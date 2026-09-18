@@ -1034,13 +1034,17 @@ body {
   }
 
   .app-workspace .business-service .result-panel__tabs {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    width: 100%;
     max-width: 100%;
-    overflow-x: auto;
-    overflow-y: hidden;
+    gap: 0;
   }
 
   .app-workspace .business-service .result-panel__tabs button {
-    flex: 0 0 auto;
+    min-width: 0;
+    height: 40px !important;
+    padding-inline: 2px !important;
   }
 
   .app-workspace .business-service .result-panel__table {
@@ -1157,7 +1161,7 @@ body {
 
   .app-workspace .business-service .developer-view__cards {
     display: grid !important;
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 560px), 1fr)) !important;
     height: auto !important;
     min-height: 0 !important;
     overflow: visible !important;
@@ -1166,44 +1170,6 @@ body {
   .app-workspace .business-service .developer-view__cards > .kg-panel {
     height: auto !important;
     min-height: 332px !important;
-  }
-
-  .app-workspace .business-service .prototype-table--request .col-name {
-    width: 28%;
-  }
-
-  .app-workspace .business-service .prototype-table--request .col-type {
-    width: 14%;
-  }
-
-  .app-workspace .business-service .prototype-table--request .col-required {
-    width: 10%;
-  }
-
-  .app-workspace .business-service .prototype-table--request .col-description {
-    width: 48%;
-  }
-
-  .app-workspace .business-service .prototype-table--response .col-name {
-    width: 32%;
-  }
-
-  .app-workspace .business-service .prototype-table--response .col-type {
-    width: 18%;
-  }
-
-  .app-workspace .business-service .prototype-table--response .col-description {
-    width: 50%;
-  }
-
-  .app-workspace .business-service .prototype-table :is(
-    th,
-    td:first-child,
-    td:nth-child(2)
-  ) {
-    overflow-wrap: normal !important;
-    word-break: normal !important;
-    white-space: nowrap !important;
   }
 }
 
@@ -1245,7 +1211,10 @@ body {
 }
 
 .app-workspace .business-service .result-panel__tabs {
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  width: 100%;
+  gap: 0;
   min-width: 0;
   max-width: 100%;
   height: auto;
@@ -1254,10 +1223,10 @@ body {
 }
 
 .app-workspace .business-service .result-panel__tabs button {
-  flex: 0 0 auto;
+  min-width: 0;
   white-space: nowrap;
   height: 32px;
-  padding-inline: 16px;
+  padding-inline: 2px !important;
   border-radius: 4px;
   font-size: 14px;
   line-height: 22px;
@@ -1273,6 +1242,34 @@ body {
   color: #1d2129;
   font-size: 14px !important;
   line-height: 22px !important;
+}
+
+/* Keep identifiers inside their cells; narrow screens scroll the table itself. */
+.app-workspace .business-service .prototype-table {
+  min-width: 560px;
+}
+
+.app-workspace .business-service .prototype-table--request .col-name { width: 34%; }
+.app-workspace .business-service .prototype-table--request .col-type { width: 18%; }
+.app-workspace .business-service .prototype-table--request .col-required { width: 12%; }
+.app-workspace .business-service .prototype-table--request .col-description { width: 36%; }
+.app-workspace .business-service .prototype-table--response .col-name { width: 32%; }
+.app-workspace .business-service .prototype-table--response .col-type { width: 20%; }
+.app-workspace .business-service .prototype-table--response .col-description { width: 48%; }
+
+.app-workspace .business-service .prototype-table :is(th, td) {
+  height: auto !important;
+  padding-block: 10px !important;
+}
+
+.app-workspace .business-service .prototype-table th {
+  white-space: nowrap;
+}
+
+.app-workspace .business-service .prototype-table td {
+  white-space: normal;
+  overflow-wrap: anywhere !important;
+  word-break: normal !important;
 }
 
 .app-workspace .business-service :is(
@@ -1601,23 +1598,15 @@ body {
   }
 
   .app-workspace .business-service .prototype-table {
-    width: 620px !important;
-    min-width: 620px !important;
+    width: 100% !important;
+    min-width: 560px !important;
   }
 
   .app-workspace .business-service .prototype-table :is(th, td) {
     height: auto !important;
     padding: 10px 12px !important;
-    overflow-wrap: normal !important;
+    overflow-wrap: anywhere !important;
     word-break: normal !important;
-  }
-
-  .app-workspace .business-service .prototype-table :is(
-    th,
-    td:first-child,
-    td:nth-child(2)
-  ) {
-    white-space: nowrap !important;
   }
 
   .app-workspace .business-service .business-service__main {
@@ -1637,8 +1626,15 @@ body {
 
   .app-workspace .business-service .graph-panel__canvas {
     height: 360px !important;
-    min-height: 360px !important;
+    height: clamp(280px, 48svh, 360px) !important;
+    min-height: 280px !important;
     flex: none !important;
+  }
+
+  .app-workspace .business-service .graph-panel__empty {
+    padding: 16px 16px 84px;
+    text-align: center;
+    line-height: 24px;
   }
 }
 
@@ -1736,7 +1732,7 @@ body {
 
   .app-workspace .business-service .developer-view__cards {
     display: grid !important;
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 560px), 1fr)) !important;
     flex: 0 0 auto !important;
     width: 100% !important;
     height: auto !important;
@@ -1766,32 +1762,6 @@ body {
     flex: 0 0 auto !important;
     height: auto !important;
     min-height: 260px !important;
-  }
-
-  .app-workspace .business-service .prototype-table--request .col-name {
-    width: 28% !important;
-  }
-
-  .app-workspace .business-service .prototype-table--request .col-type {
-    width: 14% !important;
-  }
-
-  .app-workspace .business-service .prototype-table--request .col-required {
-    width: 10% !important;
-  }
-
-  .app-workspace .business-service .prototype-table--request .col-description {
-    width: 48% !important;
-  }
-
-  .app-workspace .business-service .prototype-table :is(
-    th,
-    td:first-child,
-    td:nth-child(2)
-  ) {
-    overflow-wrap: normal !important;
-    word-break: normal !important;
-    white-space: nowrap !important;
   }
 
   .app-workspace .business-service .business-service__main {

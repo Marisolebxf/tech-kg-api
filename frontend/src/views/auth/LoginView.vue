@@ -128,7 +128,13 @@ onBeforeUnmount(() => window.removeEventListener("pageshow", resetSubmitting));
 .login-page {
   display: grid;
   grid-template-columns: minmax(460px, 1.2fr) minmax(420px, 0.8fr);
-  min-height: 100vh;
+  /* The app root locks document scrolling; this standalone page must own it. */
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   color: var(--gkx-text-primary);
   background: var(--gkx-bg-page);
 }

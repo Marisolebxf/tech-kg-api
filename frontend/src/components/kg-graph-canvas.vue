@@ -529,6 +529,46 @@ onUnmounted(() => {
   cursor: grabbing;
 }
 
+/* Reserve space for touch controls instead of covering graph content on phones. */
+@media (max-width: 767px) {
+  .kg-graph-viewport {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .platform-svg {
+    flex: 1 1 0%;
+    height: 0;
+  }
+
+  .kg-graph-map-controls {
+    position: static;
+    flex: none;
+    align-self: center;
+    width: calc(100% - 16px);
+    max-width: 320px;
+    min-height: 52px;
+    margin: 8px;
+    padding: 4px 6px;
+    gap: 4px;
+    transform: none;
+    box-shadow: none;
+  }
+
+  .kg-graph-map-controls__button {
+    width: 40px;
+    height: 40px;
+  }
+
+  .kg-graph-map-controls__slider {
+    flex: 1 1 104px;
+    width: auto;
+    min-width: 24px;
+    margin-inline: 4px;
+  }
+}
+
 .platform-network-lines line {
   stroke: rgba(148, 163, 184, 0.28);
   stroke-width: 0.9;

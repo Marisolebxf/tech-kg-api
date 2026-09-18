@@ -62,6 +62,9 @@ function onSelectChange(value: unknown) {
 <style scoped>
 .list-pagination{display:flex;flex-wrap:wrap;align-items:center;flex:0 0 auto;gap:8px 16px;min-height:56px;box-sizing:border-box;padding:12px 16px;border-top:1px solid #e5e6eb;background:#fff;color:#86909c;font-size:12px;line-height:20px}
 .list-pagination :deep(.arco-pagination){max-width:100%;flex-wrap:wrap;row-gap:8px}
+/* The inner page list must wrap too, or next-page controls are clipped on phones. */
+.list-pagination :deep(.arco-pagination-list){display:flex;max-width:100%;flex-wrap:wrap;row-gap:8px;white-space:normal}
+.list-pagination :deep(.arco-pagination-list>.arco-pagination-item){flex-shrink:0}
 .list-pagination>span{white-space:nowrap}
 .list-pagination .list-pagination__size{display:flex;align-items:center;gap:8px;margin-left:auto;white-space:nowrap}
 .list-pagination :deep(.arco-select-view){box-sizing:border-box;width:88px;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;font-size:14px;line-height:22px}

@@ -36,6 +36,11 @@ describe('ListPagination', () => {
     expect(w.findComponent(Pagination).props('disabled')).toBe(true)
   })
 
+  it('允许调用方隐藏跳页输入框', () => {
+    const w = mountPager({ total: 200, pageSize: 20, showJumper: false })
+    expect(w.findComponent(Pagination).props('showJumper')).toBe(false)
+  })
+
   it('每页条数选择器使用默认档位并透传 change-size', () => {
     const w = mountPager()
     const select = w.findComponent(Select)

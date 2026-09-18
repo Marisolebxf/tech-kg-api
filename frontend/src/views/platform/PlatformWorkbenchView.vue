@@ -1326,7 +1326,7 @@ const pageMeta = computed(() => {
     <!-- 两种查询模式共用固定结果列表，表格内部滚动。 -->
     <main
       v-else-if="activeTab === 'query'"
-      :class="['platform-content', 'platform-query']"
+      :class="['platform-content', 'platform-query', 'platform-query--scrollbar-hidden']"
     >
       <section class="kg-panel platform-query-form">
         <!-- 一级模式切换；算法页签和引擎状态位于下方独立一行。 -->
@@ -1554,11 +1554,9 @@ const pageMeta = computed(() => {
           <h2 class="platform-query-result__title">
             <span class="platform-query-result__title-marker" aria-hidden="true"></span>{{ selectedAlgorithmDef.label }}执行结果
           </h2>
-          <span v-if="algoResult" class="platform-query-result__meta">已返回 {{ algoRows.length }} 条{{ algoResult.truncated ? '（非全部结果）' : '' }}</span>
         </header>
         <div v-if="algoResult" class="platform-algo-list-toolbar">
           <AInputSearch v-model="algoSearch" class="platform-algo-search" :input-attrs="{ 'aria-label': '搜索图 VID' }" allow-clear placeholder="输入图 VID 筛选结果" />
-          <span>匹配 {{ algoTotal }} 条 · 搜索和排序仅针对已返回结果</span>
           <AButton :disabled="!algoTotal" @click="exportAlgoCsv">导出{{ algoResult.truncated ? '预览' : '当前结果' }} CSV</AButton>
         </div>
         <div class="platform-query-result__body">
@@ -4489,6 +4487,8 @@ print(response.json())</pre>
 
 /* 综合图谱展示 / 查询结果：复用科技专家同事关系页的预览与详情布局。 */
 .platform-query{grid-row:1/-1;height:100%;min-height:0;align-self:stretch;overflow:auto}
+.platform-query--scrollbar-hidden{scrollbar-width:none;-ms-overflow-style:none}
+.platform-query--scrollbar-hidden::-webkit-scrollbar{display:none;width:0;height:0}
 .platform-query .platform-status{display:inline-flex;align-items:center;gap:6px;min-height:22px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.platform-query .platform-status::before{display:block;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
 .platform-query .platform-table th,.platform-query .platform-table td{height:40px;padding:0 16px;font-size:14px;line-height:22px}.platform-query .platform-table th{background:#f7f8fa;font-weight:500}
 .platform-query-empty{gap:8px;padding:24px 16px}.platform-query-empty strong{font-size:16px;line-height:24px;font-weight:600}.platform-query-empty p{font-size:14px;line-height:22px}

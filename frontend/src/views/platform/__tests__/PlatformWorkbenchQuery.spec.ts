@@ -365,9 +365,19 @@ describe('Algorithm result lists', () => {
   })
 
   it('marks unexecuted result panels for the standard bottom safe spacing', async () => {
-    expect(wrapper.get('.platform-query-result').classes()).toContain('platform-query-result--empty')
+    const ngqlResult = wrapper.get('.platform-query-result')
+    expect(ngqlResult.classes()).toContain('platform-query-result--empty')
+    expect(ngqlResult.text()).toContain('暂无数据，执行 nGQL 语句后在此查看结果')
     await enterAlgorithms()
-    expect(wrapper.get('.platform-query-algo-result').classes()).toContain('platform-query-result--empty')
+    const algorithmResult = wrapper.get('.platform-query-algo-result')
+    expect(algorithmResult.classes()).toContain('platform-query-result--empty')
+    expect(algorithmResult.text()).toContain('暂无数据，提交算法作业后在此查看结果')
+  })
+
+  it('keeps the query page scrollable without showing its scrollbar in either mode', async () => {
+    expect(wrapper.get('.platform-query').classes()).toContain('platform-query--scrollbar-hidden')
+    await enterAlgorithms()
+    expect(wrapper.get('.platform-query').classes()).toContain('platform-query--scrollbar-hidden')
   })
 
   it('does not show the verbose server-truncation alert', async () => {
@@ -406,7 +416,8 @@ describe('Algorithm result lists', () => {
     await submitAlgorithm()
     expect(wrapper.findAll('tbody tr')).toHaveLength(20)
     expect(wrapper.findAll('tbody tr')[0]!.text()).toContain('node-9999')
-    expect(wrapper.text()).toContain('非全部')
+    expect(wrapper.text()).not.toContain('已返回 10000 条（非全部结果）')
+    expect(wrapper.text()).not.toContain('匹配 10000 条 · 搜索和排序仅针对已返回结果')
     expect(wrapper.find('aside').exists()).toBe(false)
     await wrapper.get('input[aria-label="搜索图 VID"]').setValue('node-1234')
     expect(wrapper.findAll('tbody tr')).toHaveLength(1)

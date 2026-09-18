@@ -13,10 +13,12 @@ const props = withDefaults(defineProps<{
   pageSizeOptions?: number[]
   disabled?: boolean
   loading?: boolean
+  showJumper?: boolean
 }>(), {
   pageSizeOptions: () => PAGE_SIZE_OPTIONS,
   disabled: false,
   loading: false,
+  showJumper: true,
 })
 
 const emit = defineEmits<{ change: [page: number]; 'change-size': [size: number] }>()
@@ -50,7 +52,7 @@ function onSelectChange(value: unknown) {
       :current="page"
       :page-size="pageSize"
       :total="total"
-      :show-jumper="totalPages > 7"
+      :show-jumper="showJumper && totalPages > 7"
       :disabled="isDisabled"
       @change="(next: number) => emit('change', next)"
     />

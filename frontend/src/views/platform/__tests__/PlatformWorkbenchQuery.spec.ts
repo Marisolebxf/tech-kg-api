@@ -39,6 +39,10 @@ const OptionStub = defineComponent({
   props: ['value'],
   template: '<option :value="value"><slot /></option>',
 })
+const PaginationStub = defineComponent({
+  props: ['total', 'showJumper'],
+  template: '<div class="list-pagination-stub" :data-total="total" :data-show-jumper="String(showJumper)" />',
+})
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -80,7 +84,7 @@ beforeEach(() => {
     props: { initialTab: 'query' },
     global: {
       plugins: [pinia],
-      stubs: { 'a-select': SelectStub, 'a-option': OptionStub, ListPagination: true },
+      stubs: { 'a-select': SelectStub, 'a-option': OptionStub, ListPagination: PaginationStub },
     },
   })
 })
@@ -88,6 +92,7 @@ beforeEach(() => {
 afterEach(() => {
   wrapper.unmount()
   vi.useRealTimers()
+  vi.unstubAllGlobals()
 })
 
 async function clickButton(label: string) {
@@ -349,6 +354,20 @@ describe('PlatformWorkbench query graph-space context', () => {
 
 
 describe('Algorithm result lists', () => {
+  it('does not show the nGQL record count after a query succeeds', async () => {
+    vi.mocked(runNgql).mockResolvedValueOnce({
+      columns: ['name'],
+      records: Array.from({ length: 13 }, (_, index) => ({ name: `result-${index}` })),
+      summary: {},
+      kind: 'read',
+    })
+    await wrapper.get('textarea').setValue('MATCH (v) RETURN v LIMIT 13')
+    await clickButton('执行 nGQL')
+    await flushPromises()
+    expect(wrapper.find('.platform-query-result__meta').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('13 行记录')
+  })
+
   it('shows the shared vertical marker on nGQL and every algorithm result title', async () => {
     const assertMarkedTitle = (title: string) => {
       const heading = wrapper.get('.platform-query-result__title')
@@ -405,25 +424,42 @@ describe('Algorithm result lists', () => {
     expect(wrapper.get('.platform-query-algo__job-running').text()).toContain('运行中')
   })
 
-  it('paginates, searches and numerically sorts a large result without graph panels', async () => {
+  it('shows at most 200 sorted rows while exporting every returned row', async () => {
+    const blobParts: unknown[][] = []
+    vi.stubGlobal('Blob', class {
+      constructor(parts: unknown[]) { blobParts.push(parts) }
+    })
+    vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:test'), revokeObjectURL: vi.fn() })
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
     vi.mocked(submitAlgorithmJob).mockResolvedValueOnce({ jobId: 'job-a', status: 'succeeded' })
     vi.mocked(getAlgorithmJobResult).mockResolvedValueOnce({
       jobId: 'job-a', sink: 'csv', truncated: true,
-      rows: Array.from({ length: 10000 }, (_, index) => ({ vid: `node-${index}`, degree: String(index) })),
+      rows: Array.from({ length: 201 }, (_, index) => ({ vid: `node-${index}`, degree: String(index) })),
     })
     await enterAlgorithms()
     await clickButton('Degree算法')
     await submitAlgorithm()
+    expect(wrapper.get('.list-pagination-stub').attributes('data-total')).toBe('200')
+    expect(wrapper.get('.list-pagination-stub').attributes('data-show-jumper')).toBe('false')
     expect(wrapper.findAll('tbody tr')).toHaveLength(20)
-    expect(wrapper.findAll('tbody tr')[0]!.text()).toContain('node-9999')
-    expect(wrapper.text()).not.toContain('已返回 10000 条（非全部结果）')
-    expect(wrapper.text()).not.toContain('匹配 10000 条 · 搜索和排序仅针对已返回结果')
+    expect(wrapper.findAll('tbody tr')[0]!.text()).toContain('node-200')
     expect(wrapper.find('aside').exists()).toBe(false)
-    await wrapper.get('input[aria-label="搜索图 VID"]').setValue('node-1234')
+    const search = wrapper.get('.platform-algo-search')
+    expect(search.classes()).toContain('platform-algo-search--entity-style')
+    await wrapper.get('input[aria-label="搜索图 VID"]').setValue('node-0')
     expect(wrapper.findAll('tbody tr')).toHaveLength(1)
-    expect(wrapper.get('tbody').text()).toContain('node-1234')
+    expect(wrapper.get('tbody').text()).toContain('node-0')
     await wrapper.get('input[aria-label="搜索图 VID"]').setValue('missing-node')
     expect(wrapper.text()).toContain('没有匹配')
+    await wrapper.get('input[aria-label="搜索图 VID"]').setValue('')
+    const exportButton = wrapper.findAll('button').find((item) => item.text() === '导出预览 CSV')
+    expect(exportButton?.classes()).toContain('arco-btn-primary')
+    await exportButton!.trigger('click')
+    const csv = blobParts[0]!.join('')
+    expect(csv.split('\r\n')).toHaveLength(202)
+    expect(csv).toContain('node-0')
+    expect(csv).toContain('node-200')
+    anchorClick.mockRestore()
   })
 
   it('places the nGQL toolbar below the shared mode header', async () => {

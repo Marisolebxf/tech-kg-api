@@ -81,6 +81,10 @@ export interface PipelineStepState {
 
 export interface PipelineStepInfo {
   status: 'COMPLETED' | 'RUNNING' | 'FAILED'
+  /** 执行序（Temporal JSON 编码按 key 排序，步序必须显式携带） */
+  position?: number
+  startedAt?: string
+  finishedAt?: string
   /** 该 step 的输入 payload（kg.custom.steps / kg.custom.chain 的 get_steps 返回）。 */
   input?: Record<string, unknown>
   output?: Record<string, unknown>
@@ -347,8 +351,10 @@ const JOB_RUNNING_STATUSES = new Set(['RUNNING'])
 const JOB_FAILED_STATUSES = new Set(['FAILED', 'CANCELED', 'TERMINATED', 'TIMED_OUT'])
 
 export function deriveJobUnifiedStatus(job: Pick<WorkflowJob, 'status' | 'lastExecutionStatus'>): JobUnifiedStatus {
-  if (job.lastExecutionStatus && JOB_RUNNING_STATUSES.has(job.lastExecutionStatus)) return '运行中'
+  // 已暂停优先于运行中：暂停是任务级开关（步间挂起当前执行），用户暂停后
+  // 状态列必须立即反映；执行实况仍在「最近执行」列如实展示
   if (job.status === '暂停') return '已暂停'
+  if (job.lastExecutionStatus && JOB_RUNNING_STATUSES.has(job.lastExecutionStatus)) return '运行中'
   if (job.lastExecutionStatus === 'COMPLETED') return '已完成'
   if (job.lastExecutionStatus && JOB_FAILED_STATUSES.has(job.lastExecutionStatus)) return '运行失败'
   // QUEUED = Temporal 不可用时的本地待下发记录，不会自愈，按未运行处理（可重新触发）

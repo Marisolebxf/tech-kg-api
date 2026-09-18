@@ -73,6 +73,12 @@ INCREMENTAL_COLUMNS = {
         "captured_revision": "INT NOT NULL DEFAULT 1",
         "last_run_status": "VARCHAR(16) NOT NULL DEFAULT 'none'",
         "last_run_error": "VARCHAR(1024) NULL",
+        # needsRun 口径（模型 last_run_at/uploaded_at）+ LLM 安全校验结果落库：
+        # 存量控制库缺这四列会让 schema 列表接口 500（Unknown column）
+        "last_run_at": "DATETIME NULL",
+        "safety_summary": "TEXT NULL",
+        "safety_issues": "TEXT NULL",
+        "uploaded_at": "DATETIME NULL",
     },
     "kg_schema_source": {
         "query_sql": "TEXT NULL",

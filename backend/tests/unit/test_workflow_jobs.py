@@ -84,6 +84,9 @@ class FakeRepo:
     def save_execution(self, execution: dict[str, Any]) -> None:
         self.saved_executions.append(execution)
 
+    def get_execution(self, execution_id: str) -> dict[str, Any] | None:
+        return next((e for e in self.saved_executions if e["id"] == execution_id), None)
+
 
 class FakeOps:
     def __init__(self) -> None:
@@ -110,7 +113,14 @@ class FakeOps:
 class FakeTemporal:
     def __init__(self) -> None:
         self.schedules: dict[str, dict[str, Any]] = {}
+        self.signals: list[tuple[str, str]] = []
         self._client = None
+
+    async def signal_workflow(self, workflow_id, run_id, signal_name):
+        self.signals.append((workflow_id, signal_name))
+
+    async def cancel_workflow(self, workflow_id, run_id):
+        self.canceled = getattr(self, "canceled", []) + [(workflow_id, run_id)]
 
     async def create_schedule(self, definition, schedule):
         self.schedules[schedule["id"]] = schedule
@@ -523,3 +533,54 @@ async def test_list_jobs_refreshes_stale_running(env):
     items = await service.list_jobs(_actor("u1"))
     assert items[0]["lastExecutionStatus"] == "COMPLETED"
     assert repo.jobs[job["id"]]["lastExecutionStatus"] == "COMPLETED"
+
+
+async def test_pause_running_job_signals_workflow_pause(env):
+    """运行中任务点暂停：除本地状态翻转外，向运行中的执行发 pause 信号（步间挂起）。"""
+    service, repo, ops, temporal = env
+    job = await service.create_job(
+        _actor("u1"), {"name": "x", "taskType": "extract", "schemaId": "schema-widget"}
+    )
+    await service.trigger_job(_actor("u1"), job["id"])
+    job = repo.get_job(job["id"])
+    assert job["lastExecutionStatus"] == "RUNNING"
+    # 真实 execute_definition 会把 execution 落 repo；fake 不落，测试补齐
+    repo.save_execution(ops.execution_by_id[job["lastExecutionId"]])
+
+    await service.set_job_state(_actor("u1"), job["id"], False)
+    assert len(temporal.signals) == 1
+    workflow_id, signal_name = temporal.signals[0]
+    assert signal_name == "pause_extraction"
+    assert workflow_id == "wf-1"  # FakeOps 固定 workflowId
+
+    await service.set_job_state(_actor("u1"), job["id"], True)
+    assert temporal.signals[-1][1] == "resume_extraction"
+
+
+async def test_pause_idle_job_sends_no_signal(env):
+    """无运行中执行时暂停不发信号（没有可挂起的东西）。"""
+    service, _, _, temporal = env
+    job = await service.create_job(
+        _actor("u1"), {"name": "x", "taskType": "extract", "schemaId": "schema-widget"}
+    )
+    await service.set_job_state(_actor("u1"), job["id"], False)
+    assert temporal.signals == []
+
+
+async def test_delete_running_job_cancels_execution(env):
+    """删除任务时终止运行中的执行：步间暂停落地后，孤儿挂起 workflow 会永远
+    等不到恢复信号，任务行卡「执行中」——删除必须一并 cancel。"""
+    service, repo, ops, temporal = env
+    job = await service.create_job(
+        _actor("u1"), {"name": "x", "taskType": "extract", "schemaId": "schema-widget"}
+    )
+    await service.trigger_job(_actor("u1"), job["id"])
+    job = repo.get_job(job["id"])
+    repo.save_execution(ops.execution_by_id[job["lastExecutionId"]])
+
+    await service.delete_job(_actor("u1"), job["id"])
+
+    execution = repo.get_execution(job["lastExecutionId"])
+    assert execution["status"] == "CANCELED"
+    assert execution["message"] == "任务已删除，执行终止"
+    assert len(temporal.canceled) == 1

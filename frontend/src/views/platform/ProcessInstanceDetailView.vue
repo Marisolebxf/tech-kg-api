@@ -31,6 +31,17 @@ type Step = {
   access?: AccessReport
   /** chain 任务：脚本 step 内含的 activity step 数（抽屉可展开）。 */
   activityCount?: number
+  /** 执行序（内部排序用） */
+  position?: number
+}
+
+function stepDuration(startedAt?: string, finishedAt?: string): string {
+  if (!startedAt || !finishedAt) return '-'
+  const start = new Date(startedAt.replace(' ', 'T')).getTime()
+  const end = new Date(finishedAt.replace(' ', 'T')).getTime()
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return '-'
+  const seconds = Math.max(Math.round((end - start) / 1000), 0)
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m${String(seconds % 60).padStart(2, '0')}s`
 }
 
 const route = useRoute()
@@ -129,20 +140,29 @@ function buildPipelineSteps(): Step[] {
           ? `attempt=${info.attempt}`
           : '-',
     abnormal: typeof info.failed === 'number' ? String(info.failed) : info.error ? '1' : '0',
-    duration: '-',
+    duration: stepDuration(info.startedAt, info.finishedAt),
     description: info.error || info.description || `${engine} · ${info.status}`,
     engine,
+    position: info.position,
     input: info.input,
     output: info.output,
     access: info.access,
     activityCount: info.activities ? Object.keys(info.activities).length : undefined,
   }))
+  // Temporal JSON 编码按 key 排序：按 position 还原执行序（无 position 保持原序）
+  if (built.some((step) => step.position != null)) {
+    built.sort((a, b) =>
+      (a.position ?? Number.MAX_SAFE_INTEGER) - (b.position ?? Number.MAX_SAFE_INTEGER))
+  }
   // 正在执行的 step 尚未写入 state：用 current 补一个「运行中」节点，避免流程断档
-  if (state.current && !state.steps[state.current]) {
+  const currentKey = state.current
+  const currentKnown =
+    currentKey != null && Boolean(state.steps[currentKey] || state.steps[`schema:${currentKey}`])
+  if (currentKey && !currentKnown) {
     built.push({
-      id: state.current,
+      id: currentKey,
       phase: '图谱构建',
-      name: state.current,
+      name: currentKey,
       status: '运行中',
       risk: '低风险',
       count: '-',
@@ -150,6 +170,7 @@ function buildPipelineSteps(): Step[] {
       duration: '-',
       description: `${engine} · 执行中`,
       engine,
+      position: undefined,
       input: undefined,
       output: undefined,
       access: undefined,
@@ -165,7 +186,14 @@ function chainActivities(scriptId: string): Array<{ id: string; info: PipelineAc
     // 实时 query 失败（workflow 已结束被历史淘汰）时，回退落库 task.steps（pipeline_steps 透传 activities）
     ?? processingInstance.value?.steps?.find((s) => s.id === scriptId)?.activities
   if (!activities) return []
-  return Object.entries(activities).map(([id, info]) => ({ id, info }))
+  // Temporal JSON 编码按 key 排序：dict 序 ≠ 脚本步序，按 position 还原（旧数据无 position 保持原序）
+  const entries = Object.entries(activities).map(([id, info]) => ({ id, info }))
+  if (entries.some((e) => (e.info as { position?: number }).position != null)) {
+    entries.sort((a, b) =>
+      ((a.info as { position?: number }).position ?? Number.MAX_SAFE_INTEGER)
+      - ((b.info as { position?: number }).position ?? Number.MAX_SAFE_INTEGER))
+  }
+  return entries
 }
 
 /** 把选中的 activity step 合成为右侧详情面板用的 Step。 */
@@ -365,8 +393,23 @@ type ExtractOutput = {
   sources?: Array<{ source?: string; table?: string; batches?: number; rows?: number; written?: number; failed?: number; watermark?: string | null; pkCursor?: string | null }>
   failures?: { count?: number }
 }
-const extractOutput = computed<ExtractOutput | null>(() =>
-  (processingInstance.value?.output ?? (selectedExecution.value as { output?: ExtractOutput } | null)?.output ?? null) as ExtractOutput | null)
+const extractOutput = computed<ExtractOutput | null>(() => {
+  const output = (processingInstance.value?.output ?? (selectedExecution.value as { output?: ExtractOutput } | null)?.output ?? null) as (ExtractOutput & { chain?: boolean; steps?: Record<string, { output?: ExtractOutput }> }) | null
+  if (!output) return null
+  // chain：顶层没有 sources/failures 汇总（分散在各环 output 里），聚合后
+  // 验收摘要/执行输出统计才能显示真实写入行数，而不是回退「工作流已下发」
+  if (output.chain && output.steps) {
+    const sources: ExtractOutput['sources'] = []
+    let failed = 0
+    for (const step of Object.values(output.steps)) {
+      const inner = step?.output ?? {}
+      if (inner.sources?.length) sources.push(...inner.sources)
+      failed += Number(inner.failures?.count ?? 0)
+    }
+    return { ...output, sources, failures: { count: failed } }
+  }
+  return output
+})
 const schemaId = computed(() => String(
   job.value?.schemaId
   || (processingInstance.value?.input as { schemaId?: unknown } | undefined)?.schemaId

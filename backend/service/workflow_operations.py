@@ -144,31 +144,49 @@ class WorkflowOperationsService:
         )
         return {"items": items, "total": len(items)}
 
-    def get_task(self, task_id: str) -> dict[str, Any]:
+    async def get_task(self, task_id: str) -> dict[str, Any]:
         task = self.repo.get_task(task_id)
         if task is None:
             raise KeyError(task_id)
         task["batch"] = self.repo.get_batch(task["batchId"])
+        # 自愈：卡在「执行中」的任务（job 已删/执行孤儿/服务重启丢刷新）查看时
+        # 向 Temporal 对账——没有列表惰性复核兜底的孤儿任务，只有这里能翻终态
+        if task.get("taskStatus") == "执行中":
+            for execution in self.repo.list_executions(job_id=task.get("jobId") or "") or []:
+                if execution.get("status") != "RUNNING":
+                    continue
+                await self.get_execution(execution["id"])  # 复用惰性刷新 + 任务状态同步
+            refreshed = self.repo.get_task(task_id)
+            if refreshed is not None:
+                task = refreshed
+                task["batch"] = self.repo.get_batch(task["batchId"])
         return task
 
     async def query_step_state(self, task: dict[str, Any]) -> dict[str, Any] | None:
-        """chain 任务（kg.schema.extract.chain）：查 Temporal 实时 get_steps 填 pipeline。
+        """抽取任务查 Temporal 实时状态填 pipeline（chain 用 get_steps，单 Schema 用 get_progress）。
 
         已结束且被历史淘汰的 workflow 查询会抛错——吞掉返回 None，调用方回退
         落库 output.steps（stage_normalizer.pipeline_steps 渲染嵌套抽屉）。
+        单 Schema 抽取只取 paused（前端「暂停中 → 已暂停」确认用）。
         """
-        if task.get("workflowType") != "kg.schema.extract.chain":
+        workflow_type = task.get("workflowType")
+        if workflow_type not in {"kg.schema.extract.chain", "kg.schema.extract"}:
             return None
         workflow_id = task.get("workflowId")
         if not workflow_id:
             return None
+        query = "get_steps" if workflow_type == "kg.schema.extract.chain" else "get_progress"
         try:
             client = await temporal_runtime.client()
             handle = client.get_workflow_handle(workflow_id)
-            state = await handle.query("get_steps")
+            state = await handle.query(query)
         except Exception:  # noqa: BLE001
             return None
-        return state if isinstance(state, dict) else None
+        if not isinstance(state, dict):
+            return None
+        if workflow_type == "kg.schema.extract":
+            return {"paused": state.get("paused") is True}
+        return state
 
     @staticmethod
     def create_task_for_execution(
@@ -347,6 +365,10 @@ class WorkflowOperationsService:
             # output 是 dict 时一律写到 task 上便于详情页查看
             # (kg.custom.python 的 {status, result, ...} 也走这里)
             task["output"] = output
+        payload = execution.get("payload")
+        if isinstance(payload, dict) and payload:
+            # Temporal 下发的触发 payload 回填「任务输入」（详情页输入输出 tab）
+            task["input"] = payload
         if already_in_sync and task.get("status") == new_status:
             # 状态已一致，避免重复 log 累积；缺的抽取数据行仍要补
             if data_lines:

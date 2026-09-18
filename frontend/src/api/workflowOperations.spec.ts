@@ -15,9 +15,9 @@ const job = (status: string, lastExecutionStatus?: string | null): JobSeed => ({
 })
 
 describe('deriveJobUnifiedStatus 统一状态推导', () => {
-  it('优先级：RUNNING 最高（暂停的任务仍有实例在跑 → 运行中）', () => {
-    // 后端语义：暂停不杀运行中实例（workflow_jobs.py set_job_state 注释）
-    expect(deriveJobUnifiedStatus(job('暂停', 'RUNNING'))).toBe('运行中')
+  it('优先级：已暂停最高（暂停的任务即使执行仍在跑也显示已暂停，实况看最近执行列）', () => {
+    // 步间暂停落地后：暂停是任务级开关，状态列立即反映；执行实况在「最近执行」列
+    expect(deriveJobUnifiedStatus(job('暂停', 'RUNNING'))).toBe('已暂停')
   })
 
   it('暂停其次：已完成后再暂停显示已暂停', () => {

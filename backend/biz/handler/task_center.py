@@ -69,7 +69,7 @@ async def list_tasks(
 @router.get("/tasks/{task_id}", responses={404: {"description": "请求的资源不存在"}})
 async def get_task(task_id: str) -> ApiResponse:
     try:
-        task = service.get_task(task_id)
+        task = await service.get_task(task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="任务不存在") from exc
     # chain（kg.schema.extract.chain）任务：用 Temporal 实时 get_steps 填 pipeline

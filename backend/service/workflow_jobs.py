@@ -327,10 +327,24 @@ class WorkflowJobService:
                     temporal_runtime._client = None
                     job["dispatchStatus"] = "LOCAL_SAVED"
                     job["message"] = str(exc)
-        # once 任务无 Schedule：暂停只是拒绝后续手动触发，正在运行的执行自然跑完
+        # once 任务无 Schedule：暂停同样生效——给运行中的执行发信号，当前步/环
+        # 正常结束后挂起在下一步开始前（恢复信号后从挂起点继续），而非任其跑完
         job["status"] = "启用" if active else "暂停"
         job["updatedAt"] = _now()
         self.repo.save_job(job)
+        execution_id = job.get("lastExecutionId")
+        if execution_id and job.get("lastExecutionStatus") == "RUNNING":
+            execution = self.repo.get_execution(execution_id)
+            if execution and execution.get("workflowId"):
+                try:
+                    await temporal_runtime.signal_workflow(
+                        execution["workflowId"],
+                        execution.get("runId"),
+                        "resume_extraction" if active else "pause_extraction",
+                    )
+                except Exception:  # noqa: BLE001
+                    # 执行刚结束/Temporal 抖动：状态仍翻转成功，信号丢失无害
+                    temporal_runtime._client = None
         return job
 
     async def delete_job(self, actor: PlatformActor, job_id: str) -> bool:
@@ -342,7 +356,21 @@ class WorkflowJobService:
             except Exception:  # noqa: BLE001
                 temporal_runtime._client = None
             self.repo.delete_schedule(schedule_id)
-        # execution 历史保留（jobId 悬空无害），详情页删除后从任务列表入口不可达
+        # 运行中的执行一并终止：步间暂停落地后，删除任务留下挂起的 workflow
+        # 会永远等不到恢复信号，任务行卡在「执行中」。execution 历史行保留
+        # （翻 CANCELED 供详情页展示），仅任务列表入口不可达。
+        for execution in self.repo.list_executions(job_id=job_id):
+            if execution.get("status") != "RUNNING" or not execution.get("workflowId"):
+                continue
+            try:
+                await temporal_runtime.cancel_workflow(
+                    execution["workflowId"], execution.get("runId")
+                )
+                execution["status"] = "CANCELED"
+                execution["message"] = "任务已删除，执行终止"
+                self.repo.save_execution(execution)
+            except Exception:  # noqa: BLE001
+                temporal_runtime._client = None
         return self.repo.delete_job(job_id)
 
     # ---------- 辅助 ----------

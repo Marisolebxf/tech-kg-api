@@ -128,6 +128,7 @@ def _save_degree_job(
     space: str, labels: list[str], rows: list[dict[str, str]], truncated: bool, *, running: bool = False
 ) -> dict[str, Any]:
     """登记 Degree 作业并清理过期结果；后台计算最多同时运行两个。"""
+
     job_id = uuid.uuid4().hex
     now = _utc_now_iso()
     job = {

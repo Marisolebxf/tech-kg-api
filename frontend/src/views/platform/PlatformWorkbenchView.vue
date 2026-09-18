@@ -358,7 +358,8 @@ const algoRows = computed(() => (algoResult.value?.rows ?? []).map((row) => {
 const algoResultColumns = computed<string[]>(() =>
   algoRows.value.length ? Object.keys(algoRows.value[0]) : [],
 )
-// 只在当前页渲染结果；搜索和排序覆盖已返回的整个预览集合。
+const ALGO_RESULT_DISPLAY_LIMIT = 200
+// 搜索和排序覆盖已返回的整个结果集，页面最多展示 200 条。
 const algoSearch = ref('')
 const algoSortColumn = ref('')
 const algoSortDirection = ref<'asc' | 'desc'>('desc')
@@ -372,7 +373,7 @@ function sortAlgoColumn(column: string, direction?: 'asc' | 'desc'): void {
   algoSortDirection.value = direction ?? 'desc'
   resetAlgoPage()
 }
-const visibleAlgoRows = computed(() => {
+const filteredAndSortedAlgoRows = computed(() => {
   const search = algoSearch.value.trim()
   const rows = search
     ? algoRows.value.filter((row) => String(row.vid ?? '').includes(search))
@@ -387,6 +388,7 @@ const visibleAlgoRows = computed(() => {
     return direction * (numeric ? Number(left) - Number(right) : left.localeCompare(right, undefined, { numeric: true }))
   })
 })
+const visibleAlgoRows = computed(() => filteredAndSortedAlgoRows.value.slice(0, ALGO_RESULT_DISPLAY_LIMIT))
 const {
   page: algoPage,
   pageSize: algoPageSize,
@@ -411,7 +413,7 @@ function exportAlgoCsv(): void {
     const safe = /^[=+@\-\t\r]/.test(value) ? `'${value}` : value
     return `"${safe.replaceAll('"', '""')}"`
   }
-  const csv = [columns, ...visibleAlgoRows.value.map((row) => columns.map((column) => String(row[column] ?? '')))]
+  const csv = [columns, ...algoRows.value.map((row) => columns.map((column) => String(row[column] ?? '')))]
     .map((row) => row.map(escapeCell).join(',')).join('\r\n')
   const url = URL.createObjectURL(new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' }))
   const link = document.createElement('a')
@@ -592,6 +594,15 @@ async function loadOverviewCards(): Promise<void> {
     overviewReviewsError.value = getErrorMessage(error)
     overviewReviewsState.value = isForbiddenError(error) ? 'forbidden' : 'error'
   }
+}
+
+/** 审核卡片跳转：抽取失败重跑（T_EXTRACT_FAIL）直达人工审核页的「抽取失败重跑」子页，
+ *  并把对象名带进搜索框定位到该实例（队列按 id/对象名/来源记录匹配，与卡片展示一致）；
+ *  其余（入库决策）保持进入审核详情。 */
+function reviewItemRoute(item: ProductionReviewCase): string | { path: string; query: Record<string, string> } {
+  if (item.templateId !== 'T_EXTRACT_FAIL') return `/manual-review/task/${item.id}`
+  const keyword = (item.objectName || item.sourceRecordId || item.id).trim()
+  return { path: '/manual-review', query: keyword ? { category: 'C', keyword } : { category: 'C' } }
 }
 const activeAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === selectedAssetChange.value))
 const entityAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === 'entity'))
@@ -1113,7 +1124,7 @@ const pageMeta = computed(() => {
           <template v-if="overviewReviewsState === 'ready'">
             <div class="platform-review-count">待处理 <strong>{{ overviewReviewsTotal }}</strong> 条</div>
             <div class="platform-review-list">
-              <RouterLink v-for="item in overviewReviews" :key="item.id" :to="`/manual-review/task/${item.id}`">
+              <RouterLink v-for="item in overviewReviews" :key="item.id" :to="reviewItemRoute(item)">
                 <strong>{{ item.objectName || item.objectId }}</strong>
                 <em>{{ item.category }}</em>
                 <span class="is-risk">风险 {{ item.riskLevel }}</span>
@@ -1326,7 +1337,7 @@ const pageMeta = computed(() => {
     <!-- 两种查询模式共用固定结果列表，表格内部滚动。 -->
     <main
       v-else-if="activeTab === 'query'"
-      :class="['platform-content', 'platform-query']"
+      :class="['platform-content', 'platform-query', 'platform-query--scrollbar-suppressed']"
     >
       <section class="kg-panel platform-query-form">
         <!-- 一级模式切换；算法页签和引擎状态位于下方独立一行。 -->
@@ -1515,13 +1526,12 @@ const pageMeta = computed(() => {
       <!-- 结果区常驻：未执行时空数据占位，执行后填充（不再整块隐藏/出现引起布局跳动） -->
       <section
         v-if="queryMode === 'ngql'"
-        :class="['platform-query-result', { 'platform-query-result--empty': !ngqlResult }]"
+        :class="['platform-query-result', { 'platform-query-result--fill': !ngqlResult }]"
       >
         <header class="platform-query-result__head">
           <h2 class="platform-query-result__title">
             <span class="platform-query-result__title-marker" aria-hidden="true"></span>nGQL 执行结果
           </h2>
-          <span v-if="ngqlResult" class="platform-query-result__meta">{{ ngqlResult.records.length }} 行记录</span>
         </header>
         <div class="platform-query-result__body">
           <div class="platform-query-result__table">
@@ -1547,19 +1557,17 @@ const pageMeta = computed(() => {
         :class="[
           'platform-query-result',
           'platform-query-algo-result',
-          { 'platform-query-result--empty': !algoResult },
+          { 'platform-query-result--fill': !algoResult },
         ]"
       >
         <header class="platform-query-result__head">
           <h2 class="platform-query-result__title">
             <span class="platform-query-result__title-marker" aria-hidden="true"></span>{{ selectedAlgorithmDef.label }}执行结果
           </h2>
-          <span v-if="algoResult" class="platform-query-result__meta">已返回 {{ algoRows.length }} 条{{ algoResult.truncated ? '（非全部结果）' : '' }}</span>
         </header>
         <div v-if="algoResult" class="platform-algo-list-toolbar">
-          <AInputSearch v-model="algoSearch" class="platform-algo-search" :input-attrs="{ 'aria-label': '搜索图 VID' }" allow-clear placeholder="输入图 VID 筛选结果" />
-          <span>匹配 {{ algoTotal }} 条 · 搜索和排序仅针对已返回结果</span>
-          <AButton :disabled="!algoTotal" @click="exportAlgoCsv">导出{{ algoResult.truncated ? '预览' : '当前结果' }} CSV</AButton>
+          <AInputSearch v-model="algoSearch" class="platform-algo-search platform-algo-search--entity-style" :input-attrs="{ 'aria-label': '搜索图 VID' }" allow-clear placeholder="输入图 VID 筛选结果" />
+          <AButton type="primary" :disabled="!algoRows.length" @click="exportAlgoCsv">导出{{ algoResult.truncated ? '预览' : '当前结果' }} CSV</AButton>
         </div>
         <div class="platform-query-result__body">
           <div class="platform-query-result__table">
@@ -1568,7 +1576,7 @@ const pageMeta = computed(() => {
               <AEmpty :description="algoSubmitLoading ? '正在提交作业，请稍候…' : isAlgoJobRunning ? '算法运行中，完成后自动展示结果' : algoResult ? (algoSearch ? '没有匹配的结果，请调整搜索条件' : '算法执行成功，无返回记录') : algoJob?.status === 'failed' ? '算法执行失败，请查看上方失败原因' : '暂无数据，提交算法作业后在此查看结果'" />
             </div>
           </div>
-          <ListPagination v-if="algoTotal > 0" :total="algoTotal" :page="algoPage" :page-size="algoPageSize" :page-size-options="[20, 50, 100]" @change="changeAlgoPage" @change-size="changeAlgoPageSize" />
+          <ListPagination v-if="algoTotal > 0" :total="algoTotal" :page="algoPage" :page-size="algoPageSize" :page-size-options="[20, 50, 100]" :show-jumper="false" @change="changeAlgoPage" @change-size="changeAlgoPageSize" />
         </div>
       </section>
 
@@ -4489,6 +4497,8 @@ print(response.json())</pre>
 
 /* 综合图谱展示 / 查询结果：复用科技专家同事关系页的预览与详情布局。 */
 .platform-query{grid-row:1/-1;height:100%;min-height:0;align-self:stretch;overflow:auto}
+.platform-query.platform-query--scrollbar-suppressed{scrollbar-width:none!important;scrollbar-color:transparent transparent!important;scrollbar-gutter:auto!important;-ms-overflow-style:none}
+.platform-query.platform-query--scrollbar-suppressed::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}
 .platform-query .platform-status{display:inline-flex;align-items:center;gap:6px;min-height:22px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.platform-query .platform-status::before{display:block;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
 .platform-query .platform-table th,.platform-query .platform-table td{height:40px;padding:0 16px;font-size:14px;line-height:22px}.platform-query .platform-table th{background:#f7f8fa;font-weight:500}
 .platform-query-empty{gap:8px;padding:24px 16px}.platform-query-empty strong{font-size:16px;line-height:24px;font-weight:600}.platform-query-empty p{font-size:14px;line-height:22px}
@@ -4519,7 +4529,6 @@ print(response.json())</pre>
 .platform-query-result__head{display:flex;flex:0 0 auto;align-items:center;justify-content:space-between;gap:16px;min-height:24px}
 .platform-query-result__title{display:flex;align-items:center;gap:8px;margin:0;color:#1d2129;font-size:16px;line-height:24px;font-weight:600}
 .platform-query-result__title-marker{width:3px;height:14px;border-radius:1px;background:#004ecc;flex:0 0 auto}
-.platform-query-result__meta{color:#86909c;font-size:12px;line-height:20px;white-space:nowrap}
 .platform-query-result__body{display:flex;flex-direction:column;overflow:hidden;border:1px solid #e5e6eb;border-radius:6px;background:#fff}
 .platform-query-result__table{min-width:0;overflow:hidden}
 .platform-query-result__empty{display:grid;place-content:center;min-height:160px;padding:24px;color:#86909c;font-size:13px;line-height:22px;text-align:center}
@@ -4603,9 +4612,16 @@ print(response.json())</pre>
 .platform-query-result__table{overflow:hidden}
 .platform-query-result__empty{min-height:180px;color:var(--color-text-3)}
 .platform-query-result__empty :deep(.arco-empty-description){font-size:14px;color:var(--color-text-3)}
-.platform-query-result--empty{margin-bottom:16px}
+.platform-query .platform-query-result--fill{min-height:0;flex:1 0 auto}
+.platform-query .platform-query-result--fill .platform-query-result__body{min-height:180px;flex:1 1 auto}
+.platform-query .platform-query-result--fill .platform-query-result__table{display:flex;min-height:0;flex:1 1 auto}
+.platform-query .platform-query-result--fill .platform-query-result__empty{width:100%;flex:1 1 auto}
 .platform-algo-list-toolbar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;color:var(--color-text-3);font-size:12px}
 .platform-algo-search{width:320px;max-width:100%}
+.platform-query :deep(.platform-algo-search--entity-style.arco-input-wrapper){box-sizing:border-box;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important}
+.platform-query :deep(.platform-algo-search--entity-style.arco-input-wrapper:hover){border-color:#4080ff!important;background:#fff!important}
+.platform-query :deep(.platform-algo-search--entity-style.arco-input-wrapper:focus-within),.platform-query :deep(.platform-algo-search--entity-style.arco-input-focus){border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
+.platform-query :deep(.platform-algo-search--entity-style input.arco-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
 .platform-algo-list-toolbar>button{margin-left:auto}
 @media(max-width:768px){.platform-query-algo__controls{flex-direction:column;gap:12px}.platform-query-algo__form{width:100%}.platform-query-algo__actions{padding-top:0}.platform-algo-search{width:100%}.platform-algo-list-toolbar>button{margin-left:0}}
 .platform-ngql-input :deep(.arco-textarea::placeholder){color:#86909c!important;opacity:1}

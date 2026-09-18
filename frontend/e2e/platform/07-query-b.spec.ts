@@ -32,11 +32,11 @@ test.describe('B. 图谱查询', () => {
     )
   })
 
-  test('B2 图算法 tab（mock 提交→轮询→PageRank 排名表 + 图谱高亮全链路）', async ({ page }) => {
+  test('B2 图算法 tab（mock 提交→轮询→PageRank 排名表全链路）', async ({ page }) => {
     // 作业三接口用 route mock（Spark 运行器未就绪，真实提交必然失败）：
     // 提交回 running，轮询第一轮 running、之后 succeeded，结果 2 行 csv。
     // metadata / engine 不 mock，走真实 dev2 接口（引擎徽标对 正常/不可用 均兼容）。
-    // 排名表节点类型解析（nodes）与图谱高亮邻域（subgraph）同样 mock。
+    // 排名表节点类型解析（nodes）同样 mock。
     const ok = (data: unknown) => ({ code: 200, success: true, data, msg: 'success' })
     let pollCount = 0
 
@@ -85,26 +85,6 @@ test.describe('B. 图谱查询', () => {
           id: vid,
           labels: ['Paper'],
           properties: { name: vid === 'p2' ? '高影响力论文' : '普通论文' },
-        }),
-      })
-    })
-    // 图谱高亮：中心节点 1 跳邻域（p2 为分值第一名，自动高亮）。
-    // subgraphFail 置真时返回 500，用于失败态 + 重试链路。
-    let subgraphFail = false
-    await page.route(/\/api\/v1\/graph-search\/subgraph\/[^/]+(?:\?.*)?$/, async (route) => {
-      if (subgraphFail) {
-        await route.fulfill({ status: 500, json: { detail: '邻域服务暂不可用' } })
-        return
-      }
-      await route.fulfill({
-        json: ok({
-          nodes: [
-            { id: 'p2', labels: ['Paper'], properties: { name: '高影响力论文' } },
-            { id: 'p1', labels: ['Paper'], properties: { name: '普通论文' } },
-          ],
-          edges: [
-            { id: 'e1', type: 'CITES', source: 'p1', target: 'p2', properties: {} },
-          ],
         }),
       })
     })
@@ -162,29 +142,16 @@ test.describe('B. 图谱查询', () => {
       { label: '排名表节点类型解析' },
     )
     await expect(rankTable).toContainText('0.15')
-    // 图谱高亮：默认选中分值第一名 p2，画布渲染邻域
-    const highlight = page.locator('.platform-query-algo__highlight')
-    await expect(highlight).toBeVisible()
-    // 画布 svg 用 aria-label 精确锁定（面板内还有缩放工具栏的图标 svg）
-    await expect(highlight.getByRole('img', { name: 'PageRank 图谱高亮' })).toBeVisible()
+    // 结果区只保留排名表：图谱高亮面板已移除
+    await expect(page.locator('.platform-query-algo__highlight')).toHaveCount(0)
     await expect(page.getByText('作业 job-e2e-1')).toBeVisible()
-
-    // 点击第 2 名（p1）行：图谱高亮中心切换；先制造邻域接口失败，验证失败态 + 重试恢复
-    subgraphFail = true
-    await rankTable.getByText('普通论文').click()
-    await expect(rankTable.locator('tr.is-selected')).toContainText('普通论文')
-    await expect(page.getByText('图谱高亮加载失败', { exact: false })).toBeVisible()
-    await expect(page.getByRole('button', { name: '重试' })).toBeVisible()
-    subgraphFail = false
-    await page.getByRole('button', { name: '重试' }).click()
-    await expect(highlight.getByRole('img', { name: 'PageRank 图谱高亮' })).toBeVisible()
 
     // 切回 nGQL 模式恢复输入面板
     await page.getByRole('button', { name: 'nGQL 模式' }).click()
     await expect(page.locator('textarea[placeholder*="MATCH (v:专家)"]')).toBeVisible()
   })
 
-  test('B3 Louvain 社区发现（mock 提交→社区图谱 + 节点→社区表）', async ({ page }) => {
+  test('B3 Louvain 社区发现（mock 提交→节点→社区表）', async ({ page }) => {
     // 作业三接口 + 节点解析接口 route mock；Louvain 结果视图无子图查询。
     const ok = (data: unknown) => ({ code: 200, success: true, data, msg: 'success' })
     let pollCount = 0
@@ -198,11 +165,11 @@ test.describe('B. 图谱查询', () => {
       const body = request.postDataJSON() as {
         algorithm: string
         labels: string[]
-        params: Record<string, number | string | boolean>
+        params?: Record<string, number | string | boolean>
       }
       expect(body.algorithm).toBe('louvain')
-      // 三个算法参数带默认值提交（普通用户不展开高级区也能跑）
-      expect(body.params).toMatchObject({ maxIter: 20, internalIter: 10, tol: 0.5 })
+      // 调优参数不在页面暴露：提交载荷不带 params，由服务端默认值兜底
+      expect(body.params).toBeUndefined()
       await route.fulfill({ json: ok({ jobId: 'job-e2e-3', status: 'running' }) })
     })
     await page.route(/\/api\/v1\/graph-algorithms\/jobs\/job-e2e-3\/result(?:\?.*)?$/, async (route) => {
@@ -276,19 +243,8 @@ test.describe('B. 图谱查询', () => {
     await expect(table).toContainText('2')
     await expect(table).toContainText('5')
 
-    // 社区图谱 + 社区列表：两个社区、不同色点；画布渲染
-    const highlight = page.locator('.platform-query-algo__highlight')
-    await expect(highlight).toBeVisible()
-    await expect(highlight.getByRole('img', { name: 'Louvain 社区图谱' })).toBeVisible()
-    const chips = page.locator('.platform-query-algo__community-list button')
-    await expect(chips).toHaveCount(2)
-    await expect(chips.first()).toContainText('社区 2')
-    await expect(chips.first()).toContainText('3 节点')
-    await expect(chips.nth(1)).toContainText('社区 5')
-
-    // 点选小社区 5：chip 激活、表格对应行高亮
-    await chips.nth(1).click()
-    await expect(chips.nth(1)).toHaveClass(/is-active/)
-    await expect(table.locator('tr.is-selected')).toContainText('论文p1')
+    // 结果区只保留节点→社区表：社区图谱与社区列表已移除
+    await expect(page.locator('.platform-query-algo__highlight')).toHaveCount(0)
+    await expect(page.locator('.platform-query-algo__community-list')).toHaveCount(0)
   })
 })

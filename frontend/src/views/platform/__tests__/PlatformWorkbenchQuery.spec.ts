@@ -195,21 +195,17 @@ describe('PlatformWorkbench query graph-space context', () => {
     expect(submitAlgorithmJob).toHaveBeenCalledTimes(1)
   })
 
-  it('renders algorithm-specific advanced params per tab and hides them for degree', async () => {
+  it('exposes no advanced params on any algorithm tab', async () => {
     await enterAlgorithms()
-    expect(wrapper.text()).toContain('最大迭代次数')
-    expect(wrapper.text()).toContain('重置概率')
-    await clickButton('Louvain算法')
-    expect(wrapper.text()).toContain('内部迭代')
-    expect(wrapper.text()).not.toContain('重置概率')
-    await clickButton('Degree算法')
-    expect(wrapper.text()).toContain('当前算法无可调参数')
-    expect(wrapper.find('.platform-query-algo__input').exists()).toBe(false)
-    await clickButton('PageRank算法')
-    await clickButton('收起高级参数')
-    expect(wrapper.text()).not.toContain('最大迭代次数')
-    await clickButton('高级参数（2 个）')
-    expect(wrapper.text()).toContain('最大迭代次数')
+    for (const label of ['PageRank算法', 'Louvain算法', 'Degree算法']) {
+      await clickButton(label)
+      expect(wrapper.find('.platform-query-algo__input').exists()).toBe(false)
+      expect(wrapper.find('.platform-query-algo__advanced-toggle').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('高级参数')
+      expect(wrapper.text()).not.toContain('最大迭代次数')
+      expect(wrapper.text()).not.toContain('内部迭代')
+      expect(wrapper.text()).not.toContain('重置概率')
+    }
   })
 
   it('marks the submit button as running and shows the running panel while a job is in progress', async () => {

@@ -38,12 +38,13 @@ export interface GraphAlgorithmMetadata {
   engine: GraphAlgorithmEngineStatus
 }
 
-/** 提交算法作业请求；params 键为算法专有参数（camelCase，如 maxIter）。 */
+/** 提交算法作业请求；params 键为算法专有参数（camelCase，如 maxIter），
+ *  页面不暴露调优参数时可省略，由服务端默认值兜底。 */
 export interface AlgorithmJobSubmitPayload {
   space: string
   algorithm: string
   labels: string[]
-  params: Record<string, number | string | boolean>
+  params?: Record<string, number | string | boolean>
   hasWeight: boolean
   weightCols: string[] | null
   encodeId: boolean

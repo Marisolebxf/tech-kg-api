@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import {
   computed,
-  nextTick,
   onUnmounted,
   ref,
   watch,
@@ -30,17 +29,17 @@ import {
   type WorkflowJob,
 } from '../../api/workflowOperations'
 import { useToast } from '../../composables/use-toast'
-import { IconInfoCircle } from '@arco-design/web-vue/es/icon'
-import KgGraphCanvas from '../../components/kg-graph-canvas.vue'
 import {
-  getGraphNode,
-  getSubgraph,
-  unwrapApiResponse,
-  type ApiResponse,
-  type GraphData,
-  type GraphNode,
-} from '../../api/graphSearch'
-import type { GraphEdgeData, GraphNodeData, GraphNodeType } from '../../data/graph-presets'
+  Button as AButton,
+  Empty as AEmpty,
+  Form as AForm,
+  FormItem as AFormItem,
+  InputSearch as AInputSearch,
+  Popover as APopover,
+  Textarea as ATextarea,
+} from '@arco-design/web-vue'
+import QueryResultTable from './QueryResultTable.vue'
+import { IconInfoCircle } from '@arco-design/web-vue/es/icon'
 import {
   fetchGraphAlgorithmEngine,
   fetchGraphAlgorithmMetadata,
@@ -306,7 +305,25 @@ const {
 // ---------- 图算法模式 ----------
 const algoSpace = computed(() => currentGraphSpace())
 const selectedAlgorithm = ref(GRAPH_ALGORITHMS[0].id)
-const algoLabels = ref<string[]>([])
+interface AlgorithmState {
+  labels: string[]
+  submitting: boolean
+  job: AlgorithmJobSnapshot | null
+  space: string
+  result: AlgorithmResultPayload | null
+  pollFailures: number
+}
+function createAlgorithmStates(): Record<string, AlgorithmState> {
+  return Object.fromEntries(GRAPH_ALGORITHMS.map(({ id }) => [id, {
+    labels: [], submitting: false, job: null, space: '', result: null, pollFailures: 0,
+  }]))
+}
+const algorithmStates = ref(createAlgorithmStates())
+const activeAlgorithmState = computed(() => algorithmStates.value[selectedAlgorithm.value])
+const algoLabels = computed({
+  get: () => activeAlgorithmState.value.labels,
+  set: (value: string[]) => { activeAlgorithmState.value.labels = value },
+})
 /** 边类型数量上限，与后端 AlgorithmSubmitRequest.labels 的 max_length=20 保持一致。 */
 const ALGO_LABELS_MAX = 20
 /** 按算法 id 分桶的参数值；切换算法时按目录默认值初始化该桶。 */
@@ -318,13 +335,10 @@ const algoEncodeId = ref(true)
 const algoPartitionNum = ref(1)
 const algoMetadataLoading = ref(false)
 const algoMetadata = ref<GraphAlgorithmMetadata | null>(null)
-const algoSubmitLoading = ref(false)
-/** 当前作业快照；algoJobSpace 为提交时冻结的图空间，轮询/取结果固定使用。 */
-const algoJob = ref<AlgorithmJobSnapshot | null>(null)
-const algoJobSpace = ref('')
-const algoResult = ref<AlgorithmResultPayload | null>(null)
+const algoSubmitLoading = computed(() => activeAlgorithmState.value.submitting)
+const algoJob = computed(() => activeAlgorithmState.value.job)
+const algoResult = computed(() => activeAlgorithmState.value.result)
 let algoPollTimer: number | undefined
-let algoPollFailures = 0
 
 const selectedAlgorithmDef = computed<GraphAlgorithmDefinition>(
   () => GRAPH_ALGORITHMS.find((item) => item.id === selectedAlgorithm.value) ?? GRAPH_ALGORITHMS[0],
@@ -332,17 +346,47 @@ const selectedAlgorithmDef = computed<GraphAlgorithmDefinition>(
 const algoParamDefs = computed<AlgorithmParamDef[]>(() => selectedAlgorithmDef.value.params)
 /** 仅展示业务输入，调优参数使用默认值。 */
 const mainParamDefs = computed(() => algoParamDefs.value.filter((param) => !param.advanced))
-/** 高级参数（算法调优项）：默认展开，让三个算法页签的表单内容有可见区分。 */
-const advancedParamDefs = computed(() => algoParamDefs.value.filter((param) => param.advanced))
-const advancedOpen = ref(true)
-/** 表单实际渲染的参数：主参数恒显，高级参数随折叠状态追加。 */
-const renderParamDefs = computed(() =>
-  advancedOpen.value ? [...mainParamDefs.value, ...advancedParamDefs.value] : mainParamDefs.value,
-)
-const algoRows = computed(() => algoResult.value?.rows ?? [])
+// Spark 的 _id / id 是已解码的原始图 VID，统一字段供展示、筛选和导出使用。
+const algoRows = computed(() => (algoResult.value?.rows ?? []).map((row) => {
+  const idKey = ['vid', '_id', 'id'].find((key) => row[key] !== undefined && row[key] !== '')
+  if (!idKey) return row
+  return {
+    vid: String(row[idKey]),
+    ...Object.fromEntries(Object.entries(row).filter(([key]) => !['vid', '_id', 'id'].includes(key))),
+  }
+}))
 const algoResultColumns = computed<string[]>(() =>
   algoRows.value.length ? Object.keys(algoRows.value[0]) : [],
 )
+// 只在当前页渲染结果；搜索和排序覆盖已返回的整个预览集合。
+const algoSearch = ref('')
+const algoSortColumn = ref('')
+const algoSortDirection = ref<'asc' | 'desc'>('desc')
+const algorithmColumnLabels: Record<string, string> = {
+  vid: '图 VID', _id: '图 VID', id: '图 VID', pagerank: 'PageRank 值',
+  louvain: '社区编号', community: '社区编号', community_id: '社区编号',
+  degree: '总度', out_degree: '出度', in_degree: '入度',
+}
+function sortAlgoColumn(column: string, direction?: 'asc' | 'desc'): void {
+  algoSortColumn.value = direction ? column : ''
+  algoSortDirection.value = direction ?? 'desc'
+  resetAlgoPage()
+}
+const visibleAlgoRows = computed(() => {
+  const search = algoSearch.value.trim()
+  const rows = search
+    ? algoRows.value.filter((row) => String(row.vid ?? '').includes(search))
+    : algoRows.value
+  const column = algoSortColumn.value
+  if (!column) return rows
+  const direction = algoSortDirection.value === 'asc' ? 1 : -1
+  return [...rows].sort((a, b) => {
+    const left = String(a[column] ?? '')
+    const right = String(b[column] ?? '')
+    const numeric = left.trim() !== '' && right.trim() !== '' && Number.isFinite(Number(left)) && Number.isFinite(Number(right))
+    return direction * (numeric ? Number(left) - Number(right) : left.localeCompare(right, undefined, { numeric: true }))
+  })
+})
 const {
   page: algoPage,
   pageSize: algoPageSize,
@@ -351,494 +395,31 @@ const {
   resetPage: resetAlgoPage,
   changePage: changeAlgoPage,
   changePageSize: changeAlgoPageSize,
-} = useClientPagination(algoRows, 20)
+} = useClientPagination(visibleAlgoRows, 20)
 
-// ---------- PageRank 专属结果：节点重要性排名表 + 图谱高亮 ----------
-/** csv 列名按优先级探测（NebulaGraph Algorithm 各版本输出列名浮动：_id/id/vid）。 */
-const PAGERANK_ID_KEYS = ['_id', 'id', 'vid']
-const PAGERANK_SCORE_KEYS = ['pagerank', 'rank', 'score']
-
-interface PageRankRow {
-  vid: string
-  score: number
-  /** 按分值降序的全局名次（1 起；切排序方向只变行序不变名次） */
-  rank: number
-}
-
-const isPagerank = computed(() => selectedAlgorithm.value === 'pagerank')
-/** 列探测失败（无 id 列或分值列）返回 null，结果区退回通用表格。 */
-const pagerankRows = computed<PageRankRow[] | null>(() => {
-  if (!isPagerank.value || !algoRows.value.length) return null
-  const columns = Object.keys(algoRows.value[0])
-  const idKey = PAGERANK_ID_KEYS.find((key) => columns.includes(key))
-  const scoreKey = PAGERANK_SCORE_KEYS.find((key) => columns.includes(key))
-  if (!idKey || !scoreKey) return null
-  return algoRows.value
-    .map((row) => ({ vid: String(row[idKey] ?? ''), score: Number(row[scoreKey]) }))
-    .filter((item) => item.vid !== '' && Number.isFinite(item.score))
-    .sort((a, b) => b.score - a.score)
-    .map((item, index) => ({ ...item, rank: index + 1 }))
+watch(algoSearch, () => resetAlgoPage())
+watch(algoResult, () => {
+  algoSearch.value = ''
+  algoSortColumn.value = algoResultColumns.value.find((column) => ['pagerank', 'degree', 'louvain', 'community'].includes(column)) ?? ''
+  algoSortDirection.value = 'desc'
+  resetAlgoPage()
 })
-/** 排名视图可用（pagerank 且列探测成功）；否则渲染通用结果表格。 */
-const usePagerankView = computed(() => pagerankRows.value !== null)
-
-const pagerankSortOrder = ref<'desc' | 'asc'>('desc')
-const sortedPagerankRows = computed(() => {
-  const rows = pagerankRows.value ?? []
-  return pagerankSortOrder.value === 'desc' ? rows : [...rows].reverse()
-})
-
-function togglePagerankSort(): void {
-  pagerankSortOrder.value = pagerankSortOrder.value === 'desc' ? 'asc' : 'desc'
-}
-
-const {
-  page: pagerankPage,
-  pageSize: pagerankPageSize,
-  total: pagerankTotal,
-  pagedItems: pagedPagerankRows,
-  resetPage: resetPagerankPage,
-  changePage: changePagerankPage,
-  changePageSize: changePagerankPageSize,
-} = useClientPagination(sortedPagerankRows, 20)
-
-/** 分值展示：常规值去尾零，极小值转科学计数，避免一串 0.0000。 */
-function formatPagerankScore(value: number): string {
-  if (value === 0) return '0'
-  if (value >= 0.001) return value.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')
-  return value.toExponential(2)
-}
-
-// ----- 排名表节点类型/名称解析（getGraphNode 按页懒解析 + 缓存） -----
-interface RankNodeInfo {
-  name: string
-  type: string
-}
-
-/** vid → 节点信息缓存；值为 null 表示查询失败，当页不重试。 */
-const rankNodeInfoCache = new Map<string, RankNodeInfo | null>()
-const rankNodeInfo = ref<Record<string, RankNodeInfo | null>>({})
-const rankNodeLoading = ref(false)
-
-async function resolveRankNodes(vids: string[]): Promise<void> {
-  // 结果行属于提交时冻结的图空间，节点解析同样用冻结空间；
-  // 用实时空间会在切换空间后全部 404，名称/类型列退化成 '-'
-  if (!algoJobSpace.value) return
-  const pending = [...new Set(vids)].filter((vid) => !rankNodeInfoCache.has(vid))
-  if (!pending.length) return
-  rankNodeLoading.value = true
-  try {
-    const results = await Promise.allSettled(
-      pending.map(async (vid) => {
-        // 拦截器运行时已解包为 ApiResponse（类型层面仍是 AxiosResponse，做一次窄化断言）
-        const body = (await getGraphNode(vid, algoJobSpace.value)) as unknown as ApiResponse<GraphNode>
-        return unwrapApiResponse(body)
-      }),
-    )
-    results.forEach((result, index) => {
-      const vid = pending[index]
-      if (result.status === 'fulfilled') {
-        const node: GraphNode = result.value
-        rankNodeInfoCache.set(vid, {
-          name: String(node.properties?.name ?? ''),
-          type: specificNodeLabel(node.labels ?? []),
-        })
-      } else {
-        rankNodeInfoCache.set(vid, null)
-      }
-    })
-    // 整表替换触发响应式更新
-    rankNodeInfo.value = Object.fromEntries(rankNodeInfoCache)
-  } finally {
-    rankNodeLoading.value = false
+function exportAlgoCsv(): void {
+  const columns = algoResultColumns.value
+  const escapeCell = (value: string) => {
+    // 防止节点名称在电子表格中被解释为公式。
+    const safe = /^[=+@\-\t\r]/.test(value) ? `'${value}` : value
+    return `"${safe.replaceAll('"', '""')}"`
   }
+  const csv = [columns, ...visibleAlgoRows.value.map((row) => columns.map((column) => String(row[column] ?? '')))]
+    .map((row) => row.map(escapeCell).join(',')).join('\r\n')
+  const url = URL.createObjectURL(new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `${selectedAlgorithm.value}-${algoJob.value?.jobId ?? 'result'}${algoResult.value?.truncated ? '-preview' : ''}.csv`
+  link.click()
+  URL.revokeObjectURL(url)
 }
-
-// ----- 图谱高亮：选中节点的 1 跳邻域，节点大小按 PageRank 分值映射 -----
-const HIGHLIGHT_NEIGHBOR_LIMIT = 40
-const highlightVid = ref('')
-const highlightLoading = ref(false)
-const highlightNodes = ref<GraphNodeData[]>([])
-const highlightEdges = ref<GraphEdgeData[]>([])
-/** 邻域子图加载失败的错误信息；非空时面板展示失败态 + 重试按钮。 */
-const highlightError = ref('')
-/** 面板根节点引用：窄屏堆叠布局下点击排名行后滚动定位用。 */
-const highlightAsideRef = ref<HTMLElement | null>(null)
-
-/** 图库 tag → 画布 nodeType（决定配色）；未命中回退 source。 */
-const RANK_NODE_TYPE_RULES: Array<[RegExp, GraphNodeType]> = [
-  [/^(scholar|expert|person)/i, 'expert'],
-  [/^(organization|institution|university|institute)/i, 'org'],
-  [/^(enterprise|company|firm)/i, 'company'],
-  [/^(paper|publication)/i, 'paper'],
-  [/^patent/i, 'topic'],
-  [/^project/i, 'project'],
-  [/^event/i, 'event'],
-]
-
-function rankNodeType(tags: string[]): GraphNodeType {
-  for (const [pattern, type] of RANK_NODE_TYPE_RULES) {
-    if (tags.some((tag) => pattern.test(tag))) return type
-  }
-  return 'source'
-}
-
-/** 图谱高亮图例：当前邻域内出现的实体类型（样式对齐九大业务模块的图谱图例）。 */
-const highlightLegendItems = computed(() =>
-  Array.from(
-    new Map(
-      highlightNodes.value.map((node) => [
-        node.nodeType,
-        { type: node.nodeType, label: node.entityType },
-      ]),
-    ).values(),
-  ),
-)
-
-/** 泛化底座标签（挂在所有节点上、非业务类型）；过滤口径与
- *  business-service/indirect-relation-view.ts 保持一致。 */
-const GENERIC_NODE_LABELS = new Set(['organization_base', 'Entity', 'Base'])
-
-/** 取展示用节点类型：跳过泛化底座标签取第一个业务 tag；只有底座标签时原样返回。 */
-function specificNodeLabel(tags: string[]): string {
-  const specific = tags.filter((tag) => !GENERIC_NODE_LABELS.has(tag))
-  return specific[0] ?? tags[0] ?? ''
-}
-
-/** 分值 → 节点半径：结果集内节点 12~24 线性缩放，中心节点 26；不在结果集内的返回 undefined 走默认。 */
-function highlightRadius(vid: string): number | undefined {
-  if (vid === highlightVid.value) return 26
-  const rows = pagerankRows.value
-  if (!rows?.length) return undefined
-  const row = rows.find((item) => item.vid === vid)
-  if (!row) return undefined
-  const max = rows[0].score
-  const ratio = max > 0 ? row.score / max : 0
-  return Math.round(12 + ratio * 12)
-}
-
-/** 高亮请求序号：并发点击时只认最后一次，过期响应直接丢弃。 */
-let highlightReqSeq = 0
-
-async function loadHighlight(vid: string, options?: { scrollIntoView?: boolean }): Promise<void> {
-  // 邻域同样按提交时冻结的图空间查询（结果 vid 来自该空间）
-  if (!algoJobSpace.value) return
-  const seq = ++highlightReqSeq
-  highlightVid.value = vid
-  highlightLoading.value = true
-  highlightError.value = ''
-  highlightNodes.value = []
-  highlightEdges.value = []
-  try {
-    const body = (await getSubgraph(vid, {
-      depth: 1,
-      limit: HIGHLIGHT_NEIGHBOR_LIMIT,
-      space: algoJobSpace.value,
-    })) as unknown as ApiResponse<GraphData>
-    if (seq !== highlightReqSeq) return
-    const graph = unwrapApiResponse(body)
-    const nodes: GraphNodeData[] = graph.nodes.map((node) => {
-      const tags = node.labels ?? []
-      return {
-        id: node.id,
-        label: String(node.properties?.name ?? node.id),
-        nodeType: rankNodeType(tags),
-        // 初始坐标：中心居中、邻居环布，交给力导向布局展开
-        x: node.id === vid ? 480 : 480 + (Math.random() - 0.5) * 360,
-        y: node.id === vid ? 270 : 270 + (Math.random() - 0.5) * 220,
-        radius: highlightRadius(node.id),
-        level: node.id === vid ? 0 : 1,
-        entityType: specificNodeLabel(tags) || '未知类型',
-        relations: '',
-        evidence: [],
-      }
-    })
-    // 重新套用 radius（依赖 highlightVid，中心变化时同步缩放）
-    highlightNodes.value = nodes.map((node) => ({ ...node, radius: highlightRadius(node.id) }))
-    highlightEdges.value = graph.edges.map((edge) => ({
-      id: edge.id,
-      from: edge.source,
-      to: edge.target,
-      label: edge.type,
-      category: edge.type,
-    }))
-    // 窄屏（≤1080px）下面板堆叠在排名表之后、常落在视口外；
-    // 用户主动切换中心时滚动到面板，避免「点了排名行右边没图」
-    if (options?.scrollIntoView && window.matchMedia('(max-width: 1080px)').matches) {
-      await nextTick()
-      highlightAsideRef.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-    }
-  } catch (error) {
-    if (seq !== highlightReqSeq) return
-    highlightError.value = getErrorMessage(error, '图谱高亮加载失败')
-    showToast(highlightError.value, 'warning')
-  } finally {
-    // 过期请求不清除新一轮的加载态
-    if (seq === highlightReqSeq) highlightLoading.value = false
-  }
-}
-
-/** 点击排名行（或画布上的结果集节点）：切换图谱高亮中心。非结果集节点忽略。 */
-function selectHighlight(vid: string): void {
-  if (vid === highlightVid.value && highlightNodes.value.length) return
-  if (!pagerankRows.value?.some((row) => row.vid === vid)) return
-  void loadHighlight(vid, { scrollIntoView: true })
-}
-
-/** 图谱高亮加载失败后的重试：仍以当前中心重新拉邻域。 */
-function retryHighlight(): void {
-  if (!highlightVid.value) return
-  void loadHighlight(highlightVid.value, { scrollIntoView: true })
-}
-
-// 新结果到达：重置排名视图并自动高亮第一名；结果清空/换算法时同步清空高亮
-watch(pagerankRows, (rows) => {
-  rankNodeInfoCache.clear()
-  rankNodeInfo.value = {}
-  pagerankSortOrder.value = 'desc'
-  resetPagerankPage()
-  if (rows?.length) {
-    void loadHighlight(rows[0].vid)
-  } else {
-    highlightVid.value = ''
-    highlightNodes.value = []
-    highlightEdges.value = []
-  }
-})
-
-// 翻页/排序后解析当前页节点的类型与名称
-watch(
-  pagedPagerankRows,
-  (rows) => {
-    if (rows?.length) void resolveRankNodes(rows.map((row) => row.vid))
-  },
-  { immediate: true },
-)
-
-// ---------- Louvain 专属结果：社区图谱 + 社区列表 + 节点→社区表 ----------
-/** csv 列名按优先级探测（NebulaGraph Algorithm 输出列名随版本浮动）。 */
-const LOUVAIN_ID_KEYS = ['_id', 'id', 'vid']
-const LOUVAIN_COMMUNITY_KEYS = ['louvain', 'community', 'communityId', 'community_id', 'cid', 'modularityClass']
-
-interface LouvainRow {
-  vid: string
-  community: string
-}
-
-interface LouvainCommunityInfo {
-  /** 社区编号（csv 原值，如 "7"） */
-  id: string
-  size: number
-  members: string[]
-}
-
-const isLouvain = computed(() => selectedAlgorithm.value === 'louvain')
-/** 列探测失败（无 id 列或社区列）返回 null，结果区退回通用表格。 */
-const louvainRows = computed<LouvainRow[] | null>(() => {
-  if (!isLouvain.value || !algoRows.value.length) return null
-  const columns = Object.keys(algoRows.value[0])
-  const idKey = LOUVAIN_ID_KEYS.find((key) => columns.includes(key))
-  const communityKey = LOUVAIN_COMMUNITY_KEYS.find((key) => columns.includes(key))
-  if (!idKey || !communityKey) return null
-  return algoRows.value
-    .map((row) => ({ vid: String(row[idKey] ?? ''), community: String(row[communityKey] ?? '') }))
-    .filter((item) => item.vid !== '' && item.community !== '')
-})
-/** 社区视图可用（louvain 且列探测成功）；否则渲染通用结果表格。 */
-const useLouvainView = computed(() => louvainRows.value !== null)
-
-/** 按社区聚合，规模降序、同规模按编号排序；图谱与社区列表共用。 */
-const louvainCommunities = computed<LouvainCommunityInfo[]>(() => {
-  const grouped = new Map<string, string[]>()
-  for (const row of louvainRows.value ?? []) {
-    const members = grouped.get(row.community)
-    if (members) members.push(row.vid)
-    else grouped.set(row.community, [row.vid])
-  }
-  return [...grouped.entries()]
-    .map(([id, members]) => ({ id, size: members.length, members }))
-    .sort((a, b) => b.size - a.size || a.id.localeCompare(b.id))
-})
-
-/** 节点→社区表：按社区规模降序分组，同社区内按 vid 排序。 */
-const sortedLouvainRows = computed(() => {
-  const order = new Map(louvainCommunities.value.map((community, index) => [community.id, index]))
-  return [...(louvainRows.value ?? [])].sort(
-    (a, b) =>
-      (order.get(a.community) ?? 0) - (order.get(b.community) ?? 0) || a.vid.localeCompare(b.vid),
-  )
-})
-
-const {
-  page: louvainPage,
-  pageSize: louvainPageSize,
-  total: louvainTotal,
-  pagedItems: pagedLouvainRows,
-  resetPage: resetLouvainPage,
-  changePage: changeLouvainPage,
-  changePageSize: changeLouvainPageSize,
-} = useClientPagination(sortedLouvainRows, 20)
-
-// ----- 社区图谱：规模前 N 社区 → 枢纽节点 + 成员边，力导向自然聚簇 -----
-/** 图谱最多同时展示的社区数与每个社区的成员节点数（成员截断，保证画布可读）。 */
-const LOUVAIN_GRAPH_COMMUNITY_LIMIT = 6
-const LOUVAIN_GRAPH_MEMBER_LIMIT = 8
-/** 社区序号 → 画布 nodeType（配色），轮转取色保证相邻社区视觉可分。 */
-const LOUVAIN_COMMUNITY_NODE_TYPES: GraphNodeType[] = [
-  'main',
-  'expert',
-  'org',
-  'company',
-  'paper',
-  'project',
-  'topic',
-  'event',
-  'chain',
-  'field',
-]
-const LOUVAIN_HUB_PREFIX = '__community_'
-
-const louvainSelectedCommunity = ref('')
-const louvainGraphNodes = ref<GraphNodeData[]>([])
-const louvainGraphEdges = ref<GraphEdgeData[]>([])
-
-/** 图谱实际展示的社区：默认规模前 N；选中社区不在前 N 时置顶替换最小的一个。 */
-const louvainDisplayedCommunities = computed<LouvainCommunityInfo[]>(() => {
-  const all = louvainCommunities.value
-  const top = all.slice(0, LOUVAIN_GRAPH_COMMUNITY_LIMIT)
-  const selected = louvainSelectedCommunity.value
-  if (selected && !top.some((community) => community.id === selected)) {
-    const target = all.find((community) => community.id === selected)
-    if (target) return [target, ...top.slice(0, LOUVAIN_GRAPH_COMMUNITY_LIMIT - 1)]
-  }
-  return top
-})
-
-function louvainHubId(communityId: string): string {
-  return `${LOUVAIN_HUB_PREFIX}${communityId}`
-}
-
-/** 社区稳定配色序号：取社区在「规模降序全集」中的位次，图谱 / 色点 / 社区列表三处共用，
- *  保证同一社区在任何视图里颜色一致。 */
-function louvainCommunityTone(communityId: string): number {
-  const index = louvainCommunities.value.findIndex((community) => community.id === communityId)
-  return Math.max(index, 0) % LOUVAIN_COMMUNITY_NODE_TYPES.length
-}
-
-/** 社区列表（前 20 个），超出部分不渲染（总量见图谱头部说明）。 */
-const louvainCommunityChips = computed(() =>
-  louvainCommunities.value.slice(0, 20).map((community) => ({
-    id: community.id,
-    size: community.size,
-    tone: louvainCommunityTone(community.id),
-  })),
-)
-
-/** 画布节点点击：枢纽节点或成员节点都选中其所属社区。 */
-function handleLouvainNodeClick(node: GraphNodeData): void {
-  if (node.id.startsWith(LOUVAIN_HUB_PREFIX)) {
-    selectLouvainCommunity(node.id.slice(LOUVAIN_HUB_PREFIX.length))
-  } else {
-    selectLouvainCommunity(louvainCommunityOf(node.id))
-  }
-}
-
-/** vid → 社区编号（画布成员节点点击回查用）。 */
-function louvainCommunityOf(vid: string): string {
-  return louvainRows.value?.find((row) => row.vid === vid)?.community ?? ''
-}
-
-/** 构建社区图谱：每个社区一个枢纽节点，成员挂边到枢纽；节点名称用已解析缓存。 */
-function buildLouvainGraph(): void {
-  const communities = louvainDisplayedCommunities.value
-  const nodes: GraphNodeData[] = []
-  const edges: GraphEdgeData[] = []
-  communities.forEach((community, index) => {
-    // 配色与社区列表色点共用 louvainCommunityTone（按全集规模位次），保证跨视图一致
-    const nodeType = LOUVAIN_COMMUNITY_NODE_TYPES[louvainCommunityTone(community.id)]
-    // 社区锚点环形分布作初始位置，力导向（成员-枢纽弹簧）负责聚簇成形
-    const angle = (index / Math.max(communities.length, 1)) * Math.PI * 2
-    const hubX = 480 + Math.cos(angle) * 300
-    const hubY = 270 + Math.sin(angle) * 170
-    nodes.push({
-      id: louvainHubId(community.id),
-      label: `社区 ${community.id}`,
-      nodeType,
-      x: hubX,
-      y: hubY,
-      radius: 20,
-      level: 0,
-      entityType: '社区',
-      relations: `${community.size} 个节点`,
-      evidence: [],
-    })
-    for (const vid of community.members.slice(0, LOUVAIN_GRAPH_MEMBER_LIMIT)) {
-      nodes.push({
-        id: vid,
-        label: rankNodeInfo.value[vid]?.name || vid,
-        nodeType,
-        x: hubX + (Math.random() - 0.5) * 200,
-        y: hubY + (Math.random() - 0.5) * 200,
-        radius: 12,
-        level: 1,
-        entityType: rankNodeInfo.value[vid]?.type || '成员',
-        relations: `社区 ${community.id}`,
-        evidence: [],
-      })
-      edges.push({
-        id: `__member_${community.id}_${vid}`,
-        from: vid,
-        to: louvainHubId(community.id),
-        label: '',
-        category: '社区归属',
-      })
-    }
-  })
-  louvainGraphNodes.value = nodes
-  louvainGraphEdges.value = edges
-}
-
-/** 选中社区（社区列表/表格行/画布节点点击共用）；不在前 N 时换入图谱。 */
-function selectLouvainCommunity(communityId: string): void {
-  if (!communityId) return
-  louvainSelectedCommunity.value = communityId
-}
-
-// 新结果到达：重置社区视图；换算法/清空结果时同步清空图谱
-watch(louvainRows, (rows) => {
-  rankNodeInfoCache.clear()
-  rankNodeInfo.value = {}
-  resetLouvainPage()
-  louvainSelectedCommunity.value = ''
-  if (rows?.length) buildLouvainGraph()
-  else {
-    louvainGraphNodes.value = []
-    louvainGraphEdges.value = []
-  }
-})
-
-// 展示社区集合或节点信息变化（名称异步解析回来）时重建图谱
-watch(
-  [louvainDisplayedCommunities, rankNodeInfo],
-  () => {
-    if (useLouvainView.value) buildLouvainGraph()
-  },
-)
-
-// 节点→社区表翻页 + 图谱成员节点：懒解析名称与类型
-watch(
-  pagedLouvainRows,
-  (rows) => {
-    if (rows?.length) void resolveRankNodes(rows.map((row) => row.vid))
-  },
-  { immediate: true },
-)
-watch(louvainGraphNodes, (nodes) => {
-  const vids = (nodes ?? [])
-    .filter((node) => !node.id.startsWith(LOUVAIN_HUB_PREFIX))
-    .map((node) => node.id)
-  if (vids.length) void resolveRankNodes(vids)
-})
 
 /** 引擎状态徽标（正常 / 不可用 / 检测中）。 */
 const algoEngineStatus = computed(() => {
@@ -1101,12 +682,6 @@ async function runWithLoading(message: string, action?: () => void) {
   isActionLoading.value = false
 }
 
-function formatNgqlCell(value: unknown): string {
-  if (value === null || value === undefined) return 'NULL'
-  if (typeof value === 'object') return JSON.stringify(value, null, 2)
-  return String(value)
-}
-
 async function handleNgqlQuery(): Promise<void> {
   if (ngqlLoading.value) return
   const context = graphContextVersion
@@ -1196,7 +771,8 @@ function stopAlgoPoll(): void {
   }
 }
 
-function scheduleAlgoPoll(): void {
+function scheduleAlgoPoll(state = activeAlgorithmState.value): void {
+  if (state !== activeAlgorithmState.value) return
   stopAlgoPoll()
   if (queryMode.value !== 'algo' || activeTab.value !== 'query') return
   algoPollTimer = window.setTimeout(() => {
@@ -1205,61 +781,63 @@ function scheduleAlgoPoll(): void {
 }
 
 async function pollAlgoJob(): Promise<void> {
+  const state = activeAlgorithmState.value
   algoPollTimer = undefined
   // 离开图算法面板或查询页签即停轮询
-  if (!algoJob.value || !algoJobSpace.value) return
+  if (!state.job || !state.space) return
   if (queryMode.value !== 'algo' || activeTab.value !== 'query') return
   const context = graphContextVersion
-  const jobId = algoJob.value.jobId
+  const jobId = state.job.jobId
   try {
-    const job = await getAlgorithmJob(algoJobSpace.value, jobId)
-    if (context !== graphContextVersion || algoJob.value?.jobId !== jobId) return
-    algoJob.value = job
-    algoPollFailures = 0
+    const job = await getAlgorithmJob(state.space, jobId)
+    if (context !== graphContextVersion || state.job?.jobId !== jobId) return
+    state.job = job
+    state.pollFailures = 0
     if (job.status === 'succeeded') {
-      await fetchAlgoResult()
+      await fetchAlgoResult(state)
     } else if (job.status === 'failed') {
       showToast('算法作业执行失败，详情见作业状态面板', 'warning')
     } else {
-      scheduleAlgoPoll()
+      scheduleAlgoPoll(state)
     }
   } catch (error) {
-    if (context !== graphContextVersion || algoJob.value?.jobId !== jobId) return
+    if (context !== graphContextVersion || state.job?.jobId !== jobId) return
     showToast(getErrorMessage(error, '算法作业状态查询失败'), 'warning')
     // 连续 3 次轮询失败即停止，避免页面后台空转打接口
-    algoPollFailures += 1
-    if (algoPollFailures < 3) scheduleAlgoPoll()
+    state.pollFailures += 1
+    if (state.pollFailures < 3) scheduleAlgoPoll(state)
   }
 }
 
-async function fetchAlgoResult(): Promise<void> {
-  if (!algoJob.value || !algoJobSpace.value) return
+async function fetchAlgoResult(state = activeAlgorithmState.value): Promise<void> {
+  if (!state.job || !state.space) return
   const context = graphContextVersion
-  const jobId = algoJob.value.jobId
+  const jobId = state.job.jobId
   try {
-    const result = await getAlgorithmJobResult(algoJobSpace.value, jobId)
-    if (context !== graphContextVersion || algoJob.value?.jobId !== jobId) return
-    algoResult.value = result
-    resetAlgoPage()
+    const result = await getAlgorithmJobResult(state.space, jobId)
+    if (context !== graphContextVersion || state.job?.jobId !== jobId) return
+    state.result = result
+    if (state === activeAlgorithmState.value) resetAlgoPage()
   } catch (error) {
-    if (context !== graphContextVersion || algoJob.value?.jobId !== jobId) return
+    if (context !== graphContextVersion || state.job?.jobId !== jobId) return
     showToast(getErrorMessage(error, '算法结果获取失败'), 'warning')
   }
 }
 
 /** 手动刷新作业状态；仍在运行则重新挂上轮询。 */
 async function refreshAlgoJob(): Promise<void> {
-  if (!algoJob.value || !algoJobSpace.value) return
+  const state = activeAlgorithmState.value
+  if (!state.job || !state.space) return
   const context = graphContextVersion
-  const jobId = algoJob.value.jobId
+  const jobId = state.job.jobId
   try {
-    const job = await getAlgorithmJob(algoJobSpace.value, jobId)
-    if (context !== graphContextVersion || algoJob.value?.jobId !== jobId) return
-    algoJob.value = job
-    if (job.status === 'succeeded') await fetchAlgoResult()
-    else if (job.status === 'running') scheduleAlgoPoll()
+    const job = await getAlgorithmJob(state.space, jobId)
+    if (context !== graphContextVersion || state.job?.jobId !== jobId) return
+    state.job = job
+    if (job.status === 'succeeded') await fetchAlgoResult(state)
+    else if (job.status === 'running') scheduleAlgoPoll(state)
   } catch (error) {
-    if (context !== graphContextVersion || algoJob.value?.jobId !== jobId) return
+    if (context !== graphContextVersion || state.job?.jobId !== jobId) return
     showToast(getErrorMessage(error, '算法作业状态查询失败'), 'warning')
   }
 }
@@ -1277,7 +855,8 @@ function collectAlgoParams(): Record<string, number | string | boolean> {
 }
 
 async function handleAlgoSubmit(): Promise<void> {
-  if (algoSubmitLoading.value) return
+  const state = activeAlgorithmState.value
+  if (state.submitting) return
   if (!algoSpace.value) {
     showToast('请选择图空间', 'warning')
     return
@@ -1320,13 +899,13 @@ async function handleAlgoSubmit(): Promise<void> {
     return
   }
 
-  algoSubmitLoading.value = true
+  state.submitting = true
   stopAlgoPoll()
   const context = graphContextVersion
   const space = algoSpace.value
-  algoJob.value = null
-  algoResult.value = null
-  algoPollFailures = 0
+  state.job = null
+  state.result = null
+  state.pollFailures = 0
   try {
     const job = await submitAlgorithmJob({
       space,
@@ -1339,15 +918,15 @@ async function handleAlgoSubmit(): Promise<void> {
       partitionNum: algoPartitionNum.value,
     })
     if (context !== graphContextVersion) return
-    algoJob.value = job
+    state.job = job
     // 使用发出请求时的空间；切换空间后旧请求不会再回写页面。
-    algoJobSpace.value = space
-    algoResult.value = null
-    resetAlgoPage()
+    state.space = space
+    state.result = null
+    if (state === activeAlgorithmState.value) resetAlgoPage()
     if (job.status === 'running') {
-      scheduleAlgoPoll()
+      scheduleAlgoPoll(state)
     } else if (job.status === 'succeeded') {
-      await fetchAlgoResult()
+      await fetchAlgoResult(state)
     } else {
       showToast('算法作业执行失败，详情见作业状态面板', 'warning')
     }
@@ -1355,14 +934,17 @@ async function handleAlgoSubmit(): Promise<void> {
     if (context !== graphContextVersion) return
     showToast(getErrorMessage(error, '算法作业提交失败'), 'warning')
   } finally {
-    if (context === graphContextVersion) algoSubmitLoading.value = false
+    if (context === graphContextVersion) state.submitting = false
   }
 }
 
-// 切换算法：初始化该算法的参数桶（watch 默认 pre flush，重渲染前生效）
+// 切换算法时同步切换独立状态，并恢复当前作业轮询。
 watch(selectedAlgorithm, (id) => {
   if (!algoParamValues.value[id]) initAlgoParams(id)
-})
+  stopAlgoPoll()
+  resetAlgoPage()
+  if (algoJob.value?.status === 'running') scheduleAlgoPoll()
+}, { flush: 'sync' })
 
 // 进入图算法模式：懒加载元数据；离开：停轮询
 watch([queryMode, activeTab], ([mode, tab]) => {
@@ -1384,11 +966,7 @@ watch(algoSpace, () => {
   algoMetadata.value = null
   algoMetadataLoading.value = false
   algoMetadataLoadedFor = ''
-  algoJob.value = null
-  algoJobSpace.value = ''
-  algoResult.value = null
-  algoSubmitLoading.value = false
-  algoPollFailures = 0
+  algorithmStates.value = createAlgorithmStates()
   resetAlgoPage()
   if (queryMode.value === 'algo' && activeTab.value === 'query') void loadAlgoMetadata()
 }, { flush: 'sync' })
@@ -1745,11 +1323,10 @@ const pageMeta = computed(() => {
 
     </main>
 
-    <!-- nGQL 模式 is-fixed-result：结果区常驻并占满剩余高度（对齐图谱构建页固定表格版式），
-         图算法模式表单较长仍走整页滚动 -->
+    <!-- 两种查询模式共用固定结果列表，表格内部滚动。 -->
     <main
       v-else-if="activeTab === 'query'"
-      :class="['platform-content', 'platform-query', { 'is-fixed-result': queryMode === 'ngql' }]"
+      :class="['platform-content', 'platform-query']"
     >
       <section class="kg-panel platform-query-form">
         <!-- 一级模式切换；算法页签和引擎状态位于下方独立一行。 -->
@@ -1771,33 +1348,26 @@ const pageMeta = computed(() => {
                 图算法
               </button>
             </div>
-            <div v-if="queryMode === 'ngql'" class="platform-ngql-permission-hint" role="note">
-              <IconInfoCircle aria-hidden="true" />
-              <span>只读语句所有用户可执行</span>
-              <i aria-hidden="true"></i>
-              <span>写语句仅平台管理员</span>
-              <i aria-hidden="true"></i>
-              <span>DDL 禁止执行</span>
-            </div>
           </div>
-          <div v-if="queryMode === 'ngql'" class="platform-ngql-header-actions">
-            <button
-              class="kg-button"
-              type="button"
-              :disabled="ngqlLoading || !ngqlStatement.trim()"
-              @click="handleNgqlQuery"
-            >
+        </div>
+        <div v-if="queryMode === 'ngql'" class="platform-ngql-toolbar">
+          <div class="platform-ngql-permission-hint" role="note">
+            <IconInfoCircle aria-hidden="true" />
+            <span>只读语句所有用户可执行</span><i aria-hidden="true"></i>
+            <span>写语句仅平台管理员</span><i aria-hidden="true"></i>
+            <span>DDL 禁止执行</span>
+          </div>
+          <div class="platform-ngql-header-actions">
+            <AButton type="primary" :disabled="ngqlLoading" @click="handleNgqlQuery">
               {{ ngqlLoading ? '执行中…' : '执行 nGQL' }}
-            </button>
+            </AButton>
           </div>
         </div>
         <div v-if="queryMode === 'ngql'" class="platform-ngql-input">
-          <textarea
+          <ATextarea
             v-model="ngqlStatement"
-            aria-label="nGQL 查询语句"
-            class="platform-ngql-input__textarea"
-            rows="5"
-            spellcheck="false"
+            :textarea-attrs="{ 'aria-label': 'nGQL 查询语句', spellcheck: false }"
+            :auto-size="{ minRows: 4, maxRows: 6 }"
             placeholder="MATCH (v:专家) RETURN v LIMIT 10"
             @keydown.ctrl.enter="handleNgqlQuery"
             @keydown.meta.enter="handleNgqlQuery"
@@ -1813,6 +1383,12 @@ const pageMeta = computed(() => {
                 :class="{ 'is-active': selectedAlgorithm === algo.id }"
                 @click="selectedAlgorithm = algo.id"
               >{{ algo.label }}</button>
+              <APopover :key="selectedAlgorithm" trigger="click" :title="selectedAlgorithmDef.label" position="bottom">
+                <AButton type="text" shape="circle" class="platform-algorithm-info" aria-label="查看算法说明">
+                  <IconInfoCircle aria-hidden="true" />
+                </AButton>
+                <template #content><p class="platform-algorithm-description">{{ selectedAlgorithmDef.description }}</p></template>
+              </APopover>
             </nav>
             <div class="platform-query-algo__engine">
               <span
@@ -1832,20 +1408,21 @@ const pageMeta = computed(() => {
           <p v-if="algoMetadata?.engine?.status === 'DOWN'" class="platform-query-algo__engine-hint" role="note">
             算法引擎当前不可用（{{ algoMetadata.engine.message ?? 'Spark 运行器未就绪' }}），提交可能失败，可稍后重试
           </p>
-          <p class="platform-query-algo__desc">{{ selectedAlgorithmDef.label }}：{{ selectedAlgorithmDef.description }}</p>
-          <p v-if="!advancedParamDefs.length" class="platform-query-algo__no-params">当前算法无可调参数，选择关系类型后直接提交即可</p>
-          <!-- 主表单保留业务输入；算法调优参数折叠在「高级参数」区（默认展开，页签间内容可见区分）。 -->
+          <!-- 仅显示业务输入，算法调优参数使用默认值。 -->
           <div class="platform-query-algo__controls">
-            <div class="platform-form-grid platform-query-algo__form">
-              <div class="platform-form-field platform-query-algo__labels">
-                <label class="platform-form-label" for="algo-relation-types"><i class="platform-query-algo__required" aria-hidden="true">*</i>关系类型（可多选）</label>
+            <AForm :model="{ labels: algoLabels }" layout="vertical" class="platform-query-algo__form">
+              <AFormItem field="labels" required :feedback="false" class="platform-query-algo__labels">
+                <template #label>关系类型<span class="platform-relation-label-hint">（可多选，最多 20 个）</span></template>
                 <a-select
                   id="algo-relation-types"
                   aria-label="关系类型（可多选，必填）"
                   v-model="algoLabels"
                   multiple
                   allow-clear
-                  placeholder="选择参与计算的关系类型（最多 20 个）"
+                  placeholder="请选择参与计算的关系类型"
+                  :loading="algoMetadataLoading"
+                  :disabled="algoSubmitLoading || isAlgoJobRunning"
+                  allow-search
                   :max-tag-count="4"
                   :scrollbar="false"
                 >
@@ -1853,8 +1430,8 @@ const pageMeta = computed(() => {
                     {{ item }}
                   </a-option>
                 </a-select>
-              </div>
-              <div v-for="param in renderParamDefs" :key="param.key" class="platform-form-field">
+              </AFormItem>
+              <div v-for="param in mainParamDefs" :key="param.key" class="platform-form-field">
                 <label class="platform-form-label" :for="`algo-param-${param.key}`">
                   <i v-if="param.required" class="platform-query-algo__required">*</i>{{ param.label }}
                 </label>
@@ -1899,26 +1476,20 @@ const pageMeta = computed(() => {
                 />
                 <span v-if="param.hint && param.type !== 'bool'" class="platform-query-algo__param-hint">{{ param.hint }}</span>
               </div>
-            </div>
-            <button
-              v-if="advancedParamDefs.length"
-              class="kg-button kg-button--text platform-query-algo__advanced-toggle"
-              type="button"
-              :aria-expanded="advancedOpen"
-              @click="advancedOpen = !advancedOpen"
-            >
-              {{ advancedOpen ? '收起高级参数' : `高级参数（${advancedParamDefs.length} 个）` }}
-            </button>
+            </AForm>
             <div class="platform-query-algo__actions">
-              <button
-                class="kg-button"
-                type="button"
+              <AButton
+                type="primary"
                 :disabled="algoSubmitLoading || isAlgoJobRunning"
                 @click="handleAlgoSubmit"
               >
-                {{ algoSubmitLoading ? '提交中…' : isAlgoJobRunning ? '作业运行中…' : '提交算法作业' }}
-              </button>
+                提交算法作业
+              </AButton>
             </div>
+          </div>
+          <div v-if="algoSubmitLoading && !algoJob" class="platform-query-algo__job platform-query-algo__job-running" role="status" aria-live="polite">
+            <i class="platform-query-algo__job-spinner" aria-hidden="true"></i>
+            <span>正在提交算法作业，提交成功后自动显示运行进度…</span>
           </div>
           <div v-if="algoJob" class="platform-query-algo__job">
             <div class="platform-query-algo__job-meta">
@@ -1949,22 +1520,9 @@ const pageMeta = computed(() => {
         </header>
         <div class="platform-query-result__body">
           <div class="platform-query-result__table">
-            <table v-if="ngqlResult && ngqlResult.records.length" aria-label="nGQL 查询结果">
-              <thead>
-                <tr>
-                  <th v-for="column in ngqlResult.columns" :key="column">{{ column }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(record, index) in pagedNgqlRecords" :key="index">
-                  <td v-for="column in ngqlResult.columns" :key="column">
-                    <pre>{{ formatNgqlCell(record[column]) }}</pre>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-            <div v-else class="platform-query-result__empty">
-              {{ ngqlResult ? '语句执行成功，无返回记录' : '暂无数据，执行 nGQL 语句后在此查看结果' }}
+            <QueryResultTable v-if="ngqlTotal" aria-label="nGQL 查询结果" :rows="pagedNgqlRecords" :columns="ngqlResult?.columns ?? []" :page="ngqlPage" :page-size="ngqlPageSize" :loading="ngqlLoading" />
+            <div v-else class="platform-query-result__empty" role="status" aria-live="polite">
+              <AEmpty :description="ngqlLoading ? '查询执行中，请稍候…' : ngqlResult ? '语句执行成功，无返回记录' : '暂无数据，执行 nGQL 语句后在此查看结果'" />
             </div>
           </div>
           <ListPagination
@@ -1979,204 +1537,27 @@ const pageMeta = computed(() => {
         </div>
       </section>
 
-      <section v-if="queryMode === 'algo' && algoResult" class="platform-query-result platform-query-algo-result">
+      <section v-if="queryMode === 'algo'" class="platform-query-result platform-query-algo-result">
         <header class="platform-query-result__head">
-          <h2 class="platform-query-result__title">
-            {{ usePagerankView ? '节点重要性排名' : useLouvainView ? '社区发现结果' : '算法执行结果' }}
-          </h2>
-          <span class="platform-query-result__meta">{{
-            usePagerankView ? pagerankTotal : useLouvainView ? louvainTotal : algoRows.length
-          }} 行记录</span>
+          <h2 class="platform-query-result__title">{{ selectedAlgorithmDef.label }}执行结果</h2>
+          <span v-if="algoResult" class="platform-query-result__meta">已返回 {{ algoRows.length }} 条{{ algoResult.truncated ? '（非全部结果）' : '' }}</span>
         </header>
-        <p v-if="algoResult.truncated" class="platform-query-algo__truncated">
-          结果已达服务端上限 10000 行，已截断展示
+        <div v-if="algoResult" class="platform-algo-list-toolbar">
+          <AInputSearch v-model="algoSearch" class="platform-algo-search" :input-attrs="{ 'aria-label': '搜索图 VID' }" allow-clear placeholder="输入图 VID 筛选结果" />
+          <span>匹配 {{ algoTotal }} 条 · 搜索和排序仅针对已返回结果</span>
+          <AButton :disabled="!algoTotal" @click="exportAlgoCsv">导出{{ algoResult.truncated ? '预览' : '当前结果' }} CSV</AButton>
+        </div>
+        <p v-if="algoResult?.truncated" class="platform-query-algo__truncated" role="note">
+          本次结果预览已被服务端截断，当前返回 {{ algoRows.length }} 条，并非全部计算结果。搜索、排序和导出仅包含这些数据；可缩小关系类型范围后重新运行。
         </p>
-        <!-- PageRank 专属：重要性排名表 + 图谱高亮 -->
-        <div v-if="usePagerankView" class="platform-query-result__body platform-query-algo__rank-body">
-          <div class="platform-query-algo__rank-table">
-            <div class="platform-query-result__table">
-              <table v-if="pagerankTotal" aria-label="PageRank 节点重要性排名">
-              <thead>
-                <tr>
-                  <th class="is-rank">排名</th>
-                  <th>节点</th>
-                  <th>节点类型</th>
-                  <th
-                    class="is-sortable"
-                    role="button"
-                    tabindex="0"
-                    :aria-sort="pagerankSortOrder === 'desc' ? 'descending' : 'ascending'"
-                    @click="togglePagerankSort"
-                    @keydown.enter="togglePagerankSort"
-                    @keydown.space.prevent="togglePagerankSort"
-                  >
-                    PageRank 值<i class="platform-query-algo__sort-arrow">{{ pagerankSortOrder === 'desc' ? '↓' : '↑' }}</i>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr
-                  v-for="row in pagedPagerankRows"
-                  :key="row.vid"
-                  :class="{ 'is-selected': row.vid === highlightVid }"
-                  @click="selectHighlight(row.vid)"
-                >
-                  <td class="is-rank">{{ row.rank }}</td>
-                  <td class="platform-query-algo__node-cell">
-                    <strong>{{ rankNodeInfo[row.vid]?.name || row.vid }}</strong>
-                    <span v-if="rankNodeInfo[row.vid]?.name" :title="row.vid">{{ row.vid }}</span>
-                  </td>
-                  <td>{{ rankNodeInfo[row.vid]?.type || (rankNodeLoading ? '…' : '-') }}</td>
-                  <td
-                    class="platform-query-algo__score"
-                    :title="`PageRank ${row.score}`"
-                  >
-                    {{ formatPagerankScore(row.score) }}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-              <div v-else class="platform-query-result__empty">算法执行成功，无返回记录</div>
-            </div>
-            <ListPagination
-              v-if="pagerankTotal > 0"
-              :total="pagerankTotal"
-              :page="pagerankPage"
-              :page-size="pagerankPageSize"
-              @change="changePagerankPage"
-              @change-size="changePagerankPageSize"
-            />
-          </div>
-          <aside ref="highlightAsideRef" class="platform-query-algo__highlight" aria-label="图谱高亮">
-            <div class="platform-query-algo__highlight-head">
-              <h3>图谱高亮</h3>
-              <p>选中节点的 1 跳邻域，节点大小按 PageRank 分值映射；点击排名行切换中心</p>
-            </div>
-            <div
-              v-if="highlightLegendItems.length"
-              class="platform-query-algo__legend"
-              aria-label="图谱实体类型图例"
-            >
-              <span
-                v-for="item in highlightLegendItems"
-                :key="item.type"
-                :class="`is-${item.type}`"
-              >
-                <i />{{ item.label }}
-              </span>
-            </div>
-            <div v-if="highlightLoading" class="platform-query-result__empty">邻域子图加载中…</div>
-            <KgGraphCanvas
-              v-else-if="highlightNodes.length"
-              :nodes="highlightNodes"
-              :edges="highlightEdges"
-              :selected-node-id="highlightVid"
-              aria-label="PageRank 图谱高亮"
-              @select-node="(node) => selectHighlight(node.id)"
-            />
-            <div v-else-if="highlightError" class="platform-query-result__empty platform-query-algo__highlight-error">
-              <span>图谱高亮加载失败：{{ highlightError }}</span>
-              <button class="kg-button kg-button--text" type="button" @click="retryHighlight">重试</button>
-            </div>
-            <div v-else class="platform-query-result__empty">点击排名行查看图谱高亮</div>
-          </aside>
-        </div>
-        <!-- Louvain 专属：节点→社区表 + 社区图谱 + 社区列表 -->
-        <div v-else-if="useLouvainView" class="platform-query-result__body platform-query-algo__rank-body">
-          <div class="platform-query-algo__rank-table">
-            <div class="platform-query-result__table">
-              <table v-if="louvainTotal" aria-label="Louvain 节点社区归属">
-                <thead>
-                  <tr>
-                    <th>节点</th>
-                    <th>节点类型</th>
-                    <th>社区编号</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr
-                    v-for="row in pagedLouvainRows"
-                    :key="row.vid"
-                    :class="{ 'is-selected': row.community === louvainSelectedCommunity }"
-                    @click="selectLouvainCommunity(row.community)"
-                  >
-                    <td class="platform-query-algo__node-cell">
-                      <strong>{{ rankNodeInfo[row.vid]?.name || row.vid }}</strong>
-                      <span v-if="rankNodeInfo[row.vid]?.name" :title="row.vid">{{ row.vid }}</span>
-                    </td>
-                    <td>{{ rankNodeInfo[row.vid]?.type || (rankNodeLoading ? '…' : '-') }}</td>
-                    <td class="platform-query-algo__community-cell">
-                      <i :class="`is-tone-${louvainCommunityTone(row.community)}`"></i>
-                      {{ row.community }}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-              <div v-else class="platform-query-result__empty">算法执行成功，无返回记录</div>
-            </div>
-            <ListPagination
-              v-if="louvainTotal > 0"
-              :total="louvainTotal"
-              :page="louvainPage"
-              :page-size="louvainPageSize"
-              @change="changeLouvainPage"
-              @change-size="changeLouvainPageSize"
-            />
-          </div>
-          <aside class="platform-query-algo__highlight" aria-label="社区图谱">
-            <div class="platform-query-algo__highlight-head">
-              <h3>社区图谱</h3>
-              <p>共 {{ louvainCommunities.length }} 个社区，展示规模前 {{ louvainDisplayedCommunities.length }} 个（每社区最多 {{ LOUVAIN_GRAPH_MEMBER_LIMIT }} 个成员节点）；不同颜色 = 不同社区</p>
-            </div>
-            <KgGraphCanvas
-              v-if="louvainGraphNodes.length"
-              :nodes="louvainGraphNodes"
-              :edges="louvainGraphEdges"
-              :selected-node-id="louvainSelectedCommunity ? louvainHubId(louvainSelectedCommunity) : null"
-              aria-label="Louvain 社区图谱"
-              @select-node="handleLouvainNodeClick"
-            />
-            <div v-else class="platform-query-result__empty">暂无社区数据</div>
-            <div class="platform-query-algo__community-list" aria-label="社区列表">
-              <button
-                v-for="community in louvainCommunityChips"
-                :key="community.id"
-                type="button"
-                :class="{ 'is-active': community.id === louvainSelectedCommunity }"
-                @click="selectLouvainCommunity(community.id)"
-              >
-                <i :class="`is-tone-${community.tone}`"></i>社区 {{ community.id }}<em>{{ community.size }} 节点</em>
-              </button>
-            </div>
-          </aside>
-        </div>
-        <!-- 其他算法：通用 csv 结果表 -->
-        <div v-else class="platform-query-result__body">
+        <div class="platform-query-result__body">
           <div class="platform-query-result__table">
-            <table v-if="algoRows.length" aria-label="图算法执行结果">
-              <thead>
-                <tr>
-                  <th v-for="column in algoResultColumns" :key="column">{{ column }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(row, index) in pagedAlgoRows" :key="index">
-                  <td v-for="column in algoResultColumns" :key="column">
-                    <pre>{{ row[column] ?? '' }}</pre>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-            <div v-else class="platform-query-result__empty">算法执行成功，无返回记录</div>
+            <QueryResultTable v-if="algoTotal" aria-label="图算法执行结果" :rows="pagedAlgoRows" :columns="algoResultColumns" :labels="algorithmColumnLabels" :page="algoPage" :page-size="algoPageSize" sortable :sort-column="algoSortColumn" :sort-direction="algoSortDirection" @sort="sortAlgoColumn" />
+            <div v-else class="platform-query-result__empty" role="status" aria-live="polite">
+              <AEmpty :description="algoSubmitLoading ? '正在提交作业，请稍候…' : isAlgoJobRunning ? '算法运行中，完成后自动展示结果' : algoResult ? (algoSearch ? '没有匹配的结果，请调整搜索条件' : '算法执行成功，无返回记录') : algoJob?.status === 'failed' ? '算法执行失败，请查看上方失败原因' : '暂无数据，提交算法作业后在此查看结果'" />
+            </div>
           </div>
-          <ListPagination
-            v-if="algoTotal > 0"
-            :total="algoTotal"
-            :page="algoPage"
-            :page-size="algoPageSize"
-            @change="changeAlgoPage"
-            @change-size="changeAlgoPageSize"
-          />
+          <ListPagination v-if="algoTotal > 0" :total="algoTotal" :page="algoPage" :page-size="algoPageSize" :page-size-options="[20, 50, 100]" @change="changeAlgoPage" @change-size="changeAlgoPageSize" />
         </div>
       </section>
 
@@ -5063,6 +4444,14 @@ print(response.json())</pre>
   .platform-query-algo__controls{flex-wrap:wrap;gap:12px}
   .platform-query .platform-query-algo__form{flex-basis:100%}
 }
+/* 多选输入复用原生标签布局，清除普通 input 的固定尺寸与内距。 */
+.platform-query .platform-query-algo__labels :deep(.arco-select-view-inner){min-width:0;flex:1;align-items:center}
+.platform-query .platform-query-algo__labels :deep(.arco-select-view-input){box-sizing:content-box;max-width:100%;height:30px!important;min-height:0!important;margin:0;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;color:#1d2129;font-size:14px;line-height:22px}
+.platform-query .platform-query-algo__labels :deep(.arco-select-view-has-placeholder .arco-select-view-input){width:100%!important}
+.platform-query .platform-query-algo__labels :deep(input::placeholder){color:#86909c!important;opacity:1}
+.platform-query :deep(.list-pagination){flex-wrap:wrap;height:auto;min-height:56px;gap:16px}
+.platform-query :deep(.arco-pagination-item-active){background:#e8f3ff;color:#165dff}
+.platform-query .platform-query-algo__labels :deep(.arco-select-view-focus){box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
 </style>
 <style scoped>
 /* DESIGN_RULES: graph query branch only. */
@@ -5120,20 +4509,12 @@ print(response.json())</pre>
 .platform-query-result__title::before{position:absolute;top:5px;left:0;width:3px;height:14px;border-radius:1px;background:#004ecc;content:""}
 .platform-query-result__meta{color:#86909c;font-size:12px;line-height:20px;white-space:nowrap}
 .platform-query-result__body{display:flex;flex-direction:column;overflow:hidden;border:1px solid #e5e6eb;border-radius:6px;background:#fff}
-.platform-query-result__table{max-height:320px;overflow:auto}
-.platform-query-result table{width:100%;margin:0;border-collapse:collapse;font-size:14px;line-height:22px}
-.platform-query-result th{position:sticky;z-index:2;top:0;height:40px;padding:0 16px;background:#f7f8fa;color:#1d2129;font-size:14px;line-height:22px;font-weight:500;text-align:left;white-space:nowrap}
-.platform-query-result td{height:40px;padding:0 16px;border-bottom:1px solid #e5edf8;color:#344763;font-size:14px;line-height:22px;font-weight:400;vertical-align:middle}
-.platform-query-result tbody tr:hover td{background:#f4f8ff}
-.platform-query-result td pre{max-width:420px;margin:0;overflow:auto;color:#1d2129;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
+.platform-query-result__table{min-width:0;overflow:hidden}
 .platform-query-result__empty{display:grid;place-content:center;min-height:160px;padding:24px;color:#86909c;font-size:13px;line-height:22px;text-align:center}
-/* nGQL 模式固定版式（对齐图谱构建页 gb-jobs-panel）：页面不滚动，结果区占满剩余高度，
-   表格在固定尺寸面板内滚动；未执行/空结果占位居中展示 */
-.platform-query.is-fixed-result{overflow:hidden}
-.platform-query.is-fixed-result .platform-query-result{flex:1 1 0;min-height:0}
-.platform-query.is-fixed-result .platform-query-result__body{flex:1;min-height:0}
-.platform-query.is-fixed-result .platform-query-result__table{flex:1;min-height:0;max-height:none;overflow:auto}
-.platform-query.is-fixed-result .platform-query-result__empty{height:100%}
+/* 查询页统一纵向滚动，当前页结果按行数展开，分页位于表格底部。 */
+.platform-query .platform-query-result{flex:0 0 auto;min-width:0}
+.platform-query .platform-query-result__body{flex:0 0 auto;min-width:0}
+.platform-query .platform-query-result__table{flex:0 0 auto;min-width:0;max-height:none;overflow:hidden}
 /* 图算法：二级页签和引擎状态独立一行。 */
 .platform-query-algo__engine{display:flex;align-items:center;gap:8px;flex:0 0 auto}
 .platform-query-algo__body{display:grid;padding:4px 0 0;gap:14px}
@@ -5156,7 +4537,7 @@ print(response.json())</pre>
 .platform-query-algo__param-hint{color:#86909c;font-size:12px;line-height:20px}
 /* 边类型多选：占半行（6 列栅格 span 3）给 tag 留空间，解除单选裁剪规则并放宽高度 */
 .platform-query-algo__labels{grid-column:span 3}
-.platform-query .platform-query-algo__labels :deep(.arco-select-view){height:auto!important;min-height:36px;padding:4px 8px!important;align-items:center}
+.platform-query .platform-query-algo__labels :deep(.arco-select-view){height:auto!important;min-height:32px;padding:0 12px!important;align-items:center}
 .platform-query .platform-query-algo__labels :deep(.arco-select-view-value){display:flex;width:auto!important;min-width:0;overflow:visible;flex:1 1 auto!important;flex-wrap:wrap;gap:2px 0;line-height:20px;text-overflow:clip;white-space:normal}
 .platform-query .platform-query-algo__labels :deep(.arco-tag){margin:2px 4px 2px 0}
 .platform-query-algo__actions{display:flex;align-items:center;gap:12px}
@@ -5166,67 +4547,12 @@ print(response.json())</pre>
 .platform-query-algo__job-spinner{display:inline-block;width:14px;height:14px;border:2px solid #c9cdd4;border-top-color:#004ecc;border-radius:50%;animation:platform-algo-spin .8s linear infinite;flex:0 0 auto}
 @keyframes platform-algo-spin{to{transform:rotate(360deg)}}
 .platform-query-algo__no-params{margin:0;color:#86909c;font-size:13px;line-height:20px}
-.platform-query-algo__advanced-toggle{flex:0 0 auto;white-space:nowrap}
 .platform-query-algo__job-meta{display:flex;align-items:center;gap:12px;color:#4e5969;font-size:13px;line-height:20px;flex-wrap:wrap}
 .platform-query-algo__job-id{color:#1d2129;font-weight:500}
 .platform-query-algo__job-error{display:grid;border:1px solid #ffd6c6;border-radius:4px;background:#fff;padding:8px 12px;gap:8px}
 .platform-query-algo__job-error p{margin:0;color:#b42318;font-size:13px;line-height:20px;overflow-wrap:anywhere}
 .platform-query-algo__job-error pre{max-height:160px;margin:0;overflow:auto;padding:8px;border-radius:4px;background:#0d1117;color:#e6edf3;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
 .platform-query-algo__truncated{margin:0 0 12px;padding:0;border:0;background:transparent;color:#86909c;font-size:12px;line-height:20px}
-/* PageRank 结果：重要性排名表 + 图谱高亮并排（覆盖 __body 的纵向 flex） */
-.platform-query-algo__rank-body{display:grid;grid-template-columns:minmax(0,1fr) 400px;overflow:hidden}
-.platform-query-algo__rank-table{display:flex;flex-direction:column;min-width:0;min-height:0;border-right:1px solid #e5e6eb}
-.platform-query-algo__rank-table th.is-sortable{cursor:pointer}
-.platform-query-algo__rank-table th.is-sortable:hover{color:#165dff}
-.platform-query-algo__sort-arrow{margin-left:4px;color:#165dff;font-style:normal}
-.platform-query-algo__rank-table td.is-rank{width:56px;color:#86909c;font-variant-numeric:tabular-nums}
-.platform-query-algo__rank-table tbody tr{cursor:pointer}
-.platform-query-algo__rank-table tbody tr.is-selected td{background:#eef4ff}
-.platform-query-algo__node-cell strong{display:block;max-width:260px;overflow:hidden;color:#1d2129;font-size:14px;text-overflow:ellipsis;white-space:nowrap}
-.platform-query-algo__node-cell span{display:block;max-width:260px;overflow:hidden;color:#86909c;font-size:12px;line-height:16px;text-overflow:ellipsis;white-space:nowrap}
-.platform-query-algo__score{color:#1d2129;font-variant-numeric:tabular-nums}
-/* 图谱高亮面板 */
-.platform-query-algo__highlight{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;background:#fff}
-.platform-query-algo__highlight-error{display:flex;flex-direction:column;align-items:center;gap:8px;justify-content:center;color:#b42318}
-.platform-query-algo__highlight-head{display:grid;padding:10px 12px 6px;gap:2px;border-bottom:1px solid #f0f2f5}
-.platform-query-algo__highlight-head h3{margin:0;color:#1d2129;font-size:14px;line-height:22px;font-weight:500}
-.platform-query-algo__highlight-head p{margin:0;color:#86909c;font-size:12px;line-height:18px}
-.platform-query-algo__legend{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;min-height:38px;padding:7px 12px;border-bottom:1px solid #f0f2f5;background:#fbfdff}
-.platform-query-algo__legend span{display:inline-flex;align-items:center;gap:6px;color:#86909c;font-size:12px;white-space:nowrap}
-.platform-query-algo__legend i{width:9px;height:9px;border-radius:50%;background:#eb2f96}
-.platform-query-algo__legend .is-main i{background:#f43f5e}
-.platform-query-algo__legend .is-expert i{background:#168cff}
-.platform-query-algo__legend .is-org i{background:#0ea5a4}
-.platform-query-algo__legend .is-company i{background:#36c414}
-.platform-query-algo__legend .is-paper i{background:#f5b700}
-.platform-query-algo__legend .is-project i{background:#ff9f0a}
-.platform-query-algo__legend .is-event i{background:#d97706}
-.platform-query-algo__legend .is-topic i{background:#722ed1}
-.platform-query-algo__highlight .platform-query-result__empty{flex:1}
-/* Louvain：社区列表（chips）+ 社区色点 */
-.platform-query-algo__community-list{display:flex;flex:0 0 auto;flex-wrap:wrap;gap:6px;max-height:132px;overflow:auto;padding:8px 12px;border-top:1px solid #f0f2f5}
-.platform-query-algo__community-list button{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border:1px solid #e5e6eb;border-radius:13px;background:#fff;color:#4e5969;font-size:12px;line-height:20px;cursor:pointer}
-.platform-query-algo__community-list button:hover{border-color:#4080ff;color:#165dff}
-.platform-query-algo__community-list button.is-active{border-color:#165dff;background:#eef4ff;color:#165dff;font-weight:500}
-.platform-query-algo__community-list button em{color:#86909c;font-size:11px;font-style:normal}
-.platform-query-algo__community-list button.is-active em{color:#4080ff}
-.platform-query-algo__community-cell{display:flex;align-items:center;gap:6px;font-variant-numeric:tabular-nums}
-.platform-query-algo__community-cell i,.platform-query-algo__community-list button i{flex:0 0 auto;width:8px;height:8px;border-radius:50%}
-/* 社区配色（10 色轮转，与画布 nodeType 色系呼应） */
-.platform-query-algo__community-cell i.is-tone-0,.platform-query-algo__community-list button i.is-tone-0{background:#165dff}
-.platform-query-algo__community-cell i.is-tone-1,.platform-query-algo__community-list button i.is-tone-1{background:#00b42a}
-.platform-query-algo__community-cell i.is-tone-2,.platform-query-algo__community-list button i.is-tone-2{background:#ff7d00}
-.platform-query-algo__community-cell i.is-tone-3,.platform-query-algo__community-list button i.is-tone-3{background:#f53f3f}
-.platform-query-algo__community-cell i.is-tone-4,.platform-query-algo__community-list button i.is-tone-4{background:#722ed1}
-.platform-query-algo__community-cell i.is-tone-5,.platform-query-algo__community-list button i.is-tone-5{background:#eb5bbc}
-.platform-query-algo__community-cell i.is-tone-6,.platform-query-algo__community-list button i.is-tone-6{background:#14c9c9}
-.platform-query-algo__community-cell i.is-tone-7,.platform-query-algo__community-list button i.is-tone-7{background:#f77234}
-.platform-query-algo__community-cell i.is-tone-8,.platform-query-algo__community-list button i.is-tone-8{background:#9fdb1d}
-.platform-query-algo__community-cell i.is-tone-9,.platform-query-algo__community-list button i.is-tone-9{background:#612c00}
-@media(max-width:1080px){
-  .platform-query-algo__rank-body{grid-template-columns:minmax(0,1fr)}
-  .platform-query-algo__rank-table{border-right:0;border-bottom:1px solid #e5e6eb}
-}
 /* 窄屏（此前该宽度区间对分布图无任何处理）：donut 与图例上下堆叠，避免固定列挤压 */
 @media(max-width:760px){
   .platform-donut-layout{grid-template-columns:minmax(0,1fr);justify-items:center;gap:12px;min-height:0;padding-bottom:8px}
@@ -5240,7 +4566,48 @@ print(response.json())</pre>
   .platform-review-list a{grid-template-columns:minmax(0,1fr)}
   .platform-review-list .is-risk{justify-self:start}
 }
-</style>
-<style>
-/* The SelectView owns the only visible shell; its readonly input must never paint over the selected value. */
+.platform-query-form{flex:0 0 auto}
+.platform-query .platform-query-form{padding-bottom:24px;border-bottom:1px solid var(--color-border-2)!important}
+.platform-query-form .kg-panel__header{margin-bottom:16px}
+.platform-ngql-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.platform-ngql-permission-hint{white-space:normal;flex-wrap:wrap}
+.platform-ngql-input{padding:16px 0 0;gap:8px}
+.platform-ngql-input :deep(.arco-textarea-wrapper){background:var(--color-fill-2);border:1px solid transparent;border-radius:4px}
+.platform-ngql-input :deep(.arco-textarea){color:var(--color-text-1);font:14px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace;background:transparent;padding:12px 16px}
+.platform-query-algo__body{gap:16px}
+.platform-query-algo__controls{display:flex;align-items:flex-start;gap:16px}
+.platform-query .platform-query-algo__form{display:block;flex:1;min-width:0}
+.platform-query-algo__form :deep(.arco-form-item){margin-bottom:0}
+.platform-query .platform-query-algo__labels :deep(.arco-form-item-label-col){padding:0!important;margin-bottom:8px;min-height:22px}
+.platform-query .platform-query-algo__labels :deep(.arco-form-item-label){color:var(--color-text-1);font-size:14px;line-height:22px;height:22px;min-height:22px}
+.platform-query .platform-query-algo__labels :deep(.arco-select-view){border:1px solid #e5e6eb!important;background:#fff!important;padding:0 12px!important;min-height:32px!important;border-radius:4px!important}
+.platform-query .platform-query-algo__labels :deep(.arco-select-view:hover){background:#fff!important;border-color:#4080ff!important}
+.platform-query .platform-query-algo__labels :deep(.arco-select-view-focus){border-color:rgb(var(--primary-6))!important;background:var(--color-bg-2)!important}
+.platform-query-algo__actions{padding-top:30px}
+.platform-query-result{gap:16px}
+.platform-query-result__title{padding-left:0;color:var(--color-text-1);font-size:16px;line-height:24px}
+.platform-query-result__title::before{display:none}
+.platform-query-result__body{border:1px solid var(--color-border-2);border-radius:4px}
+.platform-query-result__table{overflow:hidden}
+.platform-query-result__empty{min-height:180px;color:var(--color-text-3)}
+.platform-query-result__empty :deep(.arco-empty-description){font-size:14px;color:var(--color-text-3)}
+.platform-algo-list-toolbar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;color:var(--color-text-3);font-size:12px}
+.platform-algo-search{width:320px;max-width:100%}
+.platform-algo-list-toolbar>button{margin-left:auto}
+.platform-query-algo__truncated{margin:0;padding:8px 12px;color:rgb(var(--orange-6));background:var(--color-warning-light-1);border-radius:4px}
+@media(max-width:768px){.platform-query-algo__controls{flex-direction:column;gap:12px}.platform-query-algo__form{width:100%}.platform-query-algo__actions{padding-top:0}.platform-algo-search{width:100%}.platform-algo-list-toolbar>button{margin-left:0}}
+.platform-ngql-input :deep(.arco-textarea::placeholder){color:#86909c!important;opacity:1}
+.platform-relation-label-hint{margin-left:4px;color:var(--color-text-3);font-size:12px;font-weight:400}
+.platform-query-algo__tabs .platform-algorithm-info{align-self:center;display:inline-flex;align-items:center;justify-content:center;min-height:32px;width:32px;height:32px;padding:0;margin-left:8px;color:var(--color-text-3)}
+.platform-query-algo__tabs .platform-algorithm-info::after{display:none}
+.platform-query-algo__tabs .platform-algorithm-info :deep(svg){width:16px;height:16px}
+.platform-algorithm-description{max-width:320px;margin:0;color:var(--color-text-2);font-size:14px;line-height:22px;white-space:normal}
+/* 多选输入复用原生标签布局，清除普通 input 的固定尺寸与内距。 */
+.platform-query .platform-query-algo__labels :deep(.arco-select-view-inner){min-width:0;flex:1;align-items:center}
+.platform-query .platform-query-algo__labels :deep(.arco-select-view-input){box-sizing:content-box;max-width:100%;height:30px!important;min-height:0!important;margin:0;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;color:#1d2129;font-size:14px;line-height:22px}
+.platform-query .platform-query-algo__labels :deep(.arco-select-view-has-placeholder .arco-select-view-input){width:100%!important}
+.platform-query .platform-query-algo__labels :deep(input::placeholder){color:#86909c!important;opacity:1}
+.platform-query :deep(.list-pagination){flex-wrap:wrap;height:auto;min-height:56px;gap:16px}
+.platform-query :deep(.arco-pagination-item-active){background:#e8f3ff;color:#165dff}
+.platform-query .platform-query-algo__labels :deep(.arco-select-view-focus){box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
 </style>

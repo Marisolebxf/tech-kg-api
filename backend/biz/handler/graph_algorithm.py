@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 
 from biz.dependencies.auth import CurrentActor
 from biz.schemas.common import ApiResponse
@@ -44,7 +44,7 @@ def read_engine(
 
 
 @router.post("/jobs", response_model=ApiResponse)
-def create_job(payload: AlgorithmSubmitRequest, actor: CurrentActor) -> ApiResponse:
+def create_job(payload: AlgorithmSubmitRequest, actor: CurrentActor, background_tasks: BackgroundTasks) -> ApiResponse:
     """提交算法作业，返回 running 快照；前端轮询 GET /jobs/{jobId}。"""
     try:
         data = submit_job(
@@ -57,6 +57,7 @@ def create_job(payload: AlgorithmSubmitRequest, actor: CurrentActor) -> ApiRespo
             weight_cols=payload.weight_cols,
             encode_id=payload.encode_id,
             partition_num=payload.partition_num,
+            background_tasks=background_tasks,
         )
     except GraphAlgorithmError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc

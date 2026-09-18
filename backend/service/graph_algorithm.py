@@ -107,7 +107,7 @@ def _job_to_data(job: Any) -> dict:
     }
 
 
-# ---------- Degree：nGQL 同步计算（绕开 Spark 对字符串 VID 的限制） ----------
+# ---------- Degree：nGQL 后台计算（绕开 Spark 对字符串 VID 的限制） ----------
 # nebula-algorithm 3.1.0 的 DegreeStatic 加载边数据时不消费 encodeId，字符串 VID
 # （如 "paper_…"）直接 Long.parseLong 抛 NumberFormatException；同图的 PageRank /
 # Louvain 正常。度数本就是图库原生聚合能力：这里用 nGQL 出/入度聚合同步算完，
@@ -125,9 +125,9 @@ def _utc_now_iso() -> str:
 
 
 def _save_degree_job(
-    space: str, labels: list[str], rows: list[dict[str, str]], truncated: bool
+    space: str, labels: list[str], rows: list[dict[str, str]], truncated: bool, *, running: bool = False
 ) -> dict[str, Any]:
-    """本地登记 Degree 作业（同步计算，入表即 succeeded）并返回快照；顺手清理过期/超量条目。"""
+    """登记 Degree 作业并清理过期结果；后台计算最多同时运行两个。"""
     job_id = uuid.uuid4().hex
     now = _utc_now_iso()
     job = {
@@ -138,8 +138,13 @@ def _save_degree_job(
         "truncated": truncated,
         "saved_at": time.time(),
         "created_at": now,
+        "status": "running" if running else "succeeded",
+        "finished_at": None if running else now,
+        "error": None,
     }
     with _degree_jobs_lock:
+        if running and sum(stored["status"] == "running" for stored in _degree_jobs.values()) >= 2:
+            raise GraphAlgorithmError("度数计算已有两个作业运行中，请稍后重试", status_code=429)
         expired = [
             key
             for key, stored in _degree_jobs.items()
@@ -169,13 +174,13 @@ def _local_job_to_data(job: dict[str, Any]) -> dict:
     """本地 Degree 作业 → 与 Spark 作业一致的 camelCase 快照。"""
     return {
         "jobId": job["job_id"],
-        "status": "succeeded",
+        "status": job["status"],
         "createdAt": job["created_at"],
         "startedAt": job["created_at"],
-        "finishedAt": job["created_at"],
+        "finishedAt": job["finished_at"],
         "submissionId": None,
         "driverState": None,
-        "error": None,
+        "error": job["error"],
         "logTail": None,
     }
 
@@ -238,6 +243,21 @@ def _submit_degree_via_ngql(space: str, labels: list[str]) -> dict:
     return _local_job_to_data(_save_degree_job(space, labels, rows, truncated))
 
 
+def _run_degree_job(job: dict[str, Any]) -> None:
+    """后台执行计算，成功和失败均更新同一个可轮询作业。"""
+    try:
+        rows, truncated = _degree_rows_via_ngql(job["space"], job["labels"])
+        with _degree_jobs_lock:
+            job.update(rows=rows, truncated=truncated, status="succeeded")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Degree 后台计算失败: %s", exc)
+        with _degree_jobs_lock:
+            job.update(status="failed", error=f"度数计算失败: {exc}")
+    finally:
+        with _degree_jobs_lock:
+            job.update(finished_at=_utc_now_iso(), saved_at=time.time())
+
+
 def submit_job(
     actor: PlatformActor,
     space: str,
@@ -249,15 +269,21 @@ def submit_job(
     weight_cols: list[str] | None = None,
     encode_id: bool = True,
     partition_num: int = 1,
+    background_tasks: Any = None,
 ) -> dict:
     """提交算法作业（结果去向固定 csv），返回作业快照。
 
-    degreestatic 例外：Spark 侧不支持字符串 VID，改走 nGQL 同步计算
-    （见 _submit_degree_via_ngql），同样返回作业快照，前端轮询模型不变。
+    degreestatic 使用 nGQL 计算；HTTP 传入 background_tasks 时先返回 running，
+    后台计算后通过相同轮询接口获取终态。直接 service 调用保留同步兼容。
     """
     _ensure_space_access(actor, space)
     if algorithm == "degreestatic":
-        return _submit_degree_via_ngql(space, labels)
+        if background_tasks is None:
+            return _submit_degree_via_ngql(space, labels)
+        # HTTP 请求先返回 running，避免原生聚合阻塞提交及触发前端超时。
+        job = _save_degree_job(space, labels, [], False, running=True)
+        background_tasks.add_task(_run_degree_job, job)
+        return _local_job_to_data(job)
 
     from infra.graph_db import get_space_algorithm_client
 
@@ -302,6 +328,8 @@ def get_result(actor: PlatformActor, space: str, job_id: str) -> dict:
     _ensure_space_access(actor, space)
     local = _local_degree_job(space, job_id)
     if local is not None:
+        if local["status"] != "succeeded":
+            raise GraphAlgorithmError("作业尚未成功完成，暂不可获取结果", status_code=409)
         return {
             "jobId": local["job_id"],
             "sink": "csv",

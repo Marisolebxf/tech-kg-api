@@ -242,3 +242,31 @@ def test_pipeline_steps_empty_for_non_pipeline_output() -> None:
     assert pipeline_steps({"status": "completed", "result": {...}}) == []
     assert pipeline_steps({"steps": {}}) == []
     assert pipeline_steps({"steps": "bad"}) == []
+
+
+def test_pipeline_steps_sorted_by_position() -> None:
+    """Temporal JSON 编码按 key 排序：steps dict 序 ≠ 执行序，按 position 还原。"""
+    output = {
+        "steps": {
+            # 刻意按字典序排列（a70f < ceab < db51），position 才是真实执行序
+            "schema:a70f": {"status": "COMPLETED", "name": "专家", "position": 2},
+            "schema:ceab": {"status": "COMPLETED", "name": "撰写", "position": 3},
+            "schema:db51": {"status": "COMPLETED", "name": "论文", "position": 1},
+        },
+    }
+    steps = pipeline_steps(output)
+    assert [s["name"] for s in steps] == ["论文", "专家", "撰写"]
+    assert [s["position"] for s in steps] == [1, 2, 3]
+
+
+def test_pipeline_steps_without_position_keeps_dict_order() -> None:
+    """无 position 的旧形状（kg.custom.steps 等）保持原序，不参与排序。"""
+    output = {
+        "steps": {
+            "b-step": {"status": "COMPLETED", "records": 1},
+            "a-step": {"status": "COMPLETED", "records": 2},
+        },
+    }
+    steps = pipeline_steps(output)
+    assert [s["id"] for s in steps] == ["b-step", "a-step"]
+    assert all(s["position"] is None for s in steps)

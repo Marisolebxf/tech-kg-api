@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -284,9 +285,12 @@ class TestSchemaExtractOrchestration:
         assert state.get("record_failures") in (None, [])
 
 
-def _make_step_activities(state: dict[str, Any], *, fail_on=None):
+def _make_step_activities(state: dict[str, Any], *, fail_on=None, block_on=None, gate=None):
     """多步链假 activity：step_clean 只出中转数据，step_resolve 出 pending+failures，
-    step_emit 出边；记录每次 execute_transform 的请求形状供链路断言。"""
+    step_emit 出边；记录每次 execute_transform 的请求形状供链路断言。
+
+    block_on + gate：指定步的 transform 阻塞在 gate 事件上（暂停语义测试用）。
+    """
 
     @activity.defn(name="load_schema_extract_plan")
     async def load_plan(schema_id: str) -> dict[str, Any]:
@@ -325,6 +329,12 @@ def _make_step_activities(state: dict[str, Any], *, fail_on=None):
             }
         )
         fn = request["functionName"]
+        if block_on and gate and fn == block_on:
+            state.setdefault("gate_reached", []).append(fn)
+        if block_on and gate and fn == block_on:
+            gate_sync = gate
+            while not gate_sync.is_set():
+                await asyncio.sleep(0.05)
         if fail_on == fn:
             raise RuntimeError(f"step {fn} 崩溃")
         if fn == "step_clean":
@@ -444,12 +454,13 @@ class TestSchemaExtractMultiStep:
         # 只有 emit 步出了 edges → write_records 只拿到那一步的记录
         assert len(state["writes"]) == 1
         assert [e["fromId"] for e in state["writes"][0]] == ["w_1"]
-        # 分步统计：聚合计数 + COMPLETED 状态
-        assert result["steps"] == {
-            "clean": {"records": 0, "written": 0, "failed": 1, "status": "COMPLETED"},
-            "resolve": {"records": 0, "written": 0, "failed": 0, "status": "COMPLETED"},
-            "emit": {"records": 1, "written": 1, "failed": 0, "status": "COMPLETED"},
-        }
+        # 分步统计：聚合计数 + COMPLETED 状态 + 步序/起止时间（详情页排序与耗时列）
+        for sid, pos, failed in (("clean", 1, 1), ("resolve", 2, 0), ("emit", 3, 0)):
+            stat = result["steps"][sid]
+            assert stat["position"] == pos
+            assert stat["failed"] == failed
+            assert stat["status"] == "COMPLETED"
+            assert stat["startedAt"] and stat["finishedAt"]
         assert result["sources"][0]["steps"] == {
             "clean": {"records": 0, "written": 0, "failed": 1},
             "resolve": {"records": 0, "written": 0, "failed": 0},
@@ -639,6 +650,7 @@ class TestSchemaExtractChain:
             "clean": {
                 "status": "COMPLETED",
                 "name": "clean",
+                "position": 1,
                 "records": 2,
                 "written": 2,
                 "failed": 0,
@@ -654,6 +666,51 @@ class TestSchemaExtractChain:
         assert result["failures"] == {"count": 1, "recorded": 1, "truncated": False}
         assert state["writes"] == ["Alpha", "Beta"]
         assert state["record_failures"][0]["recordId"] == "bad"
+
+    async def test_pause_signal_suspends_between_steps_and_resume_continues(self):
+        """暂停信号：当前步正常结束后挂起（不再执行下一步），恢复后从断点继续。
+
+        Temporal 无原生 pause：workflow 用 signal + wait_condition 在步边界挂起。
+        门控第二步：clean 完成 → resolve 阻塞在事件上 → 发暂停 → 放行 resolve →
+        resolve 结束后 workflow 应挂在 emit 之前，直到恢复信号。
+        """
+        state: dict[str, Any] = {}
+        gate = asyncio.Event()
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue="t-pause",
+                workflows=[SchemaExtractWorkflow],
+                activities=_make_step_activities(state, block_on="step_resolve", gate=gate),
+            ):
+                handle = await env.client.start_workflow(
+                    SchemaExtractWorkflow.run,
+                    {"schemaId": "schema-e2e", "graphSpace": "dev2", "batchSize": 5},
+                    id="wf-pause-1",
+                    task_queue="t-pause",
+                )
+                # 等 resolve 步进入阻塞（clean 已完成）
+                for _ in range(50):
+                    if state.get("gate_reached"):
+                        break
+                    await asyncio.sleep(0.1)
+                assert state.get("gate_reached"), "第二步未进入"
+
+                await handle.signal("pause_extraction")
+                gate.set()  # 放行 resolve：它正常结束后 workflow 应挂在 emit 之前
+                await asyncio.sleep(1.5)
+                described = await handle.describe()
+                assert described.status.name == "RUNNING", "挂起期间 workflow 不应结束"
+                calls_when_paused = len(state["transform_calls"])
+                assert calls_when_paused == 2, f"挂起点应在 resolve 之后 emit 之前（实际 {calls_when_paused}）"
+
+                await asyncio.sleep(1.0)
+                assert len(state["transform_calls"]) == calls_when_paused, "挂起期间不应有新的转换步执行"
+
+                await handle.signal("resume_extraction")
+                result = await asyncio.wait_for(handle.result(), timeout=30)
+                assert result["status"] == "completed"
+                assert len(state["transform_calls"]) == 3, "恢复后 emit 步应继续执行"
 
     async def test_chain_aborts_on_first_schema_failure(self):
         """第一环批次崩溃 → workflow FAILED、后续环不再执行、水位全部不推进。"""
@@ -1069,12 +1126,12 @@ class TestSchemaExtractS3Relay:
         assert len(state["objects"]["out-step_resolve-0-0"]["resolved"]) == 2
         # 关系链只写 emit 步的边；分步统计聚合
         assert state["writes"] == [2]
-        assert result["steps"]["emit"] == {
-            "records": 2,
-            "written": 2,
-            "failed": 0,
-            "status": "COMPLETED",
-        }
+        emit_stat = result["steps"]["emit"]
+        assert emit_stat["records"] == 2
+        assert emit_stat["written"] == 2
+        assert emit_stat["failed"] == 0
+        assert emit_stat["status"] == "COMPLETED"
+        assert emit_stat["position"] == 3
         # clean 步毒行失败以 failuresKey 引用聚合，终态建 case 交 refs 展开
         assert result["failures"]["count"] == 1
         recorded = state["record_failure_requests"][0]

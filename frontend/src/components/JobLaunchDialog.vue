@@ -4,6 +4,7 @@ import { createJob } from '../api/workflowOperations'
 import { listAllSchemas, type SchemaDefinition } from '../api/schemaManagement'
 import { currentUserId as getCurrentUserId } from '../api/currentUser'
 import { currentGraphSpace } from '../api/currentGraphSpace'
+import { listMysqlDatasources, listMysqlDatabases, type MysqlDatasource } from '../api/mysqlDatasource'
 import { useToast } from '../composables/use-toast'
 import { buildScheduleCron, describeCron, type ScheduleFrequency } from '../utils/cronSchedule'
 import {
@@ -34,10 +35,48 @@ const extractBatchSize = ref<number | null>(null)
 const extractSchemas = ref<SchemaDefinition[]>([])
 const schemasLoading = ref(false)
 
-// 图空间跟随右上角全局选择器（弹窗内不再单独选择）。
-// 大模型/Embedding/MySQL 数据源/数据库四项已下线：抽取读源走 Schema 来源绑定，
-// 脚本 ctx 资源缺省回落 env 默认（temporal_workflows._resolve_resources）
+// 图空间默认取右上角全局选择器的当前位置，弹窗内可改。
+// MySQL 数据源/库默认跟随所选 Schema 的来源绑定（"当前位置"），可改；
+// 二者仅注入脚本 ctx.mysql 与写图空间，读取源仍按 Schema 来源绑定。
 const graphSpace = computed(() => currentGraphSpace())
+const mysqlDatasourceId = ref('')
+const mysqlDatabase = ref('')
+const mysqlDatasources = ref<MysqlDatasource[]>([])
+const mysqlDatabases = ref<string[]>([])
+
+async function loadMysqlResources(datasourceId: string, preferDatabase?: string) {
+  if (!mysqlDatasources.value.length) {
+    try {
+      mysqlDatasources.value = await listMysqlDatasources()
+    } catch {
+      mysqlDatasources.value = []
+    }
+  }
+  if (!datasourceId) {
+    mysqlDatabases.value = []
+    return
+  }
+  if (!mysqlDatasourceId.value) mysqlDatasourceId.value = datasourceId
+  try {
+    mysqlDatabases.value = await listMysqlDatabases(datasourceId)
+  } catch {
+    mysqlDatabases.value = []
+  }
+  if (preferDatabase && mysqlDatabases.value.includes(preferDatabase)) {
+    mysqlDatabase.value = preferDatabase
+  } else if (!mysqlDatabases.value.includes(mysqlDatabase.value)) {
+    mysqlDatabase.value = mysqlDatabases.value[0] ?? ''
+  }
+}
+
+/** 选中 Schema 后自动带出其来源绑定的数据源/库作为默认值（"当前位置"） */
+function applySchemaBindingDefaults(schemas: SchemaDefinition[]) {
+  const bound = schemas.find((s) => s.sources?.length)?.sources?.[0]
+  if (bound?.datasourceId) {
+    mysqlDatasourceId.value = bound.datasourceId
+    void loadMysqlResources(bound.datasourceId, bound.databaseName || undefined)
+  }
+}
 // 多脚本串行任务：按序串联多个 Schema 抽取脚本（kg.schema.extract.chain）
 const chainPick = ref('')
 const chainSteps = ref<Array<{ id: string; name: string }>>([])
@@ -93,6 +132,8 @@ function reset() {
   chainPick.value = ''
   chainSteps.value = []
   runNow.value = true
+  mysqlDatasourceId.value = ''
+  mysqlDatabase.value = ''
   since.value = ''
   executeMode.value = 'once'
   frequency.value = '每天'
@@ -104,14 +145,21 @@ watch(() => props.open, (open) => {
   if (open) {
     reset()
     loadExtractSchemas()
+    void loadMysqlResources(mysqlDatasourceId.value)
   }
 })
+
 
 watch(graphSpace, () => {
   // 换空间后原选择不再属于该空间：清空并按新空间重查
   extractSchemaId.value = ''
   chainSteps.value = []
   loadExtractSchemas(true)
+})
+
+watch(extractSchemaId, (id) => {
+  const schema = extractSchemas.value.find((s) => s.id === id)
+  if (schema) applySchemaBindingDefaults([schema])
 })
 
 function schemaOptionLabel(s: SchemaDefinition) {
@@ -128,6 +176,7 @@ function addChainStep(value: string | number | boolean | Record<string, any> | u
   const schema = extractSchemas.value.find((s) => s.id === id)
   chainSteps.value.push({ id, name: schema ? schemaOptionLabel(schema) : id })
   chainPick.value = ''
+  if (chainSteps.value.length === 1 && schema) applySchemaBindingDefaults([schema])
 }
 
 function removeChainStep(index: number) {
@@ -156,6 +205,8 @@ async function submit() {
         : { kind: 'once' },
       runNow: executeMode.value === 'once' && runNow.value,
       graphSpace: graphSpace.value || undefined,
+      mysqlDatasourceId: mysqlDatasourceId.value || undefined,
+      mysqlDatabase: mysqlDatabase.value || undefined,
       since: since.value.trim() || undefined,
     })
     showToast(`任务「${job.name}」已创建${runNow.value && executeMode.value === 'once' ? '并触发执行' : ''}`, 'success')
@@ -238,6 +289,22 @@ async function submit() {
             </label>
           </div>
         </template>
+
+        <div class="job-row">
+          <div class="job-field">
+            <span>MySQL 数据源（默认跟随 Schema 绑定）</span>
+            <a-select v-model="mysqlDatasourceId" class="job-select" aria-label="MySQL 数据源" placeholder="跟随 Schema 来源绑定" allow-clear @change="() => { mysqlDatabase = ''; void loadMysqlResources(mysqlDatasourceId) }">
+              <a-option v-for="ds in mysqlDatasources" :key="ds.id" :value="ds.id" :title="`${ds.name}（${ds.host}）`">{{ ds.name }}（{{ ds.host }}）</a-option>
+            </a-select>
+          </div>
+          <div class="job-field">
+            <span>数据库</span>
+            <a-select v-model="mysqlDatabase" class="job-select" aria-label="数据库" :loading="false" :disabled="!mysqlDatasourceId" placeholder="选择数据库">
+              <a-option v-for="db in mysqlDatabases" :key="db" :value="db" :title="db">{{ db }}</a-option>
+            </a-select>
+          </div>
+        </div>
+        <p class="resource-hint">MySQL 数据源/库默认跟随所选 Schema 的来源绑定（可改），仅注入脚本运行上下文供查找表等使用；抽取读取源仍按各 Schema 的来源绑定执行。</p>
 
         <label class="job-field">
           <span>增量游标 since（可空，对每个 Schema 生效）</span>
@@ -332,6 +399,7 @@ async function submit() {
 .muted-warn{margin:0;color:#ff7d00;font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
 .schedule-preview{margin:0;color:#4e5969;font-size:12px;line-height:20px}
 .field-error{color:#e4322d;font-size:12px;line-height:18px}
+.resource-hint{margin:0;color:#86909c;font-size:12px;line-height:20px}
 .schedule-preview strong{color:#004ecc;font-weight:600}
 .schedule-preview .cron-hint{color:#86909c}
 </style>

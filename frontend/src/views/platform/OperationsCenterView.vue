@@ -15,9 +15,10 @@ type CenterMode = 'review'
 const props = defineProps<{ mode: CenterMode }>()
 const route = useRoute()
 const keyword = ref(clampSearchKeyword(String(route.query.keyword || '')))
-/** 人工审核筛选：状态分组（待处理/已处理）与对象种类（实体/关系/都看）；C 类额外支持 重跑中/重跑失败 精确过滤。
+/** 人工审核筛选：状态分组（待处理/已处理）与对象种类（实体/关系/都看）；C 类额外支持 重跑中 精确过滤。
+ *  重跑仍失败的记录会重建为新待处理案（attempt+1），不存在「重跑失败」状态，故不提供该筛选项。
  *  undefined = 未选择（清空），语义等同「全部」。 */
-const reviewStatusFilter = ref<'全部' | '待处理' | '已处理' | '重跑中' | '重跑失败' | undefined>('全部')
+const reviewStatusFilter = ref<'全部' | '待处理' | '已处理' | '重跑中' | undefined>('全部')
 const reviewKindFilter = ref<'全部' | '实体' | '关系' | undefined>('全部')
 /** 时间过滤（按更新时间）：全部/近1小时/近24小时/近7天/近30天 → updatedWithin 查询参数。 */
 const reviewTimeFilter = ref<'全部' | '近1小时' | '近24小时' | '近7天' | '近30天' | undefined>('全部')
@@ -27,7 +28,7 @@ const REVIEW_TIME_PARAMS: Record<string, string | undefined> = { '全部': undef
 const reviewTimeSort = ref<'default' | 'desc' | 'asc'>('default')
 const reviewTotal = ref(0)
 /** 队列行 = manual-review-data 的 ReviewRecord + 重跑/删除/跳转所需的原始字段。 */
-type ReviewRow = ReviewRecord & { templateId?: string; rawStatus?: string; graphBuildId?: string; jobId?: string }
+type ReviewRow = ReviewRecord & { templateId?: string; rawStatus?: string; jobId?: string }
 
 /** 可重跑/可删除：与后端 rerun 门控同口径（未处理）。 */
 const isRerunnable = (row: ReviewRow) => row.rawStatus === 'OPEN' || row.rawStatus === 'RERUN_FAILED'
@@ -57,16 +58,16 @@ const reviewCategory = ref<'A' | 'C'>('A')
 /** C 类勾选的待重跑 case。 */
 const rerunSelection = ref<Set<string>>(new Set())
 const rerunSubmitting = ref(false)
-/** 批量重跑结果反馈（替代 alert）：展示新执行可跳转链接，15s 自动消失。 */
-const rerunFeedback = ref<{ type: 'success' | 'error'; text: string; executions: Array<{ executionId: string; schemaId: string; cases: number; records: number }> } | null>(null)
+/** 批量重跑结果反馈（替代 alert）：展示新执行可跳转链接，15s 自动消失；warning=部分 schema 被跳过。 */
+const rerunFeedback = ref<{ type: 'success' | 'warning' | 'error'; text: string; executions: Array<{ executionId: string; schemaId: string; cases: number; records: number }> } | null>(null)
 /** 勾选 >20 条时的 a-modal 二次确认。 */
 const rerunConfirmVisible = ref(false)
 let rerunFeedbackTimer: number | undefined
 
-/** A 类只有 全部/待处理/已处理；C 类追加 重跑中/重跑失败（后端 status 精确过滤）。 */
+/** A 类只有 全部/待处理/已处理；C 类追加 重跑中（后端 status 精确过滤）。 */
 const reviewStatusOptions = computed(() => (
   reviewCategory.value === 'C'
-    ? ['全部', '待处理', '已处理', '重跑中', '重跑失败']
+    ? ['全部', '待处理', '已处理', '重跑中']
     : ['全部', '待处理', '已处理']
 ))
 
@@ -94,7 +95,7 @@ function toggleRerunPickAll(event: Event) {
   for (const id of rerunPageEligibleIds.value) toggleRerunPick(id, checked)
 }
 
-function showRerunFeedback(type: 'success' | 'error', text: string, executions: Array<{ executionId: string; schemaId: string; cases: number; records: number }>) {
+function showRerunFeedback(type: 'success' | 'warning' | 'error', text: string, executions: Array<{ executionId: string; schemaId: string; cases: number; records: number }>) {
   rerunFeedback.value = { type, text, executions }
   window.clearTimeout(rerunFeedbackTimer)
   rerunFeedbackTimer = window.setTimeout(() => { rerunFeedback.value = null }, 15000)
@@ -110,7 +111,16 @@ async function rerunSelected(caseIds: string[] | undefined = undefined, skipConf
   rerunSubmitting.value = true
   try {
     const result = await rerunExtractFailures({ caseIds: ids })
-    showRerunFeedback('success', `已下发重跑：${result.cases} 条失败记录 → ${result.executions.length} 个新执行（类别=重新执行）`, result.executions)
+    // 部分 schema 校验失败被跳过（已删/不在当前控制面）：黄条提示，其余已正常下发
+    const skipped = result.skipped ?? []
+    const skippedText = skipped.length
+      ? `；跳过 ${skipped.reduce((n, s) => n + s.cases, 0)} 条（${skipped.map((s) => `${s.schemaKey || s.schemaId}×${s.cases}`).join('、')}：Schema 不在当前控制面或已删除）`
+      : ''
+    showRerunFeedback(
+      skipped.length ? 'warning' : 'success',
+      `已下发重跑：${result.cases} 条失败记录 → ${result.executions.length} 个新执行（类别=重新执行）${skippedText}`,
+      result.executions,
+    )
     rerunSelection.value = new Set()
     void loadReviews()
   } catch (error) {
@@ -251,7 +261,7 @@ async function loadReviews() {
       templateId: reviewCategory.value === 'A' ? 'T_LINK' : undefined,
       keyword: keyword.value || undefined,
       statusGroup: reviewStatusFilter.value === '待处理' ? 'pending' : reviewStatusFilter.value === '已处理' ? 'processed' : undefined,
-      status: reviewStatusFilter.value === '重跑中' ? 'RERUNNING' : reviewStatusFilter.value === '重跑失败' ? 'RERUN_FAILED' : undefined,
+      status: reviewStatusFilter.value === '重跑中' ? 'RERUNNING' : undefined,
       kind: !reviewKindFilter.value || reviewKindFilter.value === '全部' ? undefined : reviewKindFilter.value === '实体' ? 'entity' : 'relation',
       updatedWithin: REVIEW_TIME_PARAMS[reviewTimeFilter.value || '全部'],
       sort: reviewTimeSort.value === 'default' ? undefined : `updated_${reviewTimeSort.value}`,
@@ -265,7 +275,7 @@ async function loadReviews() {
       return loadReviews()
     }
     reviewRecords.value = response.items.map((row: ProductionReviewCase) => ({
-      id: row.id, templateId: row.templateId, rawStatus: row.status, graphBuildId: row.executionId || row.workflowId || '', jobId: row.jobId || '', batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待处理', status: extractCaseStatusBadge(row.status), updatedAt: fmtReviewTime(row.updatedAt), sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,
+      id: row.id, templateId: row.templateId, rawStatus: row.status, jobId: row.jobId || '', batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待处理', status: extractCaseStatusBadge(row.status), updatedAt: fmtReviewTime(row.updatedAt), sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,
     }))
     reviewLoadError.value = ''
   } catch (error) { reviewLoadError.value = error instanceof Error ? error.message : '人工处理队列加载失败' }
@@ -410,10 +420,9 @@ onMounted(loadReviews)
             </td>
             <td><span :class="['review-kind-badge', `is-${rowKindLabel(row)}`]">{{ rowKindLabel(row) }}</span></td>
             <td class="review-id-cell">
-              <!-- 来源记录：优先跳图谱构建任务详情（job 维度，含执行历史）；
-                   无 jobId 的存量 case 回落执行详情（EXEC 维度） -->
+              <!-- 来源记录：统一 job 维度，跳图谱构建任务详情（含执行历史）；
+                   无 jobId 的存量 case 不再回落 EXEC 执行链接（后端已按执行兜底解析 job） -->
               <RouterLink v-if="row.jobId" class="link" :to="`/graph-build/jobs/${row.jobId}`">{{ row.jobId }}</RouterLink>
-              <RouterLink v-else-if="row.graphBuildId" class="link" :to="`/processing-instance/${row.graphBuildId}`">{{ row.graphBuildId }}</RouterLink>
               <template v-else>—</template>
             </td>
             <td><span :class="['review-status', `is-${row.status}`]">{{ row.status }}</span></td>
@@ -624,6 +633,7 @@ onMounted(loadReviews)
 .rerun-batch-action:disabled{border-color:#94bfff;background:#94bfff;color:#fff;cursor:not-allowed}
 .rerun-feedback{flex:0 0 auto;display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid #a6f4c5;background:#ecfdf3;color:#067647;font-size:12px;line-height:20px}
 .rerun-feedback.is-error{border-color:#f5b8b3;background:#fef3f2;color:#b42318}
+.rerun-feedback.is-warning{border-color:#fec84b;background:#fffaeb;color:#b54708}
 .rerun-feedback-close{margin-left:auto;width:22px;height:22px;border:0;border-radius:4px;background:transparent;color:inherit;font-size:14px;cursor:pointer}
 .rerun-confirm-text{margin:0;color:#4e5969;font-size:13px;line-height:22px}
 .review-status.is-重跑中,.review-status.is-执行中{color:#175cd3}

@@ -37,7 +37,7 @@ const renderReview = () => {
     props: { mode: 'review' },
     global: {
       components: {
-        ASelect: { name: 'ASelect', setup: () => () => null },
+        ASelect: { name: 'ASelect', props: ['modelValue', 'options'], setup: () => () => null },
         AInput: { name: 'AInput', setup: () => () => null },
         // 弹窗 stub 直渲染默认插槽，让日志弹窗内容可被断言
         AModal: { name: 'AModal', setup: (_props: Record<string, unknown>, { slots }: { slots: { default?: () => unknown } }) => () => h('div', slots.default?.()) },
@@ -88,6 +88,18 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
       expect.objectContaining({ category: 'C', templateId: undefined }),
     )
+  })
+
+  it('C 类状态筛选只有 全部/待处理/已处理/重跑中——「重跑失败」是幽灵状态（无代码写入），已移除', async () => {
+    const wrapper = renderReview()
+    await flushPromises()
+    // 状态下拉是筛选行第一个 a-select
+    expect(wrapper.findAllComponents({ name: 'ASelect' })[0].props('options'))
+      .toEqual(['全部', '待处理', '已处理'])
+
+    await switchToCategoryC(wrapper)
+    expect(wrapper.findAllComponents({ name: 'ASelect' })[0].props('options'))
+      .toEqual(['全部', '待处理', '已处理', '重跑中'])
   })
 
   it('A 类不渲染批量重跑按钮与勾选列；C 类才渲染', async () => {

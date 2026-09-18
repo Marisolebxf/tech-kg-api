@@ -19,8 +19,6 @@ import GraphBuildView from '../views/platform/GraphBuildView.vue'
 import EntityListView from '../views/platform/EntityListView.vue'
 import ConfigurationManagementView from '../views/platform/ConfigurationManagementView.vue'
 import AccessDeniedView from '../views/auth/AccessDeniedView.vue'
-import CorrectionCenterView from '../views/admin/CorrectionCenterView.vue'
-import MemberManagementView from '../views/admin/MemberManagementView.vue'
 
 const serviceRoutes = [
   { path: '/expert-direct', name: 'expert-direct', title: '科技专家/人才直接关系', serviceKey: 'expert-direct' },
@@ -47,7 +45,7 @@ export const router = createRouter({
       path: '/forbidden',
       name: 'forbidden',
       component: AccessDeniedView,
-      meta: { title: '无管理端权限' },
+      meta: { title: '无管理员权限' },
     },
     {
       path: '/',
@@ -78,8 +76,6 @@ export const router = createRouter({
       component: EntityListView,
       meta: { title: '实体列表' },
     },
-    { path: '/admin/corrections', name: 'admin-corrections', component: CorrectionCenterView, props: { scope: 'admin' }, meta: { title: '修正记录', admin: true } },
-    { path: '/admin/members', name: 'admin-members', component: MemberManagementView, meta: { title: '成员管理', admin: true } },
     { path: '/schema', name: 'schema', component: SchemaBrowserView, meta: { title: 'Schema 管理', admin: true } },
     { path: '/graph-build', name: 'graph-build', component: GraphBuildView, meta: { title: '图谱构建', admin: true } },
     { path: '/graph-build/jobs/:jobId', name: 'job-detail', component: ProcessInstanceDetailView, meta: { title: '任务详情', admin: true } },
@@ -90,8 +86,6 @@ export const router = createRouter({
     { path: '/user-center', name: 'user-center', component: UserCenterView, meta: { title: '个人中心' } },
     { path: '/account-security', name: 'account-security', component: AccountSecurityView, meta: { title: '账号与安全' } },
     { path: '/operation-logs', name: 'operation-logs', component: OperationLogsView, meta: { title: '操作记录' } },
-    { path: '/admin/task-detail/:area/:taskId', name: 'admin-task-detail', component: ProcessInstanceDetailView, meta: { title: '任务实例详情', admin: true } },
-    { path: '/admin/processing-instance/:instanceId', name: 'admin-processing-instance-detail', component: ProcessInstanceDetailView, meta: { title: '任务实例详情', admin: true } },
     { path: '/task-detail/:area/:taskId', name: 'task-detail', component: ProcessInstanceDetailView, meta: { title: '任务实例详情', admin: true } },
     { path: '/processing-instance/:instanceId', name: 'processing-instance-detail', component: ProcessInstanceDetailView, meta: { title: '任务实例详情', admin: true } },
     {

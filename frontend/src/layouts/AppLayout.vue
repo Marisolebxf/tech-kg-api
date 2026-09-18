@@ -2397,8 +2397,14 @@ onBeforeUnmount(() => {
   }
 
   .app-top-actions__right {
+    flex: 1;
+    min-width: 0;
     gap: 4px;
     margin-right: 0;
+  }
+
+  .app-top-actions__right > :is(.app-docs-link, .app-alert-entry, .app-top-actions__user) {
+    flex-shrink: 0;
   }
 
 

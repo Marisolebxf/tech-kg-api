@@ -161,6 +161,48 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     expect(mocks.rerunExtractFailures).toHaveBeenCalledWith({ caseIds: ['MR-1', 'MR-2'] })
   })
 
+  it('批量重跑部分 schema 被跳过：反馈条转黄并展示跳过明细', async () => {
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+
+    mocks.rerunExtractFailures.mockResolvedValueOnce({
+      executions: [{ executionId: 'EXEC-R1', schemaId: 'schema-paper', records: 2, cases: 2 }],
+      cases: 2,
+      skipped: [
+        { schemaId: 'schema-patent', schemaKey: 'patent', cases: 1, reason: 'Schema 不存在: schema-patent' },
+      ],
+    })
+
+    const header = headerCheckbox(wrapper)
+    ;(header.element as HTMLInputElement).checked = true
+    await header.trigger('change')
+    await batchButton(wrapper).trigger('click')
+    await flushPromises()
+
+    const bar = wrapper.get('.rerun-feedback')
+    expect(bar.classes()).toContain('is-warning')
+    expect(bar.text()).toContain('已下发重跑：2 条失败记录')
+    expect(bar.text()).toContain('跳过 1 条')
+    expect(bar.text()).toContain('patent×1')
+  })
+
+  it('批量重跑无跳过：反馈条保持绿色 success', async () => {
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+
+    const header = headerCheckbox(wrapper)
+    ;(header.element as HTMLInputElement).checked = true
+    await header.trigger('change')
+    await batchButton(wrapper).trigger('click')
+    await flushPromises()
+
+    const bar = wrapper.get('.rerun-feedback')
+    expect(bar.classes()).toContain('is-success')
+    expect(bar.classes()).not.toContain('is-warning')
+  })
+
   it('更新时间表头三态排序：默认 → 新→旧 → 旧→新 → 默认，请求带对应 sort 参数', async () => {
     const wrapper = renderReview()
     await flushPromises()

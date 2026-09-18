@@ -346,6 +346,9 @@ async def rerun_failed_records(
     同一 schema 的所选 case 合并为**一个**新执行（triggerSource=RERUN），
     只读失败记录 id；先标 RERUNNING 再触发（防执行先完成的竞态），触发失败
     回滚为 OPEN。仍失败的记录由 workflow 结尾的 resolve 重建 case（attempt+1）。
+
+    单个 schema 校验失败（不存在/不在当前控制面/未传脚本/缺来源绑定）只跳过
+    该组并在响应 ``skipped`` 中回报，不阻断其余 schema；全部跳过时才整体 409。
     """
     from service.manual_review_production import manual_review_service
     from service.workflow_operations import workflow_operations_service
@@ -365,9 +368,23 @@ async def rerun_failed_records(
         groups.setdefault(schema_id, []).append(case)
 
     executions: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
     total_cases = 0
     for schema_id, group in groups.items():
-        info = load_extract_schema(schema_id)
+        try:
+            info = load_extract_schema(schema_id)
+        except SchemaConflictError as exc:
+            # 单个 schema 校验失败（不存在/已删除/不在当前控制面，如其他部署栈
+            # 产生的 case；或未传脚本、未绑来源）只跳过该组，不阻断其余 schema 重跑
+            skipped.append(
+                {
+                    "schemaId": schema_id,
+                    "schemaKey": group[0].get("schemaKey"),
+                    "cases": len(group),
+                    "reason": str(exc),
+                }
+            )
+            continue
         definition = persist_extract_definition(build_extract_definition(info))
         record_ids_by_source: dict[str, list[str]] = {}
         for case in group:
@@ -377,7 +394,15 @@ async def rerun_failed_records(
                 if case["recordId"] not in ids:
                     ids.append(case["recordId"])
         if not record_ids_by_source:
-            raise SchemaConflictError(f"所选 case 缺少来源绑定信息，无法重跑: {schema_id}")
+            skipped.append(
+                {
+                    "schemaId": schema_id,
+                    "schemaKey": group[0].get("schemaKey"),
+                    "cases": len(group),
+                    "reason": "所选 case 缺少来源绑定信息",
+                }
+            )
+            continue
         group_case_ids = [case["caseId"] for case in group]
         original = (
             repository.get_execution(group[0]["executionId"])
@@ -387,6 +412,7 @@ async def rerun_failed_records(
         orig_payload = (original or {}).get("payload") or {}
         graph_space = (
             orig_payload.get("graphSpace") or orig_payload.get("graph_space")
+            or info.get("graph_space")  # 原执行未带图空间时回落 schema 自身空间，避免误写环境默认空间
         ) or os.getenv("TRS_GRAPH_SPACE", "techkg")
         job_id = (original or {}).get("jobId") or group[0].get("jobId")
 
@@ -422,4 +448,11 @@ async def rerun_failed_records(
             }
         )
         total_cases += len(group_case_ids)
-    return {"executions": executions, "cases": total_cases}
+    if not executions:
+        # 全部组都被跳过（批量勾选跨栈/已删 schema 的 case 时）：聚合各组的跳过原因
+        detail = "；".join(
+            f"{s['schemaKey'] or s['schemaId']}({s['cases']}条): {s['reason']}"
+            for s in skipped
+        )
+        raise SchemaConflictError(f"所选失败记录均无法重跑——{detail}")
+    return {"executions": executions, "cases": total_cases, "skipped": skipped}

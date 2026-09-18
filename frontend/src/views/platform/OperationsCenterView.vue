@@ -57,8 +57,8 @@ const reviewCategory = ref<'A' | 'C'>('A')
 /** C 类勾选的待重跑 case。 */
 const rerunSelection = ref<Set<string>>(new Set())
 const rerunSubmitting = ref(false)
-/** 批量重跑结果反馈（替代 alert）：展示新执行可跳转链接，15s 自动消失。 */
-const rerunFeedback = ref<{ type: 'success' | 'error'; text: string; executions: Array<{ executionId: string; schemaId: string; cases: number; records: number }> } | null>(null)
+/** 批量重跑结果反馈（替代 alert）：展示新执行可跳转链接，15s 自动消失；warning=部分 schema 被跳过。 */
+const rerunFeedback = ref<{ type: 'success' | 'warning' | 'error'; text: string; executions: Array<{ executionId: string; schemaId: string; cases: number; records: number }> } | null>(null)
 /** 勾选 >20 条时的 a-modal 二次确认。 */
 const rerunConfirmVisible = ref(false)
 let rerunFeedbackTimer: number | undefined
@@ -94,7 +94,7 @@ function toggleRerunPickAll(event: Event) {
   for (const id of rerunPageEligibleIds.value) toggleRerunPick(id, checked)
 }
 
-function showRerunFeedback(type: 'success' | 'error', text: string, executions: Array<{ executionId: string; schemaId: string; cases: number; records: number }>) {
+function showRerunFeedback(type: 'success' | 'warning' | 'error', text: string, executions: Array<{ executionId: string; schemaId: string; cases: number; records: number }>) {
   rerunFeedback.value = { type, text, executions }
   window.clearTimeout(rerunFeedbackTimer)
   rerunFeedbackTimer = window.setTimeout(() => { rerunFeedback.value = null }, 15000)
@@ -110,7 +110,16 @@ async function rerunSelected(caseIds: string[] | undefined = undefined, skipConf
   rerunSubmitting.value = true
   try {
     const result = await rerunExtractFailures({ caseIds: ids })
-    showRerunFeedback('success', `已下发重跑：${result.cases} 条失败记录 → ${result.executions.length} 个新执行（类别=重新执行）`, result.executions)
+    // 部分 schema 校验失败被跳过（已删/不在当前控制面）：黄条提示，其余已正常下发
+    const skipped = result.skipped ?? []
+    const skippedText = skipped.length
+      ? `；跳过 ${skipped.reduce((n, s) => n + s.cases, 0)} 条（${skipped.map((s) => `${s.schemaKey || s.schemaId}×${s.cases}`).join('、')}：Schema 不在当前控制面或已删除）`
+      : ''
+    showRerunFeedback(
+      skipped.length ? 'warning' : 'success',
+      `已下发重跑：${result.cases} 条失败记录 → ${result.executions.length} 个新执行（类别=重新执行）${skippedText}`,
+      result.executions,
+    )
     rerunSelection.value = new Set()
     void loadReviews()
   } catch (error) {
@@ -624,6 +633,7 @@ onMounted(loadReviews)
 .rerun-batch-action:disabled{border-color:#94bfff;background:#94bfff;color:#fff;cursor:not-allowed}
 .rerun-feedback{flex:0 0 auto;display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid #a6f4c5;background:#ecfdf3;color:#067647;font-size:12px;line-height:20px}
 .rerun-feedback.is-error{border-color:#f5b8b3;background:#fef3f2;color:#b42318}
+.rerun-feedback.is-warning{border-color:#fec84b;background:#fffaeb;color:#b54708}
 .rerun-feedback-close{margin-left:auto;width:22px;height:22px;border:0;border-radius:4px;background:transparent;color:inherit;font-size:14px;cursor:pointer}
 .rerun-confirm-text{margin:0;color:#4e5969;font-size:13px;line-height:22px}
 .review-status.is-重跑中,.review-status.is-执行中{color:#175cd3}

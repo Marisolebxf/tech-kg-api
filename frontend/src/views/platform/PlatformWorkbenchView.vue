@@ -307,6 +307,8 @@ const {
 const algoSpace = computed(() => currentGraphSpace())
 const selectedAlgorithm = ref(GRAPH_ALGORITHMS[0].id)
 const algoLabels = ref<string[]>([])
+/** 边类型数量上限，与后端 AlgorithmSubmitRequest.labels 的 max_length=20 保持一致。 */
+const ALGO_LABELS_MAX = 20
 /** 按算法 id 分桶的参数值；切换算法时按目录默认值初始化该桶。 */
 const algoParamValues = ref<Record<string, Record<string, number | string | boolean>>>({})
 const algoHasWeight = ref(false)
@@ -330,6 +332,13 @@ const selectedAlgorithmDef = computed<GraphAlgorithmDefinition>(
 const algoParamDefs = computed<AlgorithmParamDef[]>(() => selectedAlgorithmDef.value.params)
 /** 仅展示业务输入，调优参数使用默认值。 */
 const mainParamDefs = computed(() => algoParamDefs.value.filter((param) => !param.advanced))
+/** 高级参数（算法调优项）：默认展开，让三个算法页签的表单内容有可见区分。 */
+const advancedParamDefs = computed(() => algoParamDefs.value.filter((param) => param.advanced))
+const advancedOpen = ref(true)
+/** 表单实际渲染的参数：主参数恒显，高级参数随折叠状态追加。 */
+const renderParamDefs = computed(() =>
+  advancedOpen.value ? [...mainParamDefs.value, ...advancedParamDefs.value] : mainParamDefs.value,
+)
 const algoRows = computed(() => algoResult.value?.rows ?? [])
 const algoResultColumns = computed<string[]>(() =>
   algoRows.value.length ? Object.keys(algoRows.value[0]) : [],
@@ -850,6 +859,29 @@ const algoJobStatus = computed(() => {
   return { label: '失败', tone: 'is-阻断' }
 })
 
+/** 本页作业是否仍在运行：运行中禁用再次提交（共享引擎同时只跑一个作业，重复提交必然 429）。 */
+const isAlgoJobRunning = computed(() => algoJob.value?.status === 'running')
+
+/** 作业时长文案：运行中为已运行时长（随轮询刷新），终态为总耗时。 */
+const algoJobElapsedText = computed(() => {
+  const job = algoJob.value
+  if (!job?.startedAt) return ''
+  const start = Date.parse(job.startedAt)
+  if (Number.isNaN(start)) return ''
+  const end =
+    job.status === 'running' ? Date.now() : job.finishedAt ? Date.parse(job.finishedAt) : Number.NaN
+  if (Number.isNaN(end)) return ''
+  const seconds = Math.max(0, Math.round((end - start) / 1000))
+  return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${String(seconds % 60).padStart(2, '0')} 秒`
+})
+
+/** 服务端 ISO 时间仅展示时分秒，作业面板更易读。 */
+function formatAlgoTime(value?: string | null): string {
+  if (!value) return ''
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleTimeString('zh-CN', { hour12: false })
+}
+
 function initAlgoParams(algorithmId: string): void {
   const def = GRAPH_ALGORITHMS.find((item) => item.id === algorithmId)
   const values: Record<string, number | string | boolean> = {}
@@ -1274,6 +1306,10 @@ async function handleAlgoSubmit(): Promise<void> {
   }
   if (!algoLabels.value.length) {
     showToast('请选择至少一个边类型', 'warning')
+    return
+  }
+  if (algoLabels.value.length > ALGO_LABELS_MAX) {
+    showToast(`关系类型最多选择 ${ALGO_LABELS_MAX} 个，当前已选 ${algoLabels.value.length} 个`, 'warning')
     return
   }
   const weightCols = algoHasWeight.value
@@ -1797,7 +1833,8 @@ const pageMeta = computed(() => {
             算法引擎当前不可用（{{ algoMetadata.engine.message ?? 'Spark 运行器未就绪' }}），提交可能失败，可稍后重试
           </p>
           <p class="platform-query-algo__desc">{{ selectedAlgorithmDef.label }}：{{ selectedAlgorithmDef.description }}</p>
-          <!-- 仅展示业务输入；算法调优和计算选项使用默认值。 -->
+          <p v-if="!advancedParamDefs.length" class="platform-query-algo__no-params">当前算法无可调参数，选择关系类型后直接提交即可</p>
+          <!-- 主表单保留业务输入；算法调优参数折叠在「高级参数」区（默认展开，页签间内容可见区分）。 -->
           <div class="platform-query-algo__controls">
             <div class="platform-form-grid platform-query-algo__form">
               <div class="platform-form-field platform-query-algo__labels">
@@ -1808,7 +1845,7 @@ const pageMeta = computed(() => {
                   v-model="algoLabels"
                   multiple
                   allow-clear
-                  placeholder="选择参与计算的关系类型"
+                  placeholder="选择参与计算的关系类型（最多 20 个）"
                   :max-tag-count="4"
                   :scrollbar="false"
                 >
@@ -1817,7 +1854,7 @@ const pageMeta = computed(() => {
                   </a-option>
                 </a-select>
               </div>
-              <div v-for="param in mainParamDefs" :key="param.key" class="platform-form-field">
+              <div v-for="param in renderParamDefs" :key="param.key" class="platform-form-field">
                 <label class="platform-form-label" :for="`algo-param-${param.key}`">
                   <i v-if="param.required" class="platform-query-algo__required">*</i>{{ param.label }}
                 </label>
@@ -1863,14 +1900,23 @@ const pageMeta = computed(() => {
                 <span v-if="param.hint && param.type !== 'bool'" class="platform-query-algo__param-hint">{{ param.hint }}</span>
               </div>
             </div>
+            <button
+              v-if="advancedParamDefs.length"
+              class="kg-button kg-button--text platform-query-algo__advanced-toggle"
+              type="button"
+              :aria-expanded="advancedOpen"
+              @click="advancedOpen = !advancedOpen"
+            >
+              {{ advancedOpen ? '收起高级参数' : `高级参数（${advancedParamDefs.length} 个）` }}
+            </button>
             <div class="platform-query-algo__actions">
               <button
                 class="kg-button"
                 type="button"
-                :disabled="algoSubmitLoading"
+                :disabled="algoSubmitLoading || isAlgoJobRunning"
                 @click="handleAlgoSubmit"
               >
-                {{ algoSubmitLoading ? '提交中…' : '提交算法作业' }}
+                {{ algoSubmitLoading ? '提交中…' : isAlgoJobRunning ? '作业运行中…' : '提交算法作业' }}
               </button>
             </div>
           </div>
@@ -1878,9 +1924,14 @@ const pageMeta = computed(() => {
             <div class="platform-query-algo__job-meta">
               <span :class="['platform-status', algoJobStatus?.tone]">{{ algoJobStatus?.label }}</span>
               <span class="platform-query-algo__job-id">作业 {{ algoJob.jobId }}</span>
-              <span v-if="algoJob.startedAt">开始 {{ algoJob.startedAt }}</span>
-              <span v-if="algoJob.finishedAt">完成 {{ algoJob.finishedAt }}</span>
+              <span v-if="algoJob.startedAt">开始 {{ formatAlgoTime(algoJob.startedAt) }}</span>
+              <span v-if="algoJob.finishedAt">完成 {{ formatAlgoTime(algoJob.finishedAt) }}</span>
+              <span v-if="algoJob.status !== 'running' && algoJobElapsedText">耗时 {{ algoJobElapsedText }}</span>
               <button class="kg-button kg-button--text" type="button" @click="refreshAlgoJob">刷新状态</button>
+            </div>
+            <div v-if="algoJob.status === 'running'" class="platform-query-algo__job-running" role="status">
+              <i class="platform-query-algo__job-spinner" aria-hidden="true"></i>
+              <span>算法作业运行中<template v-if="algoJobElapsedText">，已运行 {{ algoJobElapsedText }}</template>，完成后结果自动展示</span>
             </div>
             <div v-if="algoJob.status === 'failed'" class="platform-query-algo__job-error">
               <p><strong>失败原因：</strong>{{ algoJob.error ?? '（服务端未返回原因）' }}</p>
@@ -5000,7 +5051,8 @@ print(response.json())</pre>
 .platform-query-algo__toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:40px;border-bottom:1px solid #e5e6eb}
 .platform-query-algo__controls{display:flex;align-items:center;gap:24px}
 .platform-query .platform-query-algo__form{display:flex;flex:1;min-width:0;gap:16px;flex-wrap:wrap}
-.platform-query .platform-query-algo__labels{display:flex;flex:1;flex-direction:row;align-items:center;gap:12px;grid-column:auto}
+/* 带 .platform-form-field 提升优先级：否则被下方样式块同级的 flex-direction:column 通用规则按源顺序覆盖 */
+.platform-query .platform-form-field.platform-query-algo__labels{display:flex;flex:1;flex-direction:row;align-items:center;gap:12px;grid-column:auto}
 .platform-query .platform-query-algo__labels .platform-form-label{display:inline-flex;align-items:baseline;flex:0 0 auto;white-space:nowrap}
 .platform-query .platform-query-algo__labels :deep(.arco-select){flex:1 1 0%;width:0!important}
 .platform-query-algo__actions{flex:0 0 auto;margin-left:auto}
@@ -5110,6 +5162,11 @@ print(response.json())</pre>
 .platform-query-algo__actions{display:flex;align-items:center;gap:12px}
 
 .platform-query-algo__job{display:grid;border:1px solid #e5e6eb;border-radius:4px;background:#f7f8fa;padding:10px 12px;gap:8px}
+.platform-query-algo__job-running{display:flex;align-items:center;gap:8px;color:#1d2129;font-size:13px;line-height:20px}
+.platform-query-algo__job-spinner{display:inline-block;width:14px;height:14px;border:2px solid #c9cdd4;border-top-color:#004ecc;border-radius:50%;animation:platform-algo-spin .8s linear infinite;flex:0 0 auto}
+@keyframes platform-algo-spin{to{transform:rotate(360deg)}}
+.platform-query-algo__no-params{margin:0;color:#86909c;font-size:13px;line-height:20px}
+.platform-query-algo__advanced-toggle{flex:0 0 auto;white-space:nowrap}
 .platform-query-algo__job-meta{display:flex;align-items:center;gap:12px;color:#4e5969;font-size:13px;line-height:20px;flex-wrap:wrap}
 .platform-query-algo__job-id{color:#1d2129;font-weight:500}
 .platform-query-algo__job-error{display:grid;border:1px solid #ffd6c6;border-radius:4px;background:#fff;padding:8px 12px;gap:8px}

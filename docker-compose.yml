@@ -68,6 +68,8 @@ services:
       PATENT_EMBEDDING_MODEL: ${PATENT_EMBEDDING_MODEL:-moka-ai/m3e-small}
       PATENT_EMBEDDING_DIM: ${PATENT_EMBEDDING_DIM:-512}
       PATENT_EMBEDDING_API_KEY: ${PATENT_EMBEDDING_API_KEY:-local-no-auth}
+      # 平台展示时间统一东八区：datetime.now(UTC).astimezone() 跟随容器 TZ
+      TZ: Asia/Shanghai
       AUTH_ENABLED: ${AUTH_ENABLED:-true}
       AUTH_SESSION_BACKEND: redis
       AUTH_SESSION_COOKIE: ${AUTH_SESSION_COOKIE:-techkg_session}
@@ -229,6 +231,8 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: default
       TEMPORAL_TASK_QUEUE: tech-kg-workflows
+      # 与 api 同时区：worker 回写的执行/任务时间戳保持一致口径
+      TZ: Asia/Shanghai
       WORKFLOW_MYSQL_HOST: temporal-mysql
       WORKFLOW_MYSQL_PORT: "3306"
       WORKFLOW_MYSQL_DATABASE: techkg_control

@@ -42,7 +42,7 @@
 
 ## 脚本入口：current_context()
 
-平台脚本都是单参签名（`transform(payload)`，旧 `workflow(payload)` 兼容），平台不向其传 `ctx`：
+平台脚本都是单参签名（`@step` 标注的 `fn(payload)`），平台不向其传 `ctx`：
 
 ```python
 from kg_sdk import current_context

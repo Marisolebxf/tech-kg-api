@@ -100,8 +100,13 @@ async def _list_expert(client: AsyncClient) -> dict:
     return next(item for item in listing.json()["data"]["items"] if item["name"] == "Expert")
 
 
-BENIGN_SCRIPT = b"def transform(row):\n    return row\n"
-DANGEROUS_SCRIPT = b"import os\nos.system('rm -rf /')\n"
+BENIGN_SCRIPT = (
+    b"from kg_sdk import step\n\n\n@step\ndef clean_row(payload):\n    return payload\n"
+)
+DANGEROUS_SCRIPT = (
+    b"import os\n\nfrom kg_sdk import step\n\n\n@step\ndef clean_row(payload):\n"
+    b"    os.system('rm -rf /')\n    return payload\n"
+)
 
 
 @pytest.mark.asyncio
@@ -126,7 +131,7 @@ async def test_verify_success_saves_script(schema_api, monkeypatch) -> None:
             f"/api/v1/schema-management/schemas/{expert['id']}/script/content"
         )
         assert content.status_code == 200
-        assert content.json()["data"]["content"].startswith("def transform")
+        assert content.json()["data"]["content"].startswith("from kg_sdk import step")
 
 
 @pytest.mark.asyncio

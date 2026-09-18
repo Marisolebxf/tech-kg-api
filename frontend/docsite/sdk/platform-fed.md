@@ -9,11 +9,11 @@
 
 ```text
 平台（按时间列水位分批读源表行）
-   └─ payload["rows"] ──▶ transform(payload)  ← 脚本：纯转换，返回实体/关系
+   └─ payload["rows"] ──▶ @step 声明的抽取步(payload)  ← 脚本：纯转换，返回实体/关系
                               └─ 返回 dict ──▶ 平台 merge_node / merge_edge 写图 + 推水位
 ```
 
-- **入口**：`def transform(payload)`（单参；旧 `workflow` 名仍兼容），多步用脚本顶层 `STEPS` 清单（每步同样单参）；
+- **入口**：顶层函数标 `@step` / `@step("id")`（单参；旧单步 `transform` 与 `STEPS` 清单已下线）；
 - 脚本**不自读库、不自写图**——批次行由平台传入，写图由平台完成；
 - 每张来源表独立水位（默认时间列 `update_time`），多表并行、单表内批次串行。
 
@@ -22,7 +22,8 @@
 `props` 的键必须存在于 Schema 目录（未删除属性）；已删属性「插空」= 省略键即可。
 
 ```python
-def transform(payload):
+@step
+def emit(payload):
     rows = payload["rows"]          # 本批行（JSON dict）
     table = payload["source_table"] # "库名.表名"
     kind = payload["kind"]          # "entity" | "relation"

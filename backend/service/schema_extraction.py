@@ -235,6 +235,47 @@ def load_extract_schema(schema_id: str, *, session: Session | None = None) -> di
     return info
 
 
+def ensure_extract_script_ready(schema_id: str) -> dict[str, Any]:
+    """建/触发 extract 任务前的可执行预检，通过则返回 schema 基本信息。
+
+    在 ``load_extract_schema`` 的目录校验之上，额外探测脚本对象在对象存储中
+    真实存在：系统 Schema 的种子 script 行只登记目录、不传脚本本体
+    （object_key 指向不存在的 key），仅靠目录校验会放行，任务要等 worker
+    下载脚本重试耗尽（约 100 秒）才 FAILED，且报错只剩一句笼统的
+    "Workflow execution failed"，用户无从知晓原因。
+    """
+    info = load_extract_schema(schema_id)
+    _ensure_script_object_exists(schema_id)
+    return info
+
+
+def _ensure_script_object_exists(schema_id: str) -> None:
+    from sqlalchemy.orm import Session as OrmSession
+
+    from db_model.schema_management import GraphSchemaDefinition
+    from infra.s3 import get_schema_s3_storage
+    from infra.workflow_mysql import get_workflow_engine
+
+    with OrmSession(get_workflow_engine()) as control_session:
+        row = control_session.get(GraphSchemaDefinition, schema_id)
+        script = row.script if row is not None else None
+    bucket = script.bucket if script else None
+    object_key = script.object_key if script else None
+    if not bucket or not object_key:
+        raise SchemaConflictError("请先上传抽取脚本后再触发抽取")
+    try:
+        exists = get_schema_s3_storage().object_exists(bucket, object_key)
+    except Exception:  # noqa: BLE001
+        # S3 探测本身失败（网络/权限）不阻断触发：worker 内有同样的下载校验兜底
+        logger.warning("脚本对象存在性探测失败，跳过预检: %s/%s", bucket, object_key, exc_info=True)
+        return
+    if not exists:
+        raise SchemaConflictError(
+            f"脚本对象 {bucket}/{object_key} 在对象存储中不存在"
+            "（系统 Schema 只登记了脚本条目、未上传脚本本体），请先在 Schema 管理上传抽取脚本"
+        )
+
+
 class SchemaExtractionService:
     def __init__(self, session: Session) -> None:
         self._session = session

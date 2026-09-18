@@ -283,3 +283,31 @@ def test_engine_up(algo_backend) -> None:
     algo_backend.algo.health = lambda: {"status": "UP", "activeJobs": 0}
     status = engine_status(_actor(), "shared_business")
     assert status == {"status": "UP", "activeJobs": 0}
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_degree_returns_running_before_background_computation(algo_backend, monkeypatch, fail):
+    from fastapi import BackgroundTasks
+    from service.graph_algorithm import _run_degree_job
+
+    tasks = BackgroundTasks()
+    data = submit_job(_actor(), "shared_business", "degreestatic", ["HAS_KEYWORD"], {}, background_tasks=tasks)
+    assert data["status"] == "running"
+    assert data["finishedAt"] is None
+    assert get_job(_actor(), "shared_business", data["jobId"])["status"] == "running"
+    with pytest.raises(GraphAlgorithmError) as exc:
+        get_result(_actor(), "shared_business", data["jobId"])
+    assert exc.value.status_code == 409
+    if fail:
+        def reject(*args):
+            raise RuntimeError("graph offline")
+        monkeypatch.setattr("service.graph_algorithm._degree_rows_via_ngql", reject)
+    task = tasks.tasks[0]
+    _run_degree_job(*task.args)
+    job = get_job(_actor(), "shared_business", data["jobId"])
+    assert job["status"] == ("failed" if fail else "succeeded")
+    assert job["finishedAt"]
+    if fail:
+        assert "graph offline" in job["error"]
+    else:
+        assert get_result(_actor(), "shared_business", data["jobId"])["count"] == 3

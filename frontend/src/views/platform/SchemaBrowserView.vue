@@ -915,7 +915,8 @@ async function saveItem() {
       await bindSourcesAfterCreate(result.id, f.sources)
     }
     modalOpen.value = false
-    await loadSchemas()
+    // 展开状态下同步刷拓扑，让新建实体/关系立即出现在浏览图（收起态展开时会重拉）
+    await Promise.all([loadSchemas(), ...(topologyExpanded.value ? [loadTopology()] : [])])
     void loadEntityOptions()
   } catch (error) {
     showToast(schemaErrorMessage(error), 'warning')
@@ -1509,7 +1510,8 @@ function togglePropertyDetail(schemaId: string): void {
 .schema-version-message{margin:0;padding:9px 13px;border-bottom:1px solid #b7d0f5;background:#eef5ff;color:#344f7a;font-size:11px}
 .schema-version-table{max-height:470px}.schema-version-table td:nth-child(6){min-width:280px}.schema-version-actions{display:flex;gap:6px}.schema-version-actions button{padding:3px 7px;border:1px solid #bdd0ea;border-radius:4px;background:#fff;color:#165dff;font-size:9px;white-space:nowrap;cursor:pointer}.schema-version-actions button.danger{border-color:#f6b9b4;color:#b42318}
 
-.schema-toolbar__actions{display:flex;align-items:center;gap:10px}
+.schema-toolbar__actions{display:flex;min-width:0;flex-wrap:wrap;align-items:center;gap:10px}
+.schema-toolbar__actions>.primary{flex-shrink:0;white-space:nowrap}
 .schema-tabs>.schema-toolbar__actions{min-width:0;margin-left:auto}
 .prop-len--invalid,.property-add-form__len--invalid{border-color:#e5484d!important;background:#fff3f3!important}
 .schema-toolbar .primary{height:32px;padding:0 14px;border:0;border-radius:6px;background:#165dff;color:#fff;font-size:13px;cursor:pointer}
@@ -1658,6 +1660,30 @@ function togglePropertyDetail(schemaId: string): void {
 .sources-panel{width:min(760px,100%)}
 .sources-note{margin:0;font-size:12px;line-height:20px;color:#86909c}
 .schema-create-body>.create-field,.schema-create-body>.create-props,.create-row>.create-field{margin-bottom:0;gap:0}.schema-create-body>.create-props{gap:0}.create-ddl{margin-top:0;gap:8px}.create-ddl__confirm{margin:0}
+
+@media (max-width: 767px) {
+  .schema-topology-shell .schema-toolbar {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .schema-topology-shell .schema-toolbar > div:first-child {
+    flex: 1 0 100%;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+  }
+
+  .schema-topology-legend {
+    flex: 1;
+    flex-wrap: wrap;
+  }
+
+  .schema-tabs > .schema-toolbar__actions {
+    width: 100%;
+    margin-left: 0;
+  }
+}
+
 </style>
 <style scoped>
 /* DESIGN_RULES: Schema management page contract. */
@@ -1716,7 +1742,7 @@ function togglePropertyDetail(schemaId: string): void {
 :deep(.schema-llm-select.arco-select-view){box-sizing:border-box;width:100%;height:32px;border:1px solid #e5e6eb!important;border-radius:4px;background:#fff!important}:deep(.schema-llm-select.arco-select-view:hover){border-color:#c9cdd4!important}:deep(.schema-llm-select.arco-select-view-focus){border-color:#165dff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
 :deep(.schema-llm-select.arco-select-view) .arco-select-view-value,:deep(.schema-llm-select.arco-select-view) .arco-select-view-input{background:#fff!important}
 :is(.schema-llm-select) :deep(.arco-select-view-focus){border-color:#165dff;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
-.schema-search-input.arco-input-wrapper{box-sizing:border-box;width:280px;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important}
+.schema-search-input.arco-input-wrapper{box-sizing:border-box;flex:1 1 180px;min-width:0;max-width:280px;width:280px;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important}
 .schema-search-input.arco-input-wrapper:hover{border-color:#4080ff!important;background:#fff!important}
 .schema-search-input.arco-input-wrapper:focus-within,.schema-search-input.arco-input-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
 .schema-search-input.arco-input-wrapper :deep(.arco-input-prefix){padding-right:8px;color:#4e5969}.schema-search-input.arco-input-focus :deep(.arco-input-prefix){color:#165dff}

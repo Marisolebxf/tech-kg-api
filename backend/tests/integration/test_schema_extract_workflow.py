@@ -38,7 +38,7 @@ PLAN = {
         }
     ],
     "scriptPath": "/tmp/fake.py",
-    "functionName": "transform",
+    "steps": [{"id": "clean", "fn": "step_clean"}],
     "timeoutSeconds": 60,
     "maxInflight": 2,
     "failureCaseCap": 10,
@@ -84,7 +84,6 @@ MULTI_STEP_PLAN = {
         {"id": "resolve", "fn": "step_resolve"},
         {"id": "emit", "fn": "step_emit"},
     ],
-    "multiStep": True,
 }
 
 
@@ -635,12 +634,11 @@ class TestSchemaExtractChain:
         assert alpha["records"] == 2
         assert alpha["written"] == 2
         assert alpha["failed"] == 0
-        # chain 模式 force_step_totals：单 transform 脚本聚合为 1 条（key=_default，
-        # name=函数名），详情页抽屉有内容
+        # chain 模式 activities：该 Schema 脚本各 @step 转换步（PLAN 单步 clean）
         assert alpha["activities"] == {
-            "_default": {
+            "clean": {
                 "status": "COMPLETED",
-                "name": "transform",
+                "name": "clean",
                 "records": 2,
                 "written": 2,
                 "failed": 0,
@@ -651,7 +649,7 @@ class TestSchemaExtractChain:
         assert beta["records"] == 2
         assert beta["written"] == 1
         assert beta["failed"] == 1
-        assert beta["activities"]["_default"]["failed"] == 1
+        assert beta["activities"]["clean"]["failed"] == 1
         # 毒行失败跨环汇总；写图两环各一次
         assert result["failures"] == {"count": 1, "recorded": 1, "truncated": False}
         assert state["writes"] == ["Alpha", "Beta"]

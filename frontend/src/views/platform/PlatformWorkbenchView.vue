@@ -1513,9 +1513,14 @@ const pageMeta = computed(() => {
       </section>
 
       <!-- 结果区常驻：未执行时空数据占位，执行后填充（不再整块隐藏/出现引起布局跳动） -->
-      <section v-if="queryMode === 'ngql'" class="platform-query-result">
+      <section
+        v-if="queryMode === 'ngql'"
+        :class="['platform-query-result', { 'platform-query-result--empty': !ngqlResult }]"
+      >
         <header class="platform-query-result__head">
-          <h2 class="platform-query-result__title">nGQL 执行结果</h2>
+          <h2 class="platform-query-result__title">
+            <span class="platform-query-result__title-marker" aria-hidden="true"></span>nGQL 执行结果
+          </h2>
           <span v-if="ngqlResult" class="platform-query-result__meta">{{ ngqlResult.records.length }} 行记录</span>
         </header>
         <div class="platform-query-result__body">
@@ -1537,9 +1542,18 @@ const pageMeta = computed(() => {
         </div>
       </section>
 
-      <section v-if="queryMode === 'algo'" class="platform-query-result platform-query-algo-result">
+      <section
+        v-if="queryMode === 'algo'"
+        :class="[
+          'platform-query-result',
+          'platform-query-algo-result',
+          { 'platform-query-result--empty': !algoResult },
+        ]"
+      >
         <header class="platform-query-result__head">
-          <h2 class="platform-query-result__title">{{ selectedAlgorithmDef.label }}执行结果</h2>
+          <h2 class="platform-query-result__title">
+            <span class="platform-query-result__title-marker" aria-hidden="true"></span>{{ selectedAlgorithmDef.label }}执行结果
+          </h2>
           <span v-if="algoResult" class="platform-query-result__meta">已返回 {{ algoRows.length }} 条{{ algoResult.truncated ? '（非全部结果）' : '' }}</span>
         </header>
         <div v-if="algoResult" class="platform-algo-list-toolbar">
@@ -1547,9 +1561,6 @@ const pageMeta = computed(() => {
           <span>匹配 {{ algoTotal }} 条 · 搜索和排序仅针对已返回结果</span>
           <AButton :disabled="!algoTotal" @click="exportAlgoCsv">导出{{ algoResult.truncated ? '预览' : '当前结果' }} CSV</AButton>
         </div>
-        <p v-if="algoResult?.truncated" class="platform-query-algo__truncated" role="note">
-          本次结果预览已被服务端截断，当前返回 {{ algoRows.length }} 条，并非全部计算结果。搜索、排序和导出仅包含这些数据；可缩小关系类型范围后重新运行。
-        </p>
         <div class="platform-query-result__body">
           <div class="platform-query-result__table">
             <QueryResultTable v-if="algoTotal" aria-label="图算法执行结果" :rows="pagedAlgoRows" :columns="algoResultColumns" :labels="algorithmColumnLabels" :page="algoPage" :page-size="algoPageSize" sortable :sort-column="algoSortColumn" :sort-direction="algoSortDirection" @sort="sortAlgoColumn" />
@@ -4506,8 +4517,8 @@ print(response.json())</pre>
    表格对齐图谱构建任务列表（40px 行高、#e5edf8 分隔线、hover 高亮）。 */
 .platform-query-result{display:flex;flex-direction:column;gap:16px}
 .platform-query-result__head{display:flex;flex:0 0 auto;align-items:center;justify-content:space-between;gap:16px;min-height:24px}
-.platform-query-result__title{position:relative;padding-left:11px;margin:0;color:#1d2129;font-size:16px;line-height:24px;font-weight:600}
-.platform-query-result__title::before{position:absolute;top:5px;left:0;width:3px;height:14px;border-radius:1px;background:#004ecc;content:""}
+.platform-query-result__title{display:flex;align-items:center;gap:8px;margin:0;color:#1d2129;font-size:16px;line-height:24px;font-weight:600}
+.platform-query-result__title-marker{width:3px;height:14px;border-radius:1px;background:#004ecc;flex:0 0 auto}
 .platform-query-result__meta{color:#86909c;font-size:12px;line-height:20px;white-space:nowrap}
 .platform-query-result__body{display:flex;flex-direction:column;overflow:hidden;border:1px solid #e5e6eb;border-radius:6px;background:#fff}
 .platform-query-result__table{min-width:0;overflow:hidden}
@@ -4555,7 +4566,6 @@ print(response.json())</pre>
 .platform-query-algo__job-error{display:grid;border:1px solid #ffd6c6;border-radius:4px;background:#fff;padding:8px 12px;gap:8px}
 .platform-query-algo__job-error p{margin:0;color:#b42318;font-size:13px;line-height:20px;overflow-wrap:anywhere}
 .platform-query-algo__job-error pre{max-height:160px;margin:0;overflow:auto;padding:8px;border-radius:4px;background:#0d1117;color:#e6edf3;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
-.platform-query-algo__truncated{margin:0 0 12px;padding:0;border:0;background:transparent;color:#86909c;font-size:12px;line-height:20px}
 /* 窄屏（此前该宽度区间对分布图无任何处理）：donut 与图例上下堆叠，避免固定列挤压 */
 @media(max-width:760px){
   .platform-donut-layout{grid-template-columns:minmax(0,1fr);justify-items:center;gap:12px;min-height:0;padding-bottom:8px}
@@ -4588,16 +4598,15 @@ print(response.json())</pre>
 .platform-query .platform-query-algo__labels :deep(.arco-select-view-focus){border-color:rgb(var(--primary-6))!important;background:var(--color-bg-2)!important}
 .platform-query-algo__actions{padding-top:30px}
 .platform-query-result{gap:16px}
-.platform-query-result__title{padding-left:0;color:var(--color-text-1);font-size:16px;line-height:24px}
-.platform-query-result__title::before{display:none}
+.platform-query-result__title{color:var(--color-text-1);font-size:16px;line-height:24px}
 .platform-query-result__body{border:1px solid var(--color-border-2);border-radius:4px}
 .platform-query-result__table{overflow:hidden}
 .platform-query-result__empty{min-height:180px;color:var(--color-text-3)}
 .platform-query-result__empty :deep(.arco-empty-description){font-size:14px;color:var(--color-text-3)}
+.platform-query-result--empty{margin-bottom:16px}
 .platform-algo-list-toolbar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;color:var(--color-text-3);font-size:12px}
 .platform-algo-search{width:320px;max-width:100%}
 .platform-algo-list-toolbar>button{margin-left:auto}
-.platform-query-algo__truncated{margin:0;padding:8px 12px;color:rgb(var(--orange-6));background:var(--color-warning-light-1);border-radius:4px}
 @media(max-width:768px){.platform-query-algo__controls{flex-direction:column;gap:12px}.platform-query-algo__form{width:100%}.platform-query-algo__actions{padding-top:0}.platform-algo-search{width:100%}.platform-algo-list-toolbar>button{margin-left:0}}
 .platform-ngql-input :deep(.arco-textarea::placeholder){color:#86909c!important;opacity:1}
 .platform-relation-label-hint{margin-left:4px;color:var(--color-text-3);font-size:12px;font-weight:400}

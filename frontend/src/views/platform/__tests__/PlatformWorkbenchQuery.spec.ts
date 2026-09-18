@@ -349,6 +349,39 @@ describe('PlatformWorkbench query graph-space context', () => {
 
 
 describe('Algorithm result lists', () => {
+  it('shows the shared vertical marker on nGQL and every algorithm result title', async () => {
+    const assertMarkedTitle = (title: string) => {
+      const heading = wrapper.get('.platform-query-result__title')
+      expect(heading.text()).toBe(title)
+      expect(heading.get('.platform-query-result__title-marker').attributes('aria-hidden')).toBe('true')
+    }
+
+    assertMarkedTitle('nGQL 执行结果')
+    await enterAlgorithms()
+    for (const algorithm of ['PageRank算法', 'Louvain算法', 'Degree算法']) {
+      await clickButton(algorithm)
+      assertMarkedTitle(`${algorithm}执行结果`)
+    }
+  })
+
+  it('marks unexecuted result panels for the standard bottom safe spacing', async () => {
+    expect(wrapper.get('.platform-query-result').classes()).toContain('platform-query-result--empty')
+    await enterAlgorithms()
+    expect(wrapper.get('.platform-query-algo-result').classes()).toContain('platform-query-result--empty')
+  })
+
+  it('does not show the verbose server-truncation alert', async () => {
+    vi.mocked(submitAlgorithmJob).mockResolvedValueOnce({ jobId: 'job-a', status: 'succeeded' })
+    vi.mocked(getAlgorithmJobResult).mockResolvedValueOnce({
+      jobId: 'job-a', sink: 'csv', truncated: true, rows: [{ vid: 'limited-node', degree: '1' }],
+    })
+    await enterAlgorithms()
+    await clickButton('Degree算法')
+    await submitAlgorithm()
+    expect(wrapper.find('.platform-query-algo__truncated').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('本次结果预览已被服务端截断')
+  })
+
   it('shows progress below the unchanged submit button before the submit response', async () => {
     const request = deferred<AlgorithmJobSnapshot>()
     vi.mocked(submitAlgorithmJob).mockReturnValueOnce(request.promise)

@@ -1372,11 +1372,13 @@ function togglePropertyDetail(schemaId: string): void {
           <header><h2>请更新脚本后重跑</h2><button type="button" @click="propertyScriptGuideOpen = false">×</button></header>
           <div class="schema-modal__body">
             <p class="schema-delete-text">
-              <template v-if="propertyChangeKind === 'add'">属性已新增并执行图 DDL，但当前脚本尚未覆盖新属性——不更新脚本直接重跑，新属性不会写入图数据。</template>
-              <template v-else>属性已删除（图库列及数据已物理清除），旧脚本若仍输出该属性，重跑会写图失败。</template>
-              请先更新脚本，再到「来源表」触发抽取或回填历史数据。
+              <template v-if="propertyChangeKind === 'add'">属性已新增并在图空间执行 DDL（新列已存在，当前为空）。脚本不输出新属性，新列就永远是 NULL——请更新脚本补上取值逻辑。</template>
+              <template v-else>属性已删除（图库列及数据已物理清除）。旧脚本若仍输出该属性，写图时会自动剔除该列并记告警——请更新脚本保持映射一致。</template>
             </p>
-            <p class="schema-delete-note">完成前列表行会持续提示：更新脚本前显示「落后 N 版」，更新后显示「待重跑」直至重跑结束。如需为历史数据补齐新属性，请在「来源表 → 回填历史数据」全量重跑。</p>
+            <p class="schema-delete-note">
+              <template v-if="propertyChangeKind === 'add'">更新脚本后到「来源表」触发抽取写入增量数据，历史数据需「回填历史数据」全量重跑补齐。完成前列表行会持续提示：更新脚本前显示「落后 N 版」，更新后显示「待重跑」直至重跑结束。</template>
+              <template v-else>更新脚本后建议触发一次抽取验证新脚本正常出数（历史数据无需回填，该列已随删除物理清除）。完成前列表行同样会持续提示。</template>
+            </p>
           </div>
           <footer>
             <button type="button" @click="propertyScriptGuideOpen = false">稍后处理</button>

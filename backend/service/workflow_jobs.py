@@ -356,7 +356,21 @@ class WorkflowJobService:
             except Exception:  # noqa: BLE001
                 temporal_runtime._client = None
             self.repo.delete_schedule(schedule_id)
-        # execution 历史保留（jobId 悬空无害），详情页删除后从任务列表入口不可达
+        # 运行中的执行一并终止：步间暂停落地后，删除任务留下挂起的 workflow
+        # 会永远等不到恢复信号，任务行卡在「执行中」。execution 历史行保留
+        # （翻 CANCELED 供详情页展示），仅任务列表入口不可达。
+        for execution in self.repo.list_executions(job_id=job_id):
+            if execution.get("status") != "RUNNING" or not execution.get("workflowId"):
+                continue
+            try:
+                await temporal_runtime.cancel_workflow(
+                    execution["workflowId"], execution.get("runId")
+                )
+                execution["status"] = "CANCELED"
+                execution["message"] = "任务已删除，执行终止"
+                self.repo.save_execution(execution)
+            except Exception:  # noqa: BLE001
+                temporal_runtime._client = None
         return self.repo.delete_job(job_id)
 
     # ---------- 辅助 ----------

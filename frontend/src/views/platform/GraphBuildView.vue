@@ -336,14 +336,21 @@ onMounted(() => {
                 <div class="gb-job-actions__inner">
                   <button v-if="['未运行', '运行失败'].includes(deriveJobUnifiedStatus(job))" type="button" class="primary" :disabled="triggeringJobId === job.id" @click="onTrigger(job)">{{ deriveJobUnifiedStatus(job) === '运行失败' ? '重新执行' : '执行' }}</button>
                   <button
-                    v-if="job.status !== '暂停' && deriveJobUnifiedStatus(job) !== '已暂停'"
+                    v-if="deriveJobUnifiedStatus(job) !== '已暂停' && job.status !== '暂停' && (deriveJobUnifiedStatus(job) === '运行中' || job.schedule.kind === 'cron')"
                     type="button"
                     :disabled="Boolean(pausingJobIds[job.id])"
                     @click="onToggleState(job)"
                   >
                     {{ pausingJobIds[job.id] ? '暂停中…' : '暂停' }}
                   </button>
-                  <button v-else type="button" class="primary" @click="onToggleState(job)">恢复</button>
+                  <button
+                    v-else-if="job.status === '暂停' || deriveJobUnifiedStatus(job) === '已暂停'"
+                    type="button"
+                    class="primary"
+                    @click="onToggleState(job)"
+                  >
+                    恢复
+                  </button>
                   <button type="button" @click="openJobDetail(job)">查看详情</button>
                   <button v-if="deriveJobUnifiedStatus(job) !== '运行中'" type="button" class="danger" @click="onDelete(job)">删除</button>
                 </div>

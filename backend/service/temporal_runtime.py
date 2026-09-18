@@ -105,6 +105,12 @@ class TemporalRuntime:
         handle = client.get_workflow_handle(workflow_id, run_id=run_id)
         await handle.signal(signal_name)
 
+    async def cancel_workflow(self, workflow_id: str, run_id: str | None) -> None:
+        """取消运行中的 workflow（删除任务时终止挂起/执行中的实例）。"""
+        client = await self.client()
+        handle = client.get_workflow_handle(workflow_id, run_id=run_id)
+        await handle.cancel()
+
     async def refresh_execution(self, execution: dict[str, Any]) -> dict[str, Any]:
         if execution.get("dispatchMode") == "LOCAL_FALLBACK":
             return execution

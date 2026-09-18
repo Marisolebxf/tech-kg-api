@@ -144,11 +144,22 @@ class WorkflowOperationsService:
         )
         return {"items": items, "total": len(items)}
 
-    def get_task(self, task_id: str) -> dict[str, Any]:
+    async def get_task(self, task_id: str) -> dict[str, Any]:
         task = self.repo.get_task(task_id)
         if task is None:
             raise KeyError(task_id)
         task["batch"] = self.repo.get_batch(task["batchId"])
+        # 自愈：卡在「执行中」的任务（job 已删/执行孤儿/服务重启丢刷新）查看时
+        # 向 Temporal 对账——没有列表惰性复核兜底的孤儿任务，只有这里能翻终态
+        if task.get("taskStatus") == "执行中":
+            for execution in self.repo.list_executions(job_id=task.get("jobId") or "") or []:
+                if execution.get("status") != "RUNNING":
+                    continue
+                await self.get_execution(execution["id"])  # 复用惰性刷新 + 任务状态同步
+            refreshed = self.repo.get_task(task_id)
+            if refreshed is not None:
+                task = refreshed
+                task["batch"] = self.repo.get_batch(task["batchId"])
         return task
 
     async def query_step_state(self, task: dict[str, Any]) -> dict[str, Any] | None:

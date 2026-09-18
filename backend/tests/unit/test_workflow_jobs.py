@@ -119,6 +119,9 @@ class FakeTemporal:
     async def signal_workflow(self, workflow_id, run_id, signal_name):
         self.signals.append((workflow_id, signal_name))
 
+    async def cancel_workflow(self, workflow_id, run_id):
+        self.canceled = getattr(self, "canceled", []) + [(workflow_id, run_id)]
+
     async def create_schedule(self, definition, schedule):
         self.schedules[schedule["id"]] = schedule
         return {**schedule, "dispatchStatus": "TEMPORAL_CREATED"}
@@ -562,3 +565,22 @@ async def test_pause_idle_job_sends_no_signal(env):
     )
     await service.set_job_state(_actor("u1"), job["id"], False)
     assert temporal.signals == []
+
+
+async def test_delete_running_job_cancels_execution(env):
+    """删除任务时终止运行中的执行：步间暂停落地后，孤儿挂起 workflow 会永远
+    等不到恢复信号，任务行卡「执行中」——删除必须一并 cancel。"""
+    service, repo, ops, temporal = env
+    job = await service.create_job(
+        _actor("u1"), {"name": "x", "taskType": "extract", "schemaId": "schema-widget"}
+    )
+    await service.trigger_job(_actor("u1"), job["id"])
+    job = repo.get_job(job["id"])
+    repo.save_execution(ops.execution_by_id[job["lastExecutionId"]])
+
+    await service.delete_job(_actor("u1"), job["id"])
+
+    execution = repo.get_execution(job["lastExecutionId"])
+    assert execution["status"] == "CANCELED"
+    assert execution["message"] == "任务已删除，执行终止"
+    assert len(temporal.canceled) == 1

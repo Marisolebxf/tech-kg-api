@@ -1,0 +1,130 @@
+# 热更新开发栈：直接挂载本仓库（baixinfeng/tech-kg-api）工作区源码，改文件即时生效。
+#
+# - api-hot：复用 tech-kg-api-dev2-api 镜像（自带 .venv 依赖与 m3e 模型），
+#   ./backend 挂载到 /app，uvicorn --reload 监听 .py 变更自动重启；
+#   /app/.venv、/app/var 用命名卷隔离（首次启动自动从镜像填充，保持镜像内依赖不被挂载遮蔽）。
+# - web-hot：tech-kg-dev-frontend-builder 镜像（自带 node_modules），
+#   ./frontend 挂载到 /app，vite dev（HMR，vite.config.ts 已配 usePolling 适配 bind mount）；
+#   /app/node_modules 同样用命名卷隔离。
+#
+# 端口（5173-5175 / 8002-8004 已被其他工作区或 dev2 栈占用）：
+#   后端 http://<host>:8010    前端 http://<host>:5180
+#
+# 启动：docker compose -f docker-compose.hotreload.yml up -d
+# 停止：docker compose -f docker-compose.hotreload.yml down
+# 依赖变更后（pyproject/pnpm-lock 变了）：down -v 清卷后重新 up（卷只首次从镜像填充）
+#
+# 本栈为本地开发免登录模式（e2e 同款组合）：AUTH_ENABLED=false + APP_ENV=dev
+# + AUTH_ALLOW_INSECURE_DEV_CONTEXT=true；需要联调登录流程时改回 true 即可。
+
+name: tech-kg-hot
+
+services:
+  api-hot:
+    image: tech-kg-api-dev2-api:latest
+    container_name: tech-kg-api-hot
+    # 挂载目录归主机用户所有；root 运行避免 /app/var 等运行时写入的权限问题
+    user: root
+    command: [".venv/bin/uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    ports:
+      - "8010:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://host.docker.internal:8090}
+      TRS_GRAPH_SPACE: dev2
+      TRS_GRAPH_API_KEY: ${TRS_GRAPH_API_KEY:-ysukeg}
+      TRS_GRAPH_TIMEOUT: ${TRS_GRAPH_TIMEOUT:-30}
+      MYSQL_HOST: ${MYSQL_HOST:-host.docker.internal}
+      MYSQL_PORT: ${MYSQL_PORT:-3306}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-gkx_element}
+      MYSQL_USERNAME: ${MYSQL_USERNAME:-root}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-123456789}
+      PAPER_COOP_MYSQL_HOST: ${PAPER_COOP_MYSQL_HOST:-host.docker.internal}
+      PAPER_COOP_MYSQL_PORT: ${PAPER_COOP_MYSQL_PORT:-3306}
+      PAPER_COOP_MYSQL_DATABASE: ${PAPER_COOP_MYSQL_DATABASE:-gkx_local}
+      PAPER_COOP_MYSQL_USERNAME: ${PAPER_COOP_MYSQL_USERNAME:-root}
+      PAPER_COOP_MYSQL_PASSWORD: ${PAPER_COOP_MYSQL_PASSWORD:-123456789}
+      MILVUS_HOST: milvus
+      MILVUS_PORT: "19530"
+      PATENT_MILVUS_COLLECTION: patent
+      PATENT_INDEX_STATE_DIR: /app/var/patent_indexes
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-glm-5.3-flash}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
+      TEMPORAL_ADDRESS: temporal-dev2:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: tech-kg-workflows
+      WORKFLOW_MYSQL_HOST: temporal-mysql-dev2
+      WORKFLOW_MYSQL_PORT: "3306"
+      WORKFLOW_MYSQL_DATABASE: techkg_control
+      WORKFLOW_MYSQL_USERNAME: root
+      WORKFLOW_MYSQL_PASSWORD: temporal
+      REVIEW_IDENTITY_REQUIRE_SIGNATURE: "false"
+      CORRECTION_SYNC_WORKER_ENABLED: "false"
+      GRAPH_SPACE_REPLICA_FACTOR: "1"
+      SCHEMA_AUTO_INIT: "false"
+      SCHEMA_ALLOW_SYSTEM_DELETE: "true"
+      SCHEMA_S3_ENDPOINT_URL: http://operator-rustfs:9000
+      SCHEMA_S3_ACCESS_KEY: rustfsadmin
+      SCHEMA_S3_SECRET_KEY: rustfsadmin
+      SCHEMA_S3_BUCKET: tech-kg-schema-scripts
+      SCHEMA_S3_REGION: us-east-1
+      SCHEMA_S3_SECURE: "false"
+      SCHEMA_EXTRACT_PAYLOAD_S3_ENABLED: "true"
+      SCHEMA_EXTRACT_PAYLOAD_RETENTION_DAYS: "7"
+      SCHEMA_EXTRACT_PAYLOAD_CLEANUP_ENABLED: "true"
+      SCHEMA_SCRIPT_MAX_BYTES: "10485760"
+      PATENT_EMBEDDING_PROVIDER: openai
+      PATENT_EMBEDDING_BASE_URL: http://m3e-embedding:8010/v1
+      PATENT_EMBEDDING_MODEL: moka-ai/m3e-small
+      PATENT_EMBEDDING_DIM: "512"
+      PATENT_EMBEDDING_API_KEY: local-no-auth
+      # 免登录开发模式
+      AUTH_ENABLED: "false"
+      APP_ENV: dev
+      AUTH_ALLOW_INSECURE_DEV_CONTEXT: "true"
+      REDIS_URL: redis://auth-redis:6379/0
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./backend:/app
+      - api-hot-venv:/app/.venv
+      - api-hot-var:/app/var
+    networks:
+      - default
+      - shared
+    restart: unless-stopped
+
+  web-hot:
+    image: tech-kg-dev-frontend-builder:latest
+    container_name: tech-kg-web-hot
+    working_dir: /app
+    command: ["pnpm", "exec", "vite", "--host", "0.0.0.0", "--port", "5180"]
+    ports:
+      - "5180:5180"
+    environment:
+      # 覆盖 builder 镜像烘焙的哨兵值 /__BASE__/，开发态用根路径
+      VITE_BASE: "/"
+      VITE_API_TARGET: http://api-hot:8000
+      VITE_AUTH_ENABLED: "false"
+      VITE_GRAPH_SPACE: dev2
+    volumes:
+      - ./frontend:/app
+      - web-hot-node-modules:/app/node_modules
+    networks:
+      - default
+    depends_on:
+      - api-hot
+    restart: unless-stopped
+
+volumes:
+  api-hot-venv:
+  api-hot-var:
+  web-hot-node-modules:
+
+networks:
+  # 与 dev2 栈一样挂到共享网络，复用 milvus / auth-redis / operator-rustfs / m3e-embedding / temporal-dev2
+  shared:
+    external: true
+    name: tech-kg-api_app

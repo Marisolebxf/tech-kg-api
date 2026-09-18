@@ -2092,12 +2092,14 @@ class SchemaExtractWorkflow:
                 }
                 raise
             sources = result.get("sources") or []
-            # 内层 activities = 该脚本各 @step 转换步聚合
+            # 内层 activities = 该脚本各 @step 转换步聚合（position：Temporal 编码
+            # 按 key 排序，前端须按 position 还原脚本步序）
             activities: dict[str, dict[str, Any]] = {}
-            for sid, stat in (result.get("steps") or {}).items():
+            for act_pos, (sid, stat) in enumerate((result.get("steps") or {}).items()):
                 activities[sid] = {
                     "status": stat.get("status", "COMPLETED"),
                     "name": sid,
+                    "position": act_pos + 1,
                     "records": int(stat.get("records", 0)),
                     "written": int(stat.get("written", 0)),
                     "failed": int(stat.get("failed", 0)),
@@ -2304,9 +2306,12 @@ class SchemaExtractWorkflow:
                     return {"batches": idx, "watermark": final_wm, "pkCursor": None}
                 return {"batches": idx, **final}
 
-            # 分步聚合计数（多步脚本或 chain 模式；stepId → records/written/failed）
+            # 分步聚合计数（多步脚本或 chain 模式；stepId → position/records/written/failed）
             step_totals: dict[str, dict[str, int]] = (
-                {s["id"]: {"records": 0, "written": 0, "failed": 0} for s in steps}
+                {
+                    s["id"]: {"position": pos + 1, "records": 0, "written": 0, "failed": 0}
+                    for pos, s in enumerate(steps)
+                }
                 if track_steps
                 else {}
             )
@@ -2482,6 +2487,9 @@ class SchemaExtractWorkflow:
                                 written += step_written
                                 if track_steps:
                                     chunk_step_stats[step["id"]] = {
+                                        # position：Temporal JSON 编码会按 key 排序，
+                                        # 步序必须显式携带否则详情页乱序
+                                        "position": seq + 1,
                                         "records": records_count,
                                         "written": step_written,
                                         "failed": step_fail_count,
@@ -2513,9 +2521,15 @@ class SchemaExtractWorkflow:
                             # 分步计数聚合进来源级 step_totals（get_progress/结果摘要用）
                             for sid, stat in chunk_step_stats.items():
                                 total = step_totals.setdefault(
-                                    sid, {"records": 0, "written": 0, "failed": 0}
+                                    sid,
+                                    {
+                                        "position": int(stat.get("position", 0)),
+                                        "records": 0,
+                                        "written": 0,
+                                        "failed": 0,
+                                    },
                                 )
-                                for key in total:
+                                for key in ("records", "written", "failed"):
                                     total[key] += int(stat.get(key, 0))
                 return failures
 

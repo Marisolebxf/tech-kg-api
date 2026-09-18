@@ -120,6 +120,9 @@ def pipeline_steps(output: dict[str, Any] | None) -> list[dict[str, Any]]:
                 "count": count,
                 "abnormal": abnormal,
                 "duration": "-",
+                # position：Temporal JSON 编码按 key 排序，dict 序 ≠ 执行序，
+                # 详情页须按 position 还原（无 position 的旧形状保持原序）
+                "position": state.get("position"),
                 "input": state.get("input"),
                 "output": state.get("output"),
                 "error": state.get("error"),
@@ -127,4 +130,7 @@ def pipeline_steps(output: dict[str, Any] | None) -> list[dict[str, Any]]:
                 "activities": state.get("activities"),
             }
         )
+    if any(step["position"] is not None for step in result):
+        # 稳定排序：带 position 的排前，无 position 的保持原相对顺序
+        result.sort(key=lambda step: step["position"] if step["position"] is not None else 1 << 30)
     return result

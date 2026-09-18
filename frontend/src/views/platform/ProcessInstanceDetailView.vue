@@ -165,7 +165,14 @@ function chainActivities(scriptId: string): Array<{ id: string; info: PipelineAc
     // 实时 query 失败（workflow 已结束被历史淘汰）时，回退落库 task.steps（pipeline_steps 透传 activities）
     ?? processingInstance.value?.steps?.find((s) => s.id === scriptId)?.activities
   if (!activities) return []
-  return Object.entries(activities).map(([id, info]) => ({ id, info }))
+  // Temporal JSON 编码按 key 排序：dict 序 ≠ 脚本步序，按 position 还原（旧数据无 position 保持原序）
+  const entries = Object.entries(activities).map(([id, info]) => ({ id, info }))
+  if (entries.some((e) => (e.info as { position?: number }).position != null)) {
+    entries.sort((a, b) =>
+      ((a.info as { position?: number }).position ?? Number.MAX_SAFE_INTEGER)
+      - ((b.info as { position?: number }).position ?? Number.MAX_SAFE_INTEGER))
+  }
+  return entries
 }
 
 /** 把选中的 activity step 合成为右侧详情面板用的 Step。 */
@@ -365,8 +372,23 @@ type ExtractOutput = {
   sources?: Array<{ source?: string; table?: string; batches?: number; rows?: number; written?: number; failed?: number; watermark?: string | null; pkCursor?: string | null }>
   failures?: { count?: number }
 }
-const extractOutput = computed<ExtractOutput | null>(() =>
-  (processingInstance.value?.output ?? (selectedExecution.value as { output?: ExtractOutput } | null)?.output ?? null) as ExtractOutput | null)
+const extractOutput = computed<ExtractOutput | null>(() => {
+  const output = (processingInstance.value?.output ?? (selectedExecution.value as { output?: ExtractOutput } | null)?.output ?? null) as (ExtractOutput & { chain?: boolean; steps?: Record<string, { output?: ExtractOutput }> }) | null
+  if (!output) return null
+  // chain：顶层没有 sources/failures 汇总（分散在各环 output 里），聚合后
+  // 验收摘要/执行输出统计才能显示真实写入行数，而不是回退「工作流已下发」
+  if (output.chain && output.steps) {
+    const sources: ExtractOutput['sources'] = []
+    let failed = 0
+    for (const step of Object.values(output.steps)) {
+      const inner = step?.output ?? {}
+      if (inner.sources?.length) sources.push(...inner.sources)
+      failed += Number(inner.failures?.count ?? 0)
+    }
+    return { ...output, sources, failures: { count: failed } }
+  }
+  return output
+})
 const schemaId = computed(() => String(
   job.value?.schemaId
   || (processingInstance.value?.input as { schemaId?: unknown } | undefined)?.schemaId

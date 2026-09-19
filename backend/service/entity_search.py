@@ -48,8 +48,16 @@ NAME_CANDIDATE_KEYS = (
     "name",
     "name_zh",
     "name_cn",
+    "name_en",
     "title",
     "title_zh",
+    "title_en",
+    "project_name",
+    "paper_title",
+    "patent_name",
+    "patent_title",
+    "product_name",
+    "keyword",
     "label",
     "cn_name",
     "display_name",
@@ -302,6 +310,21 @@ def _save_state(
     row.embedding_model = embedding_model
     row.updated_at = datetime.now(UTC)
     session.commit()
+
+
+def _milvus_space_has_rows(milvus: Any, space: str) -> bool:
+    """校验共享 kg_entity 集合中是否真实存在当前图空间的数据。
+
+    控制库状态只是上次重建快照；集合被重建或覆盖、重建中途失败后，
+    快照可能仍显示有数据。这里只查询 1 个 VID，不做全量 count。
+    """
+    rows = milvus.query(
+        collection_name=COLLECTION_NAME,
+        filter=f'graph_space == "{_escape_expression(space)}"',
+        output_fields=["vid"],
+        limit=1,
+    )
+    return bool(rows)
 
 
 class EntitySearchService:
@@ -693,6 +716,18 @@ class EntitySearchService:
             raise not_indexed
         if not milvus.has_collection(COLLECTION_NAME):
             raise not_indexed
+        try:
+            has_space_rows = _milvus_space_has_rows(milvus, resolved_space)
+        except Exception as exc:  # noqa: BLE001 - 明确告诉调用方当前只剩图库精确检索
+            raise EntitySearchError(
+                f"图空间 {resolved_space} 的实体语义索引当前不可用；"
+                "VID/已建图属性索引的精确查询仍可用"
+            ) from exc
+        if not has_space_rows:
+            raise EntitySearchError(
+                f"图空间 {resolved_space} 的实体索引状态已过期（Milvus 中无该空间数据）；"
+                "VID/已建图属性索引的精确查询仍可用"
+            )
 
         conditions = [f'graph_space == "{_escape_expression(resolved_space)}"']
         if entity_type:
@@ -844,9 +879,19 @@ class EntitySearchService:
     # 类型 / 状态
     # ------------------------------------------------------------------
     def types(self, *, space: str | None = None) -> list[dict[str, Any]]:
-        """索引内实体类型 + 数量（来自该空间状态行；未建索引返回 []）。"""
-        row = _load_state(self._session, space or _default_space())
+        """索引内实体类型 + 数量；状态快照与 Milvus 实际数据不一致时返回空。"""
+        resolved_space = space or _default_space()
+        row = _load_state(self._session, resolved_space)
         if row is None:
+            return []
+        try:
+            milvus = get_milvus_client()
+            if not milvus.has_collection(COLLECTION_NAME) or not _milvus_space_has_rows(
+                milvus, resolved_space
+            ):
+                return []
+        except Exception:  # noqa: BLE001 - 类型下拉不应因 Milvus 故障拖垮页面
+            logger.warning("校验实体索引类型失败（space=%s）", resolved_space, exc_info=True)
             return []
         try:
             counts: dict[str, int] = json.loads(row.type_counts or "{}")
@@ -857,18 +902,27 @@ class EntitySearchService:
             for name, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
         ]
 
+
     def status(self, *, space: str | None = None) -> dict[str, Any]:
-        """索引状态：是否已建、实体数、类型统计、更新时间（按图空间）。"""
+        """索引状态：同时校验控制库快照和 Milvus 当前空间的真实数据。"""
         resolved_space = space or _default_space()
         row = _load_state(self._session, resolved_space)
+        space_has_rows = False
+        milvus_reachable = True
         try:
             milvus = get_milvus_client()
             collection_exists = bool(milvus.has_collection(COLLECTION_NAME))
+            if collection_exists:
+                space_has_rows = _milvus_space_has_rows(milvus, resolved_space)
         except Exception:  # noqa: BLE001 - Milvus 不可达时状态仍可读
             collection_exists = False
+            milvus_reachable = False
+
         base = {
             "graphSpace": resolved_space,
             "collectionExists": collection_exists,
+            "milvusReachable": milvus_reachable,
+            "actualDataAvailable": space_has_rows,
             "reindexing": _reindex_running,
         }
         if row is None:
@@ -881,23 +935,33 @@ class EntitySearchService:
                 "embeddingModel": None,
                 "updatedAt": None,
                 "bm25Ready": False,
+                "stateStale": False,
             }
+
         try:
             type_counts: dict[str, int] = json.loads(row.type_counts or "{}")
         except ValueError:
             type_counts = {}
+
+        state_stale = row.entity_count > 0 and not space_has_rows
+        effective_type_counts = type_counts if space_has_rows else {}
         return {
             **base,
-            "indexed": collection_exists and row.entity_count > 0,
-            "entityCount": row.entity_count,
-            "typeCounts": type_counts,
+            "indexed": collection_exists and space_has_rows and row.entity_count > 0,
+            "entityCount": row.entity_count if space_has_rows else 0,
+            "recordedEntityCount": row.entity_count,
+            "stateStale": state_stale,
+            "typeCounts": effective_type_counts,
+            "recordedTypeCounts": type_counts,
             "types": [
                 {"name": name, "count": count}
-                for name, count in sorted(type_counts.items(), key=lambda item: (-item[1], item[0]))
+                for name, count in sorted(
+                    effective_type_counts.items(), key=lambda item: (-item[1], item[0])
+                )
             ],
             "embeddingModel": row.embedding_model or None,
             "updatedAt": row.updated_at.isoformat() if row.updated_at else None,
-            "bm25Ready": bool(row.vocabulary and row.document_count),
+            "bm25Ready": bool(space_has_rows and row.vocabulary and row.document_count),
         }
 
 

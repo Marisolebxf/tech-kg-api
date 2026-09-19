@@ -656,7 +656,11 @@ onMounted(loadReviews)
 .review-source-cell strong{font-size:14px;line-height:22px;font-weight:400}
 .alert-actions{gap:4px}.alert-actions .link,.rerun-link{font-size:14px;line-height:22px;font-weight:400}
 .pick-col{box-sizing:border-box;width:52px;min-width:52px;padding-right:16px!important;padding-left:16px!important}
-.review-pagination{gap:16px;padding:8px 16px}
+/* 分页留在表格滚动区之外，窄屏换行后仍能访问翻页和跳页控件。 */
+.review-pagination{height:auto;min-height:56px;flex-wrap:wrap;gap:8px 16px;padding:8px 16px}
+.review-pagination :deep(.arco-pagination){max-width:100%;flex-wrap:wrap;row-gap:8px}
+.review-pagination :deep(.arco-pagination-list){display:flex;max-width:100%;flex-wrap:wrap;row-gap:8px;white-space:normal}
+.review-pagination :deep(.arco-pagination-list>.arco-pagination-item){flex-shrink:0}
 .review-pagination :deep(.arco-select-view),.review-pagination :deep(.arco-pagination-item){height:32px;min-height:32px}
 .review-pagination :deep(.arco-pagination-item){min-width:32px;font-size:14px;line-height:22px}
 .review-pagination :deep(.review-page-size-select.arco-select-view){display:inline-flex;box-sizing:border-box;align-items:center;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important}
@@ -672,7 +676,10 @@ onMounted(loadReviews)
 .ops-review-table-scroll td.review-action-col{position:static;box-sizing:border-box;width:auto;min-width:0;box-shadow:none;white-space:nowrap}
 .review-action-col .alert-actions{display:flex;width:max-content;min-width:0;align-items:center;gap:8px}
 .ops-review-table-scroll th,.ops-review-table-scroll td{box-sizing:border-box;padding-right:16px;padding-left:16px}
-.ops-review-table-scroll table,.ops-review-table-scroll table.review-case-table,.ops-review-table-scroll table.review-case-table--selectable{width:100%;min-width:0;table-layout:fixed}
+/* 固定列合计 1012px，最小表宽为对象列保留 268px；勾选列额外占 52px。 */
+.ops-review-table-scroll table.review-case-table{width:100%;min-width:1280px;table-layout:fixed}
+.ops-review-table-scroll table.review-case-table--selectable{min-width:1332px}
+.ops-review-table-scroll .review-object-cell{padding-top:8px;padding-bottom:8px;overflow-wrap:anywhere;word-break:normal}
 .ops-review-table-scroll td{white-space:normal}
 .ops-review-table-scroll :is(code,.review-id-cell,.review-status){white-space:nowrap}
 .ops-review-table-scroll :is(th,td):last-child{white-space:nowrap}
@@ -694,7 +701,7 @@ onMounted(loadReviews)
 .review-filter-label{color:#4e5969;font-size:14px;line-height:22px;white-space:nowrap}
 /* 处理实例 ID 纯文本：中性色，区别于可点击的链接蓝 */
 .review-id-cell .review-id-plain{color:#4e5969}
-.review-kind-badge{display:inline-flex;padding:0 8px;border-radius:4px;background:#f2f3f5;color:#4e5969;font-size:12px;line-height:20px}
+.review-kind-badge{display:inline-flex;white-space:nowrap;padding:0 8px;border-radius:4px;background:#f2f3f5;color:#4e5969;font-size:12px;line-height:20px}
 .review-kind-badge.is-实体{background:#eaf2ff;color:#175cd3}
 .review-kind-badge.is-关系{background:#fff3d8;color:#b54708}
 .rerun-link.is-danger{color:#b42318}
@@ -730,6 +737,12 @@ onMounted(loadReviews)
 .th-time-sort.is-active{color:#165dff}
 .th-time-sort .sort-arrow{margin-left:4px;color:#86909c;font-size:12px}
 .th-time-sort.is-active .sort-arrow{color:#165dff}
+/* 横屏高度不足时允许整页上下滚动，避免分页把表格挤到只剩表头。 */
+@media(max-height:600px){
+  .ops-page{overflow:auto}
+  .ops-panel{flex:none}
+  .ops-review-table-scroll{flex:none;min-height:160px;max-height:50vh}
+}
 </style>
 <style>
 /* Keep the Arco input's native field transparent; the wrapper is the only visible input shell. */

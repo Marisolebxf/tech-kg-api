@@ -35,7 +35,7 @@ class AlgorithmSubmitRequest(CamelModel):
     weight_cols: list[str] | None = None
     # 图库 vid 为字符串（如 "Person:1"），算法计算需编码，默认开启
     encode_id: bool = True
-    partition_num: int = Field(default=1, ge=1, le=10000)
+    partition_num: int = Field(default=8, ge=1, le=10000)
 
     @field_validator("labels", "weight_cols")
     @classmethod

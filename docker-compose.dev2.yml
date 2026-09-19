@@ -48,6 +48,11 @@ services:
       # tech-kg-mysql max_connections 已运行期调至 1000（重启回落 151，需重设）
       MYSQL_POOL_SIZE: ${MYSQL_POOL_SIZE:-25}
       MYSQL_MAX_OVERFLOW: ${MYSQL_MAX_OVERFLOW:-50}
+      # nGQL 控制台只读结果缓存 TTL（秒）：Nebula 会话池容量小，500 并发重复
+      # 执行同一语句会耗尽会话；相同语句 60s 内直接复用结果
+      GRAPH_CONSOLE_CACHE_SECONDS: "60"
+      # Nebula/trs-graph 会话池仅 ~27，限制我们的并发只读查询数避免会话耗尽
+      GRAPH_CONSOLE_MAX_CONCURRENT_READS: "20"
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-123456789}
       PAPER_COOP_MYSQL_HOST: ${PAPER_COOP_MYSQL_HOST:-${MYSQL_HOST:-host.docker.internal}}
       PAPER_COOP_MYSQL_PORT: ${PAPER_COOP_MYSQL_PORT:-${MYSQL_PORT:-3306}}
@@ -170,6 +175,9 @@ services:
       # tech-kg-mysql max_connections 已运行期调至 1000（重启回落 151，需重设）
       MYSQL_POOL_SIZE: ${MYSQL_POOL_SIZE:-25}
       MYSQL_MAX_OVERFLOW: ${MYSQL_MAX_OVERFLOW:-50}
+      # nGQL 控制台只读结果缓存 TTL（秒）：Nebula 会话池容量小，500 并发重复
+      # 执行同一语句会耗尽会话；相同语句 60s 内直接复用结果
+      GRAPH_CONSOLE_CACHE_SECONDS: "60"
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-123456789}
       MILVUS_HOST: ${MILVUS_HOST:-milvus}
       MILVUS_PORT: ${MILVUS_PORT:-19530}

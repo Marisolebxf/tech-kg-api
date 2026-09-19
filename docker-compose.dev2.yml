@@ -44,6 +44,10 @@ services:
       MYSQL_PORT: ${MYSQL_PORT:-3306}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-gkx_element}
       MYSQL_USERNAME: ${MYSQL_USERNAME:-root}
+      # 压测调优（2026-09-19）：默认 10+20 池在 500 并发下不够，且
+      # tech-kg-mysql max_connections 已运行期调至 1000（重启回落 151，需重设）
+      MYSQL_POOL_SIZE: ${MYSQL_POOL_SIZE:-25}
+      MYSQL_MAX_OVERFLOW: ${MYSQL_MAX_OVERFLOW:-50}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-123456789}
       PAPER_COOP_MYSQL_HOST: ${PAPER_COOP_MYSQL_HOST:-${MYSQL_HOST:-host.docker.internal}}
       PAPER_COOP_MYSQL_PORT: ${PAPER_COOP_MYSQL_PORT:-${MYSQL_PORT:-3306}}
@@ -162,6 +166,10 @@ services:
       MYSQL_PORT: ${MYSQL_PORT:-3306}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-gkx_element}
       MYSQL_USERNAME: ${MYSQL_USERNAME:-root}
+      # 压测调优（2026-09-19）：默认 10+20 池在 500 并发下不够，且
+      # tech-kg-mysql max_connections 已运行期调至 1000（重启回落 151，需重设）
+      MYSQL_POOL_SIZE: ${MYSQL_POOL_SIZE:-25}
+      MYSQL_MAX_OVERFLOW: ${MYSQL_MAX_OVERFLOW:-50}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-123456789}
       MILVUS_HOST: ${MILVUS_HOST:-milvus}
       MILVUS_PORT: ${MILVUS_PORT:-19530}

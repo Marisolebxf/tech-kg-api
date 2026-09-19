@@ -3,7 +3,7 @@
 两条查询路径：
 
 1. ``browse``（关键词为空的默认视图）：直接查图空间按标签分页（页内按 vid 排序，
-   跨标签用各标签计数拼接分页窗口）——反映图库实时数据，不依赖 Milvus 索引；
+   跨标签优先用索引统计快照拼接分页窗口，快照不可用时实时计数）；
 2. ``search``（关键词非空）：Milvus ``hybrid_search``（dense + BM25 sparse，RRF
    融合），``entity_type`` / ``graph_space`` 标量过滤；embedding 失败降级单路 BM25。
 
@@ -181,6 +181,37 @@ def _node_count_cached(graph: TRSGraphClient, space: str, label: str) -> int:
     return count
 
 
+def _state_type_counts(session: Session, space: str, labels: list[str]) -> dict[str, int] | None:
+    """读取完整的索引统计快照，无法安全用于跨标签分页时返回 ``None``。
+
+    ``type_counts`` 由全量 reindex 生成。只有快照恰好覆盖当前图空间全部标签，
+    才能替代逐标签实时 COUNT；部分重建、旧状态、损坏 JSON 或标签变化均回退
+    原有实时计数路径，以免改变跨标签分页边界。
+    """
+    try:
+        row = _load_state(session, space)
+        raw_counts = json.loads(row.type_counts or "{}") if row is not None else {}
+        if not isinstance(raw_counts, dict):
+            return None
+
+        counts: dict[str, int] = {}
+        for label, count in raw_counts.items():
+            if (
+                not isinstance(label, str)
+                or isinstance(count, bool)
+                or not isinstance(count, int)
+                or count < 0
+            ):
+                return None
+            counts[label] = count
+
+        # 严格匹配可区分全量快照与 entity_types 部分重建的快照。
+        return counts if set(counts) == set(labels) else None
+    except Exception:  # noqa: BLE001 - 状态不可用不应让图直查浏览失败
+        logger.warning("读取实体计数快照失败（space=%s），回退实时计数", space, exc_info=True)
+        return None
+
+
 # ---------------------------------------------------------------------------
 # 控制库状态（按图空间一行）
 # ---------------------------------------------------------------------------
@@ -289,10 +320,11 @@ class EntitySearchService:
         limit: int = 10,
         offset: int = 0,
     ) -> dict[str, Any]:
-        """按标签分页浏览实体（页内按 vid 排序），反映图库实时数据。
+        """按标签分页浏览实体（页内按 vid 排序）。
 
-        跨标签分页按标签名次序拼接各标签计数得到全局窗口，只拉取窗口涉及的
-        标签分片——实体再多也只取当页所需（「只在图空间中取前几个」）。
+        单类型查询复用节点分页响应中的总数；跨标签查询优先用全量 reindex
+        保存的类型计数快照计算分页窗口。快照不可安全使用时回退实时逐标签
+        计数。两条路径均只拉取窗口涉及的标签分片。
         """
         graph = get_space_client(space or _default_space())
         resolved_space = space or _default_space()
@@ -305,11 +337,15 @@ class EntitySearchService:
         type_filter = entity_type
         items: list[dict[str, Any]] = []
         if type_filter:
-            total = _node_count_cached(graph, resolved_space, type_filter)
             result = graph.get_nodes_by_label(type_filter, limit=limit, offset=offset)
+            total = int(result.total)
             items = [_serialize_browse_item(node, type_filter) for node in result.items or []]
         else:
-            counts = {label: _node_count_cached(graph, resolved_space, label) for label in labels}
+            counts = _state_type_counts(self._session, resolved_space, labels)
+            if counts is None:
+                counts = {
+                    label: _node_count_cached(graph, resolved_space, label) for label in labels
+                }
             total = sum(counts.values())
             window_start, window_end = offset, offset + limit
             cursor = 0

@@ -41,6 +41,9 @@ function rowKindLabel(row: ReviewRow): string {
 }
 const reviewRecords = ref<ReviewRow[]>([])
 const reviewLoadError = ref('')
+const reviewLoading = ref(true)
+let reviewRequestId = 0
+let reviewDisposed = false
 
 const reviewRows = computed(() => reviewRecords.value)
 
@@ -249,11 +252,19 @@ async function confirmDelete() {
 }
 
 onUnmounted(() => {
+  reviewDisposed = true
+  reviewRequestId += 1
+  window.clearTimeout(reviewKeywordTimer)
   window.clearTimeout(rerunFeedbackTimer)
 })
 
 async function loadReviews() {
-  if (props.mode !== 'review') return
+  if (props.mode !== 'review' || reviewDisposed) return
+  const requestId = ++reviewRequestId
+  reviewLoading.value = true
+  reviewLoadError.value = ''
+  reviewRecords.value = []
+  reviewTotal.value = 0
   try {
     // A=入库决策：Tab 只筛 T_LINK（实体对齐裁决）——T_DIRECT case 不进队列，
     // 详情由工作台总览/处理实例详情直达；C=抽取失败重跑（T_EXTRACT_FAIL）
@@ -269,6 +280,7 @@ async function loadReviews() {
       page: reviewPage.value,
       pageSize: reviewPageSize.value,
     })
+    if (reviewDisposed || requestId !== reviewRequestId) return
     reviewTotal.value = response.total
     // 筛选后总页数变小时收敛当前页（如翻到第 3 页后把筛选改成只有 1 页数据）
     if (reviewPage.value > Math.max(1, Math.ceil(response.total / reviewPageSize.value))) {
@@ -279,7 +291,12 @@ async function loadReviews() {
       id: row.id, templateId: row.templateId, rawStatus: row.status, jobId: row.jobId || '', batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待处理', status: extractCaseStatusBadge(row.status), updatedAt: fmtReviewTime(row.updatedAt), sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,
     }))
     reviewLoadError.value = ''
-  } catch (error) { reviewLoadError.value = error instanceof Error ? error.message : '人工处理队列加载失败' }
+  } catch (error) {
+    if (reviewDisposed || requestId !== reviewRequestId) return
+    reviewLoadError.value = error instanceof Error ? error.message : '人工处理队列加载失败'
+  } finally {
+    if (!reviewDisposed && requestId === reviewRequestId) reviewLoading.value = false
+  }
 }
 
 /** 后端 ISO 时间（2026-09-17T09:30:00）转界面习惯的 2026-09-17 09:30:00。 */
@@ -378,7 +395,7 @@ onMounted(loadReviews)
         <button class="rerun-feedback-close" type="button" @click="rerunFeedback = null">×</button>
       </div>
 
-      <div class="ops-review-table-scroll"><table class="review-case-table" :class="{ 'review-case-table--selectable': reviewCategory === 'C' }">
+      <div class="ops-review-table-scroll" :aria-busy="reviewLoading"><table class="review-case-table" :class="{ 'review-case-table--selectable': reviewCategory === 'C' }">
         <!-- 固定列宽：有数据/无数据切换时表头列位不漂移（待处理对象列吃剩余宽度） -->
         <colgroup>
           <col v-if="reviewCategory === 'C'" class="col-pick" />
@@ -452,12 +469,19 @@ onMounted(loadReviews)
             </td>
           </tr>
           <tr v-if="!reviewRows.length">
-            <td class="review-empty" :colspan="reviewCategory === 'C' ? 8 : 7">{{ reviewLoadError || (reviewStatusFilter === '全部' && reviewKindFilter === '全部' && reviewTimeFilter === '全部' && !keyword ? '暂无人工处理记录' : '暂无符合条件的记录') }}</td>
+            <td class="review-empty" :colspan="reviewCategory === 'C' ? 8 : 7">
+              <span v-if="reviewLoading" role="status">正在加载人工审核记录…</span>
+              <div v-else-if="reviewLoadError" role="alert">
+                <p>{{ reviewLoadError }}</p>
+                <button type="button" class="link" @click="loadReviews">重新加载</button>
+              </div>
+              <span v-else>{{ reviewStatusFilter === '全部' && reviewKindFilter === '全部' && reviewTimeFilter === '全部' && !keyword ? '暂无人工处理记录' : '暂无符合条件的记录' }}</span>
+            </td>
           </tr>
         </tbody>
       </table></div>
 
-      <footer class="review-pagination">
+      <footer v-if="!reviewLoading && !reviewLoadError" class="review-pagination">
         <span>共 {{ reviewTotal }} 条 · 第 {{ reviewPage }} / {{ reviewTotalPages }} 页</span>
         <span class="review-page-size">每页
           <a-select class="review-page-size-select" :model-value="reviewPageSize" :options="reviewPageSizeOptions" :scrollbar="false" @change="changeReviewPageSize" />

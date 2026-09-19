@@ -4,8 +4,9 @@
 
 1. ``browse``（关键词为空的默认视图）：直接查图空间按标签分页（页内按 vid 排序，
    跨标签用各标签计数拼接分页窗口）——反映图库实时数据，不依赖 Milvus 索引；
-2. ``search``（关键词非空）：Milvus ``hybrid_search``（dense + BM25 sparse，RRF
-   融合），``entity_type`` / ``graph_space`` 标量过滤；embedding 失败降级单路 BM25。
+2. ``search``（关键词非空）：先用图库 VID / 已索引名称和业务 ID 精确查找；
+   无精确命中时用 Milvus ``hybrid_search``（dense + BM25 sparse，RRF 融合），
+   ``entity_type`` / ``graph_space`` 标量过滤；embedding 失败降级单路 BM25。
 
 索引（``reindex``）按图空间独立：单集合 ``kg_entity`` 内 ``graph_space`` 字段
 分区，BM25 词表状态存控制库 ``kg_entity_search_state``（每空间一行）。
@@ -539,11 +540,113 @@ class EntitySearchService:
         limit: int = 10,
         offset: int = 0,
     ) -> dict[str, Any]:
-        """混合检索（dense + BM25 sparse，RRF 融合），按图空间 + 实体类型过滤。"""
+        """先查图库精确名称/ID；无精确命中时沿用 Milvus 混合检索。"""
         keyword = keyword.strip()
         if not keyword:
             raise EntitySearchError("关键词不能为空")
         resolved_space = space or _default_space()
+        exact_error: Exception | None = None
+        try:
+            exact_items = self._graph_exact_matches(
+                keyword=keyword, space=resolved_space, entity_type=entity_type
+            )
+        except Exception as exc:  # noqa: BLE001 - 图服务异常不阻断已有向量检索
+            logger.exception("图库精确检索失败（space=%s），尝试已有实体索引", resolved_space)
+            exact_error = exc
+            exact_items = []
+        if exact_items:
+            items = exact_items[offset : offset + limit]
+            return {
+                "items": items,
+                "offset": offset,
+                "limit": limit,
+                "returned": len(items),
+                "total": len(exact_items),
+                "keyword": keyword,
+                "entityType": entity_type,
+                "graphSpace": resolved_space,
+                "mode": "graph-exact",
+            }
+        result = self._search_index(
+            keyword=keyword,
+            space=resolved_space,
+            entity_type=entity_type,
+            limit=limit,
+            offset=offset,
+        )
+        if exact_error is not None and not result["items"]:
+            raise EntitySearchError("图库精确检索暂不可用，请稍后重试") from exact_error
+        return result
+
+    @staticmethod
+    def _graph_exact_matches(
+        *, keyword: str, space: str, entity_type: str | None
+    ) -> list[dict[str, Any]]:
+        """VID 点查及有属性索引的名称/业务 ID 查找，不遍历图库补齐向量索引。
+
+        每个索引查询最多取检索窗口的 500 条，去重后以类型、VID 稳定排序。
+        仅使用复合索引的首列，避免对不满足索引前缀的属性查询做全图扫描。
+        """
+        graph = get_space_client(space)
+        matches: dict[tuple[str, str], dict[str, Any]] = {}
+
+        def add(node: Any, label: str) -> None:
+            if entity_type and label != entity_type:
+                return
+            item = _serialize_browse_item(node, label)
+            if keyword in (item["vid"], item["entityId"], item["name"]):
+                matches[(label, item["vid"])] = item
+
+        node = graph.get_node(keyword)
+        if node is not None:
+            for label in sorted(node.labels or []):
+                add(node, label)
+
+        keys = set(NAME_CANDIDATE_KEYS) | {"id", "entity_id"}
+        try:
+            indexes = graph.list_indexes(entity_type)
+        except Exception:  # noqa: BLE001 - 元数据异常不丢弃已经确认的 VID 命中
+            if not matches:
+                raise
+            logger.exception("读取图属性索引失败（space=%s），返回 VID 精确命中", space)
+            return [matches[key] for key in sorted(matches)]
+        indexed_fields = sorted(
+            {
+                (index.label, index.properties[0])
+                for index in indexes
+                if index.properties
+                and index.properties[0] in keys
+                and (not entity_type or index.label == entity_type)
+            }
+        )
+        index_error: Exception | None = None
+        for label, prop in indexed_fields:
+            # find_nodes 接收结构化属性，关键词不会被拼接成查询语句。
+            try:
+                result = graph.find_nodes([label], {prop: keyword}, limit=500, offset=0)
+            except Exception as exc:  # noqa: BLE001 - 单个索引异常不丢弃其他精确命中
+                index_error = exc
+                logger.exception(
+                    "图属性精确检索失败（space=%s, label=%s, prop=%s）", space, label, prop
+                )
+                continue
+            for candidate in result.items or []:
+                add(candidate, label)
+        if index_error is not None and not matches:
+            raise index_error
+        return [matches[key] for key in sorted(matches)][:500]
+
+    def _search_index(
+        self,
+        *,
+        keyword: str,
+        space: str,
+        entity_type: str | None,
+        limit: int,
+        offset: int,
+    ) -> dict[str, Any]:
+        """保留非精确关键词的 dense + BM25 检索及原有索引错误语义。"""
+        resolved_space = space
         fetch = min(limit + offset, 500)
         milvus = get_milvus_client()
         not_indexed = EntitySearchError(

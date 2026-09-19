@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -43,10 +44,21 @@ class FakeGraph:
     ) -> None:
         self._labels = labels
         self._nodes = nodes
+        for label, items in nodes.items():
+            for node in items:
+                node.labels = [label]
         self._counts = counts if counts is not None else {k: len(v) for k, v in nodes.items()}
 
     def labels(self) -> list[str]:
         return list(self._labels)
+
+    def get_node(self, node_id: str):
+        return next(
+            (node for nodes in self._nodes.values() for node in nodes if node.id == node_id), None
+        )
+
+    def list_indexes(self, label=None):
+        return []
 
     def node_count(self, label: str | None = None) -> int:
         return self._counts.get(label or "", 0)
@@ -360,6 +372,7 @@ def test_search_without_collection_raises(state_session, monkeypatch) -> None:
     monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
     monkeypatch.setattr("service.entity_search._embedding_client", lambda: NoEmbed())
     monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: FakeGraph([], {}))
     service = EntitySearchService(state_session)
     with pytest.raises(EntitySearchError, match="尚未构建实体索引"):
         service.search(keyword="x")
@@ -375,3 +388,112 @@ def test_status_empty_state(state_session, monkeypatch) -> None:
     assert status["types"] == []
     assert status["bm25Ready"] is False
     assert service.types() == []
+
+
+def test_search_graph_vid_works_without_milvus(state_session, monkeypatch):
+    node = FakeNode("ds_dwd_bid_target_item_out", {})
+    graph = FakeGraph(["DataSource"], {"DataSource": [node]})
+    spaces = []
+
+    def get_graph(space):
+        spaces.append(space)
+        return graph
+
+    def no_milvus():
+        pytest.fail("VID 精确命中不应连接 Milvus 或 embedding")
+
+    monkeypatch.setattr("service.entity_search.get_space_client", get_graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", no_milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", no_milvus)
+    result = EntitySearchService(state_session).search(keyword=node.id, space="dev2")
+    assert result["mode"] == "graph-exact"
+    assert result["items"][0]["name"] == node.id
+    assert result["items"][0]["entityType"] == "DataSource"
+    assert spaces == ["dev2"]
+
+
+def test_search_exact_indexed_name_deduplicates_before_pagination(state_session, monkeypatch):
+    nodes = [
+        FakeNode("v2", {"name": "同名", "id": "同名"}),
+        FakeNode("v1", {"name": "同名", "id": "同名"}),
+    ]
+    graph = FakeGraph(["Expert"], {"Expert": nodes})
+    graph.list_indexes = lambda label: [
+        SimpleNamespace(label="Expert", properties=["name"]),
+        SimpleNamespace(label="Expert", properties=["id"]),
+        SimpleNamespace(label="Expert", properties=["name"]),
+        SimpleNamespace(label="Paper", properties=["name"]),
+        SimpleNamespace(label="Expert", properties=["other", "name"]),
+    ]
+    calls = []
+
+    def find_nodes(labels, properties, *, limit, offset):
+        calls.append((labels, properties, limit, offset))
+        return FakePagedResult(nodes)
+
+    graph.find_nodes = find_nodes
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    service = EntitySearchService(state_session)
+    pages = [
+        service.search(keyword="同名", space="dev2", entity_type="Expert", limit=1, offset=i)
+        for i in range(3)
+    ]
+    assert [[item["vid"] for item in page["items"]] for page in pages] == [["v1"], ["v2"], []]
+    assert [page["total"] for page in pages] == [2, 2, 2]
+    assert len(calls) == 6  # 每次只查 name/id 首列索引；重复索引及其他类型排除
+    assert all(call[0] == ["Expert"] and call[2:] == (500, 0) for call in calls)
+
+
+def test_search_vid_respects_type_filter(state_session, monkeypatch):
+    graph = FakeGraph(["Paper"], {"Paper": [FakeNode("same-id", {"name": "论文"})]})
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", FakeMilvusClient)
+    with pytest.raises(EntitySearchError, match="尚未构建实体索引"):
+        EntitySearchService(state_session).search(
+            keyword="same-id", space="dev2", entity_type="Expert"
+        )
+
+
+def test_search_exact_id_survives_index_metadata_failure(state_session, monkeypatch):
+    graph = FakeGraph(["Expert"], {"Expert": [FakeNode("E-1", {"name": "姓名"})]})
+
+    def failed_indexes(label):
+        raise RuntimeError("metadata unavailable")
+
+    graph.list_indexes = failed_indexes
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    result = EntitySearchService(state_session).search(keyword="E-1", space="dev2")
+    assert result["items"][0]["vid"] == "E-1"
+
+
+def test_search_exact_matches_survive_individual_index_failure(state_session, monkeypatch):
+    graph = FakeGraph(["Expert"], {"Expert": [FakeNode("E-1", {"name": "姓名"})]})
+    graph.list_indexes = lambda label: [
+        SimpleNamespace(label="Expert", properties=["id"]),
+        SimpleNamespace(label="Expert", properties=["name"]),
+    ]
+
+    def find_nodes(labels, properties, *, limit, offset):
+        if "id" in properties:
+            raise RuntimeError("one index unavailable")
+        return FakePagedResult([FakeNode("E-2", {"name": "E-1"})])
+
+    graph.find_nodes = find_nodes
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    result = EntitySearchService(state_session).search(keyword="E-1", space="dev2")
+    assert [item["vid"] for item in result["items"]] == ["E-1", "E-2"]
+    assert result["total"] == 2
+
+
+def test_search_failed_exact_query_does_not_report_no_matches(state_session, monkeypatch):
+    graph = FakeGraph([], {})
+    graph.list_indexes = lambda label: [SimpleNamespace(label="Expert", properties=["name"])]
+
+    def find_nodes(*args, **kwargs):
+        raise RuntimeError("index unavailable")
+
+    graph.find_nodes = find_nodes
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr(EntitySearchService, "_search_index", lambda self, **kwargs: {"items": []})
+    with pytest.raises(EntitySearchError, match="图库精确检索暂不可用"):
+        EntitySearchService(state_session).search(keyword="姓名", space="dev2")

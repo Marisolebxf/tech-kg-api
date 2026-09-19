@@ -37,6 +37,7 @@ const types = ref<EntityTypeCount[]>([])
 const status = ref<EntityIndexStatus | null>(null)
 const result = ref<EntityListResult | null>(null)
 const loading = ref(false)
+const searchError = ref('')
 const reindexing = ref(false)
 const expandedRows = ref<Set<string>>(new Set())
 
@@ -54,6 +55,7 @@ const totalPages = computed(() => {
 const modeLabel = computed(() => {
   const mode = result.value?.mode
   if (mode === 'browse') return '浏览（图直查）'
+  if (mode === 'graph-exact') return '精确匹配'
   if (mode === 'hybrid') return '混合（语义+关键词）'
   if (mode === 'dense') return '语义'
   return '关键词'
@@ -82,6 +84,7 @@ async function doSearch() {
   const trimmed = keyword.value.trim()
   appliedKeyword.value = trimmed
   loading.value = true
+  searchError.value = ''
   try {
     if (trimmed) {
       result.value = await searchEntities({
@@ -101,7 +104,8 @@ async function doSearch() {
       })
     }
   } catch (error) {
-    showToast(entitySearchErrorMessage(error), 'warning')
+    result.value = null
+    searchError.value = entitySearchErrorMessage(error)
   } finally {
     loading.value = false
   }
@@ -227,6 +231,10 @@ watch(
 
     <section class="entity-shell entity-result-shell" aria-label="实体列表">
       <div v-if="loading" class="entity-empty">加载中...</div>
+      <div v-else-if="searchError" class="entity-empty" role="alert">
+        <span>{{ searchError }}</span>
+        <button class="kg-button" type="button" @click="doSearch">重试</button>
+      </div>
       <div v-else-if="!items.length" class="entity-empty">
         <template v-if="isBrowseMode">
           <template v-if="entityType">类型 {{ entityType }} 下暂无实体</template>

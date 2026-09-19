@@ -64,12 +64,12 @@ def _raise_domain_error(exc: SchemaManagementError) -> None:
     raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
-@router.get("/overview", response_model=ApiResponse)
+@router.get("/overview")
 def get_schema_overview(
     session: Annotated[Session, Depends(get_workflow_session)],
     graph_space: Annotated[str | None, Query(alias="graphSpace", max_length=64)] = None,
-) -> ApiResponse:
-    return ApiResponse(data=_application(session).overview(graph_space))
+) -> Response:
+    return Response(_application(session).overview_payload(graph_space), media_type="application/json")
 
 
 @router.get("/schemas")
@@ -104,13 +104,14 @@ def get_schema_topology(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_workflow_session)],
     graph_space: Annotated[str | None, Query(alias="graphSpace", max_length=64)] = None,
-) -> ApiResponse:
-    return ApiResponse(
-        data=_application(session).topology(
+) -> Response:
+    return Response(
+        _application(session).topology_payload(
             actor.user_id,
             is_platform_admin=actor.is_admin,
             graph_space=graph_space,
-        )
+        ),
+        media_type="application/json",
     )
 
 
@@ -119,14 +120,15 @@ def get_schema_detail(
     schema_id: str,
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_workflow_session)],
-) -> ApiResponse:
+) -> Response:
     try:
-        return ApiResponse(
-            data=_application(session).get_schema(
+        return Response(
+            _application(session).get_schema_payload(
                 schema_id,
                 actor.user_id,
                 is_platform_admin=actor.is_admin,
-            )
+            ),
+            media_type="application/json",
         )
     except SchemaManagementError as exc:
         _raise_domain_error(exc)
@@ -431,10 +433,12 @@ async def verify_and_save_script(
 def get_schema_script_content(
     schema_id: str,
     session: Annotated[Session, Depends(get_workflow_session)],
-) -> ApiResponse:
+) -> Response:
     try:
-        data = _application(session).get_script_content(schema_id)
-        return ApiResponse(data=data)
+        return Response(
+            _application(session).get_script_content_payload(schema_id),
+            media_type="application/json",
+        )
     except SchemaManagementError as exc:
         _raise_domain_error(exc)
 

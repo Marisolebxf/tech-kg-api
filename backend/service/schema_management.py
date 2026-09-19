@@ -301,6 +301,8 @@ class SchemaManagementService:
     # 会在请求结束时随实例丢弃，命中率恒为 0（2026-09-19 实测踩坑）。
     _list_cache_seconds = float(os.getenv("SCHEMA_LIST_CACHE_SECONDS", "60"))
     _list_cache: dict[tuple, tuple[float, dict]] = {}
+    _catalog_cache: dict[str, tuple[float, str]] = {}
+    _catalog_cache_lock = threading.Lock()
     _list_cache_lock = threading.Lock()
 
     def __init__(self, session: Session, storage: S3Storage | None = None) -> None:
@@ -311,6 +313,7 @@ class SchemaManagementService:
     @classmethod
     def _invalidate_list_cache(cls) -> None:
         cls._list_cache.clear()
+        cls._catalog_cache.clear()
 
     def overview(self, graph_space: str | None = None) -> dict[str, Any]:
         stats = self._dao.stats(graph_space)
@@ -397,6 +400,111 @@ class SchemaManagementService:
             ensure_ascii=False,
             default=str,
         )
+
+    @classmethod
+    def _catalog_get(cls, key: str):
+        entry = cls._catalog_cache.get(key)
+        if entry and entry[0] > time.monotonic():
+            return entry[1]
+        return None
+
+    @classmethod
+    def _catalog_put(cls, key: str, payload: str, ttl_seconds: float) -> None:
+        cls._catalog_cache[key] = (time.monotonic() + ttl_seconds, payload)
+
+    @staticmethod
+    def _overlay_flags(item: dict[str, Any], user_id: str | None, is_platform_admin: bool) -> dict[str, Any]:
+        return {
+            **item,
+            "canDelete": bool(
+                user_id
+                and not item["isSystem"]
+                and (is_platform_admin or item["createdBy"] == user_id)
+            ),
+            "canManageProperties": bool(
+                is_platform_admin
+                or (
+                    not item["isSystem"]
+                    and user_id is not None
+                    and item["createdBy"] == user_id
+                )
+            ),
+        }
+
+    def overview_payload(self, graph_space: str | None = None) -> str:
+        """Schema 概览：60s 结果缓存（变更时整体失效），JSON 直返。"""
+        key = f"overview:{graph_space}"
+        with self._catalog_cache_lock:
+            payload = self._catalog_get(key)
+            if payload is None:
+                payload = json.dumps(
+                    {"code": 200, "success": True, "data": self.overview(graph_space), "msg": ""},
+                    ensure_ascii=False,
+                    default=str,
+                )
+                self._catalog_put(key, payload, self._list_cache_seconds)
+        return payload
+
+    def topology_payload(self, user_id: str | None, *, is_platform_admin: bool, graph_space: str | None) -> str:
+        """拓扑图数据：节点/边按目录序列化（缓存不含用户标记，返回时叠加）。"""
+        key = f"topology:{graph_space}:{is_platform_admin}"
+        with self._catalog_cache_lock:
+            payload = self._catalog_get(key)
+            if payload is None:
+                data = self.topology(
+                    None,
+                    is_platform_admin=False,
+                    graph_space=graph_space,
+                )
+                payload = json.dumps(
+                    {"code": 200, "success": True, "data": data, "msg": ""},
+                    ensure_ascii=False,
+                    default=str,
+                )
+                self._catalog_put(key, payload, self._list_cache_seconds)
+        data = json.loads(payload)["data"]
+        for node in data["nodes"]:
+            node.update(self._overlay_flags(node, user_id, is_platform_admin))
+        for edge in data["edges"]:
+            edge.update(self._overlay_flags(edge, user_id, is_platform_admin))
+        return json.dumps(
+            {"code": 200, "success": True, "data": data, "msg": ""},
+            ensure_ascii=False,
+            default=str,
+        )
+
+    def get_schema_payload(self, schema_id: str, user_id: str | None, *, is_platform_admin: bool) -> str:
+        key = f"detail:{schema_id}:{is_platform_admin}"
+        with self._catalog_cache_lock:
+            base = self._catalog_get(key)
+            if base is None:
+                definition = self._require_schema(schema_id)
+                base = self._serialize(
+                    definition,
+                    user_id=None,
+                    detail=True,
+                    is_platform_admin=False,
+                )
+                self._catalog_put(key, base, self._list_cache_seconds)
+        item = self._overlay_flags(base, user_id, is_platform_admin)
+        return json.dumps(
+            {"code": 200, "success": True, "data": item, "msg": ""},
+            ensure_ascii=False,
+            default=str,
+        )
+
+    def get_script_content_payload(self, schema_id: str) -> str:
+        key = f"script_content:{schema_id}"
+        with self._catalog_cache_lock:
+            payload = self._catalog_get(key)
+            if payload is None:
+                payload = json.dumps(
+                    {"code": 200, "success": True, "data": self.get_script_content(schema_id), "msg": ""},
+                    ensure_ascii=False,
+                    default=str,
+                )
+                self._catalog_put(key, payload, self._list_cache_seconds)
+        return payload
 
     def get_schema(
         self,

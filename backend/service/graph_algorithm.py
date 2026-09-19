@@ -7,10 +7,14 @@ labels 传 EDGE（边类型）名——Spark 侧按边类型构建计算图。
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import threading
 import time
 import uuid
+
+import redis as redis_lib
 from datetime import UTC, datetime
 from typing import Any
 
@@ -114,6 +118,53 @@ def _job_to_data(job: Any) -> dict:
 # 包装成与 Spark 作业一致的 job / result 模型（前端零改动），也不受算法引擎
 # "同一时刻仅允许一个作业"的并发限制。
 _DEGREE_JOB_TTL_SECONDS = 30 * 60
+
+# 作业快照跨 worker 共享：8 worker 部署下，提交与查询会落在不同进程，
+# 纯进程内存会让其余 worker 查询 404（2026-09-20 用例 10 实测 95% 404）。
+# 快照同步写 Redis（与 auth 会话共用实例，键前缀隔离），TTL 与本地一致。
+_ALGO_JOB_REDIS_PREFIX = "algo:degree_job:"
+_algo_redis_client: redis_lib.Redis | None = None
+_algo_redis_lock = threading.Lock()
+
+
+def _shared_redis() -> redis_lib.Redis:
+    global _algo_redis_client
+    with _algo_redis_lock:
+        if _algo_redis_client is None:
+            url = os.getenv("REDIS_URL", "redis://auth-redis:6379/0")
+            _algo_redis_client = redis_lib.Redis.from_url(url, decode_responses=True)
+        return _algo_redis_client
+
+
+def _shared_job_save(job_id: str, job: dict) -> None:
+    try:
+        _shared_redis().set(
+            _ALGO_JOB_REDIS_PREFIX + job_id,
+            json.dumps(job, ensure_ascii=False, default=str),
+            ex=_DEGREE_JOB_TTL_SECONDS,
+        )
+    except Exception:  # noqa: BLE001 — Redis 不可用时不影响本地作业
+        logging.getLogger(__name__).warning("算法作业快照写 Redis 失败", exc_info=True)
+
+
+def _shared_job_load(job_id: str) -> dict | None:
+    raw = None
+    for attempt in range(2):  # 高压下 Redis 瞬时抖动重试一次
+        try:
+            raw = _shared_redis().get(_ALGO_JOB_REDIS_PREFIX + job_id)
+            break
+        except Exception:  # noqa: BLE001
+            if attempt == 0:
+                time.sleep(0.05)
+    if not raw:
+        return None
+    if not raw:
+        return None
+    try:
+        job = json.loads(raw)
+    except ValueError:
+        return None
+    return job if isinstance(job, dict) else None
 _DEGREE_JOB_CAPACITY = 50
 _DEGREE_RESULT_LIMIT = 10_000
 _degree_jobs: dict[str, dict[str, Any]] = {}
@@ -156,19 +207,29 @@ def _save_degree_job(
         while len(_degree_jobs) >= _DEGREE_JOB_CAPACITY:
             del _degree_jobs[min(_degree_jobs, key=lambda key: _degree_jobs[key]["saved_at"])]
         _degree_jobs[job_id] = job
+    _shared_job_save(job_id, job)
     return job
 
 
 def _local_degree_job(space: str, job_id: str) -> dict[str, Any] | None:
-    """按 jobId 取本地 Degree 作业；不存在 / 已过期 / 空间不匹配返回 None（走图服务）。"""
+    """按 jobId 取本地 Degree 作业；本地未命中时尝试 Redis 共享快照
+    （跨 worker：提交与查询可能落在不同进程）。
+    不存在 / 已过期 / 空间不匹配返回 None（走图服务）。"""
     with _degree_jobs_lock:
         job = _degree_jobs.get(job_id)
-        if job is None or job["space"] != space:
-            return None
-        if time.time() - job["saved_at"] > _DEGREE_JOB_TTL_SECONDS:
-            del _degree_jobs[job_id]
-            return None
-        return job
+        if job is not None:
+            if job["space"] != space:
+                return None
+            if time.time() - job["saved_at"] > _DEGREE_JOB_TTL_SECONDS:
+                del _degree_jobs[job_id]
+                return None
+            return job
+    shared = _shared_job_load(job_id)
+    if shared is not None and shared.get("space") == space:
+        with _degree_jobs_lock:
+            _degree_jobs.setdefault(job_id, shared)
+        return shared
+    return None
 
 
 def _local_job_to_data(job: dict[str, Any]) -> dict:
@@ -257,6 +318,7 @@ def _run_degree_job(job: dict[str, Any]) -> None:
     finally:
         with _degree_jobs_lock:
             job.update(finished_at=_utc_now_iso(), saved_at=time.time())
+        _shared_job_save(job["job_id"], job)
 
 
 def submit_job(
@@ -420,7 +482,20 @@ def list_edge_types(actor: PlatformActor, space: str) -> list[str]:
 
 
 def engine_status(actor: PlatformActor, space: str) -> dict:
-    """算法引擎（Spark 运行器）健康状态；探测失败一律降级为 DOWN，不向上抛。"""
+    """算法引擎（Spark 运行器）健康状态；探测失败一律降级为 DOWN，不向上抛。
+    结果按 space 缓存 30s：500 并发下逐请求探测 runner/Nebula 会耗尽会话池。"""
+    key = f"engine:{space}"
+    with _algo_info_lock:
+        cached = _algo_info_cache.get(key)
+        if cached and cached[0] > time.monotonic():
+            return cached[1]
+    result = _engine_status_uncached(actor, space)
+    with _algo_info_lock:
+        _algo_info_cache[key] = (time.monotonic(), result)
+    return result
+
+
+def _engine_status_uncached(actor: PlatformActor, space: str) -> dict:
     from infra.graph_db import get_space_algorithm_client
 
     _ensure_space_access(actor, space)
@@ -432,9 +507,23 @@ def engine_status(actor: PlatformActor, space: str) -> dict:
         return {"status": "DOWN", "activeJobs": None, "message": str(_map_error(exc))}
 
 
+_ALGO_INFO_CACHE_SECONDS = float(os.getenv("GRAPH_ALGO_INFO_CACHE_SECONDS", "60"))
+_algo_info_cache: dict[str, tuple[float, dict]] = {}
+_algo_info_lock = threading.Lock()
+
+
 def metadata(actor: PlatformActor, space: str) -> dict:
-    """边类型 + 引擎状态聚合；引擎探测失败仅降级，不阻塞边类型返回。"""
-    return {
+    """边类型 + 引擎状态聚合；引擎探测失败仅降级，不阻塞边类型返回。
+    结果按 space 缓存 30s（边类型列表变化极低频）。"""
+    key = f"meta:{space}"
+    with _algo_info_lock:
+        cached = _algo_info_cache.get(key)
+        if cached and cached[0] > time.monotonic():
+            return cached[1]
+    result = {
         "edgeTypes": list_edge_types(actor, space),
         "engine": engine_status(actor, space),
     }
+    with _algo_info_lock:
+        _algo_info_cache[key] = (time.monotonic(), result)
+    return result

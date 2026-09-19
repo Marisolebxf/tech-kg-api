@@ -175,6 +175,23 @@ describe('GraphVisualizationView', () => {
     expect(wrapper.text()).toContain('撰写（20）')
   })
 
+  it('起点检索结果栏可收起与展开，新检索命中自动展开', async () => {
+    await searchStart([entityItem('scholar-1', '张三', '专家'), entityItem('scholar-2', '李四', '专家')])
+    expect(wrapper.findAll('.graphviz-start__item')).toHaveLength(2)
+
+    await clickButton('×')
+    expect(wrapper.find('.graphviz-start__item').exists()).toBe(false)
+    expect(wrapper.text()).toContain('命中 2 个实体')
+    // 已收起时消息行出现展开入口
+    await clickButton('展开检索结果（2 条）')
+    expect(wrapper.findAll('.graphviz-start__item')).toHaveLength(2)
+
+    // 收起后再次检索命中会自动展开
+    await clickButton('×')
+    await searchStart([entityItem('scholar-3', '王五', '专家')])
+    expect(wrapper.findAll('.graphviz-start__item')).toHaveLength(1)
+  })
+
   it('起点检索点选后按参数查询子图并出图画布', async () => {
     await searchStart([entityItem('scholar-1', '张三', '专家')])
     expect(wrapper.text()).toContain('命中 1 个实体')

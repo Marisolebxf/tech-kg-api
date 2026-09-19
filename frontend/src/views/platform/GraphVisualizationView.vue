@@ -82,6 +82,8 @@ const searchKeyword = ref('')
 const searching = ref(false)
 const searchMessage = ref('')
 const searchResults = ref<EntitySearchItem[]>([])
+// 检索结果列表可手动收起；新的检索命中时自动展开
+const startListVisible = ref(true)
 const startNode = ref<EntitySearchItem | null>(null)
 const depth = ref<GraphDepth>(2)
 const perHopLimit = ref(100)
@@ -360,6 +362,7 @@ async function doSearch(): Promise<void> {
     if (context !== graphContextVersion) return
     if (result.items.length > 0) {
       searchResults.value = result.items
+      startListVisible.value = true
       searchMessage.value = `命中 ${result.items.length} 个实体，点击选择查询起点`
       return
     }
@@ -378,6 +381,7 @@ async function doSearch(): Promise<void> {
             score: null,
           },
         ]
+        startListVisible.value = true
         searchMessage.value = '按名称未命中，已按节点 ID 直查命中 1 个实体'
         return
       } catch {
@@ -550,6 +554,7 @@ watch(
     searchKeyword.value = ''
     searchResults.value = []
     searchMessage.value = ''
+    startListVisible.value = true
     startNode.value = null
     entityTypeFilter.value = ''
     selectedEdgeTypes.value = []
@@ -621,24 +626,38 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div v-if="searchResults.length" class="graphviz-start" aria-label="起点检索结果">
-          <button
-            v-for="item in searchResults"
-            :key="item.vid"
-            type="button"
-            :class="['graphviz-start__item', { 'is-selected': startNode?.vid === item.vid }]"
-            :title="item.vid"
-            @click="pickStartNode(item)"
-          >
-            <b>{{ item.name || '（未命名）' }}</b>
-            <span>{{ item.entityType || '未知类型' }}</span>
-            <code>{{ item.vid }}</code>
-          </button>
+        <div v-if="startListVisible && searchResults.length" class="graphviz-start" aria-label="起点检索结果">
+          <div class="graphviz-start__bar">
+            <span>起点检索结果（{{ searchResults.length }} 条，点击选择查询起点）</span>
+            <button type="button" class="graphviz-start__close" title="收起检索结果" @click="startListVisible = false">×</button>
+          </div>
+          <div class="graphviz-start__list">
+            <button
+              v-for="item in searchResults"
+              :key="item.vid"
+              type="button"
+              :class="['graphviz-start__item', { 'is-selected': startNode?.vid === item.vid }]"
+              :title="item.vid"
+              @click="pickStartNode(item)"
+            >
+              <b>{{ item.name || '（未命名）' }}</b>
+              <span>{{ item.entityType || '未知类型' }}</span>
+              <code>{{ item.vid }}</code>
+            </button>
+          </div>
         </div>
 
         <p v-if="searchMessage" class="graphviz-form__message">
           {{ searchMessage }}
           <template v-if="startNode">｜已选起点：<b>{{ startNode.name || startNode.vid }}</b>（{{ startNode.entityType || '未知类型' }}）</template>
+          <button
+            v-if="!startListVisible && searchResults.length"
+            type="button"
+            class="graphviz-form__reveal"
+            @click="startListVisible = true"
+          >
+            展开检索结果（{{ searchResults.length }} 条）
+          </button>
         </p>
 
         <div class="graphviz-form__grid graphviz-form__grid--params">
@@ -872,7 +891,9 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.graphviz-page{display:flex;height:100%;min-height:0;flex-direction:column;gap:16px;color:#1d2129;overflow:hidden}
+/* 外层 .app-workspace 本身是滚动容器：这里不钉死高度、不裁溢出，
+   内容少时 min-height 撑满（画布拉伸），内容多时由外层整体纵向滚动 */
+.graphviz-page{display:flex;min-height:100%;flex-direction:column;gap:16px;color:#1d2129}
 .graphviz-panel{display:flex;flex-direction:column;min-height:0;border:1px solid #e5e6eb;border-radius:6px;background:#fff}
 .graphviz-panel__header{display:flex;flex:0 0 auto;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid #f2f3f5}
 .graphviz-panel__title{margin:0;font-size:15px;line-height:22px;font-weight:600}
@@ -891,7 +912,13 @@ onUnmounted(() => {
 .graphviz-search{display:flex;gap:8px}
 .graphviz-form__message{margin:0;color:#4e5969;font-size:12px;line-height:20px}
 .graphviz-form__message--muted{color:#86909c}
-.graphviz-start{display:flex;flex-direction:column;gap:4px;max-height:168px;overflow:auto;border:1px solid #f2f3f5;border-radius:4px;padding:8px;background:#fafbfc}
+.graphviz-form__reveal{margin-left:8px;padding:0;border:0;background:transparent;color:#165dff;cursor:pointer;font-size:12px;line-height:20px}
+.graphviz-form__reveal:hover{text-decoration:underline}
+.graphviz-start{border:1px solid #f2f3f5;border-radius:4px;padding:8px;background:#fafbfc}
+.graphviz-start__bar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 4px 6px;color:#4e5969;font-size:12px;line-height:18px}
+.graphviz-start__close{flex:0 0 auto;width:20px;height:20px;padding:0;border:0;border-radius:4px;background:transparent;color:#86909c;cursor:pointer;font-size:14px;line-height:20px}
+.graphviz-start__close:hover{background:#f2f3f5;color:#1d2129}
+.graphviz-start__list{display:flex;flex-direction:column;gap:4px;max-height:168px;overflow:auto}
 .graphviz-start__item{display:flex;align-items:center;gap:8px;min-width:0;padding:6px 8px;border:1px solid transparent;border-radius:4px;background:#fff;cursor:pointer;text-align:left;font-size:12px;line-height:20px}
 .graphviz-start__item:hover{border-color:#4080ff}
 .graphviz-start__item.is-selected{border-color:#165dff;background:#f2f7ff}
@@ -931,7 +958,7 @@ onUnmounted(() => {
 .graphviz-cap-banner{display:flex;flex:0 0 auto;align-items:center;justify-content:space-between;gap:12px;padding:6px 16px;border-bottom:1px solid #ffe4ba;background:#fff7e8;color:#b54708;font-size:12px;line-height:20px}
 .graphviz-cap-banner button{flex:0 0 auto;border:0;background:transparent;color:#165dff;cursor:pointer;font-size:12px;line-height:20px;white-space:nowrap}
 .graphviz-cap-banner button:hover{text-decoration:underline}
-.graphviz-canvas{position:relative;flex:1;min-height:0;overflow:hidden;border-radius:4px}
+.graphviz-canvas{position:relative;flex:1;min-height:480px;overflow:hidden;border-radius:4px}
 .graphviz-canvas__empty{position:absolute;inset:0;z-index:2;display:grid;place-items:center;padding:24px;background:transparent;color:#86909c;font-size:13px;line-height:22px;text-align:center;pointer-events:none}
 
 /* ---------- 详情面板 ---------- */

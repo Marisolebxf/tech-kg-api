@@ -114,6 +114,19 @@ class FakeMilvusClient:
     def load_collection(self, collection_name: str):
         pass
 
+    def query(
+        self,
+        collection_name: str,
+        filter: str = "",  # noqa: A002
+        output_fields: list[str] | None = None,
+        limit: int = 10,
+    ):
+        rows = self.collections.get(collection_name, [])
+        if 'graph_space == "' in filter:
+            space = filter.split('graph_space == "', 1)[1].split('"', 1)[0]
+            rows = [row for row in rows if row.get("graph_space") == space]
+        return rows[:limit]
+
 
 class FakeEmbeddingClient:
     def __init__(self) -> None:
@@ -147,6 +160,8 @@ def test_extract_entity_name_candidates() -> None:
     assert extract_entity_name({"title": "论文A"}, "v1") == "论文A"
     assert extract_entity_name({"other": "x"}, "fallback-vid") == "fallback-vid"
     assert extract_entity_name({"name": "  ", "name_zh": "中文名"}, "v1") == "中文名"
+    assert extract_entity_name({"project_name": "项目甲"}, "v1") == "项目甲"
+    assert extract_entity_name({"patent_title": "专利乙"}, "v1") == "专利乙"
 
 
 def test_extract_display_properties_filters_and_truncates() -> None:
@@ -593,3 +608,79 @@ def test_search_failed_exact_query_does_not_report_no_matches(state_session, mon
     monkeypatch.setattr(EntitySearchService, "_search_index", lambda self, **kwargs: {"items": []})
     with pytest.raises(EntitySearchError, match="图库精确检索暂不可用"):
         EntitySearchService(state_session).search(keyword="姓名", space="dev2")
+
+
+
+def test_status_marks_stale_state_when_space_missing_in_milvus(state_session, monkeypatch):
+    milvus = FakeMilvusClient()
+    milvus.collections[COLLECTION_NAME] = [
+        {
+            "vid": "other-1",
+            "graph_space": "gaoxing_test",
+            "entity_type": "Program",
+        }
+    ]
+    state_session.add(
+        EntitySearchState(
+            graph_space="dev2",
+            entity_count=4,
+            document_count=4,
+            vocabulary='{"x":0}',
+            document_frequency='{"x":4}',
+            type_counts='{"E2EBigWidget":4}',
+            embedding_model="moka-ai/m3e-small",
+        )
+    )
+    state_session.commit()
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+
+    service = EntitySearchService(state_session)
+    status = service.status()
+
+    assert status["indexed"] is False
+    assert status["actualDataAvailable"] is False
+    assert status["stateStale"] is True
+    assert status["entityCount"] == 0
+    assert status["recordedEntityCount"] == 4
+    assert status["typeCounts"] == {}
+    assert status["recordedTypeCounts"] == {"E2EBigWidget": 4}
+    assert status["bm25Ready"] is False
+    assert service.types() == []
+
+
+def test_search_stale_milvus_state_keeps_graph_exact_fallback(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    graph = FakeGraph(
+        ["DataSource"],
+        {"DataSource": [FakeNode("ds_dwd_bid_target_item_out", {})]},
+    )
+    milvus = FakeMilvusClient()
+    milvus.collections[COLLECTION_NAME] = [
+        {"vid": "other-1", "graph_space": "gaoxing_test", "entity_type": "Program"}
+    ]
+    state_session.add(
+        EntitySearchState(
+            graph_space="dev2",
+            entity_count=4,
+            document_count=4,
+            vocabulary='{"x":0}',
+            document_frequency='{"x":4}',
+            type_counts='{"E2EBigWidget":4}',
+            embedding_model="moka-ai/m3e-small",
+        )
+    )
+    state_session.commit()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+
+    service = EntitySearchService(state_session)
+    exact = service.search(keyword="ds_dwd_bid_target_item_out", space="dev2")
+
+    assert exact["mode"] == "graph-exact"
+    assert exact["returned"] == 1
+    assert exact["items"][0]["entityType"] == "DataSource"
+
+    with pytest.raises(EntitySearchError, match="索引状态已过期"):
+        service.search(keyword="不存在的语义关键词", space="dev2")

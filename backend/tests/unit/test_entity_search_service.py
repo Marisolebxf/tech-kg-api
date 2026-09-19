@@ -29,9 +29,9 @@ class FakeNode:
 
 
 class FakePagedResult:
-    def __init__(self, items: list[FakeNode]) -> None:
+    def __init__(self, items: list[FakeNode], total: int | None = None) -> None:
         self.items = items
-        self.total = len(items)
+        self.total = len(items) if total is None else total
 
 
 class FakeGraph:
@@ -55,7 +55,7 @@ class FakeGraph:
         self, label: str, *, limit: int = 100, offset: int = 0
     ) -> FakePagedResult:
         items = self._nodes.get(label, [])
-        return FakePagedResult(items[offset : offset + limit])
+        return FakePagedResult(items[offset : offset + limit], total=len(items))
 
 
 class FakeMilvusClient:
@@ -182,6 +182,32 @@ def test_browse_single_type_pagination(state_session, monkeypatch) -> None:
     assert [item["vid"] for item in result["items"]] == ["expert_b"]
 
 
+def test_browse_single_type_reuses_page_total_without_node_count(
+    state_session, monkeypatch
+) -> None:
+    graph = FakeGraph(
+        ["Expert"],
+        {
+            "Expert": [
+                FakeNode("expert_1", {"name": "张三"}),
+                FakeNode("expert_2", {"name": "李四"}),
+            ]
+        },
+    )
+
+    def fail_node_count(label=None):
+        raise AssertionError("单类型浏览不应再额外调用 node_count")
+
+    graph.node_count = fail_node_count
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+
+    result = EntitySearchService(state_session).browse(entity_type="Expert", limit=1, offset=1)
+
+    assert result["total"] == 2
+    assert [item["vid"] for item in result["items"]] == ["expert_2"]
+
+
 def test_browse_cross_type_window_fetches_only_needed_labels(state_session, monkeypatch) -> None:
     graph = FakeGraph(
         ["A", "B", "C"],
@@ -207,6 +233,76 @@ def test_browse_cross_type_window_fetches_only_needed_labels(state_session, monk
     # 超出总数 → 空页
     result = service.browse(limit=2, offset=4)
     assert result["items"] == []
+
+
+def test_browse_cross_type_uses_complete_state_counts(state_session, monkeypatch) -> None:
+    graph = FakeGraph(
+        ["A", "B", "C"],
+        {
+            "A": [FakeNode("a_1", {"name": "A1"})],
+            "B": [
+                FakeNode("b_2", {"name": "B2"}),
+                FakeNode("b_1", {"name": "B1"}),
+            ],
+            "C": [FakeNode("c_1", {"name": "C1"})],
+        },
+    )
+
+    def fail_node_count(label=None):
+        raise AssertionError("完整统计快照存在时不应调用 node_count")
+
+    graph.node_count = fail_node_count
+    state_session.add(
+        EntitySearchState(
+            graph_space="dev2",
+            entity_count=4,
+            type_counts=json.dumps({"A": 1, "B": 2, "C": 1}),
+        )
+    )
+    state_session.commit()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+
+    result = EntitySearchService(state_session).browse(limit=2, offset=2)
+
+    assert result["total"] == 4
+    assert [item["vid"] for item in result["items"]] == ["b_1", "c_1"]
+
+
+def test_browse_cross_type_incomplete_state_falls_back_to_live_counts(
+    state_session, monkeypatch
+) -> None:
+    graph = FakeGraph(
+        ["A", "B"],
+        {
+            "A": [FakeNode("a_1", {"name": "A1"})],
+            "B": [FakeNode("b_1", {"name": "B1"})],
+        },
+    )
+    calls: list[str | None] = []
+    original_node_count = graph.node_count
+
+    def track_node_count(label=None):
+        calls.append(label)
+        return original_node_count(label)
+
+    graph.node_count = track_node_count
+    state_session.add(
+        EntitySearchState(
+            graph_space="dev2",
+            entity_count=1,
+            type_counts=json.dumps({"A": 1}),
+        )
+    )
+    state_session.commit()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+    monkeypatch.setattr("service.entity_search._node_count_cache", {})
+
+    result = EntitySearchService(state_session).browse(limit=10, offset=0)
+
+    assert result["total"] == 2
+    assert calls == ["A", "B"]
 
 
 def test_browse_unknown_type(state_session, monkeypatch) -> None:

@@ -441,11 +441,11 @@ onBeforeUnmount(() => {
               ></span>
               <span v-if="!sidebarCollapsed">配置管理</span>
             </RouterLink>
-
+            </template>
+            <!-- 知识图谱构建服务父目录：图谱查询与业务服务两个子组的共同上级，两类账号均可见。 -->
             <div v-if="!sidebarCollapsed" class="app-nav__group">
               <span>知识图谱构建服务</span>
             </div>
-            </template>
             <div class="app-nav__query-group">
               <button
                 class="app-nav__item app-nav__item--top app-nav__item--button"

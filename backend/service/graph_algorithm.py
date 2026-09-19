@@ -269,7 +269,7 @@ def submit_job(
     has_weight: bool = False,
     weight_cols: list[str] | None = None,
     encode_id: bool = True,
-    partition_num: int = 1,
+    partition_num: int = 8,
     background_tasks: Any = None,
 ) -> dict:
     """提交算法作业（结果去向固定 csv），返回作业快照。

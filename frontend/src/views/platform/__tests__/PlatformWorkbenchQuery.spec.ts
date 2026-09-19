@@ -276,6 +276,95 @@ describe('PlatformWorkbench query graph-space context', () => {
     expect(wrapper.get('.platform-query-algo__job-running').text()).toContain('算法作业运行中')
   })
 
+  it('submits Louvain with lighter defaults, encoded VIDs and eight partitions', async () => {
+    vi.mocked(fetchGraphAlgorithmMetadata).mockResolvedValueOnce({
+      edgeTypes: ['HAS_KEYWORD'], engine: { status: 'UP' },
+    })
+    await enterAlgorithms()
+    await clickButton('Louvain算法')
+    await wrapper.get('.platform-query-algo__labels select').setValue(['HAS_KEYWORD'])
+    await clickButton('提交算法作业')
+    await flushPromises()
+
+    expect(submitAlgorithmJob).toHaveBeenCalledWith({
+      space: 'space-a',
+      algorithm: 'louvain',
+      labels: ['HAS_KEYWORD'],
+      params: { maxIter: 8, internalIter: 5, tol: 0.5 },
+      hasWeight: false,
+      weightCols: null,
+      encodeId: true,
+      partitionNum: 8,
+    })
+  })
+
+  it('continues polling every three seconds while the job is running', async () => {
+    await enterAlgorithms()
+    await submitAlgorithm()
+
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+    expect(getAlgorithmJob).toHaveBeenCalledTimes(1)
+    expect(getAlgorithmJobResult).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+    expect(getAlgorithmJob).toHaveBeenCalledTimes(2)
+    expect(getAlgorithmJobResult).not.toHaveBeenCalled()
+  })
+
+  it('stops polling and loads the CSV result after the job succeeds', async () => {
+    vi.mocked(getAlgorithmJob).mockResolvedValueOnce({ jobId: 'job-a', status: 'succeeded' })
+    await enterAlgorithms()
+    await submitAlgorithm()
+
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+    expect(getAlgorithmJobResult).toHaveBeenCalledWith('space-a', 'job-a')
+    expect(wrapper.get('.query-result-table[aria-label="图算法执行结果"]').text()).toContain('current-result')
+
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(getAlgorithmJob).toHaveBeenCalledTimes(1)
+  })
+
+  it('stops polling and exposes failure diagnostics without expanding logs by default', async () => {
+    vi.mocked(getAlgorithmJob).mockResolvedValueOnce({
+      jobId: 'job-a', status: 'failed', driverState: 'FAILED',
+      error: 'Spark driver exited', logTail: 'executor lost',
+    })
+    await enterAlgorithms()
+    await submitAlgorithm()
+
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+    const jobPanel = wrapper.get('.platform-query-algo__job')
+    expect(jobPanel.text()).toContain('Spark Driver：FAILED')
+    expect(jobPanel.text()).toContain('Spark driver exited')
+    expect(jobPanel.get('details').attributes('open')).toBeUndefined()
+    expect(jobPanel.get('summary').text()).toBe('查看 Spark 日志')
+    expect(getAlgorithmJobResult).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(getAlgorithmJob).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    [121, '作业运行时间较长，当前仍在计算'],
+    [301, '作业运行时间较长，可检查 Spark 作业状态'],
+  ])('shows the expected running hint after %i seconds', async (elapsedSeconds, hint) => {
+    vi.mocked(submitAlgorithmJob).mockResolvedValueOnce({
+      jobId: 'job-a', status: 'running', driverState: 'RUNNING',
+      startedAt: new Date(Date.now() - elapsedSeconds * 1000).toISOString(),
+    })
+    await enterAlgorithms()
+    await submitAlgorithm()
+
+    const jobPanel = wrapper.get('.platform-query-algo__job')
+    expect(jobPanel.text()).toContain('已运行')
+    expect(jobPanel.text()).toContain('Spark Driver：RUNNING')
+    expect(jobPanel.get('.platform-query-algo__job-long-hint').text()).toBe(hint)
+  })
+
   it('does not restore metadata from a space whose request completed late', async () => {
     const oldRequest = deferred<GraphAlgorithmMetadata>()
     vi.mocked(fetchGraphAlgorithmMetadata).mockReturnValueOnce(oldRequest.promise)

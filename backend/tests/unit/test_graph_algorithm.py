@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from biz.schemas.graph_algorithm import AlgorithmSubmitRequest
 from infra.graph_db import AlgorithmJobBusyError
 from infra.graph_db.exceptions import GraphNotFoundError, GraphRequestError
 from service.graph_algorithm import (
@@ -37,6 +38,15 @@ def _job_snapshot(**overrides) -> SimpleNamespace:
     )
     base.update(overrides)
     return SimpleNamespace(**base)
+
+
+def test_submit_request_defaults_keep_string_vids_and_use_eight_partitions() -> None:
+    request = AlgorithmSubmitRequest(
+        space="dev2", algorithm="louvain", labels=["HAS_KEYWORD"]
+    )
+    assert request.encode_id is True
+    assert request.partition_num == 8
+    assert request.model_dump(by_alias=True)["partitionNum"] == 8
 
 
 @pytest.fixture
@@ -118,6 +128,8 @@ def test_submit_allowed_on_default_and_bound_space(algo_backend, space) -> None:
     assert data["jobId"] == "job-9"
     assert data["status"] == "running"
     assert len(algo_backend.submit_calls) == 1
+    assert algo_backend.submit_calls[0]["encode_id"] is True
+    assert algo_backend.submit_calls[0]["partition_num"] == 8
 
 
 def test_submit_forces_csv_and_passes_options(algo_backend) -> None:
@@ -288,6 +300,7 @@ def test_engine_up(algo_backend) -> None:
 @pytest.mark.parametrize("fail", [False, True])
 def test_degree_returns_running_before_background_computation(algo_backend, monkeypatch, fail):
     from fastapi import BackgroundTasks
+
     from service.graph_algorithm import _run_degree_job
 
     tasks = BackgroundTasks()

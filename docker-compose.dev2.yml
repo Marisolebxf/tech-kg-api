@@ -24,9 +24,10 @@ services:
     container_name: tech-kg-api-dev2
     # keep-alive 75s 必须大于 nginx 上游连接池 keepalive_timeout(60s)：
     # 让 nginx 侧先关空闲连接，避免复用已被 uvicorn 关闭的连接产生零星 502。
-    # --workers 4：单 worker 单核饱和（~900rps）是 0919 压测吞吐/P90 不达标的根因，
-    # 16 核按 4 worker 起步；每 worker 独立 result cache（prewarm 各自预热）
-    command: [".venv/bin/uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4", "--timeout-keep-alive", "75"]
+    # --workers 8：压测实测 4 worker 时 CPU 406-450%（GIL 下每缓存命中请求
+    # ~5-8ms CPU，吞吐封顶 ~900rps）；16 核 × 8 worker ≈ 理论 1500+rps，
+    # 内存代价约 270MB/worker
+    command: [".venv/bin/uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "8", "--timeout-keep-alive", "75"]
     ports:
       - "8002:8000"
     env_file:

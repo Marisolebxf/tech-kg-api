@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import json
 import logging
 import os
 import re
+import threading
 import time
 from collections.abc import Iterator
 from datetime import date, datetime
@@ -291,10 +293,24 @@ def _stale_behind(property_revision: int | None, captured_revision: int | None) 
 
 
 class SchemaManagementService:
+    # 目录列表结果缓存：序列化 100 行约 100-190ms 纯 Python（GIL 下 4 worker
+    # 天花板 ~90rps，2026-09-19 压测用例 02 不达标根因）。键不含用户身份——
+    # 缓存条目不带 canDelete/canManageProperties，返回时按当前用户叠加。
+    # 任何目录变更（见各变更方法里的 _invalidate_list_cache）即整体失效。
+    # 注意必须挂类级：SchemaManagementService 每请求实例化，实例属性缓存
+    # 会在请求结束时随实例丢弃，命中率恒为 0（2026-09-19 实测踩坑）。
+    _list_cache_seconds = float(os.getenv("SCHEMA_LIST_CACHE_SECONDS", "60"))
+    _list_cache: dict[tuple, tuple[float, dict]] = {}
+    _list_cache_lock = threading.Lock()
+
     def __init__(self, session: Session, storage: S3Storage | None = None) -> None:
         self._session = session
         self._dao = SchemaManagementDAO(session)
         self._storage = storage or get_schema_s3_storage()
+
+    @classmethod
+    def _invalidate_list_cache(cls) -> None:
+        cls._list_cache.clear()
 
     def overview(self, graph_space: str | None = None) -> dict[str, Any]:
         stats = self._dao.stats(graph_space)
@@ -326,23 +342,61 @@ class SchemaManagementService:
         graph_space: str | None = None,
     ) -> dict[str, Any]:
         user_id = user_id.strip() if user_id else None
-        items, total = self._dao.list(
-            kind=kind, keyword=keyword, page=page, page_size=page_size, graph_space=graph_space
-        )
-        return {
-            "items": [
-                self._serialize(
-                    item,
-                    user_id=user_id,
-                    detail=include_details,
-                    is_platform_admin=is_platform_admin,
+        key = (kind, keyword, page, page_size, include_details, graph_space, is_platform_admin)
+        now = time.monotonic()
+        # single-flight：TTL 到期瞬间的并发请求只放一个去重算（重算 ~190ms 纯
+        # Python，GIL 串行下放任惊群会把 worker 锁死数秒），其余等锁后读新缓存
+        with self._list_cache_lock:
+            cached = self._list_cache.get(key)
+            if cached is None or cached[0] <= now:
+                items_raw, total = self._dao.list(
+                    kind=kind,
+                    keyword=keyword,
+                    page=page,
+                    page_size=page_size,
+                    graph_space=graph_space,
                 )
-                for item in items
-            ],
-            "total": total,
-            "page": page,
-            "pageSize": page_size,
-        }
+                base_items = [
+                    self._serialize(
+                        item, user_id=None, detail=include_details, is_platform_admin=False
+                    )
+                    for item in items_raw
+                ]
+                cached = (now + self._list_cache_seconds, {"items": base_items, "total": total})
+                self._list_cache[key] = cached
+        base = cached[1]
+        items = [
+            {
+                **item,
+                "canDelete": bool(
+                    user_id
+                    and not item["isSystem"]
+                    and (is_platform_admin or item["createdBy"] == user_id)
+                ),
+                "canManageProperties": bool(
+                    is_platform_admin
+                    or (
+                        not item["isSystem"]
+                        and user_id is not None
+                        and item["createdBy"] == user_id
+                    )
+                ),
+            }
+            for item in base["items"]
+        ]
+        return {"items": items, "total": base["total"], "page": page, "pageSize": page_size}
+
+    def list_schemas_payload(self, **kwargs: Any) -> str:
+        """list_schemas 的 JSON 直返版本：缓存命中路径整条链路零 pydantic/零
+        jsonable_encoder，压测/高频浏览下绕开 GIL 序列化瓶颈。返回体即
+        ApiResponse 信封（code/success/data/msg），前端 unwrap 语义不变。
+        """
+        data = self.list_schemas(**kwargs)
+        return json.dumps(
+            {"code": 200, "success": True, "data": data, "msg": ""},
+            ensure_ascii=False,
+            default=str,
+        )
 
     def get_schema(
         self,
@@ -401,6 +455,7 @@ class SchemaManagementService:
         payload: dict[str, Any],
         user_id: str,
     ) -> dict[str, Any]:
+        self._invalidate_list_cache()
         return self._create(kind="entity", payload=payload, user_id=user_id)
 
     def create_relation(
@@ -409,6 +464,7 @@ class SchemaManagementService:
         payload: dict[str, Any],
         user_id: str,
     ) -> dict[str, Any]:
+        self._invalidate_list_cache()
         source_id = payload.get("source_schema_id")
         target_id = payload.get("target_schema_id")
         source = self._dao.get_entity(source_id) if source_id else None
@@ -442,6 +498,7 @@ class SchemaManagementService:
         script_data: bytes,
         is_platform_admin: bool = False,
     ) -> dict[str, Any]:
+        self._invalidate_list_cache()
         user_id = user_id.strip()
         if not user_id or len(user_id) > 128:
             raise SchemaPermissionError("登录用户 ID 不能为空且不能超过 128 个字符")

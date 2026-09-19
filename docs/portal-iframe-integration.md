@@ -57,9 +57,10 @@
 
 当前实现支持：
 
-- `page.ready`：路由页面完成渲染后强制通知门户。
+- `page.ready`：子应用首次挂载并注册消息监听器后发送一次，门户随后下发初始深链。
+- `page.setTitle`：页面标题变化时同步门户标题。
 - `loading.show` / `loading.hide`：门户全局加载状态。
-- `route.change`：将子系统 hash 路由同步给门户。
+- `route.change`：使用 `{ code, subPath }` 双向同步路由；`code` 是门户菜单编码，`subPath` 是子应用完整路由（含查询参数），不是部署前缀或完整 URL。
 - `menu.navigate`：子系统请求门户切换菜单。
 - `session_expired`：API 返回 401 时通知门户处理登录过期。
 - `NO_PERMISSION`：API 返回 403 时通知门户展示无权限页。
@@ -67,6 +68,13 @@
 
 消息只接受来自 `window.parent` 且命中来源白名单的事件；发送时始终指定明确
 `targetOrigin`，不会使用 `*`。
+
+当前门户菜单编码与路由映射维护在 `frontend/src/portal/portalRoutes.ts`，例如
+`/graph-build` 对应 `graph_build`，`/manual-review` 对应 `manual_review`。
+同一菜单下的详情路由继续使用所属菜单编码。门户跨菜单导航会按菜单配置重载 iframe，
+子应用在首次 `page.ready` 后接收下行 `route.change` 恢复深链；恢复期间不回发导航，
+避免消息循环。后续本地导航发送 `route.change`，不重复发送 `page.ready`。
+门户调整菜单编码时，应同步更新映射并验证总览内部入口、详情页刷新和前进/后退。
 
 ## 构建配置
 
@@ -119,7 +127,7 @@ Content-Security-Policy: frame-ancestors 'self' https://edu.itic-sci.com
 1. 独立打开系统，顶部导航和左侧菜单正常显示。
 2. 从统一门户打开 `embedded=1` URL，子系统自身导航和登录入口不显示。
 3. 已登录门户用户进入子系统时不重复登录。
-4. 每次进入或切换子系统路由，门户收到 `page.ready` 和 `route.change`。
+4. 首次进入子应用，门户收到一次 `page.ready`；子应用内部切换路由时收到 `{ code, subPath }` 的 `route.change`，目标菜单与内容一致，门户下发的深链能够恢复且不产生回发循环。
 5. API 返回 401 时门户收到 `session_expired`；返回 403 时收到 `NO_PERMISSION`。
 6. 门户发送 `LOGOUT` 后，本系统清除本地会话并显示退出状态。
 7. 非白名单来源的消息被忽略，消息发送目标不使用 `*`。

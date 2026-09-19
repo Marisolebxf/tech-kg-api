@@ -5,6 +5,7 @@ export const IFRAME_BRIDGE_VERSION = '1.0'
 
 export const PortalAction = {
   PAGE_READY: 'page.ready',
+  PAGE_SET_TITLE: 'page.setTitle',
   LOADING_SHOW: 'loading.show',
   LOADING_HIDE: 'loading.hide',
   MENU_NAVIGATE: 'menu.navigate',

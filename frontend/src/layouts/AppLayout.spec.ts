@@ -71,7 +71,7 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
     expect(navigation.text()).toContain('工作台')
     expect(navigation.text()).not.toContain('图谱建设与治理')
     expect(navigation.text()).not.toContain('平台管理')
-    expect(navigation.text()).not.toContain('知识图谱构建服务')
+    expect(navigation.text()).toContain('知识图谱构建服务')
     expect(navigation.text()).toContain('科技专家/人才知识推理构建服务')
     expect(navigation.find('a[href="/overview"]').exists()).toBe(true)
     for (const path of [...queryPaths, ...sharedPaths]) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(true)

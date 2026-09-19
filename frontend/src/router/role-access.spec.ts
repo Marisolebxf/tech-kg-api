@@ -31,6 +31,7 @@ vi.mock('../views/platform/ProcessInstanceDetailView.vue', () => ({ default: {} 
 vi.mock('../views/platform/SchemaBrowserView.vue', () => ({ default: {} }))
 vi.mock('../views/platform/GraphBuildView.vue', () => ({ default: {} }))
 vi.mock('../views/platform/EntityListView.vue', () => ({ default: {} }))
+vi.mock('../views/platform/GraphVisualizationView.vue', () => ({ default: {} }))
 vi.mock('../views/platform/ConfigurationManagementView.vue', () => ({ default: {} }))
 vi.mock('../views/admin/CorrectionCenterView.vue', () => ({ default: {} }))
 vi.mock('../views/admin/MemberManagementView.vue', () => ({ default: {} }))
@@ -43,7 +44,7 @@ const restrictedPaths = [
   '/manual-review/task/instance-1', '/configurations', '/task-detail/extract/task-1',
   '/processing-instance/instance-1', '/admin/members', '/admin/reviews', '/admin/corrections',
   '/admin/task-detail/extract/task-1', '/admin/processing-instance/instance-1',
-  '/graph-query', '/graph-query/entities',
+  '/graph-query', '/graph-query/entities', '/graph-query/visualization',
 ]
 const sharedPaths = [
   '/expert-direct', '/node-indirect',

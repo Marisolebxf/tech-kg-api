@@ -117,6 +117,29 @@ export interface GetSubgraphParams {
 
 
 /**
+ * 多边类型子图查询参数（filtered-subgraph）。
+ *
+ * edge_types 为逗号分隔的边类型串，由调用方 join。
+ */
+export interface GetFilteredSubgraphParams {
+  edge_types: string
+  depth?: GraphDepth
+  limit?: number
+  direction?: GraphDirection
+  space?: string
+}
+
+
+/**
+ * 图空间资产统计：各实体标签 / 边类型的数量。
+ */
+export interface GraphStatsData {
+  nodes: Record<string, number>
+  edges: Record<string, number>
+}
+
+
+/**
  * Axios 实例已经配置了 baseURL: '/api'。
  *
  * 最终请求地址为：
@@ -222,6 +245,48 @@ export function getSubgraph(
     `${GRAPH_SEARCH_PREFIX}/subgraph/${encodeURIComponent(nodeId)}`,
     {
       params,
+    },
+  )
+}
+
+
+/**
+ * 按多个边类型查询指定节点的子图。
+ *
+ * 后端 node_id 路径参数没有 `:path` 转换，VID 含 `/` 时
+ * 需由调用方回退到逐边类型 getSubgraph 再合并。
+ *
+ * 对应后端：
+ * GET /api/v1/graph-search/filtered-subgraph/{node_id}
+ */
+export function getFilteredSubgraph(
+  nodeId: string,
+  params: GetFilteredSubgraphParams,
+) {
+  return http.get<ApiResponse<GraphData>>(
+    `${GRAPH_SEARCH_PREFIX}/filtered-subgraph/${encodeURIComponent(nodeId)}`,
+    {
+      params,
+    },
+  )
+}
+
+
+/**
+ * 查询图空间资产统计（实体标签 → 数量、边类型 → 数量，后端缓存 5 分钟）。
+ *
+ * 对应后端：
+ * GET /api/v1/graph-search/stats
+ */
+export function getGraphStats(
+  space?: string,
+) {
+  return http.get<ApiResponse<GraphStatsData>>(
+    `${GRAPH_SEARCH_PREFIX}/stats`,
+    {
+      params: {
+        space,
+      },
     },
   )
 }

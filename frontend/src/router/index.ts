@@ -17,6 +17,7 @@ import ProcessInstanceDetailView from '../views/platform/ProcessInstanceDetailVi
 import SchemaBrowserView from '../views/platform/SchemaBrowserView.vue'
 import GraphBuildView from '../views/platform/GraphBuildView.vue'
 import EntityListView from '../views/platform/EntityListView.vue'
+import GraphVisualizationView from '../views/platform/GraphVisualizationView.vue'
 import ConfigurationManagementView from '../views/platform/ConfigurationManagementView.vue'
 import AccessDeniedView from '../views/auth/AccessDeniedView.vue'
 import CorrectionCenterView from '../views/admin/CorrectionCenterView.vue'
@@ -77,6 +78,12 @@ export const router = createRouter({
       name: 'graph-query-entities',
       component: EntityListView,
       meta: { title: '实体列表', admin: true },
+    },
+    {
+      path: '/graph-query/visualization',
+      name: 'graph-query-visualization',
+      component: GraphVisualizationView,
+      meta: { title: '图谱可视化', admin: true },
     },
     { path: '/admin/corrections', name: 'admin-corrections', component: CorrectionCenterView, props: { scope: 'admin' }, meta: { title: '修正记录', admin: true } },
     { path: '/admin/reviews', name: 'admin-reviews', component: CorrectionCenterView, props: { scope: 'admin', mode: 'review' }, meta: { title: '审核与同步', admin: true } },

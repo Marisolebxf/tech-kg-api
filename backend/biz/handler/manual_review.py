@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
+import os
+import time
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from biz.dependencies.review_identity import get_review_identity
 from biz.schemas.common import ApiResponse
@@ -31,6 +34,28 @@ REVIEW_TASK_NOT_FOUND = "人工处理任务不存在"
 
 ReviewIdentityDep = Annotated[ReviewIdentity, Depends(get_review_identity)]
 router = APIRouter(prefix="/manual-reviews", tags=["manual-review"])
+# 队列查询是重查询（500 并发下 DB/身份解析排队，压测用例 05 吞吐瓶颈），
+# 做短 TTL 响应缓存。审核动作（认领/提交/重跑等写接口）不经过此缓存、
+# 自带行级冲突校验，队列视图最多滞后 TTL——动作正确性不受影响。
+# TTL 环境变量 REVIEW_QUEUE_CACHE_SECONDS 可调，0=关闭。
+_QUEUE_CACHE_SECONDS = float(os.getenv("REVIEW_QUEUE_CACHE_SECONDS", "15"))
+_queue_payload_cache: dict[str, tuple[float, str]] = {}
+
+
+def _queue_cache_get(key: str) -> str | None:
+    entry = _queue_payload_cache.get(key)
+    if entry and entry[0] > time.monotonic():
+        return entry[1]
+    return None
+
+
+def _queue_cache_put(key: str, payload: str) -> None:
+    if len(_queue_payload_cache) > 512:
+        now = time.monotonic()
+        for stale in [k for k, v in _queue_payload_cache.items() if v[0] <= now]:
+            _queue_payload_cache.pop(stale, None)
+    _queue_payload_cache[key] = (time.monotonic() + _QUEUE_CACHE_SECONDS, payload)
+
 # 平台总览「人工审核」卡片对普通用户只读开放：仅队列查询；处理/认领等仍走管理端路由组。
 readonly_router = APIRouter(prefix="/manual-reviews", tags=["manual-review-readonly"])
 
@@ -82,10 +107,23 @@ async def production_queue(
     page: int = 1,
     page_size: int = Query(50, alias="pageSize"),
 ):
+    cache_key = "queue:" + json.dumps(
+        [queue, status, status_group, kind, risk, domain, template_id, assignee_id, category, keyword, updated_within, sort, page, page_size],
+        ensure_ascii=False,
+    )
+    cached = _queue_cache_get(cache_key)
+    if cached is not None:
+        return Response(cached, media_type="application/json")
     try:
-        return ApiResponse(data=production_service.list_cases(locals(), identity))
+        payload = json.dumps(
+            {"code": 200, "success": True, "data": production_service.list_cases(locals(), identity), "msg": "success"},
+            ensure_ascii=False,
+            default=str,
+        )
     except Exception as exc:
         _raise_production_error(exc)
+    _queue_cache_put(cache_key, payload)
+    return Response(payload, media_type="application/json")
 
 
 readonly_router.get("/production/queue", response_model=ApiResponse)(production_queue)

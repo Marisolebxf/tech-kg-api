@@ -24,8 +24,8 @@ from biz.handler.expert_paper_cooperation import router as expert_paper_cooperat
 from biz.handler.graph_algorithm import router as graph_algorithm_router
 from biz.handler.graph_console import router as graph_console_router
 from biz.handler.graph_search import router as graph_search_router
-from biz.handler.graph_space import router as graph_space_router
 from biz.handler.graph_space import readonly_router as graph_space_readonly_router
+from biz.handler.graph_space import router as graph_space_router
 from biz.handler.industry_chain_panorama import router as industry_chain_panorama_router
 from biz.handler.industry_chain_topn_event import router as industry_chain_topn_event_router
 from biz.handler.industry_node_top_events_business import (
@@ -39,6 +39,7 @@ from biz.handler.milvus_config import router as milvus_config_router
 from biz.handler.mysql_datasource import router as mysql_datasource_router
 from biz.handler.options import router as options_router
 from biz.handler.platform_overview import router as platform_overview_router
+from biz.handler.project_relation import router as project_relation_router
 from biz.handler.relation_detail_annotation import router as relation_detail_annotation_router
 from biz.handler.schema_management import router as schema_management_router
 from biz.handler.task_center import router as task_center_router
@@ -74,6 +75,7 @@ def register_routers(app: FastAPI) -> None:
         graph_search_router,
         graph_console_router,
         graph_algorithm_router,
+        project_relation_router,
         entity_search_router,
         correction_router,
         expert_colleague_service_router,

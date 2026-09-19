@@ -37,6 +37,7 @@ def _fail_closed_app() -> FastAPI:
             {"json": {}},
         ),
         ("POST", "/api/v1/kg-service/expert-colleague-relation", {"json": {}}),
+        ("POST", "/api/v1/kg-service/project-relations/query", {"json": {}}),
         (
             "POST",
             "/api/v1/kg-construction/expert-indirect-relations/demo/structured-result",

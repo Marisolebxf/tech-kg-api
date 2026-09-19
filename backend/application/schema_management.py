@@ -23,6 +23,9 @@ class SchemaManagementApplication:
     def list_schemas(self, **kwargs) -> dict[str, Any]:
         return self._service.list_schemas(**kwargs)
 
+    def list_schemas_payload(self, **kwargs) -> str:
+        return self._service.list_schemas_payload(**kwargs)
+
     def get_schema(self, schema_id: str, user_id: str | None, **kwargs) -> dict[str, Any]:
         return self._service.get_schema(schema_id, user_id, **kwargs)
 

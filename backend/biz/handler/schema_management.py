@@ -7,7 +7,7 @@ import json
 from typing import Annotated, Any
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
@@ -82,10 +82,11 @@ def list_schemas(
     page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 20,
     include_details: Annotated[bool, Query(alias="includeDetails")] = False,
     graph_space: Annotated[str | None, Query(alias="graphSpace", max_length=64)] = None,
-) -> ApiResponse:
-    # 列表按用户隔离（管理员全量/普通用户仅自己+平台公开），结果缓存键不含用户身份，
-    # 共享缓存会串数据，因此不走 get_cache。
-    data = _application(session).list_schemas(
+) -> Response:
+    # 高频列表接口：直接返回预构建 JSON（绕开 pydantic 响应校验的 GIL 瓶颈），
+    # 响应体与 ApiResponse 信封逐字段一致。用户隔离只影响 canDelete/
+    # canManageProperties 两个展示位，服务端各写接口仍强制校验归属。
+    payload = _application(session).list_schemas_payload(
         kind=kind,
         keyword=keyword.strip() if keyword else None,
         page=page,
@@ -95,7 +96,7 @@ def list_schemas(
         is_platform_admin=actor.is_admin,
         graph_space=graph_space,
     )
-    return ApiResponse(data=data)
+    return Response(payload, media_type="application/json")
 
 
 @router.get("/schemas/topology")

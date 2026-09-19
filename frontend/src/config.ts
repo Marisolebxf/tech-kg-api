@@ -56,7 +56,12 @@ export const appBase = normalizeBase(pick('base', 'BASE_URL'))
 /** API 前缀（不带尾斜杠）：缺省 {appBase}api，如 /bkg_zpt/api、根路径 /api */
 export const apiBase = (() => {
   const explicit = pick('apiBase', 'VITE_API_BASE')
-  if (explicit) return explicit.replace(/\/+$/, '')
+  if (explicit) {
+    // 线性去除尾部斜杠（等价旧正则 /\/+$/，规避 Sonar S8786 回溯告警）
+    let end = explicit.length
+    while (end > 0 && explicit[end - 1] === '/') end -= 1
+    return explicit.slice(0, end)
+  }
   return `${appBase.slice(0, -1)}/api`
 })()
 

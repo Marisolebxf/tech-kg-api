@@ -7,6 +7,8 @@ jobId 关联回 Job，详情页据此列出执行历史。
 
 from __future__ import annotations
 
+import asyncio
+
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -396,16 +398,24 @@ class WorkflowJobService:
     async def _rebuild_chain_definition(
         self, job: dict[str, Any], schema_ids: Any
     ) -> dict[str, Any]:
-        """用新的步序在同一定义 id 上原地重建 chain 定义。"""
-        from service.schema_extraction import (
-            build_extract_chain_definition,
-            persist_extract_chain_definition,
-        )
+        """用新的步序在同一定义 id 上原地重建 chain 定义。
 
-        infos = self._load_chain_infos(schema_ids)
-        return persist_extract_chain_definition(
-            build_extract_chain_definition(infos, job["definitionId"])
-        )
+        校验/构建/持久化均为同步阻塞操作（DB 读取 + Temporal RPC），
+        卸载到线程执行，避免阻塞事件循环（Sonar S7503）。
+        """
+
+        def _rebuild() -> dict[str, Any]:
+            from service.schema_extraction import (
+                build_extract_chain_definition,
+                persist_extract_chain_definition,
+            )
+
+            infos = self._load_chain_infos(schema_ids)
+            return persist_extract_chain_definition(
+                build_extract_chain_definition(infos, job["definitionId"])
+            )
+
+        return await asyncio.to_thread(_rebuild)
 
     def selector_payload(self, job: dict[str, Any]) -> dict[str, Any]:
         """job 上的 camelCase 选择器 → workflow payload 的 snake_case 键。"""

@@ -7,7 +7,7 @@ import json
 from typing import Annotated, Any
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
@@ -64,12 +64,12 @@ def _raise_domain_error(exc: SchemaManagementError) -> None:
     raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
-@router.get("/overview", response_model=ApiResponse)
+@router.get("/overview")
 def get_schema_overview(
     session: Annotated[Session, Depends(get_workflow_session)],
     graph_space: Annotated[str | None, Query(alias="graphSpace", max_length=64)] = None,
-) -> ApiResponse:
-    return ApiResponse(data=_application(session).overview(graph_space))
+) -> Response:
+    return Response(_application(session).overview_payload(graph_space), media_type="application/json")
 
 
 @router.get("/schemas")
@@ -82,10 +82,11 @@ def list_schemas(
     page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 20,
     include_details: Annotated[bool, Query(alias="includeDetails")] = False,
     graph_space: Annotated[str | None, Query(alias="graphSpace", max_length=64)] = None,
-) -> ApiResponse:
-    # 列表按用户隔离（管理员全量/普通用户仅自己+平台公开），结果缓存键不含用户身份，
-    # 共享缓存会串数据，因此不走 get_cache。
-    data = _application(session).list_schemas(
+) -> Response:
+    # 高频列表接口：直接返回预构建 JSON（绕开 pydantic 响应校验的 GIL 瓶颈），
+    # 响应体与 ApiResponse 信封逐字段一致。用户隔离只影响 canDelete/
+    # canManageProperties 两个展示位，服务端各写接口仍强制校验归属。
+    payload = _application(session).list_schemas_payload(
         kind=kind,
         keyword=keyword.strip() if keyword else None,
         page=page,
@@ -95,7 +96,7 @@ def list_schemas(
         is_platform_admin=actor.is_admin,
         graph_space=graph_space,
     )
-    return ApiResponse(data=data)
+    return Response(payload, media_type="application/json")
 
 
 @router.get("/schemas/topology")
@@ -103,13 +104,14 @@ def get_schema_topology(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_workflow_session)],
     graph_space: Annotated[str | None, Query(alias="graphSpace", max_length=64)] = None,
-) -> ApiResponse:
-    return ApiResponse(
-        data=_application(session).topology(
+) -> Response:
+    return Response(
+        _application(session).topology_payload(
             actor.user_id,
             is_platform_admin=actor.is_admin,
             graph_space=graph_space,
-        )
+        ),
+        media_type="application/json",
     )
 
 
@@ -118,14 +120,15 @@ def get_schema_detail(
     schema_id: str,
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_workflow_session)],
-) -> ApiResponse:
+) -> Response:
     try:
-        return ApiResponse(
-            data=_application(session).get_schema(
+        return Response(
+            _application(session).get_schema_payload(
                 schema_id,
                 actor.user_id,
                 is_platform_admin=actor.is_admin,
-            )
+            ),
+            media_type="application/json",
         )
     except SchemaManagementError as exc:
         _raise_domain_error(exc)
@@ -430,10 +433,12 @@ async def verify_and_save_script(
 def get_schema_script_content(
     schema_id: str,
     session: Annotated[Session, Depends(get_workflow_session)],
-) -> ApiResponse:
+) -> Response:
     try:
-        data = _application(session).get_script_content(schema_id)
-        return ApiResponse(data=data)
+        return Response(
+            _application(session).get_script_content_payload(schema_id),
+            media_type="application/json",
+        )
     except SchemaManagementError as exc:
         _raise_domain_error(exc)
 

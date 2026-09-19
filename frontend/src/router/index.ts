@@ -20,8 +20,6 @@ import EntityListView from '../views/platform/EntityListView.vue'
 import GraphVisualizationView from '../views/platform/GraphVisualizationView.vue'
 import ConfigurationManagementView from '../views/platform/ConfigurationManagementView.vue'
 import AccessDeniedView from '../views/auth/AccessDeniedView.vue'
-import CorrectionCenterView from '../views/admin/CorrectionCenterView.vue'
-import MemberManagementView from '../views/admin/MemberManagementView.vue'
 
 const serviceRoutes = [
   { path: '/expert-direct', name: 'expert-direct', title: '科技专家/人才直接关系', serviceKey: 'expert-direct' },
@@ -48,7 +46,7 @@ export const router = createRouter({
       path: '/forbidden',
       name: 'forbidden',
       component: AccessDeniedView,
-      meta: { title: '无管理端权限' },
+      meta: { title: '无管理员权限' },
     },
     {
       path: '/',
@@ -60,7 +58,7 @@ export const router = createRouter({
       name: 'overview',
       component: PlatformWorkbenchView,
       props: { initialTab: 'overview' },
-      meta: { title: '平台总览', admin: true },
+      meta: { title: '平台总览' },
     },
     {
       path: '/data-processing',
@@ -71,23 +69,20 @@ export const router = createRouter({
       name: 'graph-query',
       component: PlatformWorkbenchView,
       props: { initialTab: 'query' },
-      meta: { title: '综合查询', admin: true },
+      meta: { title: '综合查询' },
     },
     {
       path: '/graph-query/entities',
       name: 'graph-query-entities',
       component: EntityListView,
-      meta: { title: '实体列表', admin: true },
+      meta: { title: '实体列表' },
     },
     {
       path: '/graph-query/visualization',
       name: 'graph-query-visualization',
       component: GraphVisualizationView,
-      meta: { title: '图谱可视化', admin: true },
+      meta: { title: '图谱可视化' },
     },
-    { path: '/admin/corrections', name: 'admin-corrections', component: CorrectionCenterView, props: { scope: 'admin' }, meta: { title: '修正记录', admin: true } },
-    { path: '/admin/reviews', name: 'admin-reviews', component: CorrectionCenterView, props: { scope: 'admin', mode: 'review' }, meta: { title: '审核与同步', admin: true } },
-    { path: '/admin/members', name: 'admin-members', component: MemberManagementView, meta: { title: '成员管理', admin: true } },
     { path: '/schema', name: 'schema', component: SchemaBrowserView, meta: { title: 'Schema 管理', admin: true } },
     { path: '/graph-build', name: 'graph-build', component: GraphBuildView, meta: { title: '图谱构建', admin: true } },
     { path: '/graph-build/jobs/:jobId', name: 'job-detail', component: ProcessInstanceDetailView, meta: { title: '任务详情', admin: true } },
@@ -98,8 +93,6 @@ export const router = createRouter({
     { path: '/user-center', name: 'user-center', component: UserCenterView, meta: { title: '个人中心' } },
     { path: '/account-security', name: 'account-security', component: AccountSecurityView, meta: { title: '账号与安全' } },
     { path: '/operation-logs', name: 'operation-logs', component: OperationLogsView, meta: { title: '操作记录' } },
-    { path: '/admin/task-detail/:area/:taskId', name: 'admin-task-detail', component: ProcessInstanceDetailView, meta: { title: '任务实例详情', admin: true } },
-    { path: '/admin/processing-instance/:instanceId', name: 'admin-processing-instance-detail', component: ProcessInstanceDetailView, meta: { title: '任务实例详情', admin: true } },
     { path: '/task-detail/:area/:taskId', name: 'task-detail', component: ProcessInstanceDetailView, meta: { title: '任务实例详情', admin: true } },
     { path: '/processing-instance/:instanceId', name: 'processing-instance-detail', component: ProcessInstanceDetailView, meta: { title: '任务实例详情', admin: true } },
     {
@@ -131,10 +124,7 @@ router.beforeEach(async (to) => {
       return loginRedirect(to.fullPath, '登录状态已失效或已超时，请重新登录')
     }
     const requiredPermission = typeof to.meta.permission === 'string' ? to.meta.permission : ''
-    // 首页和旧 OAuth 回跳统一落到当前角色可访问的默认页面。
-    if (to.name === 'overview' && !profile.isAdmin) {
-      return { path: '/expert-direct', query: to.query, hash: to.hash }
-    }
+    // 平台总览对所有登录用户开放；卡片入口对普通用户只读（见 PlatformWorkbenchView）。
     if (to.meta.admin === true && !profile.isAdmin) {
       return { path: '/forbidden', query: { redirect: to.fullPath } }
     }

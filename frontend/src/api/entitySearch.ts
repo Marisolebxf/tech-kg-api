@@ -37,7 +37,7 @@ export interface EntityListResult {
   keyword?: string
   entityType: string | null
   graphSpace?: string | null
-  mode: 'browse' | 'hybrid' | 'dense' | 'sparse'
+  mode: 'browse' | 'graph-exact' | 'hybrid' | 'dense' | 'sparse' | 'keyword'
 }
 
 export interface EntityIndexStatus {

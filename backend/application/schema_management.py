@@ -23,6 +23,20 @@ class SchemaManagementApplication:
     def list_schemas(self, **kwargs) -> dict[str, Any]:
         return self._service.list_schemas(**kwargs)
 
+    def list_schemas_payload(self, **kwargs) -> str:
+        return self._service.list_schemas_payload(**kwargs)
+    def overview_payload(self, graph_space: str | None = None) -> str:
+        return self._service.overview_payload(graph_space)
+
+    def topology_payload(self, user_id: str | None = None, **kwargs) -> str:
+        return self._service.topology_payload(user_id, **kwargs)
+
+    def get_schema_payload(self, schema_id: str, user_id: str | None = None, **kwargs) -> str:
+        return self._service.get_schema_payload(schema_id, user_id, **kwargs)
+
+    def get_script_content_payload(self, schema_id: str) -> str:
+        return self._service.get_script_content_payload(schema_id)
+
     def get_schema(self, schema_id: str, user_id: str | None, **kwargs) -> dict[str, Any]:
         return self._service.get_schema(schema_id, user_id, **kwargs)
 

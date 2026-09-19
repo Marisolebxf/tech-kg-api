@@ -50,6 +50,9 @@ import { useToast } from '../../composables/use-toast'
 import {
   buildRequiredPropertyRows,
   emptyPropertyRow,
+  FIXED_STRING_MAX,
+  FIXED_STRING_MAX_INPUT_CHARS,
+  FIXED_STRING_MIN,
   PROPERTY_TYPES,
   sanitizeLengthInput,
   validateFixedLength,
@@ -659,6 +662,30 @@ function onPropertyLengthInput(event: Event) {
   input.value = propertyForm.value.length
 }
 
+// ---- 输入框达上限提示：maxlength 只会静默吞掉超长输入，达上限时红边高亮 + 可见文案 ----
+
+/** 值长度已达上限（配合输入框 maxlength 硬截断，达上限后无法继续输入）。 */
+function atLimit(value: string, max: number): boolean {
+  return value.length >= max
+}
+
+/** 新建弹窗属性列表：达上限字段的汇总提示（紧凑行内放不下逐行文案，红边标出具体输入框；各自带上限数值）。 */
+const propListLimitNote = computed(() => {
+  const fields: string[] = []
+  createForm.value.properties.forEach((row, index) => {
+    if (!row.locked && row.name.length >= PROP_NAME_RULE.max) fields.push(`第 ${index + 1} 行属性名已达 ${PROP_NAME_RULE.max} 字上限`)
+  })
+  return fields.length ? `${fields.join('；')}，无法继续输入` : ''
+})
+
+/** 属性管理弹窗「新增属性」表单：同上汇总提示。 */
+const propertyAddLimitNote = computed(() => {
+  if (propertyForm.value.name.length >= PROP_NAME_RULE.max) {
+    return `属性名已达 ${PROP_NAME_RULE.max} 字上限，无法继续输入`
+  }
+  return ''
+})
+
 /** 首个 fixed_string 长度校验错误文案（用于 toast）；全部合法返回 null */
 function firstFixedLengthError(rows: PropertyRow[]): string | null {
   for (const [index, row] of rows.entries()) {
@@ -1112,9 +1139,12 @@ function togglePropertyDetail(schemaId: string): void {
           <button v-for="tab in tabs" :key="tab" type="button" :class="{ active: activeTab === tab }" @click="switchTab(tab)">{{ tab }}</button>
         </div>
         <div class="schema-toolbar__actions">
-          <a-input v-model="keyword" class="schema-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" :aria-label="`搜索${activeTab}`" :placeholder="`搜索${activeTab}`" @input="onKeywordInput">
-            <template #prefix><IconSearch /></template>
-          </a-input>
+          <span class="limit-field">
+            <a-input v-model="keyword" class="schema-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" :aria-label="`搜索${activeTab}`" :placeholder="`搜索${activeTab}`" @input="onKeywordInput">
+              <template #prefix><IconSearch /></template>
+            </a-input>
+            <span v-if="atLimit(keyword, SEARCH_KEYWORD_MAX_LENGTH)" class="limit-field__hint">已达 {{ SEARCH_KEYWORD_MAX_LENGTH }} 字上限，无法继续输入</span>
+          </span>
           <button class="primary" type="button" @click="openCreate">＋ 增加</button>
         </div>
       </nav>
@@ -1147,11 +1177,13 @@ function togglePropertyDetail(schemaId: string): void {
           <header><h2>新增{{ activeTab }}</h2><button type="button" @click="modalOpen = false">×</button></header>
           <a-form ref="createFormRef" :model="createForm" :rules="createFormRules" class="schema-modal__body schema-create-body" layout="vertical">
             <div class="create-row">
-              <a-form-item class="create-field" field="name" :label="isRelationTab() ? '关系英文名' : '实体名'" required>
-                <input aria-label="name" v-model="createForm.name" class="create-text-input" :maxlength="SCHEMA_ENTITY_NAME_RULE.max" :placeholder="isRelationTab() ? 'USES_TECHNOLOGY' : 'Gadget'" />
+              <a-form-item class="create-field create-field--limit-note" field="name" :label="isRelationTab() ? '关系英文名' : '实体名'" required>
+                <input aria-label="name" v-model="createForm.name" class="create-text-input" :class="{ 'is-at-limit': atLimit(createForm.name, SCHEMA_ENTITY_NAME_RULE.max) }" :maxlength="SCHEMA_ENTITY_NAME_RULE.max" :placeholder="isRelationTab() ? 'USES_TECHNOLOGY' : 'Gadget'" />
+                <p v-if="atLimit(createForm.name, SCHEMA_ENTITY_NAME_RULE.max)" class="limit-field-note">已达 {{ SCHEMA_ENTITY_NAME_RULE.max }} 字上限，无法继续输入</p>
               </a-form-item>
-              <a-form-item class="create-field" field="label" label="中文名" required>
-                <input aria-label="如：技术" v-model="createForm.label" class="create-text-input" :maxlength="SCHEMA_LABEL_RULE.max" placeholder="如：技术" />
+              <a-form-item class="create-field create-field--limit-note" field="label" label="中文名" required>
+                <input aria-label="如：技术" v-model="createForm.label" class="create-text-input" :class="{ 'is-at-limit': atLimit(createForm.label, SCHEMA_LABEL_RULE.max) }" :maxlength="SCHEMA_LABEL_RULE.max" placeholder="如：技术" />
+                <p v-if="atLimit(createForm.label, SCHEMA_LABEL_RULE.max)" class="limit-field-note">已达 {{ SCHEMA_LABEL_RULE.max }} 字上限，无法继续输入</p>
               </a-form-item>
             </div>
 
@@ -1170,8 +1202,9 @@ function togglePropertyDetail(schemaId: string): void {
               </a-form-item>
             </div>
 
-            <a-form-item class="create-field create-field--full" field="description" label="说明">
+            <a-form-item class="create-field create-field--full create-field--limit-note" field="description" label="说明">
               <a-textarea v-model="createForm.description" class="schema-description-textarea" :max-length="SCHEMA_DESC_RULE.max" show-word-limit :auto-size="{ minRows: 3, maxRows: 5 }" />
+              <p v-if="atLimit(createForm.description, SCHEMA_DESC_RULE.max)" class="limit-field-note">已达 {{ SCHEMA_DESC_RULE.max }} 字上限，无法继续输入</p>
             </a-form-item>
             <a-form-item class="create-props" field="properties" required label-component="div">
               <template #label>
@@ -1181,14 +1214,13 @@ function togglePropertyDetail(schemaId: string): void {
                 </div>
               </template>
               <div class="create-prop-list">
+                <template v-for="(p, i) in createForm.properties" :key="i">
                 <div
-                v-for="(p, i) in createForm.properties"
-                :key="i"
                 class="create-prop-row"
                 :class="{ 'create-prop-row--has-length': p.dataType === 'fixed_string', 'create-prop-row--locked': p.locked }"
               >
                 <a-form-item class="prop-name-field" :field="`properties.${i}.name`" :rules="[{ required: true, message: '请输入属性名称' }, { validator: validatePropName }]" hide-label>
-                  <input aria-label="属性名" v-model="p.name" :maxlength="PROP_NAME_RULE.max" placeholder="属性名" class="prop-name" :disabled="p.locked" :title="p.locked ? '公共必选属性，不可修改' : undefined" />
+                  <input aria-label="属性名" v-model="p.name" :maxlength="PROP_NAME_RULE.max" placeholder="属性名" class="prop-name" :class="{ 'is-at-limit': !p.locked && atLimit(p.name, PROP_NAME_RULE.max) }" :disabled="p.locked" :title="p.locked ? '公共必选属性，不可修改' : undefined" />
                 </a-form-item>
                 <template v-if="p.locked">
                   <span class="prop-locked-type">string</span>
@@ -1201,12 +1233,15 @@ function togglePropertyDetail(schemaId: string): void {
                   <a-select v-model="p.dataType" class="schema-select prop-type" popup-container=".schema-create-modal" :scrollbar="false">
                     <a-option v-for="t in PROPERTY_TYPES" :key="t" :value="t">{{ t }}</a-option>
                   </a-select>
-                  <input aria-label="1~1024" v-if="p.dataType === 'fixed_string'" :value="p.length" type="text" inputmode="numeric" maxlength="64" class="prop-len" :class="{ 'prop-len--invalid': fixedLengthInvalid(p) }" :title="validateFixedLength(p.length) || undefined" placeholder="1~1024" @input="onLengthInput(p, $event)" />
+                  <input aria-label="1~1024" v-if="p.dataType === 'fixed_string'" :value="p.length" type="text" inputmode="numeric" :maxlength="FIXED_STRING_MAX_INPUT_CHARS" class="prop-len" :class="{ 'prop-len--invalid': fixedLengthInvalid(p) }" :title="validateFixedLength(p.length) || undefined" placeholder="1~1024" @input="onLengthInput(p, $event)" />
                   <a-checkbox v-model="p.required" class="prop-required">必填</a-checkbox>
                   <button type="button" class="prop-remove" @click="removeProperty(i)" title="删除">×</button>
                 </template>
                 </div>
+                <p v-if="p.dataType === 'fixed_string'" class="prop-length-live" :class="{ 'prop-length-live--invalid': fixedLengthInvalid(p) }">长度：当前 {{ p.length || '—' }}，可定义 {{ FIXED_STRING_MIN }}~{{ FIXED_STRING_MAX }}</p>
+                </template>
               </div>
+              <p v-if="propListLimitNote" class="limit-field-note">{{ propListLimitNote }}</p>
             </a-form-item>
 
             <div class="create-sources">
@@ -1295,14 +1330,16 @@ function togglePropertyDetail(schemaId: string): void {
             <div class="property-section">
               <div class="property-section__head"><strong>新增属性</strong><span>新增后在图库执行 ALTER ADD（可空列）</span></div>
               <div class="property-add-form">
-                <input aria-label="属性名（字母/数字/下划线）" v-model="propertyForm.name" :maxlength="PROP_NAME_RULE.max" placeholder="属性名（字母/数字/下划线）" class="property-add-form__name" />
+                <input aria-label="属性名（字母/数字/下划线）" v-model="propertyForm.name" :maxlength="PROP_NAME_RULE.max" placeholder="属性名（字母/数字/下划线）" class="property-add-form__name" :class="{ 'is-at-limit': atLimit(propertyForm.name, PROP_NAME_RULE.max) }" />
                 <a-select v-model="propertyForm.dataType" class="property-add-form__type" popup-container=".property-modal" :scrollbar="false">
                   <a-option v-for="t in PROPERTY_TYPES" :key="t" :value="t">{{ t }}</a-option>
                 </a-select>
-                <input aria-label="1~1024" v-if="propertyForm.dataType === 'fixed_string'" :value="propertyForm.length" type="text" inputmode="numeric" maxlength="64" class="property-add-form__len" :class="{ 'property-add-form__len--invalid': propertyLengthInvalid }" :title="propertyLengthError || undefined" placeholder="1~1024" @input="onPropertyLengthInput" />
+                <input aria-label="1~1024" v-if="propertyForm.dataType === 'fixed_string'" :value="propertyForm.length" type="text" inputmode="numeric" :maxlength="FIXED_STRING_MAX_INPUT_CHARS" class="property-add-form__len" :class="{ 'property-add-form__len--invalid': propertyLengthInvalid }" :title="propertyLengthError || undefined" placeholder="1~1024" @input="onPropertyLengthInput" />
                 <label class="property-add-form__required"><input aria-label="required" v-model="propertyForm.required" type="checkbox" />必填</label>
                 <button type="button" class="primary" :disabled="propertySaving" @click="submitAddProperty">{{ propertySaving ? '新增中...' : '＋ 新增属性' }}</button>
               </div>
+              <p v-if="propertyForm.dataType === 'fixed_string'" class="prop-length-live" :class="{ 'prop-length-live--invalid': propertyLengthInvalid }">长度：当前 {{ propertyForm.length || '—' }}，可定义 {{ FIXED_STRING_MIN }}~{{ FIXED_STRING_MAX }}</p>
+              <p v-if="propertyAddLimitNote" class="limit-field-note">{{ propertyAddLimitNote }}</p>
             </div>
           </div>
           <footer>
@@ -1372,11 +1409,13 @@ function togglePropertyDetail(schemaId: string): void {
           <header><h2>请更新脚本后重跑</h2><button type="button" @click="propertyScriptGuideOpen = false">×</button></header>
           <div class="schema-modal__body">
             <p class="schema-delete-text">
-              <template v-if="propertyChangeKind === 'add'">属性已新增并执行图 DDL，但当前脚本尚未覆盖新属性——不更新脚本直接重跑，新属性不会写入图数据。</template>
-              <template v-else>属性已删除（图库列及数据已物理清除），旧脚本若仍输出该属性，重跑会写图失败。</template>
-              请先更新脚本，再到「来源表」触发抽取或回填历史数据。
+              <template v-if="propertyChangeKind === 'add'">属性已新增并在图空间执行 DDL（新列已存在，当前为空）。脚本不输出新属性，新列就永远是 NULL——请更新脚本补上取值逻辑。</template>
+              <template v-else>属性已删除（图库列及数据已物理清除）。旧脚本若仍输出该属性，写图时会自动剔除该列并记告警——请更新脚本保持映射一致。</template>
             </p>
-            <p class="schema-delete-note">完成前列表行会持续提示：更新脚本前显示「落后 N 版」，更新后显示「待重跑」直至重跑结束。如需为历史数据补齐新属性，请在「来源表 → 回填历史数据」全量重跑。</p>
+            <p class="schema-delete-note">
+              <template v-if="propertyChangeKind === 'add'">更新脚本后到「来源表」触发抽取写入增量数据，历史数据需「回填历史数据」全量重跑补齐。完成前列表行会持续提示：更新脚本前显示「落后 N 版」，更新后显示「待重跑」直至重跑结束。</template>
+              <template v-else>更新脚本后建议触发一次抽取验证新脚本正常出数（历史数据无需回填，该列已随删除物理清除）。完成前列表行同样会持续提示。</template>
+            </p>
           </div>
           <footer>
             <button type="button" @click="propertyScriptGuideOpen = false">稍后处理</button>
@@ -1514,6 +1553,20 @@ function togglePropertyDetail(schemaId: string): void {
 .schema-toolbar__actions>.primary{flex-shrink:0;white-space:nowrap}
 .schema-tabs>.schema-toolbar__actions{min-width:0;margin-left:auto}
 .prop-len--invalid,.property-add-form__len--invalid{border-color:#e5484d!important;background:#fff3f3!important}
+/* 长度达上限：与校验失败同款红边高亮（可见文案见 .limit-field-note / .limit-field__hint） */
+.is-at-limit{border-color:#e5484d!important;background:#fff3f3!important}
+/* 达上限提示：表单字段为输入框下红字一行；搜索框无下方空间，浮层 pill 定位到输入框下沿 */
+.limit-field-note{margin:4px 0 0;color:#b42318;font-size:12px;line-height:20px}
+.limit-field{position:relative;display:flex;flex:1 1 180px;min-width:0;max-width:280px}
+.limit-field .schema-search-input.arco-input-wrapper{flex:1 1 auto;max-width:none;width:auto}
+.limit-field__hint{position:absolute;top:calc(100% + 4px);right:0;z-index:30;white-space:nowrap;padding:2px 8px;border-radius:4px;background:#fee4e2;color:#b42318;font-size:12px;line-height:20px;box-shadow:0 2px 8px rgba(50,64,93,.12)}
+/* fixed_string 长度实时提示：随输入显示当前定义值（1~1024 取自常量，不写死）；超范围转红 */
+.prop-length-live{margin:0;color:#86909c;font-size:12px;line-height:20px}
+.prop-length-live--invalid{color:#b42318}
+.create-prop-list .prop-length-live{grid-column:1/-1;margin-top:-8px}
+/* 表单项内容改纵向排布：输入框与达上限提示行上下排（默认 flex 会把提示挤到输入框右侧） */
+.create-field--limit-note :deep(.arco-form-item-content){display:block}
+.create-props :deep(.arco-form-item-content){display:block}
 .schema-toolbar .primary{height:32px;padding:0 14px;border:0;border-radius:6px;background:#165dff;color:#fff;font-size:13px;cursor:pointer}
 .schema-toolbar .primary:hover{background:#0e4ed8}
 .schema-actions{white-space:nowrap}

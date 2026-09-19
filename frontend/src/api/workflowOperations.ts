@@ -186,11 +186,13 @@ export const getProductionReviewAuditLogs = (id: string) =>
 export const deleteProductionReview = (id: string) =>
   unwrap(http.delete(`/v1/manual-reviews/production/${id}`)) as Promise<{ id: string; deleted: boolean }>
 
-/** T_EXTRACT_FAIL 抽取失败记录重跑：所选 case 按 schema 合并为新执行（triggerSource=RERUN）。 */
+/** T_EXTRACT_FAIL 抽取失败记录重跑：所选 case 按 schema 合并为新执行（triggerSource=RERUN）。
+ *  skipped = 校验失败被跳过的 schema 组（已删/不在当前控制面/缺来源绑定），不阻断其余重跑。 */
 export const rerunExtractFailures = (data: { caseIds?: string[]; executionId?: string; batchSize?: number }) =>
   unwrap(http.post('/v1/manual-reviews/production/rerun-extract-failures', data)) as Promise<{
     executions: Array<{ executionId: string; schemaId: string; records: number; cases: number }>
     cases: number
+    skipped: Array<{ schemaId: string; schemaKey?: string | null; cases: number; reason: string }>
   }>
 
 /** case 事件流水（audit-logs）：创建/领取/重跑/状态变迁，含操作人与时间。 */

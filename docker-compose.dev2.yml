@@ -22,6 +22,12 @@ services:
         PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
     image: tech-kg-api-dev2-api:latest
     container_name: tech-kg-api-dev2
+    # keep-alive 75s 必须大于 nginx 上游连接池 keepalive_timeout(60s)：
+    # 让 nginx 侧先关空闲连接，避免复用已被 uvicorn 关闭的连接产生零星 502。
+    # --workers 8：压测实测 4 worker 时 CPU 406-450%（GIL 下每缓存命中请求
+    # ~5-8ms CPU，吞吐封顶 ~900rps）；16 核 × 8 worker ≈ 理论 1500+rps，
+    # 内存代价约 270MB/worker
+    command: [".venv/bin/uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "8", "--timeout-keep-alive", "75"]
     ports:
       - "8002:8000"
     env_file:
@@ -64,6 +70,11 @@ services:
       WORKFLOW_MYSQL_DATABASE: techkg_control
       WORKFLOW_MYSQL_USERNAME: root
       WORKFLOW_MYSQL_PASSWORD: temporal
+      # 压测调优（2026-09-19）：默认 5+10 的池在 500 并发下打光（pool_timeout 30s 恰好
+      # 撞上 JMeter 30s 读超时，用例 02 全军覆没）。MySQL max_connections=151，运行期
+      # 已 SET GLOBAL 400 兜底；4 worker × (20+25) 峰值 180 < 400
+      WORKFLOW_MYSQL_POOL_SIZE: "20"
+      WORKFLOW_MYSQL_MAX_OVERFLOW: "25"
       WORKFLOW_DEMO_DATA_ENABLED: ${WORKFLOW_DEMO_DATA_ENABLED:-false}
       # 开发期关闭网关签名校验，未传 X-User-Id 时返回 dev-anonymous 身份。
       # 生产保持 REVIEW_IDENTITY_REQUIRE_SIGNATURE=true 且配 REVIEW_IDENTITY_HMAC_SECRET。

@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import time
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -32,6 +34,34 @@ SCHEDULE_NOT_FOUND = "Schedule 不存在"
 WORKFLOW_DEFINITION_NOT_FOUND = "工作流定义不存在"
 
 router = APIRouter(prefix="/workflow-system", tags=["workflow-system"])
+# 平台总览「图谱构建」卡片对普通用户只读开放：仅任务列表（按 owner 收敛），
+# 其余工作流接口仍走管理端路由组。挂载见 biz/router/register.py 的 protected 组。
+readonly_router = APIRouter(prefix="/workflow-system", tags=["workflow-system-readonly"])
+# 任务列表/详情/执行历史是读多写少的重查询（列表还会惰性向 Temporal 复核），
+# 做短 TTL 响应缓存扛读并发；任务创建/触发/删除/启停时整体失效。
+# TTL 环境变量 WORKFLOW_JOBS_CACHE_SECONDS 可调，0=关闭（测试用）。
+_JOBS_PAYLOAD_CACHE_SECONDS = float(os.getenv("WORKFLOW_JOBS_CACHE_SECONDS", "15"))
+_jobs_payload_cache: dict[str, tuple[float, str]] = {}
+
+
+def _jobs_cache_get(key: str) -> str | None:
+    entry = _jobs_payload_cache.get(key)
+    if entry and entry[0] > time.monotonic():
+        return entry[1]
+    return None
+
+
+def _jobs_cache_put(key: str, payload: str) -> None:
+    if len(_jobs_payload_cache) > 1024:
+        now = time.monotonic()
+        for stale in [k for k, v in _jobs_payload_cache.items() if v[0] <= now]:
+            _jobs_payload_cache.pop(stale, None)
+    _jobs_payload_cache[key] = (time.monotonic() + _JOBS_PAYLOAD_CACHE_SECONDS, payload)
+
+
+def _jobs_cache_clear() -> None:
+    _jobs_payload_cache.clear()
+
 service = workflow_operations_application.service
 job_service = workflow_job_application.service
 logger = logging.getLogger(__name__)
@@ -169,25 +199,36 @@ async def list_executions(
     definition_id: Annotated[str | None, Query(alias="definitionId")] = None,
     schedule_id: Annotated[str | None, Query(alias="scheduleId")] = None,
     trigger_source: Annotated[str | None, Query(alias="triggerSource")] = None,
-) -> ApiResponse:
+) -> Response:
     if trigger_source is not None and trigger_source not in ("MANUAL", "SCHEDULE", "RERUN"):
         raise HTTPException(status_code=422, detail="triggerSource 仅支持 MANUAL/SCHEDULE/RERUN")
-    return ApiResponse(
-        data=service.list_executions(
-            limit=limit,
-            definition_id=definition_id,
-            schedule_id=schedule_id,
-            trigger_source=trigger_source,
-        )
+    cache_key = f"executions:{limit}:{definition_id}:{schedule_id}:{trigger_source}"
+    cached = _jobs_cache_get(cache_key)
+    if cached is not None:
+        return Response(cached, media_type="application/json")
+    data = service.list_executions(
+        limit=limit,
+        definition_id=definition_id,
+        schedule_id=schedule_id,
+        trigger_source=trigger_source,
     )
+    payload = json.dumps({"code": 200, "success": True, "data": data, "msg": "success"}, ensure_ascii=False, default=str)
+    _jobs_cache_put(cache_key, payload)
+    return Response(payload, media_type="application/json")
 
 
 @router.get("/executions/{execution_id}", responses={404: {"description": "请求的资源不存在"}})
-async def get_execution(execution_id: str) -> ApiResponse:
+async def get_execution(execution_id: str) -> Response:
+    cache_key = f"execution:{execution_id}"
+    cached = _jobs_cache_get(cache_key)
+    if cached is not None:
+        return Response(cached, media_type="application/json")
     execution = await service.get_execution(execution_id)
     if execution is None:
         raise HTTPException(status_code=404, detail="工作流执行记录不存在")
-    return ApiResponse(data=execution)
+    payload = json.dumps({"code": 200, "success": True, "data": execution, "msg": "success"}, ensure_ascii=False, default=str)
+    _jobs_cache_put(cache_key, payload)
+    return Response(payload, media_type="application/json")
 
 
 @router.get("/schedules")
@@ -287,15 +328,28 @@ def _job_error(exc: WorkflowJobError) -> HTTPException:
     return HTTPException(status_code=400, detail=str(exc))
 
 
-@router.get("/jobs", response_model=ApiResponse)
+@router.get("/jobs")
 async def list_jobs(
     actor: CurrentActor,
     name: Annotated[str | None, Query(max_length=128)] = None,
     status: str | None = Query(None, pattern="^(启用|暂停)$"),
     task_type: Annotated[str | None, Query(alias="taskType")] = None,
-) -> ApiResponse:
+) -> Response:
+    cache_key = f"jobs:{actor.user_id}:{actor.is_admin}:{name}:{status}:{task_type}"
+    cached = _jobs_cache_get(cache_key)
+    if cached is not None:
+        return Response(cached, media_type="application/json")
     items = await job_service.list_jobs(actor, name=name, status=status, task_type=task_type)
-    return ApiResponse(data={"items": items, "total": len(items)})
+    payload = json.dumps(
+        {"code": 200, "success": True, "data": {"items": items, "total": len(items)}, "msg": "success"},
+        ensure_ascii=False,
+        default=str,
+    )
+    _jobs_cache_put(cache_key, payload)
+    return Response(payload, media_type="application/json")
+
+
+readonly_router.get("/jobs", response_model=ApiResponse)(list_jobs)
 
 
 # SSE 心跳周期须小于 nginx proxy_read_timeout（默认 60s），防代理掐空闲连接
@@ -335,6 +389,7 @@ async def stream_job_events() -> StreamingResponse:
 
 @router.post("/jobs", response_model=ApiResponse)
 async def create_job(request: JobCreateRequest, actor: CurrentActor) -> ApiResponse:
+    _jobs_cache_clear()
     _validate_resource_selectors(actor, request.model_dump())
     try:
         job = await job_service.create_job(actor, request.model_dump(by_alias=True))
@@ -345,17 +400,24 @@ async def create_job(request: JobCreateRequest, actor: CurrentActor) -> ApiRespo
     return ApiResponse(data=job, msg="任务已创建")
 
 
-@router.get("/jobs/{job_id}", response_model=ApiResponse)
-async def get_job(job_id: str, actor: CurrentActor) -> ApiResponse:
+@router.get("/jobs/{job_id}")
+async def get_job(job_id: str, actor: CurrentActor) -> Response:
+    cache_key = f"job:{actor.user_id}:{actor.is_admin}:{job_id}"
+    cached = _jobs_cache_get(cache_key)
+    if cached is not None:
+        return Response(cached, media_type="application/json")
     try:
         detail = await job_service.get_job_detail(actor, job_id)
     except WorkflowJobError as exc:
         raise _job_error(exc) from exc
-    return ApiResponse(data=detail)
+    payload = json.dumps({"code": 200, "success": True, "data": detail, "msg": "success"}, ensure_ascii=False, default=str)
+    _jobs_cache_put(cache_key, payload)
+    return Response(payload, media_type="application/json")
 
 
 @router.post("/jobs/{job_id}/trigger", response_model=ApiResponse)
 async def trigger_job(job_id: str, actor: CurrentActor) -> ApiResponse:
+    _jobs_cache_clear()
     try:
         execution = await job_service.trigger_job(actor, job_id)
     except WorkflowJobError as exc:
@@ -367,6 +429,7 @@ async def trigger_job(job_id: str, actor: CurrentActor) -> ApiResponse:
 async def update_job_state(
     job_id: str, request: ScheduleStateRequest, actor: CurrentActor
 ) -> ApiResponse:
+    _jobs_cache_clear()
     try:
         job = await job_service.set_job_state(actor, job_id, request.active)
     except WorkflowJobError as exc:
@@ -386,6 +449,7 @@ async def update_job(job_id: str, request: JobUpdateRequest, actor: CurrentActor
 
 @router.delete("/jobs/{job_id}", response_model=ApiResponse)
 async def delete_job(job_id: str, actor: CurrentActor) -> ApiResponse:
+    _jobs_cache_clear()
     try:
         ok = await job_service.delete_job(actor, job_id)
     except WorkflowJobError as exc:

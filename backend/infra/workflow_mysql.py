@@ -22,7 +22,8 @@ from infra.mysql import MySQLClient
 _WORKFLOW_DEFAULTS = {
     "host": "temporal-mysql",
     "database": "techkg_control",
-    "password": "temporal",
+    # 密码不设源码回退值（Sonar S2068）：必须由 WORKFLOW_MYSQL_PASSWORD 提供，
+    # 缺失时在首次建连处显式报错（见 WorkflowMySQLClient.url）。
     "pool_size": 5,
     "max_overflow": 10,
 }

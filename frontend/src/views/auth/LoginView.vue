@@ -9,7 +9,7 @@ import { safeLoginTarget } from "../../router/loginTarget";
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
-const submitting = ref<"business" | "admin" | "">("");
+const submitting = ref(false);
 function normalizeLoginFeedback(value: unknown): string {
   if (typeof value !== "string") return "";
   if (/request failed|network error|status code 5\d\d|failed to fetch/i.test(value)) {
@@ -36,12 +36,12 @@ function errorMessage(error: unknown): string {
   return "登录服务暂时不可用，请确认网络和后端服务后重试";
 }
 
-async function login(portal: "business" | "admin") {
+async function login() {
   if (submitting.value || authStore.loading) return;
-  submitting.value = portal;
+  submitting.value = true;
   feedback.value = "";
-  const defaultTarget = portal === "admin" ? "/admin/reviews" : "/overview";
-  const target = redirectPath.value && (portal === "admin") === redirectPath.value.startsWith("/admin") ? redirectPath.value : defaultTarget;
+  // 旧书签可能指向已下线的 /admin 管理端路径，此时回退到平台总览
+  const target = redirectPath.value && !redirectPath.value.startsWith("/admin") ? redirectPath.value : "/overview";
   try {
     if (await authStore.loadCurrentUser(true)) {
       await router.replace(target);
@@ -51,12 +51,12 @@ async function login(portal: "business" | "admin") {
   } catch (error) {
     feedback.value = errorMessage(error);
   } finally {
-    submitting.value = "";
+    submitting.value = false;
   }
 }
 
 function resetSubmitting() {
-  submitting.value = "";
+  submitting.value = false;
 }
 
 watch(() => route.query.error, (error) => {
@@ -114,11 +114,8 @@ onBeforeUnmount(() => window.removeEventListener("pageshow", resetSubmitting));
           {{ feedback }}
         </p>
         <div class="login-portals">
-          <button type="button" :disabled="Boolean(submitting) || authStore.loading" @click="login('business')">
-            <strong>用户端</strong><b>{{ submitting === 'business' ? '跳转中…' : '进入 →' }}</b>
-          </button>
-          <button class="admin" type="button" :disabled="Boolean(submitting) || authStore.loading" @click="login('admin')">
-            <strong>管理端</strong><b>{{ submitting === 'admin' ? '跳转中…' : '进入 →' }}</b>
+          <button type="button" :disabled="submitting || authStore.loading" @click="login">
+            <strong>进入平台</strong><b>{{ submitting ? '跳转中…' : '进入 →' }}</b>
           </button>
         </div>
         <small>登录即表示你已获得访问本系统的组织授权。</small>
@@ -131,7 +128,13 @@ onBeforeUnmount(() => window.removeEventListener("pageshow", resetSubmitting));
 .login-page {
   display: grid;
   grid-template-columns: minmax(460px, 1.2fr) minmax(420px, 0.8fr);
-  min-height: 100vh;
+  /* The app root locks document scrolling; this standalone page must own it. */
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   color: var(--gkx-text-primary);
   background: var(--gkx-bg-page);
 }

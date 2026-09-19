@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import json
 import logging
 import os
 import re
+import threading
+import time
 from collections.abc import Iterator
 from datetime import date, datetime
 from pathlib import Path
@@ -40,6 +43,18 @@ OWN_SCHEMA_SCRIPT_REQUIRED = "只能更换自己创建的 Schema 脚本"
 SYSTEM_SCHEMA_ADMIN_REQUIRED = "只有 Schema 管理员可以更换系统 Schema 脚本"
 
 logger = logging.getLogger(__name__)
+
+
+# 目录页（pageSize=100, includeDetails=true）会对每个 schema 探测一次脚本对象
+# 是否存在于 S3——500 并发下这就是数万次 RustFS 调用（2026-09-19 压测用例 02
+# 吞吐只剩 64rps 的根因）。结果做进程内 TTL 缓存；TTL 可用环境变量调 0 关闭
+# （集成测试置 0 保持"探测即实时"语义），生产默认 30s（信息性标记，触发下载
+# 另有实时兜底拦截，见 SchemaManagementService._script_object_available）。
+_SCRIPT_OBJECT_CACHE: dict[str, tuple[float, bool]] = {}
+_SCRIPT_OBJECT_CACHE_TTL_SECONDS = float(
+    os.getenv("SCHEMA_SCRIPT_AVAILABLE_CACHE_TTL_SECONDS", "30")
+)
+_SCRIPT_OBJECT_CACHE_MAX_KEYS = 4096
 
 
 class SchemaManagementError(Exception):
@@ -278,10 +293,27 @@ def _stale_behind(property_revision: int | None, captured_revision: int | None) 
 
 
 class SchemaManagementService:
+    # 目录列表结果缓存：序列化 100 行约 100-190ms 纯 Python（GIL 下 4 worker
+    # 天花板 ~90rps，2026-09-19 压测用例 02 不达标根因）。键不含用户身份——
+    # 缓存条目不带 canDelete/canManageProperties，返回时按当前用户叠加。
+    # 任何目录变更（见各变更方法里的 _invalidate_list_cache）即整体失效。
+    # 注意必须挂类级：SchemaManagementService 每请求实例化，实例属性缓存
+    # 会在请求结束时随实例丢弃，命中率恒为 0（2026-09-19 实测踩坑）。
+    _list_cache_seconds = float(os.getenv("SCHEMA_LIST_CACHE_SECONDS", "60"))
+    _list_cache: dict[tuple, tuple[float, dict]] = {}
+    _catalog_cache: dict[str, tuple[float, str]] = {}
+    _catalog_cache_lock = threading.Lock()
+    _list_cache_lock = threading.Lock()
+
     def __init__(self, session: Session, storage: S3Storage | None = None) -> None:
         self._session = session
         self._dao = SchemaManagementDAO(session)
         self._storage = storage or get_schema_s3_storage()
+
+    @classmethod
+    def _invalidate_list_cache(cls) -> None:
+        cls._list_cache.clear()
+        cls._catalog_cache.clear()
 
     def overview(self, graph_space: str | None = None) -> dict[str, Any]:
         stats = self._dao.stats(graph_space)
@@ -313,23 +345,166 @@ class SchemaManagementService:
         graph_space: str | None = None,
     ) -> dict[str, Any]:
         user_id = user_id.strip() if user_id else None
-        items, total = self._dao.list(
-            kind=kind, keyword=keyword, page=page, page_size=page_size, graph_space=graph_space
-        )
-        return {
-            "items": [
-                self._serialize(
-                    item,
-                    user_id=user_id,
-                    detail=include_details,
-                    is_platform_admin=is_platform_admin,
+        key = (kind, keyword, page, page_size, include_details, graph_space, is_platform_admin)
+        now = time.monotonic()
+        # single-flight：TTL 到期瞬间的并发请求只放一个去重算（重算 ~190ms 纯
+        # Python，GIL 串行下放任惊群会把 worker 锁死数秒），其余等锁后读新缓存
+        with self._list_cache_lock:
+            cached = self._list_cache.get(key)
+            if cached is None or cached[0] <= now:
+                items_raw, total = self._dao.list(
+                    kind=kind,
+                    keyword=keyword,
+                    page=page,
+                    page_size=page_size,
+                    graph_space=graph_space,
                 )
-                for item in items
-            ],
-            "total": total,
-            "page": page,
-            "pageSize": page_size,
+                base_items = [
+                    self._serialize(
+                        item, user_id=None, detail=include_details, is_platform_admin=False
+                    )
+                    for item in items_raw
+                ]
+                cached = (now + self._list_cache_seconds, {"items": base_items, "total": total})
+                self._list_cache[key] = cached
+        base = cached[1]
+        items = [
+            {
+                **item,
+                "canDelete": bool(
+                    user_id
+                    and not item["isSystem"]
+                    and (is_platform_admin or item["createdBy"] == user_id)
+                ),
+                "canManageProperties": bool(
+                    is_platform_admin
+                    or (
+                        not item["isSystem"]
+                        and user_id is not None
+                        and item["createdBy"] == user_id
+                    )
+                ),
+            }
+            for item in base["items"]
+        ]
+        return {"items": items, "total": base["total"], "page": page, "pageSize": page_size}
+
+    def list_schemas_payload(self, **kwargs: Any) -> str:
+        """list_schemas 的 JSON 直返版本：缓存命中路径整条链路零 pydantic/零
+        jsonable_encoder，压测/高频浏览下绕开 GIL 序列化瓶颈。返回体即
+        ApiResponse 信封（code/success/data/msg），前端 unwrap 语义不变。
+        """
+        data = self.list_schemas(**kwargs)
+        return json.dumps(
+            {"code": 200, "success": True, "data": data, "msg": ""},
+            ensure_ascii=False,
+            default=str,
+        )
+
+    @classmethod
+    def _catalog_get(cls, key: str):
+        entry = cls._catalog_cache.get(key)
+        if entry and entry[0] > time.monotonic():
+            return entry[1]
+        return None
+
+    @classmethod
+    def _catalog_put(cls, key: str, payload: str, ttl_seconds: float) -> None:
+        cls._catalog_cache[key] = (time.monotonic() + ttl_seconds, payload)
+
+    @staticmethod
+    def _overlay_flags(item: dict[str, Any], user_id: str | None, is_platform_admin: bool) -> dict[str, Any]:
+        return {
+            **item,
+            "canDelete": bool(
+                user_id
+                and not item["isSystem"]
+                and (is_platform_admin or item["createdBy"] == user_id)
+            ),
+            "canManageProperties": bool(
+                is_platform_admin
+                or (
+                    not item["isSystem"]
+                    and user_id is not None
+                    and item["createdBy"] == user_id
+                )
+            ),
         }
+
+    def overview_payload(self, graph_space: str | None = None) -> str:
+        """Schema 概览：60s 结果缓存（变更时整体失效），JSON 直返。"""
+        key = f"overview:{graph_space}"
+        with self._catalog_cache_lock:
+            payload = self._catalog_get(key)
+            if payload is None:
+                payload = json.dumps(
+                    {"code": 200, "success": True, "data": self.overview(graph_space), "msg": ""},
+                    ensure_ascii=False,
+                    default=str,
+                )
+                self._catalog_put(key, payload, self._list_cache_seconds)
+        return payload
+
+    def topology_payload(self, user_id: str | None, *, is_platform_admin: bool, graph_space: str | None) -> str:
+        """拓扑图数据：节点/边按目录序列化（缓存不含用户标记，返回时叠加）。"""
+        key = f"topology:{graph_space}:{is_platform_admin}"
+        with self._catalog_cache_lock:
+            payload = self._catalog_get(key)
+            if payload is None:
+                data = self.topology(
+                    None,
+                    is_platform_admin=False,
+                    graph_space=graph_space,
+                )
+                payload = json.dumps(
+                    {"code": 200, "success": True, "data": data, "msg": ""},
+                    ensure_ascii=False,
+                    default=str,
+                )
+                self._catalog_put(key, payload, self._list_cache_seconds)
+        data = json.loads(payload)["data"]
+        for node in data["nodes"]:
+            node.update(self._overlay_flags(node, user_id, is_platform_admin))
+        for edge in data["edges"]:
+            edge.update(self._overlay_flags(edge, user_id, is_platform_admin))
+        return json.dumps(
+            {"code": 200, "success": True, "data": data, "msg": ""},
+            ensure_ascii=False,
+            default=str,
+        )
+
+    def get_schema_payload(self, schema_id: str, user_id: str | None, *, is_platform_admin: bool) -> str:
+        key = f"detail:{schema_id}:{is_platform_admin}"
+        with self._catalog_cache_lock:
+            base = self._catalog_get(key)
+            if base is None:
+                definition = self._require_schema(schema_id)
+                base = self._serialize(
+                    definition,
+                    user_id=None,
+                    detail=True,
+                    is_platform_admin=False,
+                )
+                self._catalog_put(key, base, self._list_cache_seconds)
+        item = self._overlay_flags(base, user_id, is_platform_admin)
+        return json.dumps(
+            {"code": 200, "success": True, "data": item, "msg": ""},
+            ensure_ascii=False,
+            default=str,
+        )
+
+    def get_script_content_payload(self, schema_id: str) -> str:
+        key = f"script_content:{schema_id}"
+        with self._catalog_cache_lock:
+            payload = self._catalog_get(key)
+            if payload is None:
+                payload = json.dumps(
+                    {"code": 200, "success": True, "data": self.get_script_content(schema_id), "msg": ""},
+                    ensure_ascii=False,
+                    default=str,
+                )
+                self._catalog_put(key, payload, self._list_cache_seconds)
+        return payload
 
     def get_schema(
         self,
@@ -388,6 +563,7 @@ class SchemaManagementService:
         payload: dict[str, Any],
         user_id: str,
     ) -> dict[str, Any]:
+        self._invalidate_list_cache()
         return self._create(kind="entity", payload=payload, user_id=user_id)
 
     def create_relation(
@@ -396,6 +572,7 @@ class SchemaManagementService:
         payload: dict[str, Any],
         user_id: str,
     ) -> dict[str, Any]:
+        self._invalidate_list_cache()
         source_id = payload.get("source_schema_id")
         target_id = payload.get("target_schema_id")
         source = self._dao.get_entity(source_id) if source_id else None
@@ -429,6 +606,7 @@ class SchemaManagementService:
         script_data: bytes,
         is_platform_admin: bool = False,
     ) -> dict[str, Any]:
+        self._invalidate_list_cache()
         user_id = user_id.strip()
         if not user_id or len(user_id) > 128:
             raise SchemaPermissionError("登录用户 ID 不能为空且不能超过 128 个字符")
@@ -1209,11 +1387,23 @@ class SchemaManagementService:
         worker 下载处失败）。探测异常按 True 处理：S3 抖动不应把可选
         Schema 清空，触发时 ensure_extract_script_ready 还有兜底拦截。
         """
+        key = f"{script.bucket}/{script.object_key}"
+        now = time.monotonic()
+        cached = _SCRIPT_OBJECT_CACHE.get(key)
+        if cached is not None and cached[0] > now:
+            return cached[1]
         try:
             # get_schema_s3_storage 为模块级单例，与实例 self._storage 同源
-            return get_schema_s3_storage().object_exists(script.bucket, script.object_key)
+            available = get_schema_s3_storage().object_exists(script.bucket, script.object_key)
         except Exception:  # noqa: BLE001
             return True
+        _SCRIPT_OBJECT_CACHE[key] = (now + _SCRIPT_OBJECT_CACHE_TTL_SECONDS, available)
+        if len(_SCRIPT_OBJECT_CACHE) > _SCRIPT_OBJECT_CACHE_MAX_KEYS:
+            for expired_key in [
+                k for k, v in _SCRIPT_OBJECT_CACHE.items() if v[0] <= now
+            ]:
+                _SCRIPT_OBJECT_CACHE.pop(expired_key, None)
+        return available
 
     @staticmethod
     def _serialize_script(

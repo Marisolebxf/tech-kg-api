@@ -408,4 +408,7 @@ async function submit() {
 .resource-hint{margin:0;color:#86909c;font-size:12px;line-height:20px}
 .schedule-preview strong{color:#004ecc;font-weight:600}
 .schedule-preview .cron-hint{color:#86909c}
+@media(max-width:600px){
+  .job-row,.job-row:has(> :nth-child(3)){grid-template-columns:minmax(0,1fr)}
+}
 </style>

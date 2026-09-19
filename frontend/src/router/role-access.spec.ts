@@ -33,18 +33,14 @@ vi.mock('../views/platform/GraphBuildView.vue', () => ({ default: {} }))
 vi.mock('../views/platform/EntityListView.vue', () => ({ default: {} }))
 vi.mock('../views/platform/GraphVisualizationView.vue', () => ({ default: {} }))
 vi.mock('../views/platform/ConfigurationManagementView.vue', () => ({ default: {} }))
-vi.mock('../views/admin/CorrectionCenterView.vue', () => ({ default: {} }))
-vi.mock('../views/admin/MemberManagementView.vue', () => ({ default: {} }))
 
 import { router } from './index'
 
-// 图谱查询（综合查询/实体列表）按产品决策并入管理端，仅管理员可见。
+// 图谱构建/人工审核等管理页仅管理员可见；平台总览与图谱查询对所有登录用户开放。
 const restrictedPaths = [
   '/schema', '/graph-build', '/graph-build/jobs/job-1', '/manual-review',
   '/manual-review/task/instance-1', '/configurations', '/task-detail/extract/task-1',
-  '/processing-instance/instance-1', '/admin/members', '/admin/reviews', '/admin/corrections',
-  '/admin/task-detail/extract/task-1', '/admin/processing-instance/instance-1',
-  '/graph-query', '/graph-query/entities', '/graph-query/visualization',
+  '/processing-instance/instance-1',
 ]
 const sharedPaths = [
   '/expert-direct', '/node-indirect',
@@ -72,9 +68,11 @@ describe('角色控制与默认入口', () => {
     expect(mocks.loadCurrentUser).toHaveBeenCalledWith(true)
   })
 
-  it.each(['/overview', '/'])('普通用户从 %s 落到专家直达并保留门户参数', async (path) => {
+  it.each(['/overview', '/'])('普通用户可进入平台总览并保留门户参数', async (path) => {
     await router.push(`${path}?embedded=1#entry`)
-    expect(router.currentRoute.value.fullPath).toBe('/expert-direct?embedded=1#entry')
+    expect(router.currentRoute.value.path).toBe('/overview')
+    expect(router.currentRoute.value.query.embedded).toBe('1')
+    expect(router.currentRoute.value.hash).toBe('#entry')
   })
 
   it('旧管理路由重定向也经过角色检查', async () => {

@@ -32,6 +32,16 @@ class FakeGraph:
     def node_count(self, label: str | None = None) -> int:
         return 1
 
+    def get_node(self, node_id: str):
+        if node_id == "expert_1":
+            node = FakeNode("expert_1", {"id": "E-1", "name": "张三", "org": "中科院"})
+            node.labels = ["Expert"]
+            return node
+        return None
+
+    def list_indexes(self, label=None):
+        return []
+
     def get_nodes_by_label(self, label: str, *, limit: int = 100, offset: int = 0):
         items = (
             [FakeNode("expert_1", {"id": "E-1", "name": "张三", "org": "中科院"})]
@@ -50,6 +60,7 @@ class FakeGraph:
 class FakeMilvus:
     def __init__(self) -> None:
         self.exists = False
+        self.rows: list[dict[str, Any]] = []
 
     def has_collection(self, name: str) -> bool:
         return self.exists
@@ -81,13 +92,26 @@ class FakeMilvus:
         pass
 
     def upsert(self, collection_name: str, data: list):
-        pass
+        self.rows.extend(data)
 
     def flush(self, collection_name: str):
         pass
 
     def load_collection(self, collection_name: str):
         pass
+
+    def query(
+        self,
+        collection_name: str,
+        filter: str = "",  # noqa: A002
+        output_fields: list[str] | None = None,
+        limit: int = 10,
+    ):
+        rows = self.rows
+        if 'graph_space == "' in filter:
+            space = filter.split('graph_space == "', 1)[1].split('"', 1)[0]
+            rows = [row for row in rows if row.get("graph_space") == space]
+        return rows[:limit]
 
 
 class FakeEmbedding:

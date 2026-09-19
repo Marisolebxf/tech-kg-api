@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -92,7 +93,7 @@ def parse_confidence(value: object) -> float | None:
         number = float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
-    if number != number:  # NaN
+    if math.isnan(number):  # NaN 防护（Sonar S1764：显式 isNaN 表达意图）
         return None
     return round(min(max(number, 0.0), 1.0), 4)
 

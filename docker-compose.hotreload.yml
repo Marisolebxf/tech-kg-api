@@ -25,7 +25,42 @@ services:
     container_name: tech-kg-api-hot
     # 挂载目录归主机用户所有；root 运行避免 /app/var 等运行时写入的权限问题
     user: root
-    command: [".venv/bin/uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    # --reload 必须显式限定监听目录：镜像 venv 没有 watchfiles（也没有 pip/uv，
+    # 容器内装不了），uvicorn 退回 StatReload——每 250ms 递归 stat 扫描
+    # reload_dirs（默认整个 /app，含 .venv 命名卷里 site-packages 万余文件，
+    # 实测约 80% 单核 CPU）。显式列出业务源码目录（约 355 个 .py，不含 tests）
+    # 后扫描量降到 ~3%。注意：根目录 main.py 不在任何 reload-dir 里，改它
+    # 不会热重启，需手动 docker restart tech-kg-api-hot。
+    command:
+      - .venv/bin/uvicorn
+      - main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --reload
+      - --reload-dir
+      - /app/biz
+      - --reload-dir
+      - /app/service
+      - --reload-dir
+      - /app/application
+      - --reload-dir
+      - /app/dao
+      - --reload-dir
+      - /app/db_model
+      - --reload-dir
+      - /app/infra
+      - --reload-dir
+      - /app/sdk
+      - --reload-dir
+      - /app/config
+      - --reload-dir
+      - /app/utils
+      - --reload-dir
+      - /app/script
+      - --reload-dir
+      - /app/organization_ETL
     ports:
       - "8010:8000"
     env_file:

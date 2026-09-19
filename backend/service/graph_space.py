@@ -102,17 +102,35 @@ class GraphSpaceService:
         names = dict.fromkeys([default_graph_space(), *bound_names])
         return [{"name": name, "bound": name in bound, "mine": name in bound} for name in names]
 
+    # Nebula SHOW SPACES 结果做 30s 进程内缓存：空间列表极少变化，而压测/高频
+    # 访问下每次请求都打 Nebula 会拖垮图服务（2026-09-19 用例 08）。
+    _all_spaces_cached_at: float = 0.0
+    _all_spaces_cache: list = []
+
+    def _all_spaces(self) -> list:
+        now = time.monotonic()
+        if now - GraphSpaceService._all_spaces_cached_at < 30.0:
+            return GraphSpaceService._all_spaces_cache
+        try:
+            names = self.client.list_spaces()
+        except Exception as exc:  # noqa: BLE001
+            # 失败时回退旧值（可能为空列表）：空结果不缓存，避免短暂故障被
+            # 放大成 30s 的"空间不存在"
+            logger.warning("列出图空间失败，回退旧缓存: %s", exc)
+            return GraphSpaceService._all_spaces_cache
+        if not names:
+            return GraphSpaceService._all_spaces_cache
+        GraphSpaceService._all_spaces_cached_at = now
+        GraphSpaceService._all_spaces_cache = names
+        return names
+
     def list_spaces_for_actor(self, actor: PlatformActor) -> list[dict]:
         """配置页绑定入口：管理员看全量（需可选列表），普通用户按可工作空间收敛。"""
         if not actor.is_admin:
             return self.list_work_spaces_for_actor(actor)
         bound_names = [item["name"] for item in self.bound_spaces(actor.user_id)]
         bound = set(bound_names)
-        try:
-            all_spaces = self.client.list_spaces()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("列出图空间失败: %s", exc)
-            all_spaces = []
+        all_spaces = self._all_spaces()
         return [{"name": s, "bound": s in bound, "mine": s in bound} for s in all_spaces]
 
     # ---------- 绑定 / 解绑 ----------

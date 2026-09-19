@@ -59,6 +59,9 @@ def _queue_cache_put(key: str, payload: str) -> None:
 # 平台总览「人工审核」卡片对普通用户只读开放：仅队列查询；处理/认领等仍走管理端路由组。
 readonly_router = APIRouter(prefix="/manual-reviews", tags=["manual-review-readonly"])
 
+def _queue_cache_clear() -> None:
+    _queue_payload_cache.clear()
+
 
 def _raise_production_error(exc: Exception) -> None:
     if isinstance(exc, KeyError):
@@ -149,6 +152,7 @@ async def production_detail(case_id: str, identity: ReviewIdentityDep) -> Respon
 
 @router.post("/production/{case_id}/claim", response_model=ApiResponse)
 async def claim_case(case_id: str, body: VersionRequest, identity: ReviewIdentityDep):
+    _queue_cache_clear()
     try:
         return ApiResponse(data=production_service.claim(case_id, body.version, identity))
     except Exception as exc:
@@ -165,6 +169,7 @@ async def heartbeat_case(case_id: str, body: VersionRequest, identity: ReviewIde
 
 @router.post("/production/{case_id}/release", response_model=ApiResponse)
 async def release_case(case_id: str, body: VersionRequest, identity: ReviewIdentityDep):
+    _queue_cache_clear()
     try:
         return ApiResponse(data=production_service.release(case_id, body.version, identity))
     except Exception as exc:
@@ -173,6 +178,7 @@ async def release_case(case_id: str, body: VersionRequest, identity: ReviewIdent
 
 @router.post("/production/{case_id}/transfer", response_model=ApiResponse)
 async def transfer_case(case_id: str, body: TransferRequest, identity: ReviewIdentityDep):
+    _queue_cache_clear()
     try:
         return ApiResponse(
             data=production_service.transfer(
@@ -195,6 +201,7 @@ async def save_case_draft(case_id: str, body: DraftRequest, identity: ReviewIden
 
 @router.post("/production/{case_id}/submit", response_model=ApiResponse)
 async def submit_case(case_id: str, body: SubmitRequest, identity: ReviewIdentityDep):
+    _queue_cache_clear()
     try:
         return ApiResponse(
             data=production_service.submit(
@@ -208,6 +215,7 @@ async def submit_case(case_id: str, body: SubmitRequest, identity: ReviewIdentit
 @router.post("/production/{case_id}/direct-decide", response_model=ApiResponse)
 async def direct_decide_case(case_id: str, body: DirectDecideRequest, identity: ReviewIdentityDep):
     """kg.custom.steps T_DIRECT 案例两步决策：accept 直接写图，reject 丢弃。"""
+    _queue_cache_clear()
     try:
         return ApiResponse(
             data=production_service.direct_decide(
@@ -235,6 +243,7 @@ async def rerun_extract_failures(body: ExtractFailuresRerunRequest, identity: Re
         "approver",
         "review_admin",
     )
+    _queue_cache_clear()
     try:
         data = await rerun_failed_records(
             case_ids=body.caseIds,
@@ -250,6 +259,7 @@ async def rerun_extract_failures(body: ExtractFailuresRerunRequest, identity: Re
 
 @router.post("/production/{case_id}/cancel", response_model=ApiResponse)
 async def cancel_case(case_id: str, body: CancelRequest, identity: ReviewIdentityDep):
+    _queue_cache_clear()
     try:
         return ApiResponse(
             data=production_service.cancel(case_id, body.version, body.reason, identity)
@@ -261,6 +271,7 @@ async def cancel_case(case_id: str, body: CancelRequest, identity: ReviewIdentit
 @router.delete("/production/{case_id}", response_model=ApiResponse)
 async def delete_case(case_id: str, identity: ReviewIdentityDep):
     """物理删除未处理 case（review_admin；已终态的记录保留作历史不可删）。"""
+    _queue_cache_clear()
     try:
         return ApiResponse(data=production_service.delete_case(case_id, identity))
     except Exception as exc:

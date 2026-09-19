@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
+import os
+import time
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Response, HTTPException
 from sqlalchemy.orm import Session
 
 from application.embedding_config import EmbeddingConfigApplication
@@ -17,6 +20,32 @@ from biz.schemas.embedding_config import (
     EmbeddingConfigVerifyRequest,
 )
 from infra.mysql import get_session
+
+
+# 配置列表为读多写少的轻查询，加短 TTL 响应缓存扛读并发；键含用户身份
+# （列表按 owner 隔离：管理员全量/普通用户仅自己），不会跨用户串数据。
+# 配置创建/更新/删除后缓存最长 15s 内滞后。TTL 环境变量 CONFIG_CACHE_SECONDS 可调，0=关闭。
+_CONFIG_CACHE_SECONDS = float(os.getenv("CONFIG_CACHE_SECONDS", "15"))
+_config_payload_cache: dict[str, tuple[float, str]] = {}
+
+
+def _config_cache_get(key: str) -> str | None:
+    entry = _config_payload_cache.get(key)
+    if entry and entry[0] > time.monotonic():
+        return entry[1]
+    return None
+
+
+def _config_cache_put(key: str, payload: str) -> None:
+    if len(_config_payload_cache) > 512:
+        now = time.monotonic()
+        for stale in [k for k, v in _config_payload_cache.items() if v[0] <= now]:
+            _config_payload_cache.pop(stale, None)
+    _config_payload_cache[key] = (time.monotonic() + _CONFIG_CACHE_SECONDS, payload)
+
+
+def _config_cache_clear() -> None:
+    _config_payload_cache.clear()
 
 router = APIRouter(prefix="/embedding-config", tags=["embedding-config"])
 
@@ -33,12 +62,23 @@ def _owned_config(app: EmbeddingConfigApplication, actor: CurrentActor, config_i
     return data
 
 
-@router.get("", response_model=ApiResponse)
+@router.get("")
 def list_embedding_configs(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
-) -> ApiResponse:
-    return ApiResponse(data=_application(session).list_configs(owner=resource_owner_filter(actor)))
+) -> Response:
+    owner = resource_owner_filter(actor)
+    cache_key = f"embedding-configs:{owner}:{actor.user_id}:{actor.is_admin}"
+    cached = _config_cache_get(cache_key)
+    if cached is not None:
+        return Response(cached, media_type="application/json")
+    payload = json.dumps(
+        {"code": 200, "success": True, "data": _application(session).list_configs(owner=owner), "msg": "success"},
+        ensure_ascii=False,
+        default=str,
+    )
+    _config_cache_put(cache_key, payload)
+    return Response(payload, media_type="application/json")
 
 
 @router.get("/{config_id}", response_model=ApiResponse)

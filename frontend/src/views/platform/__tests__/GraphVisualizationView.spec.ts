@@ -11,7 +11,7 @@ import {
   type GraphData,
   type GetSubgraphParams,
 } from '../../../api/graphSearch'
-import { searchEntities, type EntitySearchItem } from '../../../api/entitySearch'
+import { browseEntities, searchEntities, type EntitySearchItem } from '../../../api/entitySearch'
 import { useGraphSpaceStore } from '../../../stores/graphSpace'
 import GraphVisualizationView from '../GraphVisualizationView.vue'
 
@@ -30,7 +30,7 @@ vi.mock('../../../api/graphSearch', async (importOriginal) => {
 })
 vi.mock('../../../api/entitySearch', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../api/entitySearch')>()
-  return { ...actual, searchEntities: vi.fn() }
+  return { ...actual, searchEntities: vi.fn(), browseEntities: vi.fn() }
 })
 vi.mock('../../../composables/use-toast', () => ({ useToast: () => ({ showToast }) }))
 vi.mock('@arco-design/web-vue/es/icon', () => ({ IconSearch: { template: '<i />' } }))
@@ -52,6 +52,13 @@ const InputStub = defineComponent({
   emits: ['update:modelValue'],
   template: `<div class="input-stub"><input :value="modelValue"
     @input="$emit('update:modelValue', $event.target.value)" /><slot name="prefix" /></div>`,
+})
+// a-input-number 桩：输入即回传数值并触发 change
+const InputNumberStub = defineComponent({
+  props: { modelValue: { type: Number, default: 100 } },
+  emits: ['update:modelValue', 'change'],
+  template: `<div class="input-number-stub"><input type="number" :value="modelValue"
+    @input="$emit('update:modelValue', Number($event.target.value)); $emit('change', Number($event.target.value))" /></div>`,
 })
 // 画布桩：渲染节点按钮触发 selectNode，计数用于断言过滤效果
 const CanvasStub = defineComponent({
@@ -117,6 +124,19 @@ beforeEach(() => {
   vi.mocked(getGraphStats).mockResolvedValue(
     apiOk({ nodes: { 专家: 12, 论文: 8 }, edges: { 撰写: 20, 任职: 6 } }),
   )
+  // 默认浏览无实体：自动预览直接跳过，不影响「未查询」空态用例
+  vi.mocked(browseEntities).mockResolvedValue({
+    items: [], offset: 0, limit: 1, entityType: null, mode: 'browse',
+  })
+  mountView()
+})
+
+/** 自动预览在挂载瞬间就发 browse 请求：需要先改 mock 再挂载的用例走这里重挂 */
+function mountView() {
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  store = useGraphSpaceStore()
+  store.setCurrent('space-a')
   wrapper = mount(GraphVisualizationView, {
     global: {
       plugins: [pinia],
@@ -124,11 +144,12 @@ beforeEach(() => {
         'a-select': SelectStub,
         'a-option': OptionStub,
         'a-input': InputStub,
+        'a-input-number': InputNumberStub,
         KgGraphCanvas: CanvasStub,
       },
     },
   })
-})
+}
 
 afterEach(() => {
   wrapper.unmount()
@@ -164,6 +185,11 @@ function canvasCount(): string {
   return wrapper.get('.canvas-count').text()
 }
 
+/** 读组件内 perHopLimit 的当前值（经 stub 的受控 value 绑定回显） */
+function perHopLimitInputValue(): number {
+  return Number((wrapper.get('#graphviz-limit input').element as HTMLInputElement).value)
+}
+
 describe('GraphVisualizationView', () => {
   it('挂载按全局图空间加载统计，未查询时给空态提示', async () => {
     await flushPromises()
@@ -173,6 +199,73 @@ describe('GraphVisualizationView', () => {
     // 类型下拉来自 stats 的标签/边类型计数
     expect(wrapper.text()).toContain('专家（12）')
     expect(wrapper.text()).toContain('撰写（20）')
+  })
+
+  it('打开页面自动取图里第一个实体预览出图，免手动搜索起点', async () => {
+    // 自动预览随挂载触发：先备好 mock 再重挂
+    wrapper.unmount()
+    vi.mocked(browseEntities).mockResolvedValue({
+      items: [entityItem('scholar-7', '赵六', '专家')],
+      offset: 0, limit: 1, entityType: null, mode: 'browse',
+    })
+    vi.mocked(getSubgraph).mockResolvedValue(
+      apiOk({ nodes: [apiNode('scholar-7', ['专家'], { name_cn: '赵六' })], edges: [] }),
+    )
+    mountView()
+    await flushPromises()
+    expect(browseEntities).toHaveBeenCalledWith({ space: 'space-a', limit: 10 })
+    expect(getSubgraph).toHaveBeenCalledWith(
+      'scholar-7',
+      expect.objectContaining({ space: 'space-a' }),
+    )
+    expect(canvasCount()).toBe('1/0')
+    // 摘要里的查询起点即自动预览命中的实体
+    expect(wrapper.text()).toContain('赵六')
+  })
+
+  it('自动预览跳过无边孤点，选有边的实体当起点', async () => {
+    wrapper.unmount()
+    vi.mocked(browseEntities).mockResolvedValue({
+      items: [entityItem('lone-1', '孤点实体', '专家'), entityItem('hub-1', '枢纽实体', '专家')],
+      offset: 0, limit: 10, entityType: null, mode: 'browse',
+    })
+    // 孤点候选子图无边；枢纽候选带 1 条边
+    vi.mocked(getSubgraph).mockImplementation(async (nodeId: string) =>
+      apiOk(
+        nodeId === 'lone-1'
+          ? { nodes: [apiNode('lone-1', ['专家'])], edges: [] }
+          : {
+              nodes: [apiNode('hub-1', ['专家']), apiNode('paper-1', ['论文'])],
+              edges: [apiEdge('e1', '撰写', 'hub-1', 'paper-1')],
+            },
+      ),
+    )
+    mountView()
+    await flushPromises()
+    // 探测（lone-1 无边跳过）+ 正式（hub-1 出图）
+    expect(getSubgraph).toHaveBeenCalledWith('lone-1', expect.objectContaining({ space: 'space-a' }))
+    expect(getSubgraph).toHaveBeenCalledWith('hub-1', expect.objectContaining({ space: 'space-a' }))
+    expect(canvasCount()).toBe('2/1')
+    expect(wrapper.text()).toContain('枢纽实体')
+  })
+
+  it('实体类型下拉选了具体类型后可选回「全部类型」', async () => {
+    await flushPromises()
+    vi.mocked(searchEntities).mockResolvedValue({
+      items: [], offset: 0, limit: 20, entityType: null, mode: 'hybrid',
+    })
+    const select = wrapper.get('#graphviz-entity-type')
+    await select.setValue('专家')
+    await wrapper.get('#graphviz-keyword input').setValue('张三')
+    await clickButton('搜索起点')
+    await flushPromises()
+    expect(searchEntities).toHaveBeenCalledWith(expect.objectContaining({ entityType: '专家' }))
+
+    // 通过固定首项「全部类型」选回：检索不再限定类型
+    await select.setValue('')
+    await clickButton('搜索起点')
+    await flushPromises()
+    expect(searchEntities).toHaveBeenLastCalledWith(expect.objectContaining({ entityType: null }))
   })
 
   it('起点检索结果栏可收起与展开，新检索命中自动展开', async () => {
@@ -190,6 +283,27 @@ describe('GraphVisualizationView', () => {
     await clickButton('×')
     await searchStart([entityItem('scholar-3', '王五', '专家')])
     expect(wrapper.findAll('.graphviz-start__item')).toHaveLength(1)
+  })
+
+  it('每跳上限可自由输入并夹紧到 1-256', async () => {
+    await searchStart([entityItem('scholar-1', '张三', '专家')])
+    await wrapper.findAll('.graphviz-start__item')[0].trigger('click')
+
+    // 自定义值 7：随查询参数下发
+    vi.mocked(getSubgraph).mockResolvedValue(apiOk({ nodes: [], edges: [] }))
+    await wrapper.get('#graphviz-limit input').setValue('7')
+    await clickButton('查询图谱')
+    await flushPromises()
+    expect(getSubgraph).toHaveBeenLastCalledWith(
+      'scholar-1',
+      expect.objectContaining({ limit: 7 }),
+    )
+
+    // 手输越界值被夹回边界内：0 → 1、999 → 256
+    await wrapper.get('#graphviz-limit input').setValue('0')
+    expect(perHopLimitInputValue()).toBe(1)
+    await wrapper.get('#graphviz-limit input').setValue('999')
+    expect(perHopLimitInputValue()).toBe(256)
   })
 
   it('起点检索点选后按参数查询子图并出图画布', async () => {
@@ -369,6 +483,33 @@ describe('GraphVisualizationView', () => {
       'paper-1',
       expect.objectContaining({ space: 'space-a' }),
     )
+  })
+
+  it('重定中心/手动查询后可点「自动预览」回到自动选点', async () => {
+    // 默认 browse 空：先手动检索起点并查询
+    await searchStart([entityItem('scholar-1', '张三', '专家')])
+    await wrapper.findAll('.graphviz-start__item')[0].trigger('click')
+    await runQuery({ nodes: [apiNode('scholar-1', ['专家'])], edges: [] })
+    expect(canvasCount()).toBe('1/0')
+
+    // 自动预览命中另一个有边起点并出图
+    vi.mocked(browseEntities).mockResolvedValue({
+      items: [entityItem('hub-9', '枢纽实体', '专家')],
+      offset: 0, limit: 10, entityType: null, mode: 'browse',
+    })
+    vi.mocked(getSubgraph).mockResolvedValue(
+      apiOk({
+        nodes: [apiNode('hub-9', ['专家']), apiNode('paper-1', ['论文'])],
+        edges: [apiEdge('e1', '撰写', 'hub-9', 'paper-1')],
+      }),
+    )
+    await clickButton('自动预览')
+    await flushPromises()
+    expect(canvasCount()).toBe('2/1')
+    expect(wrapper.text()).toContain('枢纽实体')
+    // 自动选中的实体同步为「已选起点」：可继续用「查询图谱」重复查询
+    expect(wrapper.text()).toContain('已选起点')
+    expect(wrapper.text()).toContain('枢纽实体（专家）')
   })
 
   it('切换全局图空间后整体重置并按新空间加载统计', async () => {

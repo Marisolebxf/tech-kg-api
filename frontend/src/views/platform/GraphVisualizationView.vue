@@ -16,6 +16,7 @@ import {
   type GraphStatsData,
 } from '../../api/graphSearch'
 import {
+  browseEntities,
   entitySearchErrorMessage,
   searchEntities,
   type EntitySearchItem,
@@ -49,7 +50,9 @@ const NODE_CAP = 300
 const LIST_CAP = 30
 const SEARCH_RESULT_LIMIT = 20
 const DEPTH_OPTIONS: GraphDepth[] = [1, 2, 3]
-const LIMIT_OPTIONS = [50, 100, 200]
+/** 每跳上限可自由输入（1-256，与后端 GET /subgraph 校验一致） */
+const PER_HOP_LIMIT_MIN = 1
+const PER_HOP_LIMIT_MAX = 256
 const DIRECTION_LABELS: Record<GraphDirection, string> = {
   both: '双向',
   out: '仅出边',
@@ -341,6 +344,46 @@ async function loadStats(): Promise<void> {
   }
 }
 
+/** 打开页面即看图 / 点「自动预览」按钮：自动从图里挑一个实体当起点跑一次
+ *  子图查询，免去「必须先搜索起点」的冷启动。逐个探测前几个候选、优先挑
+ *  有边的（孤点开局不直观）；全是孤点则退回首候选；图空/失败保持原空态。 */
+async function autoPreview(): Promise<void> {
+  if (querying.value) return // 查询进行中不打扰
+  const context = graphContextVersion
+  try {
+    const result = await browseEntities({ space: space.value || null, limit: 10 })
+    if (context !== graphContextVersion) return
+    const probeParams = {
+      depth: depth.value,
+      limit: perHopLimit.value,
+      direction: direction.value,
+      space: space.value || undefined,
+    }
+    for (const item of result.items) {
+      if (context !== graphContextVersion || querying.value) return
+      if (!item?.vid) continue
+      try {
+        const data = unwrapGraphResponse(await getSubgraph(item.vid, probeParams))
+        if (context !== graphContextVersion) return
+        if ((data.edges ?? []).length > 0) {
+          startNode.value = item
+          void runQuery(item.vid, item.name || item.vid)
+          return
+        }
+      } catch {
+        // 单个候选探测失败继续试下一个
+      }
+    }
+    const first = result.items[0]
+    if (first?.vid) {
+      startNode.value = first
+      void runQuery(first.vid, first.name || first.vid)
+    }
+  } catch {
+    // 自动预览失败静默降级：用户仍可手动检索起点
+  }
+}
+
 async function doSearch(): Promise<void> {
   if (searching.value) return
   const keyword = searchKeyword.value.trim()
@@ -522,9 +565,11 @@ function onDepthSelect(value: unknown): void {
   if (n === 1 || n === 2 || n === 3) depth.value = n
 }
 
-function onLimitSelect(value: unknown): void {
-  const n = Number(value)
-  if (LIMIT_OPTIONS.includes(n)) perHopLimit.value = n
+function onLimitInput(value: unknown): void {
+  const n = Math.round(Number(value))
+  if (!Number.isFinite(n)) return
+  // 与 a-input-number 的 min/max 同步夹紧，兜住手输越界值
+  perHopLimit.value = Math.min(PER_HOP_LIMIT_MAX, Math.max(PER_HOP_LIMIT_MIN, n))
 }
 
 function onDirectionSelect(value: unknown): void {
@@ -543,6 +588,7 @@ function formatQueryTimestamp(date: Date): string {
 
 onMounted(() => {
   void loadStats()
+  void autoPreview()
 })
 
 // 切换图空间：作废在途请求并整体重置（表单/结果/过滤/详情），按新空间重载统计
@@ -570,6 +616,7 @@ watch(
     querying.value = false
     searching.value = false
     void loadStats()
+    void autoPreview()
   },
   { flush: 'sync' },
 )
@@ -600,6 +647,8 @@ onUnmounted(() => {
               :scrollbar="false"
               @change="onEntityTypeSelect"
             >
+              <!-- 固定「全部类型」项：选了具体类型后也能直接选回，不依赖 allow-clear 的 × -->
+              <a-option value="">全部类型</a-option>
               <a-option v-for="t in entityTypeOptions" :key="t.name" :value="t.name">
                 {{ t.name }}（{{ t.count }}）
               </a-option>
@@ -674,16 +723,18 @@ onUnmounted(() => {
             </a-select>
           </div>
           <div class="graphviz-field">
-            <label for="graphviz-limit">每跳上限</label>
-            <a-select
+            <label for="graphviz-limit">每跳上限（1-256）</label>
+            <a-input-number
               id="graphviz-limit"
-              class="graphviz-select"
-              :model-value="perHopLimit"
-              :scrollbar="false"
-              @change="onLimitSelect"
-            >
-              <a-option v-for="option in LIMIT_OPTIONS" :key="option" :value="option">{{ option }}</a-option>
-            </a-select>
+              v-model="perHopLimit"
+              class="graphviz-input-number"
+              :min="PER_HOP_LIMIT_MIN"
+              :max="PER_HOP_LIMIT_MAX"
+              :step="1"
+              :precision="0"
+              hide-button
+              @change="onLimitInput"
+            />
           </div>
           <div class="graphviz-field">
             <label for="graphviz-direction">查询方向</label>
@@ -719,9 +770,20 @@ onUnmounted(() => {
           </div>
           <div class="graphviz-field graphviz-field--actions">
             <label aria-hidden="true">查询</label>
-            <button class="kg-button" type="button" :disabled="querying || !startNode" @click="runQuery()">
-              {{ querying ? '查询中…' : '查询图谱' }}
-            </button>
+            <div class="graphviz-actions">
+              <button
+                class="kg-button"
+                type="button"
+                :disabled="querying"
+                title="自动挑选有边的实体作为查询起点并出图"
+                @click="autoPreview"
+              >
+                自动预览
+              </button>
+              <button class="kg-button" type="button" :disabled="querying || !startNode" @click="runQuery()">
+                {{ querying ? '查询中…' : '查询图谱' }}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -910,6 +972,7 @@ onUnmounted(() => {
 .graphviz-field--wide{grid-column:span 2}
 .graphviz-field--actions{justify-content:flex-end}
 .graphviz-search{display:flex;gap:8px}
+.graphviz-actions{display:flex;justify-content:flex-end;gap:8px}
 .graphviz-form__message{margin:0;color:#4e5969;font-size:12px;line-height:20px}
 .graphviz-form__message--muted{color:#86909c}
 .graphviz-form__reveal{margin-left:8px;padding:0;border:0;background:transparent;color:#165dff;cursor:pointer;font-size:12px;line-height:20px}
@@ -932,6 +995,11 @@ onUnmounted(() => {
 .graphviz-field :deep(.graphviz-select.arco-select-view:focus-within),.graphviz-field :deep(.graphviz-select.arco-select-view-focus){border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
 .graphviz-field :deep(.graphviz-select .arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important}
 .graphviz-field :deep(.graphviz-select .arco-select-view-value){min-width:0;overflow:hidden;background:transparent!important;font-size:13px;line-height:22px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
+/* a-input-number 根节点同样不带 data-v：经 :deep 命中并与 select 视觉对齐 */
+.graphviz-field :deep(.graphviz-input-number.arco-input-number){display:inline-flex;box-sizing:border-box;width:100%;min-width:0;min-height:32px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important}
+.graphviz-field :deep(.graphviz-input-number.arco-input-number:hover){border-color:#4080ff!important}
+.graphviz-field :deep(.graphviz-input-number.arco-input-number:focus-within){border-color:#165dff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
+.graphviz-field :deep(.graphviz-input-number .arco-input-number-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0 12px!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:13px!important;line-height:22px!important;box-shadow:none!important;outline:0!important;text-align:left}
 .graphviz-field :deep(.graphviz-select[multiple] .arco-select-view-value){display:flex;flex-wrap:wrap;gap:4px;overflow:visible;white-space:normal}
 .graphviz-field :deep(.graphviz-input.arco-input-wrapper){display:inline-flex;box-sizing:border-box;width:100%;min-width:0;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important}
 .graphviz-field :deep(.graphviz-input.arco-input-wrapper:hover){border-color:#4080ff!important}

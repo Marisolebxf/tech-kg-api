@@ -165,7 +165,19 @@ def run_statement(actor: PlatformActor, space: str, statement: str) -> dict:
         if kind == "write":
             result = client.execute_write(statement)
         else:
-            result = client.execute_read(statement)
+            # 只读查询限并发 + 会话耗尽时退避重试（Nebula 会话池小，
+            # 突发下会瞬时不可用；3 次退避覆盖 ~2s 窗口）
+            with _read_execute_semaphore:
+                result = None
+                for attempt, delay in enumerate((0, 0.3, 0.8), start=1):
+                    try:
+                        if attempt > 1:
+                            time.sleep(delay)
+                        result = client.execute_read(statement)
+                        break
+                    except GraphRepoError as exc:
+                        if "no extra session" not in str(exc) or attempt == 3:
+                            raise
     except GraphRepoError as exc:
         raise GraphConsoleError(f"语句执行失败: {exc}") from exc
 

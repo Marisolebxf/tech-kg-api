@@ -129,12 +129,22 @@ async def production_queue(
 readonly_router.get("/production/queue", response_model=ApiResponse)(production_queue)
 
 
-@router.get("/production/{case_id}", response_model=ApiResponse)
-async def production_detail(case_id: str, identity: ReviewIdentityDep):
+@router.get("/production/{case_id}")
+async def production_detail(case_id: str, identity: ReviewIdentityDep) -> Response:
+    cache_key = f"case_detail:{case_id}"
+    cached = _queue_cache_get(cache_key)
+    if cached is not None:
+        return Response(cached, media_type="application/json")
     try:
-        return ApiResponse(data=production_service.get_case(case_id, identity))
+        payload = json.dumps(
+            {"code": 200, "success": True, "data": production_service.get_case(case_id, identity), "msg": "success"},
+            ensure_ascii=False,
+            default=str,
+        )
     except Exception as exc:
         _raise_production_error(exc)
+    _queue_cache_put(cache_key, payload)
+    return Response(payload, media_type="application/json")
 
 
 @router.post("/production/{case_id}/claim", response_model=ApiResponse)
@@ -257,12 +267,22 @@ async def delete_case(case_id: str, identity: ReviewIdentityDep):
         _raise_production_error(exc)
 
 
-@router.get("/production/{case_id}/audit-logs", response_model=ApiResponse)
-async def case_audit_logs(case_id: str, identity: ReviewIdentityDep):
+@router.get("/production/{case_id}/audit-logs")
+async def case_audit_logs(case_id: str, identity: ReviewIdentityDep) -> Response:
+    cache_key = f"case_audit_logs:{case_id}"
+    cached = _queue_cache_get(cache_key)
+    if cached is not None:
+        return Response(cached, media_type="application/json")
     try:
-        return ApiResponse(data={"items": production_service.logs(case_id, identity)})
+        payload = json.dumps(
+            {"code": 200, "success": True, "data": {"items": production_service.logs(case_id, identity)}, "msg": "success"},
+            ensure_ascii=False,
+            default=str,
+        )
     except Exception as exc:
         _raise_production_error(exc)
+    _queue_cache_put(cache_key, payload)
+    return Response(payload, media_type="application/json")
 
 
 @router.post("/production/{case_id}/evidence/upload-url", response_model=ApiResponse)

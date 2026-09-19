@@ -7,6 +7,7 @@ import hashlib
 import logging
 import os
 import re
+import time
 from collections.abc import Iterator
 from datetime import date, datetime
 from pathlib import Path
@@ -40,6 +41,18 @@ OWN_SCHEMA_SCRIPT_REQUIRED = "只能更换自己创建的 Schema 脚本"
 SYSTEM_SCHEMA_ADMIN_REQUIRED = "只有 Schema 管理员可以更换系统 Schema 脚本"
 
 logger = logging.getLogger(__name__)
+
+
+# 目录页（pageSize=100, includeDetails=true）会对每个 schema 探测一次脚本对象
+# 是否存在于 S3——500 并发下这就是数万次 RustFS 调用（2026-09-19 压测用例 02
+# 吞吐只剩 64rps 的根因）。结果做进程内 TTL 缓存；TTL 可用环境变量调 0 关闭
+# （集成测试置 0 保持"探测即实时"语义），生产默认 30s（信息性标记，触发下载
+# 另有实时兜底拦截，见 SchemaManagementService._script_object_available）。
+_SCRIPT_OBJECT_CACHE: dict[str, tuple[float, bool]] = {}
+_SCRIPT_OBJECT_CACHE_TTL_SECONDS = float(
+    os.getenv("SCHEMA_SCRIPT_AVAILABLE_CACHE_TTL_SECONDS", "30")
+)
+_SCRIPT_OBJECT_CACHE_MAX_KEYS = 4096
 
 
 class SchemaManagementError(Exception):
@@ -1209,11 +1222,23 @@ class SchemaManagementService:
         worker 下载处失败）。探测异常按 True 处理：S3 抖动不应把可选
         Schema 清空，触发时 ensure_extract_script_ready 还有兜底拦截。
         """
+        key = f"{script.bucket}/{script.object_key}"
+        now = time.monotonic()
+        cached = _SCRIPT_OBJECT_CACHE.get(key)
+        if cached is not None and cached[0] > now:
+            return cached[1]
         try:
             # get_schema_s3_storage 为模块级单例，与实例 self._storage 同源
-            return get_schema_s3_storage().object_exists(script.bucket, script.object_key)
+            available = get_schema_s3_storage().object_exists(script.bucket, script.object_key)
         except Exception:  # noqa: BLE001
             return True
+        _SCRIPT_OBJECT_CACHE[key] = (now + _SCRIPT_OBJECT_CACHE_TTL_SECONDS, available)
+        if len(_SCRIPT_OBJECT_CACHE) > _SCRIPT_OBJECT_CACHE_MAX_KEYS:
+            for expired_key in [
+                k for k, v in _SCRIPT_OBJECT_CACHE.items() if v[0] <= now
+            ]:
+                _SCRIPT_OBJECT_CACHE.pop(expired_key, None)
+        return available
 
     @staticmethod
     def _serialize_script(

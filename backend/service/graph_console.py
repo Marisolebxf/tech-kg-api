@@ -9,7 +9,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import re
+import threading
+import time
 
 from service.platform_access import PlatformActor
 
@@ -60,6 +65,75 @@ DDL_TOKENS = frozenset(
 
 _MAX_STATEMENT_CHARS = 4000
 
+# 只读查询结果缓存：同 space+statement 在 TTL 内直接复用上次结果。
+# 背景：Nebula 会话池容量小，500 并发重复执行同一语句会耗尽会话
+# （no extra session available）。TTL 环境变量
+# GRAPH_CONSOLE_CACHE_SECONDS 可调，0=关闭（默认 15s）。
+_NGQL_CACHE_TTL_SECONDS = float(os.getenv("GRAPH_CONSOLE_CACHE_SECONDS", "15"))
+_ngql_payload_cache: dict[str, tuple[float, str]] = {}
+_ngql_cache_lock = threading.Lock()
+_ngql_cache_lock = threading.Lock()
+
+# Nebula 侧可用会话有限（trs-graph 会话池），限制同时在执行的只读查询数，
+# 超出的请求排队等待而不是报 no extra session available。
+_READ_EXECUTE_CONCURRENCY = int(os.getenv("GRAPH_CONSOLE_MAX_CONCURRENT_READS", "32"))
+_read_execute_semaphore = threading.BoundedSemaphore(_READ_EXECUTE_CONCURRENCY)
+
+
+def _ngql_cache_get(key: str) -> str | None:
+    entry = _ngql_payload_cache.get(key)
+    if entry and entry[0] > time.monotonic():
+        return entry[1]
+    return None
+
+
+def _ngql_cache_put(key: str, payload: str) -> None:
+    if len(_ngql_payload_cache) > 512:
+        now = time.monotonic()
+        for stale in [k for k, v in _ngql_payload_cache.items() if v[0] <= now]:
+            _ngql_payload_cache.pop(stale, None)
+    _ngql_payload_cache[key] = (time.monotonic() + _NGQL_CACHE_TTL_SECONDS, payload)
+
+
+def ngql_cache_key(space: str, statement: str) -> str:
+    digest = hashlib.sha256(f"{space}\x00{statement}".encode()).hexdigest()
+    return f"ngql:{digest}"
+
+
+def run_statement_cached_payload(actor: PlatformActor, space: str, statement: str) -> str:
+    """带 single-flight 的只读查询执行：同 key 并发只放一个真实执行，
+    其余等锁后直接读缓存；返回 ApiResponse 信封 JSON 字符串。
+    非 read 语句不缓存，每次真实执行（写语句仅管理员，另行校验）。
+    """
+    try:
+        kind = classify_statement(statement)
+    except GraphConsoleError:
+        kind = None
+    key = ngql_cache_key(space, statement) if kind == "read" else None
+    if key is not None:
+        # single-flight：持锁重算，同 key 的并发请求只放一个真实执行，
+        # 其余等锁后直接命中缓存（500 并发惊群下 Nebula 会话会耗尽）
+        with _ngql_cache_lock:
+            cached = _ngql_cache_get(key)
+            if cached is not None:
+                return cached
+            data = run_statement(actor, space, statement)
+            body = json.dumps(
+                {"code": 200, "success": True, "data": data, "msg": "success"},
+                ensure_ascii=False,
+                default=str,
+            )
+            _ngql_cache_put(key, body)
+        return body
+    try:
+        data = run_statement(actor, space, statement)
+    except GraphConsoleError as exc:
+        raise
+    return json.dumps(
+        {"code": 200, "success": True, "data": data, "msg": "success"},
+        ensure_ascii=False,
+        default=str,
+    )
 _comment_pattern = re.compile(r"(--|//)[^\n]*")
 
 
@@ -142,7 +216,9 @@ def run_statement(actor: PlatformActor, space: str, statement: str) -> dict:
         session = create_session()
         try:
             space_service = GraphSpaceService(session)
-            spaces = space_service.client.list_spaces()
+            # SHOW SPACES 走 30s 进程内缓存（同配置页）：500 并发下逐请求打
+            # Nebula 会耗尽会话（no extra session available，2026-09-19 用例 09）
+            spaces = space_service._all_spaces()
             space_allowed = (
                 actor.is_admin
                 or space == default_graph_space()
@@ -165,7 +241,15 @@ def run_statement(actor: PlatformActor, space: str, statement: str) -> dict:
         if kind == "write":
             result = client.execute_write(statement)
         else:
-            result = client.execute_read(statement)
+            # 只读查询限并发 + 会话耗尽时短暂等待重试一次
+            with _read_execute_semaphore:
+                try:
+                    result = client.execute_read(statement)
+                except GraphRepoError as exc:
+                    if "no extra session" not in str(exc):
+                        raise
+                    time.sleep(0.2)
+                    result = client.execute_read(statement)
     except GraphRepoError as exc:
         raise GraphConsoleError(f"语句执行失败: {exc}") from exc
 

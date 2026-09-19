@@ -114,8 +114,12 @@ class GraphSpaceService:
         try:
             names = self.client.list_spaces()
         except Exception as exc:  # noqa: BLE001
-            logger.warning("列出图空间失败: %s", exc)
-            names = []
+            # 失败时回退旧值（可能为空列表）：空结果不缓存，避免短暂故障被
+            # 放大成 30s 的"空间不存在"
+            logger.warning("列出图空间失败，回退旧缓存: %s", exc)
+            return GraphSpaceService._all_spaces_cache
+        if not names:
+            return GraphSpaceService._all_spaces_cache
         GraphSpaceService._all_spaces_cached_at = now
         GraphSpaceService._all_spaces_cache = names
         return names

@@ -336,6 +336,9 @@ const algoLabels = computed({
   get: () => activeAlgorithmState.value.labels,
   set: (value: string[]) => { activeAlgorithmState.value.labels = value },
 })
+// 关系类型错误只在用户提交空表单后显示；选择任一类型后立即清除。
+// 不使用 AFormItem 的隐式 required 校验，避免组件内部错误状态与 v-model 脱节。
+const algoLabelsValidationError = ref(false)
 /** 边类型数量上限，与后端 AlgorithmSubmitRequest.labels 的 max_length=20 保持一致。 */
 const ALGO_LABELS_MAX = 20
 /** 按算法 id 分桶的参数值；切换算法时按目录默认值初始化该桶。 */
@@ -920,9 +923,11 @@ async function handleAlgoSubmit(): Promise<void> {
     }
   }
   if (!algoLabels.value.length) {
+    algoLabelsValidationError.value = true
     showToast('请选择至少一个边类型', 'warning')
     return
   }
+  algoLabelsValidationError.value = false
   if (algoLabels.value.length > ALGO_LABELS_MAX) {
     showToast(`关系类型最多选择 ${ALGO_LABELS_MAX} 个，当前已选 ${algoLabels.value.length} 个`, 'warning')
     return
@@ -977,10 +982,15 @@ async function handleAlgoSubmit(): Promise<void> {
 // 切换算法时同步切换独立状态，并恢复当前作业轮询。
 watch(selectedAlgorithm, (id) => {
   if (!algoParamValues.value[id]) initAlgoParams(id)
+  algoLabelsValidationError.value = false
   stopAlgoPoll()
   resetAlgoPage()
   if (algoJob.value?.status === 'running') scheduleAlgoPoll()
 }, { flush: 'sync' })
+
+watch(algoLabels, (labels) => {
+  if (labels.length) algoLabelsValidationError.value = false
+})
 
 // 进入图算法模式：懒加载元数据；离开：停轮询
 watch([queryMode, activeTab], ([mode, tab]) => {
@@ -998,6 +1008,7 @@ watch(algoSpace, () => {
   ngqlLoading.value = false
   resetNgqlPage()
   algoLabels.value = []
+  algoLabelsValidationError.value = false
   algoWeightCols.value = {}
   algoMetadata.value = null
   algoMetadataLoading.value = false
@@ -1447,8 +1458,14 @@ const pageMeta = computed(() => {
           <!-- 仅显示业务输入，算法调优参数使用默认值。 -->
           <div class="platform-query-algo__controls">
             <AForm :model="{ labels: algoLabels }" layout="vertical" class="platform-query-algo__form">
-              <AFormItem field="labels" required :feedback="false" class="platform-query-algo__labels">
-                <template #label>关系类型<span class="platform-relation-label-hint">（可多选，最多 20 个）</span></template>
+              <AFormItem
+                field="labels"
+                :feedback="false"
+                :validate-status="algoLabelsValidationError ? 'error' : undefined"
+                :help="algoLabelsValidationError ? 'labels 是必填项' : undefined"
+                class="platform-query-algo__labels"
+              >
+                <template #label><i class="platform-query-algo__required">*</i>关系类型<span class="platform-relation-label-hint">（可多选，最多 20 个）</span></template>
                 <a-select
                   id="algo-relation-types"
                   aria-label="关系类型（可多选，必填）"

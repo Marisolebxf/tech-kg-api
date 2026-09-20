@@ -173,24 +173,50 @@ def test_extract_entity_name_candidates() -> None:
     assert extract_entity_name({"patent_title": "专利乙"}, "v1") == "专利乙"
 
 
-def test_extract_display_properties_filters_and_truncates() -> None:
+def test_extract_display_properties_serializes_complex_values_and_truncates() -> None:
     props = {
         "id": "E-1",
         "name": "张三",
-        "tags": ["a", "b"],  # 非标量 → 剔除
+        "tags": ["a", "b"],
         "none": None,
         "empty": "",
         "long": "x" * 1024,
     }
     display = extract_display_properties(props)
     assert display["id"] == "E-1"
-    assert "tags" not in display and "none" not in display and "empty" not in display
+    assert display["tags"] == '["a","b"]'
+    assert "none" not in display and "empty" not in display
     assert len(display["long"]) == 513  # 512 + …
 
 
 def test_compose_entity_text() -> None:
     text = compose_entity_text("张三", "Expert", {"id": "E-1", "org": "中科院"})
     assert "张三" in text and "Expert" in text and "id E-1" in text and "org 中科院" in text
+
+
+def test_compose_entity_text_flattens_json_and_collection_properties() -> None:
+    text = compose_entity_text(
+        "专利A",
+        "Patent",
+        {
+            "keywords": ["人工智能", {"zhName": "知识图谱"}],
+            "classifications": '[{"code":"G06F","name":"数据处理"}]',
+        },
+    )
+
+    assert "keywords 人工智能 zhName 知识图谱" in text
+    assert "classifications code G06F name 数据处理" in text
+
+
+def test_compose_entity_text_keeps_long_value_tail_and_late_property() -> None:
+    props = {f"field_{index}": "值" * 300 for index in range(40)}
+    props["abstract"] = "开头" + "x" * 3000 + "尾部目标词"
+    props["last_field"] = "国内机构要素库"
+
+    text = compose_entity_text("实体A", "DataSource", props)
+
+    assert "尾部目标词" in text
+    assert "last_field 国内机构要素库" in text
 
 
 def test_browse_single_type_pagination(state_session, monkeypatch) -> None:
@@ -401,6 +427,46 @@ def test_reindex_builds_collection_and_state(
     assert status["graphSpace"] == "dev2"
 
 
+def test_reindex_streams_graph_and_embedding_in_bounded_batches(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    graph = FakeGraph(
+        ["Expert"],
+        {"Expert": [FakeNode(f"expert_{index}", {"name": f"专家{index}"}) for index in range(5)]},
+    )
+    graph_reads = 0
+    original_get_nodes = graph.get_nodes_by_label
+
+    def counted_get_nodes(label, *, limit=100, offset=0):
+        nonlocal graph_reads
+        graph_reads += 1
+        return original_get_nodes(label, limit=limit, offset=offset)
+
+    graph.get_nodes_by_label = counted_get_nodes
+    milvus = FakeMilvusClient()
+
+    class BoundedEmbedding:
+        def __init__(self) -> None:
+            self.batch_sizes: list[int] = []
+
+        def embed(self, texts):
+            self.batch_sizes.append(len(texts))
+            return [[1.0, 0.5, 0.25] for _ in texts]
+
+    embedding = BoundedEmbedding()
+    monkeypatch.setattr("service.entity_search.EMBED_BATCH_SIZE", 2)
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", lambda: embedding)
+
+    result = EntitySearchService(state_session).reindex(space="dev2")
+
+    assert result["entityCount"] == 5
+    assert embedding.batch_sizes == [2, 2, 1]
+    assert graph_reads == 2  # BM25 统计一遍，流式写入一遍
+    assert len(milvus.collections[COLLECTION_NAME]) == 5
+
+
 def test_reindex_unknown_entity_type_raises(state_session, monkeypatch) -> None:
     graph = FakeGraph(["Expert"], {})
     monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
@@ -478,6 +544,35 @@ def test_reindex_embedding_failure_keeps_collection(
     with pytest.raises(EntitySearchError, match="embedding 服务调用失败"):
         service.reindex()
     assert COLLECTION_NAME not in milvus.collections
+
+
+def test_reindex_late_embedding_failure_removes_partial_snapshot(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    graph = FakeGraph(
+        ["Expert"],
+        {"Expert": [FakeNode(f"expert_{index}", {"name": f"专家{index}"}) for index in range(3)]},
+    )
+    milvus = FakeMilvusClient()
+
+    class FailOnSecondBatch:
+        calls = 0
+
+        def embed(self, texts):
+            self.calls += 1
+            if self.calls == 2:
+                return None
+            return [[1.0, 0.5, 0.25] for _ in texts]
+
+    monkeypatch.setattr("service.entity_search.EMBED_BATCH_SIZE", 2)
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", FailOnSecondBatch)
+
+    with pytest.raises(EntitySearchError, match="embedding 服务调用失败"):
+        EntitySearchService(state_session).reindex(space="dev2")
+
+    assert milvus.collections[COLLECTION_NAME] == []
 
 
 def test_search_hybrid_with_type_filter(state_session, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -582,6 +677,41 @@ def test_search_finds_scalar_property_keyword(
     assert result["items"][0]["properties"]["library"] == "国内机构要素库"
 
 
+def test_reindex_complex_property_has_real_bm25_dimension(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    graph = FakeGraph(
+        ["Patent"],
+        {
+            "Patent": [
+                FakeNode(
+                    "patent_1",
+                    {
+                        "title": "测试专利",
+                        "keywords": ["人工智能", {"zhName": "知识图谱"}],
+                    },
+                )
+            ]
+        },
+    )
+    milvus = FakeMilvusClient()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", FakeEmbeddingClient)
+
+    EntitySearchService(state_session).reindex(space="dev2")
+
+    state = state_session.get(EntitySearchState, "dev2")
+    vocabulary = json.loads(state.vocabulary)
+    query_dimensions = {
+        vocabulary[token] for token in ("知识图谱", "知识", "图谱") if token in vocabulary
+    }
+    row = milvus.collections[COLLECTION_NAME][0]
+    assert query_dimensions
+    assert query_dimensions & set(row["sparse_vector"])
+    assert "知识图谱" in row["search_text"]
+
+
 def test_search_requires_keyword(state_session) -> None:
     service = EntitySearchService(state_session)
     with pytest.raises(EntitySearchError, match="关键词不能为空"):
@@ -666,8 +796,34 @@ def test_search_exact_indexed_name_deduplicates_before_pagination(state_session,
     ]
     assert [[item["vid"] for item in page["items"]] for page in pages] == [["v1"], ["v2"], []]
     assert [page["total"] for page in pages] == [2, 2, 2]
-    assert len(calls) == 6  # 每次只查 name/id 首列索引；重复索引及其他类型排除
+    assert len(calls) == 9  # 每次查 3 个不同首列属性索引；重复索引及其他类型排除
     assert all(call[0] == ["Expert"] and call[2:] == (500, 0) for call in calls)
+
+
+def test_search_exact_arbitrary_indexed_property_works_without_milvus(state_session, monkeypatch):
+    node = FakeNode("org_1", {"name": "机构甲", "library": "国内机构要素库"})
+    graph = FakeGraph(["Organization"], {"Organization": [node]})
+    graph.list_indexes = lambda label: [
+        SimpleNamespace(label="Organization", properties=["library"])
+    ]
+
+    def find_nodes(labels, properties, *, limit, offset):
+        assert labels == ["Organization"]
+        assert properties == {"library": "国内机构要素库"}
+        return FakePagedResult([node])
+
+    graph.find_nodes = find_nodes
+
+    def no_milvus():
+        pytest.fail("已建图属性索引精确命中不应访问 Milvus")
+
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", no_milvus)
+    result = EntitySearchService(state_session).search(keyword="国内机构要素库", space="dev2")
+
+    assert result["mode"] == "graph-exact"
+    assert result["items"][0]["vid"] == "org_1"
+    assert result["items"][0]["properties"]["library"] == "国内机构要素库"
 
 
 def test_search_vid_respects_type_filter(state_session, monkeypatch):

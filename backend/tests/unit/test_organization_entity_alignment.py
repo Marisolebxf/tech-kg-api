@@ -80,6 +80,22 @@ def test_bm25_state_round_trip(tmp_path: Path) -> None:
     assert loaded.encode_document("中国科学院计算技术研究所")
 
 
+def test_bm25_fit_iterable_consumes_stream_once() -> None:
+    consumed: list[str] = []
+
+    def documents():
+        for value in ("人工智能", "知识图谱"):
+            consumed.append(value)
+            yield value
+
+    encoder = BM25SparseEncoder()
+    encoder.fit_iterable(documents())
+
+    assert consumed == ["人工智能", "知识图谱"]
+    assert encoder.document_count == 2
+    assert encoder.encode_query("知识图谱")
+
+
 def test_hashing_dense_encoder_is_deterministic_and_normalized() -> None:
     encoder = HashingDenseEncoder(64)
     first = encoder.encode("中国科学院计算技术研究所")

@@ -59,14 +59,17 @@ class BM25SparseEncoder:
     def fitted(self) -> bool:
         return self.document_count > 0 and bool(self.vocabulary)
 
-    def fit(self, documents: Sequence[str]) -> None:
+    def fit_iterable(self, documents: Iterable[str]) -> None:
+        """Fit from a stream without retaining the whole corpus in memory."""
         frequencies: Counter[str] = Counter()
         total_length = 0
+        document_count = 0
         for document in documents:
             tokens = tokenize_alignment_text(document)
             total_length += len(tokens)
             frequencies.update(set(tokens))
-        self.document_count = len(documents)
+            document_count += 1
+        self.document_count = document_count
         self.average_document_length = (
             total_length / self.document_count if self.document_count else 0.0
         )
@@ -74,6 +77,9 @@ class BM25SparseEncoder:
         self.vocabulary = {
             token: index for index, token in enumerate(sorted(self.document_frequency))
         }
+
+    def fit(self, documents: Sequence[str]) -> None:
+        self.fit_iterable(documents)
 
     def _idf(self, token: str) -> float:
         frequency = self.document_frequency.get(token, 0)

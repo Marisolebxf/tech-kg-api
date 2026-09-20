@@ -224,7 +224,10 @@ watch(
           </button>
         </div>
       </div>
-      <p v-if="status && !status.bm25Ready && status.indexed" class="entity-hint">
+      <p v-if="status?.milvusReachable === false" class="entity-hint">
+        Milvus 当前不可用，已降级为 VID/已建图属性索引的精确查询。
+      </p>
+      <p v-else-if="status && !status.bm25Ready && status.indexed" class="entity-hint">
         BM25 关键词条目缺失（仅语义检索可用），重建索引可恢复混合检索能力。
       </p>
     </section>

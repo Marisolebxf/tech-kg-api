@@ -12,6 +12,7 @@ import {
   SINCE_RULE,
   validateText,
 } from '../utils/textInput'
+import { validateNumericField } from '../utils/configFieldValidation'
 
 const props = defineProps<{
   open: boolean
@@ -31,7 +32,8 @@ const runNow = ref(true)
 
 // 数据抽取任务：选 Schema（须已传脚本且绑定来源表），平台分批并发喂数转换
 const extractSchemaId = ref('')
-const extractBatchSize = ref<number | null>(null)
+// 字符串绑定：v-model.number 会把 65 位数字折叠成 1e+64，位数校验（FUNC-00872）就做不成了
+const extractBatchSize = ref('')
 const extractSchemas = ref<SchemaDefinition[]>([])
 const schemasLoading = ref(false)
 
@@ -98,10 +100,12 @@ const nameError = computed(() => validateText('任务名称', name.value, JOB_NA
 const sinceError = computed(() =>
   since.value.trim() ? validateText('增量游标', since.value, SINCE_RULE) : null,
 )
+// 批大小可空（默认 500）；填了则须为 ≥1 的整数（FUNC-00872：65 位数字触发位数校验）
+const batchSizeError = computed(() => validateNumericField(extractBatchSize.value, { label: '批大小', min: 1 }))
 
 const canSubmit = computed(() => {
   if (!name.value.trim()) return false
-  if (nameError.value || sinceError.value) return false
+  if (nameError.value || sinceError.value || batchSizeError.value) return false
   if (taskType.value === 'chain') return chainSteps.value.length >= 2
   return Boolean(extractSchemaId.value)
 })
@@ -128,7 +132,7 @@ function reset() {
   taskType.value = 'extract'
   name.value = ''
   extractSchemaId.value = ''
-  extractBatchSize.value = null
+  extractBatchSize.value = ''
   chainPick.value = ''
   chainSteps.value = []
   runNow.value = true
@@ -199,7 +203,7 @@ async function submit() {
       taskType: taskType.value,
       schemaId: taskType.value === 'extract' ? extractSchemaId.value : undefined,
       schemaIds: taskType.value === 'chain' ? chainSteps.value.map((s) => s.id) : undefined,
-      batchSize: extractBatchSize.value || undefined,
+      batchSize: extractBatchSize.value.trim() === '' ? undefined : Number(extractBatchSize.value),
       schedule: executeMode.value === 'recurring'
         ? { kind: 'cron', cron: buildScheduleCron(frequency.value, executionTime.value, weekday.value), timezone: 'Asia/Shanghai' }
         : { kind: 'once' },
@@ -261,7 +265,8 @@ async function submit() {
           </div>
           <label class="job-field">
             <span>批大小（默认 500）</span>
-            <input aria-label="500" v-model.number="extractBatchSize" type="number" min="1" max="5000" placeholder="500" />
+            <input aria-label="500" v-model="extractBatchSize" type="number" min="1" max="5000" placeholder="500" />
+            <small v-if="batchSizeError" class="field-error">{{ batchSizeError }}</small>
           </label>
         </div>
 
@@ -285,7 +290,8 @@ async function submit() {
           <div class="job-row">
             <label class="job-field">
               <span>批大小（默认 500，对每个 Schema 生效）</span>
-              <input aria-label="500" v-model.number="extractBatchSize" type="number" min="1" max="5000" placeholder="500" />
+              <input aria-label="500" v-model="extractBatchSize" type="number" min="1" max="5000" placeholder="500" />
+              <small v-if="batchSizeError" class="field-error">{{ batchSizeError }}</small>
             </label>
           </div>
         </template>

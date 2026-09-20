@@ -344,7 +344,7 @@ const algoHasWeight = ref(false)
 /** 按已选边类型键控的权重属性名（加权开启后逐项必填）。 */
 const algoWeightCols = ref<Record<string, string>>({})
 const algoEncodeId = ref(true)
-const algoPartitionNum = ref(1)
+const algoPartitionNum = ref(8)
 const algoMetadataLoading = ref(false)
 const algoMetadata = ref<GraphAlgorithmMetadata | null>(null)
 const algoSubmitLoading = computed(() => activeAlgorithmState.value.submitting)
@@ -457,17 +457,30 @@ const algoJobStatus = computed(() => {
 /** 本页作业是否仍在运行：运行中禁用再次提交（共享引擎同时只跑一个作业，重复提交必然 429）。 */
 const isAlgoJobRunning = computed(() => algoJob.value?.status === 'running')
 
-/** 作业时长文案：运行中为已运行时长（随轮询刷新），终态为总耗时。 */
-const algoJobElapsedText = computed(() => {
+/** 作业时长：运行中随轮询刷新，终态使用服务端完成时间。 */
+const algoJobElapsedSeconds = computed<number | null>(() => {
   const job = algoJob.value
-  if (!job?.startedAt) return ''
+  if (!job?.startedAt) return null
   const start = Date.parse(job.startedAt)
-  if (Number.isNaN(start)) return ''
+  if (Number.isNaN(start)) return null
   const end =
     job.status === 'running' ? Date.now() : job.finishedAt ? Date.parse(job.finishedAt) : Number.NaN
-  if (Number.isNaN(end)) return ''
-  const seconds = Math.max(0, Math.round((end - start) / 1000))
+  if (Number.isNaN(end)) return null
+  return Math.max(0, Math.round((end - start) / 1000))
+})
+
+const algoJobElapsedText = computed(() => {
+  const seconds = algoJobElapsedSeconds.value
+  if (seconds === null) return ''
   return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${String(seconds % 60).padStart(2, '0')} 秒`
+})
+
+/** 长任务只做轻量提示，不改变作业状态，也不停止 Spark 作业。 */
+const algoLongRunningHint = computed(() => {
+  if (!isAlgoJobRunning.value || algoJobElapsedSeconds.value === null) return ''
+  if (algoJobElapsedSeconds.value >= 300) return '作业运行时间较长，可检查 Spark 作业状态'
+  if (algoJobElapsedSeconds.value >= 120) return '作业运行时间较长，当前仍在计算'
+  return ''
 })
 
 /** 服务端 ISO 时间仅展示时分秒，作业面板更易读。 */
@@ -1521,15 +1534,22 @@ const pageMeta = computed(() => {
               <span v-if="algoJob.startedAt">开始 {{ formatAlgoTime(algoJob.startedAt) }}</span>
               <span v-if="algoJob.finishedAt">完成 {{ formatAlgoTime(algoJob.finishedAt) }}</span>
               <span v-if="algoJob.status !== 'running' && algoJobElapsedText">耗时 {{ algoJobElapsedText }}</span>
+              <span v-if="algoJob.driverState">Spark Driver：{{ algoJob.driverState }}</span>
               <button class="kg-button kg-button--text" type="button" @click="refreshAlgoJob">刷新状态</button>
             </div>
             <div v-if="algoJob.status === 'running'" class="platform-query-algo__job-running" role="status">
               <i class="platform-query-algo__job-spinner" aria-hidden="true"></i>
-              <span>算法作业运行中<template v-if="algoJobElapsedText">，已运行 {{ algoJobElapsedText }}</template>，完成后结果自动展示</span>
+              <span>
+                算法作业运行中<template v-if="algoJobElapsedText">，已运行 {{ algoJobElapsedText }}</template>，完成后结果自动展示
+                <template v-if="algoLongRunningHint"><br /><span class="platform-query-algo__job-long-hint">{{ algoLongRunningHint }}</span></template>
+              </span>
             </div>
             <div v-if="algoJob.status === 'failed'" class="platform-query-algo__job-error">
               <p><strong>失败原因：</strong>{{ algoJob.error ?? '（服务端未返回原因）' }}</p>
-              <pre v-if="algoJob.logTail">{{ algoJob.logTail }}</pre>
+              <details v-if="algoJob.logTail" class="platform-query-algo__job-log">
+                <summary>查看 Spark 日志</summary>
+                <pre>{{ algoJob.logTail }}</pre>
+              </details>
             </div>
           </div>
         </div>
@@ -4591,7 +4611,9 @@ print(response.json())</pre>
 .platform-query-algo__job-id{color:#1d2129;font-weight:500}
 .platform-query-algo__job-error{display:grid;border:1px solid #ffd6c6;border-radius:4px;background:#fff;padding:8px 12px;gap:8px}
 .platform-query-algo__job-error p{margin:0;color:#b42318;font-size:13px;line-height:20px;overflow-wrap:anywhere}
-.platform-query-algo__job-error pre{max-height:160px;margin:0;overflow:auto;padding:8px;border-radius:4px;background:#0d1117;color:#e6edf3;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
+.platform-query-algo__job-long-hint{color:#ad6800}
+.platform-query-algo__job-log summary{color:#4e5969;font-size:13px;line-height:20px;cursor:pointer}
+.platform-query-algo__job-log pre{max-height:160px;margin:8px 0 0;overflow:auto;padding:8px;border-radius:4px;background:#0d1117;color:#e6edf3;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
 /* 窄屏（此前该宽度区间对分布图无任何处理）：donut 与图例上下堆叠，避免固定列挤压 */
 @media(max-width:760px){
   .platform-donut-layout{grid-template-columns:minmax(0,1fr);justify-items:center;gap:12px;min-height:0;padding-bottom:8px}

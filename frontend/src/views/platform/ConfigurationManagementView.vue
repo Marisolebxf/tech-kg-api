@@ -44,6 +44,13 @@ import { currentUserIsAdmin } from '../../api/currentUser'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
 import { useToast } from '../../composables/use-toast'
 import { SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
+import {
+  numberOrNullForSubmit,
+  portValueForSubmit,
+  validateConfigFields,
+  validateGraphSpaceName,
+  type ConfigFieldErrors,
+} from '../../utils/configFieldValidation'
 
 type ConfigKind = 'llm' | 'embedding' | 'mysql'
 type ConfigStatus = '正常' | '停用' | '异常'
@@ -123,23 +130,24 @@ type ConfigForm = {
 }
 
 const form = ref<ConfigForm>({})
-const configFormRef = ref()
-const detailFormRef = ref()
 const verifying = ref(false)
 const verified = ref(false)
-const configFormRules = {
-  name: [{ required: true, message: '请输入配置名称' }],
-  baseUrl: [{ required: true, message: '请输入 Base URL' }],
-  model: [{ required: true, message: '请输入模型名称' }],
-  apiKey: [{ required: true, message: '请输入 API Key' }],
-  host: [{ required: true, message: '请输入主机地址' }],
-  username: [{ required: true, message: '请输入用户名' }],
-}
-const detailFormRules = configFormRules
+// 输入即校验（第一轮测试 FUNC-00404～00676 口径）：computed 错误随输入刷新，字段位提示并拦提交/验证。
+// 之前挂在 a-form :rules 上——原生 input 不触发 arco 的 change 校验，只有提交时 validate() 兜底，「输入即校验」全缺失。
+const createFieldErrors = computed<ConfigFieldErrors>(() =>
+  formKind.value ? validateConfigFields(formKind.value, form.value, 'create') : {})
+const hasCreateErrors = computed(() => Object.keys(createFieldErrors.value).length > 0)
+const detailFieldErrors = computed<ConfigFieldErrors>(() =>
+  selected.value && !isGraphSpaceCategory.value
+    ? validateConfigFields(selected.value.kind, selected.value, 'detail')
+    : {})
+const hasDetailErrors = computed(() => Object.keys(detailFieldErrors.value).length > 0)
+const spaceNameError = computed(() => (spaceDialogOpen.value ? validateGraphSpaceName(newSpaceName.value) : null))
 
 const isModelKind = computed(() => activeCategory.value === '语言模型' || activeCategory.value === '向量模型')
 const canVerifyForm = computed(() =>
-  Boolean(String(form.value.baseUrl || '').trim() && String(form.value.model || '').trim() && String(form.value.apiKey || '').trim()))
+  Boolean(String(form.value.baseUrl || '').trim() && String(form.value.model || '').trim() && String(form.value.apiKey || '').trim())
+  && !hasCreateErrors.value)
 
 // 模型配置要求"验证通过才能保存"；任何字段改动都会使已验证状态失效，需重新验证。
 watch(form, () => { verified.value = false }, { deep: true })
@@ -266,8 +274,8 @@ async function loadGraphSpaces() {
 }
 
 async function createSpace() {
+  if (spaceNameError.value) return
   const name = newSpaceName.value.trim()
-  if (!name) return
   spaceWorking.value = true
   try {
     await createGraphSpace(name)
@@ -354,8 +362,7 @@ function openCreate() {
 async function verifyForm() {
   const kind = formKind.value
   if (kind !== 'llm' && kind !== 'embedding') return
-  const validationErrors = await configFormRef.value?.validate()
-  if (validationErrors) return
+  if (hasCreateErrors.value) return
   verifying.value = true
   try {
     const payload = {
@@ -382,12 +389,10 @@ async function verifyForm() {
 }
 
 async function saveConfig() {
-  const validationErrors = await configFormRef.value?.validate()
-  if (validationErrors) return
+  if (hasCreateErrors.value) return
   const kind = formKind.value
   if (!kind) return
   if ((kind === 'llm' || kind === 'embedding') && !verified.value) return
-  if (!String(form.value.name).trim()) return
   saving.value = true
   try {
     if (kind === 'llm') {
@@ -404,7 +409,7 @@ async function saveConfig() {
         name: String(form.value.name).trim(),
         baseUrl: String(form.value.baseUrl).trim(),
         model: String(form.value.model).trim(),
-        dimensions: form.value.dimensions == null ? null : Number(form.value.dimensions),
+        dimensions: numberOrNullForSubmit(form.value.dimensions),
         apiKey: String(form.value.apiKey || '').trim(),
         description: String(form.value.description || '').trim(),
         isDefault: Boolean(form.value.isDefault),
@@ -413,7 +418,7 @@ async function saveConfig() {
       await createMysqlDatasource({
         name: String(form.value.name).trim(),
         host: String(form.value.host).trim(),
-        port: Number(form.value.port || 3306),
+        port: portValueForSubmit(form.value.port),
         defaultDatabase: String(form.value.defaultDatabase || '').trim(),
         username: String(form.value.username).trim(),
         password: String(form.value.password || ''),
@@ -434,8 +439,7 @@ async function saveConfig() {
 
 async function saveDetail() {
   if (!selected.value) return
-  const validationErrors = await detailFormRef.value?.validate()
-  if (validationErrors) return
+  if (hasDetailErrors.value) return
   const item = selected.value
   saving.value = true
   try {
@@ -448,12 +452,12 @@ async function saveDetail() {
     } else if (item.kind === 'embedding') {
       const updated = await updateEmbeddingConfig(item.id, {
         name: item.name, description: item.description, baseUrl: item.baseUrl || '', model: item.model || '',
-        dimensions: item.dimensions ?? null, owner: item.owner, apiKey: item.apiKey || '', status: item.status,
+        dimensions: numberOrNullForSubmit(item.dimensions), owner: item.owner, apiKey: item.apiKey || '', status: item.status,
       }, currentUserId())
       selected.value = { ...selected.value, ...toConfigItem('embedding', updated), apiKey: '' }
     } else if (item.kind === 'mysql') {
       const updated = await updateMysqlDatasource(item.id, {
-        name: item.name, description: item.description, host: item.host || '', port: Number(item.port || 3306),
+        name: item.name, description: item.description, host: item.host || '', port: portValueForSubmit(item.port),
         defaultDatabase: item.defaultDatabase || '', username: item.username || '',
         password: item.password || '', owner: item.owner, status: item.status,
       }, currentUserId())
@@ -636,25 +640,25 @@ onMounted(() => {
       <header><div><span>{{ selected.id }}</span><h2>{{ selected.name }}<b v-if="selected.isDefault" class="default-tag">默认</b></h2></div><button type="button" @click="selected=null">×</button></header>
       <div class="detail-drawer-body">
         <section class="health-card"><i :class="`is-${selected.status}`" /><div><strong>{{ selected.status === '正常' ? '配置可用' : selected.status === '异常' ? '连接存在异常' : '配置已停用' }}</strong><span>后端真实探活</span></div><button type="button" :disabled="testingId === selected.id" @click="testConnection(selected)">{{ testingId === selected.id ? '测试中…' : '测试连接' }}</button></section>
-        <a-form ref="detailFormRef" :model="selected" :rules="detailFormRules" class="detail-form" layout="vertical">
-          <a-form-item field="name" label="配置名称" required><input aria-label="name" v-model="selected.name" /></a-form-item>
+        <a-form :model="selected" class="detail-form" layout="vertical">
+          <a-form-item field="name" label="配置名称" required><input aria-label="name" v-model="selected.name" /><small v-if="detailFieldErrors.name" class="field-error">{{ detailFieldErrors.name }}</small></a-form-item>
           <a-form-item label="服务类型"><input aria-label="input-field" :value="selected.type" readonly /></a-form-item>
           <template v-if="selected.kind === 'llm' || selected.kind === 'embedding'">
-            <a-form-item class="wide" field="baseUrl" label="Base URL" required><input aria-label="baseUrl" v-model="selected.baseUrl" /></a-form-item>
-            <a-form-item field="model" label="模型" required><input aria-label="model" v-model="selected.model" /></a-form-item>
-            <a-form-item v-if="selected.kind === 'embedding'" label="维度"><input aria-label="number-input" v-model.number="selected.dimensions" type="number" /></a-form-item>
+            <a-form-item class="wide" field="baseUrl" label="Base URL" required><input aria-label="baseUrl" v-model="selected.baseUrl" /><small v-if="detailFieldErrors.baseUrl" class="field-error">{{ detailFieldErrors.baseUrl }}</small></a-form-item>
+            <a-form-item field="model" label="模型" required><input aria-label="model" v-model="selected.model" /><small v-if="detailFieldErrors.model" class="field-error">{{ detailFieldErrors.model }}</small></a-form-item>
+            <a-form-item v-if="selected.kind === 'embedding'" label="维度"><input aria-label="number-input" v-model="selected.dimensions" type="number" /><small v-if="detailFieldErrors.dimensions" class="field-error">{{ detailFieldErrors.dimensions }}</small></a-form-item>
             <a-form-item label="访问凭据"><input aria-label="input-field" :value="selected.apiKeyMasked || (selected.hasApiKey ? '••••••••' : '未设置')" readonly /></a-form-item>
-            <a-form-item class="wide" label="更新 API Key（留空保留原值）"><input aria-label="输入新 Key 覆盖原值" v-model="selected.apiKey" type="password" placeholder="输入新 Key 覆盖原值" /></a-form-item>
+            <a-form-item class="wide" label="更新 API Key（留空保留原值）"><input aria-label="输入新 Key 覆盖原值" v-model="selected.apiKey" type="password" placeholder="输入新 Key 覆盖原值" /><small v-if="detailFieldErrors.apiKey" class="field-error">{{ detailFieldErrors.apiKey }}</small></a-form-item>
           </template>
           <template v-else>
-            <a-form-item field="host" label="主机" required><input aria-label="host" v-model="selected.host" /></a-form-item>
-            <a-form-item label="端口"><input aria-label="number-input" v-model.number="selected.port" type="number" /></a-form-item>
-            <a-form-item label="默认库"><input aria-label="defaultDatabase" v-model="selected.defaultDatabase" /></a-form-item>
-            <a-form-item field="username" label="用户名" required><input aria-label="username" v-model="selected.username" /></a-form-item>
+            <a-form-item field="host" label="主机" required><input aria-label="host" v-model="selected.host" /><small v-if="detailFieldErrors.host" class="field-error">{{ detailFieldErrors.host }}</small></a-form-item>
+            <a-form-item label="端口"><input aria-label="number-input" v-model="selected.port" type="number" /><small v-if="detailFieldErrors.port" class="field-error">{{ detailFieldErrors.port }}</small></a-form-item>
+            <a-form-item label="默认库"><input aria-label="defaultDatabase" v-model="selected.defaultDatabase" /><small v-if="detailFieldErrors.defaultDatabase" class="field-error">{{ detailFieldErrors.defaultDatabase }}</small></a-form-item>
+            <a-form-item field="username" label="用户名" required><input aria-label="username" v-model="selected.username" /><small v-if="detailFieldErrors.username" class="field-error">{{ detailFieldErrors.username }}</small></a-form-item>
             <a-form-item label="访问凭据"><input aria-label="input-field" :value="selected.passwordMasked || (selected.hasPassword ? '••••••••' : '未设置')" readonly /></a-form-item>
-            <a-form-item class="wide" label="更新密码（留空保留原值）"><input aria-label="输入新密码覆盖原值" v-model="selected.password" type="password" placeholder="输入新密码覆盖原值" /></a-form-item>
+            <a-form-item class="wide" label="更新密码（留空保留原值）"><input aria-label="输入新密码覆盖原值" v-model="selected.password" type="password" placeholder="输入新密码覆盖原值" /><small v-if="detailFieldErrors.password" class="field-error">{{ detailFieldErrors.password }}</small></a-form-item>
           </template>
-          <a-form-item class="wide" label="配置说明"><a-textarea v-model="selected.description" /></a-form-item>
+          <a-form-item class="wide" label="配置说明"><a-textarea v-model="selected.description" /><small v-if="detailFieldErrors.description" class="field-error">{{ detailFieldErrors.description }}</small></a-form-item>
         </a-form>
         <section class="reference-card"><header><strong>引用关系</strong><span>{{ selected.usage }}</span></header><p>配置变更将在下次脚本调用时生效（context 按触发时所选数据源 / 图空间 / LLM / embedding 注入；向量库随图空间自动同名创建）。</p></section>
       </div>
@@ -662,7 +666,7 @@ onMounted(() => {
         <button v-if="!selected.isDefault" type="button" @click="setAsDefault(selected)">设为默认</button>
         <button type="button" @click="toggleItem(selected)">{{ selected.status === '停用' ? '启用配置' : '停用配置' }}</button>
         <button type="button" @click="removeConfig(selected)">删除</button>
-        <button class="primary" type="button" :disabled="saving" @click="saveDetail">{{ saving ? '保存中…' : '保存修改' }}</button>
+        <button class="primary" type="button" :disabled="saving || hasDetailErrors" @click="saveDetail">{{ saving ? '保存中…' : '保存修改' }}</button>
       </footer>
       </aside>
     </Teleport>
@@ -674,40 +678,41 @@ onMounted(() => {
         <a-form class="dialog-form" layout="vertical" :model="{}">
           <a-form-item class="wide" label="图数据空间名称" required>
             <input aria-label="仅字母、数字、下划线，以字母或下划线开头" v-model="newSpaceName" placeholder="仅字母、数字、下划线，以字母或下划线开头" />
+            <small v-if="spaceNameError" class="field-error">{{ spaceNameError }}</small>
           </a-form-item>
           <p class="space-dialog-hint">将真实执行 CREATE SPACE 并自动绑定到你的账号；空间创建后有秒级传播延迟。</p>
         </a-form>
-        <footer><button type="button" @click="spaceDialogOpen=false">取消</button><button class="primary" type="button" :disabled="!newSpaceName.trim() || spaceWorking" @click="createSpace">{{ spaceWorking ? '创建中…' : '创建' }}</button></footer>
+        <footer><button type="button" @click="spaceDialogOpen=false">取消</button><button class="primary" type="button" :disabled="spaceWorking" @click="createSpace">{{ spaceWorking ? '创建中…' : '创建' }}</button></footer>
       </aside>
       <button v-if="dialogOpen" class="mask create-dialog-mask" type="button" aria-label="关闭新建配置弹窗" @click="dialogOpen=false" />
       <aside v-if="dialogOpen" class="create-dialog config-create-dialog">
       <header><div><span>NEW CONFIGURATION</span><h2>新建{{ categories.find(item => item.key === activeCategory)?.label }}</h2></div><button type="button" @click="dialogOpen=false">×</button></header>
-      <a-form ref="configFormRef" :model="form" :rules="configFormRules" class="dialog-form config-create-form" layout="vertical">
+      <a-form :model="form" class="dialog-form config-create-form" layout="vertical">
         <template v-if="formKind === 'llm' || formKind === 'embedding'">
-          <a-form-item class="wide" field="name" label="配置名称" required><input aria-label="例如：科技文本抽取大模型" v-model="form.name" placeholder="例如：科技文本抽取大模型" /></a-form-item>
-          <a-form-item class="wide" field="baseUrl" label="Base URL" required><input aria-label="baseUrl" v-model="form.baseUrl" /></a-form-item>
-          <a-form-item class="wide" field="model" label="模型" required><input aria-label="model" v-model="form.model" /></a-form-item>
-          <a-form-item v-if="formKind === 'embedding'" field="dimensions" label="维度"><input aria-label="number-input" v-model.number="form.dimensions" type="number" /></a-form-item>
-          <a-form-item class="wide" field="apiKey" label="API Key" required><input aria-label="必填；验证通过后才能保存，明文入库脱敏展示" v-model="form.apiKey" type="password" placeholder="必填；验证通过后才能保存，明文入库脱敏展示" /></a-form-item>
+          <a-form-item class="wide" field="name" label="配置名称" required><input aria-label="例如：科技文本抽取大模型" v-model="form.name" placeholder="例如：科技文本抽取大模型" /><small v-if="createFieldErrors.name" class="field-error">{{ createFieldErrors.name }}</small></a-form-item>
+          <a-form-item class="wide" field="baseUrl" label="Base URL" required><input aria-label="baseUrl" v-model="form.baseUrl" /><small v-if="createFieldErrors.baseUrl" class="field-error">{{ createFieldErrors.baseUrl }}</small></a-form-item>
+          <a-form-item class="wide" field="model" label="模型" required><input aria-label="model" v-model="form.model" /><small v-if="createFieldErrors.model" class="field-error">{{ createFieldErrors.model }}</small></a-form-item>
+          <a-form-item v-if="formKind === 'embedding'" field="dimensions" label="维度"><input aria-label="number-input" v-model="form.dimensions" type="number" /><small v-if="createFieldErrors.dimensions" class="field-error">{{ createFieldErrors.dimensions }}</small></a-form-item>
+          <a-form-item class="wide" field="apiKey" label="API Key" required><input aria-label="必填；验证通过后才能保存，明文入库脱敏展示" v-model="form.apiKey" type="password" placeholder="必填；验证通过后才能保存，明文入库脱敏展示" /><small v-if="createFieldErrors.apiKey" class="field-error">{{ createFieldErrors.apiKey }}</small></a-form-item>
         </template>
         <template v-else>
-          <a-form-item class="wide" field="name" label="配置名称" required><input aria-label="name" v-model="form.name" /></a-form-item>
-          <a-form-item field="host" label="主机" required><input aria-label="host" v-model="form.host" /></a-form-item>
-          <a-form-item label="端口"><input aria-label="number-input" v-model.number="form.port" type="number" /></a-form-item>
-          <a-form-item label="默认库"><input aria-label="defaultDatabase" v-model="form.defaultDatabase" /></a-form-item>
-          <a-form-item field="username" label="用户名" required><input aria-label="username" v-model="form.username" /></a-form-item>
-          <a-form-item class="wide" label="密码"><input aria-label="password" v-model="form.password" type="password" /></a-form-item>
+          <a-form-item class="wide" field="name" label="配置名称" required><input aria-label="name" v-model="form.name" /><small v-if="createFieldErrors.name" class="field-error">{{ createFieldErrors.name }}</small></a-form-item>
+          <a-form-item field="host" label="主机" required><input aria-label="host" v-model="form.host" /><small v-if="createFieldErrors.host" class="field-error">{{ createFieldErrors.host }}</small></a-form-item>
+          <a-form-item label="端口"><input aria-label="number-input" v-model="form.port" type="number" /><small v-if="createFieldErrors.port" class="field-error">{{ createFieldErrors.port }}</small></a-form-item>
+          <a-form-item label="默认库"><input aria-label="defaultDatabase" v-model="form.defaultDatabase" /><small v-if="createFieldErrors.defaultDatabase" class="field-error">{{ createFieldErrors.defaultDatabase }}</small></a-form-item>
+          <a-form-item field="username" label="用户名" required><input aria-label="username" v-model="form.username" /><small v-if="createFieldErrors.username" class="field-error">{{ createFieldErrors.username }}</small></a-form-item>
+          <a-form-item class="wide" label="密码"><input aria-label="password" v-model="form.password" type="password" /><small v-if="createFieldErrors.password" class="field-error">{{ createFieldErrors.password }}</small></a-form-item>
         </template>
-        <a-form-item class="wide" label="说明"><a-textarea v-model="form.description" :max-length="200" show-word-limit :auto-size="{ minRows: 3, maxRows: 5 }" /></a-form-item>
+        <a-form-item class="wide" label="说明"><a-textarea v-model="form.description" :auto-size="{ minRows: 3, maxRows: 5 }" /><small v-if="createFieldErrors.description" class="field-error">{{ createFieldErrors.description }}</small></a-form-item>
         <a-form-item class="wide" field="isDefault"><a-checkbox v-model="form.isDefault" class="default-config-checkbox">设为默认（同一类别仅一条默认生效）</a-checkbox></a-form-item>
       </a-form>
       <footer>
         <button type="button" @click="dialogOpen=false">取消</button>
         <template v-if="isModelKind">
           <button type="button" :disabled="verifying || !canVerifyForm" @click="verifyForm">{{ verifying ? '验证中…' : '验证连接' }}</button>
-          <button class="primary" type="button" :disabled="!verified || saving" @click="saveConfig">{{ saving ? '保存中…' : verified ? '保存' : '验证通过后可保存' }}</button>
+          <button class="primary" type="button" :disabled="!verified || saving || hasCreateErrors" @click="saveConfig">{{ saving ? '保存中…' : verified ? '保存' : '验证通过后可保存' }}</button>
         </template>
-        <button v-else class="primary" type="button" :disabled="!form.name || saving" @click="saveConfig">{{ saving ? '保存中…' : '保存' }}</button>
+        <button v-else class="primary" type="button" :disabled="hasCreateErrors || saving" @click="saveConfig">{{ saving ? '保存中…' : '保存' }}</button>
       </footer>
       </aside>
     </Teleport>
@@ -791,6 +796,8 @@ onMounted(() => {
 .bind-nav{display:flex;width:100%;gap:16px;align-items:center}.bind-nav :deep(.arco-select){width:200px;min-width:200px}.bind-nav button{height:32px;padding:0 16px;border:1px solid #bdd0ea;border-radius:4px;font-size:14px;cursor:pointer}
 .space-hint{margin:8px 16px;color:#86909c;font-size:12px;line-height:20px}
 .space-dialog-hint{grid-column:1/-1;margin:0;color:#86909c;font-size:12px;line-height:20px}
+/* 字段级校验提示（输入即校验，超长/异常字符/范围/必填） */
+.dialog-form .field-error,.detail-form .field-error{display:block;color:#e4322d;font-size:12px;line-height:18px}
 
 /* 新建配置弹窗文字层级：主 / 次 / 三级 / 禁用。 */
 .config-create-dialog,.config-create-dialog :deep(*){font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;letter-spacing:0}

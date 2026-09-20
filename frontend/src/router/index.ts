@@ -17,6 +17,7 @@ import ProcessInstanceDetailView from '../views/platform/ProcessInstanceDetailVi
 import SchemaBrowserView from '../views/platform/SchemaBrowserView.vue'
 import GraphBuildView from '../views/platform/GraphBuildView.vue'
 import EntityListView from '../views/platform/EntityListView.vue'
+import GraphVisualizationView from '../views/platform/GraphVisualizationView.vue'
 import ConfigurationManagementView from '../views/platform/ConfigurationManagementView.vue'
 import AccessDeniedView from '../views/auth/AccessDeniedView.vue'
 
@@ -75,6 +76,12 @@ export const router = createRouter({
       name: 'graph-query-entities',
       component: EntityListView,
       meta: { title: '实体列表' },
+    },
+    {
+      path: '/graph-query/visualization',
+      name: 'graph-query-visualization',
+      component: GraphVisualizationView,
+      meta: { title: '图谱可视化' },
     },
     { path: '/schema', name: 'schema', component: SchemaBrowserView, meta: { title: 'Schema 管理', admin: true } },
     { path: '/graph-build', name: 'graph-build', component: GraphBuildView, meta: { title: '图谱构建', admin: true } },

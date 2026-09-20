@@ -51,6 +51,11 @@ export interface EntityIndexStatus {
   collectionExists: boolean
   bm25Ready: boolean
   reindexing: boolean
+  milvusReachable?: boolean
+  actualDataAvailable?: boolean
+  stateStale?: boolean
+  recordedEntityCount?: number
+  recordedTypeCounts?: Record<string, number>
 }
 
 export interface EntityReindexResult {

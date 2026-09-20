@@ -61,6 +61,7 @@ async def test_route_is_registered_and_empty_data_succeeds(
 async def test_validation_errors_use_http_422(project_relation_client) -> None:
     for payload in (
         {"relationTypes": ["DROP_SPACE"]},
+        {"projectNumber": "P-001"},
         {"pageSize": 201},
     ):
         response = await project_relation_client.post(

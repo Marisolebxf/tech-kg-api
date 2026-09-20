@@ -623,6 +623,11 @@ function isRelationTab(): boolean {
   return activeTab.value === '关系'
 }
 
+/** 名称输入框上限：关系页 64（EDGE 类型名）、实体页 128，与校验规则同源 */
+const nameRuleMax = computed(() =>
+  isRelationTab() ? SCHEMA_RELATION_NAME_RULE.max : SCHEMA_ENTITY_NAME_RULE.max,
+)
+
 function addProperty() {
   createForm.value.properties.push(emptyPropertyRow())
 }
@@ -1178,8 +1183,8 @@ function togglePropertyDetail(schemaId: string): void {
           <a-form ref="createFormRef" :model="createForm" :rules="createFormRules" class="schema-modal__body schema-create-body" layout="vertical">
             <div class="create-row">
               <a-form-item class="create-field create-field--limit-note" field="name" :label="isRelationTab() ? '关系英文名' : '实体名'" required>
-                <input aria-label="name" v-model="createForm.name" class="create-text-input" :class="{ 'is-at-limit': atLimit(createForm.name, SCHEMA_ENTITY_NAME_RULE.max) }" :maxlength="SCHEMA_ENTITY_NAME_RULE.max" :placeholder="isRelationTab() ? 'USES_TECHNOLOGY' : 'Gadget'" />
-                <p v-if="atLimit(createForm.name, SCHEMA_ENTITY_NAME_RULE.max)" class="limit-field-note">已达 {{ SCHEMA_ENTITY_NAME_RULE.max }} 字上限，无法继续输入</p>
+                <input aria-label="name" v-model="createForm.name" class="create-text-input" :class="{ 'is-at-limit': atLimit(createForm.name, nameRuleMax) }" :maxlength="nameRuleMax" :placeholder="isRelationTab() ? 'USES_TECHNOLOGY' : 'Gadget'" />
+                <p v-if="atLimit(createForm.name, nameRuleMax)" class="limit-field-note">已达 {{ nameRuleMax }} 字上限，无法继续输入</p>
               </a-form-item>
               <a-form-item class="create-field create-field--limit-note" field="label" label="中文名" required>
                 <input aria-label="如：技术" v-model="createForm.label" class="create-text-input" :class="{ 'is-at-limit': atLimit(createForm.label, SCHEMA_LABEL_RULE.max) }" :maxlength="SCHEMA_LABEL_RULE.max" placeholder="如：技术" />

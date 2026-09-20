@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import time
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from application.entity_search import EntitySearchApplication
@@ -19,6 +22,29 @@ from service.entity_search import (
 )
 
 router = APIRouter(prefix="/entity-search", tags=["entity-search"])
+
+# 实体列表浏览是重查询（Nebula 分页扫描+排序，dev2 空间 52 万实体），
+# 500 并发下 api 连接积压产生 502。结果按 查询参数 做 15s TTL 缓存
+# （同参数结果一致）；实体数据由 ETL 持续写入，15s 滞后可接受。
+# TTL 环境变量 ENTITY_BROWSE_CACHE_SECONDS 可调，0=关闭。
+_BROWSE_CACHE_SECONDS = float(os.getenv("ENTITY_BROWSE_CACHE_SECONDS", "15"))
+_browse_payload_cache: dict[str, tuple[float, str]] = {}
+
+
+def _browse_cache_get(key: str) -> str | None:
+    entry = _browse_payload_cache.get(key)
+    if entry and entry[0] > time.monotonic():
+        return entry[1]
+    return None
+
+
+def _browse_cache_put(key: str, payload: str) -> None:
+    if len(_browse_payload_cache) > 1024:
+        now = time.monotonic()
+        for stale in [k for k, v in _browse_payload_cache.items() if v[0] <= now]:
+            _browse_payload_cache.pop(stale, None)
+    _browse_payload_cache[key] = (time.monotonic() + _BROWSE_CACHE_SECONDS, payload)
+
 
 
 def _application(session: Session) -> EntitySearchApplication:
@@ -54,6 +80,10 @@ async def browse_entities(
 ) -> ApiResponse:
     """浏览实体（关键词为空的默认视图）：图空间直查分页，页内按 vid 排序。"""
     _ensure_space_access(actor, space)
+    cache_key = f"browse:{space}:{entityType}:{limit}:{offset}"
+    cached = _browse_cache_get(cache_key)
+    if cached is not None:
+        return Response(cached, media_type="application/json")
     app = _application(session)
     try:
         data = await asyncio.to_thread(
@@ -63,9 +93,15 @@ async def browse_entities(
             limit=limit,
             offset=offset,
         )
-        return ApiResponse(data=data)
     except EntitySearchError as exc:
         _raise_domain_error(exc)
+    payload = json.dumps(
+        {"code": 200, "success": True, "data": data, "msg": "success"},
+        ensure_ascii=False,
+        default=str,
+    )
+    _browse_cache_put(cache_key, payload)
+    return Response(payload, media_type="application/json")
 
 
 @router.get("/types", response_model=ApiResponse)

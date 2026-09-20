@@ -513,6 +513,25 @@ describe('Algorithm result lists', () => {
     expect(wrapper.get('.platform-query-algo__job-running').text()).toContain('运行中')
   })
 
+  it('shows the labels error only after an empty submit and clears it after selection', async () => {
+    await enterAlgorithms()
+    await clickButton('Degree算法')
+
+    expect(wrapper.text()).not.toContain('labels 是必填项')
+    await clickButton('提交算法作业')
+    await nextTick()
+    expect(wrapper.text()).toContain('labels 是必填项')
+    expect(submitAlgorithmJob).not.toHaveBeenCalled()
+
+    await wrapper.get('.platform-query-algo__labels select').setValue([`${store.current}-edge`])
+    await nextTick()
+    expect(wrapper.text()).not.toContain('labels 是必填项')
+
+    await clickButton('提交算法作业')
+    await flushPromises()
+    expect(submitAlgorithmJob).toHaveBeenCalledTimes(1)
+  })
+
   it('shows at most 200 sorted rows while exporting every returned row', async () => {
     const blobParts: unknown[][] = []
     vi.stubGlobal('Blob', class {

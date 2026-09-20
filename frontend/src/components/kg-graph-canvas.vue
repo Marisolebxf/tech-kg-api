@@ -103,10 +103,10 @@ function nodeClass(
   if (props.nodeShape === 'circle') classes.push('is-solid-circle')
 
   /*
-   * 中心节点只负责加粗、加大，
-   * 不再改变实体类型颜色。
+   * 中心节点标记为 --center（更大半径/光环/加粗标题），
+   * uniform-node-size 下仍保留中心强调，只统一其余节点尺寸。
    */
-  if (node.level === 0 && !props.uniformNodeSize) {
+  if (node.level === 0) {
     classes.push(
       'platform-node--center',
     )
@@ -132,10 +132,12 @@ function nodeHeight(node: GraphNodeData) {
 }
 
 /** 圆形节点半径，渲染与连线偏移共用，避免节点/连线半径不一致。
- *  节点自带 radius（如 PageRank 重要性分值映射）时优先使用。 */
+ *  节点自带 radius（如 PageRank 重要性分值映射）时优先使用；
+ *  uniform-node-size 只统一非中心节点，中心节点仍放大以区分。 */
 function nodeRadius(node: GraphNodeData) {
   if (node.radius !== undefined && !props.uniformNodeSize) return node.radius
-  return node.level === 0 && !props.uniformNodeSize ? 20 : 15
+  if (node.level === 0) return props.uniformNodeSize ? 24 : 20
+  return 15
 }
 
 /** 标签过长时截断，防止长文本撑爆画布。 */
@@ -344,6 +346,11 @@ onUnmounted(() => {
           @click.stop="handleNodeClick(node)"
         >
           <title>{{ node.label }}｜{{ node.entityType }}｜{{ node.relations }}</title>
+          <circle
+            v-if="nodeShape === 'circle' && node.level === 0"
+            class="node-halo"
+            :r="nodeRadius(node) + 7"
+          />
           <circle
             v-if="nodeShape === 'circle'"
             class="node-shape"
@@ -756,6 +763,21 @@ onUnmounted(() => {
   fill: #1d2129;
   font-size: 10px;
   font-weight: 700;
+}
+
+/* 中心节点强调：虚线光环外环 + 更强投影，与普通节点明显区分（circle 模式） */
+.platform-node .node-halo {
+  fill: none;
+  stroke: #4e5969;
+  stroke-width: 1.2;
+  stroke-dasharray: 3 4;
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.platform-node.is-solid-circle.platform-node--center .node-shape {
+  stroke-width: 2.5;
+  filter: drop-shadow(0 3px 9px rgba(29, 33, 41, 0.28));
 }
 
 </style>

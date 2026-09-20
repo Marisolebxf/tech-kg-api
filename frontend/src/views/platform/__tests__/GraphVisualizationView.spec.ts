@@ -12,6 +12,10 @@ import {
   type GetSubgraphParams,
 } from '../../../api/graphSearch'
 import { browseEntities, searchEntities, type EntitySearchItem } from '../../../api/entitySearch'
+import {
+  getSchemaTopology,
+  type SchemaDefinition,
+} from '../../../api/schemaManagement'
 import { useGraphSpaceStore } from '../../../stores/graphSpace'
 import GraphVisualizationView from '../GraphVisualizationView.vue'
 
@@ -27,6 +31,10 @@ vi.mock('../../../api/graphSearch', async (importOriginal) => {
     getFilteredSubgraph: vi.fn(),
     getGraphNode: vi.fn(),
   }
+})
+vi.mock('../../../api/schemaManagement', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../api/schemaManagement')>()
+  return { ...actual, getSchemaTopology: vi.fn() }
 })
 vi.mock('../../../api/entitySearch', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../api/entitySearch')>()
@@ -124,6 +132,8 @@ beforeEach(() => {
   vi.mocked(getGraphStats).mockResolvedValue(
     apiOk({ nodes: { 专家: 12, 论文: 8 }, edges: { 撰写: 20, 任职: 6 } }),
   )
+  // 默认空目录：类型名回退原名显示（不依赖 Schema 目录的用例不受影响）
+  vi.mocked(getSchemaTopology).mockResolvedValue({ nodes: [], edges: [] })
   // 默认浏览无实体：自动预览直接跳过，不影响「未查询」空态用例
   vi.mocked(browseEntities).mockResolvedValue({
     items: [], offset: 0, limit: 1, entityType: null, mode: 'browse',
@@ -199,6 +209,34 @@ describe('GraphVisualizationView', () => {
     // 类型下拉来自 stats 的标签/边类型计数
     expect(wrapper.text()).toContain('专家（12）')
     expect(wrapper.text()).toContain('撰写（20）')
+  })
+
+  it('类型名显示 Schema 目录中文名（目录缺失的类型回退英文原名）', async () => {
+    wrapper.unmount()
+    vi.mocked(getGraphStats).mockResolvedValue(
+      apiOk({ nodes: { Expert: 3, Legacy: 1 }, edges: { AUTHORED_BY: 5 } }),
+    )
+    vi.mocked(getSchemaTopology).mockResolvedValue({
+      nodes: [{ name: 'Expert', label: '专家' } as SchemaDefinition],
+      edges: [{ name: 'AUTHORED_BY', label: '撰写' } as SchemaDefinition],
+    })
+    vi.mocked(browseEntities).mockResolvedValue({
+      items: [entityItem('exp-1', '张三', 'Expert')],
+      offset: 0, limit: 1, entityType: null, mode: 'browse',
+    })
+    vi.mocked(getSubgraph).mockResolvedValue(
+      apiOk({ nodes: [apiNode('exp-1', ['Expert'], { name: '张三' })], edges: [] }),
+    )
+    mountView()
+    await flushPromises()
+    expect(getSchemaTopology).toHaveBeenCalledWith('space-a')
+    // 实体/边类型下拉用目录中文名；目录没有的 Legacy 回退英文原名
+    const entitySelectText = wrapper.get('#graphviz-entity-type').text()
+    expect(entitySelectText).toContain('专家（3）')
+    expect(entitySelectText).toContain('Legacy（1）')
+    expect(wrapper.get('#graphviz-edge-types').text()).toContain('撰写（5）')
+    // 图例（实体类型显隐开关）同样显示中文名
+    expect(wrapper.get('.graphviz-legend').text()).toContain('专家')
   })
 
   it('打开页面自动取图里第一个实体预览出图，免手动搜索起点', async () => {
@@ -285,7 +323,7 @@ describe('GraphVisualizationView', () => {
     expect(wrapper.findAll('.graphviz-start__item')).toHaveLength(1)
   })
 
-  it('每跳上限可自由输入并夹紧到 1-256', async () => {
+  it('每跳边数上限可自由输入并夹紧到 1-256', async () => {
     await searchStart([entityItem('scholar-1', '张三', '专家')])
     await wrapper.findAll('.graphviz-start__item')[0].trigger('click')
 
@@ -320,7 +358,7 @@ describe('GraphVisualizationView', () => {
     })
     expect(getSubgraph).toHaveBeenCalledWith(
       'scholar-1',
-      expect.objectContaining({ depth: 2, limit: 100, direction: 'both', space: 'space-a' }),
+      expect.objectContaining({ depth: 3, limit: 16, direction: 'both', space: 'space-a' }),
     )
     expect(canvasCount()).toBe('2/1')
     expect(showToast).toHaveBeenCalledWith('已加载 2 个实体、1 条关系', 'success')

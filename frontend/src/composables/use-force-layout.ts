@@ -25,6 +25,8 @@ export interface ForceLayoutOptions {
   maxTicks?: number
   /** 将 level=1 节点固定在中心外的环形半径；仅分层全景图按需启用。 */
   levelOneRingRadius?: number
+  /** 布局模式：'force' 力导向（默认）；'radial' 按 BFS 跳数同心环扩散。 */
+  layout?: 'force' | 'radial'
 }
 
 /**
@@ -51,6 +53,10 @@ const COLLISION_GAP = 20
 const EDGE_AVOID_PAD = 12
 /** 边避让推力强度，按超出量线性施加。 */
 const EDGE_AVOID_STRENGTH = 0.25
+/** 径向布局：相邻环的基础半径间距。 */
+const RADIAL_RING_GAP = 150
+/** 径向布局：同环相邻节点的最小弧长（环内节点过多时按此放大环半径）。 */
+const RADIAL_MIN_ARC = 62
 
 /** FNV-1a 字符串哈希，返回 uint32，用作确定性伪随机种子。 */
 function hashStr(s: string): number {
@@ -87,6 +93,125 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 /**
+ * 纯函数径向布局：以中心节点为圆心，按 BFS 跳数把节点钉到同心环上
+ * （第 L 跳 = 第 L 号环），呈环形扩散。跳数由边拓扑算出（节点数据的
+ * level 只有中心/非中心两档，不反映真实跳数）。环半径自适应：节点多
+ * 时按最小弧间距放大；同环节点按父节点角度排序聚类以减少交叉；相邻
+ * 环错开半个槽位。确定性（同输入→同输出，无随机源）。
+ */
+export function runRadialLayout(
+  nodes: readonly GraphNodeData[],
+  edges: readonly GraphEdgeData[],
+  options?: ForceLayoutOptions,
+): Map<string, Vec> {
+  void options
+  const result = new Map<string, Vec>()
+  const seen = new Set<string>()
+  const ordered: GraphNodeData[] = []
+  for (const node of nodes) {
+    if (!node?.id || seen.has(node.id)) continue
+    seen.add(node.id)
+    ordered.push(node)
+  }
+  if (!ordered.length) return result
+  // 单节点（或全部重叠的无边图）直接居中。
+  if (ordered.length === 1) {
+    result.set(ordered[0].id, { x: CX, y: CY })
+    return result
+  }
+
+  const idx = new Map<string, number>()
+  ordered.forEach((node, i) => idx.set(node.id, i))
+
+  // 无向邻接表：只保留两端都在 nodes 中的边，跳过自环。
+  const neighbors: number[][] = ordered.map(() => [])
+  for (const e of edges) {
+    if (!e) continue
+    const a = idx.get(e.from)
+    const b = idx.get(e.to)
+    if (a === undefined || b === undefined || a === b) continue
+    neighbors[a].push(b)
+    neighbors[b].push(a)
+  }
+
+  // BFS 分层：首个 level===0 节点为根（无则首节点），记录跳数与父节点。
+  const rootIdx = Math.max(ordered.findIndex((node) => node.level === 0), 0)
+  const hop = new Array<number>(ordered.length).fill(-1)
+  const parent = new Array<number>(ordered.length).fill(-1)
+  hop[rootIdx] = 0
+  const queue = [rootIdx]
+  for (let head = 0; head < queue.length; head++) {
+    const cur = queue[head]
+    for (const nb of neighbors[cur]) {
+      if (hop[nb] !== -1) continue
+      hop[nb] = hop[cur] + 1
+      parent[nb] = cur
+      queue.push(nb)
+    }
+  }
+  // 与中心不连通的节点放最外环之外的一环。
+  const maxReachable = Math.max(...hop)
+  for (let i = 0; i < ordered.length; i++) {
+    if (hop[i] === -1) hop[i] = maxReachable + 1
+  }
+
+  // 按环收集（BFS 序，保证确定性）。
+  const rings: number[][] = []
+  for (let i = 0; i < ordered.length; i++) {
+    const level = hop[i]
+    if (!rings[level]) rings[level] = []
+    rings[level].push(i)
+  }
+
+  // 环半径自适应：基础 = 间距 × 环号；节点多时按最小弧间距放大；
+  // 且比内环至少多留半个间距，保证环间可分。
+  const radii: number[] = [0]
+  for (let level = 1; level < rings.length; level++) {
+    const count = rings[level]?.length ?? 0
+    radii[level] = count
+      ? Math.max(
+          RADIAL_RING_GAP * level,
+          (count * RADIAL_MIN_ARC) / (Math.PI * 2),
+          radii[level - 1] + RADIAL_RING_GAP * 0.55,
+        )
+      : radii[level - 1]
+  }
+
+  // 椭圆适配：画布横宽竖窄，环按可用半宽/半高各自缩放（不放大），
+  // 最外环铺满可用区域，环呈同心椭圆。
+  const maxRadius = radii[radii.length - 1] || 0
+  const halfW = Math.max(1, CX - MIN_X)
+  const halfH = Math.max(1, CY - MIN_Y)
+  const scaleX = maxRadius > 0 ? Math.min(1, halfW / maxRadius) : 1
+  const scaleY = maxRadius > 0 ? Math.min(1, halfH / maxRadius) : 1
+
+  // 逐环铺角：同环按父节点角度排序（同源子节点相邻，减少连线交叉），
+  // 相邻环错开半个槽位避免径向对齐。自内向外逐环计算，保证父角度已知。
+  const angles = new Array<number>(ordered.length).fill(-Math.PI / 2)
+  for (let level = 1; level < rings.length; level++) {
+    const ring = [...(rings[level] ?? [])].sort((a, b) => {
+      const angleA = parent[a] >= 0 ? angles[parent[a]] : Number.NEGATIVE_INFINITY
+      const angleB = parent[b] >= 0 ? angles[parent[b]] : Number.NEGATIVE_INFINITY
+      return angleA - angleB
+    })
+    const count = ring.length
+    if (!count) continue
+    const offset = (level % 2) * (Math.PI / count)
+    ring.forEach((nodeIdx, slot) => {
+      angles[nodeIdx] = -Math.PI / 2 + offset + (slot * Math.PI * 2) / count
+    })
+  }
+
+  for (let i = 0; i < ordered.length; i++) {
+    const r = radii[hop[i]] ?? 0
+    const x = clamp(CX + r * scaleX * Math.cos(angles[i]), MIN_X, MAX_X)
+    const y = clamp(CY + r * scaleY * Math.sin(angles[i]), MIN_Y, MAX_Y)
+    result.set(ordered[i].id, { x, y })
+  }
+  return result
+}
+
+/**
  * 纯函数力导向布局：确定性（同输入→同输出，无 Math.random），
  * level===0 的首个中心节点钉在画布中心 (380,215) 不参与迭代，提供稳定锚点。
  * 返回 id→{x,y} 的位置映射。
@@ -96,6 +221,9 @@ export function runForceLayout(
   edges: readonly GraphEdgeData[],
   options?: ForceLayoutOptions,
 ): Map<string, Vec> {
+  if (options?.layout === 'radial') {
+    return runRadialLayout(nodes, edges, options)
+  }
   const result = new Map<string, Vec>()
   const shape = options?.nodeShape ?? 'circle'
   const maxTicks = options?.maxTicks ?? MAX_TICKS
@@ -349,6 +477,7 @@ export function useForceLayout(
       o?.width ?? 760,
       o?.height ?? 430,
       o?.levelOneRingRadius ?? 0,
+      o?.layout ?? 'force',
     ].join('#')
   }
 

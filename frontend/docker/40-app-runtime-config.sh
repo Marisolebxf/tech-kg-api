@@ -45,7 +45,8 @@ window.__RUNTIME_CONFIG__ = {
   portalAllowedOrigins: $(jstr "${PORTAL_ALLOWED_ORIGINS:-}"),
   portalTargetOrigin: $(jstr "${PORTAL_TARGET_ORIGIN:-}"),
   portalSource: $(jstr "${PORTAL_SOURCE:-}"),
-  adminExampleFallback: $(jstr "${ADMIN_EXAMPLE_FALLBACK:-}")
+  adminExampleFallback: $(jstr "${ADMIN_EXAMPLE_FALLBACK:-}"),
+  graphVisualizationEnabled: $(jstr "${GRAPH_VISUALIZATION_ENABLED:-}")
 }
 EOF
 

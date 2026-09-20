@@ -299,6 +299,9 @@ services:
         VITE_GRAPH_SPACE: ${VITE_GRAPH_SPACE:-dev2}
         VITE_AUTH_ENABLED: ${VITE_AUTH_ENABLED:-false}
     container_name: tech-kg-web
+    environment:
+      # 图谱可视化：正式环境先隐藏（仅显式 true 开启，见 frontend/src/config.ts）
+      GRAPH_VISUALIZATION_ENABLED: ${GRAPH_VISUALIZATION_ENABLED:-false}
     ports:
       - "8088:8080"
     depends_on:

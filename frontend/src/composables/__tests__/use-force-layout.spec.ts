@@ -191,6 +191,89 @@ describe('runForceLayout', () => {
   })
 })
 
+describe('runRadialLayout', () => {
+  it('空节点返回空映射，单节点居中', () => {
+    expect(runForceLayout([], [], { layout: 'radial' }).size).toBe(0)
+    const pos = runForceLayout([makeNode('solo')], [], { layout: 'radial' })
+    expect(Math.hypot(pos.get('solo')!.x - CX, pos.get('solo')!.y - CY)).toBeLessThan(2)
+  })
+
+  it('中心钉画布中心，一跳邻居同环等距扩散', () => {
+    const { nodes, edges } = star('center', 6)
+    const pos = runForceLayout(nodes, edges, { layout: 'radial' })
+    const c = pos.get('center')!
+    expect(c.x).toBeCloseTo(CX, 3)
+    expect(c.y).toBeCloseTo(CY, 3)
+    const dists = nodes.slice(1).map((n) => {
+      const p = pos.get(n.id)!
+      return Math.hypot(p.x - CX, p.y - CY)
+    })
+    dists.forEach((d) => expect(d).toBeGreaterThan(100))
+    // 同一环上的节点到中心距离彼此相等（未被画布压缩的半径）
+    dists.forEach((d) => expect(d).toBeCloseTo(dists[0], 3))
+  })
+
+  it('跳数来自边拓扑而非 node.level：链式二跳比一跳更靠外', () => {
+    const nodes = [makeNode('root', { level: 0 }), makeNode('hop1'), makeNode('hop2')]
+    const edges = [makeEdge('root', 'hop1'), makeEdge('hop1', 'hop2')]
+    const pos = runForceLayout(nodes, edges, { layout: 'radial' })
+    const d1 = Math.hypot(pos.get('hop1')!.x - CX, pos.get('hop1')!.y - CY)
+    const d2 = Math.hypot(pos.get('hop2')!.x - CX, pos.get('hop2')!.y - CY)
+    expect(d2).toBeGreaterThan(d1 + 50)
+  })
+
+  it('同环节点多时按最小弧间距放大环半径，节点不挤叠', () => {
+    const { nodes, edges } = star('center', 20)
+    const pos = runForceLayout(nodes, edges, { layout: 'radial' })
+    const points = nodes.slice(1).map((n) => pos.get(n.id)!)
+    let minDist = Number.POSITIVE_INFINITY
+    for (let i = 0; i < points.length; i++) {
+      for (let j = i + 1; j < points.length; j++) {
+        minDist = Math.min(
+          minDist,
+          Math.hypot(points[i].x - points[j].x, points[i].y - points[j].y),
+        )
+      }
+    }
+    expect(minDist).toBeGreaterThanOrEqual(50)
+  })
+
+  it('与中心不连通的节点放最外环', () => {
+    const { nodes, edges } = star('center', 4)
+    const pos = runForceLayout([...nodes, makeNode('iso')], edges, { layout: 'radial' })
+    const isoDist = Math.hypot(pos.get('iso')!.x - CX, pos.get('iso')!.y - CY)
+    nodes.slice(1).forEach((n) => {
+      const d = Math.hypot(pos.get(n.id)!.x - CX, pos.get(n.id)!.y - CY)
+      expect(isoDist).toBeGreaterThan(d)
+    })
+  })
+
+  it('所有节点落在边界范围内且结果确定', () => {
+    const { nodes, edges } = star('center', 12)
+    const a = runForceLayout(nodes, edges, { layout: 'radial' })
+    const b = runForceLayout(nodes, edges, { layout: 'radial' })
+    expect([...a.entries()]).toEqual([...b.entries()])
+    for (const p of a.values()) {
+      expect(p.x).toBeGreaterThanOrEqual(MIN_X)
+      expect(p.x).toBeLessThanOrEqual(MAX_X)
+      expect(p.y).toBeGreaterThanOrEqual(MIN_Y)
+      expect(p.y).toBeLessThanOrEqual(MAX_Y)
+    }
+  })
+
+  it('相邻环错开槽位：链式一跳与二跳径向不对齐', () => {
+    const nodes = [makeNode('root', { level: 0 }), makeNode('hop1'), makeNode('hop2')]
+    const edges = [makeEdge('root', 'hop1'), makeEdge('hop1', 'hop2')]
+    const pos = runForceLayout(nodes, edges, { layout: 'radial' })
+    const a = pos.get('hop1')!
+    const b = pos.get('hop2')!
+    const dot = (a.x - CX) * (b.x - CX) + (a.y - CY) * (b.y - CY)
+    const cos = dot / (Math.hypot(a.x - CX, a.y - CY) * Math.hypot(b.x - CX, b.y - CY))
+    // 夹角明显偏离 0（单槽环错开半槽 → 夹角 π）
+    expect(cos).toBeLessThan(Math.cos(Math.PI / 4))
+  })
+})
+
 describe('useForceLayout', () => {
   it('首次即产出已布局节点', () => {
     const scope = effectScope(true)
@@ -263,6 +346,26 @@ describe('useForceLayout', () => {
     edges.value = [makeEdge('a', 'c')]
     await nextTick()
     expect(result.laidOutNodes.value.map((n) => n.id).join(',')).toBe('a,c')
+    scope.stop()
+  })
+
+  it('切换 layout 选项触发重布局为径向', async () => {
+    const scope = effectScope(true)
+    const nodes = ref([makeNode('a', { level: 0 }), makeNode('b')])
+    const edges = ref([makeEdge('a', 'b')])
+    const layout = ref<'force' | 'radial'>('force')
+    const result = scope.run(() =>
+      useForceLayout(nodes, edges, () => ({ layout: layout.value })),
+    )!
+    const before = result.laidOutNodes.value.map(({ x, y }) => ({ x, y }))
+    layout.value = 'radial'
+    await nextTick()
+    const after = result.laidOutNodes.value.map(({ x, y }) => ({ x, y }))
+    expect(after).not.toEqual(before)
+    // 径向：中心钉中心，唯一一跳节点在错开半槽的角度上（x 仍回中心线）
+    expect(after[0].x).toBeCloseTo(CX, 3)
+    expect(after[0].y).toBeCloseTo(CY, 3)
+    expect(after[1].x).toBeCloseTo(CX, 3)
     scope.stop()
   })
 })

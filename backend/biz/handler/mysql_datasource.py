@@ -42,6 +42,7 @@ def _config_cache_put(key: str, payload: str) -> None:
 def _config_cache_clear() -> None:
     _config_payload_cache.clear()
 
+
 router = APIRouter(prefix="/mysql-datasources", tags=["mysql-datasource"])
 
 
@@ -68,7 +69,12 @@ def list_mysql_datasources(
     if cached is not None:
         return Response(cached, media_type="application/json")
     payload = json.dumps(
-        {"code": 200, "success": True, "data": _application(session).list_configs(owner=owner), "msg": "success"},
+        {
+            "code": 200,
+            "success": True,
+            "data": _application(session).list_configs(owner=owner),
+            "msg": "success",
+        },
         ensure_ascii=False,
         default=str,
     )
@@ -98,7 +104,7 @@ def create_mysql_datasource(
     _config_cache_clear()
     data = payload.model_dump()
     data["owner"] = actor.user_id if not actor.is_admin else (data.get("owner") or actor.user_id)
-    result = _application(session).create_config(data)
+    result = _application(session).create_config(data, scope_owner=resource_owner_filter(actor))
     return ApiResponse(data=result, msg="MySQL 数据源已创建")
 
 
@@ -114,7 +120,9 @@ def update_mysql_datasource(
     data = payload.model_dump(exclude_unset=True)
     if not actor.is_admin:
         data.pop("owner", None)
-    updated = _application(session).update_config(datasource_id, data)
+    updated = _application(session).update_config(
+        datasource_id, data, scope_owner=resource_owner_filter(actor)
+    )
     if updated is None:
         raise HTTPException(status_code=404, detail="数据源不存在")
     return ApiResponse(data=updated, msg="MySQL 数据源已更新")
@@ -142,7 +150,9 @@ def set_default_mysql_datasource(
 ) -> ApiResponse:
     _config_cache_clear()
     _owned_config(_application(session), actor, datasource_id)
-    data = _application(session).set_default(datasource_id)
+    data = _application(session).set_default(
+        datasource_id, scope_owner=resource_owner_filter(actor)
+    )
     if data is None:
         raise HTTPException(status_code=404, detail="数据源不存在")
     return ApiResponse(data=data, msg="已设为默认")

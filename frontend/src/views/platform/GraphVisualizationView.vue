@@ -22,6 +22,7 @@ import {
   type EntitySearchItem,
 } from '../../api/entitySearch'
 import { currentGraphSpace } from '../../api/currentGraphSpace'
+import { getSchemaTopology } from '../../api/schemaManagement'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
 import { useToast } from '../../composables/use-toast'
 import { SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
@@ -50,7 +51,7 @@ const NODE_CAP = 300
 const LIST_CAP = 30
 const SEARCH_RESULT_LIMIT = 20
 const DEPTH_OPTIONS: GraphDepth[] = [1, 2, 3]
-/** 每跳上限可自由输入（1-256，与后端 GET /subgraph 校验一致） */
+/** 每跳边数上限可自由输入（1-256，与后端 GET /subgraph 校验一致） */
 const PER_HOP_LIMIT_MIN = 1
 const PER_HOP_LIMIT_MAX = 256
 const DIRECTION_LABELS: Record<GraphDirection, string> = {
@@ -88,8 +89,8 @@ const searchResults = ref<EntitySearchItem[]>([])
 // 检索结果列表可手动收起；新的检索命中时自动展开
 const startListVisible = ref(true)
 const startNode = ref<EntitySearchItem | null>(null)
-const depth = ref<GraphDepth>(2)
-const perHopLimit = ref(100)
+const depth = ref<GraphDepth>(3)
+const perHopLimit = ref(16)
 const direction = ref<GraphDirection>('both')
 const selectedEdgeTypes = ref<string[]>([])
 
@@ -144,7 +145,13 @@ const allNodes = computed(() => {
     labelTones.value.get(label) ?? 'topic',
   )
 })
-const allEdges = computed(() => convertApiGraphEdges(rawGraph.value?.edges ?? []))
+// 边 label 即边类型名（英文）：画布边标签/详情统一换成 Schema 目录中文名
+const allEdges = computed(() =>
+  convertApiGraphEdges(rawGraph.value?.edges ?? []).map((edge) => ({
+    ...edge,
+    label: edgeTypeLabel(edge.label),
+  })),
+)
 
 /** 图例即显隐开关：按结果里实际出现的实体类型给出色调/计数/隐藏态。 */
 const legendItems = computed(() => {
@@ -237,8 +244,8 @@ const summaryRows = computed<Array<[string, string]>>(() => {
   return [
     ['图空间', q.space || '默认'],
     ['查询起点', `${q.centerLabel}（${q.vid}）`],
-    ['查询条件', `深度 ${q.depth} 跳 · 每跳上限 ${q.limit} · ${DIRECTION_LABELS[q.direction]}`],
-    ['边类型筛选', q.edgeTypes.length ? q.edgeTypes.join('、') : '全部边类型'],
+    ['查询条件', `深度 ${q.depth} 跳 · 每跳边数上限 ${q.limit} · ${DIRECTION_LABELS[q.direction]}`],
+    ['边类型筛选', q.edgeTypes.length ? q.edgeTypes.map(edgeTypeLabel).join('、') : '全部边类型'],
     ['图谱规模', `返回 ${allNodes.value.length} 实体 / ${allEdges.value.length} 关系`],
     [
       '当前展示',
@@ -254,7 +261,7 @@ const entityRows = computed<Array<[string, string]>>(() => {
   if (selected) {
     return [
       ['实体名称', selected.label],
-      ['实体类型', selected.entityType],
+      ['实体类型', entityTypeLabel(selected.entityType)],
       ['节点 VID', selected.id],
       ['关联关系', selected.relations || '—'],
       ['置信度', formatConfidence(selected.confidence)],
@@ -262,7 +269,7 @@ const entityRows = computed<Array<[string, string]>>(() => {
   }
   return visibleNodes.value.slice(0, LIST_CAP).flatMap((node, index) => [
     [`实体 ${index + 1}`, `${node.label}（${node.id}）`],
-    ['类型', node.entityType],
+    ['类型', entityTypeLabel(node.entityType)],
     ['关联关系', node.relations || '—'],
     ['置信度', formatConfidence(node.confidence)],
   ])
@@ -275,8 +282,8 @@ const relationRows = computed<Array<[string, string]>>(() => {
     const from = byId.get(selected.from)
     const to = byId.get(selected.to)
     return [
-      ['源实体', `${from?.label || selected.from} / ${from?.entityType || '—'}`],
-      ['目标实体', `${to?.label || selected.to} / ${to?.entityType || '—'}`],
+      ['源实体', `${from?.label || selected.from} / ${entityTypeLabel(from?.entityType)}`],
+      ['目标实体', `${to?.label || selected.to} / ${entityTypeLabel(to?.entityType)}`],
       ['关系类型', selected.label],
       ['关系分类', selected.category],
       ['置信度', formatConfidence(selected.confidence)],
@@ -324,7 +331,7 @@ const provenance = computed(() => {
 const provenanceTarget = computed(() => {
   const node = provenanceNode.value
   if (node) {
-    return { kind: '实体', name: node.label, type: node.entityType, id: node.id }
+    return { kind: '实体', name: node.label, type: entityTypeLabel(node.entityType), id: node.id }
   }
   const edge = selectedEdge.value
   const { from, to } = selectedEdgeNodes.value
@@ -342,6 +349,33 @@ async function loadStats(): Promise<void> {
     stats.value = null
     showToast('图空间统计加载失败，类型下拉暂不可用（仍可检索起点直接查询）', 'warning')
   }
+}
+
+// 类型中文名：Schema 目录的 name（图库 TAG/EDGE 英文名）→ label（中文）映射；
+// 拿不到目录（权限/网络）时退回英文原名，不阻塞可视化。
+const entityTypeLabels = ref(new Map<string, string>())
+const edgeTypeLabels = ref(new Map<string, string>())
+
+async function loadTypeLabels(): Promise<void> {
+  const context = graphContextVersion
+  try {
+    const topology = await getSchemaTopology(space.value || undefined)
+    if (context !== graphContextVersion) return
+    entityTypeLabels.value = new Map(topology.nodes.map((s) => [s.name, s.label]))
+    edgeTypeLabels.value = new Map(topology.edges.map((s) => [s.name, s.label]))
+  } catch {
+    if (context !== graphContextVersion) return
+    entityTypeLabels.value = new Map()
+    edgeTypeLabels.value = new Map()
+  }
+}
+
+function entityTypeLabel(name: string | null | undefined): string {
+  return (name && entityTypeLabels.value.get(name)) || name || '—'
+}
+
+function edgeTypeLabel(name: string | null | undefined): string {
+  return (name && edgeTypeLabels.value.get(name)) || name || '—'
 }
 
 /** 打开页面即看图 / 点「自动预览」按钮：自动从图里挑一个实体当起点跑一次
@@ -394,7 +428,7 @@ async function doSearch(): Promise<void> {
   const context = graphContextVersion
   searching.value = true
   searchMessage.value = ''
-  const missMessage = `未找到匹配「${keyword}」的实体${entityTypeFilter.value ? `（类型 ${entityTypeFilter.value}）` : ''}`
+  const missMessage = `未找到匹配「${keyword}」的实体${entityTypeFilter.value ? `（类型 ${entityTypeLabel(entityTypeFilter.value)}）` : ''}`
   try {
     const result = await searchEntities({
       keyword,
@@ -588,6 +622,7 @@ function formatQueryTimestamp(date: Date): string {
 
 onMounted(() => {
   void loadStats()
+  void loadTypeLabels()
   void autoPreview()
 })
 
@@ -616,6 +651,7 @@ watch(
     querying.value = false
     searching.value = false
     void loadStats()
+    void loadTypeLabels()
     void autoPreview()
   },
   { flush: 'sync' },
@@ -650,7 +686,7 @@ onUnmounted(() => {
               <!-- 固定「全部类型」项：选了具体类型后也能直接选回，不依赖 allow-clear 的 × -->
               <a-option value="">全部类型</a-option>
               <a-option v-for="t in entityTypeOptions" :key="t.name" :value="t.name">
-                {{ t.name }}（{{ t.count }}）
+                {{ entityTypeLabel(t.name) }}（{{ t.count }}）
               </a-option>
               <template #empty>当前图空间暂无实体</template>
             </a-select>
@@ -690,7 +726,7 @@ onUnmounted(() => {
               @click="pickStartNode(item)"
             >
               <b>{{ item.name || '（未命名）' }}</b>
-              <span>{{ item.entityType || '未知类型' }}</span>
+              <span>{{ item.entityType ? entityTypeLabel(item.entityType) : '未知类型' }}</span>
               <code>{{ item.vid }}</code>
             </button>
           </div>
@@ -723,7 +759,7 @@ onUnmounted(() => {
             </a-select>
           </div>
           <div class="graphviz-field">
-            <label for="graphviz-limit">每跳上限（1-256）</label>
+            <label for="graphviz-limit">每跳边数上限（1-256）</label>
             <a-input-number
               id="graphviz-limit"
               v-model="perHopLimit"
@@ -763,7 +799,7 @@ onUnmounted(() => {
               @change="onEdgeTypesSelect"
             >
               <a-option v-for="t in edgeTypeOptions" :key="t.name" :value="t.name">
-                {{ t.name }}（{{ t.count }}）
+                {{ edgeTypeLabel(t.name) }}（{{ t.count }}）
               </a-option>
               <template #empty>当前图空间暂无关系</template>
             </a-select>
@@ -811,7 +847,7 @@ onUnmounted(() => {
             :title="item.hidden ? '点击显示该类型' : '点击隐藏该类型'"
             @click="toggleLabel(item.label)"
           >
-            <i /><span>{{ item.label }}</span><em>{{ item.count }}</em>
+            <i /><span>{{ entityTypeLabel(item.label) }}</span><em>{{ item.count }}</em>
           </button>
         </div>
         <div v-if="capHiddenCount > 0" class="graphviz-cap-banner" role="status">
@@ -828,6 +864,7 @@ onUnmounted(() => {
             node-shape="circle"
             show-edge-labels
             uniform-node-size
+            :layout-options="{ layout: 'radial' }"
             aria-label="图谱可视化结果"
             @select-node="openNodeDetail"
             @select-edge="openEdgeDetail"

@@ -90,7 +90,7 @@ class LlmConfigService:
         row = self._dao.get(config_id)
         return _to_out(row) if row else None
 
-    def create_config(self, payload: dict) -> dict:
+    def create_config(self, payload: dict, *, scope_owner: str | None = None) -> dict:
         now = _utcnow_naive()
         config_id = f"LLM-{uuid.uuid4().hex[:8].upper()}"
         row = self._dao.create(
@@ -107,11 +107,13 @@ class LlmConfigService:
             updated_at=now,
         )
         if row.is_default:
-            self._dao.clear_other_defaults(row.id, owner=row.owner)
+            self._dao.clear_other_defaults(row.id, owner=scope_owner)
         reset_llm_client()
         return _to_out(row)
 
-    def update_config(self, config_id: str, payload: dict) -> dict | None:
+    def update_config(
+        self, config_id: str, payload: dict, *, scope_owner: str | None = None
+    ) -> dict | None:
         row = self._dao.get(config_id)
         if row is None:
             return None
@@ -125,7 +127,7 @@ class LlmConfigService:
             updates["api_key"] = new_key
         updated = self._dao.update(config_id, **updates)
         if updated and updated.is_default:
-            self._dao.clear_other_defaults(updated.id, owner=updated.owner)
+            self._dao.clear_other_defaults(updated.id, owner=scope_owner)
         reset_llm_client()
         return _to_out(updated) if updated else None
 
@@ -140,11 +142,12 @@ class LlmConfigService:
             reset_llm_client()
         return ok
 
-    def set_default(self, config_id: str) -> dict | None:
+    def set_default(self, config_id: str, *, scope_owner: str | None = None) -> dict | None:
         row = self._dao.get(config_id)
         if row is None:
             return None
-        self._dao.clear_other_defaults(config_id, owner=row.owner)
+        # 默认互斥范围＝操作者可见范围：scope_owner=None（管理员）全局唯一，普通用户仅自身范围
+        self._dao.clear_other_defaults(config_id, owner=scope_owner)
         updated = self._dao.update(config_id, is_default=True, updated_at=_utcnow_naive())
         reset_llm_client()
         return _to_out(updated) if updated else None

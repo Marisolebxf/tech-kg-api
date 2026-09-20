@@ -17,6 +17,7 @@ interface RuntimeConfig {
   portalTargetOrigin?: string
   portalSource?: string
   adminExampleFallback?: string
+  graphVisualizationEnabled?: string
 }
 
 declare global {
@@ -78,3 +79,7 @@ export const portalSource = pick('portalSource', 'VITE_PORTAL_SOURCE') || 'tech-
 
 /** 管理页示例数据兜底：默认开，仅显式 'false' 关闭 */
 export const adminExampleFallback = pick('adminExampleFallback', 'VITE_ADMIN_EXAMPLE_FALLBACK') !== 'false'
+
+/** 图谱可视化功能开关：默认隐藏（正式环境先不放开），仅显式 'true' 开启——
+ *  开发/演示容器在部署期注入 GRAPH_VISUALIZATION_ENABLED=true，本地 dev 走 VITE_ 构建/回落值。 */
+export const graphVisualizationEnabled = pick('graphVisualizationEnabled', 'VITE_GRAPH_VISUALIZATION_ENABLED') === 'true'

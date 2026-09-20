@@ -447,7 +447,7 @@ async def get_subgraph(
     actor: CurrentActor,
     node_id: str,
     depth: int = Query(1, ge=1, le=3, description="跳数 1-3"),
-    limit: int = Query(50, ge=1, le=256, description="每页最大边数"),
+    limit: int = Query(50, ge=1, le=256, description="每跳最大新边数"),
     offset: int = Query(0, ge=0, description="一跳遍历分页偏移量"),
     edge_type: str | None = Query(None, description="边类型过滤，如 AUTHORED_BY"),
     direction: Literal["out", "in", "both"] = Query("both", description="方向: out/in/both"),
@@ -500,22 +500,43 @@ def _collect_subgraph(
     seen_edge_ids: set[str] = set()
     seen_vids = {str(center.id)}
 
-    # 逐跳扩展
+    # 逐跳扩展：limit 是「每跳上限」——每跳最多收录 limit 条新边（已收录过的边
+    # 不占预算），预算逐跳重置。配额在跳内按前沿节点均分（向上取整）：每个节点
+    # 都能分到可展示的出边名额，而不是 BFS 序靠前的节点吃光预算；某节点边数
+    # 不足其配额时，剩余名额自动回流给后面的节点。查询页按 4 倍配额过采样：
+    # 原始返回页里会混入已收录过的回边/重复边（不占预算但占查询页名额），
+    # 只按配额取页会让「每跳最多 limit 条新边」达不到，收集侧再按配额截断。
     frontier = [node_id]
     for _hop in range(depth):
         next_frontier: list[str] = []
+        remaining = limit
+        pending = len(frontier)
         for vid in frontier:
+            if remaining <= 0 or pending <= 0:
+                break
+            quota = min(remaining, -(-remaining // pending))
             edge_list = client.get_node_edges(
-                vid, direction=direction, edge_type=edge_type, limit=limit, offset=offset
+                vid,
+                direction=direction,
+                edge_type=edge_type,
+                limit=min(256, quota * 4),
+                offset=offset,
             )
+            pending -= 1
+            collected = 0
             for e in edge_list:
+                if collected >= quota:
+                    break
                 edge_data = _edge_to_data(e)
 
                 edge_key = edge_data.id or f"{edge_data.source}|{edge_data.type}|{edge_data.target}"
 
-                if edge_key not in seen_edge_ids:
-                    seen_edge_ids.add(edge_key)
-                    edges.append(edge_data)
+                if edge_key in seen_edge_ids:
+                    continue
+                seen_edge_ids.add(edge_key)
+                edges.append(edge_data)
+                collected += 1
+                remaining -= 1
                 neighbor_id = str(e.target_id if str(e.source_id) == vid else e.source_id)
                 if neighbor_id not in seen_vids:
                     neighbor = client.get_node(neighbor_id)
@@ -528,10 +549,6 @@ def _collect_subgraph(
                     seen_vids.add(n_data.id)
                     next_frontier.append(n_data.id)
         frontier = next_frontier
-
-    # 边按页限制；节点需包含中心点和本页所有边端点。
-    if len(edges) > limit:
-        edges = edges[:limit]
 
     return {"nodes": nodes, "edges": edges}
 
@@ -552,62 +569,95 @@ async def get_filtered_subgraph(
     不会因 limit 截断把需要的边挤掉（论文/合作者等不会占名额）。
     """
     _ensure_space_access(actor, space)
+    et_set = [et.strip() for et in edge_types.split(",") if et.strip()]
+    if not et_set:
+        return ApiResponse(code=422, success=False, msg="edge_types 不能为空")
     try:
-        client = _get_client(space)
-        center = client.get_node(node_id)
-        if center is None:
+        subgraph = await asyncio.to_thread(
+            _collect_filtered_subgraph,
+            _get_client(space),
+            node_id,
+            et_set,
+            depth,
+            limit,
+            direction,
+        )
+        if subgraph is None:
             return ApiResponse(code=404, success=False, msg=f"节点不存在: {node_id}")
-
-        et_set = [et.strip() for et in edge_types.split(",") if et.strip()]
-        if not et_set:
-            return ApiResponse(code=422, success=False, msg="edge_types 不能为空")
-
-        nodes: list[GraphNodeData] = [_node_to_data(center)]
-        edges: list[GraphEdgeData] = []
-        seen_edge_ids: set[str] = set()
-        seen_vids = {str(center.id)}
-        frontier = [node_id]
-
-        for _hop in range(depth):
-            next_frontier: list[str] = []
-            for vid in frontier:
-                # 每种边类型单独查，避免无关边占 limit 名额
-                for et in et_set:
-                    try:
-                        edge_list = client.get_node_edges(
-                            vid, direction=direction, edge_type=et, limit=limit
-                        )
-                    except GraphRequestError:
-                        # 该边类型在当前图空间不存在（trs traversal 400）等查询失败，
-                        # 跳过该边类型不阻断整个子图——避免因部分边类型缺失而 500 丢失 seed。
-                        continue
-                    for e in edge_list:
-                        edge_data = _edge_to_data(e)
-                        edge_key = (
-                            edge_data.id
-                            or f"{edge_data.source}|{edge_data.type}|{edge_data.target}"
-                        )
-                        if edge_key not in seen_edge_ids:
-                            seen_edge_ids.add(edge_key)
-                            edges.append(edge_data)
-                        neighbor_id = str(e.target_id if str(e.source_id) == vid else e.source_id)
-                        if neighbor_id not in seen_vids:
-                            neighbor = client.get_node(neighbor_id)
-                            if neighbor:
-                                n_data = _node_to_data(neighbor)
-                                nodes.append(n_data)
-                                seen_vids.add(n_data.id)
-                                next_frontier.append(n_data.id)
-            frontier = next_frontier
-
-        if len(nodes) > limit * len(et_set):
-            nodes = nodes[: limit * len(et_set)]
-        if len(edges) > limit * len(et_set):
-            edges = edges[: limit * len(et_set)]
-
-        return ApiResponse(data=SubgraphData(nodes=nodes, edges=edges).model_dump())
+        return ApiResponse(data=SubgraphData(**subgraph).model_dump())
     except Exception:
         return _graph_query_error("get_filtered_subgraph")
+
+
+def _collect_filtered_subgraph(
+    client: TRSGraphClient,
+    node_id: str,
+    et_set: list[str],
+    depth: int,
+    limit: int,
+    direction: str,
+) -> dict[str, Any] | None:
+    """同步收集多边类型过滤的 N 跳子图（整体放线程里执行以免卡住事件循环）。"""
+    center = client.get_node(node_id)
+    if center is None:
+        return None
+
+    nodes: list[GraphNodeData] = [_node_to_data(center)]
+    edges: list[GraphEdgeData] = []
+    seen_edge_ids: set[str] = set()
+    seen_vids = {str(center.id)}
+    frontier = [node_id]
+
+    for _hop in range(depth):
+        next_frontier: list[str] = []
+        # limit 是「每种边类型每跳上限」：逐跳逐类型重置预算，已收录过的边
+        # 不占预算；不做全局截断（否则第一跳吃光预算，深跳一条边进不来）。
+        # 配额按前沿节点均分（向上取整）——每个节点都能分到可展示的出边名额，
+        # 某节点边数不足时余量回流给后面的节点。查询页按 4 倍配额过采样
+        # （跳过已见回边后再按配额截断），保证每类型每跳上限真正可达。
+        type_budgets = {et: limit for et in et_set}
+        pending = len(frontier)
+        for vid in frontier:
+            # 每种边类型单独查，避免无关边占 limit 名额
+            for et in et_set:
+                budget = type_budgets[et]
+                if budget <= 0 or pending <= 0:
+                    continue
+                quota = min(budget, -(-budget // pending))
+                try:
+                    edge_list = client.get_node_edges(
+                        vid, direction=direction, edge_type=et, limit=min(256, quota * 4)
+                    )
+                except GraphRequestError:
+                    # 该边类型在当前图空间不存在（trs traversal 400）等查询失败，
+                    # 跳过该边类型不阻断整个子图——避免因部分边类型缺失而 500 丢失 seed。
+                    continue
+                collected = 0
+                for e in edge_list:
+                    if collected >= quota:
+                        break
+                    edge_data = _edge_to_data(e)
+                    edge_key = (
+                        edge_data.id or f"{edge_data.source}|{edge_data.type}|{edge_data.target}"
+                    )
+                    if edge_key in seen_edge_ids:
+                        continue
+                    seen_edge_ids.add(edge_key)
+                    edges.append(edge_data)
+                    collected += 1
+                    type_budgets[et] -= 1
+                    neighbor_id = str(e.target_id if str(e.source_id) == vid else e.source_id)
+                    if neighbor_id not in seen_vids:
+                        neighbor = client.get_node(neighbor_id)
+                        if neighbor:
+                            n_data = _node_to_data(neighbor)
+                            nodes.append(n_data)
+                            seen_vids.add(n_data.id)
+                            next_frontier.append(n_data.id)
+            pending -= 1
+        frontier = next_frontier
+
+    return {"nodes": nodes, "edges": edges}
 
 
 @router.get("/node/{node_id}/edges")

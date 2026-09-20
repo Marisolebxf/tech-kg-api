@@ -60,7 +60,9 @@ class MysqlDatasourceService:
         row = self._dao.get(config_id)
         return _to_out(row) if row else None
 
-    def create_config(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def create_config(
+        self, payload: dict[str, Any], *, scope_owner: str | None = None
+    ) -> dict[str, Any]:
         now = datetime.now(UTC)
         config_id = f"MYSQL-{uuid.uuid4().hex[:8].upper()}"
         row = self._dao.create(
@@ -79,10 +81,12 @@ class MysqlDatasourceService:
             updated_at=now,
         )
         if row.is_default:
-            self._dao.clear_other_defaults(row.id, owner=row.owner)
+            self._dao.clear_other_defaults(row.id, owner=scope_owner)
         return _to_out(row)
 
-    def update_config(self, config_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    def update_config(
+        self, config_id: str, payload: dict[str, Any], *, scope_owner: str | None = None
+    ) -> dict[str, Any] | None:
         row = self._dao.get(config_id)
         if row is None:
             return None
@@ -110,7 +114,7 @@ class MysqlDatasourceService:
             updates["password"] = new_pwd
         updated = self._dao.update(config_id, **updates)
         if updated and updated.is_default:
-            self._dao.clear_other_defaults(updated.id, owner=updated.owner)
+            self._dao.clear_other_defaults(updated.id, owner=scope_owner)
         return _to_out(updated) if updated else None
 
     def delete_config(self, config_id: str) -> bool:
@@ -121,11 +125,14 @@ class MysqlDatasourceService:
             logger.warning("删除默认 MySQL 数据源 %s，删除后无默认生效（回退 env）", config_id)
         return self._dao.delete(config_id)
 
-    def set_default(self, config_id: str) -> dict[str, Any] | None:
+    def set_default(
+        self, config_id: str, *, scope_owner: str | None = None
+    ) -> dict[str, Any] | None:
         row = self._dao.get(config_id)
         if row is None:
             return None
-        self._dao.clear_other_defaults(config_id, owner=row.owner)
+        # 默认互斥范围＝操作者可见范围：scope_owner=None（管理员）全局唯一，普通用户仅自身范围
+        self._dao.clear_other_defaults(config_id, owner=scope_owner)
         updated = self._dao.update(config_id, is_default=True, updated_at=datetime.now(UTC))
         return _to_out(updated) if updated else None
 

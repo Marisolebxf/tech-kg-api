@@ -1,6 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
-import { appBase, authDisabled } from '../config'
+import { appBase, authDisabled, graphVisualizationEnabled } from '../config'
 
 import { useAuthStore } from '../stores/auth'
 import { installSessionRecovery, loginRedirect, notifySessionExpired } from './sessionRecovery'
@@ -109,6 +109,11 @@ export const router = createRouter({
 })
 
 router.beforeEach(async (to) => {
+  // 图谱可视化未开启时整功能隐藏：导航入口不渲染，直达 URL 也归拢到综合查询
+  if (to.name === 'graph-query-visualization' && !graphVisualizationEnabled) {
+    return { path: '/graph-query' }
+  }
+
   if (authDisabled) {
     return to.name === 'login' ? { path: '/overview' } : true
   }

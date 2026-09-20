@@ -54,6 +54,10 @@ class _FakeGraphClient:
 
             raise GraphRequestError("DDL 失败：语义错误")
 
+    def execute_query(self, query: str) -> None:
+        # REBUILD TAG INDEX 走查询通道（后台 job 提交），与写通道同账本记录
+        self.writes.append(query)
+
 
 @pytest.fixture
 def schema_api(monkeypatch):
@@ -117,14 +121,17 @@ async def test_create_entity_executes_ddl(schema_api) -> None:
     data = response.json()["data"]
     assert data["ddlStatus"] == "succeeded"
     assert data["ddlError"] is None
-    # 公共必选属性（id/name/create_time/update_time/source_table）注入头部 + 用户属性
+    # 公共必选属性（id/name/create_time/update_time/source_table）注入头部 + 用户属性；
+    # TAG 建成后自动补 name 属性原生索引（实体检索精确名称查找依赖）
     assert data["ddlStatement"] == (
         "CREATE TAG IF NOT EXISTS Gadget("
         "id string NOT NULL, name string NOT NULL, create_time string NOT NULL, "
         "update_time string NOT NULL, source_table string NOT NULL, "
-        "gadget_id string NOT NULL, weight double);"
+        "gadget_id string NOT NULL, weight double);\n"
+        "CREATE TAG INDEX IF NOT EXISTS idx_gadget_name ON Gadget(name(64));\n"
+        "REBUILD TAG INDEX idx_gadget_name;"
     )
-    assert fake_graph.writes == [data["ddlStatement"]]
+    assert fake_graph.writes == data["ddlStatement"].split("\n")
 
 
 @pytest.mark.asyncio

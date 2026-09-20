@@ -173,6 +173,11 @@ def _make_activities(state: dict[str, Any], *, rows_per_batch=3, batches=2, fail
         state.setdefault("resolve", []).append(request)
         return {"resolved": 1, "refailed": 0, "recreated": 0}
 
+    @activity.defn(name="refresh_graph_stats")
+    async def refresh_stats(request: dict[str, Any]) -> dict[str, Any]:
+        state.setdefault("stats_jobs", []).append(request)
+        return {"submitted": True, "jobId": 99}
+
     @activity.defn(name="build_entity_index")
     async def build_index(request: dict[str, Any]) -> dict[str, Any]:
         state.setdefault("index", []).append(request)
@@ -190,6 +195,7 @@ def _make_activities(state: dict[str, Any], *, rows_per_batch=3, batches=2, fail
         record_failures,
         resolve,
         build_index,
+        refresh_stats,
     ]
 
 
@@ -392,6 +398,11 @@ def _make_step_activities(state: dict[str, Any], *, fail_on=None, block_on=None,
         state.setdefault("resolve", []).append(request)
         return {"resolved": 1, "refailed": 0, "recreated": 0}
 
+    @activity.defn(name="refresh_graph_stats")
+    async def refresh_stats(request: dict[str, Any]) -> dict[str, Any]:
+        state.setdefault("stats_jobs", []).append(request)
+        return {"submitted": True, "jobId": 99}
+
     @activity.defn(name="build_entity_index")
     async def build_index(request: dict[str, Any]) -> dict[str, Any]:
         state.setdefault("index", []).append(request)
@@ -407,6 +418,7 @@ def _make_step_activities(state: dict[str, Any], *, fail_on=None, block_on=None,
         record_failures,
         resolve,
         build_index,
+        refresh_stats,
     ]
 
 
@@ -574,6 +586,11 @@ def _make_chain_activities(state: dict[str, Any], *, fail_schema: str | None = N
         state.setdefault("resolve", []).append(request)
         return {"resolved": 1, "refailed": 0, "recreated": 0}
 
+    @activity.defn(name="refresh_graph_stats")
+    async def refresh_stats(request: dict[str, Any]) -> dict[str, Any]:
+        state.setdefault("stats_jobs", []).append(request)
+        return {"submitted": True, "jobId": 99}
+
     @activity.defn(name="build_entity_index")
     async def build_index(request: dict[str, Any]) -> dict[str, Any]:
         state.setdefault("index", []).append(request)
@@ -591,6 +608,7 @@ def _make_chain_activities(state: dict[str, Any], *, fail_schema: str | None = N
         record_failures,
         resolve,
         build_index,
+        refresh_stats,
     ]
 
 
@@ -702,10 +720,14 @@ class TestSchemaExtractChain:
                 described = await handle.describe()
                 assert described.status.name == "RUNNING", "挂起期间 workflow 不应结束"
                 calls_when_paused = len(state["transform_calls"])
-                assert calls_when_paused == 2, f"挂起点应在 resolve 之后 emit 之前（实际 {calls_when_paused}）"
+                assert calls_when_paused == 2, (
+                    f"挂起点应在 resolve 之后 emit 之前（实际 {calls_when_paused}）"
+                )
 
                 await asyncio.sleep(1.0)
-                assert len(state["transform_calls"]) == calls_when_paused, "挂起期间不应有新的转换步执行"
+                assert len(state["transform_calls"]) == calls_when_paused, (
+                    "挂起期间不应有新的转换步执行"
+                )
 
                 await handle.signal("resume_extraction")
                 result = await asyncio.wait_for(handle.result(), timeout=30)
@@ -969,6 +991,11 @@ def _make_relay_activities(
         state.setdefault("resolve", []).append({"inline": inline, "refs": refs})
         return {"resolved": 1, "refailed": 0, "recreated": 0}
 
+    @activity.defn(name="refresh_graph_stats")
+    async def refresh_stats(request: dict[str, Any]) -> dict[str, Any]:
+        state.setdefault("stats_jobs", []).append(request)
+        return {"submitted": True, "jobId": 99}
+
     @activity.defn(name="build_entity_index")
     async def build_index(request: dict[str, Any]) -> dict[str, Any]:
         state.setdefault("index", []).append(request)
@@ -985,6 +1012,7 @@ def _make_relay_activities(
         record_failures,
         resolve_cases,
         build_index,
+        refresh_stats,
     ]
 
 

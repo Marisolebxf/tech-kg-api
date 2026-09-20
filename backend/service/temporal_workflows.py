@@ -1932,6 +1932,44 @@ async def build_entity_index(request: dict[str, Any]) -> dict[str, Any]:
     return {"reindexed": result}
 
 
+@activity.defn
+async def refresh_graph_stats(request: dict[str, Any]) -> dict[str, Any]:
+    """触发图库 SUBMIT JOB STATS，让平台总览 SHOW STATS 反映本次写图（00918）。
+
+    SHOW STATS 只返回最近一次 stats job 的预计算结果——INSERT VERTEX 写图后
+    不自动刷新，不触发则总览实体/关系总量停在旧值。异步 job 提交即返回；
+    另一个 stats job 已在跑等异常只告警降级（下次抽取会再触发），不拖垮抽取。
+    """
+    from infra.graph_db.client import TRSGraphClient
+    from infra.graph_db.config import TRSGraphSettings
+
+    settings = TRSGraphSettings.from_env()
+    if request.get("space"):
+        settings.space = str(request["space"])
+    client = TRSGraphClient(settings)
+    try:
+        client.connect()
+        result = client.execute_write("SUBMIT JOB STATS")
+        job_id = None
+        for rec in result.records or []:
+            if isinstance(rec, dict) and rec.get("New Job Id") is not None:
+                job_id = rec.get("New Job Id")
+                break
+        return {"submitted": True, "jobId": job_id}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "SUBMIT JOB STATS 提交失败 space=%s（总览统计将滞后至下次触发）: %s",
+            settings.space,
+            exc,
+        )
+        return {"submitted": False, "error": str(exc)[:200]}
+    finally:
+        try:
+            client.close()
+        except Exception:  # noqa: BLE001
+            logger.exception("关闭图客户端失败")
+
+
 async def _register_scheduled_run(request: dict[str, Any]) -> None:
     """payload 带 _scheduleId 时（周期 Schedule 触发），先落 execution/task 行。"""
     schedule_id = (request.get("payload") or {}).get("_scheduleId")
@@ -2749,6 +2787,16 @@ class SchemaExtractWorkflow:
                     retry_policy=ACTIVITY_RETRY_POLICY,
                 )
                 recorded_count = int((fail_resp or {}).get("recorded") or 0)
+        if sum(int(r.get("written") or 0) for r in results):
+            # 写图后触发图库 stats job：SHOW STATS（平台总览实体/关系总量的数据源）
+            # 只反映最近一次 SUBMIT JOB STATS 预计算，不触发则总览不随抽取更新（00918）。
+            # activity 内部吞异常降级，失败不影响执行终态。
+            await workflow.execute_activity(
+                refresh_graph_stats,
+                {"space": graph_space},
+                start_to_close_timeout=timedelta(seconds=60),
+                retry_policy=ACTIVITY_RETRY_POLICY,
+            )
 
         # 多步脚本（及 chain 模式）的全局分步聚合计数（跨来源求和）。status 供任务
         # 详情 pipeline_steps 把每步渲染成「成功」；单步单跑不加该键，形状与历史一致。
@@ -2935,4 +2983,5 @@ ACTIVITIES = [
     record_extract_failures,
     resolve_failure_cases,
     build_entity_index,
+    refresh_graph_stats,
 ]

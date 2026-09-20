@@ -20,9 +20,12 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from itertools import islice
 from typing import Any
 
-from sqlalchemy import inspect, select
+from sqlalchemy import inspect, select, text
 from sqlalchemy.orm import Session
 
 from infra.graph_db import TRSGraphClient, get_space_client
@@ -38,13 +41,14 @@ logger = logging.getLogger(__name__)
 COLLECTION_NAME = "kg_entity"
 DEFAULT_PAGE_SIZE = 10
 GRAPH_PAGE_SIZE = 200
-EMBED_BATCH_SIZE = 64
-UPSERT_BATCH_SIZE = 200
+EMBED_BATCH_SIZE = 256
 # RRF 融合常数（与项目域一致）
 RRF_K = 60
 # 检索/展示文本上限
-SEARCH_TEXT_MAX_CHARS = 4000
-PROPERTIES_JSON_MAX_CHARS = 60000
+SEARCH_TEXT_MAX_BYTES = 32000
+PROPERTY_TEXT_MAX_BYTES = 2048
+PROPERTY_TEXT_MIN_BYTES = 96
+PROPERTIES_JSON_MAX_BYTES = 60000
 NAME_CANDIDATE_KEYS = (
     "name",
     "name_zh",
@@ -119,6 +123,72 @@ def _scalar(value: Any) -> Any:
     return None
 
 
+def _iter_property_values(value: Any, *, depth: int = 0) -> Iterator[str]:
+    """展开属性中的可检索叶子值，兼容原生 list/dict 与 JSON 字符串。"""
+    if value is None or depth > 6:
+        return
+    if isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return
+        if normalized[:1] in {"[", "{"}:
+            try:
+                decoded = json.loads(normalized)
+            except (TypeError, ValueError):
+                decoded = None
+            if isinstance(decoded, (Mapping, list, tuple, set)):
+                yield from _iter_property_values(decoded, depth=depth + 1)
+                return
+        yield normalized
+        return
+    if isinstance(value, Mapping):
+        for nested_key, nested_value in value.items():
+            yield str(nested_key)
+            yield from _iter_property_values(nested_value, depth=depth + 1)
+        return
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        for item in value:
+            yield from _iter_property_values(item, depth=depth + 1)
+        return
+    if isinstance(value, set):
+        for item in sorted(value, key=str):
+            yield from _iter_property_values(item, depth=depth + 1)
+        return
+    if isinstance(value, (int, float, bool)):
+        yield str(value)
+
+
+def _clip_search_text(value: str, limit: int) -> str:
+    """保留长值首尾，避免只保留开头导致尾部关键词永远不可检索。"""
+    encoded = value.encode("utf-8")
+    if len(encoded) <= limit:
+        return value
+    head = max((limit - 1) // 2, 1)
+    tail = max(limit - head - 1, 1)
+    prefix = encoded[:head].decode("utf-8", errors="ignore")
+    suffix = encoded[-tail:].decode("utf-8", errors="ignore")
+    return f"{prefix} {suffix}"
+
+
+def _truncate_utf8(value: str, limit: int) -> str:
+    encoded = value.encode("utf-8")
+    if len(encoded) <= limit:
+        return value
+    return encoded[:limit].decode("utf-8", errors="ignore")
+
+
+def _property_search_fragment(key: Any, value: Any, *, limit: int) -> str:
+    parts = [str(key)]
+    remaining = max(limit - len(parts[0].encode("utf-8")) - 1, 0)
+    for leaf in _iter_property_values(value):
+        if remaining <= 0:
+            break
+        clipped = _clip_search_text(leaf, remaining)
+        parts.append(clipped)
+        remaining -= len(clipped.encode("utf-8")) + 1
+    return " ".join(parts) if len(parts) > 1 else ""
+
+
 def _escape_expression(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
@@ -134,33 +204,58 @@ def extract_entity_name(props: dict[str, Any], vid: str) -> str:
 
 
 def extract_display_properties(props: dict[str, Any]) -> dict[str, Any]:
-    """挑出可展示的公共属性（标量、键值均截断），按插入序保留。"""
+    """挑出可展示的公共属性；复杂值序列化后截断，按插入序保留。"""
     display: dict[str, Any] = {}
     for key, value in props.items():
         scalar = _scalar(value)
-        if scalar is None or scalar == "":
+        if scalar is None:
+            if not isinstance(value, (Mapping, list, tuple, set)):
+                continue
+            try:
+                scalar = json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))
+            except (TypeError, ValueError):
+                continue
+        if scalar == "":
             continue
         text = str(scalar)
         if len(text) > 512:
             text = text[:512] + "…"
-        display[str(key)] = text
-        if len(json.dumps(display, ensure_ascii=False)) >= PROPERTIES_JSON_MAX_CHARS:
+        key_text = str(key)
+        candidate = {**display, key_text: text}
+        if (
+            len(json.dumps(candidate, ensure_ascii=False).encode("utf-8"))
+            > PROPERTIES_JSON_MAX_BYTES
+        ):
             break
+        display[key_text] = text
     return display
 
 
 def compose_entity_text(name: str, entity_type: str, props: dict[str, Any]) -> str:
-    """BM25 / dense 共用语料：实体名 + 类型 + 标量属性键值。"""
+    """BM25 / dense 共用语料：实体名、类型及展开后的全部属性键值。"""
     parts = [name, entity_type]
+    remaining = (
+        SEARCH_TEXT_MAX_BYTES - len(name.encode("utf-8")) - len(entity_type.encode("utf-8")) - 2
+    )
+    property_count = max(len(props), 1)
+    per_property_limit = min(
+        PROPERTY_TEXT_MAX_BYTES,
+        max(PROPERTY_TEXT_MIN_BYTES, remaining // property_count),
+    )
     for key, value in props.items():
-        scalar = _scalar(value)
-        if scalar is None or scalar == "":
-            continue
-        text = str(scalar)
-        if len(text) > 256:
-            text = text[:256]
-        parts.append(f"{key} {text}")
-    return " ".join(part for part in parts if part)[:SEARCH_TEXT_MAX_CHARS]
+        fragment = _property_search_fragment(key, value, limit=per_property_limit)
+        if fragment:
+            parts.append(fragment)
+    return _truncate_utf8(
+        " ".join(part for part in parts if part),
+        SEARCH_TEXT_MAX_BYTES,
+    )
+
+
+def _batched(items: Iterable[dict[str, Any]], size: int) -> Iterator[list[dict[str, Any]]]:
+    iterator = iter(items)
+    while chunk := list(islice(iterator, size)):
+        yield chunk
 
 
 def _serialize_browse_item(node: Any, entity_type: str) -> dict[str, Any]:
@@ -331,6 +426,81 @@ def _milvus_space_has_rows(milvus: Any, space: str) -> bool:
     return bool(rows)
 
 
+def _index_record(item: dict[str, Any]) -> dict[str, Any]:
+    props = item["props"]
+    name = extract_entity_name(props, item["vid"])
+    entity_id = str(
+        next(
+            (props.get(key) for key in ("id", "entity_id") if _scalar(props.get(key))),
+            "",
+        )
+        or item["vid"]
+    )
+    return {
+        "vid": item["vid"],
+        "entity_id": entity_id[:256],
+        "name": name[:2048],
+        "entity_type": item["entity_type"],
+        "properties": extract_display_properties(props),
+        "text": compose_entity_text(name, item["entity_type"], props),
+    }
+
+
+def _iter_index_records(graph: TRSGraphClient, labels: list[str]) -> Iterator[dict[str, Any]]:
+    for item in _iter_graph_entities(graph, labels):
+        record = _index_record(item)
+        if record["text"]:
+            yield record
+
+
+def _iter_index_texts(graph: TRSGraphClient, labels: list[str]) -> Iterator[str]:
+    """首遍仅生成检索语料，避免为不落库的记录序列化展示属性。"""
+    for item in _iter_graph_entities(graph, labels):
+        name = extract_entity_name(item["props"], item["vid"])
+        document = compose_entity_text(name, item["entity_type"], item["props"])
+        if document:
+            yield document
+
+
+@contextmanager
+def _database_reindex_guard(session: Session):
+    """MySQL advisory lock prevents two API/worker processes rebuilding together."""
+    bind = session.get_bind()
+    if bind.dialect.name != "mysql":
+        yield
+        return
+    with bind.connect() as connection:
+        acquired = connection.execute(
+            text("SELECT GET_LOCK(:name, 0)"), {"name": "kg_entity_search_reindex"}
+        ).scalar()
+        if acquired != 1:
+            raise EntitySearchReindexInProgressError("索引重建正在进行中，请稍后再试")
+        try:
+            yield
+        finally:
+            connection.execute(
+                text("SELECT RELEASE_LOCK(:name)"), {"name": "kg_entity_search_reindex"}
+            )
+
+
+def _database_reindex_running(session: Session) -> bool:
+    bind = session.get_bind()
+    if bind.dialect.name != "mysql":
+        return _reindex_running
+    try:
+        with bind.connect() as connection:
+            return (
+                connection.execute(
+                    text("SELECT IS_USED_LOCK(:name)"),
+                    {"name": "kg_entity_search_reindex"},
+                ).scalar()
+                is not None
+            )
+    except Exception:  # noqa: BLE001 - 状态接口仍应返回其余可用信息
+        logger.warning("检查实体索引重建锁失败", exc_info=True)
+        return _reindex_running
+
+
 class EntitySearchService:
     """实体 Milvus 混合检索 + 图直查浏览（browse / search / reindex / types / status）。"""
 
@@ -424,7 +594,8 @@ class EntitySearchService:
                 raise EntitySearchReindexInProgressError("索引重建正在进行中，请稍后再试")
             _reindex_running = True
         try:
-            return self._reindex_locked(space=space, entity_types=entity_types)
+            with _database_reindex_guard(self._session):
+                return self._reindex_locked(space=space, entity_types=entity_types)
         finally:
             with _reindex_lock:
                 _reindex_running = False
@@ -446,90 +617,75 @@ class EntitySearchService:
             # 再只写回当前类型。保留 entity_types 作为兼容校验参数，但始终重建
             # 当前图空间全部标签，保证向量、统计和实际行集合属于同一快照。
 
-        records: list[dict[str, Any]] = []
-        for item in _iter_graph_entities(graph, labels):
-            props = item["props"]
-            name = extract_entity_name(props, item["vid"])
-            entity_id = str(
-                next(
-                    (props.get(key) for key in ("id", "entity_id") if _scalar(props.get(key))),
-                    "",
-                )
-                or item["vid"]
-            )
-            records.append(
-                {
-                    "vid": item["vid"],
-                    "entity_id": entity_id[:256],
-                    "name": name[:2048],
-                    "entity_type": item["entity_type"],
-                    "properties": extract_display_properties(props),
-                    "text": compose_entity_text(name, item["entity_type"], props),
-                }
-            )
-        records = [record for record in records if record["text"]]
-
-        # BM25 fit 全量语料
+        # 第一遍只累计 BM25 文档频率/词表，不保留全量实体和 dense vectors。
+        # dev2 约 52 万实体，历史实现一次性持有 records + 512 维向量会占用数 GB。
         encoder = BM25SparseEncoder()
-        encoder.fit([record["text"] for record in records])
+        encoder.fit_iterable(_iter_index_texts(graph, labels))
 
-        # dense embedding 分批
+        # 第二遍重新流式读取图实体，每批完成 embedding 后立即写入 Milvus。
         embedding_config = _env_embedding_config()
         client = _embedding_client()
-        dense_vectors: list[list[float] | None] = []
-        for start in range(0, len(records), EMBED_BATCH_SIZE):
-            batch = [record["text"] for record in records[start : start + EMBED_BATCH_SIZE]]
-            vectors = client.embed(batch)
-            if vectors is None or len(vectors) != len(batch):
-                raise EntitySearchError(
-                    f"embedding 服务调用失败（model={embedding_config['model']}），索引未写入"
-                )
-            if any(len(vector) != embedding_config["dim"] for vector in vectors):
-                raise EntitySearchError(
-                    f"embedding 维度与配置不符（期望 {embedding_config['dim']}）"
-                )
-            dense_vectors.extend(vectors)
-
         milvus = get_milvus_client()
-        self._ensure_collection(milvus, dim=embedding_config["dim"])
-        # 按空间覆盖旧数据（不影响其他空间的索引）
-        milvus.delete(
-            collection_name=COLLECTION_NAME,
-            filter=f'graph_space == "{_escape_expression(resolved_space)}"',
-        )
         written = 0
-        for start in range(0, len(records), UPSERT_BATCH_SIZE):
-            chunk = records[start : start + UPSERT_BATCH_SIZE]
-            rows = []
-            for index, record in enumerate(chunk):
-                vector = dense_vectors[start + index]
-                if vector is None:
-                    continue
-                rows.append(
-                    {
-                        "document_id": f"{resolved_space}::{record['vid']}",
-                        "vid": record["vid"],
-                        "entity_id": record["entity_id"],
-                        "name": record["name"],
-                        "entity_type": record["entity_type"],
-                        "graph_space": resolved_space,
-                        "search_text": record["text"],
-                        "properties": json.dumps(record["properties"], ensure_ascii=False)[
-                            :PROPERTIES_JSON_MAX_CHARS
-                        ],
-                        "dense_vector": vector,
-                        "sparse_vector": encoder.encode_document(record["text"]),
-                    }
-                )
-            if rows:
+        type_counts: dict[str, int] = {}
+        replacement_started = False
+        space_filter = f'graph_space == "{_escape_expression(resolved_space)}"'
+        try:
+            for chunk in _batched(_iter_index_records(graph, labels), EMBED_BATCH_SIZE):
+                batch = [record["text"] for record in chunk]
+                vectors = client.embed(batch)
+                if vectors is None or len(vectors) != len(batch):
+                    raise EntitySearchError(
+                        f"embedding 服务调用失败（model={embedding_config['model']}），索引未写入"
+                    )
+                if any(len(vector) != embedding_config["dim"] for vector in vectors):
+                    raise EntitySearchError(
+                        f"embedding 维度与配置不符（期望 {embedding_config['dim']}）"
+                    )
+                if not replacement_started:
+                    self._ensure_collection(milvus, dim=embedding_config["dim"])
+                    milvus.delete(collection_name=COLLECTION_NAME, filter=space_filter)
+                    replacement_started = True
+                rows = []
+                for record, vector in zip(chunk, vectors, strict=True):
+                    rows.append(
+                        {
+                            "document_id": f"{resolved_space}::{record['vid']}",
+                            "vid": record["vid"],
+                            "entity_id": record["entity_id"],
+                            "name": record["name"],
+                            "entity_type": record["entity_type"],
+                            "graph_space": resolved_space,
+                            "search_text": record["text"],
+                            "properties": json.dumps(record["properties"], ensure_ascii=False),
+                            "dense_vector": vector,
+                            "sparse_vector": encoder.encode_document(record["text"]),
+                        }
+                    )
+                    entity_type = record["entity_type"]
+                    type_counts[entity_type] = type_counts.get(entity_type, 0) + 1
                 milvus.upsert(collection_name=COLLECTION_NAME, data=rows)
                 written += len(rows)
-        milvus.flush(COLLECTION_NAME)
-        milvus.load_collection(COLLECTION_NAME)
+                if written % 5000 < len(rows):
+                    logger.info("实体索引流式重建进度 space=%s written=%s", resolved_space, written)
 
-        type_counts: dict[str, int] = {}
-        for record in records:
-            type_counts[record["entity_type"]] = type_counts.get(record["entity_type"], 0) + 1
+            if not replacement_started:
+                self._ensure_collection(milvus, dim=embedding_config["dim"])
+                milvus.delete(collection_name=COLLECTION_NAME, filter=space_filter)
+                replacement_started = True
+            milvus.flush(COLLECTION_NAME)
+            milvus.load_collection(COLLECTION_NAME)
+        except Exception:
+            # 不让失败批次伪装成可用的完整索引；状态行保留旧快照，查询端会
+            # 通过“当前空间无行”明确报告 stateStale，管理员可安全重试。
+            if replacement_started:
+                try:
+                    milvus.delete(collection_name=COLLECTION_NAME, filter=space_filter)
+                    milvus.flush(COLLECTION_NAME)
+                except Exception:  # noqa: BLE001 - 保留原始重建异常
+                    logger.exception("清理失败的实体索引批次失败（space=%s）", resolved_space)
+            raise
+
         _ensure_state_table()
         _save_state(
             self._session,
@@ -654,7 +810,7 @@ class EntitySearchService:
     def _graph_exact_matches(
         *, keyword: str, space: str, entity_type: str | None
     ) -> list[dict[str, Any]]:
-        """VID 点查及有属性索引的名称/业务 ID 查找，不遍历图库补齐向量索引。
+        """VID 点查及任意已建图属性索引的精确查找，不遍历图库补齐向量索引。
 
         每个索引查询最多取检索窗口的 500 条，去重后以类型、VID 稳定排序。
         仅使用复合索引的首列，避免对不满足索引前缀的属性查询做全图扫描。
@@ -662,11 +818,11 @@ class EntitySearchService:
         graph = get_space_client(space)
         matches: dict[tuple[str, str], dict[str, Any]] = {}
 
-        def add(node: Any, label: str) -> None:
+        def add(node: Any, label: str, *, indexed_property_match: bool = False) -> None:
             if entity_type and label != entity_type:
                 return
             item = _serialize_browse_item(node, label)
-            if keyword in (item["vid"], item["entityId"], item["name"]):
+            if indexed_property_match or keyword in (item["vid"], item["entityId"], item["name"]):
                 matches[(label, item["vid"])] = item
 
         node = graph.get_node(keyword)
@@ -674,7 +830,6 @@ class EntitySearchService:
             for label in sorted(node.labels or []):
                 add(node, label)
 
-        keys = set(NAME_CANDIDATE_KEYS) | {"id", "entity_id"}
         try:
             indexes = graph.list_indexes(entity_type)
         except Exception:  # noqa: BLE001 - 元数据异常不丢弃已经确认的 VID 命中
@@ -686,9 +841,7 @@ class EntitySearchService:
             {
                 (index.label, index.properties[0])
                 for index in indexes
-                if index.properties
-                and index.properties[0] in keys
-                and (not entity_type or index.label == entity_type)
+                if index.properties and (not entity_type or index.label == entity_type)
             }
         )
         index_error: Exception | None = None
@@ -703,7 +856,7 @@ class EntitySearchService:
                 )
                 continue
             for candidate in result.items or []:
-                add(candidate, label)
+                add(candidate, label, indexed_property_match=True)
         if index_error is not None and not matches:
             raise index_error
         return [matches[key] for key in sorted(matches)][:500]
@@ -941,7 +1094,7 @@ class EntitySearchService:
             "collectionExists": collection_exists,
             "milvusReachable": milvus_reachable,
             "actualDataAvailable": space_has_rows,
-            "reindexing": _reindex_running,
+            "reindexing": _database_reindex_running(self._session),
         }
         if row is None:
             return {

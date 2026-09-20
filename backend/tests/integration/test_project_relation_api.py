@@ -7,7 +7,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from biz.dependencies.auth import require_platform_actor
+from biz.dependencies.project_relation_auth import require_project_relation_identity
 from biz.handler import project_relation as handler
 from service.platform_access import PlatformActor
 
@@ -31,7 +31,7 @@ class _Graph:
 async def project_relation_client() -> AsyncClient:
     app = FastAPI()
     app.include_router(handler.router, prefix="/api/v1")
-    app.dependency_overrides[require_platform_actor] = lambda: PlatformActor(
+    app.dependency_overrides[require_project_relation_identity] = lambda: PlatformActor(
         user_id="test-user",
         username="tester",
         display_name="Tester",

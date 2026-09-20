@@ -19,17 +19,19 @@ Content-Type: application/json
 
 ## 2. 认证
 
-每个请求必须携带统一用户中心签发的 Bearer Token：
+外部业务系统使用本系统分配的 `client_id` 和 API Key，每个请求同时携带以下两个 Header：
 
 ```http
-Authorization: Bearer <access_token>
+X-Client-Id: <client_id>
+X-API-Key: <api_key>
 Content-Type: application/json
 ```
 
-- Token 由「统一用户中心」（OAuth2）签发。接入前向平台申请服务账号或可续期的机器
-  凭证，勿长期复用个人浏览器登录 Token。
-- Token 缺失或过期返回 HTTP 401，重新获取或续期后重试。
-- 本接口不接收 TRSGraph `X-API-Key`，不支持匿名调用。
+- 向本系统管理员提供业务方名称，由管理员分配 `client_id`、API Key 和有效期；调用方无需自行实现签发功能或登录用户中心。API Key 仅在创建或轮换时显示一次，由调用方后端安全保存，不放入 URL、浏览器前端或公开日志。
+- API Key 仅授权此项目关系查询接口，要求 `project-relations:read` 权限；不能用于平台管理接口，也不是 TRSGraph 服务的内部 API Key。
+- 默认有效期为 90 天，实际有效期以管理员签发结果为准。过期前联系管理员轮换并更新调用配置；轮换后旧 Key 立即失效。停用的凭证不能继续调用。
+- 原有 `Authorization: Bearer <access_token>` 和登录 Cookie 方式继续兼容。只要请求包含 `X-Client-Id` 或 `X-API-Key` 中任意一个 Header，就优先校验 API Key；缺少另一项或校验失败均不回退到 Bearer/Cookie。
+- 正式对外接入应启用 `AUTH_ENABLED=true`；不要依靠开发环境的关闭登录配置保护接口。管理员操作见 [外部业务方凭证管理](external_api_clients.md)。
 
 ## 3. 请求参数
 
@@ -168,22 +170,25 @@ HTTP 200。`items` 的每个元素是一条关系记录；**分页单位是关�
 
 **重要：参数校验失败时 HTTP 状态码仍为 200**，失败信息在响应体的 `code` / `success`
 字段里（平台统一响应壳）。调用方判断成败必须看 `success`（或 `code`），不能只看
-HTTP 状态码。其余错误（400 / 401 / 502）是真实 HTTP 状态码，响应体为
+HTTP 状态码。其余错误（400 / 401 / 403 / 502 / 503）是真实 HTTP 状态码，响应体为
 `{"detail": "..."}` 格式。
 
 | 场景 | HTTP 状态码 | 响应体格式 |
 |---|---:|---|
 | 参数校验失败：非法关系类型、`pageSize` 越界、缺请求体等 | **200** | 统一响应壳 `code=422` |
 | 游标格式无效；或修改了筛选条件后仍沿用旧游标 | 400 | `{"detail": "游标格式无效"}` |
-| 未认证、Token 缺失或已过期 | 401 | `{"detail": "尚未登录"}` |
+| 未认证、Token 缺失或已过期；API Key Header 缺失、不匹配、过期或被停用 | 401 | `{"detail": "..."}`，补齐凭证或联系管理员重新签发 |
+| API Key 有效但缺少 `project-relations:read` 权限 | 403 | `{"detail": "..."}`，联系管理员核对授权 |
 | 图数据服务不可用或查询失败 | 502 | `{"detail": "图数据服务暂时不可用，请稍后重试"}` |
+| API Key 认证数据库不可用 | 503 | `{"detail": "..."}`，稍后重试并联系平台运维；不会放行请求 |
 
 ## 7. 完整 curl 示例
 
 ```bash
 curl -X POST \
   'https://edu.itic-sci.com/bkg_zpt/api/v1/kg-service/project-relations/query' \
-  -H 'Authorization: Bearer <access_token>' \
+  -H 'X-Client-Id: <client_id>' \
+  -H 'X-API-Key: <api_key>' \
   -H 'Content-Type: application/json' \
   -d '{"keyword": "人工智能", "relationTypes": [], "pageSize": 100}'
 ```

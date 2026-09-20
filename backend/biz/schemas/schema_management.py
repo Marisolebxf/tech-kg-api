@@ -150,6 +150,8 @@ class EntitySchemaCreate(SchemaCreateBase):
 
 
 class RelationSchemaCreate(SchemaCreateBase):
+    # 关系英文名（nGQL EDGE 类型名）上限 64；实体名（PascalCase）维持 128
+    name: str = Field(min_length=1, max_length=64)
     source_schema_id: str | None = Field(default=None, min_length=1, max_length=36)
     target_schema_id: str | None = Field(default=None, min_length=1, max_length=36)
     source_expression: str | None = Field(default=None, min_length=1, max_length=128)

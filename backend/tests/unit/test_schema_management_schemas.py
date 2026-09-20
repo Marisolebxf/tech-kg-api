@@ -7,7 +7,11 @@ SCHEMA_DESC_RULE 上限 4000；后端曾全局卡 64 导致合法输入被拒。
 import pytest
 from pydantic import ValidationError
 
-from biz.schemas.schema_management import EntitySchemaCreate, SchemaPropertyInput
+from biz.schemas.schema_management import (
+    EntitySchemaCreate,
+    RelationSchemaCreate,
+    SchemaPropertyInput,
+)
 
 
 def _payload(**overrides):
@@ -18,6 +22,18 @@ def _payload(**overrides):
         "description": "",
         "properties": [{"name": "id", "data_type": "string"}],
     }
+    base.update(overrides)
+    return base
+
+
+def _relation_payload(**overrides):
+    base = _payload(
+        schema_key="uses_technology",
+        name="USES_TECHNOLOGY",
+        label="使用技术",
+        source_schema_id="018f1a2b-0000-4000-8000-000000000001",
+        target_schema_id="018f1a2b-0000-4000-8000-000000000002",
+    )
     base.update(overrides)
     return base
 
@@ -64,6 +80,21 @@ class TestSchemaCreateTextLimits:
         # identity_key 未放开，维持全局 64 上限
         with pytest.raises(ValidationError, match="64"):
             EntitySchemaCreate(**_payload(identity_key="k" * 65))
+
+
+class TestRelationNameLimit:
+    def test_relation_name_64_chars_accepted(self):
+        relation = RelationSchemaCreate(**_relation_payload(name="U" + "S" * 63))
+        assert len(relation.name) == 64
+
+    def test_relation_name_65_chars_rejected(self):
+        # 关系英文名（EDGE 类型名）单独收紧到 64，实体名维持 128
+        with pytest.raises(ValidationError):
+            RelationSchemaCreate(**_relation_payload(name="U" + "S" * 64))
+
+    def test_entity_name_128_still_accepted(self):
+        entity = EntitySchemaCreate(**_payload(name="A" + "b" * 127))
+        assert len(entity.name) == 128
 
 
 class TestSchemaPropertyInputLimits:

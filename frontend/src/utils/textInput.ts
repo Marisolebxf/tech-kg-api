@@ -63,9 +63,9 @@ export const SCHEMA_ENTITY_NAME_RULE: TextRule = {
   patternHint: '实体名需为 PascalCase 英文（首字母大写，如 Gadget）',
 }
 
-/** 关系英文名：UPPER_SNAKE_CASE（nGQL EDGE 类型名） */
+/** 关系英文名：UPPER_SNAKE_CASE（nGQL EDGE 类型名，上限 64） */
 export const SCHEMA_RELATION_NAME_RULE: TextRule = {
-  max: 128,
+  max: 64,
   pattern: /^[A-Z][A-Z0-9_]*$/,
   patternHint: '关系英文名需为大写下划线（如 USES_TECHNOLOGY）',
 }

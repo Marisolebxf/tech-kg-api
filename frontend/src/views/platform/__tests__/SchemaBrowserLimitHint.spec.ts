@@ -136,6 +136,35 @@ describe('Schema 管理输入框达上限提示', () => {
     expect(nameInput.classes()).not.toContain('is-at-limit')
   })
 
+  it('关系页名称上限 64：达上限红边提示 64 字，maxlength 同步收紧；实体页仍为 128', async () => {
+    const view = mountView()
+    await flushPromises()
+
+    // 切到「关系」tab 再打开新增弹窗
+    const relationTab = view.findAll('.schema-tabs__items button').find((button) => button.text() === '关系')
+    expect(relationTab).toBeTruthy()
+    await relationTab!.trigger('click')
+    await view.get('.schema-tabs .primary').trigger('click')
+
+    const nameInput = view.findAll('input.create-text-input')[0]
+    expect(nameInput.attributes('maxlength')).toBe('64')
+    expect(view.find('.create-field--limit-note .limit-field-note').exists()).toBe(false)
+
+    await nameInput.setValue('U'.repeat(64))
+    expect(nameInput.classes()).toContain('is-at-limit')
+    expect(view.get('.create-field--limit-note .limit-field-note').text()).toContain('已达 64 字上限，无法继续输入')
+
+    await nameInput.setValue('USES_TECHNOLOGY')
+    expect(view.find('.create-field--limit-note .limit-field-note').exists()).toBe(false)
+
+    // 实体页维持 128
+    const entityTab = view.findAll('.schema-tabs__items button').find((button) => button.text() === '标准实体')
+    await entityTab!.trigger('click')
+    await view.get('.schema-tabs .primary').trigger('click')
+    const entityNameInput = view.findAll('input.create-text-input')[0]
+    expect(entityNameInput.attributes('maxlength')).toBe('128')
+  })
+
   it('属性列表行达 128 字上限：该行输入框红边 + 列表下方汇总提示（含行号）', async () => {
     const view = mountView()
     await flushPromises()

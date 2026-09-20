@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from biz.dependencies.auth import CurrentActor
-from biz.schemas.common import ApiResponse
-from service.graph_console import GraphConsoleError, run_statement
+from service.graph_console import GraphConsoleError, run_statement_cached_payload
 
 router = APIRouter(prefix="/graph-console", tags=["graph-console"])
 
@@ -17,10 +16,10 @@ class GraphConsoleRequest(BaseModel):
     statement: str = Field(min_length=1, max_length=4000)
 
 
-@router.post("/query", response_model=ApiResponse)
-def run_ngql(payload: GraphConsoleRequest, actor: CurrentActor) -> ApiResponse:
+@router.post("/query")
+def run_ngql(payload: GraphConsoleRequest, actor: CurrentActor) -> Response:
     try:
-        data = run_statement(actor, payload.space, payload.statement)
+        body = run_statement_cached_payload(actor, payload.space, payload.statement)
     except GraphConsoleError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-    return ApiResponse(data=data)
+    return Response(body, media_type="application/json")

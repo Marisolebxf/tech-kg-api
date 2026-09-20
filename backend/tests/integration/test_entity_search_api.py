@@ -13,6 +13,8 @@ from sqlalchemy.pool import StaticPool
 
 from biz.dependencies.auth import require_platform_actor
 from db_model.entity_search import EntitySearchState
+from infra.entity_response_cache import build_cache_key
+from infra.redis import MemoryJsonStore
 from infra.workflow_mysql import get_workflow_session
 from main import app
 from service.platform_access import PlatformActor
@@ -149,6 +151,12 @@ def entity_search_api(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("service.entity_search.get_space_client", lambda space: FakeGraph())
     monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
     monkeypatch.setattr("service.entity_search._node_count_cache", {})
+    cache_store = MemoryJsonStore()
+    monkeypatch.setattr("infra.entity_response_cache.get_json_store", lambda: cache_store)
+    from biz.handler import entity_search as entity_search_handler
+
+    entity_search_handler._browse_cache.clear_local()
+    entity_search_handler._search_cache.clear_local()
 
     def set_actor(user_id: str, is_admin: bool) -> None:
         actor = PlatformActor(
@@ -162,6 +170,8 @@ def entity_search_api(monkeypatch: pytest.MonkeyPatch):
 
     set_actor("user-a", False)
     yield engine, set_actor, monkeypatch
+    entity_search_handler._browse_cache.clear_local()
+    entity_search_handler._search_cache.clear_local()
     app.dependency_overrides.pop(get_workflow_session, None)
     app.dependency_overrides.pop(require_platform_actor, None)
     engine.dispose()
@@ -193,6 +203,38 @@ async def test_browse_default_view(entity_search_api) -> None:
         # 未知类型 → 400
         missing = await client.get("/api/v1/entity-search/entities", params={"entityType": "Nope"})
         assert missing.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_browse_uses_shared_cache_after_l1_is_cleared(entity_search_api) -> None:
+    _, _, monkeypatch = entity_search_api
+    graph = FakeGraph()
+    calls = 0
+    original_get_nodes = graph.get_nodes_by_label
+
+    def counted_get_nodes(label: str, *, limit: int = 100, offset: int = 0):
+        nonlocal calls
+        calls += 1
+        return original_get_nodes(label, limit=limit, offset=offset)
+
+    graph.get_nodes_by_label = counted_get_nodes
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+
+    from biz.handler import entity_search as entity_search_handler
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        first = await client.get("/api/v1/entity-search/entities", params={"limit": 7})
+        assert first.status_code == 200
+        assert first.headers["X-Entity-Cache"] == "MISS"
+        assert calls == 1
+
+        # 模拟请求落到另一个 worker：清掉当前进程 L1，仍应从共享缓存取结果。
+        entity_search_handler._browse_cache.clear_local()
+        second = await client.get("/api/v1/entity-search/entities", params={"limit": 7})
+        assert second.status_code == 200
+        assert second.headers["X-Entity-Cache"] == "HIT"
+        assert second.json() == first.json()
+        assert calls == 1
 
 
 @pytest.mark.asyncio
@@ -251,17 +293,17 @@ async def test_reindex_and_search_full_flow(entity_search_api) -> None:
     milvus = FakeMilvus()
     monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
     monkeypatch.setattr("service.entity_search._embedding_client", lambda: FakeEmbedding())
-    entity_search_handler._browse_payload_cache["search:dev2:None:旧词:10:0"] = (
-        float("inf"),
-        '{"stale":true}',
+    stale_key = build_cache_key(
+        "search", space="dev2", entity_type=None, keyword="旧词", limit=10, offset=0
     )
+    await entity_search_handler._search_cache.put(stale_key, '{"stale":true}')
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         set_actor("admin-1", True)
         reindexed = await client.post("/api/v1/entity-search/reindex", json={})
         assert reindexed.status_code == 200
         assert reindexed.json()["data"]["entityCount"] == 1
-        assert entity_search_handler._browse_payload_cache == {}
+        assert await entity_search_handler._search_cache.get(stale_key) is None
 
         types = await client.get("/api/v1/entity-search/types")
         assert types.json()["data"]["items"] == [{"name": "Expert", "count": 1}]

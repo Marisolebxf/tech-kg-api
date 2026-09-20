@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from types import SimpleNamespace
 from typing import Any
 
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from db_model.entity_search import EntitySearchState
+from infra.graph_db.exceptions import GraphRequestError
 from service.entity_search import (
     COLLECTION_NAME,
     EntitySearchError,
@@ -465,6 +467,109 @@ def test_reindex_streams_graph_and_embedding_in_bounded_batches(
     assert embedding.batch_sizes == [2, 2, 1]
     assert graph_reads == 2  # BM25 统计一遍，流式写入一遍
     assert len(milvus.collections[COLLECTION_NAME]) == 5
+
+
+class LookupGraph(FakeGraph):
+    """execute_query 可用：有索引标签走 LOOKUP 分页，无索引标签回退 REST。"""
+
+    def __init__(self, labels, nodes, lookup_labels):
+        super().__init__(labels, nodes)
+        self._lookup_labels = set(lookup_labels)
+        self.rest_reads: list[str] = []
+        self.lookup_reads: list[str] = []
+
+    def execute_query(self, query: str):
+        label = query.split("`")[1]
+        if label not in self._lookup_labels:
+            raise GraphRequestError(f"no index on {label}", status_code=500)
+        match = re.search(r"LIMIT (\d+)(?: OFFSET (\d+))?", query)
+        assert match is not None
+        limit = int(match.group(1))
+        offset = int(match.group(2) or 0)
+        page = self._nodes.get(label, [])[offset : offset + limit]
+        self.lookup_reads.append(label)
+        return SimpleNamespace(
+            records=[
+                {"v": {"id": node.id, "labels": node.labels, "properties": node.properties}}
+                for node in page
+            ]
+        )
+
+    def get_nodes_by_label(self, label: str, *, limit: int = 100, offset: int = 0):
+        self.rest_reads.append(label)
+        return super().get_nodes_by_label(label, limit=limit, offset=offset)
+
+
+def test_reindex_prefers_lookup_pagination_for_indexed_labels(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    graph = LookupGraph(
+        ["Expert", "Paper"],
+        {
+            "Expert": [
+                FakeNode("expert_1", {"id": "E-1", "name": "张三"}),
+                FakeNode("expert_2", {"id": "E-2", "name": "李四"}),
+            ],
+            "Paper": [FakeNode("paper_1", {"id": "P-1", "title": "深度学习综述"})],
+        },
+        lookup_labels={"Expert"},
+    )
+    milvus = FakeMilvusClient()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", FakeEmbeddingClient)
+    monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+
+    result = EntitySearchService(state_session).reindex()
+
+    assert result["entityCount"] == 3
+    assert result["typeCounts"] == {"Expert": 2, "Paper": 1}
+    assert result["skippedLabels"] == []
+    # 有索引标签两次遍历全走 LOOKUP；REST 只服务无索引标签
+    assert set(graph.lookup_reads) == {"Expert"}
+    assert set(graph.rest_reads) == {"Paper"}
+    assert len(milvus.collections[COLLECTION_NAME]) == 3
+    expert_row = next(
+        row for row in milvus.collections[COLLECTION_NAME] if row["vid"] == "expert_1"
+    )
+    assert expert_row["name"] == "张三" and expert_row["entity_id"] == "E-1"
+
+
+def test_reindex_skips_big_label_when_lookup_and_rest_both_fail(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    graph = LookupGraph(
+        ["Expert", "Paper"],
+        {
+            "Expert": [FakeNode("expert_1", {"id": "E-1", "name": "张三"})],
+            "Paper": [FakeNode("paper_1", {"id": "P-1", "title": "深度学习综述"})],
+        },
+        lookup_labels={"Expert"},
+    )
+
+    def broken_rest(label, *, limit=100, offset=0):
+        if label == "Paper":  # 大标签 REST 分页超时（MATCH+SKIP 全量物化）
+            raise GraphRequestError("read timeout", status_code=504)
+        return LookupGraph.get_nodes_by_label(graph, label, limit=limit, offset=offset)
+
+    graph.get_nodes_by_label = broken_rest
+    milvus = FakeMilvusClient()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", FakeEmbeddingClient)
+    monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+
+    service = EntitySearchService(state_session)
+    result = service.reindex()
+
+    # Paper 无图索引且 REST 拉不动：跳过但不让整次重建失败
+    assert result["entityCount"] == 1
+    assert result["typeCounts"] == {"Expert": 1}
+    assert result["skippedLabels"] == ["Paper"]
+    rows = milvus.collections[COLLECTION_NAME]
+    assert len(rows) == 1 and rows[0]["vid"] == "expert_1"
+    assert service.types() == [{"name": "Expert", "count": 1}]
+    assert graph.lookup_reads == ["Expert"] * 4  # 两遍各一次探活 + 一次分页；Paper 第二遍不再重试
 
 
 def test_reindex_unknown_entity_type_raises(state_session, monkeypatch) -> None:
@@ -1020,7 +1125,9 @@ def test_upsert_entity_new_vertex_increments_state_counts(
     service = EntitySearchService(state_session)
     service.reindex()
     # 裁决 create 后图里多出的新顶点（与既有实体同名 → BM25 词表可编码）
-    graph._nodes["Expert"].append(FakeNode("expert_3", {"id": "E-3", "name": "张三", "org": "中科院"}))
+    graph._nodes["Expert"].append(
+        FakeNode("expert_3", {"id": "E-3", "name": "张三", "org": "中科院"})
+    )
 
     result = service.upsert_entity(space="dev2", node_label="Expert", vid="expert_3", is_new=True)
 

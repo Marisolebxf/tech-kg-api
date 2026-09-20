@@ -476,16 +476,20 @@ def _index_record(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _iter_index_records(graph: TRSGraphClient, labels: list[str]) -> Iterator[dict[str, Any]]:
-    for item in _iter_graph_entities(graph, labels):
+def _iter_index_records(
+    graph: TRSGraphClient, labels: list[str], skipped: list[str] | None = None
+) -> Iterator[dict[str, Any]]:
+    for item in _iter_graph_entities(graph, labels, skipped=skipped):
         record = _index_record(item)
         if record["text"]:
             yield record
 
 
-def _iter_index_texts(graph: TRSGraphClient, labels: list[str]) -> Iterator[str]:
+def _iter_index_texts(
+    graph: TRSGraphClient, labels: list[str], skipped: list[str] | None = None
+) -> Iterator[str]:
     """首遍仅生成检索语料，避免为不落库的记录序列化展示属性。"""
-    for item in _iter_graph_entities(graph, labels):
+    for item in _iter_graph_entities(graph, labels, skipped=skipped):
         name = extract_entity_name(item["props"], item["vid"])
         document = compose_entity_text(name, item["entity_type"], item["props"])
         if document:
@@ -649,8 +653,16 @@ class EntitySearchService:
 
         # 第一遍只累计 BM25 文档频率/词表，不保留全量实体和 dense vectors。
         # dev2 约 52 万实体，历史实现一次性持有 records + 512 维向量会占用数 GB。
+        skipped_labels: list[str] = []
         encoder = BM25SparseEncoder()
-        encoder.fit_iterable(_iter_index_texts(graph, labels))
+        encoder.fit_iterable(_iter_index_texts(graph, labels, skipped=skipped_labels))
+        # 无索引且 REST 拉不动的大标签已跳过：第二遍不再重试（每次重试都是一轮超时）
+        if skipped_labels:
+            labels = [label for label in labels if label not in skipped_labels]
+            logger.warning(
+                "实体索引重建跳过无索引大标签: %s（补建标签索引后重建可收编）",
+                sorted(set(skipped_labels)),
+            )
 
         # 第二遍重新流式读取图实体，每批完成 embedding 后立即写入 Milvus。
         embedding_config = _env_embedding_config()
@@ -661,7 +673,9 @@ class EntitySearchService:
         replacement_started = False
         space_filter = f'graph_space == "{_escape_expression(resolved_space)}"'
         try:
-            for chunk in _batched(_iter_index_records(graph, labels), EMBED_BATCH_SIZE):
+            for chunk in _batched(
+                _iter_index_records(graph, labels, skipped=skipped_labels), EMBED_BATCH_SIZE
+            ):
                 batch = [record["text"] for record in chunk]
                 vectors = client.embed(batch)
                 if vectors is None or len(vectors) != len(batch):
@@ -730,6 +744,7 @@ class EntitySearchService:
             "typeCounts": type_counts,
             "graphSpace": resolved_space,
             "embeddingModel": embedding_config["model"],
+            "skippedLabels": sorted(set(skipped_labels)),
             "durationSeconds": round(time.monotonic() - started, 2),
         }
 
@@ -1244,24 +1259,81 @@ class EntitySearchService:
 
 
 def _iter_graph_entities(
-    graph: TRSGraphClient, labels: list[str], page_size: int = GRAPH_PAGE_SIZE
+    graph: TRSGraphClient,
+    labels: list[str],
+    page_size: int = GRAPH_PAGE_SIZE,
+    skipped: list[str] | None = None,
 ):
-    """按标签分页拉取全部节点，yield {vid, entity_type, props}。"""
+    """按标签分页拉取全部节点，yield {vid, entity_type, props}。
+
+    优先走 nGQL ``LOOKUP ON <tag> YIELD vertex | LIMIT/OFFSET``：有索引的标签
+    （organization_base 23 万等）索引枚举深分页仅 ~3s/页；REST ``/nodes/label``
+    是 MATCH+SKIP 全量物化，大标签单页就能超过读超时（2026-09-21 实测 Paper
+    在 REST 上 90s 服务端兜底超时，重建两次中断）。LOOKUP 不可用（标签无索引）
+    时回退 REST 分页；REST 再失败的大标签记 warning 跳过并写入 ``skipped``
+    ——待补建标签索引后下次全量重建收编，其余标签不受影响。
+    """
+    from infra.graph_db.exceptions import GraphRepoError
+
+    skipped = skipped if skipped is not None else []
     for label in labels:
-        offset = 0
-        while True:
-            result = graph.get_nodes_by_label(label, limit=page_size, offset=offset)
-            items = result.items or []
-            if not items:
-                break
-            for node in items:
-                vid = str(node.id)
-                if not vid:
-                    continue
-                yield {"vid": vid, "entity_type": label, "props": dict(node.properties or {})}
-            offset += len(items)
-            if len(items) < page_size:
-                break
+        try:
+            probe = graph.execute_query(f"LOOKUP ON `{label}` YIELD vertex AS v | LIMIT 1")
+        except (AttributeError, GraphRepoError):
+            # AttributeError：客户端无原生查询能力（测试替身/旧版本）→ 走 REST
+            probe = None
+        if probe is not None:
+            yield from _iter_label_via_lookup(graph, label)
+            continue
+        try:
+            yield from _iter_label_via_rest(graph, label, page_size)
+        except GraphRepoError:
+            logger.warning(
+                "标签 %s 无图索引且 REST 分页超时，本次重建跳过该标签（补建标签索引后重建可收编）",
+                label,
+            )
+            skipped.append(label)
+
+
+def _iter_label_via_lookup(graph: TRSGraphClient, label: str, page_size: int = 2000):
+    """索引枚举分页：LOOKUP + LIMIT/OFFSET（对有索引标签是线性代价）。"""
+    offset = 0
+    while True:
+        result = graph.execute_query(
+            f"LOOKUP ON `{label}` YIELD vertex AS v | LIMIT {page_size} OFFSET {offset}"
+        )
+        records = result.records or []
+        if not records:
+            return
+        for record in records:
+            node = record.get("v") if isinstance(record, dict) else None
+            if not isinstance(node, dict):
+                continue
+            vid = str(node.get("id") or "")
+            if not vid:
+                continue
+            yield {"vid": vid, "entity_type": label, "props": dict(node.get("properties") or {})}
+        offset += len(records)
+        if len(records) < page_size:
+            return
+
+
+def _iter_label_via_rest(graph: TRSGraphClient, label: str, page_size: int):
+    """REST /nodes/label 分页（原实现）：适合小标签。"""
+    offset = 0
+    while True:
+        result = graph.get_nodes_by_label(label, limit=page_size, offset=offset)
+        items = result.items or []
+        if not items:
+            break
+        for node in items:
+            vid = str(node.id)
+            if not vid:
+                continue
+            yield {"vid": vid, "entity_type": label, "props": dict(node.properties or {})}
+        offset += len(items)
+        if len(items) < page_size:
+            break
 
 
 def _default_space() -> str:

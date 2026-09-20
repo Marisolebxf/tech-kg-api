@@ -19,17 +19,19 @@ class MysqlDatasourceApplication:
     def get_config(self, config_id: str) -> dict | None:
         return self._service.get_config(config_id)
 
-    def create_config(self, payload: dict) -> dict:
-        return self._service.create_config(payload)
+    def create_config(self, payload: dict, *, scope_owner: str | None = None) -> dict:
+        return self._service.create_config(payload, scope_owner=scope_owner)
 
-    def update_config(self, config_id: str, payload: dict) -> dict | None:
-        return self._service.update_config(config_id, payload)
+    def update_config(
+        self, config_id: str, payload: dict, *, scope_owner: str | None = None
+    ) -> dict | None:
+        return self._service.update_config(config_id, payload, scope_owner=scope_owner)
 
     def delete_config(self, config_id: str) -> bool:
         return self._service.delete_config(config_id)
 
-    def set_default(self, config_id: str) -> dict | None:
-        return self._service.set_default(config_id)
+    def set_default(self, config_id: str, *, scope_owner: str | None = None) -> dict | None:
+        return self._service.set_default(config_id, scope_owner=scope_owner)
 
     def test_connection(self, config_id: str) -> dict:
         return self._service.test_connection(config_id)

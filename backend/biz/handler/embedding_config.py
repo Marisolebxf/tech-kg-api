@@ -107,7 +107,7 @@ def create_embedding_config(
 ) -> ApiResponse:
     data = payload.model_dump()
     data["owner"] = actor.user_id if not actor.is_admin else (data.get("owner") or actor.user_id)
-    result = _application(session).create_config(data)
+    result = _application(session).create_config(data, scope_owner=resource_owner_filter(actor))
     _config_cache_clear()
     return ApiResponse(data=result, msg="embedding 配置已创建")
 
@@ -123,7 +123,9 @@ def update_embedding_config(
     data = payload.model_dump(exclude_unset=True)
     if not actor.is_admin:
         data.pop("owner", None)
-    updated = _application(session).update_config(config_id, data)
+    updated = _application(session).update_config(
+        config_id, data, scope_owner=resource_owner_filter(actor)
+    )
     if updated is None:
         raise HTTPException(status_code=404, detail="embedding 配置不存在")
     _config_cache_clear()
@@ -151,7 +153,7 @@ def set_default_embedding_config(
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
     _owned_config(_application(session), actor, config_id)
-    data = _application(session).set_default(config_id)
+    data = _application(session).set_default(config_id, scope_owner=resource_owner_filter(actor))
     if data is None:
         raise HTTPException(status_code=404, detail="embedding 配置不存在")
     _config_cache_clear()

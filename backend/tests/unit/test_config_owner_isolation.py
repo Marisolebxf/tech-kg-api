@@ -83,7 +83,7 @@ def _client(app: FastAPI) -> AsyncClient:
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 
-def _seed_llm(session_factory, config_id: str, owner: str) -> None:
+def _seed_llm(session_factory, config_id: str, owner: str, *, is_default: bool = False) -> None:
     s = session_factory()
     now = datetime.utcnow()
     s.add(
@@ -95,7 +95,7 @@ def _seed_llm(session_factory, config_id: str, owner: str) -> None:
             api_key="k",
             model="m",
             owner=owner,
-            is_default=False,
+            is_default=is_default,
             status="正常",
             created_at=now,
             updated_at=now,
@@ -218,3 +218,27 @@ async def test_set_default_scoped_to_owner(session_factory) -> None:
     rows = {r.id: r.is_default for r in s.query(LlmConfig).all()}
     s.close()
     assert rows == {"LLM-A1": True, "LLM-A2": False, "LLM-B1": True}
+
+
+@pytest.mark.asyncio
+async def test_admin_set_default_exclusive_globally(session_factory) -> None:
+    """管理员看到全局列表：设默认时同类别全局互斥（00382），跨 owner 的旧默认一并取消。
+
+    普通用户仍按自身范围互斥（见 test_set_default_scoped_to_owner），互斥范围＝操作者可见范围。
+    """
+    _seed_llm(session_factory, "LLM-A1", USER_A, is_default=True)
+    _seed_llm(session_factory, "LLM-A2", USER_A)
+    _seed_llm(session_factory, "LLM-B1", USER_B)
+
+    async with _client(_make_app(session_factory, _actor("admin", is_admin=True))) as client:
+        assert (
+            await client.post("/api/v1/llm-config/llm-configs/LLM-B1/set-default")
+        ).status_code == 200
+        resp = await client.get("/api/v1/llm-config/llm-configs")
+        defaults = {item["id"] for item in resp.json()["data"] if item["isDefault"]}
+        assert defaults == {"LLM-B1"}
+
+    s = session_factory()
+    rows = {r.id: r.is_default for r in s.query(LlmConfig).all()}
+    s.close()
+    assert rows == {"LLM-A1": False, "LLM-A2": False, "LLM-B1": True}

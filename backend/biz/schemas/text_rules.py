@@ -35,16 +35,19 @@ def check_text(
     label: str,
     pattern: re.Pattern[str] = IDENTIFIER_TEXT_PATTERN,
     allow_space: bool = False,
+    max_length: int = MAX_TEXT_LENGTH,
 ) -> str | None:
     """校验文本入参:超长与异常字符;空值原样放行(必填由 Field 约束)。
 
     allow_space=True 时使用关键词字符集(含空格);否则使用传入的
-    标识类字符集。返回原值,不做 strip,由调用方决定清洗方式。
+    标识类字符集。max_length 供个别字段使用更宽的上限(如 Schema
+    中文名 128),默认仍为全局 64。返回原值,不做 strip,由调用方
+    决定清洗方式。
     """
     if value is None or value == "":
         return value
-    if len(value) > MAX_TEXT_LENGTH:
-        raise ValueError(f"{label}长度不能超过 {MAX_TEXT_LENGTH} 个字符")
+    if len(value) > max_length:
+        raise ValueError(f"{label}长度不能超过 {max_length} 个字符")
     effective = KEYWORD_TEXT_PATTERN if allow_space else pattern
     if not effective.fullmatch(value):
         prefix = "" if allow_space else "空格或 "

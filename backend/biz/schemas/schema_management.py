@@ -29,7 +29,7 @@ class CamelModel(BaseModel):
 
 
 class SchemaPropertyInput(CamelModel):
-    name: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=128)
     data_type: str = Field(min_length=1, max_length=64)
     required: bool = False
     rule: str = Field(default="", max_length=512)
@@ -68,9 +68,11 @@ class SchemaPropertyInput(CamelModel):
 
 class SchemaCreateBase(CamelModel):
     schema_key: str = Field(min_length=1, max_length=64)
-    name: str = Field(min_length=1, max_length=64)
-    label: str = Field(min_length=1, max_length=64)
-    description: str = Field(default="", max_length=64)
+    # name/label/属性名上限 128、description 上限 4000，与前端
+    # utils/textInput.ts 的规则及 kg_schema_definition 列宽（String(128)/Text）对齐
+    name: str = Field(min_length=1, max_length=128)
+    label: str = Field(min_length=1, max_length=128)
+    description: str = Field(default="", max_length=4000)
     identity_key: str = Field(default="", max_length=64)
     properties: list[SchemaPropertyInput] = Field(min_length=1, max_length=200)
     mappings: list[str] = Field(default_factory=list, max_length=100)
@@ -94,12 +96,31 @@ class SchemaCreateBase(CamelModel):
             raise ValueError("图空间名称仅支持字母、数字、下划线，且以字母或下划线开头（最长 64）")
         return value
 
-    @field_validator("label", "description", "identity_key", mode="before")
+    @field_validator("identity_key", mode="before")
     @classmethod
-    def validate_texts(cls, value: str) -> str:
+    def validate_identity_key(cls, value: str) -> str:
         if not value:
             return value
+        # identity_key 维持全局 64 上限
         return check_text(value.strip(), label="Schema 文本", allow_space=True)
+
+    @field_validator("label", mode="before")
+    @classmethod
+    def validate_label(cls, value: str) -> str:
+        if not value:
+            return value
+        return check_text(value.strip(), label="Schema 中文名", allow_space=True, max_length=128)
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def validate_description(cls, value: str) -> str:
+        if not value:
+            return value
+        # 说明允许较长文本（4000），仅套用字符白名单，不走 check_text 的默认 64 长度上限
+        text = value.strip()
+        if not KEYWORD_TEXT_PATTERN.fullmatch(text):
+            raise ValueError(f"Schema 说明不能包含{ABNORMAL_CHARS_HINT}")
+        return text
 
     @field_validator("mappings")
     @classmethod
@@ -131,8 +152,8 @@ class EntitySchemaCreate(SchemaCreateBase):
 class RelationSchemaCreate(SchemaCreateBase):
     source_schema_id: str | None = Field(default=None, min_length=1, max_length=36)
     target_schema_id: str | None = Field(default=None, min_length=1, max_length=36)
-    source_expression: str | None = Field(default=None, min_length=1, max_length=64)
-    target_expression: str | None = Field(default=None, min_length=1, max_length=64)
+    source_expression: str | None = Field(default=None, min_length=1, max_length=128)
+    target_expression: str | None = Field(default=None, min_length=1, max_length=128)
     relation_category: str = Field(default="fact", pattern="^(fact|inferred)$")
 
     @field_validator("source_expression", "target_expression", mode="before")

@@ -246,15 +246,22 @@ async def test_reindex_requires_admin(entity_search_api) -> None:
 async def test_reindex_and_search_full_flow(entity_search_api) -> None:
     _, set_actor, monkeypatch = entity_search_api
 
+    from biz.handler import entity_search as entity_search_handler
+
     milvus = FakeMilvus()
     monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
     monkeypatch.setattr("service.entity_search._embedding_client", lambda: FakeEmbedding())
+    entity_search_handler._browse_payload_cache["search:dev2:None:旧词:10:0"] = (
+        float("inf"),
+        '{"stale":true}',
+    )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         set_actor("admin-1", True)
         reindexed = await client.post("/api/v1/entity-search/reindex", json={})
         assert reindexed.status_code == 200
         assert reindexed.json()["data"]["entityCount"] == 1
+        assert entity_search_handler._browse_payload_cache == {}
 
         types = await client.get("/api/v1/entity-search/types")
         assert types.json()["data"]["items"] == [{"name": "Expert", "count": 1}]

@@ -10,8 +10,13 @@ import { useAppStore } from '../stores/app'
 import { useGraphSpaceStore } from '../stores/graphSpace'
 import AppLayout from './AppLayout.vue'
 
-const mocks = vi.hoisted(() => ({ authDisabled: false }))
-vi.mock('../config', () => ({ appBase: '/', graphSpace: 'dev2', get authDisabled() { return mocks.authDisabled } }))
+const mocks = vi.hoisted(() => ({ authDisabled: false, graphVisualization: false }))
+vi.mock('../config', () => ({
+  appBase: '/',
+  graphSpace: 'dev2',
+  get authDisabled() { return mocks.authDisabled },
+  get graphVisualizationEnabled() { return mocks.graphVisualization },
+}))
 vi.mock('../api/auth', () => ({
   getCurrentProfile: vi.fn(), getLoginUrl: vi.fn(), logoutCurrentSession: vi.fn(), refreshCurrentSession: vi.fn(),
 }))
@@ -113,5 +118,17 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
     const selector = wrapper.get('.app-space-select')
     expect(selector.text()).toContain('图空间')
     expect(useGraphSpaceStore().current).toBe('dev2')
+  })
+
+  it('图谱可视化入口默认隐藏，开关开启后出现在图谱查询组', async () => {
+    mocks.graphVisualization = false
+    const hidden = await renderLayout(true, '/graph-query')
+    expect(hidden.wrapper.find('.app-nav a[href="/graph-query/visualization"]').exists()).toBe(false)
+
+    mocks.graphVisualization = true
+    const shown = await renderLayout(true, '/graph-query')
+    const link = shown.wrapper.find('.app-nav a[href="/graph-query/visualization"]')
+    expect(link.exists()).toBe(true)
+    expect(link.text()).toContain('图谱可视化')
   })
 })

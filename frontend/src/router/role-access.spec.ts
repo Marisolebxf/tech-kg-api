@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   authDisabled: false,
+  graphVisualization: false,
   embedded: false,
   loadCurrentUser: vi.fn(),
 }))
@@ -10,6 +11,7 @@ vi.mock('../config', () => ({
   appBase: '/',
   apiBase: '/',
   get authDisabled() { return mocks.authDisabled },
+  get graphVisualizationEnabled() { return mocks.graphVisualization },
 }))
 vi.mock('../stores/auth', () => ({ useAuthStore: () => ({ loadCurrentUser: mocks.loadCurrentUser }) }))
 vi.mock('../portal/iframeBridge', () => ({
@@ -118,5 +120,19 @@ describe('角色控制与默认入口', () => {
     await router.push('/schema')
     expect(router.currentRoute.value.path).toBe('/schema')
     expect(mocks.loadCurrentUser).not.toHaveBeenCalled()
+  })
+})
+
+describe('图谱可视化部署开关', () => {
+  it('默认隐藏：直达 /graph-query/visualization 归拢到综合查询', async () => {
+    mocks.graphVisualization = false
+    await router.push('/graph-query/visualization')
+    expect(router.currentRoute.value.path).toBe('/graph-query')
+  })
+
+  it('开启后可达', async () => {
+    mocks.graphVisualization = true
+    await router.push('/graph-query/visualization')
+    expect(router.currentRoute.value.name).toBe('graph-query-visualization')
   })
 })

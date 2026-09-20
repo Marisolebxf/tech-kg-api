@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { appBase, authDisabled } from "../config";
+import { appBase, authDisabled, graphVisualizationEnabled } from "../config";
 import { IconHistory } from "@arco-design/web-vue/es/icon";
 import {
   computed,
@@ -58,16 +58,26 @@ const routeError = ref("");
 const serviceNavCollapsed = ref(false);
 // 图谱查询折叠组（综合查询 / 实体列表 / 图谱可视化）
 const queryNavCollapsed = ref(false);
-const queryNavItems = [
-  { to: "/graph-query", label: "综合查询", fullLabel: "图谱查询 · 综合查询" },
-  { to: "/graph-query/entities", label: "实体列表", fullLabel: "图谱查询 · 实体列表" },
-  { to: "/graph-query/visualization", label: "图谱可视化", fullLabel: "图谱查询 · 图谱可视化" },
-];
+// 图谱可视化按部署开关注入（默认隐藏，见 config.ts GRAPH_VISUALIZATION_ENABLED）
+const queryNavItems = computed(() => {
+  const items = [
+    { to: "/graph-query", label: "综合查询", fullLabel: "图谱查询 · 综合查询" },
+    { to: "/graph-query/entities", label: "实体列表", fullLabel: "图谱查询 · 实体列表" },
+  ];
+  if (graphVisualizationEnabled) {
+    items.push({
+      to: "/graph-query/visualization",
+      label: "图谱可视化",
+      fullLabel: "图谱查询 · 图谱可视化",
+    });
+  }
+  return items;
+});
 const showQueryNavItems = computed(
   () => !sidebarCollapsed.value && !queryNavCollapsed.value,
 );
 const isGraphQueryRoute = computed(() =>
-  queryNavItems.some((item) => item.to === route.path),
+  queryNavItems.value.some((item) => item.to === route.path),
 );
 function toggleQueryNav() {
   // 侧边栏收起时点击走默认子页（与服务组飞出菜单并存的兜底入口）

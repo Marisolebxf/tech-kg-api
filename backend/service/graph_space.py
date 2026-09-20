@@ -212,6 +212,9 @@ class GraphSpaceService:
                 )
             )
             self._session.commit()
+        # 新空间立即可见：作废 _all_spaces 的 30s 缓存，避免空间列表/控制台
+        # 下拉在缓存期内看不到刚创建的空间
+        GraphSpaceService._all_spaces_cached_at = 0.0
         db_status, _ = self._ensure_vector_database(space_name)
         return self._space_result(space_name, db_status)
 

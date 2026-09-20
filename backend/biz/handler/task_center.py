@@ -85,6 +85,7 @@ async def retry_task(task_id: str, request: TaskRetryRequest) -> ApiResponse:
     """失败任务重试：调 Temporal ResetWorkflowExecution，回放到失败 step 之前。"""
     try:
         result = await service.retry_task(task_id, reason=request.reason)
+        get_cache.invalidate("task-center:tasks")
         return ApiResponse(data=result, msg="任务重试已下发，workflow 正在回放")
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="任务不存在") from exc

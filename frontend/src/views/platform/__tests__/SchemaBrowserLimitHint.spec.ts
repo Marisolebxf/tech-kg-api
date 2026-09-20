@@ -3,7 +3,12 @@ import { createPinia, setActivePinia } from 'pinia'
 import { defineComponent } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { getSchemaOverview, listSchemasPaged, type SchemaDefinition } from '../../../api/schemaManagement'
+import {
+  deleteSchema,
+  getSchemaOverview,
+  listSchemasPaged,
+  type SchemaDefinition,
+} from '../../../api/schemaManagement'
 import SchemaBrowserView from '../SchemaBrowserView.vue'
 
 vi.mock('../../../api/schemaManagement', () => ({
@@ -237,5 +242,70 @@ describe('Schema 管理输入框达上限提示', () => {
     const live = view.get('.property-section .prop-length-live')
     expect(live.text()).toContain('当前 1024，可定义 1~1024')
     expect(live.classes()).not.toContain('prop-length-live--invalid')
+  })
+})
+
+describe('Schema 列表说明列截断与删除脏行兜底', () => {
+  it('实体/关系说明超 20 字截断显示，短说明原样展示', async () => {
+    vi.mocked(listSchemasPaged).mockResolvedValue({
+      items: [schemaFixture({ kind: 'entity', description: '说'.repeat(25) })],
+      total: 1, page: 1, pageSize: 10,
+    })
+    const view = mountView()
+    await flushPromises()
+
+    const entityDesc = view.findAll('.schema-table-wrap tbody tr')[0].findAll('td')[2]
+    expect(entityDesc.text()).toBe('说'.repeat(20) + '…')
+
+    // 关系子页面：说明（basis=description）同样截断
+    vi.mocked(listSchemasPaged).mockResolvedValue({
+      items: [schemaFixture({
+        kind: 'relation', name: 'USES_TECH', description: '长'.repeat(30),
+        sourceSchemaName: 'Expert', targetSchemaName: 'Paper',
+      })],
+      total: 1, page: 1, pageSize: 10,
+    })
+    const relationTab = view.findAll('.schema-tabs__items button').find((button) => button.text() === '关系')
+    await relationTab!.trigger('click')
+    await flushPromises()
+
+    const relationDesc = view.findAll('.schema-table-wrap tbody tr')[0].findAll('td')[4]
+    expect(relationDesc.text()).toBe('长'.repeat(20) + '…')
+
+    // 短说明不截断（重新挂载拿新 mock 数据）
+    view.unmount()
+    vi.mocked(listSchemasPaged).mockResolvedValue({
+      items: [schemaFixture({ kind: 'relation', name: 'USES_TECH', description: '短说明' })],
+      total: 1, page: 1, pageSize: 10,
+    })
+    const shortView = mountView()
+    await flushPromises()
+    const shortTab = shortView.findAll('.schema-tabs__items button').find((button) => button.text() === '关系')
+    await shortTab!.trigger('click')
+    await flushPromises()
+    const shortDesc = shortView.findAll('.schema-table-wrap tbody tr')[0].findAll('td')[4]
+    expect(shortDesc.text()).toBe('短说明')
+  })
+
+  it('删除已不存在的行（脏行）：报「不存在」时关弹窗并刷新列表', async () => {
+    vi.mocked(deleteSchema).mockRejectedValue(new Error('Schema 不存在: gone-id'))
+    vi.mocked(listSchemasPaged).mockResolvedValue({
+      items: [schemaFixture({ canDelete: true })],
+      total: 1, page: 1, pageSize: 10,
+    })
+    const view = mountView()
+    await flushPromises()
+
+    const deleteButton = view.findAll('button.schema-action-link--danger')[0]
+    await deleteButton.trigger('click')
+    expect(view.find('.schema-delete-modal').exists()).toBe(true)
+
+    const listCallsBefore = vi.mocked(listSchemasPaged).mock.calls.length
+    await view.get('.schema-delete-modal footer .danger').trigger('click')
+    await flushPromises()
+
+    // 弹窗关闭且列表被重新拉取（脏行清除）
+    expect(view.find('.schema-delete-modal').exists()).toBe(false)
+    expect(vi.mocked(listSchemasPaged).mock.calls.length).toBeGreaterThan(listCallsBefore)
   })
 })

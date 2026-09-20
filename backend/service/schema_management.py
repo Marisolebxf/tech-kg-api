@@ -413,7 +413,9 @@ class SchemaManagementService:
         cls._catalog_cache[key] = (time.monotonic() + ttl_seconds, payload)
 
     @staticmethod
-    def _overlay_flags(item: dict[str, Any], user_id: str | None, is_platform_admin: bool) -> dict[str, Any]:
+    def _overlay_flags(
+        item: dict[str, Any], user_id: str | None, is_platform_admin: bool
+    ) -> dict[str, Any]:
         return {
             **item,
             "canDelete": bool(
@@ -423,11 +425,7 @@ class SchemaManagementService:
             ),
             "canManageProperties": bool(
                 is_platform_admin
-                or (
-                    not item["isSystem"]
-                    and user_id is not None
-                    and item["createdBy"] == user_id
-                )
+                or (not item["isSystem"] and user_id is not None and item["createdBy"] == user_id)
             ),
         }
 
@@ -445,7 +443,9 @@ class SchemaManagementService:
                 self._catalog_put(key, payload, self._list_cache_seconds)
         return payload
 
-    def topology_payload(self, user_id: str | None, *, is_platform_admin: bool, graph_space: str | None) -> str:
+    def topology_payload(
+        self, user_id: str | None, *, is_platform_admin: bool, graph_space: str | None
+    ) -> str:
         """拓扑图数据：节点/边按目录序列化（缓存不含用户标记，返回时叠加）。"""
         key = f"topology:{graph_space}:{is_platform_admin}"
         with self._catalog_cache_lock:
@@ -473,7 +473,9 @@ class SchemaManagementService:
             default=str,
         )
 
-    def get_schema_payload(self, schema_id: str, user_id: str | None, *, is_platform_admin: bool) -> str:
+    def get_schema_payload(
+        self, schema_id: str, user_id: str | None, *, is_platform_admin: bool
+    ) -> str:
         key = f"detail:{schema_id}:{is_platform_admin}"
         with self._catalog_cache_lock:
             base = self._catalog_get(key)
@@ -499,7 +501,12 @@ class SchemaManagementService:
             payload = self._catalog_get(key)
             if payload is None:
                 payload = json.dumps(
-                    {"code": 200, "success": True, "data": self.get_script_content(schema_id), "msg": ""},
+                    {
+                        "code": 200,
+                        "success": True,
+                        "data": self.get_script_content(schema_id),
+                        "msg": "",
+                    },
                     ensure_ascii=False,
                     default=str,
                 )
@@ -789,6 +796,8 @@ class SchemaManagementService:
                     user_id=user_id,
                     workflow_function_name=workflow_function,
                 )
+                # 脚本元数据会体现在列表/详情序列化里，保存成功即失效目录缓存
+                self._invalidate_list_cache()
             except SchemaManagementError as exc:
                 yield {
                     "type": "error",
@@ -913,6 +922,7 @@ class SchemaManagementService:
         回滚目录行并抛 SchemaDdlError。Nebula ALTER ADD 不支持 NOT NULL →
         新增属性在图里一律可空（目录保留 required 口径）。
         """
+        self._invalidate_list_cache()
         from biz.schemas.schema_management import SchemaPropertyInput
 
         definition = self.assert_mutable(schema_id, user_id, is_platform_admin=is_platform_admin)
@@ -976,6 +986,7 @@ class SchemaManagementService:
         列不存在（system schema DDL 未跑过 / 已删过）时跳过 DDL 只删目录行，
         让目录与图库回到同一个事实源。成功后 ``property_revision += 1``。
         """
+        self._invalidate_list_cache()
         definition = self.assert_mutable(schema_id, user_id, is_platform_admin=is_platform_admin)
         row = next((p for p in definition.properties if p.name == property_name), None)
         if row is None:
@@ -1064,6 +1075,7 @@ class SchemaManagementService:
         每次调用覆盖全部绑定；datasource 存在性经业务库校验。绑定独立水位
         （definition_id + ``source:{id}`` step_id），多表可并行抽取。
         """
+        self._invalidate_list_cache()
         definition = self.assert_mutable(schema_id, user_id, is_platform_admin=is_platform_admin)
         for item in sources:
             _validate_datasource_exists(item["datasource_id"])
@@ -1104,6 +1116,7 @@ class SchemaManagementService:
         抽取任务（防边删边写）→ 实体被关系引用（先删关系）。图数据删除失败
         则目录不动（Schema 保留可重试），成功后才物理删目录行，不可逆。
         """
+        self._invalidate_list_cache()
         user_id = user_id.strip()
         if not user_id:
             raise SchemaPermissionError("登录用户 ID 不能为空")
@@ -1139,6 +1152,10 @@ class SchemaManagementService:
         script = self._script_snapshot(definition.script)
         self._dao.delete(definition)
         self._session.commit()
+        # DROP TAG/EDGE 同样改变类型清单：清图算法页的边类型/引擎缓存
+        from service.graph_algorithm import clear_algo_info_cache
+
+        clear_algo_info_cache()
 
         cleanup_succeeded = True
         if script:
@@ -1253,6 +1270,10 @@ class SchemaManagementService:
             raise SchemaDdlError(f"DDL 结果回写失败: {exc}") from exc
 
         created = self._require_schema(schema_id)
+        # 图算法页的边类型/引擎信息缓存依赖类型清单，DDL 变更后主动失效
+        from service.graph_algorithm import clear_algo_info_cache
+
+        clear_algo_info_cache()
         return self._serialize(created, user_id=user_id, detail=True)
 
     @staticmethod
@@ -1399,9 +1420,7 @@ class SchemaManagementService:
             return True
         _SCRIPT_OBJECT_CACHE[key] = (now + _SCRIPT_OBJECT_CACHE_TTL_SECONDS, available)
         if len(_SCRIPT_OBJECT_CACHE) > _SCRIPT_OBJECT_CACHE_MAX_KEYS:
-            for expired_key in [
-                k for k, v in _SCRIPT_OBJECT_CACHE.items() if v[0] <= now
-            ]:
+            for expired_key in [k for k, v in _SCRIPT_OBJECT_CACHE.items() if v[0] <= now]:
                 _SCRIPT_OBJECT_CACHE.pop(expired_key, None)
         return available
 

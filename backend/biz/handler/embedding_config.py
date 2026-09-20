@@ -7,7 +7,7 @@ import os
 import time
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Response, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from application.embedding_config import EmbeddingConfigApplication
@@ -20,7 +20,6 @@ from biz.schemas.embedding_config import (
     EmbeddingConfigVerifyRequest,
 )
 from infra.mysql import get_session
-
 
 # 配置列表为读多写少的轻查询，加短 TTL 响应缓存扛读并发；键含用户身份
 # （列表按 owner 隔离：管理员全量/普通用户仅自己），不会跨用户串数据。
@@ -46,6 +45,7 @@ def _config_cache_put(key: str, payload: str) -> None:
 
 def _config_cache_clear() -> None:
     _config_payload_cache.clear()
+
 
 router = APIRouter(prefix="/embedding-config", tags=["embedding-config"])
 
@@ -73,7 +73,12 @@ def list_embedding_configs(
     if cached is not None:
         return Response(cached, media_type="application/json")
     payload = json.dumps(
-        {"code": 200, "success": True, "data": _application(session).list_configs(owner=owner), "msg": "success"},
+        {
+            "code": 200,
+            "success": True,
+            "data": _application(session).list_configs(owner=owner),
+            "msg": "success",
+        },
         ensure_ascii=False,
         default=str,
     )
@@ -103,6 +108,7 @@ def create_embedding_config(
     data = payload.model_dump()
     data["owner"] = actor.user_id if not actor.is_admin else (data.get("owner") or actor.user_id)
     result = _application(session).create_config(data)
+    _config_cache_clear()
     return ApiResponse(data=result, msg="embedding 配置已创建")
 
 
@@ -120,6 +126,7 @@ def update_embedding_config(
     updated = _application(session).update_config(config_id, data)
     if updated is None:
         raise HTTPException(status_code=404, detail="embedding 配置不存在")
+    _config_cache_clear()
     return ApiResponse(data=updated, msg="embedding 配置已更新")
 
 
@@ -133,6 +140,7 @@ def delete_embedding_config(
     ok = _application(session).delete_config(config_id)
     if not ok:
         raise HTTPException(status_code=404, detail="embedding 配置不存在")
+    _config_cache_clear()
     return ApiResponse(data={"deleted": True}, msg="embedding 配置已删除")
 
 
@@ -146,6 +154,7 @@ def set_default_embedding_config(
     data = _application(session).set_default(config_id)
     if data is None:
         raise HTTPException(status_code=404, detail="embedding 配置不存在")
+    _config_cache_clear()
     return ApiResponse(data=data, msg="已设为默认")
 
 

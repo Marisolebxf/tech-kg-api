@@ -2723,7 +2723,7 @@ class SchemaExtractWorkflow:
                 try:
                     index_result = await workflow.execute_activity(
                         build_entity_index,
-                        {"space": graph_space, "entityTypes": [plan["name"]]},
+                        {"space": graph_space},
                         start_to_close_timeout=timedelta(
                             seconds=int(plan.get("indexTimeoutSeconds", 1800))
                         ),

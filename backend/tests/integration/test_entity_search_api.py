@@ -69,7 +69,7 @@ class FakeMilvus:
         pass
 
     def describe_collection(self, name: str) -> dict[str, Any]:
-        return {"fields": [{"name": "graph_space"}]}
+        return {"fields": [{"name": "document_id"}, {"name": "graph_space"}]}
 
     def create_schema(self, **kwargs):
         class Schema:
@@ -89,10 +89,14 @@ class FakeMilvus:
         self.exists = True
 
     def delete(self, collection_name: str, filter: str = "") -> None:  # noqa: A002
-        pass
+        if 'graph_space == "' in filter:
+            space = filter.split('graph_space == "', 1)[1].split('"', 1)[0]
+            self.rows = [row for row in self.rows if row.get("graph_space") != space]
 
     def upsert(self, collection_name: str, data: list):
-        self.rows.extend(data)
+        by_id = {row["document_id"]: row for row in self.rows}
+        by_id.update({row["document_id"]: row for row in data})
+        self.rows = list(by_id.values())
 
     def flush(self, collection_name: str):
         pass

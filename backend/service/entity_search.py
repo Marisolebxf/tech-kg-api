@@ -9,7 +9,8 @@
    ``entity_type`` / ``graph_space`` 标量过滤；embedding 失败降级单路 BM25。
 
 索引（``reindex``）按图空间独立：单集合 ``kg_entity`` 内 ``graph_space`` 字段
-分区，BM25 词表状态存控制库 ``kg_entity_search_state``（每空间一行）。
+分区，使用 ``graph_space::vid`` 作为集合主键，BM25 词表状态存控制库
+``kg_entity_search_state``（每空间一行）。
 """
 
 from __future__ import annotations
@@ -415,7 +416,7 @@ class EntitySearchService:
         space: str | None = None,
         entity_types: list[str] | None = None,
     ) -> dict[str, Any]:
-        """按图空间重建 ``kg_entity`` 中该空间的实体索引：图 → embedding + BM25 → Milvus。"""
+        """全量重建指定图空间的实体索引：图 → embedding + BM25 → Milvus。"""
         global _reindex_running
 
         with _reindex_lock:
@@ -437,10 +438,13 @@ class EntitySearchService:
         labels = sorted(graph.labels())
         if entity_types:
             wanted = {item.strip() for item in entity_types if item.strip()}
-            labels = [label for label in labels if label in wanted]
             missing = sorted(wanted - set(labels))
             if missing:
                 raise EntitySearchError(f"图空间中不存在这些实体类型: {', '.join(missing)}")
+            # BM25 的词表和稀疏向量维度由整个语料库共同决定。只重建指定类型会让
+            # 新词表与其他类型的旧稀疏向量不兼容；历史实现还会先删除空间全部行，
+            # 再只写回当前类型。保留 entity_types 作为兼容校验参数，但始终重建
+            # 当前图空间全部标签，保证向量、统计和实际行集合属于同一快照。
 
         records: list[dict[str, Any]] = []
         for item in _iter_graph_entities(graph, labels):
@@ -503,6 +507,7 @@ class EntitySearchService:
                     continue
                 rows.append(
                     {
+                        "document_id": f"{resolved_space}::{record['vid']}",
                         "vid": record["vid"],
                         "entity_id": record["entity_id"],
                         "name": record["name"],
@@ -544,7 +549,11 @@ class EntitySearchService:
 
     @staticmethod
     def _ensure_collection(milvus: Any, *, dim: int) -> None:
-        """建 / 校验 kg_entity 集合；旧 schema（无 graph_space 字段）整体重建。"""
+        """建 / 校验 kg_entity 集合；旧主键 schema 整体重建。
+
+        ``vid`` 在不同图空间可能重复，不能作为共享集合主键。新版使用
+        ``document_id=graph_space::vid``，检测到旧集合时丢弃并由本次全量重建恢复。
+        """
         from pymilvus import DataType  # type: ignore[import-not-found]
 
         if milvus.has_collection(COLLECTION_NAME):
@@ -554,13 +563,14 @@ class EntitySearchService:
                 for field in description.get("fields", [])
                 if isinstance(field, dict)
             }
-            if "graph_space" not in fields:
-                # 旧 schema（单空间版本）→ 丢弃重建，重新 reindex 即可恢复
+            if "graph_space" not in fields or "document_id" not in fields:
+                # 旧 schema（单空间或 vid 主键版本）→ 丢弃重建
                 milvus.drop_collection(COLLECTION_NAME)
 
         if not milvus.has_collection(COLLECTION_NAME):
             schema = milvus.create_schema(auto_id=False, enable_dynamic_field=False)
-            schema.add_field("vid", DataType.VARCHAR, is_primary=True, max_length=128)
+            schema.add_field("document_id", DataType.VARCHAR, is_primary=True, max_length=256)
+            schema.add_field("vid", DataType.VARCHAR, max_length=128)
             schema.add_field("entity_id", DataType.VARCHAR, max_length=256)
             schema.add_field("name", DataType.VARCHAR, max_length=2048)
             schema.add_field("entity_type", DataType.VARCHAR, max_length=64)

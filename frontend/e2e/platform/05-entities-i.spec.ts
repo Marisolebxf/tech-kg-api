@@ -51,18 +51,50 @@ test.describe('I. 实体列表', () => {
   })
 
   test('I2 关键词/混合搜索（相关度列 + 模式标注）', async ({ page, request }) => {
-    // 先从 dev2 拿一个真实实体名片段
+    // 从实时图库浏览结果中选择一个普通标量属性，验证该属性确实进入 Milvus 索引。
     const entities = await apiMust<any>(
       request,
       'GET',
-      '/entity-search/entities?space=dev2&page=1&pageSize=5',
+      '/entity-search/entities?space=dev2&limit=100&offset=0',
       undefined,
       '浏览实体',
     )
     const items = entities.items ?? entities.rows ?? []
-    const firstName: string = items[0]?.name ?? ''
-    test.skip(!firstName, 'dev2 无已索引实体，前置不满足')
-    const keyword = firstName.slice(0, 2)
+    const identityKeys = new Set([
+      'id',
+      'entity_id',
+      'name',
+      'name_zh',
+      'name_cn',
+      'name_en',
+      'title',
+      'title_zh',
+      'title_en',
+      'project_name',
+      'paper_title',
+      'patent_name',
+      'patent_title',
+      'product_name',
+      'keyword',
+      'label',
+      'cn_name',
+      'display_name',
+      'org_name',
+    ])
+    const candidate = items
+      .flatMap((item: any) =>
+        Object.entries(item.properties ?? {}).map(([key, value]) => ({
+          item,
+          key,
+          value,
+        })),
+      )
+      .find(({ key, value }: any) => {
+        const text = typeof value === 'string' ? value.trim() : ''
+        return !identityKeys.has(key) && text.length >= 2 && text.length <= 128
+      })
+    test.skip(!candidate, 'dev2 浏览窗口中没有可验证的普通标量属性')
+    const keyword = String(candidate!.value).trim()
 
     await page.goto('/graph-query/entities')
     await page.waitForLoadState('networkidle')
@@ -81,15 +113,21 @@ test.describe('I. 实体列表', () => {
       },
       { label: '检索模式标注' },
     )
-    // 结果与 API 一致（子集校验：API 命中数 >0）
+    // API 必须返回真正含该属性值的实体；不能再用“结果数 >= 0”的无效断言。
     const search = await apiMust<any>(
       request,
       'POST',
       '/entity-search/search',
-      { keyword, space: 'dev2', page: 1, pageSize: 10 },
-      '关键词搜索',
+      { keyword, space: 'dev2', limit: 100, offset: 0 },
+      '属性关键词搜索',
     )
-    expect((search.items ?? []).length).toBeGreaterThanOrEqual(0)
+    const searchItems: any[] = search.items ?? []
+    expect(searchItems.length).toBeGreaterThan(0)
+    expect(
+      searchItems.some((item: any) =>
+        Object.values(item.properties ?? {}).some((value) => String(value).includes(keyword)),
+      ),
+    ).toBe(true)
 
     // 清空再搜 → 恢复浏览模式
     await page.locator('input[placeholder*="输入实体名称"]').fill('')

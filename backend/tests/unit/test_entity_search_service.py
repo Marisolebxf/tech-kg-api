@@ -82,7 +82,7 @@ class FakeMilvusClient:
         self.collections.pop(name, None)
 
     def describe_collection(self, name: str) -> dict[str, Any]:
-        return {"fields": [{"name": "graph_space"}]}
+        return {"fields": [{"name": "document_id"}, {"name": "graph_space"}]}
 
     def create_schema(self, **kwargs):
         class Schema:
@@ -104,9 +104,18 @@ class FakeMilvusClient:
 
     def delete(self, collection_name: str, filter: str = "") -> None:  # noqa: A002
         self.deleted.append(filter)
+        rows = self.collections.get(collection_name, [])
+        if 'graph_space == "' in filter:
+            space = filter.split('graph_space == "', 1)[1].split('"', 1)[0]
+            self.collections[collection_name] = [
+                row for row in rows if row.get("graph_space") != space
+            ]
 
     def upsert(self, collection_name: str, data: list[dict[str, Any]]):
-        self.collections[collection_name].extend(data)
+        rows = self.collections[collection_name]
+        by_id = {row["document_id"]: row for row in rows}
+        by_id.update({row["document_id"]: row for row in data})
+        self.collections[collection_name] = list(by_id.values())
 
     def flush(self, collection_name: str):
         pass
@@ -374,6 +383,7 @@ def test_reindex_builds_collection_and_state(
     assert expert_row["name"] == "张三"
     assert expert_row["entity_id"] == "E-1"
     assert expert_row["graph_space"] == "dev2"
+    assert expert_row["document_id"] == "dev2::expert_1"
     assert json.loads(expert_row["properties"])["org"] == "中科院"
     assert len(expert_row["dense_vector"]) == 3
     assert expert_row["sparse_vector"]  # BM25 已编码
@@ -397,6 +407,56 @@ def test_reindex_unknown_entity_type_raises(state_session, monkeypatch) -> None:
     service = EntitySearchService(state_session)
     with pytest.raises(EntitySearchError, match="不存在这些实体类型"):
         service.reindex(entity_types=["Nope"])
+
+
+def test_reindex_entity_type_hint_still_builds_complete_bm25_snapshot(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """兼容的 entity_types 参数不能删除同空间其他类型或生成局部 BM25 词表。"""
+    graph = FakeGraph(
+        ["Expert", "Paper"],
+        {
+            "Expert": [FakeNode("expert_1", {"name": "张三", "org": "中科院"})],
+            "Paper": [FakeNode("paper_1", {"title": "知识图谱", "source": "期刊"})],
+        },
+    )
+    milvus = FakeMilvusClient()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", FakeEmbeddingClient)
+
+    result = EntitySearchService(state_session).reindex(space="dev2", entity_types=["Expert"])
+
+    assert result["typeCounts"] == {"Expert": 1, "Paper": 1}
+    assert {row["entity_type"] for row in milvus.collections[COLLECTION_NAME]} == {
+        "Expert",
+        "Paper",
+    }
+
+
+def test_reindex_same_vid_in_two_spaces_keeps_both_documents(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """共享集合主键包含图空间，跨空间相同 VID 不得相互覆盖。"""
+    graphs = {
+        "dev": FakeGraph(["Expert"], {"Expert": [FakeNode("same_vid", {"name": "开发空间专家"})]}),
+        "dev2": FakeGraph(["Expert"], {"Expert": [FakeNode("same_vid", {"name": "测试空间专家"})]}),
+    }
+    milvus = FakeMilvusClient()
+    monkeypatch.setattr("service.entity_search.get_space_client", graphs.__getitem__)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", FakeEmbeddingClient)
+
+    service = EntitySearchService(state_session)
+    service.reindex(space="dev")
+    service.reindex(space="dev2")
+
+    rows = milvus.collections[COLLECTION_NAME]
+    assert {row["document_id"] for row in rows} == {"dev::same_vid", "dev2::same_vid"}
+    assert {(row["graph_space"], row["name"]) for row in rows} == {
+        ("dev", "开发空间专家"),
+        ("dev2", "测试空间专家"),
+    }
 
 
 def test_reindex_embedding_failure_keeps_collection(
@@ -465,6 +525,61 @@ def test_search_hybrid_with_type_filter(state_session, monkeypatch: pytest.Monke
     assert item["properties"] == {"org": "中科院"}
     assert item["entityType"] == "Expert"
     assert result["graphSpace"] == "dev2"
+
+
+def test_search_finds_scalar_property_keyword(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """普通标量属性应进入全量 BM25 快照，并能通过属性关键词返回目标实体。"""
+    graph = FakeGraph(
+        ["DataSource"],
+        {
+            "DataSource": [
+                FakeNode(
+                    "ds_dwd_bid_base_out",
+                    {
+                        "source_table": "dwd_bid_base_out",
+                        "table_cn_name": "招投标公告基础表",
+                        "library": "国内机构要素库",
+                    },
+                )
+            ]
+        },
+    )
+    milvus = FakeMilvusClient()
+    embedding = FakeEmbeddingClient()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", lambda: embedding)
+
+    service = EntitySearchService(state_session)
+    service.reindex(space="dev2")
+    indexed_row = milvus.collections[COLLECTION_NAME][0]
+    assert "library 国内机构要素库" in indexed_row["search_text"]
+
+    def fake_hybrid_search(self, client, *, dense_vector, sparse_vector, expr, limit):
+        assert dense_vector is not None
+        assert sparse_vector
+        assert expr == 'graph_space == "dev2"'
+        return [
+            {
+                "distance": 0.99,
+                "fields": {
+                    "vid": indexed_row["vid"],
+                    "entity_id": indexed_row["entity_id"],
+                    "name": indexed_row["name"],
+                    "entity_type": indexed_row["entity_type"],
+                    "properties": indexed_row["properties"],
+                },
+            }
+        ]
+
+    monkeypatch.setattr(EntitySearchService, "_hybrid_search", fake_hybrid_search)
+    result = service.search(keyword="国内机构要素库", space="dev2")
+
+    assert result["returned"] == 1
+    assert result["items"][0]["vid"] == "ds_dwd_bid_base_out"
+    assert result["items"][0]["properties"]["library"] == "国内机构要素库"
 
 
 def test_search_requires_keyword(state_session) -> None:

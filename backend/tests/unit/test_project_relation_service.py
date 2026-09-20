@@ -80,17 +80,13 @@ def test_queries_all_relations_once_without_n_plus_one() -> None:
 def test_filters_are_bound_as_parameters() -> None:
     graph = _Graph([])
     service = ProjectRelationService(graph)
-    service.query(ProjectRelationQueryRequest(projectNumber='P-"001'))
-    query, params = graph.calls[0]
-    assert 'P-"001' not in query
-    assert params == {"project_number": 'P-"001'}
-
-    graph.calls.clear()
     service.query(
         ProjectRelationQueryRequest(keyword="人工智能", relationTypes=["LEADS", "HAS_OUTPUT"])
     )
     query, params = graph.calls[0]
     assert "FUNDED_BY" not in query
+    assert "p.Project.title CONTAINS $keyword" in query
+    assert "p.Project.project_number CONTAINS" not in query
     assert params == {"keyword": "人工智能"}
 
 

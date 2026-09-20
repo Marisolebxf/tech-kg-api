@@ -97,7 +97,6 @@ class ProjectRelationService:
     ) -> str:
         filters = {
             "keyword": body.keyword or "",
-            "projectNumber": body.projectNumber or "",
             "relationTypes": sorted(relation_types),
         }
         raw = json.dumps(filters, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
@@ -138,14 +137,8 @@ class ProjectRelationService:
         edge_types = "|".join(f"`{item}`" for item in relation_types)
         conditions: list[str] = []
         params: dict[str, Any] = {}
-        if body.projectNumber:
-            conditions.append("p.Project.project_number == $project_number")
-            params["project_number"] = body.projectNumber
-        elif body.keyword:
-            conditions.append(
-                "(p.Project.title CONTAINS $keyword OR "
-                "p.Project.project_number CONTAINS $keyword)"
-            )
+        if body.keyword:
+            conditions.append("p.Project.title CONTAINS $keyword")
             params["keyword"] = body.keyword
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         query = (

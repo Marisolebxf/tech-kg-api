@@ -54,6 +54,8 @@ API_V1_PREFIX = "/api/v1"
 
 def register_routers(app: FastAPI) -> None:
     app.include_router(auth_router, prefix=API_V1_PREFIX)
+    # 该路由自身执行 API Key / 用户双通道认证，不叠加仅接受用户的依赖。
+    app.include_router(project_relation_router, prefix=API_V1_PREFIX)
 
     protected_dependencies = [Depends(require_authenticated_user)]
     protected_routers = (
@@ -75,7 +77,6 @@ def register_routers(app: FastAPI) -> None:
         graph_search_router,
         graph_console_router,
         graph_algorithm_router,
-        project_relation_router,
         entity_search_router,
         correction_router,
         expert_colleague_service_router,

@@ -8,7 +8,7 @@ import logging
 from fastapi import APIRouter, HTTPException, status
 
 from application.project_relation import ProjectRelationApplication
-from biz.dependencies.auth import CurrentActor
+from biz.dependencies.project_relation_auth import ProjectRelationIdentity
 from biz.schemas.common import ApiResponse
 from biz.schemas.project_relation import ProjectRelationQueryRequest
 from infra.graph_db import get_trs_graph_client
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 @router.post("/query", response_model=ApiResponse)
 async def query_project_relations(
     body: ProjectRelationQueryRequest,
-    actor: CurrentActor,
+    actor: ProjectRelationIdentity,
 ) -> ApiResponse:
     """分页查询默认正式图空间中的项目出边关系。"""
     del actor

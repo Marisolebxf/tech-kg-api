@@ -37,15 +37,13 @@ Content-Type: application/json
 
 | 字段 | 类型 | 默认值 | 约束 | 说明 |
 |---|---|---|---|---|
-| `keyword` | string | 不筛选 | ≤256 字符 | 项目名称**或**项目编号的子串匹配（CONTAINS） |
-| `projectNumber` | string | 不筛选 | ≤128 字符 | 项目编号**等值精确**匹配 |
+| `keyword` | string | 不筛选 | ≤256 字符 | 项目名称的子串模糊匹配（`Project.title CONTAINS`） |
 | `relationTypes` | string[] | `[]` = 全部 | ≤5 个，重复自动去重 | 关系类型白名单 |
 | `pageSize` | integer | 100 | 1～200 | 每页返回的关系记录条数 |
 | `cursor` | string | 不翻页 | ≤2048 字符 | 翻页游标，原样传回上一页的 `nextCursor`，不要自行构造或修改 |
 
 规则：
 
-- `keyword` 与 `projectNumber` 互斥，同时传返回 422。
 - 空字符串（去空格后）视为未传。
 - **不传任何筛选参数（空对象 `{}`）= 查询全部项目的全部关系**：按默认
   `pageSize=100` 返回第一页，之后用 `nextCursor` 翻页，直到 `hasMore=false`
@@ -57,9 +55,7 @@ Content-Type: application/json
 
 | 参数 | 示例值 | 含义 |
 |---|---|---|
-| `keyword` | `"人工智能"` | 标题含「人工智能」的项目 |
-| `keyword` | `"2029378"` | 编号含「2029378」的项目（子串，可能命中多个） |
-| `projectNumber` | `"2029378"` | 编号恰好等于 2029378 的那一个项目（定点查询的推荐方式） |
+| `keyword` | `"人工智能"` | 项目名称中包含「人工智能」的项目 |
 | `relationTypes` | `[]` | 全部五种关系 |
 | `relationTypes` | `["LEADS"]` | 只查项目负责人关系 |
 | `relationTypes` | `["LEADS", "HAS_OUTPUT"]` | 负责人 + 产出成果 |
@@ -84,25 +80,19 @@ Content-Type: application/json
 {}
 ```
 
-（2）按项目编号精确查询（推荐的系统间定点查询方式）：
-
-```json
-{"projectNumber": "2029378", "relationTypes": [], "pageSize": 100}
-```
-
-（3）按关键词查询，只看负责人和产出成果：
+（2）按项目名称模糊查询，只看负责人和产出成果：
 
 ```json
 {"keyword": "人工智能", "relationTypes": ["LEADS", "HAS_OUTPUT"], "pageSize": 50}
 ```
 
-（4）只查某一种关系：
+（3）只查某一种关系：
 
 ```json
 {"relationTypes": ["FUNDED_BY"], "pageSize": 10}
 ```
 
-（5）翻页取下一页（`cursor` 填上一页响应的 `nextCursor` 原值）：
+（4）翻页取下一页（`cursor` 填上一页响应的 `nextCursor` 原值）：
 
 ```json
 {"relationTypes": [], "pageSize": 100, "cursor": "eyJ2IjoxLCJvZmZzZXQiOjEwMC4uLg"}
@@ -183,30 +173,10 @@ HTTP 状态码。其余错误（400 / 401 / 502）是真实 HTTP 状态码，响
 
 | 场景 | HTTP 状态码 | 响应体格式 |
 |---|---:|---|
-| 参数校验失败：非法关系类型、`keyword` 与 `projectNumber` 同传、`pageSize` 越界、缺请求体等 | **200** | 统一响应壳 `code=422`，见下方实测示例 |
+| 参数校验失败：非法关系类型、`pageSize` 越界、缺请求体等 | **200** | 统一响应壳 `code=422` |
 | 游标格式无效；或修改了筛选条件后仍沿用旧游标 | 400 | `{"detail": "游标格式无效"}` |
 | 未认证、Token 缺失或已过期 | 401 | `{"detail": "尚未登录"}` |
 | 图数据服务不可用或查询失败 | 502 | `{"detail": "图数据服务暂时不可用，请稍后重试"}` |
-
-参数校验失败响应体示例（`keyword` 与 `projectNumber` 同传，实测返回）：
-
-```json
-{
-  "code": 422,
-  "success": false,
-  "data": [
-    {
-      "loc": ["body"],
-      "msg": "Value error, keyword 和 projectNumber 不能同时传入",
-      "type": "value_error"
-    }
-  ],
-  "msg": "请求参数校验失败"
-}
-```
-
-排查提示：若 400 响应中出现 `No valid index found`，为平台图库缺少编号索引的
-环境问题，请联系平台运维处理，调用方无需改动。
 
 ## 7. 完整 curl 示例
 
@@ -215,11 +185,10 @@ curl -X POST \
   'https://edu.itic-sci.com/bkg_zpt/api/v1/kg-service/project-relations/query' \
   -H 'Authorization: Bearer <access_token>' \
   -H 'Content-Type: application/json' \
-  -d '{"projectNumber": "2029378", "relationTypes": [], "pageSize": 100}'
+  -d '{"keyword": "人工智能", "relationTypes": [], "pageSize": 100}'
 ```
 
 ## 8. 性能预期
 
-- `projectNumber` 精确匹配走图库索引，响应快（毫秒～秒级），适合系统间定点查询。
-- `keyword` 为子串全扫描，项目规模大时响应可能达秒级，适合人工检索场景；
-  程序化集成优先使用 `projectNumber`。
+- `keyword` 对项目名称执行子串模糊匹配。当前实现可能扫描项目节点，数据规模较大时响应可能达到秒级。
+- 调用方应尽量提供有区分度的完整项目名称片段，并配合分页参数控制单次返回量。

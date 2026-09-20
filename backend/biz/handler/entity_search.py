@@ -167,7 +167,7 @@ async def reindex_entities(
     session: Annotated[Session, Depends(get_workflow_session)],
     payload: EntityReindexRequest | None = None,
 ) -> ApiResponse:
-    """按图空间重建实体 Milvus 索引（管理员）：图 → embedding + BM25 → kg_entity 集合。"""
+    """全量重建图空间实体 Milvus 索引（管理员）：图 → embedding + BM25 → kg_entity。"""
     if not actor.is_admin:
         raise HTTPException(status_code=403, detail="仅平台管理员可以重建实体索引")
     app = _application(session)

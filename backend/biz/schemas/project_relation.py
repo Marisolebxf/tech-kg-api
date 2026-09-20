@@ -19,6 +19,7 @@ class ProjectRelationQueryRequest(BaseModel):
     # Swagger 预填示例：全部留空即"查询全部关系的第一页"，可直接执行；
     # 不给示例时 Swagger 会用 "string"/首枚举值占位，直接执行必触发互斥/游标校验失败。
     model_config = ConfigDict(
+        extra="forbid",
         json_schema_extra={
             "example": {
                 "keyword": "",

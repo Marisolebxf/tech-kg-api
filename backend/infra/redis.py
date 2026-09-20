@@ -24,6 +24,8 @@ class AsyncJsonStore(Protocol):
 
     async def delete(self, key: str) -> None: ...
 
+    async def delete_prefix(self, prefix: str) -> int: ...
+
     async def close(self) -> None: ...
 
 
@@ -63,6 +65,11 @@ class RedisClient:
 
     async def delete(self, key: str) -> None:
         await self.client.delete(key)
+
+    async def delete_prefix(self, prefix: str) -> int:
+        """Delete keys in this Redis database that start with ``prefix``."""
+        keys = [key async for key in self.client.scan_iter(match=f"{prefix}*")]
+        return int(await self.client.delete(*keys)) if keys else 0
 
     async def close(self) -> None:
         if self._client is not None:
@@ -129,6 +136,13 @@ class MemoryJsonStore:
     async def delete(self, key: str) -> None:
         async with self._lock:
             self._values.pop(key, None)
+
+    async def delete_prefix(self, prefix: str) -> int:
+        async with self._lock:
+            keys = [key for key in self._values if key.startswith(prefix)]
+            for key in keys:
+                self._values.pop(key, None)
+            return len(keys)
 
     async def close(self) -> None:
         async with self._lock:

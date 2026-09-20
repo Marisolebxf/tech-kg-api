@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
-import time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -15,6 +15,8 @@ from application.entity_search import EntitySearchApplication
 from biz.dependencies.auth import CurrentActor
 from biz.schemas.common import ApiResponse
 from biz.schemas.entity_search import EntityReindexRequest, EntitySearchRequest
+from infra.entity_response_cache import EntityResponseCache, build_cache_key
+from infra.graph_db.config import TRSGraphSettings
 from infra.workflow_mysql import get_workflow_session
 from service.entity_search import (
     EntitySearchError,
@@ -22,33 +24,119 @@ from service.entity_search import (
 )
 
 router = APIRouter(prefix="/entity-search", tags=["entity-search"])
+logger = logging.getLogger(__name__)
 
-# 实体列表浏览是重查询（Nebula 分页扫描+排序，dev2 空间 52 万实体），
-# 500 并发下 api 连接积压产生 502。结果按 查询参数 做 15s TTL 缓存
-# （同参数结果一致）；实体数据由 ETL 持续写入，15s 滞后可接受。
-# TTL 环境变量 ENTITY_BROWSE_CACHE_SECONDS 可调，0=关闭。
-_BROWSE_CACHE_SECONDS = float(os.getenv("ENTITY_BROWSE_CACHE_SECONDS", "15"))
-_browse_payload_cache: dict[str, tuple[float, str]] = {}
-
-
-def _browse_cache_get(key: str) -> str | None:
-    entry = _browse_payload_cache.get(key)
-    if entry and entry[0] > time.monotonic():
-        return entry[1]
-    return None
-
-
-def _browse_cache_put(key: str, payload: str) -> None:
-    if len(_browse_payload_cache) > 1024:
-        now = time.monotonic()
-        for stale in [k for k, v in _browse_payload_cache.items() if v[0] <= now]:
-            _browse_payload_cache.pop(stale, None)
-    _browse_payload_cache[key] = (time.monotonic() + _BROWSE_CACHE_SECONDS, payload)
+# 浏览页默认缓存 5 分钟；关键词搜索仍使用较短 TTL，避免索引变化后旧命中保留过久。
+# 两者都是 L1 进程缓存 + L2 Redis 共享缓存，Redis 不可用时自动降级到 L1。
+_browse_cache = EntityResponseCache(
+    namespace="entity-search:browse:v2",
+    ttl_seconds=float(os.getenv("ENTITY_BROWSE_CACHE_SECONDS", "300")),
+)
+_search_cache = EntityResponseCache(
+    namespace="entity-search:search:v2",
+    ttl_seconds=float(os.getenv("ENTITY_SEARCH_CACHE_SECONDS", "60")),
+)
+_request_locks: dict[str, asyncio.Lock] = {}
+_request_locks_guard = asyncio.Lock()
 
 
-def _clear_entity_cache() -> None:
-    """重建完成后清掉旧搜索/浏览响应，避免短 TTL 内继续返回空结果。"""
-    _browse_payload_cache.clear()
+async def _request_lock(key: str) -> asyncio.Lock:
+    async with _request_locks_guard:
+        return _request_locks.setdefault(key, asyncio.Lock())
+
+
+async def _release_request_lock(key: str, lock: asyncio.Lock) -> None:
+    async with _request_locks_guard:
+        if not lock.locked():
+            _request_locks.pop(key, None)
+
+
+async def _clear_entity_cache() -> None:
+    """重建完成后清掉所有 worker 可见的旧搜索/浏览响应。"""
+    await asyncio.gather(_browse_cache.clear(), _search_cache.clear())
+
+
+def _resolved_space(space: str | None) -> str:
+    return space or TRSGraphSettings.from_env().space
+
+
+def _serialized_success(data: dict) -> str:
+    return json.dumps(
+        {"code": 200, "success": True, "data": data, "msg": "success"},
+        ensure_ascii=False,
+        default=str,
+    )
+
+
+async def _load_browse_payload(
+    session: Session,
+    *,
+    space: str | None,
+    entity_type: str | None,
+    limit: int,
+    offset: int,
+) -> tuple[str, bool]:
+    """Return serialized browse response and whether it came from cache.
+
+    The per-key lock collapses a burst of identical cold requests into one graph
+    query. Other requests wait for that result and then read the freshly cached
+    payload instead of repeating the expensive scan.
+    """
+    key = build_cache_key(
+        "browse",
+        space=_resolved_space(space),
+        entity_type=entity_type,
+        limit=limit,
+        offset=offset,
+    )
+    cached = await _browse_cache.get(key)
+    if cached is not None:
+        return cached, True
+
+    lock = await _request_lock(key)
+    try:
+        async with lock:
+            cached = await _browse_cache.get(key)
+            if cached is not None:
+                return cached, True
+            data = await asyncio.to_thread(
+                _application(session).browse,
+                space=space,
+                entity_type=entity_type,
+                limit=limit,
+                offset=offset,
+            )
+            payload = _serialized_success(data)
+            await _browse_cache.put(key, payload)
+            return payload, False
+    finally:
+        await _release_request_lock(key, lock)
+
+
+async def prewarm_entity_browse() -> None:
+    """Best-effort startup warm-up for the default entity-list first page."""
+    if os.getenv("ENTITY_BROWSE_PREWARM_ENABLED", "true").lower() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    } or not _browse_cache.enabled:
+        return
+    from infra.workflow_mysql import workflow_session_scope
+
+    space = _resolved_space(None)
+    try:
+        with workflow_session_scope() as session:
+            _, hit = await _load_browse_payload(
+                session,
+                space=space,
+                entity_type=None,
+                limit=10,
+                offset=0,
+            )
+        logger.info("实体列表默认首页预热完成 space=%s cache_hit=%s", space, hit)
+    except Exception:  # noqa: BLE001 - startup warm-up must never block API startup
+        logger.warning("实体列表默认首页预热失败，首次请求将按正常路径加载", exc_info=True)
 
 
 def _application(session: Session) -> EntitySearchApplication:
@@ -84,14 +172,9 @@ async def browse_entities(
 ) -> ApiResponse:
     """浏览实体（关键词为空的默认视图）：图空间直查分页，页内按 vid 排序。"""
     _ensure_space_access(actor, space)
-    cache_key = f"browse:{space}:{entityType}:{limit}:{offset}"
-    cached = _browse_cache_get(cache_key)
-    if cached is not None:
-        return Response(cached, media_type="application/json")
-    app = _application(session)
     try:
-        data = await asyncio.to_thread(
-            app.browse,
+        payload, cache_hit = await _load_browse_payload(
+            session,
             space=space,
             entity_type=entityType,
             limit=limit,
@@ -99,13 +182,11 @@ async def browse_entities(
         )
     except EntitySearchError as exc:
         _raise_domain_error(exc)
-    payload = json.dumps(
-        {"code": 200, "success": True, "data": data, "msg": "success"},
-        ensure_ascii=False,
-        default=str,
+    return Response(
+        payload,
+        media_type="application/json",
+        headers={"X-Entity-Cache": "HIT" if cache_hit else "MISS"},
     )
-    _browse_cache_put(cache_key, payload)
-    return Response(payload, media_type="application/json")
 
 
 @router.get("/types", response_model=ApiResponse)
@@ -137,12 +218,23 @@ async def search_entities(
     """实体混合检索：m3e 语义向量 + BM25 关键词（RRF 融合），支持实体类型过滤。
 
     混合检索为重查询（m3e 向量化 + Milvus + 图直查），同关键词+空间+分页的
-    重复检索做 15s TTL 缓存（实体由 ETL 持续写入，15s 滞后可接受）。"""
+    重复检索使用短 TTL 共享缓存（默认 60 秒，可通过环境变量调整）。"""
     _ensure_space_access(actor, payload.space)
-    cache_key = f"search:{payload.space}:{payload.entityType}:{payload.keyword}:{payload.limit}:{payload.offset}"
-    cached = _browse_cache_get(cache_key)
+    cache_key = build_cache_key(
+        "search",
+        space=_resolved_space(payload.space),
+        entity_type=payload.entityType,
+        keyword=payload.keyword,
+        limit=payload.limit,
+        offset=payload.offset,
+    )
+    cached = await _search_cache.get(cache_key)
     if cached is not None:
-        return Response(cached, media_type="application/json")
+        return Response(
+            cached,
+            media_type="application/json",
+            headers={"X-Entity-Cache": "HIT"},
+        )
     app = _application(session)
     try:
         # 图/Milvus/embedding 均为同步 IO，放线程池避免阻塞事件循环
@@ -156,13 +248,13 @@ async def search_entities(
         )
     except EntitySearchError as exc:
         _raise_domain_error(exc)
-    payload_json = json.dumps(
-        {"code": 200, "success": True, "data": data, "msg": "success"},
-        ensure_ascii=False,
-        default=str,
+    payload_json = _serialized_success(data)
+    await _search_cache.put(cache_key, payload_json)
+    return Response(
+        payload_json,
+        media_type="application/json",
+        headers={"X-Entity-Cache": "MISS"},
     )
-    _browse_cache_put(cache_key, payload_json)
-    return Response(payload_json, media_type="application/json")
 
 
 @router.post("/reindex", response_model=ApiResponse)
@@ -182,7 +274,7 @@ async def reindex_entities(
             space=request.space,
             entity_types=request.entityTypes,
         )
-        _clear_entity_cache()
+        await _clear_entity_cache()
         return ApiResponse(data=data, msg="实体索引重建完成")
     except EntitySearchError as exc:
         _raise_domain_error(exc)

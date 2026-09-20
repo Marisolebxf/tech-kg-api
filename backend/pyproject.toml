@@ -29,7 +29,7 @@ dependencies = [
     "sqlglot>=26",
     "temporalio>=1.12.0,<2",
     "torch>=2.7",
-    "uvicorn>=0.44.0",
+    "uvicorn[standard]>=0.44.0",
     "zai-sdk>=0.2.2",
     "zhipuai>=1.0.7",
 ]

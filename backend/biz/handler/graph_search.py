@@ -447,7 +447,7 @@ async def get_subgraph(
     actor: CurrentActor,
     node_id: str,
     depth: int = Query(1, ge=1, le=3, description="跳数 1-3"),
-    limit: int = Query(50, ge=1, le=200, description="每页最大边数"),
+    limit: int = Query(50, ge=1, le=256, description="每页最大边数"),
     offset: int = Query(0, ge=0, description="一跳遍历分页偏移量"),
     edge_type: str | None = Query(None, description="边类型过滤，如 AUTHORED_BY"),
     direction: Literal["out", "in", "both"] = Query("both", description="方向: out/in/both"),
@@ -542,7 +542,7 @@ async def get_filtered_subgraph(
     node_id: str,
     edge_types: str = Query(..., description="逗号分隔的边类型，如 EXECUTIVE_OF,HAS_PARTICPTANT"),
     depth: int = Query(2, ge=1, le=3, description="跳数 1-3"),
-    limit: int = Query(50, ge=1, le=200, description="每种边类型每跳最大边数"),
+    limit: int = Query(50, ge=1, le=256, description="每种边类型每跳最大边数"),
     direction: Literal["out", "in", "both"] = Query("both", description="方向: out/in/both"),
     space: str | None = Query(None, description="图空间"),
 ) -> ApiResponse:

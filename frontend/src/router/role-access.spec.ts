@@ -31,6 +31,7 @@ vi.mock('../views/platform/ProcessInstanceDetailView.vue', () => ({ default: {} 
 vi.mock('../views/platform/SchemaBrowserView.vue', () => ({ default: {} }))
 vi.mock('../views/platform/GraphBuildView.vue', () => ({ default: {} }))
 vi.mock('../views/platform/EntityListView.vue', () => ({ default: {} }))
+vi.mock('../views/platform/GraphVisualizationView.vue', () => ({ default: {} }))
 vi.mock('../views/platform/ConfigurationManagementView.vue', () => ({ default: {} }))
 
 import { router } from './index'

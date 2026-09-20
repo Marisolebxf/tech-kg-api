@@ -56,11 +56,12 @@ const userRoleDescription = computed(() =>
 const pageTitle = computed(() => String(route.meta.title ?? "亿级知识图谱"));
 const routeError = ref("");
 const serviceNavCollapsed = ref(false);
-// 图谱查询折叠组（综合查询 / 实体列表）
+// 图谱查询折叠组（综合查询 / 实体列表 / 图谱可视化）
 const queryNavCollapsed = ref(false);
 const queryNavItems = [
   { to: "/graph-query", label: "综合查询", fullLabel: "图谱查询 · 综合查询" },
   { to: "/graph-query/entities", label: "实体列表", fullLabel: "图谱查询 · 实体列表" },
+  { to: "/graph-query/visualization", label: "图谱可视化", fullLabel: "图谱查询 · 图谱可视化" },
 ];
 const showQueryNavItems = computed(
   () => !sidebarCollapsed.value && !queryNavCollapsed.value,

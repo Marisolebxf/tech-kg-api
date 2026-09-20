@@ -124,14 +124,21 @@ def get_index_status(
     return ApiResponse(data=_application(session).status(space=space))
 
 
-@router.post("/search", response_model=ApiResponse)
+@router.post("/search")
 async def search_entities(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_workflow_session)],
     payload: EntitySearchRequest,
-) -> ApiResponse:
-    """实体混合检索：m3e 语义向量 + BM25 关键词（RRF 融合），支持实体类型过滤。"""
+) -> Response:
+    """实体混合检索：m3e 语义向量 + BM25 关键词（RRF 融合），支持实体类型过滤。
+
+    混合检索为重查询（m3e 向量化 + Milvus + 图直查），同关键词+空间+分页的
+    重复检索做 15s TTL 缓存（实体由 ETL 持续写入，15s 滞后可接受）。"""
     _ensure_space_access(actor, payload.space)
+    cache_key = f"search:{payload.space}:{payload.entityType}:{payload.keyword}:{payload.limit}:{payload.offset}"
+    cached = _browse_cache_get(cache_key)
+    if cached is not None:
+        return Response(cached, media_type="application/json")
     app = _application(session)
     try:
         # 图/Milvus/embedding 均为同步 IO，放线程池避免阻塞事件循环
@@ -143,9 +150,15 @@ async def search_entities(
             limit=payload.limit,
             offset=payload.offset,
         )
-        return ApiResponse(data=data)
     except EntitySearchError as exc:
         _raise_domain_error(exc)
+    payload_json = json.dumps(
+        {"code": 200, "success": True, "data": data, "msg": "success"},
+        ensure_ascii=False,
+        default=str,
+    )
+    _browse_cache_put(cache_key, payload_json)
+    return Response(payload_json, media_type="application/json")
 
 
 @router.post("/reindex", response_model=ApiResponse)

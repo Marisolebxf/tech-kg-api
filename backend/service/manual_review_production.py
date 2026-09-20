@@ -1409,6 +1409,9 @@ class ManualReviewService:
             "diagnosis": c.diagnosis,
             "sourceTable": c.source_table,
             "sourceRecordId": c.source_record_id,
+            # 重跑轮次（00919：OPEN 待处理记录应为 attempt=1）：快照未写 = 首次失败；
+            # 重跑仍失败建新案时快照带 attempt+1（与 list_rerun_failures 同口径）
+            "attempt": int(input_data.get("attempt") or 1),
             "createdAt": c.created_at.isoformat(),
             "updatedAt": c.updated_at.isoformat(),
         }

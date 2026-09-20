@@ -1025,7 +1025,8 @@ onUnmounted(() => {
 
 async function loadPlatformOverview(): Promise<void> {
   try {
-    const data = await getPlatformOverview()
+    // 图资产统计随全局图空间选择器（00918：抽取写非默认空间后总览也要能反映）
+    const data = await getPlatformOverview(currentGraphSpace())
 
     overviewMeta.value = {
       platformStatus: data.platformStatus,
@@ -1056,6 +1057,11 @@ watch(activeTab, (tab) => {
     void loadOverviewCards()
   }
 }, { immediate: true })
+
+// 全局图空间切换后重载已展示的总览（统计按空间隔离）
+watch(algoSpace, () => {
+  if (overviewDataLoaded.value) void loadPlatformOverview()
+})
 
 
 function handleStartTask() {

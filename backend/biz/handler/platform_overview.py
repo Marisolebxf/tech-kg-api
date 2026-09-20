@@ -26,19 +26,24 @@ router = APIRouter(prefix="/platform/overview", tags=["platform-overview"])
 application = PlatformOverviewApplication()
 
 
-async def _get_overview() -> PlatformOverviewData:
+async def _get_overview(space: str | None = None) -> PlatformOverviewData:
     # TRSGraph 客户端为同步实现，放在线程中避免阻塞 FastAPI 事件循环。
-    return await asyncio.to_thread(application.get_overview)
+    # space：全局图空间选择器当前空间（缺省回落 env 默认空间，兼容旧调用方）。
+    return await asyncio.to_thread(application.get_overview, space)
 
 
 @router.get("")
-async def get_platform_overview() -> PlatformOverviewResponse:
-    return PlatformOverviewResponse(data=await _get_overview())
+async def get_platform_overview(
+    space: Annotated[str | None, Query(max_length=64)] = None,
+) -> PlatformOverviewResponse:
+    return PlatformOverviewResponse(data=await _get_overview(space))
 
 
 @router.get("/assets")
-async def get_platform_assets() -> PlatformAssetSummaryResponse:
-    overview = await _get_overview()
+async def get_platform_assets(
+    space: Annotated[str | None, Query(max_length=64)] = None,
+) -> PlatformAssetSummaryResponse:
+    overview = await _get_overview(space)
     return PlatformAssetSummaryResponse(
         data=PlatformAssetSummaryData(
             platform_status=overview.platform_status,
@@ -55,8 +60,9 @@ async def get_platform_assets() -> PlatformAssetSummaryResponse:
 @router.get("/changes")
 async def get_platform_asset_changes(
     asset_type: Annotated[AssetOverviewKey, Query(alias="assetType")] = "entity",
+    space: Annotated[str | None, Query(max_length=64)] = None,
 ) -> PlatformAssetChangesResponse:
-    overview = await _get_overview()
+    overview = await _get_overview(space)
     return PlatformAssetChangesResponse(
         data=PlatformAssetChangesData(
             asset_type=asset_type,
@@ -67,8 +73,10 @@ async def get_platform_asset_changes(
 
 
 @router.get("/activity")
-async def get_platform_activity() -> PlatformActivityResponse:
-    overview = await _get_overview()
+async def get_platform_activity(
+    space: Annotated[str | None, Query(max_length=64)] = None,
+) -> PlatformActivityResponse:
+    overview = await _get_overview(space)
     return PlatformActivityResponse(
         data=PlatformActivityData(
             items=overview.latest_changes,
@@ -78,8 +86,10 @@ async def get_platform_activity() -> PlatformActivityResponse:
 
 
 @router.get("/risks")
-async def get_platform_risks() -> PlatformRiskResponse:
-    overview = await _get_overview()
+async def get_platform_risks(
+    space: Annotated[str | None, Query(max_length=64)] = None,
+) -> PlatformRiskResponse:
+    overview = await _get_overview(space)
     return PlatformRiskResponse(
         data=PlatformRiskData(
             items=overview.management_risks,
@@ -89,8 +99,10 @@ async def get_platform_risks() -> PlatformRiskResponse:
 
 
 @router.get("/structures")
-async def get_platform_structures() -> PlatformStructureResponse:
-    overview = await _get_overview()
+async def get_platform_structures(
+    space: Annotated[str | None, Query(max_length=64)] = None,
+) -> PlatformStructureResponse:
+    overview = await _get_overview(space)
     return PlatformStructureResponse(
         data=PlatformStructureData(
             entity=overview.entity_structure,

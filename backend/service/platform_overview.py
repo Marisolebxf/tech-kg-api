@@ -7,7 +7,7 @@ import os
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 from biz.schemas.platform_overview import (
     AssetChangeRow,
@@ -34,12 +34,36 @@ class GraphStatsSnapshot:
 
 
 class GraphStatsProvider(Protocol):
-    def get_stats(self) -> GraphStatsSnapshot: ...
+    def get_stats(self, space: str | None = None) -> GraphStatsSnapshot: ...
 
 
 class TRSGraphStatsProvider:
-    def get_stats(self) -> GraphStatsSnapshot:
-        client = get_trs_graph_client()
+    def get_stats(self, space: str | None = None) -> GraphStatsSnapshot:
+        """读图统计；``space`` 给定时统计该空间（全局图空间选择器），否则默认空间单例。"""
+        client: Any
+        owned = False
+        if space:
+            # 显式空间：与写图/消歧 activity 同口径的临时 client（单例绑死默认空间）
+            from infra.graph_db.client import TRSGraphClient
+            from infra.graph_db.config import TRSGraphSettings
+
+            settings = TRSGraphSettings.from_env()
+            settings.space = space
+            client = TRSGraphClient(settings)
+            client.connect()
+            owned = True
+        else:
+            client = get_trs_graph_client()
+        try:
+            return self._stats_via_client(client)
+        finally:
+            if owned:
+                try:
+                    client.close()
+                except Exception:  # noqa: BLE001
+                    logger.exception("关闭图客户端失败")
+
+    def _stats_via_client(self, client: Any) -> GraphStatsSnapshot:
         # 优先用 SHOW STATS：单条 nGQL 一次性返回所有 Tag/Edge 计数与总数（NebulaGraph 预计算，
         # 毫秒级）。比逐 label 调 node_count / 逐 edge_type 调 edge_count（N 次串行 HTTP，
         # 实测 ~57s）快 4 个数量级。SHOW STATS 需要 SUBMIT JOB STATS 已跑过；若返回空或抛错，
@@ -174,16 +198,18 @@ class PlatformOverviewService:
     def __init__(self, stats_provider: GraphStatsProvider | None = None) -> None:
         self._stats_provider = stats_provider or TRSGraphStatsProvider()
         self._cache_seconds = int(os.getenv("PLATFORM_OVERVIEW_CACHE_SECONDS", "60"))
-        self._cached: tuple[float, PlatformOverviewData] | None = None
+        # 缓存按空间隔离：总览随全局图空间选择器切换后 60s 内不串空间
+        self._cached: dict[str | None, tuple[float, PlatformOverviewData]] = {}
 
-    def get_overview(self) -> PlatformOverviewData:
+    def get_overview(self, space: str | None = None) -> PlatformOverviewData:
         now = time.monotonic()
-        if self._cached is not None and self._cached[0] > now:
-            return self._cached[1]
+        cached = self._cached.get(space)
+        if cached is not None and cached[0] > now:
+            return cached[1]
 
         fallback = self._get_fallback_overview()
         try:
-            stats = self._stats_provider.get_stats()
+            stats = self._stats_provider.get_stats(space)
         except Exception as exc:
             logger.warning("首页图资产统计读取失败，使用降级数据: %s", exc)
             result = fallback.model_copy(
@@ -248,7 +274,7 @@ class PlatformOverviewService:
                     ],
                 }
             )
-        self._cached = (now + self._cache_seconds, result)
+        self._cached[space] = (now + self._cache_seconds, result)
         return result
 
     def _get_fallback_overview(self) -> PlatformOverviewData:

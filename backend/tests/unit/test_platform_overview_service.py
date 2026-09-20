@@ -4,9 +4,11 @@ from service.platform_overview import GraphStatsSnapshot, PlatformOverviewServic
 class FakeStatsProvider:
     def __init__(self) -> None:
         self.calls = 0
+        self.spaces: list[str | None] = []
 
-    def get_stats(self) -> GraphStatsSnapshot:
+    def get_stats(self, space: str | None = None) -> GraphStatsSnapshot:
         self.calls += 1
+        self.spaces.append(space)
         return GraphStatsSnapshot(
             total_nodes=128_000_000,
             total_edges=642_000_000,
@@ -28,7 +30,7 @@ class FakeStatsProvider:
 
 
 class FailingStatsProvider:
-    def get_stats(self) -> GraphStatsSnapshot:
+    def get_stats(self, space: str | None = None) -> GraphStatsSnapshot:
         raise RuntimeError("graph unavailable")
 
 
@@ -50,6 +52,24 @@ def test_overview_uses_live_graph_totals_and_explicit_partial_mode() -> None:
     # 同一服务实例在缓存时间内不会重复扫描全部标签和边类型。
     assert service.get_overview() is result
     assert provider.calls == 1
+
+
+def test_overview_cache_is_isolated_per_space() -> None:
+    """总览随全局图空间查询（00918）：不同空间各自缓存、不串数据。"""
+    provider = FakeStatsProvider()
+    service = PlatformOverviewService(stats_provider=provider)
+
+    first = service.get_overview("gaoxing_test")
+    assert provider.spaces == ["gaoxing_test"]
+
+    # 同空间命中缓存；切空间重新读该空间统计
+    assert service.get_overview("gaoxing_test") is first
+    service.get_overview("techkg")
+    assert provider.spaces == ["gaoxing_test", "techkg"]
+
+    # 缺省空间（env 默认）与显式空间互不干扰
+    service.get_overview()
+    assert provider.spaces == ["gaoxing_test", "techkg", None]
 
 
 def test_overview_marks_demo_fallback_when_graph_is_unavailable() -> None:

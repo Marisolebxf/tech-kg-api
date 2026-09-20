@@ -65,11 +65,12 @@ export interface PlatformOverviewData {
 
 const PLATFORM_OVERVIEW_ENDPOINT = '/v1/platform/overview'
 
-export async function getPlatformOverview(): Promise<PlatformOverviewData> {
+/** 图资产统计随 space（全局图空间选择器当前空间）查询；缺省由后端回落 env 默认空间。 */
+export async function getPlatformOverview(space?: string): Promise<PlatformOverviewData> {
   const response = await http.get<
     ApiResponse<PlatformOverviewData>,
     ApiResponse<PlatformOverviewData>
-  >(PLATFORM_OVERVIEW_ENDPOINT)
+  >(PLATFORM_OVERVIEW_ENDPOINT, { params: space ? { space } : undefined })
 
   return unwrapApiResponse(response)
 }

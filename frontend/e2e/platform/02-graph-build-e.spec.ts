@@ -86,6 +86,32 @@ test.describe.serial('E. 任务中心', () => {
       { label: '名称筛选收敛' },
     )
     await page.locator('#graph-build-filter-name input').fill('')
+
+    // 00843/00847：状态/类型筛选提供「未选择」伪选项——先选一个真实值，再选「未选择」
+    // 应清空筛选（值标签隐藏、框体回到 placeholder 空态），列表不再按该维度过滤
+    for (const [sel, realOpt] of [
+      ['#graph-build-filter-status', '已完成'],
+      ['#graph-build-filter-type', '数据抽取'],
+    ] as const) {
+      const box = page.locator(sel)
+      await box.click()
+      await page.locator('li.arco-select-option:visible', { hasText: realOpt }).first().click()
+      await expect(box).toContainText(realOpt)
+
+      await box.click()
+      await page.locator('li.arco-select-option:visible', { hasText: '未选择' }).first().click()
+      // 清空判定：arco 的值标签 .arco-select-view-value 在空态带 -value-hidden（display:none）
+      await expect(box.locator('.arco-select-view-value')).toBeHidden()
+      await expect(box).not.toContainText(realOpt)
+    }
+    // 清空后列表仍有任务行（不受状态/类型限制）
+    await waitFor(
+      async () => {
+        const n = await page.locator('tbody tr').count()
+        return n > 0 ? n : null
+      },
+      { label: '未选择清空后列表不空' },
+    )
   })
 
   test('E2 新建一次性「数据抽取」任务并立即执行', async ({ page, request }) => {

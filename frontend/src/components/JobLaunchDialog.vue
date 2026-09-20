@@ -32,8 +32,10 @@ const runNow = ref(true)
 
 // 数据抽取任务：选 Schema（须已传脚本且绑定来源表），平台分批并发喂数转换
 const extractSchemaId = ref('')
-// 字符串绑定：v-model.number 会把 65 位数字折叠成 1e+64，位数校验（FUNC-00872）就做不成了
-const extractBatchSize = ref('')
+// 字符串绑定：Vue 的 vModelText 对 type="number" 无条件 parseFloat（castToNumber 不看
+// .number 修饰符），v-model 会把纯数字输入变成 number 存进 ref——提交链 .trim() 即炸、
+// 65 位数字也被折叠成 1e+64 使位数校验（FUNC-00872）失效。故模板一律显式字符串赋值。
+const extractBatchSize = ref<string>('')
 const extractSchemas = ref<SchemaDefinition[]>([])
 const schemasLoading = ref(false)
 
@@ -265,7 +267,7 @@ async function submit() {
           </div>
           <label class="job-field">
             <span>批大小（默认 500）</span>
-            <input aria-label="500" v-model="extractBatchSize" type="number" min="1" max="5000" placeholder="500" />
+            <input aria-label="500" :value="extractBatchSize" type="number" min="1" max="5000" placeholder="500" @input="extractBatchSize = ($event.target as HTMLInputElement).value" />
             <small v-if="batchSizeError" class="field-error">{{ batchSizeError }}</small>
           </label>
         </div>
@@ -290,7 +292,7 @@ async function submit() {
           <div class="job-row">
             <label class="job-field">
               <span>批大小（默认 500，对每个 Schema 生效）</span>
-              <input aria-label="500" v-model="extractBatchSize" type="number" min="1" max="5000" placeholder="500" />
+              <input aria-label="500" :value="extractBatchSize" type="number" min="1" max="5000" placeholder="500" @input="extractBatchSize = ($event.target as HTMLInputElement).value" />
               <small v-if="batchSizeError" class="field-error">{{ batchSizeError }}</small>
             </label>
           </div>

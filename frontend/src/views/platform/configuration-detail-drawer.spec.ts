@@ -140,4 +140,45 @@ describe('配置管理 · 管理抽屉编辑隔离', () => {
     expect(cardName()).toContain('服务端新名称')
     wrapper.unmount()
   })
+
+  it('端口位数校验：63 位数字按范围校验（不折叠成 1e+63），65 位触发位数上限', async () => {
+    setActivePinia(createPinia())
+    const { listMysqlDatasources } = await import('../../api/mysqlDatasource')
+    // type="number" 的 v-model 会被 Vue 自动 parseFloat（不看 .number 修饰符），
+    // 63 位数字进 ref 就成 1e+63——位数/范围校验全错口径（FUNC-00462/00463）
+    vi.mocked(listMysqlDatasources).mockResolvedValue([{
+      id: 'MY-E2E',
+      name: '端口位数回归',
+      description: '',
+      owner: 'admin',
+      updatedAt: '2026-09-20 10:00:00',
+      status: '正常',
+      isDefault: false,
+      host: '127.0.0.1',
+      port: 3306,
+      defaultDatabase: 'gkx_element',
+      username: 'root',
+      hasPassword: true,
+      passwordMasked: '••••••',
+    }])
+    const wrapper = mountView()
+    await flushPromises()
+
+    // 切到 MySQL 数据源分类并打开管理抽屉
+    const mysqlNav = wrapper.findAll('.category-nav > button').find((b) => b.text().includes('MySQL'))
+    await mysqlNav?.trigger('click')
+    await flushPromises()
+    await openDrawer(wrapper)
+
+    const portInput = wrapper.find('.detail-drawer input[aria-label="number-input"]')
+    const fieldError = () => wrapper.find('.detail-drawer .field-error').text()
+
+    await portInput.setValue('1'.repeat(63))
+    expect(fieldError()).toContain('输入超出有效范围1～65535')
+    expect(fieldError()).not.toContain('需为数字')
+
+    await portInput.setValue('1'.repeat(65))
+    expect(fieldError()).toContain('数字输入长度不能超过64个字符')
+    wrapper.unmount()
+  })
 })

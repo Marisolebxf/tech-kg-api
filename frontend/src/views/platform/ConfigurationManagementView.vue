@@ -74,10 +74,14 @@ type ConfigItem = {
   apiKey?: string
   hasApiKey?: boolean
   apiKeyMasked?: string
-  dimensions?: number | null
+  // 端口/维度编辑态是字符串：type="number" 的 v-model 会被 Vue 自动 parseFloat 成
+  // number（castToNumber 不看 .number 修饰符），65 位数字折叠成 1e+64、位数校验
+  // （FUNC-00462/00463）失效——模板一律显式字符串赋值；服务端回填是 number，
+  // 提交由 portValueForSubmit / numberOrNullForSubmit 归一。
+  dimensions?: number | string | null
   // mysql
   host?: string
-  port?: number
+  port?: number | string
   defaultDatabase?: string
   username?: string
   password?: string
@@ -118,11 +122,11 @@ type ConfigForm = {
   baseUrl?: string
   model?: string
   apiKey?: string
-  dimensions?: number | null
+  dimensions?: number | string | null
   owner?: string
   description?: string
   host?: string
-  port?: number
+  port?: number | string
   defaultDatabase?: string
   username?: string
   password?: string
@@ -656,13 +660,13 @@ onMounted(() => {
           <template v-if="selected.kind === 'llm' || selected.kind === 'embedding'">
             <a-form-item class="wide" field="baseUrl" label="Base URL" required><input aria-label="baseUrl" v-model="selected.baseUrl" /><small v-if="detailFieldErrors.baseUrl" class="field-error">{{ detailFieldErrors.baseUrl }}</small></a-form-item>
             <a-form-item field="model" label="模型" required><input aria-label="model" v-model="selected.model" /><small v-if="detailFieldErrors.model" class="field-error">{{ detailFieldErrors.model }}</small></a-form-item>
-            <a-form-item v-if="selected.kind === 'embedding'" label="维度"><input aria-label="number-input" v-model="selected.dimensions" type="number" /><small v-if="detailFieldErrors.dimensions" class="field-error">{{ detailFieldErrors.dimensions }}</small></a-form-item>
+            <a-form-item v-if="selected.kind === 'embedding'" label="维度"><input aria-label="number-input" :value="selected.dimensions ?? ''" type="number" @input="selected.dimensions = ($event.target as HTMLInputElement).value" /><small v-if="detailFieldErrors.dimensions" class="field-error">{{ detailFieldErrors.dimensions }}</small></a-form-item>
             <a-form-item label="访问凭据"><input aria-label="input-field" :value="selected.apiKeyMasked || (selected.hasApiKey ? '••••••••' : '未设置')" readonly /></a-form-item>
             <a-form-item class="wide" label="更新 API Key（留空保留原值）"><input aria-label="输入新 Key 覆盖原值" v-model="selected.apiKey" type="password" placeholder="输入新 Key 覆盖原值" /><small v-if="detailFieldErrors.apiKey" class="field-error">{{ detailFieldErrors.apiKey }}</small></a-form-item>
           </template>
           <template v-else>
             <a-form-item field="host" label="主机" required><input aria-label="host" v-model="selected.host" /><small v-if="detailFieldErrors.host" class="field-error">{{ detailFieldErrors.host }}</small></a-form-item>
-            <a-form-item label="端口"><input aria-label="number-input" v-model="selected.port" type="number" /><small v-if="detailFieldErrors.port" class="field-error">{{ detailFieldErrors.port }}</small></a-form-item>
+            <a-form-item label="端口"><input aria-label="number-input" :value="selected.port ?? ''" type="number" @input="selected.port = ($event.target as HTMLInputElement).value" /><small v-if="detailFieldErrors.port" class="field-error">{{ detailFieldErrors.port }}</small></a-form-item>
             <a-form-item label="默认库"><input aria-label="defaultDatabase" v-model="selected.defaultDatabase" /><small v-if="detailFieldErrors.defaultDatabase" class="field-error">{{ detailFieldErrors.defaultDatabase }}</small></a-form-item>
             <a-form-item field="username" label="用户名" required><input aria-label="username" v-model="selected.username" /><small v-if="detailFieldErrors.username" class="field-error">{{ detailFieldErrors.username }}</small></a-form-item>
             <a-form-item label="访问凭据"><input aria-label="input-field" :value="selected.passwordMasked || (selected.hasPassword ? '••••••••' : '未设置')" readonly /></a-form-item>
@@ -702,13 +706,13 @@ onMounted(() => {
           <a-form-item class="wide" field="name" label="配置名称" required><input aria-label="例如：科技文本抽取大模型" v-model="form.name" placeholder="例如：科技文本抽取大模型" /><small v-if="createFieldErrors.name" class="field-error">{{ createFieldErrors.name }}</small></a-form-item>
           <a-form-item class="wide" field="baseUrl" label="Base URL" required><input aria-label="baseUrl" v-model="form.baseUrl" /><small v-if="createFieldErrors.baseUrl" class="field-error">{{ createFieldErrors.baseUrl }}</small></a-form-item>
           <a-form-item class="wide" field="model" label="模型" required><input aria-label="model" v-model="form.model" /><small v-if="createFieldErrors.model" class="field-error">{{ createFieldErrors.model }}</small></a-form-item>
-          <a-form-item v-if="formKind === 'embedding'" field="dimensions" label="维度"><input aria-label="number-input" v-model="form.dimensions" type="number" /><small v-if="createFieldErrors.dimensions" class="field-error">{{ createFieldErrors.dimensions }}</small></a-form-item>
+          <a-form-item v-if="formKind === 'embedding'" field="dimensions" label="维度"><input aria-label="number-input" :value="form.dimensions ?? ''" type="number" @input="form.dimensions = ($event.target as HTMLInputElement).value" /><small v-if="createFieldErrors.dimensions" class="field-error">{{ createFieldErrors.dimensions }}</small></a-form-item>
           <a-form-item class="wide" field="apiKey" label="API Key" required><input aria-label="必填；验证通过后才能保存，明文入库脱敏展示" v-model="form.apiKey" type="password" placeholder="必填；验证通过后才能保存，明文入库脱敏展示" /><small v-if="createFieldErrors.apiKey" class="field-error">{{ createFieldErrors.apiKey }}</small></a-form-item>
         </template>
         <template v-else>
           <a-form-item class="wide" field="name" label="配置名称" required><input aria-label="name" v-model="form.name" /><small v-if="createFieldErrors.name" class="field-error">{{ createFieldErrors.name }}</small></a-form-item>
           <a-form-item field="host" label="主机" required><input aria-label="host" v-model="form.host" /><small v-if="createFieldErrors.host" class="field-error">{{ createFieldErrors.host }}</small></a-form-item>
-          <a-form-item label="端口"><input aria-label="number-input" v-model="form.port" type="number" /><small v-if="createFieldErrors.port" class="field-error">{{ createFieldErrors.port }}</small></a-form-item>
+          <a-form-item label="端口"><input aria-label="number-input" :value="form.port ?? ''" type="number" @input="form.port = ($event.target as HTMLInputElement).value" /><small v-if="createFieldErrors.port" class="field-error">{{ createFieldErrors.port }}</small></a-form-item>
           <a-form-item label="默认库"><input aria-label="defaultDatabase" v-model="form.defaultDatabase" /><small v-if="createFieldErrors.defaultDatabase" class="field-error">{{ createFieldErrors.defaultDatabase }}</small></a-form-item>
           <a-form-item field="username" label="用户名" required><input aria-label="username" v-model="form.username" /><small v-if="createFieldErrors.username" class="field-error">{{ createFieldErrors.username }}</small></a-form-item>
           <a-form-item class="wide" label="密码"><input aria-label="password" v-model="form.password" type="password" /><small v-if="createFieldErrors.password" class="field-error">{{ createFieldErrors.password }}</small></a-form-item>

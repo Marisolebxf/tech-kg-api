@@ -97,13 +97,13 @@ def test_subgraph_rejects_depth_above_maximum() -> None:
 
 
 def test_subgraph_rejects_limit_above_maximum() -> None:
-    """子图查询的 limit 最大值应为 200。"""
+    """子图查询的 limit（每跳上限）最大值应为 256。"""
 
     response = client.get(
         f"{BASE_URL}/subgraph/{NODE_ID}",
         params={
             "depth": 3,
-            "limit": 201,
+            "limit": 257,
             "direction": "both",
         },
     )
@@ -276,3 +276,170 @@ def test_collect_subgraph_keeps_dangling_vertex_center() -> None:
         _collect_subgraph(cast(TRSGraphClient, _GhostClient([])), "ghost", 1, 40, 0, None, "both")
         is None
     )
+
+
+class _AdjacencyClient:
+    """邻接表桩：按 ``{vid: {edge_type: [边]}}`` 回答 get_node_edges。"""
+
+    def __init__(self, adjacency: dict[str, dict[str, list[Any]]]) -> None:
+        self._adjacency = adjacency
+
+    def get_node(self, vid: str):
+        from infra.graph_db.models import GraphNode
+
+        return GraphNode(id=vid, labels=["Thing"], properties={"name": vid})
+
+    def get_node_edges(self, vid: str, *, direction: str = "both", edge_type=None, limit=None, **_):
+        result: list[Any] = []
+        for et, edge_list in self._adjacency.get(vid, {}).items():
+            if edge_type is not None and et != edge_type:
+                continue
+            result.extend(edge_list)
+        if limit is not None:
+            result = result[:limit]  # 与真实接口一致：limit 截断返回页
+        return result
+
+
+def _edge(edge_id: str, edge_type: str, source: str, target: str):
+    from infra.graph_db.models import GraphEdge
+
+    return GraphEdge(id=edge_id, type=edge_type, source_id=source, target_id=target)
+
+
+def test_collect_subgraph_fair_quota_within_hop() -> None:
+    """limit 是每跳上限：预算逐跳重置 + 跳内按前沿节点均分配额。
+
+    - 逐跳重置：第二跳的边不会被第一跳挤掉（老实现全局 ``edges[:limit]``
+      截断后深度 2/3 的边一条都进不来）。
+    - 均分配额：跳内每个前沿节点分到 ceil(预算/节点数) 条出边名额，
+      靠前的节点不能吃光预算——a 有 2 条边但配额 1，e5 被挤掉；
+      b 同样分到 1 条名额（e6 进来）。
+    """
+    from biz.handler.graph_search import _collect_subgraph
+    from infra.graph_db import TRSGraphClient
+
+    adjacency = {
+        # 中心 3 条边，limit=2 → 第一跳配额 2 条（e3 超出查询页被挤掉）
+        "c": {
+            "REL": [
+                _edge("e1", "REL", "c", "a"),
+                _edge("e2", "REL", "c", "b"),
+                _edge("e3", "REL", "c", "d"),
+            ]
+        },
+        # a 有 2 条边但第二跳配额只有 1 → 只进 e4；b 分到的名额进 e6
+        "a": {"REL": [_edge("e4", "REL", "a", "x"), _edge("e5", "REL", "a", "y")]},
+        "b": {"REL": [_edge("e6", "REL", "b", "z")]},
+    }
+    subgraph = _collect_subgraph(
+        cast(TRSGraphClient, _AdjacencyClient(adjacency)), "c", 2, 2, 0, None, "both"
+    )
+    assert subgraph is not None
+    edge_ids = {edge.id for edge in subgraph["edges"]}
+    # 第一跳 2 条（均分配额下 e3 出局）+ 第二跳 a/b 各 1 条
+    assert edge_ids == {"e1", "e2", "e4", "e6"}
+    node_ids = {node.id for node in subgraph["nodes"]}
+    assert node_ids == {"c", "a", "b", "x", "z"}  # d/e5/y 未被发现
+
+    # 余量回流：a 无边用不掉配额，b 拿到全部剩余预算（2 条都能进）
+    adjacency_reflow = {
+        "c": {"REL": [_edge("e1", "REL", "c", "a"), _edge("e2", "REL", "c", "b")]},
+        "a": {},
+        "b": {"REL": [_edge("e6", "REL", "b", "z"), _edge("e7", "REL", "b", "w")]},
+    }
+    subgraph2 = _collect_subgraph(
+        cast(TRSGraphClient, _AdjacencyClient(adjacency_reflow)), "c", 2, 2, 0, None, "both"
+    )
+    assert subgraph2 is not None
+    assert {edge.id for edge in subgraph2["edges"]} == {"e1", "e2", "e6", "e7"}
+
+
+def test_collect_subgraph_oversamples_past_seen_edges() -> None:
+    """查询页按 4 倍配额过采样：已收录的回边不占配额。
+
+    第二跳 a 的边序列里前两条是第一跳已收录的回边（同 id 反向查回）：
+    旧实现查询页 = 配额 1，页被回边占掉 → a 贡献 0 条新边；
+    过采样后跳过回边仍能收到新边 new1。
+    """
+    from biz.handler.graph_search import _collect_subgraph
+    from infra.graph_db import TRSGraphClient
+
+    adjacency = {
+        "c": {"REL": [_edge("e1", "REL", "c", "a"), _edge("e2", "REL", "c", "b")]},
+        # a 的边序列：先 2 条回边（e1/e2 均为第一跳已收录），再 1 条新边
+        "a": {
+            "REL": [
+                _edge("e1", "REL", "a", "c"),
+                _edge("e2", "REL", "a", "c"),
+                _edge("new1", "REL", "a", "x"),
+            ]
+        },
+        "b": {"REL": [_edge("new2", "REL", "b", "y")]},
+    }
+    subgraph = _collect_subgraph(
+        cast(TRSGraphClient, _AdjacencyClient(adjacency)), "c", 2, 2, 0, None, "both"
+    )
+    assert subgraph is not None
+    # 第二跳 a/b 各分 1 条名额：a 跳过回边收 new1，b 收 new2
+    assert {edge.id for edge in subgraph["edges"]} == {"e1", "e2", "new1", "new2"}
+    assert {node.id for node in subgraph["nodes"]} == {"c", "a", "b", "x", "y"}
+
+
+def test_collect_filtered_subgraph_oversamples_past_seen_edges() -> None:
+    """filtered-subgraph 同样过采样：配额被回边占页时仍能收到新边。"""
+    from biz.handler.graph_search import _collect_filtered_subgraph
+    from infra.graph_db import TRSGraphClient
+
+    adjacency = {
+        "c": {"R1": [_edge("r1", "R1", "c", "a"), _edge("r2", "R1", "c", "b")]},
+        # a 的边序列：先 1 条回边（r1 已收录），再 1 条新边
+        "a": {"R1": [_edge("r1", "R1", "a", "c"), _edge("new1", "R1", "a", "x")]},
+        "b": {},
+    }
+    subgraph = _collect_filtered_subgraph(
+        cast(TRSGraphClient, _AdjacencyClient(adjacency)), "c", ["R1"], 2, 2, "both"
+    )
+    assert subgraph is not None
+    # 第二跳 R1 预算重置为 2、a/b 各分 1 名额：a 跳过回边后收 new1
+    # （旧实现查询页 = 配额 1 被回边吃掉 → a 贡献 0 条新边）
+    assert {edge.id for edge in subgraph["edges"]} == {"r1", "r2", "new1"}
+    assert {node.id for node in subgraph["nodes"]} == {"c", "a", "b", "x"}
+
+
+def test_collect_filtered_subgraph_budget_per_type_per_hop() -> None:
+    """filtered-subgraph：每种边类型每跳各 limit 条预算，逐跳逐类型重置 + 跳内均分。"""
+    from biz.handler.graph_search import _collect_filtered_subgraph
+    from infra.graph_db import TRSGraphClient
+
+    adjacency = {
+        # R1/R2 各自独立预算：limit=1 时每类型保留 1 条
+        "c": {
+            "R1": [_edge("r1a", "R1", "c", "a"), _edge("r1b", "R1", "c", "b")],
+            "R2": [_edge("r2a", "R2", "c", "a")],
+        },
+        # 第二跳：R1 预算重置，a-x 能进来（全局截断语义下进不来）
+        "a": {"R1": [_edge("r1c", "R1", "a", "x")]},
+        "b": {},
+    }
+    subgraph = _collect_filtered_subgraph(
+        cast(TRSGraphClient, _AdjacencyClient(adjacency)), "c", ["R1", "R2"], 2, 1, "both"
+    )
+    assert subgraph is not None
+    edge_ids = {edge.id for edge in subgraph["edges"]}
+    # 第一跳：R1 取 r1a（预算 1）、R2 取 r2a；第二跳：R1 预算重置收 r1c
+    assert edge_ids == {"r1a", "r2a", "r1c"}
+    node_ids = {node.id for node in subgraph["nodes"]}
+    assert node_ids == {"c", "a", "x"}  # b 被 R1 第一跳预算挤掉
+
+    # 跳内均分：R1 第二跳预算 2，a/b 各分 1 条名额——a 的第二条（r1e）被挤掉，
+    # b 不会因为排在后面就拿不到名额（贪心语义下 b 一条都进不来）
+    adjacency_fair = {
+        "c": {"R1": [_edge("r1a", "R1", "c", "a"), _edge("r1b", "R1", "c", "b")]},
+        "a": {"R1": [_edge("r1c", "R1", "a", "x"), _edge("r1e", "R1", "a", "w")]},
+        "b": {"R1": [_edge("r1d", "R1", "b", "y")]},
+    }
+    subgraph2 = _collect_filtered_subgraph(
+        cast(TRSGraphClient, _AdjacencyClient(adjacency_fair)), "c", ["R1"], 2, 2, "both"
+    )
+    assert subgraph2 is not None
+    assert {edge.id for edge in subgraph2["edges"]} == {"r1a", "r1b", "r1c", "r1d"}

@@ -471,8 +471,10 @@ def _index_record(item: dict[str, Any]) -> dict[str, Any]:
     )
     return {
         "vid": item["vid"],
-        "entity_id": entity_id[:256],
-        "name": name[:2048],
+        # Milvus VARCHAR max_length 按 UTF-8 字节计：中文 2048 字符可达 6144 字节，
+        # 按字符切片会让整批 upsert 被 1100 拒绝（2026-09-21 实测 name 5430 字节）
+        "entity_id": _truncate_utf8(entity_id, 256),
+        "name": _truncate_utf8(name, 2048),
         "entity_type": item["entity_type"],
         "properties": extract_display_properties(props),
         "text": compose_entity_text(name, item["entity_type"], props),
@@ -483,6 +485,10 @@ def _iter_index_records(
     graph: TRSGraphClient, labels: list[str], skipped: list[str] | None = None
 ) -> Iterator[dict[str, Any]]:
     for item in _iter_graph_entities(graph, labels, skipped=skipped):
+        # 超长 VID（Nebula 上限 256B，Milvus vid 字段 128B）入不了主键字段：跳过
+        if len(item["vid"].encode("utf-8")) > 128:
+            logger.warning("VID 超过 128 字节，跳过入索引: %.60s…", item["vid"])
+            continue
         record = _index_record(item)
         if record["text"]:
             yield record
@@ -644,6 +650,8 @@ class EntitySearchService:
         resolved_space = space or _default_space()
         graph = get_space_client(resolved_space)
         labels = sorted(graph.labels())
+        # Milvus entity_type 字段 64 字节上限：超长标签名（垃圾数据）直接排除
+        labels = [label for label in labels if len(label.encode("utf-8")) <= 64]
         if entity_types:
             wanted = {item.strip() for item in entity_types if item.strip()}
             missing = sorted(wanted - set(labels))
@@ -1287,7 +1295,12 @@ def _iter_graph_entities(
             # AttributeError：客户端无原生查询能力（测试替身/旧版本）→ 走 REST
             probe = None
         if probe is not None:
-            yield from _iter_label_via_lookup(graph, label)
+            try:
+                yield from _iter_label_via_lookup(graph, label)
+            except GraphRepoError:
+                # 长任务中途的瞬时图服务抖动不应报废整次重建：按标签降级跳过
+                logger.warning("标签 %s LOOKUP 分页中途失败，本次重建跳过该标签", label)
+                skipped.append(label)
             continue
         try:
             yield from _iter_label_via_rest(graph, label, page_size)

@@ -616,6 +616,88 @@ def test_reindex_clips_embedding_input_to_service_caps(
     assert len(long_row["search_text"]) > EMBED_TEXT_MAX_CHARS
 
 
+def test_reindex_clips_varchar_fields_by_utf8_bytes(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Milvus VARCHAR max_length 按 UTF-8 字节计：2048 个中文字符 = 6144 字节会被整批拒绝。"""
+    graph = FakeGraph(
+        ["Expert"],
+        {
+            "Expert": [
+                FakeNode("expert_1", {"name": "长" * 3000, "id": "号" * 300}),
+                FakeNode("expert_2", {"name": "李四"}),
+            ]
+        },
+    )
+    milvus = FakeMilvusClient()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", FakeEmbeddingClient)
+    monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+
+    result = EntitySearchService(state_session).reindex()
+
+    assert result["entityCount"] == 2  # 超长字段不再让整批 upsert 失败
+    long_row = next(row for row in milvus.collections[COLLECTION_NAME] if row["vid"] == "expert_1")
+    assert len(long_row["name"].encode("utf-8")) <= 2048
+    assert len(long_row["entity_id"].encode("utf-8")) <= 256
+
+
+def test_reindex_skips_overlong_vid(state_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    """VID 超过 Milvus vid 字段 128 字节上限的垃圾顶点跳过，不阻断重建。"""
+    graph = FakeGraph(
+        ["Expert"],
+        {
+            "Expert": [
+                FakeNode("v" * 200, {"name": "超长VID"}),
+                FakeNode("expert_1", {"name": "张三"}),
+            ]
+        },
+    )
+    milvus = FakeMilvusClient()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", FakeEmbeddingClient)
+
+    result = EntitySearchService(state_session).reindex(space="dev2")
+
+    assert result["entityCount"] == 1
+    assert [row["vid"] for row in milvus.collections[COLLECTION_NAME]] == ["expert_1"]
+
+
+def test_reindex_skips_label_when_lookup_fails_midway(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """长任务中途 LOOKUP 瞬时失败按标签降级跳过，其余标签照常完成。"""
+
+    class FlakyLookupGraph(LookupGraph):
+        def execute_query(self, query: str):
+            if "OFFSET 2000" in query:  # 第二页起图服务抖动
+                raise GraphRequestError("read timeout", status_code=504)
+            return super().execute_query(query)
+
+    graph = FlakyLookupGraph(
+        ["Expert", "Scholar"],
+        {
+            # 超过一页（2000/页），第二页触发抖动
+            "Expert": [FakeNode(f"expert_{i}", {"name": f"专家{i}"}) for i in range(2001)],
+            "Scholar": [FakeNode("scholar_1", {"name": "学者一"})],
+        },
+        lookup_labels={"Expert", "Scholar"},
+    )
+    milvus = FakeMilvusClient()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", FakeEmbeddingClient)
+    monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+
+    result = EntitySearchService(state_session).reindex()
+
+    assert result["entityCount"] == 1  # 只有 Scholar 完成
+    assert result["skippedLabels"] == ["Expert"]
+    assert [row["vid"] for row in milvus.collections[COLLECTION_NAME]] == ["scholar_1"]
+
+
 def test_reindex_unknown_entity_type_raises(state_session, monkeypatch) -> None:
     graph = FakeGraph(["Expert"], {})
     monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)

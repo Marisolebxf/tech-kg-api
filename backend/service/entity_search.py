@@ -43,7 +43,10 @@ logger = logging.getLogger(__name__)
 COLLECTION_NAME = "kg_entity"
 DEFAULT_PAGE_SIZE = 10
 GRAPH_PAGE_SIZE = 200
-EMBED_BATCH_SIZE = 256
+# m3e embedding 服务侧限制：单条 ≤16000 字符、单批 ≤ M3E_MAX_BATCH_SIZE（当前 64）。
+# 任一超限服务直接 422 拒绝整批，全量重建在 pass 2 首批即中断（2026-09-21 实测）。
+EMBED_TEXT_MAX_CHARS = int(os.getenv("ENTITY_SEARCH_EMBED_TEXT_MAX_CHARS", "16000"))
+EMBED_BATCH_SIZE = int(os.getenv("ENTITY_SEARCH_EMBED_BATCH_SIZE", "64"))
 # RRF 融合常数（与项目域一致）
 RRF_K = 60
 # 检索/展示文本上限
@@ -676,7 +679,8 @@ class EntitySearchService:
             for chunk in _batched(
                 _iter_index_records(graph, labels, skipped=skipped_labels), EMBED_BATCH_SIZE
             ):
-                batch = [record["text"] for record in chunk]
+                # 只裁 embedding 输入：BM25 语料/存储仍保留完整 32KB 文本
+                batch = [record["text"][:EMBED_TEXT_MAX_CHARS] for record in chunk]
                 vectors = client.embed(batch)
                 if vectors is None or len(vectors) != len(batch):
                     raise EntitySearchError(
@@ -774,7 +778,7 @@ class EntitySearchService:
         if not record["text"]:
             return {"upserted": False, "reason": "empty search text"}
         embedding_config = _env_embedding_config()
-        vectors = _embedding_client().embed([record["text"]])
+        vectors = _embedding_client().embed([record["text"][:EMBED_TEXT_MAX_CHARS]])
         if not vectors or len(vectors) != 1:
             return {"upserted": False, "reason": "embedding failed"}
         if len(vectors[0]) != embedding_config["dim"]:

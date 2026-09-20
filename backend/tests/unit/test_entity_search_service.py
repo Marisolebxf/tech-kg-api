@@ -572,6 +572,50 @@ def test_reindex_skips_big_label_when_lookup_and_rest_both_fail(
     assert graph.lookup_reads == ["Expert"] * 4  # 两遍各一次探活 + 一次分页；Paper 第二遍不再重试
 
 
+def test_reindex_clips_embedding_input_to_service_caps(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """m3e 服务限制单条 ≤16000 字符、单批 ≤64：超限 422 拒绝整批，重建首批评分即中断。"""
+    from service.entity_search import EMBED_BATCH_SIZE, EMBED_TEXT_MAX_CHARS
+
+    graph = FakeGraph(
+        ["Expert"],
+        {
+            "Expert": [
+                # 20 个长 ASCII 属性：单属性 2048B 上限截不断，拼起来 3.2 万字符
+                # ——按 32KB 字节语料上限可入库，但超出 m3e 的 16000 字符上限
+                FakeNode("expert_1", {"name": "张三", **{f"f{i}": "a" * 3000 for i in range(20)}}),
+                FakeNode("expert_2", {"name": "李四"}),
+            ]
+        },
+    )
+    batch_sizes: list[int] = []
+    text_lengths: list[int] = []
+
+    class RecordingEmbedding:
+        def embed(self, texts):
+            batch_sizes.append(len(texts))
+            text_lengths.extend(len(text) for text in texts)
+            return [[1.0, 0.5, 0.25] for _ in texts]
+
+        def embed_one(self, text):
+            return [1.0, 0.5, 0.25]
+
+    milvus = FakeMilvusClient()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", RecordingEmbedding)
+
+    result = EntitySearchService(state_session).reindex()
+
+    assert result["entityCount"] == 2
+    assert max(batch_sizes) <= EMBED_BATCH_SIZE
+    assert max(text_lengths) <= EMBED_TEXT_MAX_CHARS
+    # 存储与 BM25 语料仍保留完整长文本，只裁 embedding 输入
+    long_row = next(row for row in milvus.collections[COLLECTION_NAME] if row["vid"] == "expert_1")
+    assert len(long_row["search_text"]) > EMBED_TEXT_MAX_CHARS
+
+
 def test_reindex_unknown_entity_type_raises(state_session, monkeypatch) -> None:
     graph = FakeGraph(["Expert"], {})
     monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)

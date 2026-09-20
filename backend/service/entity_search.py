@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -28,6 +29,7 @@ from typing import Any
 from sqlalchemy import inspect, select, text
 from sqlalchemy.orm import Session
 
+from infra.entity_response_cache import EntityResponseCache
 from infra.graph_db import TRSGraphClient, get_space_client
 from infra.llm import EmbeddingClient
 from infra.milvus import get_milvus_client
@@ -74,6 +76,34 @@ _NODE_COUNT_TTL_SECONDS = 300.0
 _reindex_lock = threading.Lock()
 _reindex_running = False
 _node_count_cache: dict[tuple[str, str], tuple[float, int]] = {}
+
+# 搜索/浏览响应缓存（L1 进程 + L2 Redis，实例从 handler 下沉到 service，
+# 供 reindex 完成与人工审核写图联动统一失效——FUNC-00813 队列与图库联动）。
+browse_cache = EntityResponseCache(
+    namespace="entity-search:browse:v2",
+    ttl_seconds=float(os.getenv("ENTITY_BROWSE_CACHE_SECONDS", "300")),
+)
+search_cache = EntityResponseCache(
+    namespace="entity-search:search:v2",
+    ttl_seconds=float(os.getenv("ENTITY_SEARCH_CACHE_SECONDS", "60")),
+)
+
+
+async def clear_entity_caches() -> None:
+    """清掉搜索/浏览的 L1 进程 + L2 Redis 缓存（reindex 完成或写图联动时调用）。"""
+    await asyncio.gather(browse_cache.clear(), search_cache.clear())
+
+
+def invalidate_entity_caches_sync() -> None:
+    """同步上下文的缓存失效入口：工作线程里 asyncio.run 全清；
+    事件循环线程内只清 L1（Redis 由短 TTL 兜底），避免嵌套事件循环。"""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(clear_entity_caches())
+    else:
+        browse_cache.clear_local()
+        search_cache.clear_local()
 
 
 class EntitySearchError(Exception):
@@ -702,6 +732,85 @@ class EntitySearchService:
             "embeddingModel": embedding_config["model"],
             "durationSeconds": round(time.monotonic() - started, 2),
         }
+
+    def upsert_entity(
+        self, *, space: str, node_label: str, vid: str, is_new: bool
+    ) -> dict[str, Any]:
+        """图写后单实体增量入索引（人工审核 T_LINK 裁决联动，FUNC-00813）。
+
+        与全量 reindex 同构：图读回顶点 → dense embed + BM25（state 词表）→ 幂等 upsert。
+        前置守卫：空间索引已建成（state 快照 + BM25 词表可用）且当前无重建在跑；
+        未建成 / 组件异常一律返回 ``upserted=False``，由调用方降级（下次全量重建兜底）。
+        ``is_new``：create 落新 vid → 计数快照 +1；merge 覆盖已有行 → 计数不变。
+        """
+        if _database_reindex_running(self._session):
+            return {"upserted": False, "reason": "reindex in progress"}
+        state_row = _load_state(self._session, space)
+        encoder = _load_bm25_from_state(self._session, space)
+        if state_row is None or encoder is None or not (state_row.entity_count or 0):
+            return {"upserted": False, "reason": "space index not built"}
+        graph = get_space_client(space)
+        node = graph.get_node(vid)
+        if node is None:
+            return {"upserted": False, "reason": "vertex not found in graph"}
+        record = _index_record(
+            {"vid": vid, "entity_type": node_label, "props": dict(node.properties or {})}
+        )
+        if not record["text"]:
+            return {"upserted": False, "reason": "empty search text"}
+        embedding_config = _env_embedding_config()
+        vectors = _embedding_client().embed([record["text"]])
+        if not vectors or len(vectors) != 1:
+            return {"upserted": False, "reason": "embedding failed"}
+        if len(vectors[0]) != embedding_config["dim"]:
+            return {"upserted": False, "reason": "embedding dim mismatch"}
+        sparse_vector = encoder.encode_document(record["text"])
+        if not sparse_vector:
+            # Milvus 拒绝空稀疏向量：文本 token 全不在全量词表（全新造词）时降级跳过
+            return {"upserted": False, "reason": "empty sparse vector"}
+        try:
+            milvus = get_milvus_client()
+            if not milvus.has_collection(COLLECTION_NAME):
+                return {"upserted": False, "reason": "collection missing"}
+            milvus.upsert(
+                collection_name=COLLECTION_NAME,
+                data=[
+                    {
+                        "document_id": f"{space}::{vid}",
+                        "vid": vid,
+                        "entity_id": record["entity_id"],
+                        "name": record["name"],
+                        "entity_type": node_label,
+                        "graph_space": space,
+                        "search_text": record["text"],
+                        "properties": json.dumps(record["properties"], ensure_ascii=False),
+                        "dense_vector": vectors[0],
+                        "sparse_vector": sparse_vector,
+                    }
+                ],
+            )
+        except Exception as exc:  # noqa: BLE001 - 增量失败不影响裁决，等全量重建兜底
+            logger.warning("单实体入索引失败 vid=%s space=%s", vid, space)
+            return {"upserted": False, "reason": f"milvus error: {exc}"}
+        if is_new:
+            self._bump_state_counts(state_row, node_label)
+        return {"upserted": True, "vid": vid, "entityType": node_label}
+
+    def _bump_state_counts(self, state_row: Any, node_label: str) -> None:
+        """create 场景计数快照 +1：浏览分页窗口/总览与图保持一致（merge 不变）。"""
+        from datetime import UTC, datetime
+
+        try:
+            counts = json.loads(state_row.type_counts or "{}")
+        except Exception:  # noqa: BLE001 - 计数快照损坏按空处理
+            counts = {}
+        if not isinstance(counts, dict):
+            counts = {}
+        counts[node_label] = int(counts.get(node_label) or 0) + 1
+        state_row.type_counts = json.dumps(counts, ensure_ascii=False)
+        state_row.entity_count = int(state_row.entity_count or 0) + 1
+        state_row.updated_at = datetime.now(UTC)
+        self._session.commit()
 
     @staticmethod
     def _ensure_collection(milvus: Any, *, dim: int) -> None:

@@ -62,6 +62,7 @@ def _jobs_cache_put(key: str, payload: str) -> None:
 def _jobs_cache_clear() -> None:
     _jobs_payload_cache.clear()
 
+
 service = workflow_operations_application.service
 job_service = workflow_job_application.service
 logger = logging.getLogger(__name__)
@@ -212,7 +213,11 @@ async def list_executions(
         schedule_id=schedule_id,
         trigger_source=trigger_source,
     )
-    payload = json.dumps({"code": 200, "success": True, "data": data, "msg": "success"}, ensure_ascii=False, default=str)
+    payload = json.dumps(
+        {"code": 200, "success": True, "data": data, "msg": "success"},
+        ensure_ascii=False,
+        default=str,
+    )
     _jobs_cache_put(cache_key, payload)
     return Response(payload, media_type="application/json")
 
@@ -226,7 +231,11 @@ async def get_execution(execution_id: str) -> Response:
     execution = await service.get_execution(execution_id)
     if execution is None:
         raise HTTPException(status_code=404, detail="工作流执行记录不存在")
-    payload = json.dumps({"code": 200, "success": True, "data": execution, "msg": "success"}, ensure_ascii=False, default=str)
+    payload = json.dumps(
+        {"code": 200, "success": True, "data": execution, "msg": "success"},
+        ensure_ascii=False,
+        default=str,
+    )
     _jobs_cache_put(cache_key, payload)
     return Response(payload, media_type="application/json")
 
@@ -341,7 +350,12 @@ async def list_jobs(
         return Response(cached, media_type="application/json")
     items = await job_service.list_jobs(actor, name=name, status=status, task_type=task_type)
     payload = json.dumps(
-        {"code": 200, "success": True, "data": {"items": items, "total": len(items)}, "msg": "success"},
+        {
+            "code": 200,
+            "success": True,
+            "data": {"items": items, "total": len(items)},
+            "msg": "success",
+        },
         ensure_ascii=False,
         default=str,
     )
@@ -410,7 +424,11 @@ async def get_job(job_id: str, actor: CurrentActor) -> Response:
         detail = await job_service.get_job_detail(actor, job_id)
     except WorkflowJobError as exc:
         raise _job_error(exc) from exc
-    payload = json.dumps({"code": 200, "success": True, "data": detail, "msg": "success"}, ensure_ascii=False, default=str)
+    payload = json.dumps(
+        {"code": 200, "success": True, "data": detail, "msg": "success"},
+        ensure_ascii=False,
+        default=str,
+    )
     _jobs_cache_put(cache_key, payload)
     return Response(payload, media_type="application/json")
 
@@ -444,6 +462,7 @@ async def update_job(job_id: str, request: JobUpdateRequest, actor: CurrentActor
         job = await job_service.update_job(actor, job_id, request.model_dump(by_alias=True))
     except WorkflowJobError as exc:
         raise _job_error(exc) from exc
+    _jobs_cache_clear()
     return ApiResponse(data=job, msg="任务已更新")
 
 

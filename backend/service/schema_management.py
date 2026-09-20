@@ -1139,6 +1139,10 @@ class SchemaManagementService:
         script = self._script_snapshot(definition.script)
         self._dao.delete(definition)
         self._session.commit()
+        # DROP TAG/EDGE 同样改变类型清单：清图算法页的边类型/引擎缓存
+        from service.graph_algorithm import clear_algo_info_cache
+
+        clear_algo_info_cache()
 
         cleanup_succeeded = True
         if script:
@@ -1253,6 +1257,10 @@ class SchemaManagementService:
             raise SchemaDdlError(f"DDL 结果回写失败: {exc}") from exc
 
         created = self._require_schema(schema_id)
+        # 图算法页的边类型/引擎信息缓存依赖类型清单，DDL 变更后主动失效
+        from service.graph_algorithm import clear_algo_info_cache
+
+        clear_algo_info_cache()
         return self._serialize(created, user_id=user_id, detail=True)
 
     @staticmethod

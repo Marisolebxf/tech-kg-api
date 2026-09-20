@@ -25,6 +25,10 @@ FIXED_STRING_MAX_LENGTH = 1024
 
 DDL_MAX_RETRIES = 3
 
+# 实体 TAG name 属性索引长度：string 列的索引必须显式给长度；64 与实体检索
+# graph-exact 名称查找、消歧 recall_same_name 的口径一致（idx_*_name 同款）
+NAME_INDEX_LENGTH = 64
+
 
 def default_graph_space() -> str:
     # 与默认 client 的真实空间同源（service.graph_space.default_graph_space 同口径）。
@@ -71,10 +75,14 @@ def _ddl_client(graph_space: str | None):
     return get_space_client(graph_space)
 
 
-def execute_schema_ddl(ddl: str, graph_space: str | None = None) -> tuple[str, str | None]:
+def execute_schema_ddl(
+    ddl: str, graph_space: str | None = None, *, query_channel: bool = False
+) -> tuple[str, str | None]:
     """执行 DDL，返回 ``(status, error)``；``status`` ∈ {"succeeded","failed"}。
 
     幂等（``IF NOT EXISTS``），失败重试最多 3 次应对图空间 DDL 传播延迟。
+    ``query_channel=True`` 走查询通道：REBUILD TAG INDEX 是提交后台 job，
+    trs-graph 的 /query/write 会拒绝（400），须走 /query。
     """
     last_err: str | None = None
     try:
@@ -83,9 +91,10 @@ def execute_schema_ddl(ddl: str, graph_space: str | None = None) -> tuple[str, s
         logger.exception("获取 graph client 失败")
         return "failed", f"图服务连接失败: {exc}"
 
+    executor = client.execute_query if query_channel else client.execute_write
     for attempt in range(DDL_MAX_RETRIES):
         try:
-            client.execute_write(ddl)
+            executor(ddl)
             return "succeeded", None
         except GraphRequestError as exc:
             last_err = str(exc)
@@ -99,17 +108,72 @@ def execute_schema_ddl(ddl: str, graph_space: str | None = None) -> tuple[str, s
     return "failed", last_err
 
 
+def build_name_index_ddls(tag: str, properties: list[dict[str, Any]]) -> list[str]:
+    """实体 TAG ``name`` 属性原生索引 DDL（CREATE INDEX + REBUILD），不适用返回空。
+
+    Nebula MATCH/LOOKUP 的属性过滤依赖原生索引，只建 TAG 不建索引会导致实体
+    检索的精确名称查找与消歧同名召回全部失效（图里有实体但按名字搜不到）。
+    string 列索引需显式长度；fixed_string 列长度已定，直接索引全列。
+    """
+    prop = next((p for p in properties if p.get("name") == "name"), None)
+    if prop is None:
+        return []
+    data_type = str(prop.get("data_type", ""))
+    if data_type == "string":
+        column = f"name({NAME_INDEX_LENGTH})"
+    elif FIXED_STRING_RE.fullmatch(data_type):
+        column = "name"
+    else:
+        return []
+    index = f"idx_{tag.lower()}_name"
+    return [
+        f"CREATE TAG INDEX IF NOT EXISTS {index} ON {tag}({column});",
+        f"REBUILD TAG INDEX {index};",
+    ]
+
+
+def _run_name_index_ddls(
+    tag: str,
+    properties: list[dict[str, Any]],
+    graph_space: str | None,
+    statements: list[str],
+) -> tuple[str, str | None] | None:
+    """执行 name 索引 DDL 并追加进 ``statements``；返回失败 ``(status, error)`` 或 ``None``。
+
+    CREATE INDEX 失败返回失败（避免「TAG 建成但索引缺失」的静默缺口）；
+    REBUILD 失败仅告警——索引定义已生效、新写入自动进索引，可事后重建。
+    """
+    for stmt in build_name_index_ddls(tag, properties):
+        is_rebuild = stmt.startswith("REBUILD")
+        idx_status, idx_error = execute_schema_ddl(stmt, graph_space, query_channel=is_rebuild)
+        statements.append(stmt)
+        if idx_status != "succeeded":
+            if stmt.startswith("CREATE"):
+                return idx_status, f"name 属性索引创建失败: {idx_error}"
+            logger.warning("REBUILD name 索引失败（索引已生效，可事后重建）: %s", idx_error)
+    return None
+
+
 def run_schema_ddl(
     kind: str,
     name: str,
     properties: list[dict[str, Any]],
     graph_space: str | None = None,
 ) -> dict[str, Any]:
-    """构建并执行 DDL，返回 ``{statement, status, error, executed_at}``。"""
+    """构建并执行 DDL，返回 ``{statement, status, error, executed_at}``。
+
+    实体 TAG 建成后自动补 ``name`` 属性原生索引（见 ``build_name_index_ddls``），
+    DDL 记录拼接为多行语句。
+    """
     ddl = build_create_ddl(kind, name, properties)
     status, error = execute_schema_ddl(ddl, graph_space)
+    statements = [ddl]
+    if status == "succeeded" and kind == "entity":
+        failure = _run_name_index_ddls(name, properties, graph_space, statements)
+        if failure:
+            status, error = failure
     return {
-        "statement": ddl,
+        "statement": "\n".join(statements),
         "status": status,
         "error": error,
         "executed_at": datetime.now().isoformat() if status == "succeeded" else None,
@@ -132,11 +196,19 @@ def run_alter_add_ddl(
     prop: dict[str, Any],
     graph_space: str | None = None,
 ) -> dict[str, Any]:
-    """构建并执行属性新增 DDL，返回 ``{statement, status, error, executed_at}``。"""
+    """构建并执行属性新增 DDL，返回 ``{statement, status, error, executed_at}``。
+
+    实体 TAG 后补 ``name`` 属性时同样建原生索引（存量数据靠 REBUILD 进索引）。
+    """
     ddl = build_alter_add_ddl(kind, name, prop)
     status, error = execute_schema_ddl(ddl, graph_space)
+    statements = [ddl]
+    if status == "succeeded" and kind == "entity" and prop.get("name") == "name":
+        failure = _run_name_index_ddls(name, [prop], graph_space, statements)
+        if failure:
+            status, error = failure
     return {
-        "statement": ddl,
+        "statement": "\n".join(statements),
         "status": status,
         "error": error,
         "executed_at": datetime.now().isoformat() if status == "succeeded" else None,
@@ -213,15 +285,44 @@ def _graph_type_names(kind: str, client: Any) -> set[str] | None:
 BULK_DELETE_CHUNK = 256
 
 
+def drop_related_tag_indexes(tag: str, graph_space: str | None = None) -> list[str]:
+    """删除该 TAG 上的全部原生索引，返回已执行的 DROP 语句。
+
+    Nebula ``DROP TAG`` 要求先删 TAG 上的索引（否则报 Related index exists）；
+    平台建 TAG 会自动补 name 索引，删除 Schema 前必须先清掉。依赖
+    ``SHOW TAG INDEXES`` 的 "By Tag" 列定位；查询失败返回空，让后续 DROP TAG
+    的报错直接透出。逐条 ``DROP TAG INDEX IF EXISTS``，失败仅告警不中断。
+    """
+    try:
+        client = _ddl_client(graph_space)
+        result = client.execute_query("SHOW TAG INDEXES;")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("SHOW TAG INDEXES 失败: %s", exc)
+        return []
+    statements: list[str] = []
+    for record in result.records or []:
+        if isinstance(record, dict) and str(record.get("By Tag")) == tag:
+            index = record.get("Index Name")
+            if not index:
+                continue
+            stmt = f"DROP TAG INDEX IF EXISTS {index};"
+            status, error = execute_schema_ddl(stmt, graph_space)
+            if status != "succeeded":
+                logger.warning("DROP TAG INDEX %s 失败: %s", index, error)
+            statements.append(stmt)
+    return statements
+
+
 def delete_schema_graph_data(
     kind: str, name: str, graph_space: str | None = None
 ) -> dict[str, Any]:
     """删除图空间中该 Schema 的全部数据并 ``DROP TAG/EDGE IF EXISTS``（真删，不可逆）。
 
     删除 Schema 目录前的图数据清理：按类型分页枚举存量点/边，nGQL 批量
-    ``DELETE VERTEX`` / ``DELETE EDGE`` 物理删除，随后 DROP 类型定义。
+    ``DELETE VERTEX`` / ``DELETE EDGE`` 物理删除，实体 TAG 先删其原生索引
+    （见 ``drop_related_tag_indexes``），随后 DROP 类型定义。
     类型不存在（创建时 DDL 未执行过）则跳过数据删除，幂等可重试。
-    返回 ``{status, error, typeExisted, verticesDeleted, edgesDeleted, dropStatement}``。
+    返回 ``{status, error, typeExisted, verticesDeleted, edgesDeleted, dropStatement, indexDropStatements}``。
     """
     keyword = "TAG" if kind == "entity" else "EDGE"
     result: dict[str, Any] = {
@@ -231,6 +332,7 @@ def delete_schema_graph_data(
         "verticesDeleted": 0,
         "edgesDeleted": 0,
         "dropStatement": None,
+        "indexDropStatements": [],
     }
     try:
         client = _ddl_client(graph_space)
@@ -255,6 +357,9 @@ def delete_schema_graph_data(
         return result
 
     drop = f"DROP {keyword} IF EXISTS {name};"
+    if kind == "entity":
+        # Nebula DROP TAG 要求先删 TAG 上的索引（Related index exists）
+        result["indexDropStatements"] = drop_related_tag_indexes(name, graph_space)
     status, error = execute_schema_ddl(drop, graph_space)
     result["dropStatement"] = drop
     if status != "succeeded":

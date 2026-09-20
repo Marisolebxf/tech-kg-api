@@ -46,6 +46,10 @@ def _browse_cache_put(key: str, payload: str) -> None:
     _browse_payload_cache[key] = (time.monotonic() + _BROWSE_CACHE_SECONDS, payload)
 
 
+def _clear_entity_cache() -> None:
+    """重建完成后清掉旧搜索/浏览响应，避免短 TTL 内继续返回空结果。"""
+    _browse_payload_cache.clear()
+
 
 def _application(session: Session) -> EntitySearchApplication:
     return EntitySearchApplication(session)
@@ -178,6 +182,7 @@ async def reindex_entities(
             space=request.space,
             entity_types=request.entityTypes,
         )
+        _clear_entity_cache()
         return ApiResponse(data=data, msg="实体索引重建完成")
     except EntitySearchError as exc:
         _raise_domain_error(exc)

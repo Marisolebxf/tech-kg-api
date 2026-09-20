@@ -323,6 +323,13 @@ async function unbindSpace(name: string) {
   }
 }
 
+/** 打开管理抽屉：编辑副本隔离列表项。直接绑列表项（共享引用）会把未保存的输入
+ * （含非法值）实时串进页面卡片，关抽屉不保存后卡片残留脏值直到刷新。保存成功
+ * 由 saveDetail 的 loadByCategory 用服务端数据回填列表。 */
+function openDetail(item: ConfigItem) {
+  selected.value = { ...item }
+}
+
 async function switchCategory(key: string) {
   activeCategory.value = key
   selected.value = null
@@ -490,6 +497,9 @@ async function testConnection(item: ConfigItem) {
       item.status = '异常'
       showToast(`${item.name} 连接失败：${result.error ?? '未知错误'}`, 'warning')
     }
+    // 探活结果同步列表卡片（抽屉编辑副本不再共享列表项引用）
+    const listed = items.value.find((i) => i.id === item.id)
+    if (listed) listed.status = item.status
   } catch (err) {
     showToast(`测试请求失败：${(err as Error).message}`, 'warning')
   } finally {
@@ -605,7 +615,7 @@ onMounted(() => {
           <table>
             <thead><tr><th>配置名称</th><th>类型 / 地址</th><th class="config-status-col">状态</th><th class="config-usage-col">引用情况</th><th class="config-time-col">更新时间</th><th class="config-action-col">操作</th></tr></thead>
             <tbody>
-              <tr v-for="item in pagedItems" :key="item.id" @click="selected=item">
+              <tr v-for="item in pagedItems" :key="item.id" @click="openDetail(item)">
                 <td><div class="config-name"><i>{{ defaultIcon(item.kind) }}</i><span><strong>{{ item.name }}<b v-if="item.isDefault" class="default-tag">默认</b></strong><small>{{ item.id }} · {{ item.description }}</small></span></div></td>
                 <td><strong class="type-name">{{ item.type }}<template v-if="item.model"> · {{ item.model }}</template></strong><code>{{ item.baseUrl || item.host && `${item.host}:${item.port}` || item.endpoint }}</code></td>
                 <td class="config-status-col"><span class="status" :class="`is-${item.status}`"><i />{{ item.status }}</span></td>
@@ -613,7 +623,7 @@ onMounted(() => {
                 <td class="config-time-col"><span>{{ item.owner }}</span><small class="updated">{{ item.updatedAt }}</small></td>
                 <td class="config-action-col">
                   <div class="row-actions">
-                    <button class="link" type="button" @click.stop="selected=item">管理</button>
+                    <button class="link" type="button" @click.stop="openDetail(item)">管理</button>
                     <button class="link" type="button" @click.stop="toggleItem(item)">{{ item.status === '停用' ? '启用' : '停用' }}</button>
                     <button class="link danger" type="button" @click.stop="removeConfig(item)">删除</button>
                   </div>

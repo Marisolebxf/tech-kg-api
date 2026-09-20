@@ -230,7 +230,7 @@ class TestSchemaExtractOrchestration:
         # 游标只推进一次（全部批次成功后）
         assert len(state.get("advances", [])) == 1
         # 实体默认重建索引 + 冲突检测按批调用
-        assert state.get("index")
+        assert state.get("index") == [{"space": "dev2"}]
         assert len(state.get("collisions_calls", [])) >= 2
 
     async def test_poison_rows_go_to_failure_cases(self):

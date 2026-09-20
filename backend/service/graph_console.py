@@ -127,13 +127,19 @@ def run_statement_cached_payload(actor: PlatformActor, space: str, statement: st
         return body
     try:
         data = run_statement(actor, space, statement)
-    except GraphConsoleError as exc:
+    except GraphConsoleError:
         raise
+    # 写语句改变了图数据：整体作废只读缓存，避免"写完再查同一条 SELECT"
+    # 命中写前结果（写语句仅管理员，频次低，整清成本可忽略）
+    with _ngql_cache_lock:
+        _ngql_payload_cache.clear()
     return json.dumps(
         {"code": 200, "success": True, "data": data, "msg": "success"},
         ensure_ascii=False,
         default=str,
     )
+
+
 _comment_pattern = re.compile(r"(--|//)[^\n]*")
 
 

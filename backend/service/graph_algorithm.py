@@ -13,10 +13,10 @@ import os
 import threading
 import time
 import uuid
-
-import redis as redis_lib
 from datetime import UTC, datetime
 from typing import Any
+
+import redis as redis_lib
 
 from service.platform_access import PlatformActor
 
@@ -165,6 +165,8 @@ def _shared_job_load(job_id: str) -> dict | None:
     except ValueError:
         return None
     return job if isinstance(job, dict) else None
+
+
 _DEGREE_JOB_CAPACITY = 50
 _DEGREE_RESULT_LIMIT = 10_000
 _degree_jobs: dict[str, dict[str, Any]] = {}
@@ -176,7 +178,12 @@ def _utc_now_iso() -> str:
 
 
 def _save_degree_job(
-    space: str, labels: list[str], rows: list[dict[str, str]], truncated: bool, *, running: bool = False
+    space: str,
+    labels: list[str],
+    rows: list[dict[str, str]],
+    truncated: bool,
+    *,
+    running: bool = False,
 ) -> dict[str, Any]:
     """登记 Degree 作业并清理过期结果；后台计算最多同时运行两个。"""
 
@@ -483,7 +490,8 @@ def list_edge_types(actor: PlatformActor, space: str) -> list[str]:
 
 def engine_status(actor: PlatformActor, space: str) -> dict:
     """算法引擎（Spark 运行器）健康状态；探测失败一律降级为 DOWN，不向上抛。
-    结果按 space 缓存 30s：500 并发下逐请求探测 runner/Nebula 会耗尽会话池。"""
+    结果按 space 缓存 GRAPH_ALGO_INFO_CACHE_SECONDS（默认 60s）：500 并发下
+    逐请求探测 runner/Nebula 会耗尽会话池。"""
     key = f"engine:{space}"
     with _algo_info_lock:
         cached = _algo_info_cache.get(key)
@@ -514,7 +522,8 @@ _algo_info_lock = threading.Lock()
 
 def metadata(actor: PlatformActor, space: str) -> dict:
     """边类型 + 引擎状态聚合；引擎探测失败仅降级，不阻塞边类型返回。
-    结果按 space 缓存 30s（边类型列表变化极低频）。"""
+    结果按 space 缓存 GRAPH_ALGO_INFO_CACHE_SECONDS（默认 60s）；
+    Schema 新建/删除关系（EDGE 类型变更）时会主动清缓存。"""
     key = f"meta:{space}"
     with _algo_info_lock:
         cached = _algo_info_cache.get(key)
@@ -527,3 +536,10 @@ def metadata(actor: PlatformActor, space: str) -> dict:
     with _algo_info_lock:
         _algo_info_cache[key] = (time.monotonic(), result)
     return result
+
+
+def clear_algo_info_cache() -> None:
+    """清空边类型/引擎状态缓存：图类型 DDL 变更（Schema 新建/删除关系）后调用，
+    避免算法页边类型下拉最长一个 TTL 内看不到最新类型。"""
+    with _algo_info_lock:
+        _algo_info_cache.clear()

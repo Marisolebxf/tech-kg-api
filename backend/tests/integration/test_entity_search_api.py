@@ -271,7 +271,8 @@ async def test_types_and_status_empty_state(entity_search_api) -> None:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         types = await client.get("/api/v1/entity-search/types")
         assert types.status_code == 200
-        assert types.json()["data"] == {"items": []}
+        # 未建索引：类型下拉回退图直查（fixture FakeGraph 只有 Expert 标签）
+        assert types.json()["data"] == {"items": [{"name": "Expert", "count": 1}]}
 
         status = await client.get("/api/v1/entity-search/index-status")
         assert status.status_code == 200

@@ -1102,12 +1102,31 @@ def test_status_empty_state(state_session, monkeypatch) -> None:
     milvus = FakeMilvusClient()
     monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
     monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: FakeGraph([], {}))
     service = EntitySearchService(state_session)
     status = service.status()
     assert status["indexed"] is False
     assert status["types"] == []
     assert status["bm25Ready"] is False
     assert service.types() == []
+
+
+def test_types_falls_back_to_graph_labels_without_index(state_session, monkeypatch) -> None:
+    """未建索引的空间类型下拉不再空白：SHOW TAGS + label_count 图直查兜底。"""
+    milvus = FakeMilvusClient()
+    graph = FakeGraph(["Expert", "Org", "超长" * 40], {}, counts={"Expert": 4, "Org": 7})
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+    monkeypatch.setattr("service.entity_search._node_count_cache", {})
+
+    items = EntitySearchService(state_session).types()
+
+    # 按数量降序；超 64 字节标签（进不了 Milvus entity_type 字段）排除
+    assert items == [
+        {"name": "Org", "count": 7},
+        {"name": "Expert", "count": 4},
+    ]
 
 
 def test_search_graph_vid_works_without_milvus(state_session, monkeypatch):
@@ -1268,6 +1287,9 @@ def test_status_marks_stale_state_when_space_missing_in_milvus(state_session, mo
     state_session.commit()
     monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
     monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+    monkeypatch.setattr(
+        "service.entity_search.get_space_client", lambda space: FakeGraph(["E2EBigWidget"], {})
+    )
 
     service = EntitySearchService(state_session)
     status = service.status()
@@ -1280,7 +1302,8 @@ def test_status_marks_stale_state_when_space_missing_in_milvus(state_session, mo
     assert status["typeCounts"] == {}
     assert status["recordedTypeCounts"] == {"E2EBigWidget": 4}
     assert status["bm25Ready"] is False
-    assert service.types() == []
+    # 索引状态过期不代表图里没数据：类型下拉回退图直查，仍可过滤
+    assert service.types() == [{"name": "E2EBigWidget", "count": 0}]
 
 
 def test_status_marks_milvus_unreachable_as_explicit_degradation(state_session, monkeypatch):

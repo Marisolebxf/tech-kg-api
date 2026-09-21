@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 import uuid
 from collections.abc import Sequence
 from typing import Any
@@ -42,6 +43,12 @@ from infra.graph_db.models import (
 SCHEMA_INDEXES_PATH = "/api/v1/schema/indexes"
 
 logger = logging.getLogger("infra.graph_db")
+
+# nGQL 直查只接受白名单标签名（SHOW TAGS 出来的标识符），防注入
+_TAG_IDENTIFIER = re.compile(r"^[A-Za-z0-9_]{1,128}$")
+# SHOW STATS 快照缓存：{space: (monotonic 时间, {"tags", "edges", "total_nodes", "total_edges"})}
+_stats_snapshot_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_STATS_CACHE_TTL_SECONDS = 300.0
 
 # The trs-graph-service only treats these property keys as the Nebula vertex id
 # (see NodeService.extractVid / NgqlBuilder.extractOrGenerateVid). When none of
@@ -236,6 +243,86 @@ class TRSGraphClient:
             limit=limit,
             offset=offset,
         )
+
+    def paged_nodes_by_label(
+        self, label: str, *, limit: int = 100, offset: int = 0
+    ) -> list[GraphNode]:
+        """按标签分页取节点：nGQL SKIP/LIMIT 直查，毫秒级。
+
+        REST /api/v1/nodes/label/{label} 在 trs-graph 侧附带全量总数计算，
+        大标签（如 Paper 十万级）30s+ 超时（2026-09-21 实测 limit=2 也挂）；
+        总数需求另走 label_count()，不要为此恢复 REST 分页端点。
+        """
+        if not _TAG_IDENTIFIER.fullmatch(label or ""):
+            raise GraphRequestError(f"非法节点标签: {label!r}", status_code=400)
+        result = self.execute_read(
+            f"MATCH (v:`{label}`) RETURN v SKIP {int(offset)} LIMIT {int(limit)}"
+        )
+        nodes: list[GraphNode] = []
+        for record in result.records or []:
+            data = record.get("v") if isinstance(record, dict) else None
+            if not isinstance(data, dict):
+                continue
+            nodes.append(
+                GraphNode(
+                    id=data.get("id"),
+                    labels=list(data.get("labels") or []),
+                    properties=dict(data.get("properties") or {}),
+                )
+            )
+        return nodes
+
+    def label_count(self, label: str) -> int:
+        """标签节点数：优先 SHOW STATS（毫秒级）；标签不在统计中才回退
+        REST node-count（服务端全表 count，大标签秒级甚至超时）。"""
+        counts = self.stats_tag_counts()
+        if label in counts:
+            return counts[label]
+        return self.node_count(label)
+
+    def stats_snapshot(self) -> dict[str, Any]:
+        """SHOW STATS 解析快照 {"tags", "edges", "total_nodes", "total_edges"}，按空间缓存 300s。
+
+        Nebula 统计只在 SUBMIT JOB STATS 后刷新，本就允许轻微滞后，用它换掉
+        逐标签/边类型全表 count（Paper 实测 45s+ 超时）。缓存模块级共享：
+        即使 SHOW STATS 此刻报错（如 stats 任务卡死），300s 内成功过的快照
+        仍可读——平台总览等消费方的回退路径据此兜底。
+        """
+        cached = _stats_snapshot_cache.get(self._settings.space)
+        if cached and time.monotonic() - cached[0] < _STATS_CACHE_TTL_SECONDS:
+            return cached[1]
+        result = self.execute_read("SHOW STATS;")
+        tags: dict[str, int] = {}
+        edges: dict[str, int] = {}
+        vertices = 0
+        edge_total = 0
+        for record in result.records or []:
+            if not isinstance(record, dict):
+                continue
+            rtype = record.get("Type")
+            name = record.get("Name")
+            count = int(record.get("Count") or 0)
+            if rtype == "Tag" and name:
+                tags[str(name)] = count
+            elif rtype == "Edge" and name:
+                edges[str(name)] = count
+            elif rtype == "Space":
+                if name == "vertices":
+                    vertices = count
+                elif name == "edges":
+                    edge_total = count
+        snapshot = {
+            "tags": tags,
+            "edges": edges,
+            "total_nodes": vertices or sum(tags.values()),
+            "total_edges": edge_total or sum(edges.values()),
+        }
+        _stats_snapshot_cache[self._settings.space] = (time.monotonic(), snapshot)
+        return snapshot
+
+    def stats_tag_counts(self) -> dict[str, int]:
+        """SHOW STATS 的全标签计数（stats_snapshot 的 tags 部分，副本）。"""
+        return dict(self.stats_snapshot()["tags"])
 
     def find_nodes(
         self,

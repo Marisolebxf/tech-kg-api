@@ -327,12 +327,13 @@ def _serialize_browse_item(node: Any, entity_type: str) -> dict[str, Any]:
 
 
 def _node_count_cached(graph: TRSGraphClient, space: str, label: str) -> int:
-    """带 TTL 缓存的标签节点数（Nebula count 是全量扫描，秒级）。"""
+    """带 TTL 缓存的标签节点数。label_count 优先 SHOW STATS（毫秒级），
+    仅统计缺失时回退 REST node-count（服务端全表 count，大标签超时）。"""
     key = (space, label)
     cached = _node_count_cache.get(key)
     if cached and time.monotonic() - cached[0] < _NODE_COUNT_TTL_SECONDS:
         return cached[1]
-    count = int(graph.node_count(label))
+    count = int(graph.label_count(label))
     _node_count_cache[key] = (time.monotonic(), count)
     return count
 
@@ -581,9 +582,9 @@ class EntitySearchService:
     ) -> dict[str, Any]:
         """按标签分页浏览实体（页内按 vid 排序）。
 
-        单类型查询复用节点分页响应中的总数；跨标签查询优先用全量 reindex
-        保存的类型计数快照计算分页窗口。快照不可安全使用时回退实时逐标签
-        计数。两条路径均只拉取窗口涉及的标签分片。
+        计数优先用全量 reindex 保存的类型计数快照；快照不可用时回退
+        SHOW STATS（毫秒级，再兜底 REST 计数）。分片拉取走 nGQL 直查分页，
+        不经 REST /nodes/label（其附带全量计数，大标签超时）。
         """
         graph = get_space_client(space or _default_space())
         resolved_space = space or _default_space()
@@ -596,9 +597,10 @@ class EntitySearchService:
         type_filter = entity_type
         items: list[dict[str, Any]] = []
         if type_filter:
-            result = graph.get_nodes_by_label(type_filter, limit=limit, offset=offset)
-            total = int(result.total)
-            items = [_serialize_browse_item(node, type_filter) for node in result.items or []]
+            # nGQL 直查分页（REST /nodes/label 在 trs-graph 侧附带全量计数，大标签超时）
+            nodes = graph.paged_nodes_by_label(type_filter, limit=limit, offset=offset)
+            items = [_serialize_browse_item(node, type_filter) for node in nodes]
+            total = _node_count_cached(graph, resolved_space, type_filter)
         else:
             counts = _state_type_counts(self._session, resolved_space, labels)
             if counts is None:
@@ -624,10 +626,10 @@ class EntitySearchService:
                 slice_end = min(window_end, label_end) - label_start
                 if slice_start >= slice_end:
                     continue
-                result = graph.get_nodes_by_label(
+                nodes = graph.paged_nodes_by_label(
                     label, limit=slice_end - slice_start, offset=slice_start
                 )
-                items.extend(_serialize_browse_item(node, label) for node in result.items or [])
+                items.extend(_serialize_browse_item(node, label) for node in nodes)
         items.sort(key=lambda item: str(item["vid"]))
         return {
             "items": items[:limit],

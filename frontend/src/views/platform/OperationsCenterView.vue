@@ -384,12 +384,11 @@ onMounted(loadReviews)
 
       <div v-if="rerunFeedback" :class="['rerun-feedback', `is-${rerunFeedback.type}`]">
         <span>{{ rerunFeedback.text }}</span>
-        <RouterLink
+        <span
           v-for="item in rerunFeedback.executions"
           :key="item.executionId"
-          class="link"
-          :to="`/processing-instance/${item.executionId}`"
-        >{{ item.schemaId }} · {{ item.cases }} 条</RouterLink>
+          class="rerun-feedback-exec"
+        >{{ item.schemaId }} · {{ item.cases }} 条</span>
         <button class="rerun-feedback-close" type="button" @click="rerunFeedback = null">×</button>
       </div>
 
@@ -527,7 +526,7 @@ onMounted(loadReviews)
           <section class="case-log-sec">
             <h4>执行概要</h4>
             <dl class="case-log-dl">
-              <div><dt>执行 ID</dt><dd><RouterLink class="link" :to="`/processing-instance/${logExecution.id}`"><code>{{ logExecution.id }}</code></RouterLink></dd></div>
+              <div><dt>执行 ID</dt><dd><code>{{ logExecution.id }}</code></dd></div>
               <div><dt>触发方式</dt><dd>{{ TRIGGER_SOURCE_LABEL[logExecution.triggerSource || 'MANUAL'] || logExecution.triggerSource || '—' }}</dd></div>
               <div><dt>状态</dt><dd>{{ logExecution.status }}</dd></div>
               <div><dt>开始时间</dt><dd>{{ logExecution.startedAt || '—' }}</dd></div>

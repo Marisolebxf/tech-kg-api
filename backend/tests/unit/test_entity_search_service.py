@@ -191,7 +191,7 @@ def state_session(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture(autouse=True)
 def _hermetic_embedding_config(monkeypatch: pytest.MonkeyPatch):
-    """固定 embedding 配置解析：单测不触达配置管理 DB，也不依赖宿主环境变量。
+    """固定 embedding 配置解析：单测不依赖宿主环境变量（解析只读 env，不触 DB）。
 
     维度跟随 ENTITY_SEARCH_EMBEDDING_DIM（state_session 设为 3，与 FakeEmbeddingClient
     返回的 3 维向量一致）；个别用例可再次 monkeypatch 覆盖为 None / 抛未配置。
@@ -203,7 +203,6 @@ def _hermetic_embedding_config(monkeypatch: pytest.MonkeyPatch):
             "model": "m3e-test",
             "api_key": "test-key",
             "dim": int(os.environ.get("ENTITY_SEARCH_EMBEDDING_DIM", "3")),
-            "config_id": None,
         },
     )
 
@@ -989,7 +988,7 @@ def test_reindex_complex_property_has_real_bm25_dimension(
 def test_reindex_infers_dim_when_config_dim_unset(
     state_session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """配置未声明维度时以首个成功响应推断，集合按推断维度创建。"""
+    """环境变量未声明维度时以首个成功响应推断，集合按推断维度创建。"""
     monkeypatch.setattr(
         "service.entity_search._resolve_embedding_config",
         lambda: {
@@ -997,7 +996,6 @@ def test_reindex_infers_dim_when_config_dim_unset(
             "model": "m3e-test",
             "api_key": "test-key",
             "dim": None,
-            "config_id": "EMB-1",
         },
     )
     graph = FakeGraph(["Expert"], {"Expert": [FakeNode("expert_1", {"id": "E-1", "name": "张三"})]})
@@ -1011,7 +1009,6 @@ def test_reindex_infers_dim_when_config_dim_unset(
     dense = next(field for field in milvus.schema_fields if field.get("name") == "dense_vector")
     assert dense["dim"] == 3  # FakeEmbeddingClient 返回 3 维
     assert result["embeddingModel"] == "m3e-test"
-    assert result["embeddingConfigId"] == "EMB-1"
 
 
 def test_reindex_recreates_collection_when_dim_changes(
@@ -1040,10 +1037,10 @@ def test_reindex_recreates_collection_when_dim_changes(
 def test_reindex_without_embedding_config_raises(
     state_session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """完全未配置时重建给出明确指引；查询端客户端为 None 走 BM25 降级而非报错。"""
+    """完全未配置环境变量时重建给出明确指引；状态读取降级为模型未知而非报错。"""
 
     def _unconfigured():
-        raise EntitySearchError("未配置 embedding 服务：请在「配置管理」设置默认 embedding 配置")
+        raise EntitySearchError("未配置 embedding 服务：请配置环境变量")
 
     graph = FakeGraph(["Expert"], {"Expert": [FakeNode("expert_1", {"id": "E-1", "name": "张三"})]})
     monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)

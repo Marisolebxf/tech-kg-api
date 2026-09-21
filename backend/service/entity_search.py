@@ -118,24 +118,28 @@ class EntitySearchReindexInProgressError(EntitySearchError):
 
 
 def _resolve_embedding_config() -> dict[str, Any]:
-    """embedding 服务配置：配置管理默认配置优先，回退 env（ENTITY_SEARCH_*/PATENT_*）。
+    """embedding 服务配置：只读环境变量（ENTITY_SEARCH_EMBEDDING_* 优先，回退 PATENT_EMBEDDING_*）。
 
-    ``dim`` 可能为 None（配置未声明维度）——由重建时首个成功响应推断。
+    「配置管理」的 embedding 配置仅作用于图谱构建（任务级选择注入脚本上下文），
+    实体检索不读它。``dim`` 可能为 None（环境变量未声明维度）——由重建时首个成功响应推断。
     """
-    from service.embedding_config import resolve_embedding_settings
-
-    settings = resolve_embedding_settings()
-    if settings is None:
+    base_url = (
+        os.getenv("ENTITY_SEARCH_EMBEDDING_BASE_URL")
+        or os.getenv("PATENT_EMBEDDING_BASE_URL")
+        or ""
+    )
+    model = os.getenv("ENTITY_SEARCH_EMBEDDING_MODEL") or os.getenv("PATENT_EMBEDDING_MODEL") or ""
+    api_key = os.getenv("ENTITY_SEARCH_EMBEDDING_API_KEY") or os.getenv("PATENT_EMBEDDING_API_KEY")
+    dim = os.getenv("ENTITY_SEARCH_EMBEDDING_DIM") or os.getenv("PATENT_EMBEDDING_DIM") or ""
+    if not (base_url or model or api_key or dim):
         raise EntitySearchError(
-            "未配置 embedding 服务：请在「配置管理」设置默认 embedding 配置，"
-            "或配置 ENTITY_SEARCH_EMBEDDING_*/PATENT_EMBEDDING_* 环境变量"
+            "未配置 embedding 服务：请配置 ENTITY_SEARCH_EMBEDDING_*/PATENT_EMBEDDING_* 环境变量"
         )
     return {
-        "base_url": settings["base_url"],
-        "model": settings["model"],
-        "api_key": settings["api_key"],
-        "dim": settings.get("dimensions"),
-        "config_id": settings.get("config_id"),
+        "base_url": base_url,
+        "model": model or "moka-ai/m3e-small",
+        "api_key": api_key or "local-no-auth",
+        "dim": int(dim) if dim.isdigit() else None,
     }
 
 
@@ -156,15 +160,12 @@ def _embedding_client() -> EmbeddingClient | None:
 
 
 def _current_embedding_fields() -> dict[str, Any]:
-    """状态页附加字段：当前生效的 embedding 模型/配置来源；解析失败不拖垮状态读取。"""
+    """状态页附加字段：当前生效（环境变量侧）的 embedding 模型；未配置时不拖垮状态读取。"""
     try:
         config = _resolve_embedding_config()
-    except Exception:  # noqa: BLE001 - EntitySearchError / DB 故障均降级为未知
-        return {"currentEmbeddingModel": None, "currentEmbeddingConfigId": None}
-    return {
-        "currentEmbeddingModel": config["model"],
-        "currentEmbeddingConfigId": config.get("config_id"),
-    }
+    except Exception:  # noqa: BLE001 - EntitySearchError 均降级为未知
+        return {"currentEmbeddingModel": None}
+    return {"currentEmbeddingModel": config["model"]}
 
 
 def _scalar(value: Any) -> Any:
@@ -787,7 +788,6 @@ class EntitySearchService:
             "typeCounts": type_counts,
             "graphSpace": resolved_space,
             "embeddingModel": embedding_config["model"],
-            "embeddingConfigId": embedding_config.get("config_id"),
             "skippedLabels": sorted(set(skipped_labels)),
             "durationSeconds": round(time.monotonic() - started, 2),
         }

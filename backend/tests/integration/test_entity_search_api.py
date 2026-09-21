@@ -162,8 +162,7 @@ def entity_search_api(monkeypatch: pytest.MonkeyPatch):
 
     app.dependency_overrides[get_workflow_session] = override_session
     monkeypatch.setenv("ENTITY_SEARCH_EMBEDDING_DIM", "3")
-    # 固定 embedding 配置解析：容器内跑集成测试时配置管理 DB 可达，
-    # 不能让真实默认配置影响维度/模型断言
+    # 固定 embedding 配置解析：不依赖容器/宿主的环境变量取值影响维度/模型断言
     monkeypatch.setattr(
         "service.entity_search._resolve_embedding_config",
         lambda: {
@@ -171,7 +170,6 @@ def entity_search_api(monkeypatch: pytest.MonkeyPatch):
             "model": "m3e-test",
             "api_key": "test-key",
             "dim": 3,
-            "config_id": None,
         },
     )
     # 测试用 sqlite 会话：跳过对真实控制库的建表检查

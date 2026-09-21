@@ -88,12 +88,16 @@ MULTI_STEP_PLAN = {
 }
 
 
-def _make_activities(state: dict[str, Any], *, rows_per_batch=3, batches=2, fail_batch=None):
+def _make_activities(
+    state: dict[str, Any], *, rows_per_batch=3, batches=2, fail_batch=None, fail_plan=False
+):
     """假 activity 集：读按游标吐批次；转换对毒行（id=bad）报 failures；记录调用。"""
 
     @activity.defn(name="load_schema_extract_plan")
     async def load_plan(schema_id: str) -> dict[str, Any]:
         state["load_plan"] = state.get("load_plan", 0) + 1
+        if fail_plan:
+            raise ValueError("下载 Schema 脚本失败: NoSuchKey")
         return PLAN
 
     @activity.defn(name="read_source_batch")
@@ -183,6 +187,11 @@ def _make_activities(state: dict[str, Any], *, rows_per_batch=3, batches=2, fail
         state.setdefault("index", []).append(request)
         return {"reindexed": {"entityTypes": request.get("entityTypes")}}
 
+    @activity.defn(name="revert_rerun_failure_cases")
+    async def revert_rerun(request: dict[str, Any]) -> dict[str, Any]:
+        state.setdefault("reverts", []).append(request)
+        return {"reverted": len(request.get("rerunCaseIds") or [])}
+
     return [
         load_plan,
         read_batch,
@@ -194,6 +203,7 @@ def _make_activities(state: dict[str, Any], *, rows_per_batch=3, batches=2, fail
         collisions,
         record_failures,
         resolve,
+        revert_rerun,
         build_index,
         refresh_stats,
     ]
@@ -289,6 +299,58 @@ class TestSchemaExtractOrchestration:
         # 正常模式批次崩溃 → workflow FAILED，游标不推进
         assert state.get("advances") in (None, [])
         assert state.get("record_failures") in (None, [])
+
+    async def test_rerun_crash_reverts_rerunning_cases(self):
+        """重跑执行中途崩溃（如脚本对象丢失）：case 回滚 OPEN，不滞留 RERUNING。
+
+        resolve_failure_cases 只在正常结尾调用；崩溃路径必须有人把
+        mark_extract_rerun 标记的 RERUNING case 回滚，否则队列不可见、无法重跑。
+        """
+        state: dict[str, Any] = {}
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue="t-4",
+                workflows=[SchemaExtractWorkflow],
+                activities=_make_activities(state, rows_per_batch=1, batches=1, fail_plan=True),
+            ):
+                with pytest.raises(WorkflowFailureError):
+                    await _run(
+                        env.client,
+                        "t-4",
+                        {
+                            "schemaId": "schema-e2e",
+                            "graphSpace": "dev2",
+                            "batchSize": 5,
+                            "recordIdsBySource": {"bind-1": ["bad"]},
+                            "rerunCaseIds": ["MR-1", "MR-2"],
+                            "rerunOfExecutionId": "EXEC-1",
+                            "triggerSource": "RERUN",
+                        },
+                    )
+        assert state["reverts"][0]["rerunCaseIds"] == ["MR-1", "MR-2"]
+        # ActivityError 的 str 不带 cause 链（NoSuchKey 在 __cause__ 里），只断言前缀
+        assert state["reverts"][0]["reason"].startswith("重跑执行失败")
+        # 崩溃在读取之前：没读批次、也没走到 resolve
+        assert state.get("resolve") in (None, [])
+
+    async def test_normal_crash_does_not_touch_rerun_revert(self):
+        """正常模式（非重跑）崩溃：不应调用重跑回滚 activity。"""
+        state: dict[str, Any] = {}
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue="t-5",
+                workflows=[SchemaExtractWorkflow],
+                activities=_make_activities(state, rows_per_batch=2, batches=3, fail_plan=True),
+            ):
+                with pytest.raises(WorkflowFailureError):
+                    await _run(
+                        env.client,
+                        "t-5",
+                        {"schemaId": "schema-e2e", "graphSpace": "dev2", "batchSize": 2},
+                    )
+        assert state.get("reverts") in (None, [])
 
 
 def _make_step_activities(state: dict[str, Any], *, fail_on=None, block_on=None, gate=None):

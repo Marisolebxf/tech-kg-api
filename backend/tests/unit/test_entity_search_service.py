@@ -740,6 +740,241 @@ def test_reindex_skips_label_when_lookup_fails_midway(
     assert [row["vid"] for row in milvus.collections[COLLECTION_NAME]] == ["scholar_1"]
 
 
+def test_reindex_aborts_when_all_labels_unreadable(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """图服务整体不可读（全部标签 LOOKUP/REST 均失败）≠ 空空间：中止重建并保留旧索引。
+
+    2026-09-21 实测：共享图过载时所有标签按超时跳过，重建继续走「空间无实体」
+    分支清空 Milvus 旧行并落 entityCount=0 的 state——一次图抖动毁掉整个检索。
+    """
+    graph = LookupGraph(
+        ["Expert", "Paper"],
+        {
+            "Expert": [FakeNode("expert_1", {"id": "E-1", "name": "张三"})],
+            "Paper": [FakeNode("paper_1", {"id": "P-1", "title": "深度学习综述"})],
+        },
+        lookup_labels=set(),  # 无一标签可 LOOKUP（探活必失败）
+    )
+
+    def dead_rest(label, *, limit=100, offset=0):
+        raise GraphRequestError("read timeout", status_code=504)
+
+    graph.get_nodes_by_label = dead_rest
+    milvus = FakeMilvusClient()
+    # 既有索引行 + 既有 state 快照：中止时必须原样保留
+    milvus.collections[COLLECTION_NAME] = [
+        {"document_id": "dev2::expert_1", "vid": "expert_1", "graph_space": "dev2"}
+    ]
+    state_session.add(
+        EntitySearchState(
+            graph_space="dev2",
+            vocabulary='{"张": 0}',
+            document_frequency='{"张": 1}',
+            document_count=1,
+            entity_count=1,
+            type_counts='{"Expert": 1}',
+            embedding_model="moka-ai/m3e-small",
+        )
+    )
+    state_session.commit()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", FakeEmbeddingClient)
+    monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+
+    service = EntitySearchService(state_session)
+    with pytest.raises(EntitySearchError, match="图服务当前不可读"):
+        service.reindex()
+
+    # 旧行未清、无新写入；state 快照未被空结果覆盖
+    assert milvus.deleted == []
+    assert [row["vid"] for row in milvus.collections[COLLECTION_NAME]] == ["expert_1"]
+    assert service.status()["entityCount"] == 1
+
+
+def test_reindex_aborts_when_second_pass_loses_everything(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """首遍读到语料、第二遍全灭（图中途退化）≠ 空空间：中止并保留旧索引。
+
+    2026-09-21 实测：首遍只有字母序靠前的小标签成功（document_count>0 过掉
+    首遍守卫），organization_base 中途失败触发图退化，第二遍连小标签也读不
+    回来 → written=0 → 走「空空间」分支清空索引。
+    """
+
+    class DegradingGraph(LookupGraph):
+        """前两次查询（首遍探活+分页）成功，之后图服务退化全部失败。"""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.budget = 2  # 首遍：1 次探活 + 1 页
+
+        def execute_query(self, query):
+            if self.budget <= 0:
+                raise GraphRequestError("read timeout", status_code=504)
+            self.budget -= 1
+            return super().execute_query(query)
+
+        def get_nodes_by_label(self, label, *, limit=100, offset=0):
+            raise GraphRequestError("read timeout", status_code=504)
+
+    graph = DegradingGraph(
+        ["Expert"],
+        {"Expert": [FakeNode("expert_1", {"id": "E-1", "name": "张三"})]},
+        lookup_labels={"Expert"},
+    )
+    milvus = FakeMilvusClient()
+    milvus.collections[COLLECTION_NAME] = [
+        {"document_id": "dev2::expert_1", "vid": "expert_1", "graph_space": "dev2"}
+    ]
+    state_session.add(
+        EntitySearchState(
+            graph_space="dev2",
+            vocabulary='{"张": 0}',
+            document_frequency='{"张": 1}',
+            document_count=1,
+            entity_count=1,
+            type_counts='{"Expert": 1}',
+            embedding_model="moka-ai/m3e-small",
+        )
+    )
+    state_session.commit()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", FakeEmbeddingClient)
+    monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+
+    service = EntitySearchService(state_session)
+    with pytest.raises(EntitySearchError, match="第二遍"):
+        service.reindex()
+
+    # written=0 时绝不走「空空间」清空：旧索引与旧快照原样保留
+    assert milvus.deleted == []
+    assert [row["vid"] for row in milvus.collections[COLLECTION_NAME]] == ["expert_1"]
+    assert service.status()["entityCount"] == 1
+
+
+def test_reindex_retries_transient_page_failure_instead_of_skipping_label(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LOOKUP 单页瞬时失败重试一次后恢复：标签不因一页抖动整标签报废。
+
+    2026-09-21 实测：organization_base 百余页分页中途一页超时 → 整标签跳过
+    （23 万实体）→ 重建失去主体语料。页级重试吸收瞬时停顿。
+    """
+    monkeypatch.setattr("time.sleep", lambda _s: None)  # 重试不真的等 2s
+
+    class HiccupGraph(LookupGraph):
+        """第二页首次请求失败（模拟排队停顿），重试即成功。"""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.failed_once = set()
+
+        def execute_query(self, query):
+            if "OFFSET 2000" in query and "offset2" not in self.failed_once:
+                self.failed_once.add("offset2")
+                raise GraphRequestError("read timeout", status_code=504)
+            return super().execute_query(query)
+
+    graph = HiccupGraph(
+        ["Expert"],
+        {"Expert": [FakeNode(f"expert_{i}", {"name": f"专家{i}"}) for i in range(2001)]},
+        lookup_labels={"Expert"},
+    )
+    milvus = FakeMilvusClient()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", FakeEmbeddingClient)
+    monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+
+    result = EntitySearchService(state_session).reindex()
+
+    # 第二页抖动被重试吸收：标签完整入索引（两遍各 2001 实体都读全）
+    assert result["skippedLabels"] == []
+    assert result["entityCount"] == 2001
+    assert result["typeCounts"] == {"Expert": 2001}
+
+
+def test_reindex_defers_rest_fallback_labels_until_lookup_labels_done(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """无索引标签的 REST 兜底排在全部 LOOKUP 标签之后。
+
+    REST 的 MATCH+SKIP 全量扫描会打满共享图（网关服务端还会重试超时查询），
+    混排会让排在后面的 LOOKUP 标签也排队超时，放大成整次重建全跳过。
+    APaper 字母序在 Expert 之前：若混排，Expert 的读取会被 APaper 拖累。
+    """
+
+    class SequencedGraph(LookupGraph):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.read_order: list[tuple[str, str]] = []
+
+        def execute_query(self, query):
+            label = query.split("`")[1]
+            self.read_order.append((label, "lookup"))
+            return super().execute_query(query)
+
+        def get_nodes_by_label(self, label, *, limit=100, offset=0):
+            self.read_order.append((label, "rest"))
+            return super().get_nodes_by_label(label, limit=limit, offset=offset)
+
+    graph = SequencedGraph(
+        ["APaper", "Expert"],
+        {
+            "APaper": [FakeNode("ap_1", {"id": "A-1", "title": "无索引标签"})],
+            "Expert": [FakeNode("expert_1", {"id": "E-1", "name": "张三"})],
+        },
+        lookup_labels={"Expert"},
+    )
+    milvus = FakeMilvusClient()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", FakeEmbeddingClient)
+    monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+
+    EntitySearchService(state_session).reindex()
+
+    # 第一遍里 Expert（LOOKUP）的所有读取都发生在 APaper（REST）之前
+    first_rest = next(i for i, (_, how) in enumerate(graph.read_order) if how == "rest")
+    expert_reads = [i for i, (label, _) in enumerate(graph.read_order) if label == "Expert"]
+    assert expert_reads, "Expert 应有 LOOKUP 读取"
+    assert max(expert_reads[:2]) < first_rest, "LOOKUP 标签应先于 REST 兜底标签读取"
+
+
+def test_reindex_rest_fallback_disabled_skips_no_index_labels_without_any_rest_call(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ENTITY_SEARCH_REST_FALLBACK=false：无索引标签直接记 skipped，不发 MATCH 扫描。
+
+    共享图 I/O 退化期（compaction 积压）自救用：REST 兜底的大标签永远超时，
+    每次尝试还在网关服务端制造重试僵尸，反过来拖垮第二遍。
+    """
+    monkeypatch.setenv("ENTITY_SEARCH_REST_FALLBACK", "false")
+    graph = LookupGraph(
+        ["Expert", "Paper"],
+        {
+            "Expert": [FakeNode("expert_1", {"id": "E-1", "name": "张三"})],
+            "Paper": [FakeNode("paper_1", {"id": "P-1", "title": "深度学习综述"})],
+        },
+        lookup_labels={"Expert"},
+    )
+    milvus = FakeMilvusClient()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", FakeEmbeddingClient)
+    monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+
+    result = EntitySearchService(state_session).reindex()
+
+    assert result["entityCount"] == 1
+    assert result["skippedLabels"] == ["Paper"]
+    assert graph.rest_reads == []  # 一次 REST 都没发
+    assert [row["vid"] for row in milvus.collections[COLLECTION_NAME]] == ["expert_1"]
+
+
 def test_reindex_unknown_entity_type_raises(state_session, monkeypatch) -> None:
     graph = FakeGraph(["Expert"], {})
     monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)

@@ -1390,13 +1390,39 @@ def _iter_graph_entities(
             skipped.append(label)
 
 
-def _iter_label_via_lookup(graph: TRSGraphClient, label: str, page_size: int = 2000):
-    """索引枚举分页：LOOKUP + LIMIT/OFFSET（对有索引标签是线性代价）。"""
+def _iter_label_via_lookup(
+    graph: TRSGraphClient, label: str, page_size: int = 2000, page_attempts: int = 2
+):
+    """索引枚举分页：LOOKUP + LIMIT/OFFSET（对有索引标签是线性代价）。
+
+    单页失败重试一次：共享图上大标签分页要数分钟（organization_base 百余页），
+    瞬时停顿（并发 browse/僵尸扫描排队）不该报废整个标签的几十万实体——
+    2026-09-21 实测单页超时即整标签跳过，重建因此清零。
+    """
+    from infra.graph_db.exceptions import GraphRepoError
+
     offset = 0
+    result = None
     while True:
-        result = graph.execute_query(
-            f"LOOKUP ON `{label}` YIELD vertex AS v | LIMIT {page_size} OFFSET {offset}"
-        )
+        for attempt in range(1, page_attempts + 1):
+            try:
+                result = graph.execute_query(
+                    f"LOOKUP ON `{label}` YIELD vertex AS v | LIMIT {page_size} OFFSET {offset}"
+                )
+                break
+            except GraphRepoError:
+                if attempt >= page_attempts:
+                    raise
+                logger.warning(
+                    "标签 %s 第 %s 页读取失败（offset=%s），重试 %s/%s",
+                    label,
+                    offset // page_size + 1,
+                    offset,
+                    attempt,
+                    page_attempts - 1,
+                )
+                time.sleep(2)
+        assert result is not None  # 重试循环只会 break（成功）或 raise 退出
         records = result.records or []
         if not records:
             return

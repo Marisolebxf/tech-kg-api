@@ -842,6 +842,48 @@ def test_reindex_aborts_when_second_pass_loses_everything(
     assert service.status()["entityCount"] == 1
 
 
+def test_reindex_retries_transient_page_failure_instead_of_skipping_label(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LOOKUP 单页瞬时失败重试一次后恢复：标签不因一页抖动整标签报废。
+
+    2026-09-21 实测：organization_base 百余页分页中途一页超时 → 整标签跳过
+    （23 万实体）→ 重建失去主体语料。页级重试吸收瞬时停顿。
+    """
+    monkeypatch.setattr("time.sleep", lambda _s: None)  # 重试不真的等 2s
+
+    class HiccupGraph(LookupGraph):
+        """第二页首次请求失败（模拟排队停顿），重试即成功。"""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.failed_once = set()
+
+        def execute_query(self, query):
+            if "OFFSET 2000" in query and "offset2" not in self.failed_once:
+                self.failed_once.add("offset2")
+                raise GraphRequestError("read timeout", status_code=504)
+            return super().execute_query(query)
+
+    graph = HiccupGraph(
+        ["Expert"],
+        {"Expert": [FakeNode(f"expert_{i}", {"name": f"专家{i}"}) for i in range(2001)]},
+        lookup_labels={"Expert"},
+    )
+    milvus = FakeMilvusClient()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", FakeEmbeddingClient)
+    monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+
+    result = EntitySearchService(state_session).reindex()
+
+    # 第二页抖动被重试吸收：标签完整入索引（两遍各 2001 实体都读全）
+    assert result["skippedLabels"] == []
+    assert result["entityCount"] == 2001
+    assert result["typeCounts"] == {"Expert": 2001}
+
+
 def test_reindex_defers_rest_fallback_labels_until_lookup_labels_done(
     state_session, monkeypatch: pytest.MonkeyPatch
 ) -> None:

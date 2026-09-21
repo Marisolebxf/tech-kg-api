@@ -57,11 +57,27 @@ def service():
     return _make_service()
 
 
+@pytest.fixture(autouse=True)
+def entity_search_sync_calls(monkeypatch):
+    """隔离真实钩子（会连控制库 / Milvus / Redis）：替成记录桩，供断言调用参数。"""
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        ManualReviewService,
+        "_sync_entity_search_after_write",
+        lambda self, apply_detail: calls.append(apply_detail),
+    )
+    return calls
+
+
 @pytest.fixture
 def graph(monkeypatch):
     fake = FakeGraph()
     monkeypatch.setattr(ManualReviewService, "_graph_client_for", lambda self, snapshot: fake)
     return fake
+
+
+# autouse 桩会替换类方法——直测真实钩子的用例用它把真函数装回去
+_real_sync_entity_search = ManualReviewService._sync_entity_search_after_write
 
 
 def gray_case_kwargs(**overrides):
@@ -341,3 +357,105 @@ def test_parked_edge_write_injects_not_null_audit_columns(service, monkeypatch):
     # 业务列与原溯源值保留，不被覆盖
     assert props["role"] == "engineer"
     assert props["source_table"] == "db.org"
+
+
+# ---------------------------------------------------------------------------
+# 裁决提交 → 实体检索联动（FUNC-00813：索引增量 + 缓存失效）
+# ---------------------------------------------------------------------------
+
+
+def test_create_verdict_triggers_entity_search_sync(service, graph, entity_search_sync_calls):
+    case_id, version = opened(service)
+    out = service.submit(
+        case_id, version, "entity-confirm", {"entityVerdict": "create"}, "", actor()
+    )
+    assert out["status"] == "RESOLVED"
+    assert entity_search_sync_calls == [
+        {
+            "applied": True,
+            "verdict": "create",
+            "vid": "org_new_1",
+            "graphSpace": "dev2",
+            "nodeLabel": "Organization",
+            "pendingRelationsWritten": 0,
+        }
+    ]
+
+
+def test_merge_verdict_syncs_target_vid(service, graph, entity_search_sync_calls):
+    case_id, version = opened(service)
+    service.submit(
+        case_id, version, "entity-confirm", {"entityVerdict": "merge", "targetEntityId": "org_9"},
+        "", actor(),
+    )
+    (detail,) = entity_search_sync_calls
+    assert detail["vid"] == "org_9"
+    assert detail["verdict"] == "merge"
+    assert detail["graphSpace"] == "dev2"
+    assert detail["nodeLabel"] == "Organization"
+
+
+def test_legacy_and_reject_verdicts_skip_sync(service, graph, entity_search_sync_calls):
+    # 存量写后 case：实体已在图，只记录决议，不触发索引联动
+    case = service.create_direct_case(
+        **gray_case_kwargs(
+            candidate={
+                "name": "存量实体",
+                "newIds": ["a", "b"],
+                "existingCandidates": [{"vid": "c", "name": "存量实体"}],
+            }
+        )
+    )
+    detail = service.get_case(case["reviewId"], actor())
+    service.submit(
+        detail["id"], detail["version"], "entity-confirm",
+        {"entityVerdict": "merge", "targetEntityId": "c"}, "", actor(),
+    )
+    assert entity_search_sync_calls == [{"applied": False, "note": "存量写后 case：实体已在图，仅记录决议"}]
+
+    # 驳回不写图：无联动
+    case_id, version = opened(service)
+    service.submit(case_id, version, "reject-candidate", {"entityVerdict": "reject"}, "", actor())
+    assert len(entity_search_sync_calls) == 1
+
+
+def test_entity_search_sync_swallows_infra_failure(monkeypatch):
+    """联动是 best-effort：控制库会话建不起来也不能让已落库的 submit 抛错，
+    且缓存失效仍要尝试（清掉提交前的旧空结果）。"""
+    import infra.workflow_mysql as workflow_mysql
+    import service.entity_search as entity_search_module
+
+    def broken_session():
+        raise RuntimeError("control db down")
+
+    invalidated = []
+    monkeypatch.setattr(workflow_mysql, "create_workflow_session", broken_session)
+    monkeypatch.setattr(
+        entity_search_module, "invalidate_entity_caches_sync", lambda: invalidated.append(True)
+    )
+    # autouse 桩在本模块全局生效：这里要测的就是真实钩子，装回真函数
+    monkeypatch.setattr(ManualReviewService, "_sync_entity_search_after_write", _real_sync_entity_search)
+
+    _make_service()._sync_entity_search_after_write(
+        {"applied": True, "verdict": "create", "vid": "v1", "graphSpace": "dev2",
+         "nodeLabel": "Organization"}
+    )  # 不抛异常
+
+    assert invalidated == [True]
+
+
+def test_entity_search_sync_skips_without_applied_or_fields(monkeypatch):
+    """applied=False / 缺图空间字段：直接早退，不触任何外部依赖。"""
+    def boom():
+        raise AssertionError("不应触碰实体检索依赖")
+
+    import infra.workflow_mysql as workflow_mysql
+
+    monkeypatch.setattr(workflow_mysql, "create_workflow_session", boom)
+    monkeypatch.setattr(ManualReviewService, "_sync_entity_search_after_write", _real_sync_entity_search)
+
+    service = _make_service()
+    service._sync_entity_search_after_write({"applied": False})
+    service._sync_entity_search_after_write(
+        {"applied": True, "verdict": "create"}  # 缺 vid/graphSpace/nodeLabel
+    )

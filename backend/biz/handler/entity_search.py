@@ -15,27 +15,23 @@ from application.entity_search import EntitySearchApplication
 from biz.dependencies.auth import CurrentActor
 from biz.schemas.common import ApiResponse
 from biz.schemas.entity_search import EntityReindexRequest, EntitySearchRequest
-from infra.entity_response_cache import EntityResponseCache, build_cache_key
+from infra.entity_response_cache import build_cache_key
 from infra.graph_db.config import TRSGraphSettings
 from infra.workflow_mysql import get_workflow_session
 from service.entity_search import (
     EntitySearchError,
     EntitySearchReindexInProgressError,
+    clear_entity_caches,
 )
+from service.entity_search import browse_cache as _browse_cache
+from service.entity_search import search_cache as _search_cache
 
 router = APIRouter(prefix="/entity-search", tags=["entity-search"])
 logger = logging.getLogger(__name__)
 
 # 浏览页默认缓存 5 分钟；关键词搜索仍使用较短 TTL，避免索引变化后旧命中保留过久。
 # 两者都是 L1 进程缓存 + L2 Redis 共享缓存，Redis 不可用时自动降级到 L1。
-_browse_cache = EntityResponseCache(
-    namespace="entity-search:browse:v2",
-    ttl_seconds=float(os.getenv("ENTITY_BROWSE_CACHE_SECONDS", "300")),
-)
-_search_cache = EntityResponseCache(
-    namespace="entity-search:search:v2",
-    ttl_seconds=float(os.getenv("ENTITY_SEARCH_CACHE_SECONDS", "60")),
-)
+# 实例定义在 service.entity_search（写图联动也要失效同一批缓存——FUNC-00813）。
 _request_locks: dict[str, asyncio.Lock] = {}
 _request_locks_guard = asyncio.Lock()
 
@@ -53,7 +49,7 @@ async def _release_request_lock(key: str, lock: asyncio.Lock) -> None:
 
 async def _clear_entity_cache() -> None:
     """重建完成后清掉所有 worker 可见的旧搜索/浏览响应。"""
-    await asyncio.gather(_browse_cache.clear(), _search_cache.clear())
+    await clear_entity_caches()
 
 
 def _resolved_space(space: str | None) -> str:

@@ -15,8 +15,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 import threading
 import time
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -27,6 +29,7 @@ from typing import Any
 from sqlalchemy import inspect, select, text
 from sqlalchemy.orm import Session
 
+from infra.entity_response_cache import EntityResponseCache
 from infra.graph_db import TRSGraphClient, get_space_client
 from infra.llm import EmbeddingClient
 from infra.milvus import get_milvus_client
@@ -40,7 +43,10 @@ logger = logging.getLogger(__name__)
 COLLECTION_NAME = "kg_entity"
 DEFAULT_PAGE_SIZE = 10
 GRAPH_PAGE_SIZE = 200
-EMBED_BATCH_SIZE = 256
+# m3e embedding 服务侧限制：单条 ≤16000 字符、单批 ≤ M3E_MAX_BATCH_SIZE（当前 64）。
+# 任一超限服务直接 422 拒绝整批，全量重建在 pass 2 首批即中断（2026-09-21 实测）。
+EMBED_TEXT_MAX_CHARS = int(os.getenv("ENTITY_SEARCH_EMBED_TEXT_MAX_CHARS", "16000"))
+EMBED_BATCH_SIZE = int(os.getenv("ENTITY_SEARCH_EMBED_BATCH_SIZE", "64"))
 # RRF 融合常数（与项目域一致）
 RRF_K = 60
 # 检索/展示文本上限
@@ -73,6 +79,34 @@ _NODE_COUNT_TTL_SECONDS = 300.0
 _reindex_lock = threading.Lock()
 _reindex_running = False
 _node_count_cache: dict[tuple[str, str], tuple[float, int]] = {}
+
+# 搜索/浏览响应缓存（L1 进程 + L2 Redis，实例从 handler 下沉到 service，
+# 供 reindex 完成与人工审核写图联动统一失效——FUNC-00813 队列与图库联动）。
+browse_cache = EntityResponseCache(
+    namespace="entity-search:browse:v2",
+    ttl_seconds=float(os.getenv("ENTITY_BROWSE_CACHE_SECONDS", "300")),
+)
+search_cache = EntityResponseCache(
+    namespace="entity-search:search:v2",
+    ttl_seconds=float(os.getenv("ENTITY_SEARCH_CACHE_SECONDS", "60")),
+)
+
+
+async def clear_entity_caches() -> None:
+    """清掉搜索/浏览的 L1 进程 + L2 Redis 缓存（reindex 完成或写图联动时调用）。"""
+    await asyncio.gather(browse_cache.clear(), search_cache.clear())
+
+
+def invalidate_entity_caches_sync() -> None:
+    """同步上下文的缓存失效入口：工作线程里 asyncio.run 全清；
+    事件循环线程内只清 L1（Redis 由短 TTL 兜底），避免嵌套事件循环。"""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(clear_entity_caches())
+    else:
+        browse_cache.clear_local()
+        search_cache.clear_local()
 
 
 class EntitySearchError(Exception):
@@ -455,24 +489,34 @@ def _index_record(item: dict[str, Any]) -> dict[str, Any]:
     )
     return {
         "vid": item["vid"],
-        "entity_id": entity_id[:256],
-        "name": name[:2048],
+        # Milvus VARCHAR max_length 按 UTF-8 字节计：中文 2048 字符可达 6144 字节，
+        # 按字符切片会让整批 upsert 被 1100 拒绝（2026-09-21 实测 name 5430 字节）
+        "entity_id": _truncate_utf8(entity_id, 256),
+        "name": _truncate_utf8(name, 2048),
         "entity_type": item["entity_type"],
         "properties": extract_display_properties(props),
         "text": compose_entity_text(name, item["entity_type"], props),
     }
 
 
-def _iter_index_records(graph: TRSGraphClient, labels: list[str]) -> Iterator[dict[str, Any]]:
-    for item in _iter_graph_entities(graph, labels):
+def _iter_index_records(
+    graph: TRSGraphClient, labels: list[str], skipped: list[str] | None = None
+) -> Iterator[dict[str, Any]]:
+    for item in _iter_graph_entities(graph, labels, skipped=skipped):
+        # 超长 VID（Nebula 上限 256B，Milvus vid 字段 128B）入不了主键字段：跳过
+        if len(item["vid"].encode("utf-8")) > 128:
+            logger.warning("VID 超过 128 字节，跳过入索引: %.60s…", item["vid"])
+            continue
         record = _index_record(item)
         if record["text"]:
             yield record
 
 
-def _iter_index_texts(graph: TRSGraphClient, labels: list[str]) -> Iterator[str]:
+def _iter_index_texts(
+    graph: TRSGraphClient, labels: list[str], skipped: list[str] | None = None
+) -> Iterator[str]:
     """首遍仅生成检索语料，避免为不落库的记录序列化展示属性。"""
-    for item in _iter_graph_entities(graph, labels):
+    for item in _iter_graph_entities(graph, labels, skipped=skipped):
         name = extract_entity_name(item["props"], item["vid"])
         document = compose_entity_text(name, item["entity_type"], item["props"])
         if document:
@@ -624,6 +668,8 @@ class EntitySearchService:
         resolved_space = space or _default_space()
         graph = get_space_client(resolved_space)
         labels = sorted(graph.labels())
+        # Milvus entity_type 字段 64 字节上限：超长标签名（垃圾数据）直接排除
+        labels = [label for label in labels if len(label.encode("utf-8")) <= 64]
         if entity_types:
             wanted = {item.strip() for item in entity_types if item.strip()}
             missing = sorted(wanted - set(labels))
@@ -636,8 +682,16 @@ class EntitySearchService:
 
         # 第一遍只累计 BM25 文档频率/词表，不保留全量实体和 dense vectors。
         # dev2 约 52 万实体，历史实现一次性持有 records + 512 维向量会占用数 GB。
+        skipped_labels: list[str] = []
         encoder = BM25SparseEncoder()
-        encoder.fit_iterable(_iter_index_texts(graph, labels))
+        encoder.fit_iterable(_iter_index_texts(graph, labels, skipped=skipped_labels))
+        # 无索引且 REST 拉不动的大标签已跳过：第二遍不再重试（每次重试都是一轮超时）
+        if skipped_labels:
+            labels = [label for label in labels if label not in skipped_labels]
+            logger.warning(
+                "实体索引重建跳过无索引大标签: %s（补建标签索引后重建可收编）",
+                sorted(set(skipped_labels)),
+            )
 
         # 第二遍重新流式读取图实体，每批完成 embedding 后立即写入 Milvus。
         embedding_config = _resolve_embedding_config()
@@ -654,8 +708,11 @@ class EntitySearchService:
         space_filter = f'graph_space == "{_escape_expression(resolved_space)}"'
         try:
             expected_dim = embedding_config["dim"]
-            for chunk in _batched(_iter_index_records(graph, labels), EMBED_BATCH_SIZE):
-                batch = [record["text"] for record in chunk]
+            for chunk in _batched(
+                _iter_index_records(graph, labels, skipped=skipped_labels), EMBED_BATCH_SIZE
+            ):
+                # 只裁 embedding 输入：BM25 语料/存储仍保留完整 32KB 文本
+                batch = [record["text"][:EMBED_TEXT_MAX_CHARS] for record in chunk]
                 vectors = client.embed(batch)
                 if vectors is None or len(vectors) != len(batch):
                     raise EntitySearchError(
@@ -729,8 +786,95 @@ class EntitySearchService:
             "graphSpace": resolved_space,
             "embeddingModel": embedding_config["model"],
             "embeddingConfigId": embedding_config.get("config_id"),
+            "skippedLabels": sorted(set(skipped_labels)),
             "durationSeconds": round(time.monotonic() - started, 2),
         }
+
+    def upsert_entity(
+        self, *, space: str, node_label: str, vid: str, is_new: bool
+    ) -> dict[str, Any]:
+        """图写后单实体增量入索引（人工审核 T_LINK 裁决联动，FUNC-00813）。
+
+        与全量 reindex 同构：图读回顶点 → dense embed + BM25（state 词表）→ 幂等 upsert。
+        前置守卫：空间索引已建成（state 快照 + BM25 词表可用）且当前无重建在跑；
+        未建成 / 组件异常一律返回 ``upserted=False``，由调用方降级（下次全量重建兜底）。
+        ``is_new``：create 落新 vid → 计数快照 +1；merge 覆盖已有行 → 计数不变。
+        """
+        if _database_reindex_running(self._session):
+            return {"upserted": False, "reason": "reindex in progress"}
+        state_row = _load_state(self._session, space)
+        encoder = _load_bm25_from_state(self._session, space)
+        if state_row is None or encoder is None or not (state_row.entity_count or 0):
+            return {"upserted": False, "reason": "space index not built"}
+        graph = get_space_client(space)
+        node = graph.get_node(vid)
+        if node is None:
+            return {"upserted": False, "reason": "vertex not found in graph"}
+        record = _index_record(
+            {"vid": vid, "entity_type": node_label, "props": dict(node.properties or {})}
+        )
+        if not record["text"]:
+            return {"upserted": False, "reason": "empty search text"}
+        try:
+            embedding_config = _resolve_embedding_config()
+            client = _embedding_client()
+        except EntitySearchError:
+            return {"upserted": False, "reason": "embedding not configured"}
+        if client is None:
+            return {"upserted": False, "reason": "embedding not configured"}
+        vectors = client.embed([record["text"][:EMBED_TEXT_MAX_CHARS]])
+        if not vectors or len(vectors) != 1:
+            return {"upserted": False, "reason": "embedding failed"}
+        # 配置声明了维度才校验；未声明（首个响应推断口径）交给 Milvus 建行时报错降级
+        if embedding_config["dim"] is not None and len(vectors[0]) != embedding_config["dim"]:
+            return {"upserted": False, "reason": "embedding dim mismatch"}
+        sparse_vector = encoder.encode_document(record["text"])
+        if not sparse_vector:
+            # Milvus 拒绝空稀疏向量：文本 token 全不在全量词表（全新造词）时降级跳过
+            return {"upserted": False, "reason": "empty sparse vector"}
+        try:
+            milvus = get_milvus_client()
+            if not milvus.has_collection(COLLECTION_NAME):
+                return {"upserted": False, "reason": "collection missing"}
+            milvus.upsert(
+                collection_name=COLLECTION_NAME,
+                data=[
+                    {
+                        "document_id": f"{space}::{vid}",
+                        "vid": vid,
+                        "entity_id": record["entity_id"],
+                        "name": record["name"],
+                        "entity_type": node_label,
+                        "graph_space": space,
+                        "search_text": record["text"],
+                        "properties": json.dumps(record["properties"], ensure_ascii=False),
+                        "dense_vector": vectors[0],
+                        "sparse_vector": sparse_vector,
+                    }
+                ],
+            )
+        except Exception as exc:  # noqa: BLE001 - 增量失败不影响裁决，等全量重建兜底
+            logger.warning("单实体入索引失败 vid=%s space=%s", vid, space)
+            return {"upserted": False, "reason": f"milvus error: {exc}"}
+        if is_new:
+            self._bump_state_counts(state_row, node_label)
+        return {"upserted": True, "vid": vid, "entityType": node_label}
+
+    def _bump_state_counts(self, state_row: Any, node_label: str) -> None:
+        """create 场景计数快照 +1：浏览分页窗口/总览与图保持一致（merge 不变）。"""
+        from datetime import UTC, datetime
+
+        try:
+            counts = json.loads(state_row.type_counts or "{}")
+        except Exception:  # noqa: BLE001 - 计数快照损坏按空处理
+            counts = {}
+        if not isinstance(counts, dict):
+            counts = {}
+        counts[node_label] = int(counts.get(node_label) or 0) + 1
+        state_row.type_counts = json.dumps(counts, ensure_ascii=False)
+        state_row.entity_count = int(state_row.entity_count or 0) + 1
+        state_row.updated_at = datetime.now(UTC)
+        self._session.commit()
 
     @staticmethod
     def _ensure_collection(milvus: Any, *, dim: int) -> None:
@@ -1180,24 +1324,86 @@ class EntitySearchService:
 
 
 def _iter_graph_entities(
-    graph: TRSGraphClient, labels: list[str], page_size: int = GRAPH_PAGE_SIZE
+    graph: TRSGraphClient,
+    labels: list[str],
+    page_size: int = GRAPH_PAGE_SIZE,
+    skipped: list[str] | None = None,
 ):
-    """按标签分页拉取全部节点，yield {vid, entity_type, props}。"""
+    """按标签分页拉取全部节点，yield {vid, entity_type, props}。
+
+    优先走 nGQL ``LOOKUP ON <tag> YIELD vertex | LIMIT/OFFSET``：有索引的标签
+    （organization_base 23 万等）索引枚举深分页仅 ~3s/页；REST ``/nodes/label``
+    是 MATCH+SKIP 全量物化，大标签单页就能超过读超时（2026-09-21 实测 Paper
+    在 REST 上 90s 服务端兜底超时，重建两次中断）。LOOKUP 不可用（标签无索引）
+    时回退 REST 分页；REST 再失败的大标签记 warning 跳过并写入 ``skipped``
+    ——待补建标签索引后下次全量重建收编，其余标签不受影响。
+    """
+    from infra.graph_db.exceptions import GraphRepoError
+
+    skipped = skipped if skipped is not None else []
     for label in labels:
-        offset = 0
-        while True:
-            result = graph.get_nodes_by_label(label, limit=page_size, offset=offset)
-            items = result.items or []
-            if not items:
-                break
-            for node in items:
-                vid = str(node.id)
-                if not vid:
-                    continue
-                yield {"vid": vid, "entity_type": label, "props": dict(node.properties or {})}
-            offset += len(items)
-            if len(items) < page_size:
-                break
+        try:
+            probe = graph.execute_query(f"LOOKUP ON `{label}` YIELD vertex AS v | LIMIT 1")
+        except (AttributeError, GraphRepoError):
+            # AttributeError：客户端无原生查询能力（测试替身/旧版本）→ 走 REST
+            probe = None
+        if probe is not None:
+            try:
+                yield from _iter_label_via_lookup(graph, label)
+            except GraphRepoError:
+                # 长任务中途的瞬时图服务抖动不应报废整次重建：按标签降级跳过
+                logger.warning("标签 %s LOOKUP 分页中途失败，本次重建跳过该标签", label)
+                skipped.append(label)
+            continue
+        try:
+            yield from _iter_label_via_rest(graph, label, page_size)
+        except GraphRepoError:
+            logger.warning(
+                "标签 %s 无图索引且 REST 分页超时，本次重建跳过该标签（补建标签索引后重建可收编）",
+                label,
+            )
+            skipped.append(label)
+
+
+def _iter_label_via_lookup(graph: TRSGraphClient, label: str, page_size: int = 2000):
+    """索引枚举分页：LOOKUP + LIMIT/OFFSET（对有索引标签是线性代价）。"""
+    offset = 0
+    while True:
+        result = graph.execute_query(
+            f"LOOKUP ON `{label}` YIELD vertex AS v | LIMIT {page_size} OFFSET {offset}"
+        )
+        records = result.records or []
+        if not records:
+            return
+        for record in records:
+            node = record.get("v") if isinstance(record, dict) else None
+            if not isinstance(node, dict):
+                continue
+            vid = str(node.get("id") or "")
+            if not vid:
+                continue
+            yield {"vid": vid, "entity_type": label, "props": dict(node.get("properties") or {})}
+        offset += len(records)
+        if len(records) < page_size:
+            return
+
+
+def _iter_label_via_rest(graph: TRSGraphClient, label: str, page_size: int):
+    """REST /nodes/label 分页（原实现）：适合小标签。"""
+    offset = 0
+    while True:
+        result = graph.get_nodes_by_label(label, limit=page_size, offset=offset)
+        items = result.items or []
+        if not items:
+            break
+        for node in items:
+            vid = str(node.id)
+            if not vid:
+                continue
+            yield {"vid": vid, "entity_type": label, "props": dict(node.properties or {})}
+        offset += len(items)
+        if len(items) < page_size:
+            break
 
 
 def _default_space() -> str:

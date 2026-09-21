@@ -363,6 +363,9 @@ class ManualReviewService:
                 {"actionId": action, **(apply_detail or {})},
             )
             s.commit()
+            # 事务落库后再联动实体检索（索引增量 + 缓存失效），best-effort 不影响裁决结果
+            if apply_detail:
+                self._sync_entity_search_after_write(apply_detail)
             return self.detail(s, c)
 
     def create_direct_case(
@@ -858,6 +861,10 @@ class ManualReviewService:
         incoming = snapshot.get("_incoming")
         if not incoming:
             return {"applied": False, "note": "存量写后 case：实体已在图，仅记录决议"}
+        from infra.graph_db.config import TRSGraphSettings
+
+        graph_space = str(snapshot.get("_graphSpace") or TRSGraphSettings.from_env().space)
+        node_label = str(snapshot.get("_nodeLabel") or "")
         verdict = result.get("entityVerdict")
         if verdict == "merge":
             target = str(result.get("targetEntityId") or "")
@@ -914,8 +921,56 @@ class ManualReviewService:
             "applied": True,
             "verdict": verdict,
             "vid": vid,
+            "graphSpace": graph_space,
+            "nodeLabel": node_label,
             "pendingRelationsWritten": written_edges,
         }
+
+    def _sync_entity_search_after_write(self, apply_detail: dict[str, Any]) -> None:
+        """T_LINK 裁决写图成功后联动实体检索（FUNC-00813 队列与图库联动）：
+
+        ① 单实体增量入 Milvus 索引——新实体立即可模糊检索，不必等全量重建；
+        ② 失效实体搜索/浏览缓存——清掉提交前的旧空结果，避免 60s/300s 缓存空窗。
+        best-effort：任何失败仅记录日志，绝不影响裁决提交（图已写，索引等下次全量重建兜底）。
+        """
+        if not apply_detail.get("applied"):
+            return
+        space = str(apply_detail.get("graphSpace") or "")
+        label = str(apply_detail.get("nodeLabel") or "")
+        vid = str(apply_detail.get("vid") or "")
+        if not (space and label and vid):
+            return
+        try:
+            # import 也在 try 内：模块级依赖异常同样不能让已落库的 submit 抛错
+            from infra.workflow_mysql import create_workflow_session
+            from service.entity_search import EntitySearchService
+
+            session = create_workflow_session()
+            try:
+                result = EntitySearchService(session).upsert_entity(
+                    space=space,
+                    node_label=label,
+                    vid=vid,
+                    is_new=apply_detail.get("verdict") == "create",
+                )
+            finally:
+                session.close()
+            if result.get("upserted"):
+                logger.info("裁决写图后实体已入索引 vid=%s space=%s", vid, space)
+            else:
+                logger.info(
+                    "裁决写图后实体未入索引 vid=%s reason=%s（等待下次全量重建兜底）",
+                    vid,
+                    result.get("reason"),
+                )
+        except Exception:  # noqa: BLE001 - 索引联动失败不影响裁决
+            logger.warning("裁决写图后同步实体索引失败 vid=%s（不影响裁决）", vid, exc_info=True)
+        try:
+            from service.entity_search import invalidate_entity_caches_sync
+
+            invalidate_entity_caches_sync()
+        except Exception:  # noqa: BLE001 - 缓存失效失败不影响裁决
+            logger.warning("裁决写图后失效实体检索缓存失败（不影响裁决）", exc_info=True)
 
     @staticmethod
     def _tag_fields(client: Any, label: str) -> set[str] | None:

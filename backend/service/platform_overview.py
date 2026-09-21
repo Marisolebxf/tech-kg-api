@@ -96,15 +96,27 @@ class TRSGraphStatsProvider:
                 edges=edges,
             )
         except Exception as exc:
-            logger.warning("SHOW STATS 失败，回退到逐 label/edge_type 计数（会慢）: %s", exc)
-            labels = client.labels()
-            edge_types = client.edge_types()
-            return GraphStatsSnapshot(
-                total_nodes=client.node_count(),
-                total_edges=client.edge_count(),
-                nodes={label: client.node_count(label) for label in labels},
-                edges={edge_type: client.edge_count(edge_type) for edge_type in edge_types},
-            )
+            logger.warning("SHOW STATS 失败，先试统计快照缓存，再回退逐项计数: %s", exc)
+            # ① 客户端 300s 统计快照缓存（模块级按空间共享：实体列表浏览等
+            #    可能刚成功取过）——stats 任务卡死时总览仍能秒回
+            try:
+                snap = client.stats_snapshot()
+                return GraphStatsSnapshot(
+                    total_nodes=snap["total_nodes"],
+                    total_edges=snap["total_edges"],
+                    nodes=dict(snap["tags"]),
+                    edges=dict(snap["edges"]),
+                )
+            except Exception:  # noqa: BLE001 — 缓存也没有才走 REST 逐项计数
+                logger.warning("统计快照缓存不可用，回退 REST 逐项计数（会慢）")
+                labels = client.labels()
+                edge_types = client.edge_types()
+                return GraphStatsSnapshot(
+                    total_nodes=client.node_count(),
+                    total_edges=client.edge_count(),
+                    nodes={label: client.node_count(label) for label in labels},
+                    edges={edge_type: client.edge_count(edge_type) for edge_type in edge_types},
+                )
 
 
 def _format_count(value: int) -> str:

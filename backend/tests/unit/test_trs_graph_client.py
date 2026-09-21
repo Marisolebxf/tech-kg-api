@@ -1139,3 +1139,135 @@ class TestSlashVidNgqlFallback:
 
         assert node is not None
         assert node.id == "person_1"
+
+
+class TestStatsAndPagedNodes:
+    """SHOW STATS 计数与 nGQL 分页直查（大标签绕开 REST 全量扫描，2026-09-21）。"""
+
+    @pytest.fixture(autouse=True)
+    def _clear_stats_cache(self):
+        client_mod = __import__("infra.graph_db.client", fromlist=["_stats_snapshot_cache"])
+        client_mod._stats_snapshot_cache.clear()
+        yield
+        client_mod._stats_snapshot_cache.clear()
+
+    @staticmethod
+    def _stats_payload():
+        return {
+            "records": [
+                {"Type": "Tag", "Name": "Paper", "Count": 176614},
+                {"Type": "Tag", "Name": "Journal", "Count": 2134},
+                {"Type": "Edge", "Name": "STUDIED_AT", "Count": 999},
+                {"Type": "Space", "Name": "vertices", "Count": 178748},
+                {"Type": "Space", "Name": "edges", "Count": 1001},
+            ],
+            "summary": None,
+        }
+
+    def test_stats_snapshot_parses_tags_edges_and_totals(self):
+        def handler(request):
+            if request.url.path == "/health":
+                return _health_ok(request)
+            return httpx.Response(200, json=self._stats_payload())
+
+        repo = _make_repo(handler)
+        snap = repo.stats_snapshot()
+        assert snap["tags"] == {"Paper": 176614, "Journal": 2134}
+        assert snap["edges"] == {"STUDIED_AT": 999}
+        assert snap["total_nodes"] == 178748  # Space 行优先于 tags 求和
+        assert snap["total_edges"] == 1001
+        repo.close()
+
+    def test_stats_tag_counts_parses_tags_and_caches(self):
+        calls = []
+
+        def handler(request):
+            if request.url.path == "/health":
+                return _health_ok(request)
+            assert request.url.path == "/api/v1/query/read"
+            calls.append(json.loads(request.content)["query"])
+            return httpx.Response(200, json=self._stats_payload())
+
+        repo = _make_repo(handler)
+        assert repo.stats_tag_counts() == {"Paper": 176614, "Journal": 2134}  # 边类型被排除
+        assert repo.stats_tag_counts() == {"Paper": 176614, "Journal": 2134}  # 第二次命中缓存
+        assert len(calls) == 1
+        repo.close()
+
+    def test_label_count_prefers_stats_and_falls_back_to_rest(self):
+        stats_served = {"rest_calls": []}
+
+        def handler(request):
+            if request.url.path == "/health":
+                return _health_ok(request)
+            if request.url.path == "/api/v1/query/read":
+                # 统计里没有 NotIndexed 标签 → 走 REST 兜底
+                return httpx.Response(
+                    200, json={"records": [{"Type": "Tag", "Name": "Paper", "Count": 7}]}
+                )
+            if request.url.path == "/api/v1/schema/stats/node-count":
+                stats_served["rest_calls"].append(request.url.params.get("label"))
+                return httpx.Response(200, json={"count": 42})
+            return httpx.Response(404)
+
+        repo = _make_repo(handler)
+        assert repo.label_count("Paper") == 7  # 命中统计
+        assert stats_served["rest_calls"] == []
+        assert repo.label_count("NotIndexed") == 42  # 统计缺失 → REST
+        assert stats_served["rest_calls"] == ["NotIndexed"]
+        repo.close()
+
+    def test_stats_snapshot_cached_even_when_show_stats_later_fails(self):
+        """stats 任务卡死（SHOW STATS 开始报错）时，300s 内成功过的快照仍可读。"""
+        state = {"fail": False}
+
+        def handler(request):
+            if request.url.path == "/health":
+                return _health_ok(request)
+            if state["fail"]:
+                return httpx.Response(400, json={"error": "stats job running"})
+            return httpx.Response(200, json=self._stats_payload())
+
+        repo = _make_repo(handler)
+        assert repo.stats_snapshot()["tags"]["Paper"] == 176614
+        state["fail"] = True
+        assert repo.stats_snapshot()["tags"]["Paper"] == 176614  # 命中缓存，不再报错
+        repo.close()
+
+    def test_paged_nodes_by_label_builds_ngql_and_parses_vertices(self):
+        captured = []
+
+        def handler(request):
+            if request.url.path == "/health":
+                return _health_ok(request)
+            assert request.url.path == "/api/v1/query/read"
+            captured.append(json.loads(request.content)["query"])
+            return httpx.Response(
+                200,
+                json={
+                    "records": [
+                        {
+                            "v": {
+                                "id": "paper_1",
+                                "labels": ["Paper"],
+                                "properties": {"name": "综述"},
+                            }
+                        },
+                        {"other": "ignored"},
+                    ]
+                },
+            )
+
+        repo = _make_repo(handler)
+        nodes = repo.paged_nodes_by_label("Paper", limit=20, offset=40)
+        assert captured == ["USE test; MATCH (v:`Paper`) RETURN v SKIP 40 LIMIT 20"]
+        assert len(nodes) == 1
+        assert nodes[0].id == "paper_1"
+        assert nodes[0].properties == {"name": "综述"}
+        repo.close()
+
+    def test_paged_nodes_by_label_rejects_injection(self):
+        repo = _make_repo(_health_ok)
+        with pytest.raises(GraphRequestError, match="非法节点标签"):
+            repo.paged_nodes_by_label("Paper`); DROP SPACE dev2; --")
+        repo.close()

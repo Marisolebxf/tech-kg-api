@@ -43,18 +43,19 @@ _STATS_SCAN_WORKERS = 4
 _stats_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _stats_locks: dict[str, asyncio.Lock] = {}
 _stats_refreshing: set[str] = set()
-# 单标签 count 也是全量扫描（秒级），分页拉取时会反复触发，按 (空间, 标签) 缓存。
+# 单标签 count 兜底路径（REST node-count）是全量扫描（秒级），按 (空间, 标签) 缓存；
+# 首选 SHOW STATS（毫秒级，见 client.stats_tag_counts）。
 _NODE_COUNT_TTL_SECONDS = 300.0
 _node_count_cache: dict[tuple[str, str], tuple[float, int]] = {}
 
 
 async def _node_count_cached(client: TRSGraphClient, space: str | None, label: str) -> int:
-    """带 TTL 缓存的标签节点数。"""
+    """带 TTL 缓存的标签节点数（label_count 优先 SHOW STATS，毫秒级）。"""
     key = (space or "", label)
     cached = _node_count_cache.get(key)
     if cached and time.monotonic() - cached[0] < _NODE_COUNT_TTL_SECONDS:
         return cached[1]
-    count = await asyncio.to_thread(client.node_count, label)
+    count = await asyncio.to_thread(client.label_count, label)
     _node_count_cache[key] = (time.monotonic(), count)
     return count
 
@@ -377,10 +378,12 @@ async def list_nodes(
         client = _get_client(space)
         # TRSGraphClient 底层是同步 httpx.Client，直接在 async handler 里调会把
         # 事件循环卡住，进程内并发（如全景图分层并发拉取）全部退化成串行。
-        result = await asyncio.to_thread(
-            client.get_nodes_by_label, label, limit=limit, offset=offset
+        # nGQL 直查分页 + SHOW STATS 计数：REST /nodes/label 与 node-count 在
+        # trs-graph 侧均为全量扫描，大标签（Paper 十万级）30s+ 超时（2026-09-21）。
+        nodes = await asyncio.to_thread(
+            client.paged_nodes_by_label, label, limit=limit, offset=offset
         )
-        items = [_node_to_data(n).model_dump() for n in result.items]
+        items = [_node_to_data(n).model_dump() for n in nodes]
         total = await _node_count_cached(client, space, label)
         return ApiResponse(data=NodeListData(items=items, total=total).model_dump())
     except Exception:

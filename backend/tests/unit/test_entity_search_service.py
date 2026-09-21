@@ -66,11 +66,24 @@ class FakeGraph:
     def node_count(self, label: str | None = None) -> int:
         return self._counts.get(label or "", 0)
 
+    def stats_tag_counts(self) -> dict[str, int]:
+        return dict(self._counts)
+
+    def label_count(self, label: str) -> int:
+        counts = self.stats_tag_counts()
+        if label in counts:
+            return counts[label]
+        return self.node_count(label)
+
     def get_nodes_by_label(
         self, label: str, *, limit: int = 100, offset: int = 0
     ) -> FakePagedResult:
         items = self._nodes.get(label, [])
         return FakePagedResult(items[offset : offset + limit], total=len(items))
+
+    def paged_nodes_by_label(self, label: str, *, limit: int = 100, offset: int = 0) -> list:
+        items = self._nodes.get(label, [])
+        return items[offset : offset + limit]
 
 
 class FakeMilvusClient:
@@ -275,9 +288,7 @@ def test_browse_single_type_pagination(state_session, monkeypatch) -> None:
     assert [item["vid"] for item in result["items"]] == ["expert_b"]
 
 
-def test_browse_single_type_reuses_page_total_without_node_count(
-    state_session, monkeypatch
-) -> None:
+def test_browse_single_type_counts_via_stats_without_rest_count(state_session, monkeypatch) -> None:
     graph = FakeGraph(
         ["Expert"],
         {
@@ -289,11 +300,12 @@ def test_browse_single_type_reuses_page_total_without_node_count(
     )
 
     def fail_node_count(label=None):
-        raise AssertionError("单类型浏览不应再额外调用 node_count")
+        raise AssertionError("单类型浏览总数走 SHOW STATS，不应回退 REST node_count")
 
     graph.node_count = fail_node_count
     monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
     monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+    monkeypatch.setattr("service.entity_search._node_count_cache", {})
 
     result = EntitySearchService(state_session).browse(entity_type="Expert", limit=1, offset=1)
 
@@ -374,6 +386,8 @@ def test_browse_cross_type_incomplete_state_falls_back_to_live_counts(
     )
     calls: list[str | None] = []
     original_node_count = graph.node_count
+    # SHOW STATS 也拿不到（统计缺失）→ 只能逐标签实时计数
+    graph.stats_tag_counts = lambda: {}
 
     def track_node_count(label=None):
         calls.append(label)

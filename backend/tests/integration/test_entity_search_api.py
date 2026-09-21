@@ -34,6 +34,15 @@ class FakeGraph:
     def node_count(self, label: str | None = None) -> int:
         return 1
 
+    def stats_tag_counts(self) -> dict[str, int]:
+        return {"Expert": 1}
+
+    def label_count(self, label: str) -> int:
+        counts = self.stats_tag_counts()
+        if label in counts:
+            return counts[label]
+        return self.node_count(label)
+
     def get_node(self, node_id: str):
         if node_id == "expert_1":
             node = FakeNode("expert_1", {"id": "E-1", "name": "张三", "org": "中科院"})
@@ -57,6 +66,16 @@ class FakeGraph:
                 self.total = len(rows)
 
         return Result(items)
+
+    def paged_nodes_by_label(self, label: str, *, limit: int = 100, offset: int = 0):
+        items = (
+            [FakeNode("expert_1", {"id": "E-1", "name": "张三", "org": "中科院"})]
+            if offset == 0
+            else []
+        )
+        for node in items:
+            node.labels = [label]
+        return items[:limit]
 
 
 class FakeMilvus:
@@ -222,14 +241,14 @@ async def test_browse_uses_shared_cache_after_l1_is_cleared(entity_search_api) -
     _, _, monkeypatch = entity_search_api
     graph = FakeGraph()
     calls = 0
-    original_get_nodes = graph.get_nodes_by_label
+    original_paged_nodes = graph.paged_nodes_by_label
 
-    def counted_get_nodes(label: str, *, limit: int = 100, offset: int = 0):
+    def counted_paged_nodes(label: str, *, limit: int = 100, offset: int = 0):
         nonlocal calls
         calls += 1
-        return original_get_nodes(label, limit=limit, offset=offset)
+        return original_paged_nodes(label, limit=limit, offset=offset)
 
-    graph.get_nodes_by_label = counted_get_nodes
+    graph.paged_nodes_by_label = counted_paged_nodes
     monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
 
     from biz.handler import entity_search as entity_search_handler

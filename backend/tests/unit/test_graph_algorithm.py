@@ -67,8 +67,16 @@ def algo_backend(monkeypatch):
         def edge_types(self):
             return ["HAS_KEYWORD", "EMPLOYED_BY"]
 
-        def execute_read(self, query: str):
-            # Degree nGQL 双向聚合：按箭头方向区分出度 / 入度
+        def execute_read(self, query: str, params=None, *, timeout=None):
+            if query.startswith("LOOKUP"):
+                # 边索引枚举 src/dst：b 出5，a 出2 入1，其余端点各 1 度
+                pairs = [("b", f"t{i}") for i in range(1, 6)] + [
+                    ("a", "c"),
+                    ("a", "c2"),
+                    ("d", "a"),
+                ]
+                return SimpleNamespace(records=[{"s": s, "d": d} for s, d in pairs])
+            # MATCH 回退路径（无索引边类型）：按箭头方向区分出度 / 入度
             if "<-[e:" in query:
                 return SimpleNamespace(records=[{"vid": "a", "cnt": 1}, {"vid": "c", "cnt": 4}])
             return SimpleNamespace(records=[{"vid": "a", "cnt": 2}, {"vid": "b", "cnt": 5}])
@@ -325,21 +333,57 @@ def test_get_result_passthrough_with_truncated(algo_backend) -> None:
 
 
 def test_degree_via_ngql_returns_merged_result(algo_backend) -> None:
-    # degreestatic 不走 Spark（字符串 VID 限制），nGQL 同步算完直接 succeeded
+    # degreestatic 不走 Spark（字符串 VID 限制），边索引 LOOKUP 枚举后本地聚合同步算完
     data = submit_job(_actor(), "shared_business", "degreestatic", ["HAS_KEYWORD"], {})
     assert data["status"] == "succeeded"
     assert algo_backend.submit_calls == []  # 未触碰 Spark 提交
     result = get_result(_actor(), "shared_business", data["jobId"])
-    # 出度 {a:2,b:5}、入度 {a:1,c:4} 合并后按总度降序
+    # src/dst 对：b→t1..t5（出5），a→c、a→c2（出2），d→a（a 入1）；总度降序，同度按首见序
+    assert result["rows"] == [
+        {"vid": "b", "out_degree": "5", "in_degree": "0", "degree": "5"},
+        {"vid": "a", "out_degree": "2", "in_degree": "1", "degree": "3"},
+        *[
+            {"vid": v, "out_degree": "0", "in_degree": "1", "degree": "1"}
+            for v in ("t1", "t2", "t3", "t4", "t5", "c", "c2")
+        ],
+        {"vid": "d", "out_degree": "1", "in_degree": "0", "degree": "1"},
+    ]
+    assert result["count"] == 10
+    assert result["truncated"] is False
+    job = get_job(_actor(), "shared_business", data["jobId"])
+    assert job["status"] == "succeeded"
+
+
+def test_degree_falls_back_to_match_when_edge_not_indexed(algo_backend, monkeypatch) -> None:
+    # 无索引边类型：LOOKUP 报 "no index" → 回退全空间 MATCH 聚合（服务端 count）
+    from infra.graph_db.exceptions import GraphRequestError
+
+    class NoIndexGraphClient:
+        def edge_types(self):
+            return ["HAS_KEYWORD", "EMPLOYED_BY"]
+
+        def execute_read(self, query: str, params=None, *, timeout=None):
+            if query.startswith("LOOKUP"):
+                raise GraphRequestError(
+                    "POST /api/v1/query/read -> 400: There is no index to use at runtime",
+                    status_code=400,
+                    body="",
+                )
+            if "<-[e:" in query:
+                return SimpleNamespace(records=[{"vid": "a", "cnt": 1}, {"vid": "c", "cnt": 4}])
+            return SimpleNamespace(records=[{"vid": "a", "cnt": 2}, {"vid": "b", "cnt": 5}])
+
+    monkeypatch.setattr("infra.graph_db.get_space_client", lambda space: NoIndexGraphClient())
+    data = submit_job(_actor(), "shared_business", "degreestatic", ["HAS_KEYWORD"], {})
+    assert data["status"] == "succeeded"
+    result = get_result(_actor(), "shared_business", data["jobId"])
+    # MATCH 聚合：出度 {a:2,b:5}、入度 {a:1,c:4} 合并后按总度降序
     assert result["rows"] == [
         {"vid": "b", "out_degree": "5", "in_degree": "0", "degree": "5"},
         {"vid": "c", "out_degree": "0", "in_degree": "4", "degree": "4"},
         {"vid": "a", "out_degree": "2", "in_degree": "1", "degree": "3"},
     ]
     assert result["count"] == 3
-    assert result["truncated"] is False
-    job = get_job(_actor(), "shared_business", data["jobId"])
-    assert job["status"] == "succeeded"
 
 
 def test_degree_unknown_label_rejected(algo_backend) -> None:
@@ -420,4 +464,4 @@ def test_degree_returns_running_before_background_computation(algo_backend, monk
     if fail:
         assert "graph offline" in job["error"]
     else:
-        assert get_result(_actor(), "shared_business", data["jobId"])["count"] == 3
+        assert get_result(_actor(), "shared_business", data["jobId"])["count"] == 10

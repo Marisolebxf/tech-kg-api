@@ -1271,3 +1271,119 @@ class TestStatsAndPagedNodes:
         with pytest.raises(GraphRequestError, match="非法节点标签"):
             repo.paged_nodes_by_label("Paper`); DROP SPACE dev2; --")
         repo.close()
+
+
+class TestSchemaListCache:
+    """labels()/edge_types() 短 TTL 单飞缓存（响应缓存过期瞬间的会话池保护，2026-09-21）。"""
+
+    @pytest.fixture(autouse=True)
+    def _clear_schema_list_caches(self):
+        client_mod = __import__(
+            "infra.graph_db.client",
+            fromlist=["_labels_cache", "_edge_types_cache"],
+        )
+        client_mod._labels_cache.clear()
+        client_mod._edge_types_cache.clear()
+        yield
+        client_mod._labels_cache.clear()
+        client_mod._edge_types_cache.clear()
+
+    @staticmethod
+    def _labels_payload():
+        return [{"Name": "Paper"}, {"Name": "Expert"}]
+
+    def test_labels_cached_across_calls(self):
+        calls = []
+
+        def handler(request):
+            if request.url.path == "/health":
+                return _health_ok(request)
+            calls.append(request.url.path)
+            return httpx.Response(200, json=self._labels_payload())
+
+        repo = _make_repo(handler)
+        assert repo.labels() == ["Paper", "Expert"]
+        assert repo.labels() == ["Paper", "Expert"]
+        assert calls == ["/api/v1/schema/labels"]  # 第二次命中缓存，不打 REST
+        repo.close()
+
+    def test_edge_types_cached_across_calls(self):
+        calls = []
+
+        def handler(request):
+            if request.url.path == "/health":
+                return _health_ok(request)
+            calls.append(request.url.path)
+            return httpx.Response(200, json=[{"Name": "STUDIED_AT"}])
+
+        repo = _make_repo(handler)
+        assert repo.edge_types() == ["STUDIED_AT"]
+        assert repo.edge_types() == ["STUDIED_AT"]
+        assert calls == ["/api/v1/schema/edge-types"]
+        repo.close()
+
+    def test_labels_refetch_after_ttl_expiry(self, monkeypatch):
+        client_mod = __import__(
+            "infra.graph_db.client", fromlist=["_SCHEMA_LIST_CACHE_TTL_SECONDS"]
+        )
+        monkeypatch.setattr(client_mod, "_SCHEMA_LIST_CACHE_TTL_SECONDS", 0.0)
+        calls = []
+
+        def handler(request):
+            if request.url.path == "/health":
+                return _health_ok(request)
+            calls.append(request.url.path)
+            return httpx.Response(200, json=self._labels_payload())
+
+        repo = _make_repo(handler)
+        repo.labels()
+        repo.labels()
+        assert calls == ["/api/v1/schema/labels"] * 2  # TTL=0 每次都回源
+        repo.close()
+
+    def test_labels_serve_stale_cache_when_refetch_fails(self, monkeypatch):
+        """回源失败（会话池瞬时打满→502）时沿用过期旧值，读路径不 502。"""
+        client_mod = __import__(
+            "infra.graph_db.client", fromlist=["_SCHEMA_LIST_CACHE_TTL_SECONDS"]
+        )
+        monkeypatch.setattr(client_mod, "_SCHEMA_LIST_CACHE_TTL_SECONDS", 0.0)
+        state = {"ok": True}
+
+        def handler(request):
+            if request.url.path == "/health":
+                return _health_ok(request)
+            if state["ok"]:
+                return httpx.Response(200, json=self._labels_payload())
+            return httpx.Response(502, json={"error": "no extra session available"})
+
+        repo = _make_repo(handler)
+        assert repo.labels() == ["Paper", "Expert"]
+        state["ok"] = False
+        assert repo.labels() == ["Paper", "Expert"]  # 回源失败回退过期值
+        state["ok"] = True
+        assert repo.labels() == ["Paper", "Expert"]  # 恢复后可再次回源
+        repo.close()
+
+    def test_labels_cache_isolated_per_space(self):
+        def handler(request):
+            if request.url.path == "/health":
+                return _health_ok(request)
+            space = request.headers.get("X-Graph-Space", "")
+            names = ["Paper"] if space == "space_a" else ["Expert"]
+            return httpx.Response(200, json=[{"Name": name} for name in names])
+
+        settings_a = TRSGraphSettings(
+            base_url="http://test", space="space_a", api_key=None, timeout=5
+        )
+        repo_a = TRSGraphClient(settings_a, transport=httpx.MockTransport(handler))
+        repo_a.connect()
+        settings_b = TRSGraphSettings(
+            base_url="http://test", space="space_b", api_key=None, timeout=5
+        )
+        repo_b = TRSGraphClient(settings_b, transport=httpx.MockTransport(handler))
+        repo_b.connect()
+        assert repo_a.labels() == ["Paper"]
+        assert repo_b.labels() == ["Expert"]
+        assert repo_a.labels() == ["Paper"]  # 不被另一空间的缓存覆盖
+        repo_a.close()
+        repo_b.close()

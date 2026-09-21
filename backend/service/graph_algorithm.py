@@ -13,6 +13,7 @@ import os
 import threading
 import time
 import uuid
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -269,37 +270,70 @@ def _local_job_to_data(job: dict[str, Any]) -> dict:
 
 
 def _degree_rows_via_ngql(space: str, labels: list[str]) -> tuple[list[dict[str, str]], bool]:
-    """nGQL 出/入度聚合并合并为逐顶点行（总度降序，上限对齐图服务 10000 行截断）。"""
+    """出/入度聚合并合并为逐顶点行（总度降序，上限对齐图服务 10000 行截断）。
+
+    优先边索引 LOOKUP 枚举 src/dst 后本地聚合：代价只跟该边类型的边数相关。
+    无索引边类型回退全空间 MATCH 聚合（服务端 count）——其代价是全顶点扫描，
+    共享图库缓存变冷时会超图服务内部超时（2026-09-21 实测 STUDIED_AT 92 条边
+    也 >90s），仅作兜底。
+    """
     from infra.graph_db import get_space_client
+    from infra.graph_db.exceptions import GraphRequestError
 
     client = get_space_client(space)
     known = set(client.edge_types())
     unknown = [label for label in labels if label not in known]
     if unknown:
         raise GraphAlgorithmError(f"图空间 {space} 不存在边类型: {', '.join(unknown)}")
-    edge_expr = "|".join(labels)
-    # MATCH 聚合在图库服务端完成，只回传逐顶点计数；两个方向分别查后按 vid 合并
-    out_result = client.execute_read(
-        f"MATCH (v)-[e:{edge_expr}]->(v2) RETURN id(v) AS vid, count(e) AS cnt"
-    )
-    in_result = client.execute_read(
-        f"MATCH (v)<-[e:{edge_expr}]-(v2) RETURN id(v) AS vid, count(e) AS cnt"
-    )
+
     degrees: dict[str, dict[str, int]] = {}
 
-    def absorb(records: list[dict[str, Any]], field: str) -> None:
-        for record in records:
-            vid = str(record.get("vid") or "")
-            if not vid:
+    def absorb_pairs(pairs: Iterable[tuple[str, str]]) -> None:
+        for src, dst in pairs:
+            if not src or not dst:
                 continue
-            entry = degrees.setdefault(vid, {"out": 0, "in": 0})
-            try:
-                entry[field] += int(record.get("cnt") or 0)
-            except (TypeError, ValueError):
-                continue
+            degrees.setdefault(src, {"out": 0, "in": 0})["out"] += 1
+            degrees.setdefault(dst, {"out": 0, "in": 0})["in"] += 1
 
-    absorb(out_result.records, "out")
-    absorb(in_result.records, "in")
+    try:
+        for label in labels:
+            result = client.execute_read(
+                f"LOOKUP ON `{label}` YIELD src(edge) AS s, dst(edge) AS d", timeout=90.0
+            )
+            absorb_pairs(
+                (str(record.get("s") or ""), str(record.get("d") or ""))
+                for record in (result.records or [])
+                if isinstance(record, dict)
+            )
+    except GraphRequestError as exc:
+        if "no index" not in str(exc).lower():
+            raise
+        # 无索引边类型：清半程结果，回退 MATCH 覆盖全部 labels
+        degrees.clear()
+        edge_expr = "|".join(labels)
+        out_result = client.execute_read(
+            f"MATCH (v)-[e:{edge_expr}]->(v2) RETURN id(v) AS vid, count(e) AS cnt",
+            timeout=90.0,
+        )
+        in_result = client.execute_read(
+            f"MATCH (v)<-[e:{edge_expr}]-(v2) RETURN id(v) AS vid, count(e) AS cnt",
+            timeout=90.0,
+        )
+
+        def absorb(records: list[dict[str, Any]], field: str) -> None:
+            for record in records:
+                vid = str(record.get("vid") or "")
+                if not vid:
+                    continue
+                entry = degrees.setdefault(vid, {"out": 0, "in": 0})
+                try:
+                    entry[field] += int(record.get("cnt") or 0)
+                except (TypeError, ValueError):
+                    continue
+
+        absorb(out_result.records, "out")
+        absorb(in_result.records, "in")
+
     ordered = sorted(degrees.items(), key=lambda item: item[1]["out"] + item[1]["in"], reverse=True)
     truncated = len(ordered) > _DEGREE_RESULT_LIMIT
     rows = [

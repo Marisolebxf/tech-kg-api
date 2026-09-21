@@ -685,6 +685,14 @@ class EntitySearchService:
         skipped_labels: list[str] = []
         encoder = BM25SparseEncoder()
         encoder.fit_iterable(_iter_index_texts(graph, labels, skipped=skipped_labels))
+        # 全部标签拉取失败（如共享图服务过载：LOOKUP/REST 全超时）≠ 真空空间。
+        # 放任继续会走「空间无实体」分支清空已有 Milvus 行并以 entityCount=0
+        # 落 state——一次图抖动就毁掉整个检索（2026-09-21 实测）。中止并保留旧索引。
+        if skipped_labels and not encoder.document_count:
+            raise EntitySearchError(
+                f"图服务当前不可读：{len(skipped_labels)} 个标签全部拉取失败、语料为空，"
+                "本次重建中止（旧索引保留），请确认图服务可用后重试"
+            )
         # 无索引且 REST 拉不动的大标签已跳过：第二遍不再重试（每次重试都是一轮超时）
         if skipped_labels:
             labels = [label for label in labels if label not in skipped_labels]
@@ -1337,10 +1345,15 @@ def _iter_graph_entities(
     在 REST 上 90s 服务端兜底超时，重建两次中断）。LOOKUP 不可用（标签无索引）
     时回退 REST 分页；REST 再失败的大标签记 warning 跳过并写入 ``skipped``
     ——待补建标签索引后下次全量重建收编，其余标签不受影响。
+
+    无索引标签的 REST 兜底统一放在所有 LOOKUP 标签之后：MATCH+SKIP 全量扫描
+    会打满共享 Nebula（网关服务端还会对超时查询重试），混排会让后序标签的
+    LOOKUP 也排队超时，放大成整次重建全跳过（2026-09-21 实测）。
     """
     from infra.graph_db.exceptions import GraphRepoError
 
     skipped = skipped if skipped is not None else []
+    rest_labels: list[str] = []
     for label in labels:
         try:
             probe = graph.execute_query(f"LOOKUP ON `{label}` YIELD vertex AS v | LIMIT 1")
@@ -1355,6 +1368,8 @@ def _iter_graph_entities(
                 logger.warning("标签 %s LOOKUP 分页中途失败，本次重建跳过该标签", label)
                 skipped.append(label)
             continue
+        rest_labels.append(label)
+    for label in rest_labels:
         try:
             yield from _iter_label_via_rest(graph, label, page_size)
         except GraphRepoError:

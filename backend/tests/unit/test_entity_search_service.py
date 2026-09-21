@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from types import SimpleNamespace
 from typing import Any
@@ -76,20 +77,29 @@ class FakeMilvusClient:
     def __init__(self) -> None:
         self.collections: dict[str, list[dict[str, Any]]] = {}
         self.deleted: list[str] = []
+        self.dropped: list[str] = []
+        self.schema_fields: list[dict[str, Any]] = []
+        # 可注入的集合描述（默认视为现行 schema、无维度信息）
+        self.describe_fields: list[dict[str, Any]] | None = None
 
     def has_collection(self, name: str) -> bool:
         return name in self.collections
 
     def drop_collection(self, name: str) -> None:
         self.collections.pop(name, None)
+        self.dropped.append(name)
 
     def describe_collection(self, name: str) -> dict[str, Any]:
+        if self.describe_fields is not None:
+            return {"fields": self.describe_fields}
         return {"fields": [{"name": "document_id"}, {"name": "graph_space"}]}
 
     def create_schema(self, **kwargs):
+        client = self
+
         class Schema:
             def add_field(self, *args, **kw):
-                pass
+                client.schema_fields.append({"name": args[0] if args else None, **kw})
 
         return Schema()
 
@@ -164,6 +174,25 @@ def state_session(monkeypatch: pytest.MonkeyPatch):
     with Session(engine) as session:
         yield session
     engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_embedding_config(monkeypatch: pytest.MonkeyPatch):
+    """固定 embedding 配置解析：单测不触达配置管理 DB，也不依赖宿主环境变量。
+
+    维度跟随 ENTITY_SEARCH_EMBEDDING_DIM（state_session 设为 3，与 FakeEmbeddingClient
+    返回的 3 维向量一致）；个别用例可再次 monkeypatch 覆盖为 None / 抛未配置。
+    """
+    monkeypatch.setattr(
+        "service.entity_search._resolve_embedding_config",
+        lambda: {
+            "base_url": "http://embedding.test",
+            "model": "m3e-test",
+            "api_key": "test-key",
+            "dim": int(os.environ.get("ENTITY_SEARCH_EMBEDDING_DIM", "3")),
+            "config_id": None,
+        },
+    )
 
 
 def test_extract_entity_name_candidates() -> None:
@@ -941,6 +970,99 @@ def test_reindex_complex_property_has_real_bm25_dimension(
     assert query_dimensions
     assert query_dimensions & set(row["sparse_vector"])
     assert "知识图谱" in row["search_text"]
+
+
+def test_reindex_infers_dim_when_config_dim_unset(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """配置未声明维度时以首个成功响应推断，集合按推断维度创建。"""
+    monkeypatch.setattr(
+        "service.entity_search._resolve_embedding_config",
+        lambda: {
+            "base_url": "http://embedding.test",
+            "model": "m3e-test",
+            "api_key": "test-key",
+            "dim": None,
+            "config_id": "EMB-1",
+        },
+    )
+    graph = FakeGraph(["Expert"], {"Expert": [FakeNode("expert_1", {"id": "E-1", "name": "张三"})]})
+    milvus = FakeMilvusClient()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", lambda: FakeEmbeddingClient())
+
+    result = EntitySearchService(state_session).reindex(space="dev2")
+
+    dense = next(field for field in milvus.schema_fields if field.get("name") == "dense_vector")
+    assert dense["dim"] == 3  # FakeEmbeddingClient 返回 3 维
+    assert result["embeddingModel"] == "m3e-test"
+    assert result["embeddingConfigId"] == "EMB-1"
+
+
+def test_reindex_recreates_collection_when_dim_changes(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """换 embedding 配置导致维度变化时整体丢弃重建集合（单集合只能存一种维度）。"""
+    graph = FakeGraph(["Expert"], {"Expert": [FakeNode("expert_1", {"id": "E-1", "name": "张三"})]})
+    milvus = FakeMilvusClient()
+    milvus.collections[COLLECTION_NAME] = []  # 模拟既有集合
+    milvus.describe_fields = [
+        {"name": "document_id"},
+        {"name": "graph_space"},
+        {"name": "dense_vector", "params": {"dim": 999}},
+    ]
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", lambda: FakeEmbeddingClient())
+
+    EntitySearchService(state_session).reindex(space="dev2")
+
+    assert milvus.dropped == [COLLECTION_NAME]
+    dense = next(field for field in milvus.schema_fields if field.get("name") == "dense_vector")
+    assert dense["dim"] == 3
+
+
+def test_reindex_without_embedding_config_raises(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """完全未配置时重建给出明确指引；查询端客户端为 None 走 BM25 降级而非报错。"""
+
+    def _unconfigured():
+        raise EntitySearchError("未配置 embedding 服务：请在「配置管理」设置默认 embedding 配置")
+
+    graph = FakeGraph(["Expert"], {"Expert": [FakeNode("expert_1", {"id": "E-1", "name": "张三"})]})
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search._resolve_embedding_config", _unconfigured)
+
+    with pytest.raises(EntitySearchError, match="未配置 embedding"):
+        EntitySearchService(state_session).reindex(space="dev2")
+
+    assert EntitySearchService(state_session).status()["currentEmbeddingModel"] is None
+
+
+def test_search_sparse_only_when_embedding_unconfigured(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """embedding 完全未配置时检索降级单路 BM25，不再因空客户端崩溃。"""
+    graph = FakeGraph(["Expert"], {"Expert": [FakeNode("expert_1", {"id": "E-1", "name": "张三"})]})
+    milvus = FakeMilvusClient()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", lambda: FakeEmbeddingClient())
+    service = EntitySearchService(state_session)
+    service.reindex(space="dev2")
+
+    monkeypatch.setattr("service.entity_search._embedding_client", lambda: None)
+
+    def fake_hybrid_search(self, client, *, dense_vector, sparse_vector, expr, limit):
+        assert dense_vector is None
+        assert sparse_vector
+        return []
+
+    monkeypatch.setattr(EntitySearchService, "_hybrid_search", fake_hybrid_search)
+    result = service.search(keyword="张三", space="dev2")
+    assert result["mode"] == "sparse"
 
 
 def test_search_requires_keyword(state_session) -> None:

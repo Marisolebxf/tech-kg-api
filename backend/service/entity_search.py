@@ -117,36 +117,54 @@ class EntitySearchReindexInProgressError(EntitySearchError):
     pass
 
 
-def _env_embedding_config() -> dict[str, Any]:
-    """embedding 服务配置：ENTITY_SEARCH_EMBEDDING_* 优先，回退 PATENT_EMBEDDING_*。"""
-    base_url = (
-        os.getenv("ENTITY_SEARCH_EMBEDDING_BASE_URL")
-        or os.getenv("PATENT_EMBEDDING_BASE_URL")
-        or ""
-    )
-    model = (
-        os.getenv("ENTITY_SEARCH_EMBEDDING_MODEL")
-        or os.getenv("PATENT_EMBEDDING_MODEL")
-        or "moka-ai/m3e-small"
-    )
-    api_key = (
-        os.getenv("ENTITY_SEARCH_EMBEDDING_API_KEY")
-        or os.getenv("PATENT_EMBEDDING_API_KEY")
-        or "local-no-auth"
-    )
-    dim = int(
-        os.getenv("ENTITY_SEARCH_EMBEDDING_DIM") or os.getenv("PATENT_EMBEDDING_DIM") or "512"
-    )
-    return {"base_url": base_url, "model": model, "api_key": api_key, "dim": dim}
+def _resolve_embedding_config() -> dict[str, Any]:
+    """embedding 服务配置：配置管理默认配置优先，回退 env（ENTITY_SEARCH_*/PATENT_*）。
+
+    ``dim`` 可能为 None（配置未声明维度）——由重建时首个成功响应推断。
+    """
+    from service.embedding_config import resolve_embedding_settings
+
+    settings = resolve_embedding_settings()
+    if settings is None:
+        raise EntitySearchError(
+            "未配置 embedding 服务：请在「配置管理」设置默认 embedding 配置，"
+            "或配置 ENTITY_SEARCH_EMBEDDING_*/PATENT_EMBEDDING_* 环境变量"
+        )
+    return {
+        "base_url": settings["base_url"],
+        "model": settings["model"],
+        "api_key": settings["api_key"],
+        "dim": settings.get("dimensions"),
+        "config_id": settings.get("config_id"),
+    }
 
 
-def _embedding_client() -> EmbeddingClient:
-    config = _env_embedding_config()
+def _embedding_client() -> EmbeddingClient | None:
+    """按当前生效配置构造客户端；完全未配置时返回 None（查询端降级单路 BM25）。"""
+    try:
+        config = _resolve_embedding_config()
+    except EntitySearchError:
+        return None
     if config["base_url"]:
         return EmbeddingClient(
-            api_key=config["api_key"], base_url=config["base_url"], model=config["model"]
+            api_key=config["api_key"],
+            base_url=config["base_url"],
+            model=config["model"],
+            dimensions=config["dim"],
         )
     return EmbeddingClient(api_key=config["api_key"], model=config["model"])
+
+
+def _current_embedding_fields() -> dict[str, Any]:
+    """状态页附加字段：当前生效的 embedding 模型/配置来源；解析失败不拖垮状态读取。"""
+    try:
+        config = _resolve_embedding_config()
+    except Exception:  # noqa: BLE001 - EntitySearchError / DB 故障均降级为未知
+        return {"currentEmbeddingModel": None, "currentEmbeddingConfigId": None}
+    return {
+        "currentEmbeddingModel": config["model"],
+        "currentEmbeddingConfigId": config.get("config_id"),
+    }
 
 
 def _scalar(value: Any) -> Any:
@@ -676,14 +694,20 @@ class EntitySearchService:
             )
 
         # 第二遍重新流式读取图实体，每批完成 embedding 后立即写入 Milvus。
-        embedding_config = _env_embedding_config()
+        embedding_config = _resolve_embedding_config()
         client = _embedding_client()
+        if client is None:
+            raise EntitySearchError(
+                "未配置 embedding 服务：请在「配置管理」设置默认 embedding 配置，"
+                "或配置 ENTITY_SEARCH_EMBEDDING_*/PATENT_EMBEDDING_* 环境变量"
+            )
         milvus = get_milvus_client()
         written = 0
         type_counts: dict[str, int] = {}
         replacement_started = False
         space_filter = f'graph_space == "{_escape_expression(resolved_space)}"'
         try:
+            expected_dim = embedding_config["dim"]
             for chunk in _batched(
                 _iter_index_records(graph, labels, skipped=skipped_labels), EMBED_BATCH_SIZE
             ):
@@ -694,12 +718,13 @@ class EntitySearchService:
                     raise EntitySearchError(
                         f"embedding 服务调用失败（model={embedding_config['model']}），索引未写入"
                     )
-                if any(len(vector) != embedding_config["dim"] for vector in vectors):
-                    raise EntitySearchError(
-                        f"embedding 维度与配置不符（期望 {embedding_config['dim']}）"
-                    )
+                if expected_dim is None:
+                    # 配置未声明维度：以首个成功响应为准，后续批次与建集合都按它校验
+                    expected_dim = len(vectors[0])
+                if any(len(vector) != expected_dim for vector in vectors):
+                    raise EntitySearchError(f"embedding 维度与配置不符（期望 {expected_dim}）")
                 if not replacement_started:
-                    self._ensure_collection(milvus, dim=embedding_config["dim"])
+                    self._ensure_collection(milvus, dim=expected_dim)
                     milvus.delete(collection_name=COLLECTION_NAME, filter=space_filter)
                     replacement_started = True
                 rows = []
@@ -726,11 +751,15 @@ class EntitySearchService:
                     logger.info("实体索引流式重建进度 space=%s written=%s", resolved_space, written)
 
             if not replacement_started:
-                self._ensure_collection(milvus, dim=embedding_config["dim"])
-                milvus.delete(collection_name=COLLECTION_NAME, filter=space_filter)
+                # 空间无实体：没有向量可推维度，只在集合已存在时清掉本空间旧行
+                if expected_dim is not None:
+                    self._ensure_collection(milvus, dim=expected_dim)
+                if milvus.has_collection(COLLECTION_NAME):
+                    milvus.delete(collection_name=COLLECTION_NAME, filter=space_filter)
                 replacement_started = True
-            milvus.flush(COLLECTION_NAME)
-            milvus.load_collection(COLLECTION_NAME)
+            if milvus.has_collection(COLLECTION_NAME):
+                milvus.flush(COLLECTION_NAME)
+                milvus.load_collection(COLLECTION_NAME)
         except Exception:
             # 不让失败批次伪装成可用的完整索引；状态行保留旧快照，查询端会
             # 通过“当前空间无行”明确报告 stateStale，管理员可安全重试。
@@ -756,6 +785,7 @@ class EntitySearchService:
             "typeCounts": type_counts,
             "graphSpace": resolved_space,
             "embeddingModel": embedding_config["model"],
+            "embeddingConfigId": embedding_config.get("config_id"),
             "skippedLabels": sorted(set(skipped_labels)),
             "durationSeconds": round(time.monotonic() - started, 2),
         }
@@ -785,11 +815,18 @@ class EntitySearchService:
         )
         if not record["text"]:
             return {"upserted": False, "reason": "empty search text"}
-        embedding_config = _env_embedding_config()
-        vectors = _embedding_client().embed([record["text"][:EMBED_TEXT_MAX_CHARS]])
+        try:
+            embedding_config = _resolve_embedding_config()
+            client = _embedding_client()
+        except EntitySearchError:
+            return {"upserted": False, "reason": "embedding not configured"}
+        if client is None:
+            return {"upserted": False, "reason": "embedding not configured"}
+        vectors = client.embed([record["text"][:EMBED_TEXT_MAX_CHARS]])
         if not vectors or len(vectors) != 1:
             return {"upserted": False, "reason": "embedding failed"}
-        if len(vectors[0]) != embedding_config["dim"]:
+        # 配置声明了维度才校验；未声明（首个响应推断口径）交给 Milvus 建行时报错降级
+        if embedding_config["dim"] is not None and len(vectors[0]) != embedding_config["dim"]:
             return {"upserted": False, "reason": "embedding dim mismatch"}
         sparse_vector = encoder.encode_document(record["text"])
         if not sparse_vector:
@@ -841,23 +878,32 @@ class EntitySearchService:
 
     @staticmethod
     def _ensure_collection(milvus: Any, *, dim: int) -> None:
-        """建 / 校验 kg_entity 集合；旧主键 schema 整体重建。
+        """建 / 校验 kg_entity 集合；旧主键 schema 或维度变更时整体重建。
 
         ``vid`` 在不同图空间可能重复，不能作为共享集合主键。新版使用
         ``document_id=graph_space::vid``，检测到旧集合时丢弃并由本次全量重建恢复。
+        维度是集合级属性：换 embedding 配置导致维度变化时同样整体丢弃重建——
+        其它图空间的行随之失效，需各自重新构建索引（状态页按行数报 stateStale）。
         """
         from pymilvus import DataType  # type: ignore[import-not-found]
 
         if milvus.has_collection(COLLECTION_NAME):
             description = milvus.describe_collection(COLLECTION_NAME) or {}
-            fields = {
-                field.get("name")
-                for field in description.get("fields", [])
-                if isinstance(field, dict)
-            }
-            if "graph_space" not in fields or "document_id" not in fields:
+            field_list = [
+                field for field in description.get("fields", []) if isinstance(field, dict)
+            ]
+            field_names = {field.get("name") for field in field_list}
+            if "graph_space" not in field_names or "document_id" not in field_names:
                 # 旧 schema（单空间或 vid 主键版本）→ 丢弃重建
                 milvus.drop_collection(COLLECTION_NAME)
+            else:
+                dense_field = next(
+                    (field for field in field_list if field.get("name") == "dense_vector"),
+                    None,
+                )
+                existing_dim = (dense_field or {}).get("params", {}).get("dim")
+                if existing_dim is not None and existing_dim != dim:
+                    milvus.drop_collection(COLLECTION_NAME)
 
         if not milvus.has_collection(COLLECTION_NAME):
             schema = milvus.create_schema(auto_id=False, enable_dynamic_field=False)
@@ -1058,7 +1104,8 @@ class EntitySearchService:
                 "graphSpace": resolved_space,
                 "mode": "keyword",
             }
-        dense_vector = _embedding_client().embed_one(keyword)
+        embedding_client = _embedding_client()
+        dense_vector = embedding_client.embed_one(keyword) if embedding_client else None
         encoder = _load_bm25_from_state(self._session, resolved_space)
         sparse_vector = encoder.encode_query(keyword) if encoder else None
 
@@ -1231,6 +1278,7 @@ class EntitySearchService:
             "milvusReachable": milvus_reachable,
             "actualDataAvailable": space_has_rows,
             "reindexing": _database_reindex_running(self._session),
+            **_current_embedding_fields(),
         }
         if row is None:
             return {
@@ -1265,6 +1313,11 @@ class EntitySearchService:
                 )
             ],
             "embeddingModel": row.embedding_model or None,
+            "embeddingModelChanged": (
+                base["currentEmbeddingModel"] is not None
+                and row.embedding_model is not None
+                and base["currentEmbeddingModel"] != row.embedding_model
+            ),
             "updatedAt": row.updated_at.isoformat() if row.updated_at else None,
             "bm25Ready": bool(space_has_rows and row.vocabulary and row.document_count),
         }

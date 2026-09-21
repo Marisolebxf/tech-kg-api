@@ -247,17 +247,27 @@ class TRSGraphClient:
     def paged_nodes_by_label(
         self, label: str, *, limit: int = 100, offset: int = 0
     ) -> list[GraphNode]:
-        """按标签分页取节点：nGQL SKIP/LIMIT 直查，毫秒级。
+        """按标签分页取节点：LOOKUP 索引枚举优先，无标签索引回退 MATCH 全扫。
 
+        MATCH (v:`Label`) SKIP/LIMIT 即便标签有索引也不走（实测 dev2 DataSource
+        39 行 2.7s，高负载 30s 超时拖垮实体列表），LOOKUP 走标签索引 0.07s；
+        无索引标签 LOOKUP 立即 400 "There is no index to use"（快速失败不扫描），
+        回退 MATCH 慢但正确——补建标签索引后自动切回快路径。
         REST /api/v1/nodes/label/{label} 在 trs-graph 侧附带全量总数计算，
         大标签（如 Paper 十万级）30s+ 超时（2026-09-21 实测 limit=2 也挂）；
         总数需求另走 label_count()，不要为此恢复 REST 分页端点。
         """
         if not _TAG_IDENTIFIER.fullmatch(label or ""):
             raise GraphRequestError(f"非法节点标签: {label!r}", status_code=400)
-        result = self.execute_read(
-            f"MATCH (v:`{label}`) RETURN v SKIP {int(offset)} LIMIT {int(limit)}"
-        )
+        try:
+            result = self.execute_read(
+                f"LOOKUP ON `{label}` YIELD vertex AS v | LIMIT {int(limit)} OFFSET {int(offset)}"
+            )
+        except GraphRequestError as exc:
+            logger.warning("LOOKUP 分页无索引（label=%s），回退 MATCH 全扫: %s", label, exc)
+            result = self.execute_read(
+                f"MATCH (v:`{label}`) RETURN v SKIP {int(offset)} LIMIT {int(limit)}"
+            )
         nodes: list[GraphNode] = []
         for record in result.records or []:
             data = record.get("v") if isinstance(record, dict) else None

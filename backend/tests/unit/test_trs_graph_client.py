@@ -1289,10 +1289,33 @@ class TestStatsAndPagedNodes:
 
         repo = _make_repo(handler)
         nodes = repo.paged_nodes_by_label("Paper", limit=20, offset=40)
-        assert captured == ["USE test; MATCH (v:`Paper`) RETURN v SKIP 40 LIMIT 20"]
+        # LOOKUP 索引枚举优先（MATCH 分页不走索引，实测 30s 超时拖垮实体列表）
+        assert captured == ["USE test; LOOKUP ON `Paper` YIELD vertex AS v | LIMIT 20 OFFSET 40"]
         assert len(nodes) == 1
         assert nodes[0].id == "paper_1"
         assert nodes[0].properties == {"name": "综述"}
+        repo.close()
+
+    def test_paged_nodes_by_label_falls_back_to_match_without_index(self):
+        """无标签索引 LOOKUP 立即 400（不扫描），回退 MATCH 全扫保住可用性。"""
+        captured = []
+
+        def handler(request):
+            if request.url.path == "/health":
+                return _health_ok(request)
+            assert request.url.path == "/api/v1/query/read"
+            query = json.loads(request.content)["query"]
+            captured.append(query)
+            if "LOOKUP ON" in query:
+                return httpx.Response(400, json={"error": "There is no index to use at runtime"})
+            assert "MATCH (v:`Paper`)" in query
+            return httpx.Response(200, json={"records": []})
+
+        repo = _make_repo(handler)
+        assert repo.paged_nodes_by_label("Paper", limit=10, offset=0) == []
+        assert len(captured) == 2
+        assert "LOOKUP ON `Paper`" in captured[0]
+        assert captured[1] == "USE test; MATCH (v:`Paper`) RETURN v SKIP 0 LIMIT 10"
         repo.close()
 
     def test_paged_nodes_by_label_rejects_injection(self):

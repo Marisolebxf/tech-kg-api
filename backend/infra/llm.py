@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import Sequence
 from typing import Any
 
@@ -16,6 +17,9 @@ DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 DEFAULT_MAX_TOKENS = 2048
 DEFAULT_TIMEOUT = 40
 JSON_MODES = ("json_schema", "json_object", "prompt_only")
+# 单次 embedding 请求的最大条数。自建 m3e 服务按 M3E_MAX_BATCH_SIZE（默认 64）
+# 校验并 422 拒绝超量请求，这里默认对齐；调用方仍可一次 embed 大列表，客户端自动分片。
+EMBEDDING_REQUEST_BATCH_SIZE = int(os.getenv("EMBEDDING_REQUEST_BATCH_SIZE", "64"))
 
 
 def thinking_extra_body(model: str) -> dict[str, Any]:
@@ -160,15 +164,28 @@ class EmbeddingClient:
         return self._base_url
 
     def embed(self, texts: list[str]) -> list[list[float]] | None:
-        """批量 embedding。返回与输入等长的向量列表；失败返回 None。"""
+        """批量 embedding。返回与输入等长的向量列表；失败返回 None。
+
+        超过 EMBEDDING_REQUEST_BATCH_SIZE 时自动分片多次请求，任一分片
+        失败整体降级返回 None（不产生半批结果，调用方不会写入部分索引）。
+        """
         if not texts:
             return []
+        vectors: list[list[float]] = []
         try:
-            kwargs: dict[str, Any] = {"model": self._model, "input": texts}
-            if self._dimensions:
-                kwargs["dimensions"] = self._dimensions
-            resp = self._client.embeddings.create(**kwargs)
-            return [d.embedding for d in resp.data]
+            for start in range(0, len(texts), EMBEDDING_REQUEST_BATCH_SIZE):
+                chunk = texts[start : start + EMBEDDING_REQUEST_BATCH_SIZE]
+                kwargs: dict[str, Any] = {"model": self._model, "input": chunk}
+                if self._dimensions:
+                    kwargs["dimensions"] = self._dimensions
+                resp = self._client.embeddings.create(**kwargs)
+                data = sorted(resp.data, key=lambda item: item.index)
+                if len(data) != len(chunk):
+                    raise ValueError(
+                        f"embedding 返回数量不符（期望 {len(chunk)}，得到 {len(data)}）"
+                    )
+                vectors.extend(d.embedding for d in data)
+            return vectors
         except Exception as exc:  # noqa: BLE001
             logger.warning("embedding embed failed, degrading: %s", exc)
             return None

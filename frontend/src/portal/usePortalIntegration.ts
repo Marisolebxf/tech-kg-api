@@ -16,7 +16,7 @@ const PORTAL_SOURCE = portalSource
 function routeTitle(title: unknown): string {
   return typeof title === 'string' && title.trim()
     ? title.trim()
-    : '亿级知识图谱平台'
+    : '亿级科技知识图谱引擎'
 }
 
 export function usePortalIntegration() {

@@ -1194,27 +1194,56 @@ class TestStatsAndPagedNodes:
         assert len(calls) == 1
         repo.close()
 
-    def test_label_count_prefers_stats_and_falls_back_to_rest(self):
-        stats_served = {"rest_calls": []}
+    def test_label_count_prefers_stats_and_falls_back_to_ngql_count(self):
+        queries = []
 
         def handler(request):
             if request.url.path == "/health":
                 return _health_ok(request)
             if request.url.path == "/api/v1/query/read":
-                # 统计里没有 NotIndexed 标签 → 走 REST 兜底
-                return httpx.Response(
-                    200, json={"records": [{"Type": "Tag", "Name": "Paper", "Count": 7}]}
-                )
-            if request.url.path == "/api/v1/schema/stats/node-count":
-                stats_served["rest_calls"].append(request.url.params.get("label"))
-                return httpx.Response(200, json={"count": 42})
+                query = json.loads(request.content)["query"]
+                if query.endswith("SHOW STATS;"):
+                    # 统计里没有 NotIndexed 标签 → 走 nGQL count 兜底
+                    return httpx.Response(
+                        200, json={"records": [{"Type": "Tag", "Name": "Paper", "Count": 7}]}
+                    )
+                queries.append(query)
+                assert "MATCH (v:`NotIndexed`)" in query
+                return httpx.Response(200, json={"records": [{"c": 42}]})
             return httpx.Response(404)
 
         repo = _make_repo(handler)
         assert repo.label_count("Paper") == 7  # 命中统计
-        assert stats_served["rest_calls"] == []
-        assert repo.label_count("NotIndexed") == 42  # 统计缺失 → REST
-        assert stats_served["rest_calls"] == ["NotIndexed"]
+        assert queries == []
+        assert repo.label_count("NotIndexed") == 42  # 统计缺失 → nGQL count
+        assert queries and "MATCH (v:`NotIndexed`)" in queries[0]
+        repo.close()
+
+    def test_label_count_falls_back_when_show_stats_never_run(self):
+        """空间从未 SUBMIT JOB STATS（SHOW STATS 400 "no any stats info"）时回退
+        nGQL 标签 count，不让异常抛穿拖垮实体列表浏览。"""
+
+        def handler(request):
+            if request.url.path == "/health":
+                return _health_ok(request)
+            if request.url.path == "/api/v1/query/read":
+                query = json.loads(request.content)["query"]
+                if query.endswith("SHOW STATS;"):
+                    return httpx.Response(
+                        400,
+                        json={
+                            "error": "There is no any stats info to show, please execute `submit job stats' firstly!"
+                        },
+                    )
+                assert "MATCH (v:`Expert`)" in query
+                return httpx.Response(200, json={"records": [{"c": 11}]})
+            # REST node-count 不再作兜底（实测 31s+ 超时），出现即失败
+            if request.url.path == "/api/v1/schema/stats/node-count":
+                return httpx.Response(500, json={"error": "should not be called"})
+            return httpx.Response(404)
+
+        repo = _make_repo(handler)
+        assert repo.label_count("Expert") == 11  # SHOW STATS 400 → nGQL count 兜底
         repo.close()
 
     def test_stats_snapshot_cached_even_when_show_stats_later_fails(self):

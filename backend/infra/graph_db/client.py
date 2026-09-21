@@ -273,12 +273,34 @@ class TRSGraphClient:
         return nodes
 
     def label_count(self, label: str) -> int:
-        """标签节点数：优先 SHOW STATS（毫秒级）；标签不在统计中才回退
-        REST node-count（服务端全表 count，大标签秒级甚至超时）。"""
-        counts = self.stats_tag_counts()
+        """标签节点数：优先 SHOW STATS（毫秒级）；标签不在统计中，或空间从未
+        跑过 SUBMIT JOB STATS（SHOW STATS 直接 400 "no any stats info"）时回退
+        nGQL 标签 count 直查（走标签索引，亚秒级）。不用 REST /schema/stats/
+        node-count 兜底——其在 trs-graph 侧全表扫描，11 顶点空间实测 31s+，
+        大标签必超时。"""
+        try:
+            counts = self.stats_tag_counts()
+        except (GraphRequestError, GraphConnectionError) as exc:
+            logger.warning(
+                "SHOW STATS 不可用（space=%s label=%s），回退 nGQL 标签计数: %s",
+                self._settings.space,
+                label,
+                exc,
+            )
+            counts = {}
         if label in counts:
             return counts[label]
-        return self.node_count(label)
+        return self._ngql_label_count(label)
+
+    def _ngql_label_count(self, label: str) -> int:
+        """nGQL 标签计数：``MATCH (v:`Label`) RETURN count(v)``（标签过滤亚秒级）。"""
+        if not _TAG_IDENTIFIER.fullmatch(label or ""):
+            raise GraphRequestError(f"非法节点标签: {label!r}", status_code=400)
+        result = self.execute_read(f"MATCH (v:`{label}`) RETURN count(v) AS c")
+        for record in result.records or []:
+            if isinstance(record, dict) and record.get("c") is not None:
+                return int(record["c"])
+        return 0
 
     def stats_snapshot(self) -> dict[str, Any]:
         """SHOW STATS 解析快照 {"tags", "edges", "total_nodes", "total_edges"}，按空间缓存 300s。

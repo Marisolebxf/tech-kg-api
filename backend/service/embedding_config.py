@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 import uuid
 from datetime import UTC, datetime
@@ -194,3 +195,64 @@ def get_embedding_client_by_id(config_id: str | None) -> EmbeddingClient | None:
         model=settings["model"],
         dimensions=settings.get("dimensions"),
     )
+
+
+def _env_embedding_settings() -> dict[str, Any] | None:
+    """环境变量侧的 embedding 配置：ENTITY_SEARCH_EMBEDDING_* 优先，回退 PATENT_EMBEDDING_*。
+
+    任一变量存在即视为已配置（未填项用自建 m3e 服务的默认值补齐）；全缺返回 None。
+    dimensions 不再默认 512——由首个成功响应的实际维度推断，避免换模型后校验误报。
+    """
+    base_url = (
+        os.getenv("ENTITY_SEARCH_EMBEDDING_BASE_URL")
+        or os.getenv("PATENT_EMBEDDING_BASE_URL")
+        or ""
+    )
+    model = os.getenv("ENTITY_SEARCH_EMBEDDING_MODEL") or os.getenv("PATENT_EMBEDDING_MODEL") or ""
+    api_key = (
+        os.getenv("ENTITY_SEARCH_EMBEDDING_API_KEY") or os.getenv("PATENT_EMBEDDING_API_KEY") or ""
+    )
+    dim = os.getenv("ENTITY_SEARCH_EMBEDDING_DIM") or os.getenv("PATENT_EMBEDDING_DIM") or ""
+    if not (base_url or model or api_key or dim):
+        return None
+    return {
+        "base_url": base_url,
+        "model": model or "moka-ai/m3e-small",
+        "api_key": api_key or "local-no-auth",
+        "dimensions": int(dim) if dim.isdigit() else None,
+        "config_id": None,
+    }
+
+
+def resolve_embedding_settings() -> dict[str, Any] | None:
+    """平台内 embedding 消费方（实体检索索引等）的统一解析入口。
+
+    配置管理默认配置（is_default=True 且状态正常）优先，回退环境变量；
+    返回 {base_url, model, api_key, dimensions, config_id}，无任何可用配置返回 None。
+
+    DB 默认配置缺 api_key 而 env 配了可用 key 时跳过 DB——与 resolve_llm_settings
+    同规则：空 key 客户端会把所有调用打成 Missing credentials，不能拿它屏蔽可用的
+    env 配置。DB 访问失败（库不可达/表未建）记日志后照走 env。
+    """
+    env_cfg = _env_embedding_settings()
+    env_key = env_cfg["api_key"] if env_cfg else None
+    try:
+        from infra.mysql import create_session
+
+        session = create_session()
+        try:
+            row = EmbeddingConfigDAO(session).get_default()
+        finally:
+            session.close()
+    except Exception as exc:  # noqa: BLE001 - DB 不可达不应拖垮 env 回退
+        logger.warning("读取 embedding 默认配置失败，回退 env: %s", exc)
+        row = None
+    if row is not None and (row.api_key or not env_key):
+        return {
+            "base_url": row.base_url,
+            "model": row.model,
+            "api_key": row.api_key,
+            "dimensions": row.dimensions,
+            "config_id": row.id,
+        }
+    return env_cfg

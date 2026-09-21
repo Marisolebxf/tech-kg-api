@@ -118,24 +118,28 @@ class EntitySearchReindexInProgressError(EntitySearchError):
 
 
 def _resolve_embedding_config() -> dict[str, Any]:
-    """embedding 服务配置：配置管理默认配置优先，回退 env（ENTITY_SEARCH_*/PATENT_*）。
+    """embedding 服务配置：只读环境变量（ENTITY_SEARCH_EMBEDDING_* 优先，回退 PATENT_EMBEDDING_*）。
 
-    ``dim`` 可能为 None（配置未声明维度）——由重建时首个成功响应推断。
+    「配置管理」的 embedding 配置仅作用于图谱构建（任务级选择注入脚本上下文），
+    实体检索不读它。``dim`` 可能为 None（环境变量未声明维度）——由重建时首个成功响应推断。
     """
-    from service.embedding_config import resolve_embedding_settings
-
-    settings = resolve_embedding_settings()
-    if settings is None:
+    base_url = (
+        os.getenv("ENTITY_SEARCH_EMBEDDING_BASE_URL")
+        or os.getenv("PATENT_EMBEDDING_BASE_URL")
+        or ""
+    )
+    model = os.getenv("ENTITY_SEARCH_EMBEDDING_MODEL") or os.getenv("PATENT_EMBEDDING_MODEL") or ""
+    api_key = os.getenv("ENTITY_SEARCH_EMBEDDING_API_KEY") or os.getenv("PATENT_EMBEDDING_API_KEY")
+    dim = os.getenv("ENTITY_SEARCH_EMBEDDING_DIM") or os.getenv("PATENT_EMBEDDING_DIM") or ""
+    if not (base_url or model or api_key or dim):
         raise EntitySearchError(
-            "未配置 embedding 服务：请在「配置管理」设置默认 embedding 配置，"
-            "或配置 ENTITY_SEARCH_EMBEDDING_*/PATENT_EMBEDDING_* 环境变量"
+            "未配置 embedding 服务：请配置 ENTITY_SEARCH_EMBEDDING_*/PATENT_EMBEDDING_* 环境变量"
         )
     return {
-        "base_url": settings["base_url"],
-        "model": settings["model"],
-        "api_key": settings["api_key"],
-        "dim": settings.get("dimensions"),
-        "config_id": settings.get("config_id"),
+        "base_url": base_url,
+        "model": model or "moka-ai/m3e-small",
+        "api_key": api_key or "local-no-auth",
+        "dim": int(dim) if dim.isdigit() else None,
     }
 
 
@@ -156,15 +160,12 @@ def _embedding_client() -> EmbeddingClient | None:
 
 
 def _current_embedding_fields() -> dict[str, Any]:
-    """状态页附加字段：当前生效的 embedding 模型/配置来源；解析失败不拖垮状态读取。"""
+    """状态页附加字段：当前生效（环境变量侧）的 embedding 模型；未配置时不拖垮状态读取。"""
     try:
         config = _resolve_embedding_config()
-    except Exception:  # noqa: BLE001 - EntitySearchError / DB 故障均降级为未知
-        return {"currentEmbeddingModel": None, "currentEmbeddingConfigId": None}
-    return {
-        "currentEmbeddingModel": config["model"],
-        "currentEmbeddingConfigId": config.get("config_id"),
-    }
+    except Exception:  # noqa: BLE001 - EntitySearchError 均降级为未知
+        return {"currentEmbeddingModel": None}
+    return {"currentEmbeddingModel": config["model"]}
 
 
 def _scalar(value: Any) -> Any:
@@ -328,7 +329,7 @@ def _serialize_browse_item(node: Any, entity_type: str) -> dict[str, Any]:
 
 def _node_count_cached(graph: TRSGraphClient, space: str, label: str) -> int:
     """带 TTL 缓存的标签节点数。label_count 优先 SHOW STATS（毫秒级），
-    仅统计缺失时回退 REST node-count（服务端全表 count，大标签超时）。"""
+    统计缺失或不可用（空间未跑 stats job）时回退 nGQL 标签 count（亚秒级）。"""
     key = (space, label)
     cached = _node_count_cache.get(key)
     if cached and time.monotonic() - cached[0] < _NODE_COUNT_TTL_SECONDS:
@@ -336,6 +337,14 @@ def _node_count_cached(graph: TRSGraphClient, space: str, label: str) -> int:
     count = int(graph.label_count(label))
     _node_count_cache[key] = (time.monotonic(), count)
     return count
+
+
+def _sorted_type_items(counts: dict[str, int]) -> list[dict[str, Any]]:
+    """类型计数 → 下拉项（按数量降序、名称升序）。"""
+    return [
+        {"name": name, "count": count}
+        for name, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
 
 
 def _state_type_counts(session: Session, space: str, labels: list[str]) -> dict[str, int] | None:
@@ -787,7 +796,6 @@ class EntitySearchService:
             "typeCounts": type_counts,
             "graphSpace": resolved_space,
             "embeddingModel": embedding_config["model"],
-            "embeddingConfigId": embedding_config.get("config_id"),
             "skippedLabels": sorted(set(skipped_labels)),
             "durationSeconds": round(time.monotonic() - started, 2),
         }
@@ -1237,28 +1245,39 @@ class EntitySearchService:
     # 类型 / 状态
     # ------------------------------------------------------------------
     def types(self, *, space: str | None = None) -> list[dict[str, Any]]:
-        """索引内实体类型 + 数量；状态快照与 Milvus 不一致时返回空。"""
+        """实体类型 + 数量（前端类型过滤下拉）。
+
+        有索引快照且 Milvus 有本空间行时用快照（一次读库）；空间未建索引
+        （或快照与 Milvus 不一致）时回退图直查：SHOW TAGS + label_count
+        （SHOW STATS/nGQL，亚秒级）。浏览与类型过滤本就不依赖索引——
+        下拉只认索引空间会让未建索引的空间永远没有类型可选。
+        """
         resolved_space = space or _default_space()
         row = _load_state(self._session, resolved_space)
-        if row is None:
-            return []
+        if row is not None:
+            try:
+                milvus = get_milvus_client()
+                if milvus.has_collection(COLLECTION_NAME) and _milvus_space_has_rows(
+                    milvus, resolved_space
+                ):
+                    try:
+                        counts: dict[str, int] = json.loads(row.type_counts or "{}")
+                    except ValueError:
+                        counts = {}
+                    if counts:
+                        return _sorted_type_items(counts)
+            except Exception:  # noqa: BLE001 - Milvus 故障不拖垮类型下拉，走图直查
+                logger.warning(
+                    "校验实体索引类型失败（space=%s），回退图直查", resolved_space, exc_info=True
+                )
         try:
-            milvus = get_milvus_client()
-            if not milvus.has_collection(COLLECTION_NAME) or not _milvus_space_has_rows(
-                milvus, resolved_space
-            ):
-                return []
-        except Exception:  # noqa: BLE001 - 类型下拉不应因 Milvus 故障拖垮页面
-            logger.warning("校验实体索引类型失败（space=%s）", resolved_space, exc_info=True)
+            graph = get_space_client(resolved_space)
+            labels = [label for label in sorted(graph.labels()) if len(label.encode("utf-8")) <= 64]
+            counts = {label: _node_count_cached(graph, resolved_space, label) for label in labels}
+        except Exception:  # noqa: BLE001 - 图不可达时返回空，前端下拉降级为不可过滤
+            logger.warning("图直查实体类型失败（space=%s）", resolved_space, exc_info=True)
             return []
-        try:
-            counts: dict[str, int] = json.loads(row.type_counts or "{}")
-        except ValueError:
-            counts = {}
-        return [
-            {"name": name, "count": count}
-            for name, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
-        ]
+        return _sorted_type_items(counts)
 
     def status(self, *, space: str | None = None) -> dict[str, Any]:
         """索引状态：同时校验控制库快照和 Milvus 当前空间的真实数据。"""

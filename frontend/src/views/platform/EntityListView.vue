@@ -4,11 +4,9 @@ import { IconSearch } from '@arco-design/web-vue/es/icon'
 
 import {
   browseEntities,
-  canReindexEntityIndex,
   entitySearchErrorMessage,
   getEntityIndexStatus,
   getEntitySearchTypes,
-  reindexEntities,
   searchEntities,
   type EntityIndexStatus,
   type EntityListResult,
@@ -38,12 +36,8 @@ const status = ref<EntityIndexStatus | null>(null)
 const result = ref<EntityListResult | null>(null)
 const loading = ref(false)
 const searchError = ref('')
-const reindexing = ref(false)
 const expandedRows = ref<Set<string>>(new Set())
 
-// 响应式跟随 auth store：profile 在路由守卫/启动钩子异步加载后才到位，
-// setup 时一次性调用会把 admin 恒判为 false（免登录部署下按钮永不出现）
-const isAdmin = computed(() => canReindexEntityIndex())
 const items = computed(() => result.value?.items ?? [])
 const isBrowseMode = computed(() => !appliedKeyword.value)
 const totalPages = computed(() => {
@@ -126,21 +120,6 @@ function goPage(next: number) {
   void doSearch()
 }
 
-async function reindex() {
-  if (reindexing.value) return
-  reindexing.value = true
-  try {
-    const data = await reindexEntities({ space: space.value || undefined })
-    showToast(`索引重建完成：${data.entityCount} 个实体，耗时 ${data.durationSeconds}s`, 'success')
-    await loadIndexInfo()
-    if (appliedKeyword.value) await doSearch()
-  } catch (error) {
-    showToast(entitySearchErrorMessage(error), 'warning')
-  } finally {
-    reindexing.value = false
-  }
-}
-
 function propertyEntries(item: EntityListResult['items'][number]): Array<[string, string]> {
   return Object.entries(item.properties || {})
 }
@@ -196,16 +175,6 @@ watch(
               {{ t.name }}（{{ t.count }}）
             </a-option>
           </a-select>
-          <button
-            v-if="isAdmin"
-            class="kg-button"
-            type="button"
-            :disabled="reindexing"
-            :title="'按当前图空间全量重建 Milvus 混合索引（语义 + BM25 关键词）'"
-            @click="reindex"
-          >
-            {{ reindexing ? '索引重建中...' : '重建索引' }}
-          </button>
         </div>
         <div class="entity-toolbar__right">
           <a-input
@@ -228,7 +197,7 @@ watch(
         Milvus 当前不可用，已降级为 VID/已建图属性索引的精确查询。
       </p>
       <p v-else-if="status && !status.bm25Ready && status.indexed" class="entity-hint">
-        BM25 关键词条目缺失（仅语义检索可用），重建索引可恢复混合检索能力。
+        BM25 关键词条目缺失（仅语义检索可用），可通过图谱构建任务的实体索引重建恢复混合检索能力。
       </p>
     </section>
 

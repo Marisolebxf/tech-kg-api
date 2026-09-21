@@ -191,7 +191,7 @@ def state_session(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture(autouse=True)
 def _hermetic_embedding_config(monkeypatch: pytest.MonkeyPatch):
-    """固定 embedding 配置解析：单测不触达配置管理 DB，也不依赖宿主环境变量。
+    """固定 embedding 配置解析：单测不依赖宿主环境变量（解析只读 env，不触 DB）。
 
     维度跟随 ENTITY_SEARCH_EMBEDDING_DIM（state_session 设为 3，与 FakeEmbeddingClient
     返回的 3 维向量一致）；个别用例可再次 monkeypatch 覆盖为 None / 抛未配置。
@@ -203,7 +203,6 @@ def _hermetic_embedding_config(monkeypatch: pytest.MonkeyPatch):
             "model": "m3e-test",
             "api_key": "test-key",
             "dim": int(os.environ.get("ENTITY_SEARCH_EMBEDDING_DIM", "3")),
-            "config_id": None,
         },
     )
 
@@ -989,7 +988,7 @@ def test_reindex_complex_property_has_real_bm25_dimension(
 def test_reindex_infers_dim_when_config_dim_unset(
     state_session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """配置未声明维度时以首个成功响应推断，集合按推断维度创建。"""
+    """环境变量未声明维度时以首个成功响应推断，集合按推断维度创建。"""
     monkeypatch.setattr(
         "service.entity_search._resolve_embedding_config",
         lambda: {
@@ -997,7 +996,6 @@ def test_reindex_infers_dim_when_config_dim_unset(
             "model": "m3e-test",
             "api_key": "test-key",
             "dim": None,
-            "config_id": "EMB-1",
         },
     )
     graph = FakeGraph(["Expert"], {"Expert": [FakeNode("expert_1", {"id": "E-1", "name": "张三"})]})
@@ -1011,7 +1009,6 @@ def test_reindex_infers_dim_when_config_dim_unset(
     dense = next(field for field in milvus.schema_fields if field.get("name") == "dense_vector")
     assert dense["dim"] == 3  # FakeEmbeddingClient 返回 3 维
     assert result["embeddingModel"] == "m3e-test"
-    assert result["embeddingConfigId"] == "EMB-1"
 
 
 def test_reindex_recreates_collection_when_dim_changes(
@@ -1040,10 +1037,10 @@ def test_reindex_recreates_collection_when_dim_changes(
 def test_reindex_without_embedding_config_raises(
     state_session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """完全未配置时重建给出明确指引；查询端客户端为 None 走 BM25 降级而非报错。"""
+    """完全未配置环境变量时重建给出明确指引；状态读取降级为模型未知而非报错。"""
 
     def _unconfigured():
-        raise EntitySearchError("未配置 embedding 服务：请在「配置管理」设置默认 embedding 配置")
+        raise EntitySearchError("未配置 embedding 服务：请配置环境变量")
 
     graph = FakeGraph(["Expert"], {"Expert": [FakeNode("expert_1", {"id": "E-1", "name": "张三"})]})
     monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
@@ -1105,12 +1102,31 @@ def test_status_empty_state(state_session, monkeypatch) -> None:
     milvus = FakeMilvusClient()
     monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
     monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: FakeGraph([], {}))
     service = EntitySearchService(state_session)
     status = service.status()
     assert status["indexed"] is False
     assert status["types"] == []
     assert status["bm25Ready"] is False
     assert service.types() == []
+
+
+def test_types_falls_back_to_graph_labels_without_index(state_session, monkeypatch) -> None:
+    """未建索引的空间类型下拉不再空白：SHOW TAGS + label_count 图直查兜底。"""
+    milvus = FakeMilvusClient()
+    graph = FakeGraph(["Expert", "Org", "超长" * 40], {}, counts={"Expert": 4, "Org": 7})
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+    monkeypatch.setattr("service.entity_search._node_count_cache", {})
+
+    items = EntitySearchService(state_session).types()
+
+    # 按数量降序；超 64 字节标签（进不了 Milvus entity_type 字段）排除
+    assert items == [
+        {"name": "Org", "count": 7},
+        {"name": "Expert", "count": 4},
+    ]
 
 
 def test_search_graph_vid_works_without_milvus(state_session, monkeypatch):
@@ -1271,6 +1287,9 @@ def test_status_marks_stale_state_when_space_missing_in_milvus(state_session, mo
     state_session.commit()
     monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
     monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+    monkeypatch.setattr(
+        "service.entity_search.get_space_client", lambda space: FakeGraph(["E2EBigWidget"], {})
+    )
 
     service = EntitySearchService(state_session)
     status = service.status()
@@ -1283,7 +1302,8 @@ def test_status_marks_stale_state_when_space_missing_in_milvus(state_session, mo
     assert status["typeCounts"] == {}
     assert status["recordedTypeCounts"] == {"E2EBigWidget": 4}
     assert status["bm25Ready"] is False
-    assert service.types() == []
+    # 索引状态过期不代表图里没数据：类型下拉回退图直查，仍可过滤
+    assert service.types() == [{"name": "E2EBigWidget", "count": 0}]
 
 
 def test_status_marks_milvus_unreachable_as_explicit_degradation(state_session, monkeypatch):

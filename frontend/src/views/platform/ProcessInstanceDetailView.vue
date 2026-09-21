@@ -655,7 +655,7 @@ onMounted(async () => {
       <strong>⚠ 实体索引构建失败（已降级）</strong>
       <span>图数据写入正常，但实体检索索引未重建——关键词 / 语义检索将缺失本次新增实体。</span>
       <code v-if="indexDegrade.error">{{ indexDegrade.error }}</code>
-      <em>该告警针对选中的执行 {{ selectedExecutionId || '最新一次' }}（后续成功执行可能已重建索引）；请检查 embedding 服务可用性后，在实体列表页对该图空间「重建索引」。</em>
+      <em>该告警针对选中的执行 {{ selectedExecutionId || '最新一次' }}（后续成功执行可能已重建索引）；请检查 embedding 服务可用性后，重新执行该任务——执行末尾会全量重建该图空间的实体索引。</em>
     </div>
 
     <section class="detail-workspace">

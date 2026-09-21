@@ -247,17 +247,27 @@ class TRSGraphClient:
     def paged_nodes_by_label(
         self, label: str, *, limit: int = 100, offset: int = 0
     ) -> list[GraphNode]:
-        """按标签分页取节点：nGQL SKIP/LIMIT 直查，毫秒级。
+        """按标签分页取节点：LOOKUP 索引枚举优先，无标签索引回退 MATCH 全扫。
 
+        MATCH (v:`Label`) SKIP/LIMIT 即便标签有索引也不走（实测 dev2 DataSource
+        39 行 2.7s，高负载 30s 超时拖垮实体列表），LOOKUP 走标签索引 0.07s；
+        无索引标签 LOOKUP 立即 400 "There is no index to use"（快速失败不扫描），
+        回退 MATCH 慢但正确——补建标签索引后自动切回快路径。
         REST /api/v1/nodes/label/{label} 在 trs-graph 侧附带全量总数计算，
         大标签（如 Paper 十万级）30s+ 超时（2026-09-21 实测 limit=2 也挂）；
         总数需求另走 label_count()，不要为此恢复 REST 分页端点。
         """
         if not _TAG_IDENTIFIER.fullmatch(label or ""):
             raise GraphRequestError(f"非法节点标签: {label!r}", status_code=400)
-        result = self.execute_read(
-            f"MATCH (v:`{label}`) RETURN v SKIP {int(offset)} LIMIT {int(limit)}"
-        )
+        try:
+            result = self.execute_read(
+                f"LOOKUP ON `{label}` YIELD vertex AS v | LIMIT {int(limit)} OFFSET {int(offset)}"
+            )
+        except GraphRequestError as exc:
+            logger.warning("LOOKUP 分页无索引（label=%s），回退 MATCH 全扫: %s", label, exc)
+            result = self.execute_read(
+                f"MATCH (v:`{label}`) RETURN v SKIP {int(offset)} LIMIT {int(limit)}"
+            )
         nodes: list[GraphNode] = []
         for record in result.records or []:
             data = record.get("v") if isinstance(record, dict) else None
@@ -273,12 +283,34 @@ class TRSGraphClient:
         return nodes
 
     def label_count(self, label: str) -> int:
-        """标签节点数：优先 SHOW STATS（毫秒级）；标签不在统计中才回退
-        REST node-count（服务端全表 count，大标签秒级甚至超时）。"""
-        counts = self.stats_tag_counts()
+        """标签节点数：优先 SHOW STATS（毫秒级）；标签不在统计中，或空间从未
+        跑过 SUBMIT JOB STATS（SHOW STATS 直接 400 "no any stats info"）时回退
+        nGQL 标签 count 直查（走标签索引，亚秒级）。不用 REST /schema/stats/
+        node-count 兜底——其在 trs-graph 侧全表扫描，11 顶点空间实测 31s+，
+        大标签必超时。"""
+        try:
+            counts = self.stats_tag_counts()
+        except (GraphRequestError, GraphConnectionError) as exc:
+            logger.warning(
+                "SHOW STATS 不可用（space=%s label=%s），回退 nGQL 标签计数: %s",
+                self._settings.space,
+                label,
+                exc,
+            )
+            counts = {}
         if label in counts:
             return counts[label]
-        return self.node_count(label)
+        return self._ngql_label_count(label)
+
+    def _ngql_label_count(self, label: str) -> int:
+        """nGQL 标签计数：``MATCH (v:`Label`) RETURN count(v)``（标签过滤亚秒级）。"""
+        if not _TAG_IDENTIFIER.fullmatch(label or ""):
+            raise GraphRequestError(f"非法节点标签: {label!r}", status_code=400)
+        result = self.execute_read(f"MATCH (v:`{label}`) RETURN count(v) AS c")
+        for record in result.records or []:
+            if isinstance(record, dict) and record.get("c") is not None:
+                return int(record["c"])
+        return 0
 
     def stats_snapshot(self) -> dict[str, Any]:
         """SHOW STATS 解析快照 {"tags", "edges", "total_nodes", "total_edges"}，按空间缓存 300s。

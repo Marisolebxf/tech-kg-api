@@ -162,8 +162,7 @@ def entity_search_api(monkeypatch: pytest.MonkeyPatch):
 
     app.dependency_overrides[get_workflow_session] = override_session
     monkeypatch.setenv("ENTITY_SEARCH_EMBEDDING_DIM", "3")
-    # 固定 embedding 配置解析：容器内跑集成测试时配置管理 DB 可达，
-    # 不能让真实默认配置影响维度/模型断言
+    # 固定 embedding 配置解析：不依赖容器/宿主的环境变量取值影响维度/模型断言
     monkeypatch.setattr(
         "service.entity_search._resolve_embedding_config",
         lambda: {
@@ -171,7 +170,6 @@ def entity_search_api(monkeypatch: pytest.MonkeyPatch):
             "model": "m3e-test",
             "api_key": "test-key",
             "dim": 3,
-            "config_id": None,
         },
     )
     # 测试用 sqlite 会话：跳过对真实控制库的建表检查
@@ -273,7 +271,8 @@ async def test_types_and_status_empty_state(entity_search_api) -> None:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         types = await client.get("/api/v1/entity-search/types")
         assert types.status_code == 200
-        assert types.json()["data"] == {"items": []}
+        # 未建索引：类型下拉回退图直查（fixture FakeGraph 只有 Expert 标签）
+        assert types.json()["data"] == {"items": [{"name": "Expert", "count": 1}]}
 
         status = await client.get("/api/v1/entity-search/index-status")
         assert status.status_code == 200

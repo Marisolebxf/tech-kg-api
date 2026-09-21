@@ -6,11 +6,9 @@ import { browseEntities, searchEntities } from '../../../api/entitySearch'
 
 vi.mock('../../../api/entitySearch', () => ({
   browseEntities: vi.fn(), searchEntities: vi.fn(),
-  canReindexEntityIndex: () => false,
   entitySearchErrorMessage: (error: Error) => error.message,
   getEntityIndexStatus: async () => null,
   getEntitySearchTypes: async () => [],
-  reindexEntities: vi.fn(),
 }))
 vi.mock('../../../api/currentGraphSpace', () => ({ currentGraphSpace: () => 'dev2' }))
 vi.mock('../../../stores/graphSpace', () => ({ useGraphSpaceStore: () => ({ current: 'dev2' }) }))

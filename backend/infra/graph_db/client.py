@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import threading
 import time
 import uuid
 from collections.abc import Sequence
@@ -49,6 +51,38 @@ _TAG_IDENTIFIER = re.compile(r"^[A-Za-z0-9_]{1,128}$")
 # SHOW STATS 快照缓存：{space: (monotonic 时间, {"tags", "edges", "total_nodes", "total_edges"})}
 _stats_snapshot_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _STATS_CACHE_TTL_SECONDS = 300.0
+# TAG/EDGE 类型列表缓存：{space: (monotonic 时间, [名称])}。响应缓存过期瞬间全并发回源
+# 会打爆 trs-graph 会话池（用例17c 实测 250×`no extra session available`→502），故与
+# 图算法侧 _single_flight_cache 同款：TTL + 每键回源锁（双检）。
+_labels_cache: dict[str, tuple[float, list[str]]] = {}
+_edge_types_cache: dict[str, tuple[float, list[str]]] = {}
+_SCHEMA_LIST_CACHE_TTL_SECONDS = float(os.getenv("TRS_GRAPH_SCHEMA_LIST_CACHE_SECONDS", "30"))
+_refresh_locks: dict[tuple[str, str], threading.Lock] = {}
+
+
+def _single_flight_cached(cache: dict, kind: str, space: str, ttl: float, fetch):
+    """TTL 缓存 + 每键回源锁：过期瞬间只有一个线程回源，其余等它写回缓存。
+
+    回源失败时回退过期旧值：共享图服务会话池被瞬时打满（`no extra session
+    available`→502）不应打断读路径——schema 列表/统计快照本就允许滞后。"""
+    cached = cache.get(space)
+    if cached and time.monotonic() - cached[0] < ttl:
+        return cached[1]
+    lock = _refresh_locks.setdefault((kind, space), threading.Lock())
+    with lock:
+        cached = cache.get(space)  # 双检：等锁期间可能已被先到线程刷新
+        if cached and time.monotonic() - cached[0] < ttl:
+            return cached[1]
+        try:
+            value = fetch()
+        except Exception:  # noqa: BLE001
+            if cached:
+                logger.warning("%s 回源失败，沿用过期缓存 space=%s", kind, space, exc_info=True)
+                return cached[1]
+            raise
+        cache[space] = (time.monotonic(), value)
+        return value
+
 
 # The trs-graph-service only treats these property keys as the Nebula vertex id
 # (see NodeService.extractVid / NgqlBuilder.extractOrGenerateVid). When none of
@@ -176,11 +210,12 @@ class TRSGraphClient:
         *,
         json: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
+        timeout: float | None = None,
     ) -> httpx.Response:
         if self._client is None:
             raise GraphConnectionError("Not connected — call connect() first")
         try:
-            resp = self._client.request(method, path, json=json, params=params)
+            resp = self._client.request(method, path, json=json, params=params, timeout=timeout)
         except httpx.HTTPError as exc:
             raise GraphConnectionError(f"Request failed: {method} {path}") from exc
         if resp.status_code == 404:
@@ -318,11 +353,21 @@ class TRSGraphClient:
         Nebula 统计只在 SUBMIT JOB STATS 后刷新，本就允许轻微滞后，用它换掉
         逐标签/边类型全表 count（Paper 实测 45s+ 超时）。缓存模块级共享：
         即使 SHOW STATS 此刻报错（如 stats 任务卡死），300s 内成功过的快照
-        仍可读——平台总览等消费方的回退路径据此兜底。
+        仍可读——平台总览等消费方的回退路径据此兜底。过期瞬间单飞回源，
+        避免并发 SHOW STATS 挤占会话池。
         """
         cached = _stats_snapshot_cache.get(self._settings.space)
         if cached and time.monotonic() - cached[0] < _STATS_CACHE_TTL_SECONDS:
             return cached[1]
+        return _single_flight_cached(
+            _stats_snapshot_cache,
+            "stats",
+            self._settings.space,
+            _STATS_CACHE_TTL_SECONDS,
+            self._fetch_stats_snapshot,
+        )
+
+    def _fetch_stats_snapshot(self) -> dict[str, Any]:
         result = self.execute_read("SHOW STATS;")
         tags: dict[str, int] = {}
         edges: dict[str, int] = {}
@@ -349,7 +394,6 @@ class TRSGraphClient:
             "total_nodes": vertices or sum(tags.values()),
             "total_edges": edge_total or sum(edges.values()),
         }
-        _stats_snapshot_cache[self._settings.space] = (time.monotonic(), snapshot)
         return snapshot
 
     def stats_tag_counts(self) -> dict[str, int]:
@@ -694,11 +738,19 @@ class TRSGraphClient:
         data = resp.json()
         return self._query_result(data, "/api/v1/query", expected_space=self._settings.space)
 
-    def execute_read(self, query: str, params: dict[str, Any] | None = None) -> GraphQueryResult:
+    def execute_read(
+        self,
+        query: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> GraphQueryResult:
+        """单调用可覆盖读超时（秒）。全空间 MATCH 聚合在共享图库缓存变冷时可超
+        默认 30s（索引重建/邻租户负载后实测），重分析类调用按需放宽。"""
         body: dict[str, Any] = {"query": self._scoped_query(query)}
         if params:
             body["params"] = params
-        resp = self._request("POST", "/api/v1/query/read", json=body)
+        resp = self._request("POST", "/api/v1/query/read", json=body, timeout=timeout)
         data = resp.json()
         return self._query_result(data, "/api/v1/query/read", expected_space=self._settings.space)
 
@@ -841,6 +893,21 @@ class TRSGraphClient:
         return resp.json().get("count", 0)
 
     def labels(self) -> list[str]:
+        """空间 TAG 列表。短 TTL 单飞缓存：实体浏览等高频路径每次响应缓存未命中
+        都会调它做类型校验，无缓存时过期瞬间的全并发回源会打爆 trs-graph 会话池
+        （用例17c 实测）。SHOW TAGS 结果稳定，30s 滞后可接受（DDL 本就有传播延迟）。
+        """
+        return list(
+            _single_flight_cached(
+                _labels_cache,
+                "labels",
+                self._settings.space,
+                _SCHEMA_LIST_CACHE_TTL_SECONDS,
+                self._fetch_labels,
+            )
+        )
+
+    def _fetch_labels(self) -> list[str]:
         resp = self._request("GET", "/api/v1/schema/labels")
         data = resp.json()
         items = data if isinstance(data, list) else data.get("items", [])
@@ -853,6 +920,18 @@ class TRSGraphClient:
         return result
 
     def edge_types(self) -> list[str]:
+        """空间 EDGE 类型列表（labels 同款短 TTL 单飞缓存）。"""
+        return list(
+            _single_flight_cached(
+                _edge_types_cache,
+                "edge_types",
+                self._settings.space,
+                _SCHEMA_LIST_CACHE_TTL_SECONDS,
+                self._fetch_edge_types,
+            )
+        )
+
+    def _fetch_edge_types(self) -> list[str]:
         resp = self._request("GET", "/api/v1/schema/edge-types")
         data = resp.json()
         items = data if isinstance(data, list) else data.get("items", [])

@@ -6,10 +6,10 @@ activity 在子进程外把"已解析的连接参数"（不是活对象）序列
 
 - ``from kg_sdk import current_context``，``ctx = current_context()``
   （未配置时返回 None，脚本降级），直接 ``ctx.mysql`` / ``ctx.graph`` /
-  ``ctx.llm`` / ``ctx.config`` ... 取懒构造客户端与增量游标。
+  ``ctx.llm`` / ``ctx.semantic`` / ``ctx.config`` ... 取懒构造客户端与增量游标。
 
 未配置某选择器时对应属性返回 ``None``（与 ``infra.llm.get_llm_client`` 降级约定一致），
-脚本应 ``if ctx.llm:`` 判空后再用。
+脚本应判空后再用。
 """
 
 from __future__ import annotations
@@ -18,6 +18,8 @@ import json
 import os
 from dataclasses import dataclass
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 try:  # sdk.access：子进程按顶层模块导入（PYTHONPATH 含 backend/sdk），worker/测试按包导入
     from . import access as _access
@@ -25,6 +27,228 @@ except ImportError:  # pragma: no cover - 取决于导入方式
     import access as _access
 
 _UNSET = object()
+
+
+class SemanticToolkitError(RuntimeError):
+    """语义计算服务调用失败。"""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int = 0,
+        response: Any = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.response = response
+
+
+class SemanticToolkitClient:
+    """抽取脚本可直接使用的语义计算小工具客户端。
+
+    ``base_url`` 同时接受服务根地址和以 ``/api/v1`` 结尾的地址，内部会保证
+    API 前缀只拼接一次。仅暴露已与接入文档核对一致的接口。
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str | None = None,
+        *,
+        timeout: float = 600.0,
+    ) -> None:
+        root = base_url.strip().rstrip("/")
+        if root.endswith("/api/v1"):
+            root = root[: -len("/api/v1")]
+        if not root:
+            raise ValueError("semantic toolkit base_url 不能为空")
+        self._root = root
+        self._api = f"{root}/api/v1"
+        self._api_key = api_key
+        self._timeout = float(timeout)
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        api: bool = True,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        url = (self._api if api else self._root) + path
+        headers = {"Accept": "application/json"}
+        body = None
+        if payload is not None:
+            headers["Content-Type"] = "application/json; charset=utf-8"
+            body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+        if self._api_key:
+            headers["X-API-Key"] = self._api_key
+        request = Request(url, data=body, headers=headers, method=method)
+        status_code = 0
+        raw = b""
+        try:
+            with urlopen(request, timeout=timeout or self._timeout) as response:  # noqa: S310
+                status_code = int(response.status)
+                raw = response.read()
+        except HTTPError as exc:
+            status_code = int(exc.code)
+            raw = exc.read()
+        except URLError as exc:
+            raise SemanticToolkitError(f"语义计算服务不可达：{exc.reason}") from exc
+        except TimeoutError as exc:
+            raise SemanticToolkitError("语义计算服务请求超时") from exc
+
+        try:
+            result = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            preview = raw.decode("utf-8", errors="replace")[:500]
+            raise SemanticToolkitError(
+                f"语义计算服务返回非 JSON（HTTP {status_code}）",
+                status_code=status_code,
+                response=preview,
+            ) from exc
+        if not isinstance(result, dict):
+            raise SemanticToolkitError(
+                "语义计算服务返回格式错误：顶层必须是 JSON 对象",
+                status_code=status_code,
+                response=result,
+            )
+        code = int(result.get("code", 0) or 0)
+        if status_code // 100 != 2 or code != 0:
+            detail = (
+                result.get("detail")
+                or (result.get("data") or {}).get("error_summary")
+                or result.get("message")
+                or result.get("msg")
+                or f"HTTP {status_code}"
+            )
+            raise SemanticToolkitError(
+                str(detail),
+                status_code=status_code,
+                response=result,
+            )
+        return result
+
+    def health(self) -> dict[str, Any]:
+        """检查语义计算服务是否可达。"""
+        return self._request("GET", "/health", api=False, timeout=min(self._timeout, 30))
+
+    def catalog(self) -> dict[str, Any]:
+        """返回服务当前公开的功能点目录。"""
+        return self._request("GET", "/catalog")
+
+    def research_entities(
+        self,
+        document_title: str,
+        text: str,
+        **params: Any,
+    ) -> dict[str, Any]:
+        """科研实体识别：抽取 METHOD/DATASET/INSTRUMENT/THEORY/TOPIC。"""
+        return self._request(
+            "POST",
+            "/ner/research/text",
+            {"document_title": document_title, "text": text, **params},
+        )
+
+    def concept_definitions(self, text: str, **params: Any) -> dict[str, Any]:
+        """从正文中识别概念及其定义。"""
+        return self._request("POST", "/concept-definition/text", {"text": text, **params})
+
+    def research_questions(
+        self,
+        document_title: str,
+        text: str,
+        **params: Any,
+    ) -> dict[str, Any]:
+        """识别研究问题句、问题短语和结构化研究问题。"""
+        return self._request(
+            "POST",
+            "/research-question/text",
+            {"document_title": document_title, "text": text, **params},
+        )
+
+    def citation_intent(
+        self,
+        document_title: str,
+        full_text: str,
+        *,
+        reference_entries: str = "",
+        **params: Any,
+    ) -> dict[str, Any]:
+        """识别论文引用句的引用意图。"""
+        payload = {
+            "document_title": document_title,
+            "scientific_document_full_text": full_text,
+            **params,
+        }
+        if reference_entries:
+            payload["reference_entries"] = reference_entries
+        return self._request("POST", "/citation-intent/text", payload)
+
+    def structured_review(
+        self,
+        topic: str,
+        documents: list[dict[str, Any]],
+        **params: Any,
+    ) -> dict[str, Any]:
+        """根据至少两篇文献生成结构化综述。"""
+        if len(documents) < 2:
+            raise ValueError("structured_review 至少需要两篇文献")
+        metadata = [
+            {
+                "document_id": document["document_id"],
+                "title": document.get("title", ""),
+                "publication_date": document.get("publication_date", ""),
+            }
+            for document in documents
+        ]
+        return self._request(
+            "POST",
+            "/review/structured/texts",
+            {
+                "topic_or_keywords": topic,
+                "document_set": documents,
+                "document_metadata": metadata,
+                **params,
+            },
+        )
+
+    @staticmethod
+    def entities_of(response: dict[str, Any]) -> list[dict[str, Any]]:
+        data = response.get("data") or {}
+        return list(data.get("entity_results") or data.get("entities") or [])
+
+    @staticmethod
+    def definitions_of(response: dict[str, Any]) -> list[dict[str, Any]]:
+        return list((response.get("data") or {}).get("definitions") or [])
+
+    @staticmethod
+    def questions_of(response: dict[str, Any]) -> list[Any]:
+        data = response.get("data") or {}
+        return list(
+            data.get("structured_research_questions")
+            or data.get("research_question_sentences")
+            or []
+        )
+
+
+def get_semantic_client(
+    base_url: str | None = None,
+    api_key: str | None = None,
+    *,
+    timeout: float | None = None,
+) -> SemanticToolkitClient | None:
+    """从显式参数或环境变量构造语义计算客户端；未配置服务地址时返回 None。"""
+    resolved_url = base_url or os.getenv("SEMANTIC_TOOLKIT_BASE_URL")
+    if not resolved_url:
+        return None
+    resolved_key = api_key if api_key is not None else os.getenv("SEMANTIC_TOOLKIT_API_KEY")
+    resolved_timeout = timeout
+    if resolved_timeout is None:
+        resolved_timeout = float(os.getenv("SEMANTIC_TOOLKIT_TIMEOUT", "600"))
+    return SemanticToolkitClient(resolved_url, resolved_key, timeout=resolved_timeout)
 
 
 @dataclass(frozen=True)
@@ -40,7 +264,7 @@ class ScriptConfig:
 
 
 class Context:
-    """用户脚本运行上下文：懒构造 mysql/graph/milvus/llm/embedding 客户端。
+    """用户脚本运行上下文：懒构造平台客户端。
 
     Args:
         raw: activity 注入的 ctx dict。键：
@@ -49,6 +273,7 @@ class Context:
             - milvus: {uri, db_name, token, timeout}
             - llm: {api_key, base_url, model}
             - embedding: {api_key, base_url, model, dimensions}
+            - semantic: {base_url, api_key, timeout}
             - watermark: str ISO | None
             - checkpoint: dict | None
             - stepId, attempt, prevOutputs, executionId, taskId, definitionId
@@ -61,6 +286,7 @@ class Context:
         self._milvus: Any = _UNSET
         self._llm: Any = _UNSET
         self._embedding: Any = _UNSET
+        self._semantic: Any = _UNSET
         self._config = ScriptConfig(
             watermark=self._raw.get("watermark"),
             checkpoint=self._raw.get("checkpoint"),
@@ -93,7 +319,6 @@ class Context:
                     username=params.get("username"),
                     password=params.get("password", ""),
                 )
-                # 观测式溯源：before_cursor_execute 钩子记录脚本实际访问的表
                 self._mysql = _access.observe_mysql_client(client, params.get("database"))
         return self._mysql
 
@@ -176,6 +401,18 @@ class Context:
                 self._embedding = _access.ObservedEmbeddingClient(self._embedding)
         return self._embedding
 
+    @property
+    def semantic(self) -> SemanticToolkitClient | None:
+        """语义计算工具客户端；支持 ctx.semantic 配置或环境变量。"""
+        if self._semantic is _UNSET:
+            params = self._raw.get("semantic") or {}
+            self._semantic = get_semantic_client(
+                params.get("base_url"),
+                params.get("api_key"),
+                timeout=float(params["timeout"]) if params.get("timeout") else None,
+            )
+        return self._semantic
+
     def to_dict(self) -> dict[str, Any]:
         """返回原始 ctx dict（调试用）。"""
         return dict(self._raw)
@@ -229,7 +466,7 @@ def step(fn=None, *, id=None):
     Temporal workflow 按 plan 里的步清单逐 activity 驱动，装饰器不参与运行时调度。
     """
     if callable(fn) and id is None:
-        return fn  # @step 裸形式：恒等返回原函数
+        return fn
 
     # @step("id") / @step(id="id") / @step()：fn 位是 id 字符串（或 None），返回恒等装饰器
 

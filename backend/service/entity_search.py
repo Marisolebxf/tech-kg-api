@@ -1359,9 +1359,17 @@ def _iter_graph_entities(
     无索引标签的 REST 兜底统一放在所有 LOOKUP 标签之后：MATCH+SKIP 全量扫描
     会打满共享 Nebula（网关服务端还会对超时查询重试），混排会让后序标签的
     LOOKUP 也排队超时，放大成整次重建全跳过（2026-09-21 实测）。
+    ``ENTITY_SEARCH_REST_FALLBACK=false`` 可整体关闭兜底：无索引标签直接
+    记 skipped，不再发起任何 MATCH 全量扫描——共享图 I/O 退化期（compaction
+    积压）重建自救用，恢复后开回即可收编小标签。
     """
     from infra.graph_db.exceptions import GraphRepoError
 
+    rest_enabled = os.getenv("ENTITY_SEARCH_REST_FALLBACK", "true").strip().lower() not in {
+        "0",
+        "false",
+        "off",
+    }
     skipped = skipped if skipped is not None else []
     rest_labels: list[str] = []
     for label in labels:
@@ -1379,6 +1387,14 @@ def _iter_graph_entities(
                 skipped.append(label)
             continue
         rest_labels.append(label)
+    if not rest_enabled:
+        if rest_labels:
+            logger.warning(
+                "REST 兜底已关闭（ENTITY_SEARCH_REST_FALLBACK）：跳过无索引标签 %s",
+                sorted(rest_labels),
+            )
+            skipped.extend(rest_labels)
+        return
     for label in rest_labels:
         try:
             yield from _iter_label_via_rest(graph, label, page_size)

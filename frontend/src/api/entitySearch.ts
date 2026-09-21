@@ -5,7 +5,6 @@
  */
 
 import { http } from './http'
-import { currentUserId, currentUserIsAdmin } from './currentUser'
 
 export interface ApiResponse<T> {
   code: number
@@ -58,13 +57,6 @@ export interface EntityIndexStatus {
   recordedTypeCounts?: Record<string, number>
 }
 
-export interface EntityReindexResult {
-  entityCount: number
-  typeCounts: Record<string, number>
-  graphSpace: string
-  embeddingModel: string
-  durationSeconds: number
-}
 
 const PREFIX = '/v1/entity-search'
 
@@ -131,22 +123,3 @@ export async function searchEntities(payload: {
   )
 }
 
-export async function reindexEntities(options?: {
-  space?: string
-  entityTypes?: string[]
-}): Promise<EntityReindexResult> {
-  return unwrap(
-    await asApiPromise<EntityReindexResult>(
-      http.post(`${PREFIX}/reindex`, options ?? {}, {
-        headers: { 'X-User-Id': currentUserId() },
-        // 全量重建是长操作（千级实体含 embedding 约 1 分钟），默认 20s 超时
-        // 会在完成前中断请求——用户只看到失败提示，后台仍在重建
-        timeout: 600_000,
-      }),
-    ),
-  )
-}
-
-export function canReindexEntityIndex(): boolean {
-  return currentUserIsAdmin()
-}

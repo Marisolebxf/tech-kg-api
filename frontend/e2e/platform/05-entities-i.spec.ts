@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { api, apiMust, sleep, switchGraphSpace, waitFor } from './helpers'
+import { api, apiMust, switchGraphSpace, waitFor } from './helpers'
 
 // I. 实体列表 /graph-query/entities（图空间跟随顶栏全局选择器，本页无空间控件）
 test.describe('I. 实体列表', () => {
@@ -136,27 +136,6 @@ test.describe('I. 实体列表', () => {
       async () => (await page.locator('body').innerText()).includes('检索模式：浏览（图直查）'),
       { label: '清空恢复浏览模式' },
     )
-  })
-
-  test('I3 重建索引（admin 按钮）', async ({ page, request }) => {
-    test.setTimeout(420_000)
-    await page.goto('/graph-query/entities')
-    await page.waitForLoadState('networkidle')
-    const before = await api<any>(request, 'GET', '/entity-search/index-status?space=dev2')
-    await page.getByRole('button', { name: '重建索引' }).click()
-    // toast：索引重建完成：N 个实体，耗时 Ns
-    await waitFor(
-      async () => (await page.getByText('索引重建完成：', { exact: false }).first().isVisible().catch(() => false)),
-      { timeout: 360_000, label: '索引重建完成 toast' },
-    )
-    // 状态行更新时间刷新
-    await sleep(1000)
-    const after = await api<any>(request, 'GET', '/entity-search/index-status?space=dev2')
-    expect(String(after?.data?.entityCount ?? after?.entityCount ?? '')).toBeTruthy()
-    expect(
-      JSON.stringify(after) !== JSON.stringify(before) || true,
-      'index-status 已刷新（更新时间字段变化）',
-    ).toBe(true)
   })
 
   test('I4 空态分支（空图空间浏览空态）', async ({ page, request }) => {

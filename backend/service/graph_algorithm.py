@@ -269,13 +269,30 @@ def _local_job_to_data(job: dict[str, Any]) -> dict:
     }
 
 
+def _match_count_with_storage_retry(client: Any, query: str) -> Any:
+    """MATCH 全空间聚合读。共享存储瞬时饱和时会立刻快败
+    （`Storage Error: RPC failure, probably timeout`，实测 28ms），小睡后重试一次；
+    真把 90s 耗尽的失败（连接层超时）不重试——大概率同样超时，白等一轮。"""
+    from infra.graph_db.exceptions import GraphRequestError
+
+    try:
+        return client.execute_read(query, timeout=90.0)
+    except GraphRequestError as exc:
+        if "rpc failure" not in str(exc).lower():
+            raise
+        time.sleep(1.0)
+        return client.execute_read(query, timeout=90.0)
+
+
 def _degree_rows_via_ngql(space: str, labels: list[str]) -> tuple[list[dict[str, str]], bool]:
     """出/入度聚合并合并为逐顶点行（总度降序，上限对齐图服务 10000 行截断）。
 
-    优先边索引 LOOKUP 枚举 src/dst 后本地聚合：代价只跟该边类型的边数相关。
-    无索引边类型回退全空间 MATCH 聚合（服务端 count）——其代价是全顶点扫描，
-    共享图库缓存变冷时会超图服务内部超时（2026-09-21 实测 STUDIED_AT 92 条边
-    也 >90s），仅作兜底。
+    先按 SHOW STATS 跳过无边数据的边类型（对度数零贡献，结果本就为空，
+    免去扫描；统计有滞后，仅作加速不改语义）。其余逐类型边索引 LOOKUP
+    枚举 src/dst 本地聚合：代价只跟该边类型的边数相关。无索引的类型收集后
+    回退一次全空间 MATCH 聚合（服务端 count）——其代价是全顶点扫描，共享图库
+    缓存变冷或存储瞬时饱和时会失败（2026-09-21 实测 STUDIED_AT 92 条边也
+    >90s、ALUMNI 0 条边在存储饱和窗口 28ms 快败），仅作兜底。
     """
     from infra.graph_db import get_space_client
     from infra.graph_db.exceptions import GraphRequestError
@@ -286,6 +303,17 @@ def _degree_rows_via_ngql(space: str, labels: list[str]) -> tuple[list[dict[str,
     if unknown:
         raise GraphAlgorithmError(f"图空间 {space} 不存在边类型: {', '.join(unknown)}")
 
+    active = list(labels)
+    try:
+        edge_counts = client.stats_snapshot().get("edges", {})
+    except Exception as exc:  # noqa: BLE001 — 统计读失败不拦计算，走常规路径
+        logger.warning("Degree 读 SHOW STATS 失败，跳过空边类型加速: %s", exc)
+        edge_counts = {}
+    skipped = [label for label in active if edge_counts.get(label) == 0]
+    if skipped:
+        logger.info("Degree 跳过无边数据的边类型: %s", ", ".join(skipped))
+        active = [label for label in active if edge_counts.get(label) != 0]
+
     degrees: dict[str, dict[str, int]] = {}
 
     def absorb_pairs(pairs: Iterable[tuple[str, str]]) -> None:
@@ -295,44 +323,50 @@ def _degree_rows_via_ngql(space: str, labels: list[str]) -> tuple[list[dict[str,
             degrees.setdefault(src, {"out": 0, "in": 0})["out"] += 1
             degrees.setdefault(dst, {"out": 0, "in": 0})["in"] += 1
 
-    try:
-        for label in labels:
+    def absorb_counts(records: list[dict[str, Any]], field: str) -> None:
+        for record in records:
+            vid = str(record.get("vid") or "")
+            if not vid:
+                continue
+            entry = degrees.setdefault(vid, {"out": 0, "in": 0})
+            try:
+                entry[field] += int(record.get("cnt") or 0)
+            except (TypeError, ValueError):
+                continue
+
+    fallback_labels: list[str] = []
+    for label in active:
+        try:
             result = client.execute_read(
                 f"LOOKUP ON `{label}` YIELD src(edge) AS s, dst(edge) AS d", timeout=90.0
             )
-            absorb_pairs(
-                (str(record.get("s") or ""), str(record.get("d") or ""))
-                for record in (result.records or [])
-                if isinstance(record, dict)
+        except GraphRequestError as exc:
+            if "no index" not in str(exc).lower():
+                raise
+            fallback_labels.append(label)  # 无索引：稍后合并一次 MATCH
+            continue
+        absorb_pairs(
+            (str(record.get("s") or ""), str(record.get("d") or ""))
+            for record in (result.records or [])
+            if isinstance(record, dict)
+        )
+
+    if fallback_labels:
+        edge_expr = "|".join(fallback_labels)
+        try:
+            out_result = _match_count_with_storage_retry(
+                client, f"MATCH (v)-[e:{edge_expr}]->(v2) RETURN id(v) AS vid, count(e) AS cnt"
             )
-    except GraphRequestError as exc:
-        if "no index" not in str(exc).lower():
-            raise
-        # 无索引边类型：清半程结果，回退 MATCH 覆盖全部 labels
-        degrees.clear()
-        edge_expr = "|".join(labels)
-        out_result = client.execute_read(
-            f"MATCH (v)-[e:{edge_expr}]->(v2) RETURN id(v) AS vid, count(e) AS cnt",
-            timeout=90.0,
-        )
-        in_result = client.execute_read(
-            f"MATCH (v)<-[e:{edge_expr}]-(v2) RETURN id(v) AS vid, count(e) AS cnt",
-            timeout=90.0,
-        )
-
-        def absorb(records: list[dict[str, Any]], field: str) -> None:
-            for record in records:
-                vid = str(record.get("vid") or "")
-                if not vid:
-                    continue
-                entry = degrees.setdefault(vid, {"out": 0, "in": 0})
-                try:
-                    entry[field] += int(record.get("cnt") or 0)
-                except (TypeError, ValueError):
-                    continue
-
-        absorb(out_result.records, "out")
-        absorb(in_result.records, "in")
+            in_result = _match_count_with_storage_retry(
+                client, f"MATCH (v)<-[e:{edge_expr}]-(v2) RETURN id(v) AS vid, count(e) AS cnt"
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise GraphAlgorithmError(
+                f"关系类型 {', '.join(fallback_labels)} 无边索引，全空间扫描失败"
+                f"（共享图库繁忙）: {exc}。建议改选有索引的关系类型或稍后重试"
+            ) from exc
+        absorb_counts(out_result.records, "out")
+        absorb_counts(in_result.records, "in")
 
     ordered = sorted(degrees.items(), key=lambda item: item[1]["out"] + item[1]["in"], reverse=True)
     truncated = len(ordered) > _DEGREE_RESULT_LIMIT

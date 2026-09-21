@@ -67,6 +67,9 @@ def algo_backend(monkeypatch):
         def edge_types(self):
             return ["HAS_KEYWORD", "EMPLOYED_BY"]
 
+        def stats_snapshot(self):
+            return {"tags": {}, "edges": {"HAS_KEYWORD": 8, "EMPLOYED_BY": 3}}
+
         def execute_read(self, query: str, params=None, *, timeout=None):
             if query.startswith("LOOKUP"):
                 # 边索引枚举 src/dst：b 出5，a 出2 入1，其余端点各 1 度
@@ -362,6 +365,9 @@ def test_degree_falls_back_to_match_when_edge_not_indexed(algo_backend, monkeypa
         def edge_types(self):
             return ["HAS_KEYWORD", "EMPLOYED_BY"]
 
+        def stats_snapshot(self):
+            return {"tags": {}, "edges": {"HAS_KEYWORD": 8, "EMPLOYED_BY": 3}}
+
         def execute_read(self, query: str, params=None, *, timeout=None):
             if query.startswith("LOOKUP"):
                 raise GraphRequestError(
@@ -384,6 +390,78 @@ def test_degree_falls_back_to_match_when_edge_not_indexed(algo_backend, monkeypa
         {"vid": "a", "out_degree": "2", "in_degree": "1", "degree": "3"},
     ]
     assert result["count"] == 3
+
+
+def test_degree_empty_edge_type_skips_scan(algo_backend, monkeypatch) -> None:
+    # SHOW STATS 为 0 的边类型（如 dev2 的 ALUMNI）：结果本就为空，不应触发
+    # 任何 LOOKUP/MATCH——共享存储饱和窗口实测全空间扫描 28ms 快败
+    calls = []
+
+    class EmptyEdgeClient:
+        def edge_types(self):
+            return ["ALUMNI", "EMPLOYED_BY"]
+
+        def stats_snapshot(self):
+            return {"tags": {}, "edges": {"ALUMNI": 0, "EMPLOYED_BY": 3}}
+
+        def execute_read(self, query: str, params=None, *, timeout=None):
+            calls.append(query)
+            raise AssertionError("无边数据的类型不应触发图查询")
+
+    monkeypatch.setattr("infra.graph_db.get_space_client", lambda space: EmptyEdgeClient())
+    data = submit_job(_actor(), "shared_business", "degreestatic", ["ALUMNI"], {})
+    assert data["status"] == "succeeded"
+    result = get_result(_actor(), "shared_business", data["jobId"])
+    assert result["rows"] == []
+    assert result["count"] == 0
+    assert calls == []
+
+
+def test_degree_mixed_labels_keep_lookup_and_match_fallback(algo_backend, monkeypatch) -> None:
+    # 有索引类型走 LOOKUP、无索引类型仅自身回退 MATCH：有索引的结果不被丢弃
+    from infra.graph_db.exceptions import GraphRequestError
+
+    match_queries = []
+
+    class MixedClient:
+        def edge_types(self):
+            return ["HAS_KEYWORD", "STUDIED_AT"]
+
+        def stats_snapshot(self):
+            return {"tags": {}, "edges": {"HAS_KEYWORD": 3, "STUDIED_AT": 92}}
+
+        def execute_read(self, query: str, params=None, *, timeout=None):
+            if query.startswith("LOOKUP ON `HAS_KEYWORD`"):
+                pairs = [("b", "t1"), ("b", "t2"), ("a", "c")]
+                return SimpleNamespace(records=[{"s": s, "d": d} for s, d in pairs])
+            if query.startswith("LOOKUP"):
+                raise GraphRequestError(
+                    "POST /api/v1/query/read -> 400: There is no index to use at runtime",
+                    status_code=400,
+                    body="",
+                )
+            match_queries.append(query)
+            if "<-[e:" in query:
+                return SimpleNamespace(records=[{"vid": "c", "cnt": 3}])
+            return SimpleNamespace(records=[{"vid": "a", "cnt": 2}])
+
+    monkeypatch.setattr("infra.graph_db.get_space_client", lambda space: MixedClient())
+    data = submit_job(
+        _actor(), "shared_business", "degreestatic", ["HAS_KEYWORD", "STUDIED_AT"], {}
+    )
+    assert data["status"] == "succeeded"
+    result = get_result(_actor(), "shared_business", data["jobId"])
+    # LOOKUP：b 出2、a 出1；MATCH 回退（仅 STUDIED_AT）：a 再出2、c 入3
+    assert result["rows"] == [
+        {"vid": "c", "out_degree": "0", "in_degree": "4", "degree": "4"},
+        {"vid": "a", "out_degree": "3", "in_degree": "0", "degree": "3"},
+        {"vid": "b", "out_degree": "2", "in_degree": "0", "degree": "2"},
+        {"vid": "t1", "out_degree": "0", "in_degree": "1", "degree": "1"},
+        {"vid": "t2", "out_degree": "0", "in_degree": "1", "degree": "1"},
+    ]
+    # MATCH 只覆盖无索引类型，不再拖上有索引的 HAS_KEYWORD
+    assert len(match_queries) == 2
+    assert all("STUDIED_AT" in q and "HAS_KEYWORD" not in q for q in match_queries)
 
 
 def test_degree_unknown_label_rejected(algo_backend) -> None:

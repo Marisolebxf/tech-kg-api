@@ -23,6 +23,17 @@ from service.platform_access import PlatformActor
 logger = logging.getLogger(__name__)
 
 
+# 空间列表短 TTL 缓存：查询类接口（元数据/引擎状态/作业状态/结果）每请求都过
+# _ensure_space_access，实时 SHOW SPACES 在高并发下会打满图服务会话池
+# （2026-09-21 用例08 500 并发实测 6.5% 400/502）。空间列表低频变化，进程内缓存即可。
+_SPACE_LIST_TTL_SECONDS = float(os.getenv("GRAPH_ALGO_SPACE_LIST_CACHE_SECONDS", "60"))
+
+
+def _list_spaces_cached(fetch: Any) -> list[str]:
+    """空间列表走统一单飞缓存（key="spaces"，随 clear_algo_info_cache 一并清空）。"""
+    return _single_flight_cache("spaces", _SPACE_LIST_TTL_SECONDS, fetch)
+
+
 class GraphAlgorithmError(Exception):
     """算法作业被拒绝或执行失败（message 直接作为 API detail）。"""
 
@@ -49,7 +60,7 @@ def _ensure_space_access(actor: PlatformActor, space: str) -> None:
         session = create_session()
         try:
             space_service = GraphSpaceService(session)
-            spaces = space_service.client.list_spaces()
+            spaces = _list_spaces_cached(space_service.client.list_spaces)
             space_allowed = (
                 actor.is_admin
                 or space == default_graph_space()
@@ -233,8 +244,11 @@ def _local_degree_job(space: str, job_id: str) -> dict[str, Any] | None:
             return job
     shared = _shared_job_load(job_id)
     if shared is not None and shared.get("space") == space:
-        with _degree_jobs_lock:
-            _degree_jobs.setdefault(job_id, shared)
+        # 仅终态快照可落本地缓存：running 态若被缓存，本 worker 会拿着旧状态
+        # 一直 409 到 TTL 过期（提交 worker 后台写回 succeeded 也不会同步过来）。
+        if shared.get("status") != "running":
+            with _degree_jobs_lock:
+                _degree_jobs.setdefault(job_id, shared)
         return shared
     return None
 
@@ -492,15 +506,9 @@ def engine_status(actor: PlatformActor, space: str) -> dict:
     """算法引擎（Spark 运行器）健康状态；探测失败一律降级为 DOWN，不向上抛。
     结果按 space 缓存 GRAPH_ALGO_INFO_CACHE_SECONDS（默认 60s）：500 并发下
     逐请求探测 runner/Nebula 会耗尽会话池。"""
-    key = f"engine:{space}"
-    with _algo_info_lock:
-        cached = _algo_info_cache.get(key)
-        if cached and cached[0] > time.monotonic():
-            return cached[1]
-    result = _engine_status_uncached(actor, space)
-    with _algo_info_lock:
-        _algo_info_cache[key] = (time.monotonic(), result)
-    return result
+    return _single_flight_cache(
+        f"engine:{space}", _ALGO_INFO_CACHE_SECONDS, lambda: _engine_status_uncached(actor, space)
+    )
 
 
 def _engine_status_uncached(actor: PlatformActor, space: str) -> dict:
@@ -518,24 +526,42 @@ def _engine_status_uncached(actor: PlatformActor, space: str) -> dict:
 _ALGO_INFO_CACHE_SECONDS = float(os.getenv("GRAPH_ALGO_INFO_CACHE_SECONDS", "60"))
 _algo_info_cache: dict[str, tuple[float, dict]] = {}
 _algo_info_lock = threading.Lock()
+_algo_fetch_locks: dict[str, threading.Lock] = {}
+
+
+def _single_flight_cache(key: str, ttl: float, fetch: Any) -> Any:
+    """进程内 TTL 缓存 + 同 key 单飞回源：命中直接返回；过期时同一 key 仅放行
+    一个线程回源（期间其余线程短暂等待），避免高并发下缓存过期瞬间的回源
+    风暴打满图服务会话池（2026-09-21 用例08 500 并发实测）。"""
+    with _algo_info_lock:
+        cached = _algo_info_cache.get(key)
+        if cached and cached[0] > time.monotonic():
+            return cached[1]
+        fetch_lock = _algo_fetch_locks.setdefault(key, threading.Lock())
+    with fetch_lock:
+        # 拿到回源锁后再查一次：等锁期间别的线程可能已写回缓存
+        with _algo_info_lock:
+            cached = _algo_info_cache.get(key)
+            if cached and cached[0] > time.monotonic():
+                return cached[1]
+        value = fetch()
+        with _algo_info_lock:
+            _algo_info_cache[key] = (time.monotonic() + ttl, value)
+        return value
 
 
 def metadata(actor: PlatformActor, space: str) -> dict:
     """边类型 + 引擎状态聚合；引擎探测失败仅降级，不阻塞边类型返回。
     结果按 space 缓存 GRAPH_ALGO_INFO_CACHE_SECONDS（默认 60s）；
     Schema 新建/删除关系（EDGE 类型变更）时会主动清缓存。"""
-    key = f"meta:{space}"
-    with _algo_info_lock:
-        cached = _algo_info_cache.get(key)
-        if cached and cached[0] > time.monotonic():
-            return cached[1]
-    result = {
-        "edgeTypes": list_edge_types(actor, space),
-        "engine": engine_status(actor, space),
-    }
-    with _algo_info_lock:
-        _algo_info_cache[key] = (time.monotonic(), result)
-    return result
+    return _single_flight_cache(
+        f"meta:{space}",
+        _ALGO_INFO_CACHE_SECONDS,
+        lambda: {
+            "edgeTypes": list_edge_types(actor, space),
+            "engine": engine_status(actor, space),
+        },
+    )
 
 
 def clear_algo_info_cache() -> None:

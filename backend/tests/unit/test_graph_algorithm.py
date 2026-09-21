@@ -9,6 +9,7 @@ import pytest
 from biz.schemas.graph_algorithm import AlgorithmSubmitRequest
 from infra.graph_db import AlgorithmJobBusyError
 from infra.graph_db.exceptions import GraphNotFoundError, GraphRequestError
+from service import graph_algorithm
 from service.graph_algorithm import (
     GraphAlgorithmError,
     engine_status,
@@ -41,9 +42,7 @@ def _job_snapshot(**overrides) -> SimpleNamespace:
 
 
 def test_submit_request_defaults_keep_string_vids_and_use_eight_partitions() -> None:
-    request = AlgorithmSubmitRequest(
-        space="dev2", algorithm="louvain", labels=["HAS_KEYWORD"]
-    )
+    request = AlgorithmSubmitRequest(space="dev2", algorithm="louvain", labels=["HAS_KEYWORD"])
     assert request.encode_id is True
     assert request.partition_num == 8
     assert request.model_dump(by_alias=True)["partitionNum"] == 8
@@ -51,6 +50,7 @@ def test_submit_request_defaults_keep_string_vids_and_use_eight_partitions() -> 
 
 @pytest.fixture
 def algo_backend(monkeypatch):
+    graph_algorithm.clear_algo_info_cache()  # 单飞缓存（空间列表/引擎/元数据）不跨用例泄漏
     monkeypatch.setenv("TRS_GRAPH_SPACE", "shared_business")
     submit_calls = []
 
@@ -70,9 +70,7 @@ def algo_backend(monkeypatch):
         def execute_read(self, query: str):
             # Degree nGQL 双向聚合：按箭头方向区分出度 / 入度
             if "<-[e:" in query:
-                return SimpleNamespace(
-                    records=[{"vid": "a", "cnt": 1}, {"vid": "c", "cnt": 4}]
-                )
+                return SimpleNamespace(records=[{"vid": "a", "cnt": 1}, {"vid": "c", "cnt": 4}])
             return SimpleNamespace(records=[{"vid": "a", "cnt": 2}, {"vid": "b", "cnt": 5}])
 
     graph_client = GraphClient()
@@ -119,7 +117,104 @@ def algo_backend(monkeypatch):
     monkeypatch.setattr("service.graph_space.GraphSpaceService", SpaceService)
     monkeypatch.setattr("infra.graph_db.get_space_client", lambda space: graph_client)
     monkeypatch.setattr("infra.graph_db.get_space_algorithm_client", lambda space: algo_client)
-    return SimpleNamespace(submit_calls=submit_calls, algo=algo_client)
+    yield SimpleNamespace(submit_calls=submit_calls, algo=algo_client)
+    graph_algorithm.clear_algo_info_cache()
+
+
+def test_ensure_space_access_caches_space_list(monkeypatch) -> None:
+    """/metadata 等查询接口高并发下不应每请求打图服务 SHOW SPACES（会话池瓶颈）。"""
+    graph_algorithm.clear_algo_info_cache()
+    calls = []
+
+    class Session:
+        def close(self):
+            pass
+
+    class GraphClient:
+        def list_spaces(self):
+            calls.append(1)
+            return ["dev2"]
+
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "dev2")
+    monkeypatch.setattr("infra.mysql.create_session", Session)
+    monkeypatch.setattr(
+        "service.graph_space.GraphSpaceService",
+        type(
+            "SpaceService",
+            (),
+            {
+                "__init__": lambda self, session: setattr(self, "client", GraphClient()),
+                "is_bound": lambda self, user_id, space: False,
+            },
+        ),
+    )
+    try:
+        graph_algorithm._ensure_space_access(_actor(), "dev2")
+        graph_algorithm._ensure_space_access(_actor(), "dev2")
+        assert len(calls) == 1  # 第二次命中缓存，未再回源
+    finally:
+        graph_algorithm.clear_algo_info_cache()
+
+
+def test_running_snapshot_not_pinned_locally(monkeypatch) -> None:
+    """跨 worker 从 Redis 读到 running 快照不得粘滞本地缓存：
+    提交 worker 后台写回 succeeded 后，查询 worker 必须立刻可见（否则 409 到 TTL 过期）。"""
+    import time
+
+    graph_algorithm.clear_algo_info_cache()
+    graph_algorithm._degree_jobs.clear()
+    store = {"status": "running"}
+    job_id = "job-pinned"
+
+    def fake_load(key):
+        return {
+            "job_id": key,
+            "space": "dev2",
+            "labels": ["STUDIED_AT"],
+            "rows": [{"vid": "v1", "degree": "3"}],
+            "truncated": False,
+            "saved_at": time.time(),
+            "created_at": "2026-09-21T00:00:00",
+            "finished_at": None,
+            "error": None,
+            "status": store["status"],
+        }
+
+    class Session:
+        def close(self):
+            pass
+
+    class GraphClient:
+        def list_spaces(self):
+            return ["dev2"]
+
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "dev2")
+    monkeypatch.setattr("infra.mysql.create_session", Session)
+    monkeypatch.setattr(
+        "service.graph_space.GraphSpaceService",
+        type(
+            "SpaceService",
+            (),
+            {
+                "__init__": lambda self, session: setattr(self, "client", GraphClient()),
+                "is_bound": lambda self, user_id, space: False,
+            },
+        ),
+    )
+    monkeypatch.setattr(graph_algorithm, "_shared_job_load", fake_load)
+    try:
+        # ① running 态：result 409，且不得落入本地缓存
+        with pytest.raises(GraphAlgorithmError) as exc_info:
+            graph_algorithm.get_result(_actor(), "dev2", job_id)
+        assert exc_info.value.status_code == 409
+        assert job_id not in graph_algorithm._degree_jobs
+        # ② Redis 写回 succeeded：同一 worker 立即可取结果
+        store["status"] = "succeeded"
+        data = graph_algorithm.get_result(_actor(), "dev2", job_id)
+        assert data["rows"] == [{"vid": "v1", "degree": "3"}]
+    finally:
+        graph_algorithm.clear_algo_info_cache()
+        graph_algorithm._degree_jobs.clear()
 
 
 @pytest.mark.parametrize("space", ["shared_business", "bound_private"])
@@ -278,9 +373,7 @@ def test_list_edge_types_disjoint_catalog_falls_back(algo_backend, monkeypatch) 
 
 
 def test_list_edge_types_falls_back_when_catalog_empty(algo_backend, monkeypatch) -> None:
-    monkeypatch.setattr(
-        "service.graph_algorithm._relation_schema_keys", lambda space: []
-    )
+    monkeypatch.setattr("service.graph_algorithm._relation_schema_keys", lambda space: [])
     assert list_edge_types(_actor(), "shared_business") == ["HAS_KEYWORD", "EMPLOYED_BY"]
 
 
@@ -304,7 +397,9 @@ def test_degree_returns_running_before_background_computation(algo_backend, monk
     from service.graph_algorithm import _run_degree_job
 
     tasks = BackgroundTasks()
-    data = submit_job(_actor(), "shared_business", "degreestatic", ["HAS_KEYWORD"], {}, background_tasks=tasks)
+    data = submit_job(
+        _actor(), "shared_business", "degreestatic", ["HAS_KEYWORD"], {}, background_tasks=tasks
+    )
     assert data["status"] == "running"
     assert data["finishedAt"] is None
     assert get_job(_actor(), "shared_business", data["jobId"])["status"] == "running"
@@ -312,8 +407,10 @@ def test_degree_returns_running_before_background_computation(algo_backend, monk
         get_result(_actor(), "shared_business", data["jobId"])
     assert exc.value.status_code == 409
     if fail:
+
         def reject(*args):
             raise RuntimeError("graph offline")
+
         monkeypatch.setattr("service.graph_algorithm._degree_rows_via_ngql", reject)
     task = tasks.tasks[0]
     _run_degree_job(*task.args)

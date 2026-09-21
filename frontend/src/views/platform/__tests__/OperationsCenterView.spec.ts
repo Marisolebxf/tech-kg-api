@@ -221,10 +221,15 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     expect(bar.text()).toContain('patent×1')
   })
 
-  it('批量重跑无跳过：反馈条保持绿色 success', async () => {
+  it('批量重跑无跳过：反馈条保持绿色 success，执行信息纯文本不跳转', async () => {
     const wrapper = renderReview()
     await flushPromises()
     await switchToCategoryC(wrapper)
+
+    mocks.rerunExtractFailures.mockResolvedValueOnce({
+      executions: [{ executionId: 'EXEC-R2', schemaId: 'schema-paper', records: 2, cases: 2 }],
+      cases: 2,
+    })
 
     const header = headerCheckbox(wrapper)
     ;(header.element as HTMLInputElement).checked = true
@@ -235,6 +240,9 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     const bar = wrapper.get('.rerun-feedback')
     expect(bar.classes()).toContain('is-success')
     expect(bar.classes()).not.toContain('is-warning')
+    // 执行信息是纯文本，不再提供跳执行详情的链接
+    expect(bar.findAll('router-link-stub')).toHaveLength(0)
+    expect(bar.text()).toContain('schema-paper · 2 条')
   })
 
   it('更新时间表头三态排序：默认 → 新→旧 → 旧→新 → 默认，请求带对应 sort 参数', async () => {
@@ -281,6 +289,9 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     expect(wrapper.text()).toContain('写入 120 · 失败 1')
     expect(wrapper.text()).toContain('阶段回写：1 个 stage')
     expect(wrapper.text()).not.toContain('处理时间线')
+    // 执行 ID 纯文本展示，不再跳执行详情页
+    expect(wrapper.text()).toContain('EXEC-RERUN-9')
+    expect(wrapper.find('.case-log-dl router-link-stub').exists()).toBe(false)
   })
 })
 

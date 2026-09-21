@@ -1907,6 +1907,23 @@ async def resolve_failure_cases(request: dict[str, Any]) -> dict[str, Any]:
 
 
 @activity.defn
+async def revert_rerun_failure_cases(request: dict[str, Any]) -> dict[str, Any]:
+    """重跑执行异常中止时把 RERUNNING case 回滚 OPEN（不滞留，可再次点重跑）。
+
+    ``resolve_failure_cases`` 只在 workflow 正常走到结尾时调用；重跑执行中途
+    崩溃（批次 activity 重试耗尽 / 写图异常）时 case 已被 API 侧 ``mark_extract_rerun``
+    标成 RERUNING，无人回滚就永远滞留——审核队列看不到也点不了重跑。
+    """
+    from service.manual_review_production import manual_review_service
+
+    reverted = manual_review_service.revert_extract_rerun(
+        request.get("rerunCaseIds") or [],
+        reason=str(request.get("reason") or "重跑执行失败"),
+    )
+    return {"reverted": reverted}
+
+
+@activity.defn
 async def build_entity_index(request: dict[str, Any]) -> dict[str, Any]:
     """重建实体 Milvus 混合检索索引（kg_entity 集合）：图 → embedding+BM25 → Milvus。
 
@@ -2127,6 +2144,21 @@ class SchemaExtractWorkflow:
             )
         except Exception as exc:
             await self._report_script_run(schema_id, ok=False, error=str(exc)[:1000])
+            # 重跑执行中途崩溃：case 已标 RERUNING 且 resolve_failure_cases 不会
+            # 再被调用——不回滚会永远滞留（队列不可见、无法再次重跑）
+            if request.get("recordIdsBySource"):
+                try:
+                    await workflow.execute_activity(
+                        revert_rerun_failure_cases,
+                        {
+                            "rerunCaseIds": request.get("rerunCaseIds") or [],
+                            "reason": f"重跑执行失败: {str(exc)[:300]}",
+                        },
+                        start_to_close_timeout=timedelta(seconds=60),
+                        retry_policy=ACTIVITY_RETRY_POLICY,
+                    )
+                except ActivityError:
+                    workflow.logger.warning("重跑 case 回滚 OPEN 失败（可能滞留 RERUNING）")
             raise
         await self._report_script_run(schema_id, ok=True, error=None)
         return result
@@ -2982,6 +3014,7 @@ ACTIVITIES = [
     detect_extract_collisions,
     record_extract_failures,
     resolve_failure_cases,
+    revert_rerun_failure_cases,
     build_entity_index,
     refresh_graph_stats,
 ]

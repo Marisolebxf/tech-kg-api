@@ -414,3 +414,36 @@ def test_format_workflow_failure_expands_cause_chain():
     inner.__cause__ = deepest
     text2 = _format_workflow_failure(outer)
     assert "scripts/paper.py" in text2
+
+
+def test_apply_output_failure_status_maps_completed_with_failures():
+    """FUNC-00901：含失败批次的执行按失败标记，output 保留（失败记录列可查）。
+
+    逐行失败由 workflow 正常返回（Temporal COMPLETED），控制面 refresh 时按
+    output.failures.count 映射为 FAILED；无失败或非抽取形状不受影响。
+    """
+    from service.temporal_runtime import _apply_output_failure_status
+
+    def base(output):
+        return {"status": "COMPLETED", "message": "工作流执行完成", "output": output}
+
+    failed = {"failures": {"count": 50, "recorded": 50, "truncated": False}}
+    mapped = _apply_output_failure_status(base(failed), failed)
+    assert mapped["status"] == "FAILED"
+    assert "50" in mapped["message"] and "人工审核" in mapped["message"]
+    assert mapped["output"] is failed  # 失败记录列依赖 output 透传
+
+    # 截断建案：计数如实（count > recorded 仍按 count 标失败）
+    truncated = {"failures": {"count": 2500, "recorded": 2000, "truncated": True}}
+    mapped_trunc = _apply_output_failure_status(base(truncated), truncated)
+    assert mapped_trunc["status"] == "FAILED"
+    assert "2500" in mapped_trunc["message"]
+
+    # 无失败 / 非 extract 输出形状 / 计数非法：保持 COMPLETED
+    clean = {"failures": {"count": 0, "recorded": 0, "truncated": False}}
+    assert _apply_output_failure_status(base(clean), clean)["status"] == "COMPLETED"
+    legacy = {"stages": []}
+    assert _apply_output_failure_status(base(legacy), legacy)["status"] == "COMPLETED"
+    broken = {"failures": {"count": "many"}}
+    assert _apply_output_failure_status(base(broken), broken)["status"] == "COMPLETED"
+    assert _apply_output_failure_status(base(None), None)["status"] == "COMPLETED"

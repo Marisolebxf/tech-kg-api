@@ -780,6 +780,68 @@ def test_reindex_aborts_when_all_labels_unreadable(
     assert service.status()["entityCount"] == 1
 
 
+def test_reindex_aborts_when_second_pass_loses_everything(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """首遍读到语料、第二遍全灭（图中途退化）≠ 空空间：中止并保留旧索引。
+
+    2026-09-21 实测：首遍只有字母序靠前的小标签成功（document_count>0 过掉
+    首遍守卫），organization_base 中途失败触发图退化，第二遍连小标签也读不
+    回来 → written=0 → 走「空空间」分支清空索引。
+    """
+
+    class DegradingGraph(LookupGraph):
+        """前两次查询（首遍探活+分页）成功，之后图服务退化全部失败。"""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.budget = 2  # 首遍：1 次探活 + 1 页
+
+        def execute_query(self, query):
+            if self.budget <= 0:
+                raise GraphRequestError("read timeout", status_code=504)
+            self.budget -= 1
+            return super().execute_query(query)
+
+        def get_nodes_by_label(self, label, *, limit=100, offset=0):
+            raise GraphRequestError("read timeout", status_code=504)
+
+    graph = DegradingGraph(
+        ["Expert"],
+        {"Expert": [FakeNode("expert_1", {"id": "E-1", "name": "张三"})]},
+        lookup_labels={"Expert"},
+    )
+    milvus = FakeMilvusClient()
+    milvus.collections[COLLECTION_NAME] = [
+        {"document_id": "dev2::expert_1", "vid": "expert_1", "graph_space": "dev2"}
+    ]
+    state_session.add(
+        EntitySearchState(
+            graph_space="dev2",
+            vocabulary='{"张": 0}',
+            document_frequency='{"张": 1}',
+            document_count=1,
+            entity_count=1,
+            type_counts='{"Expert": 1}',
+            embedding_model="moka-ai/m3e-small",
+        )
+    )
+    state_session.commit()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", FakeEmbeddingClient)
+    monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+
+    service = EntitySearchService(state_session)
+    with pytest.raises(EntitySearchError, match="第二遍"):
+        service.reindex()
+
+    # written=0 时绝不走「空空间」清空：旧索引与旧快照原样保留
+    assert milvus.deleted == []
+    assert [row["vid"] for row in milvus.collections[COLLECTION_NAME]] == ["expert_1"]
+    assert service.status()["entityCount"] == 1
+
+
 def test_reindex_defers_rest_fallback_labels_until_lookup_labels_done(
     state_session, monkeypatch: pytest.MonkeyPatch
 ) -> None:

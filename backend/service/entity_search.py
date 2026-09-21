@@ -759,7 +759,17 @@ class EntitySearchService:
                     logger.info("实体索引流式重建进度 space=%s written=%s", resolved_space, written)
 
             if not replacement_started:
-                # 空间无实体：没有向量可推维度，只在集合已存在时清掉本空间旧行
+                # 写入数为零但明明读到过语料/跳过过标签：不是空空间，是第二遍
+                # 重读时图服务整体退化（首遍前缀成功不足以证明空间为空——
+                # 2026-09-21 实测 organization_base 中途失败后第二遍全灭，
+                # 重建走「空空间」分支把索引清成 0）。中止并保留旧索引。
+                if written == 0 and (skipped_labels or encoder.document_count):
+                    raise EntitySearchError(
+                        "第二遍写入前图实体数已归零（首遍读取 "
+                        f"{encoder.document_count} 条、跳过 {len(skipped_labels)} 个标签），"
+                        "疑似图服务中途退化，本次重建中止（旧索引保留），请稍后重试"
+                    )
+                # 真正的空空间：没有向量可推维度，只在集合已存在时清掉本空间旧行
                 if expected_dim is not None:
                     self._ensure_collection(milvus, dim=expected_dim)
                 if milvus.has_collection(COLLECTION_NAME):

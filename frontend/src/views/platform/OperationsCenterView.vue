@@ -326,20 +326,18 @@ function toggleReviewTimeSort() {
   void loadReviews()
 }
 
-/** 筛选条件变化：回到第 1 页重新加载。 */
+/** 筛选条件变化：保留当前页重新加载；总页数收缩、当前页超出时由 loadReviews 收敛到最后有效页（FUNC-00781）。 */
 watch([reviewStatusFilter, reviewKindFilter, reviewTimeFilter], () => {
   if (props.mode !== 'review') return
-  reviewPage.value = 1
   void loadReviews()
 })
 
-/** 关键字输入防抖后走服务端检索（与分页/筛选同口径，避免页内客户端过滤与总数不一致）。 */
+/** 关键字输入防抖后走服务端检索（与分页/筛选同口径，避免页内客户端过滤与总数不一致）；页码同样保留+收敛。 */
 let reviewKeywordTimer: number | undefined
 watch(keyword, () => {
   if (props.mode !== 'review') return
   window.clearTimeout(reviewKeywordTimer)
   reviewKeywordTimer = window.setTimeout(() => {
-    reviewPage.value = 1
     void loadReviews()
   }, 300)
 })
@@ -432,7 +430,7 @@ onMounted(loadReviews)
               :checked="rerunSelection.has(row.id)"
               @change="((event?: Event) => toggleRerunPick(row.id, Boolean((event?.target as HTMLInputElement)?.checked)))"
             /></td>
-            <td class="review-id-cell"><code class="review-id-plain">{{ row.id }}</code></td>
+            <td class="review-id-cell"><code class="review-id-plain" :title="row.id">{{ row.id }}</code></td>
             <td class="review-object-cell">
               <strong>{{ row.object || '—' }}</strong>
             </td>

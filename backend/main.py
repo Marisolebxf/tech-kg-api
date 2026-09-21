@@ -116,6 +116,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from biz.prewarm_business import prewarm_business
 
         asyncio.get_running_loop().create_task(prewarm_business(app))
+        # 默认首页写入 Redis 共享缓存，避免服务重启后的第一位用户承担图扫描耗时。
+        from biz.handler.entity_search import prewarm_entity_browse
+
+        asyncio.get_running_loop().create_task(prewarm_entity_browse())
         yield
     finally:
         if correction_dispatcher is not None:

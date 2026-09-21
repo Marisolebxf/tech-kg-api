@@ -309,3 +309,73 @@ describe('来源记录跳图谱构建任务详情', () => {
     expect(secondSourceCell.text()).toBe('—')
   })
 })
+
+describe('分页统计与页数收缩收敛（FUNC-00781）/ 处理实例 ID 纯文本（FUNC-00775）', () => {
+  /** 按 statusGroup 区分筛选前后：全部 41 条（3 页）；待处理 5 条（1 页）。 */
+  const mockPaged = () => mocks.getProductionReviews.mockImplementation(
+    async (params: { page?: number; statusGroup?: string }) => {
+      if (params.statusGroup === 'pending') {
+        return params.page && params.page > 1
+          ? { items: [], total: 5, page: params.page, pageSize: 20 }
+          : { items: C_ROWS.slice(0, 5), total: 5, page: 1, pageSize: 20 }
+      }
+      return { items: C_ROWS, total: 41, page: params.page ?? 1, pageSize: 20 }
+    },
+  )
+
+  it('筛选后总页数收缩：当前页自动收敛到最后有效页并重新加载，不出现空页', async () => {
+    mockPaged()
+    const wrapper = renderReview()
+    await flushPromises()
+    expect(wrapper.get('.review-pagination > span').text()).toBe('共 41 条 · 第 1 / 3 页')
+
+    // 翻至第 3 页
+    wrapper.findComponent({ name: 'APagination' }).vm.$emit('change', 3)
+    await flushPromises()
+    expect(wrapper.get('.review-pagination > span').text()).toBe('共 41 条 · 第 3 / 3 页')
+
+    // 增加筛选（状态=待处理）使结果只剩 1 页：先按第 3 页请求 → 收敛到第 1 页重拉
+    wrapper.findAllComponents({ name: 'ASelect' })[0].vm.$emit('update:modelValue', '待处理')
+    await flushPromises()
+    await flushPromises()
+
+    const pages = mocks.getProductionReviews.mock.calls.map((call) => call[0]?.page)
+    expect(pages).toEqual([1, 3, 3, 1])
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, statusGroup: 'pending' }))
+    // 统计文案与实际数据一致，且无空页（收敛后立即有数据行）
+    expect(wrapper.get('.review-pagination > span').text()).toBe('共 5 条 · 第 1 / 1 页')
+    expect(wrapper.findAll('tbody tr td.review-id-cell').length).toBeGreaterThan(0)
+  })
+
+  it('筛选后当前页仍有效：保留当前页重新加载，不回第 1 页', async () => {
+    mocks.getProductionReviews.mockImplementation(
+      async (params: { page?: number }) => ({ items: C_ROWS, total: 61, page: params.page ?? 1, pageSize: 20 }),
+    )
+    const wrapper = renderReview()
+    await flushPromises()
+
+    wrapper.findComponent({ name: 'APagination' }).vm.$emit('change', 3)
+    await flushPromises()
+
+    wrapper.findAllComponents({ name: 'ASelect' })[0].vm.$emit('update:modelValue', '待处理')
+    await flushPromises()
+    await flushPromises()
+
+    // 61 条 = 4 页，第 3 页仍有效：筛选后停在原页
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ page: 3, statusGroup: 'pending' }))
+    expect(wrapper.get('.review-pagination > span').text()).toBe('共 61 条 · 第 3 / 4 页')
+  })
+
+  it('处理实例 ID 为纯文本（中性色 code，非链接），title 悬停提供全称', async () => {
+    const wrapper = renderReview()
+    await flushPromises()
+
+    // 首列处理实例 ID 单元格：纯 code 文本，不带链接，悬停 title 可看全称
+    const idCell = wrapper.findAll('tbody tr td.review-id-cell')[0]
+    const code = idCell.get('code.review-id-plain')
+    expect(code.attributes('title')).toBe('MR-1')
+    expect(code.text()).toBe('MR-1')
+    expect(idCell.find('router-link-stub').exists()).toBe(false)
+    expect(idCell.find('a').exists()).toBe(false)
+  })
+})

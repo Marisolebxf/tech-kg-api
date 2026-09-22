@@ -444,20 +444,20 @@ onMounted(loadReviews)
             <td>{{ row.completedAt || row.updatedAt }}</td>
             <td class="review-action-col">
               <div v-if="reviewCategory === 'A'" class="alert-actions">
-                <RouterLink class="link" :to="`/manual-review/task/${row.id}`">查看记录 →</RouterLink>
+                <RouterLink class="review-action-btn" :to="`/manual-review/task/${row.id}`">查看记录</RouterLink>
               </div>
               <div v-else class="alert-actions">
-                <button class="link rerun-link" type="button" @click="openLog(row)">日志</button>
+                <button class="review-action-btn" type="button" @click="openLog(row)">日志</button>
                 <button
                   v-if="isRerunnable(row)"
-                  class="link rerun-link"
+                  class="review-action-btn"
                   type="button"
                   :disabled="rerunSubmitting"
                   @click="rerunSelected([row.id])"
                 >重跑</button>
                 <button
                   v-if="isRerunnable(row)"
-                  class="link rerun-link is-danger"
+                  class="review-action-btn is-danger"
                   type="button"
                   :disabled="deleteSubmitting"
                   @click="askDelete(row)"
@@ -575,14 +575,13 @@ onMounted(loadReviews)
 .review-evidence{min-width:260px;max-width:360px;white-space:normal;line-height:19px}.review-status{display:inline-flex;padding:3px 8px;border-radius:10px;background:#edf2f7;color:#52647f}.review-status.is-待处理{background:#fff0e8;color:#c4320a}.review-status.is-已完成{background:#e9f8ef;color:#067647}
 .link-disabled{color:#98a2b3;font-size:12px;cursor:default}
 .pick-col{width:36px;text-align:center}.pick-col input{cursor:pointer}
-.rerun-link{padding:0;font-size:12px;border:0;background:transparent}
 .review-severity{min-width:230px;max-width:300px;white-space:normal}.review-severity small{margin:0 0 6px}.review-severity span{display:block;color:#65738b;font-size:11px;line-height:17px}
 .review-mask{position:fixed;z-index:49;inset:0;border:0;background:rgba(16,36,76,.24)}.review-drawer{position:fixed;z-index:50;top:0;right:0;display:grid;grid-template-rows:auto minmax(0,1fr) auto;width:620px;height:100vh;background:#f8fbff;box-shadow:-18px 0 42px rgba(34,74,132,.22)}.review-drawer>header{display:flex;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.review-drawer header span{color:#165dff;font-size:11px}.review-drawer h2{margin:6px 0 3px;font-size:19px}.review-drawer header p{margin:0;color:#70809a;font-size:12px}.review-drawer header>button{width:30px;height:30px;border:0;border-radius:5px;background:#f0f4fa;font-size:20px;cursor:pointer}.review-body{overflow:auto;padding:16px}.review-body section,.review-compare article{padding:14px;border:1px solid #dce8f8;border-radius:7px;background:#fff}.review-body h3{margin:0 0 8px;font-size:14px}.review-body p,.review-body li{color:#61708a;font-size:12px;line-height:20px}.review-compare{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}.review-compare span{display:block;margin-bottom:9px;color:#70809a;font-size:11px}.review-compare strong{font-size:13px}.review-compare em{color:#d92d20;font-size:11px;font-style:normal}.review-compare input,.review-compare textarea{width:100%;padding:8px;border:1px solid #bdd0ea;border-radius:5px;font:inherit}.review-compare textarea{min-height:90px;margin-top:8px;resize:vertical}.review-success{padding:10px 12px;border:1px solid #a6f4c5;border-radius:6px;background:#ecfdf3!important;color:#067647!important}.review-drawer>footer{display:flex;justify-content:flex-end;gap:8px;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.review-drawer>footer button{height:34px;padding:0 13px;border:1px solid #bdd0ea;border-radius:6px;background:#fff;color:#40516d;cursor:pointer}.review-drawer>footer .primary{border-color:#165dff;background:#165dff;color:#fff}@media(max-width:720px){.review-drawer{width:94vw}.review-compare{grid-template-columns:1fr}}
 .ops-page{display:flex;box-sizing:border-box;min-height:0;overflow:hidden;padding-bottom:2px;flex-direction:column}.review-context{flex:0 0 auto}.ops-panel{display:flex;flex:1;min-height:0;flex-direction:column}.alert-tabs,.ops-filter,.review-pagination{flex:0 0 auto}.ops-review-table-scroll{flex:1;min-height:0;max-height:none;overflow:auto}.ops-filter.is-review{grid-template-columns:minmax(280px,1fr) 170px 170px auto}.ops-review-table-scroll table{min-width:1900px}.review-pagination{display:flex;align-items:center;gap:14px;padding:11px 14px;border-top:1px solid #e4ecf6;background:#fff;color:#71809a;font-size:11px}.review-pagination>span{white-space:nowrap}.review-pagination .review-page-size{display:flex;align-items:center;gap:6px;margin-left:auto;white-space:nowrap}.review-pagination :deep(.arco-select){width:76px}.review-pagination :deep(.arco-select-view){box-sizing:border-box;width:76px;height:28px;border:1px solid #d3deee;border-radius:4px;background:#fff}.review-empty{height:100px!important;color:#8290a7;text-align:center!important}.ops-review-table-scroll td code{color:#175cd3;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .review-type-cell{min-width:170px}.review-type-cell>span{display:inline-flex;padding:3px 9px;border-radius:99px;background:#eaf2ff;color:#175cd3;font-size:11px}.review-type-cell>span.is-low-confidence{background:#fff3d8;color:#b54708}.review-type-cell>span.is-extraction{background:#fef3f2;color:#b42318}.review-type-cell>span.is-schema{background:#edf0ff;color:#444ce7}.review-type-cell>span.is-normalization{background:#ecfdf3;color:#067647}.review-type-cell>span.is-other{background:#f2f4f7;color:#475467}
 .ops-review-table-scroll table{min-width:1900px}.review-risk-explain{display:grid;flex:0 0 auto;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px}.review-risk-explain>div{display:grid;gap:3px;padding:11px 14px;border:1px solid #b9d2f4;border-radius:7px;background:#f7fbff}.review-risk-explain strong{color:#344861;font-size:11px}.review-risk-explain span{color:#6d7c93;font-size:9px;line-height:16px}.review-confidence-cell{min-width:190px;white-space:normal}.review-confidence-cell>b{display:inline-block;margin-right:7px;font-size:13px}.review-confidence-cell>small{display:inline;color:#718098}.review-confidence-cell>span{display:block;margin-top:4px;color:#78869b;font-size:9px;line-height:15px}@media(max-width:900px){.review-risk-explain{grid-template-columns:1fr}}
 .review-risk-explain{grid-template-columns:repeat(2,minmax(0,1fr))}.review-risk-explain>div:first-child{border-color:#f5b8b3;background:#fff5f4}.review-risk-explain>div:first-child strong{color:#d92d20}.review-risk-explain>div:nth-child(2){border-color:#f3d08a;background:#fffaf0}.review-risk-explain>div:nth-child(2) strong{color:#b54708}.review-type{min-width:150px}.review-confidence-cell{min-width:130px}.review-confidence-cell>em{display:block;width:max-content;margin-top:5px;padding:2px 7px;border-radius:9px;background:#fff3d8;color:#b54708;font-size:9px;font-style:normal}
-.ops-review-table-scroll table{min-width:1280px}
+.ops-review-table-scroll table{min-width:1344px}
 .review-id-cell{min-width:150px;white-space:nowrap}
 .review-id-cell .link{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
 .review-source-cell{min-width:160px}
@@ -607,7 +606,7 @@ onMounted(loadReviews)
 .ops-filter,.ops-filter.is-review{box-sizing:border-box;width:100%;grid-template-columns:minmax(280px,1fr) minmax(160px,200px) minmax(160px,200px) auto;column-gap:16px!important;row-gap:16px!important;padding:16px!important;background:#fff}
 .alert-tabs nav button{height:36px;padding:0 16px;font-size:14px;line-height:22px}.alert-tabs nav button.active{font-weight:500}
 .ops-filter input,.ops-filter select,.ops-filter button{height:32px;padding:0 12px;border-color:#e5e6eb;border-radius:4px;font-size:14px;line-height:22px}.ops-filter button{padding:0 16px}
-.ops-review-table-scroll table{min-width:1280px;font-size:14px;line-height:22px}.ops-review-table-scroll th,.ops-review-table-scroll td{height:40px;padding:0 16px}.ops-review-table-scroll th{background:#f7f8fa;color:#1d2129;font-weight:500}
+.ops-review-table-scroll table{min-width:1344px;font-size:14px;line-height:22px}.ops-review-table-scroll th,.ops-review-table-scroll td{height:40px;padding:0 16px}.ops-review-table-scroll th{background:#f7f8fa;color:#1d2129;font-weight:500}
 .ops-review-table-scroll td small,.review-source-cell strong,.review-question-cell strong,.review-confidence-cell>b{font-size:12px;line-height:20px}
 .review-status{display:inline-flex;align-items:center;gap:6px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.review-status::before{display:block;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
 .review-status.is-待处理,.review-status.is-已完成,.review-status.is-已撤销,.review-status.is-已驳回{background:transparent}
@@ -675,7 +674,7 @@ onMounted(loadReviews)
 .ops-review-table-scroll td code,.review-id-cell .link{font-family:inherit;font-size:14px;line-height:22px;font-weight:400}
 .ops-review-table-scroll td small,.ops-review-table-scroll td small code{font-size:12px;line-height:20px;font-weight:400}
 .review-source-cell strong{font-size:14px;line-height:22px;font-weight:400}
-.alert-actions{gap:4px}.alert-actions .link,.rerun-link{font-size:14px;line-height:22px;font-weight:400}
+.alert-actions{gap:4px}
 .pick-col{box-sizing:border-box;width:52px;min-width:52px;padding-right:16px!important;padding-left:16px!important}
 /* 分页留在表格滚动区之外，窄屏换行后仍能访问翻页和跳页控件。 */
 .review-pagination{height:auto;min-height:56px;flex-wrap:wrap;gap:8px 16px;padding:8px 16px}
@@ -697,9 +696,9 @@ onMounted(loadReviews)
 .ops-review-table-scroll td.review-action-col{position:static;box-sizing:border-box;width:auto;min-width:0;box-shadow:none;white-space:nowrap}
 .review-action-col .alert-actions{display:flex;width:max-content;min-width:0;align-items:center;gap:8px}
 .ops-review-table-scroll th,.ops-review-table-scroll td{box-sizing:border-box;padding-right:16px;padding-left:16px}
-/* 固定列合计 1012px，最小表宽为对象列保留 268px；勾选列额外占 52px。 */
-.ops-review-table-scroll table.review-case-table{width:100%;min-width:1280px;table-layout:fixed}
-.ops-review-table-scroll table.review-case-table--selectable{min-width:1332px}
+/* 固定列合计 1076px，最小表宽为对象列保留 268px；勾选列额外占 52px。 */
+.ops-review-table-scroll table.review-case-table{width:100%;min-width:1344px;table-layout:fixed}
+.ops-review-table-scroll table.review-case-table--selectable{min-width:1396px}
 .ops-review-table-scroll .review-object-cell{padding-top:8px;padding-bottom:8px;overflow-wrap:anywhere;word-break:normal}
 .ops-review-table-scroll td{white-space:normal}
 .ops-review-table-scroll :is(code,.review-id-cell,.review-status){white-space:nowrap}
@@ -712,7 +711,7 @@ onMounted(loadReviews)
 .review-case-table col.col-source{width:220px}
 .review-case-table col.col-status{width:104px}
 .review-case-table col.col-time{width:200px}
-.review-case-table col.col-actions{width:136px}
+.review-case-table col.col-actions{width:200px}
 .ops-review-table-scroll .review-id-cell{overflow:hidden;text-overflow:ellipsis}
 .ops-review-table-scroll .review-id-cell :is(code,.link){display:inline-block;box-sizing:border-box;max-width:100%;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom}
 /* 滚动条出现/消失（数据多少切换）不挤动列宽 */
@@ -725,7 +724,12 @@ onMounted(loadReviews)
 .review-kind-badge{display:inline-flex;white-space:nowrap;padding:0 8px;border-radius:4px;background:#f2f3f5;color:#4e5969;font-size:12px;line-height:20px}
 .review-kind-badge.is-实体{background:#eaf2ff;color:#175cd3}
 .review-kind-badge.is-关系{background:#fff3d8;color:#b54708}
-.rerun-link.is-danger{color:#b42318}
+/* 操作列按钮化：查看记录（A 类）/ 日志、重跑、删除（C 类）统一为描边按钮，删除红色警示 */
+.review-action-btn{display:inline-flex;box-sizing:border-box;height:28px;min-width:0;align-items:center;justify-content:center;padding:0 10px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#1d2129;font-size:13px;line-height:26px;white-space:nowrap;text-decoration:none;cursor:pointer}
+.review-action-btn:hover{border-color:#165dff;color:#165dff}
+.review-action-btn.is-danger{border-color:#f6c1be;color:#b42318}
+.review-action-btn.is-danger:hover{border-color:#b42318;color:#b42318}
+.review-action-btn:disabled,.review-action-btn:disabled:hover{border-color:#e5e6eb;background:#f7f8fa;color:#c9cdd4;cursor:not-allowed}
 .ops-review-table-scroll .pick-col input[type="checkbox"]:disabled{opacity:.35;cursor:not-allowed}
 /* 日志弹窗内容（弹体外壳样式在全局块） */
 .case-log-sec{margin:0 0 16px}

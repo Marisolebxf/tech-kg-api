@@ -278,7 +278,7 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     await flushPromises()
     await switchToCategoryC(wrapper)
     // 操作列第一个按钮是「日志」
-    await wrapper.findAll('tbody .rerun-link')[0].trigger('click')
+    await wrapper.findAll('tbody .review-action-btn')[0].trigger('click')
     await flushPromises()
 
     // 重跑执行优先展示，且不拉旧的审计日志

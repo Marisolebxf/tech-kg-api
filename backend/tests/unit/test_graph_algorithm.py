@@ -8,7 +8,7 @@ import pytest
 
 from biz.schemas.graph_algorithm import AlgorithmSubmitRequest
 from infra.graph_db import AlgorithmJobBusyError
-from infra.graph_db.exceptions import GraphNotFoundError, GraphRequestError
+from infra.graph_db.exceptions import GraphConnectionError, GraphNotFoundError, GraphRequestError
 from service import graph_algorithm
 from service.graph_algorithm import (
     GraphAlgorithmError,
@@ -71,6 +71,23 @@ def algo_backend(monkeypatch):
             return {"tags": {}, "edges": {"HAS_KEYWORD": 8, "EMPLOYED_BY": 3}}
 
         def execute_read(self, query: str, params=None, *, timeout=None):
+            if "GROUP BY" in query and "src(edge)" in query:
+                return SimpleNamespace(
+                    records=[
+                        {"vid": "b", "cnt": 5},
+                        {"vid": "a", "cnt": 2},
+                        {"vid": "d", "cnt": 1},
+                    ]
+                )
+            if "GROUP BY" in query and "dst(edge)" in query:
+                return SimpleNamespace(
+                    records=[
+                        *[{"vid": f"t{i}", "cnt": 1} for i in range(1, 6)],
+                        {"vid": "c", "cnt": 1},
+                        {"vid": "c2", "cnt": 1},
+                        {"vid": "a", "cnt": 1},
+                    ]
+                )
             if query.startswith("LOOKUP"):
                 # 边索引枚举 src/dst：b 出5，a 出2 入1，其余端点各 1 度
                 pairs = [("b", f"t{i}") for i in range(1, 6)] + [
@@ -345,11 +362,13 @@ def test_degree_via_ngql_returns_merged_result(algo_backend) -> None:
     assert result["rows"] == [
         {"vid": "b", "out_degree": "5", "in_degree": "0", "degree": "5"},
         {"vid": "a", "out_degree": "2", "in_degree": "1", "degree": "3"},
+        {"vid": "c", "out_degree": "0", "in_degree": "1", "degree": "1"},
+        {"vid": "c2", "out_degree": "0", "in_degree": "1", "degree": "1"},
+        {"vid": "d", "out_degree": "1", "in_degree": "0", "degree": "1"},
         *[
             {"vid": v, "out_degree": "0", "in_degree": "1", "degree": "1"}
-            for v in ("t1", "t2", "t3", "t4", "t5", "c", "c2")
+            for v in ("t1", "t2", "t3", "t4", "t5")
         ],
-        {"vid": "d", "out_degree": "1", "in_degree": "0", "degree": "1"},
     ]
     assert result["count"] == 10
     assert result["truncated"] is False
@@ -390,8 +409,10 @@ def test_degree_builds_index_when_edge_not_indexed(algo_backend, monkeypatch) ->
                 )
             if "LIMIT 1" in query:
                 return SimpleNamespace(records=[{"s": "a"}])
+            if "src(edge)" in query:
+                return SimpleNamespace(records=[{"vid": "a", "cnt": 2}, {"vid": "d", "cnt": 1}])
             return SimpleNamespace(
-                records=[{"s": "a", "d": "b"}, {"s": "a", "d": "c"}, {"s": "d", "d": "a"}]
+                records=[{"vid": "b", "cnt": 1}, {"vid": "c", "cnt": 1}, {"vid": "a", "cnt": 1}]
             )
 
         def execute_write(self, query: str):
@@ -445,16 +466,37 @@ def test_degree_lookup_is_paginated(algo_backend, monkeypatch) -> None:
             raise AssertionError(f"unexpected query: {query}")
 
     monkeypatch.setattr(graph_algorithm, "_DEGREE_LOOKUP_PAGE_SIZE", 2)
-    monkeypatch.setattr("infra.graph_db.get_space_client", lambda space: PagedClient())
-    data = submit_job(_actor(), "shared_business", "degreestatic", ["HAS_KEYWORD"], {})
-    result = get_result(_actor(), "shared_business", data["jobId"])
-    assert result["rows"] == [
-        {"vid": "a", "out_degree": "2", "in_degree": "1", "degree": "3"},
-        {"vid": "b", "out_degree": "0", "in_degree": "1", "degree": "1"},
-        {"vid": "c", "out_degree": "0", "in_degree": "1", "degree": "1"},
-        {"vid": "d", "out_degree": "1", "in_degree": "0", "degree": "1"},
+    assert list(graph_algorithm._lookup_degree_pairs(PagedClient(), "HAS_KEYWORD")) == [
+        ("a", "b"),
+        ("a", "c"),
+        ("d", "a"),
     ]
     assert [query.rsplit(" ", 1)[-1] for query in queries] == ["0", "2"]
+
+
+def test_degree_group_timeout_falls_back_to_smaller_pages(algo_backend, monkeypatch) -> None:
+    queries = []
+
+    class FlakyClient:
+        def execute_read(self, query: str, params=None, *, timeout=None):
+            queries.append(query)
+            if "GROUP BY" in query:
+                raise GraphConnectionError("Request failed: POST /api/v1/query/read (ReadTimeout)")
+            if "LIMIT 4 OFFSET 0" in query:
+                raise GraphConnectionError("Request failed: POST /api/v1/query/read (ReadTimeout)")
+            if "LIMIT 2 OFFSET 0" in query:
+                return SimpleNamespace(records=[{"s": "a", "d": "b"}, {"s": "a", "d": "c"}])
+            if "LIMIT 2 OFFSET 2" in query:
+                return SimpleNamespace(records=[{"s": "d", "d": "a"}])
+            raise AssertionError(f"unexpected query: {query}")
+
+    monkeypatch.setattr(graph_algorithm, "_DEGREE_LOOKUP_PAGE_SIZE", 4)
+    monkeypatch.setattr(graph_algorithm, "_DEGREE_LOOKUP_MIN_PAGE_SIZE", 2)
+    out_counts, in_counts = graph_algorithm._degree_counts_for_label(FlakyClient(), "CITES")
+    assert out_counts == {"a": 2, "d": 1}
+    assert in_counts == {"b": 1, "c": 1, "a": 1}
+    assert any("LIMIT 4 OFFSET 0" in query for query in queries)
+    assert any("LIMIT 2 OFFSET 0" in query for query in queries)
 
 
 def test_degree_stale_zero_stats_does_not_skip_lookup(algo_backend, monkeypatch) -> None:
@@ -470,7 +512,9 @@ def test_degree_stale_zero_stats_does_not_skip_lookup(algo_backend, monkeypatch)
 
         def execute_read(self, query: str, params=None, *, timeout=None):
             calls.append(query)
-            return SimpleNamespace(records=[{"s": "expert-a", "d": "keyword-b"}])
+            if "src(edge)" in query:
+                return SimpleNamespace(records=[{"vid": "expert-a", "cnt": 1}])
+            return SimpleNamespace(records=[{"vid": "keyword-b", "cnt": 1}])
 
     monkeypatch.setattr("infra.graph_db.get_space_client", lambda space: EmptyEdgeClient())
     data = submit_job(_actor(), "shared_business", "degreestatic", ["ALUMNI"], {})
@@ -480,7 +524,7 @@ def test_degree_stale_zero_stats_does_not_skip_lookup(algo_backend, monkeypatch)
         {"vid": "expert-a", "out_degree": "1", "in_degree": "0", "degree": "1"},
         {"vid": "keyword-b", "out_degree": "0", "in_degree": "1", "degree": "1"},
     ]
-    assert len(calls) == 1
+    assert len(calls) == 2
 
 
 def test_degree_rebuilds_created_but_empty_index(algo_backend, monkeypatch) -> None:
@@ -505,7 +549,9 @@ def test_degree_rebuilds_created_but_empty_index(algo_backend, monkeypatch) -> N
             if "LIMIT 1" in query and self.rebuilt:
                 return SimpleNamespace(records=[{"s": "a"}])
             if self.rebuilt:
-                return SimpleNamespace(records=[{"s": "a", "d": "b"}])
+                if "src(edge)" in query:
+                    return SimpleNamespace(records=[{"vid": "a", "cnt": 1}])
+                return SimpleNamespace(records=[{"vid": "b", "cnt": 1}])
             return SimpleNamespace(records=[])
 
         def execute_write(self, query: str):
@@ -541,8 +587,15 @@ def test_degree_mixed_labels_keep_lookup_and_build_missing_index(algo_backend, m
 
         def execute_read(self, query: str, params=None, *, timeout=None):
             if query.startswith("LOOKUP ON `HAS_KEYWORD`"):
-                pairs = [("b", "t1"), ("b", "t2"), ("a", "c")]
-                return SimpleNamespace(records=[{"s": s, "d": d} for s, d in pairs])
+                if "src(edge)" in query:
+                    return SimpleNamespace(records=[{"vid": "b", "cnt": 2}, {"vid": "a", "cnt": 1}])
+                return SimpleNamespace(
+                    records=[
+                        {"vid": "t1", "cnt": 1},
+                        {"vid": "t2", "cnt": 1},
+                        {"vid": "c", "cnt": 1},
+                    ]
+                )
             if query.startswith("LOOKUP ON `STUDIED_AT`") and not self.studied_at_indexed:
                 raise GraphRequestError(
                     "POST /api/v1/query/read -> 400: There is no index to use at runtime",
@@ -560,7 +613,9 @@ def test_degree_mixed_labels_keep_lookup_and_build_missing_index(algo_backend, m
                 )
             if "LIMIT 1" in query:
                 return SimpleNamespace(records=[{"s": "a"}])
-            return SimpleNamespace(records=[{"s": "a", "d": "c"}, {"s": "a", "d": "c"}])
+            if "src(edge)" in query:
+                return SimpleNamespace(records=[{"vid": "a", "cnt": 2}])
+            return SimpleNamespace(records=[{"vid": "c", "cnt": 2}])
 
         def execute_write(self, query: str):
             self.writes.append(query)

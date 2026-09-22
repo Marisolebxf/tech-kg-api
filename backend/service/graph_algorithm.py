@@ -183,7 +183,20 @@ def _shared_job_load(job_id: str) -> dict | None:
 _DEGREE_JOB_CAPACITY = 50
 _DEGREE_RESULT_LIMIT = 10_000
 _DEGREE_LOOKUP_PAGE_SIZE = max(
-    1, min(int(os.getenv("GRAPH_ALGO_DEGREE_LOOKUP_PAGE_SIZE", "5000")), 10_000)
+    1, min(int(os.getenv("GRAPH_ALGO_DEGREE_LOOKUP_PAGE_SIZE", "500")), 5_000)
+)
+_DEGREE_LOOKUP_MIN_PAGE_SIZE = max(
+    1,
+    min(
+        int(os.getenv("GRAPH_ALGO_DEGREE_LOOKUP_MIN_PAGE_SIZE", "50")),
+        _DEGREE_LOOKUP_PAGE_SIZE,
+    ),
+)
+_DEGREE_LOOKUP_RETRY_LIMIT = max(
+    0, min(int(os.getenv("GRAPH_ALGO_DEGREE_LOOKUP_RETRY_LIMIT", "3")), 10)
+)
+_DEGREE_LOOKUP_TIMEOUT_SECONDS = max(
+    5.0, float(os.getenv("GRAPH_ALGO_DEGREE_LOOKUP_TIMEOUT_SECONDS", "60"))
 )
 _DEGREE_INDEX_BUILD_TIMEOUT_SECONDS = float(
     os.getenv("GRAPH_ALGO_DEGREE_INDEX_BUILD_TIMEOUT_SECONDS", "300")
@@ -306,20 +319,129 @@ def _is_index_building_error(exc: Exception) -> bool:
 
 
 def _lookup_degree_pairs(client: Any, label: str) -> Iterable[tuple[str, str]]:
-    """通过边索引分页枚举端点，避免单次返回过大及无索引全空间 MATCH。"""
+    """通过边索引分页枚举端点；连接超时时自动缩页并重试当前 offset。"""
+    from infra.graph_db.exceptions import GraphConnectionError
+
     offset = 0
+    page_size = _DEGREE_LOOKUP_PAGE_SIZE
+    retry_count = 0
     while True:
-        result = client.execute_read(
-            f"LOOKUP ON `{label}` YIELD src(edge) AS s, dst(edge) AS d "
-            f"| LIMIT {_DEGREE_LOOKUP_PAGE_SIZE} OFFSET {offset}",
-            timeout=90.0,
-        )
+        try:
+            result = client.execute_read(
+                f"LOOKUP ON `{label}` YIELD src(edge) AS s, dst(edge) AS d "
+                f"| LIMIT {page_size} OFFSET {offset}",
+                timeout=_DEGREE_LOOKUP_TIMEOUT_SECONDS,
+            )
+        except GraphConnectionError as exc:
+            if page_size > _DEGREE_LOOKUP_MIN_PAGE_SIZE:
+                smaller_page = max(_DEGREE_LOOKUP_MIN_PAGE_SIZE, page_size // 2)
+                logger.warning(
+                    "Degree 分页读取超时，缩小页大小后重试: label=%s offset=%s page=%s->%s error=%s",
+                    label,
+                    offset,
+                    page_size,
+                    smaller_page,
+                    exc,
+                )
+                page_size = smaller_page
+                continue
+            if retry_count < _DEGREE_LOOKUP_RETRY_LIMIT:
+                retry_count += 1
+                delay = min(0.5 * (2 ** (retry_count - 1)), 2.0)
+                logger.warning(
+                    "Degree 最小分页读取失败，重试当前页: label=%s offset=%s retry=%s/%s error=%s",
+                    label,
+                    offset,
+                    retry_count,
+                    _DEGREE_LOOKUP_RETRY_LIMIT,
+                    exc,
+                )
+                time.sleep(delay)
+                continue
+            raise GraphAlgorithmError(
+                f"关系类型 {label} 在偏移 {offset} 处读取超时，已缩小到每页 "
+                f"{page_size} 条并重试 {_DEGREE_LOOKUP_RETRY_LIMIT} 次: {exc}",
+                status_code=504,
+            ) from exc
         records = [record for record in (result.records or []) if isinstance(record, dict)]
         for record in records:
             yield str(record.get("s") or ""), str(record.get("d") or "")
-        if len(records) < _DEGREE_LOOKUP_PAGE_SIZE:
+        retry_count = 0
+        if len(records) < page_size:
             return
         offset += len(records)
+
+
+def _lookup_degree_counts(client: Any, label: str, endpoint: str) -> dict[str, int]:
+    """用边索引在 Nebula 服务端按端点聚合，避免大关系集全量传输。"""
+    if endpoint not in {"src", "dst"}:
+        raise ValueError(f"unsupported edge endpoint: {endpoint}")
+    result = client.execute_read(
+        f"LOOKUP ON `{label}` YIELD {endpoint}(edge) AS vid "
+        "| GROUP BY $-.vid YIELD $-.vid AS vid, count(*) AS cnt",
+        timeout=_DEGREE_LOOKUP_TIMEOUT_SECONDS,
+    )
+    counts: dict[str, int] = {}
+    for record in result.records or []:
+        if not isinstance(record, dict):
+            continue
+        vid = str(record.get("vid") or "")
+        if not vid:
+            continue
+        try:
+            counts[vid] = counts.get(vid, 0) + int(record.get("cnt") or 0)
+        except (TypeError, ValueError):
+            continue
+    return counts
+
+
+def _degree_counts_for_label(client: Any, label: str) -> tuple[dict[str, int], dict[str, int]]:
+    """优先服务端聚合；代理连接失败时降级到可缩页的端点枚举。"""
+    from infra.graph_db.exceptions import GraphConnectionError, GraphRequestError
+
+    index_recovered = False
+    while True:
+        try:
+            out_counts = _lookup_degree_counts(client, label, "src")
+            in_counts = _lookup_degree_counts(client, label, "dst")
+        except GraphRequestError as exc:
+            if not _is_missing_index_error(exc) or index_recovered:
+                raise
+            _ensure_degree_edge_index(client, label)
+            index_recovered = True
+            continue
+        except GraphConnectionError as exc:
+            logger.warning(
+                "Degree 服务端聚合读取失败，降级为自适应分页: label=%s error=%s",
+                label,
+                exc,
+            )
+            out_counts = {}
+            in_counts = {}
+            try:
+                for src, dst in _lookup_degree_pairs(client, label):
+                    if src:
+                        out_counts[src] = out_counts.get(src, 0) + 1
+                    if dst:
+                        in_counts[dst] = in_counts.get(dst, 0) + 1
+            except GraphRequestError as page_exc:
+                if not _is_missing_index_error(page_exc) or index_recovered:
+                    raise
+                _ensure_degree_edge_index(client, label)
+                index_recovered = True
+                continue
+
+        if out_counts or in_counts:
+            return out_counts, in_counts
+
+        # LOOKUP 对“索引已创建但历史数据尚未 REBUILD”的情况会成功返回空集。
+        # 只有专用索引已有 FINISHED 状态，才把空结果视为真实无边数据。
+        if _degree_edge_index_status(client, _degree_index_name(label)) == "FINISHED":
+            return out_counts, in_counts
+        if index_recovered:
+            return out_counts, in_counts
+        _ensure_degree_edge_index(client, label)
+        index_recovered = True
 
 
 def _degree_edge_index_status(client: Any, index_name: str) -> str | None:
@@ -413,14 +535,13 @@ def _ensure_degree_edge_index(client: Any, label: str) -> None:
 def _degree_rows_via_ngql(space: str, labels: list[str]) -> tuple[list[dict[str, str]], bool]:
     """出/入度聚合并合并为逐顶点行（总度降序，上限对齐图服务 10000 行截断）。
 
-    逐类型通过边索引分页 LOOKUP 枚举 src/dst 并本地聚合：代价只跟该边类型
-    的边数相关。若关系类型尚无索引，或索引已创建但历史数据尚未重建进去，
-    则自动创建/重建 Degree 专用空属性索引，并等待 SHOW EDGE INDEX STATUS
-    返回 FINISHED 后继续；绝不回退全空间 MATCH，避免 CITES 等大边类型扫描
-    90 秒超时拖垮共享图库。SHOW STATS 可能滞后，不能据其 0 值跳过真实数据。
+    逐类型通过边索引在 Nebula 服务端按 src/dst 聚合，避免 CITES 等大关系集
+    把全部边传回应用层。若查询代理连接超时，降级为可自动缩页和重试的端点
+    枚举。关系类型尚无索引或索引未填充时，自动创建/重建 Degree 专用索引并
+    等待 FINISHED；绝不回退全空间 MATCH。SHOW STATS 可能滞后，不能据其 0
+    值跳过真实数据。
     """
     from infra.graph_db import get_space_client
-    from infra.graph_db.exceptions import GraphRequestError
 
     client = get_space_client(space)
     known = set(client.edge_types())
@@ -430,37 +551,17 @@ def _degree_rows_via_ngql(space: str, labels: list[str]) -> tuple[list[dict[str,
 
     degrees: dict[str, dict[str, int]] = {}
 
-    def absorb_pairs(pairs: Iterable[tuple[str, str]]) -> None:
-        for src, dst in pairs:
-            if not src or not dst:
-                continue
-            degrees.setdefault(src, {"out": 0, "in": 0})["out"] += 1
-            degrees.setdefault(dst, {"out": 0, "in": 0})["in"] += 1
-
     for label in labels:
-        try:
-            pairs = _lookup_degree_pairs(client, label)
-            # 生成器在迭代时才发请求，先取首项以便捕获无索引错误后自动补建。
-            first = next(pairs, None)
-        except GraphRequestError as exc:
-            if not _is_missing_index_error(exc):
-                raise
-            _ensure_degree_edge_index(client, label)
-            pairs = _lookup_degree_pairs(client, label)
-            first = next(pairs, None)
-        if first is None:
-            # CREATE 成功但 REBUILD 未启动时，LOOKUP 会“成功返回 0 行”。只有本专用
-            # 索引最近一次重建已 FINISHED，才能把空结果视为真实无边数据。
-            index_name = _degree_index_name(label)
-            if _degree_edge_index_status(client, index_name) != "FINISHED":
-                _ensure_degree_edge_index(client, label)
-                pairs = _lookup_degree_pairs(client, label)
-                first = next(pairs, None)
-        if first is not None:
-            absorb_pairs((first,))
-            absorb_pairs(pairs)
+        out_counts, in_counts = _degree_counts_for_label(client, label)
+        for vid, count in out_counts.items():
+            degrees.setdefault(vid, {"out": 0, "in": 0})["out"] += count
+        for vid, count in in_counts.items():
+            degrees.setdefault(vid, {"out": 0, "in": 0})["in"] += count
 
-    ordered = sorted(degrees.items(), key=lambda item: item[1]["out"] + item[1]["in"], reverse=True)
+    ordered = sorted(
+        degrees.items(),
+        key=lambda item: (-(item[1]["out"] + item[1]["in"]), item[0]),
+    )
     truncated = len(ordered) > _DEGREE_RESULT_LIMIT
     rows = [
         {

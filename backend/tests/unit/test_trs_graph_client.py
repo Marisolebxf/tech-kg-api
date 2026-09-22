@@ -216,7 +216,7 @@ class TestConnection:
             raise httpx.ConnectError("boom")
 
         repo = _make_repo(handler)
-        with pytest.raises(GraphConnectionError):
+        with pytest.raises(GraphConnectionError, match=r"ConnectError: boom"):
             repo._request("GET", "/api/v1/nodes/1")
         repo.close()
 

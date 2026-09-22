@@ -1,4 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
+import { Popover } from '@arco-design/web-vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import EntityListView from '../EntityListView.vue'
@@ -26,6 +27,7 @@ async function setup() {
     'a-input': { props: ['modelValue'], emits: ['update:modelValue'], template: '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />' },
     'a-select': { template: '<select><slot /></select>' },
     'a-option': { template: '<option><slot /></option>' },
+    Popover: { props: ['trigger', 'position', 'contentClass'], template: '<div class="popover-stub"><slot /><div class="popover-content"><slot name="content" /></div></div>' },
   } } })
   await flushPromises()
   await wrapper.get('input').setValue('目标实体')
@@ -54,6 +56,26 @@ describe('实体搜索结果', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('共 527336 个实体 · 第 1 / 52734 页 · 检索模式：浏览（图直查）')
     expect(wrapper.findComponent(ListPagination).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('多于四个公共属性时在悬浮或点击浮层中仅展示其余属性，不新增明细行', async () => {
+    vi.mocked(browseEntities).mockResolvedValue({
+      items: [{ ...row, properties: { first: '1', second: '2', third: '3', fourth: '4', fifth: '5', sixth: '6' } }],
+      total: 1, offset: 0, limit: 10, entityType: null, mode: 'browse',
+    })
+    const wrapper = await setup()
+    const more = wrapper.get('.entity-props__more')
+    expect(more.text()).toBe('+2')
+    expect(more.attributes('title')).toBeUndefined()
+    expect(more.attributes('aria-label')).toBe('查看其余 2 个公共属性')
+    const popover = wrapper.findComponent(Popover)
+    expect(popover.props('trigger')).toEqual(['hover', 'click'])
+    expect(popover.props('position')).toBe('bl')
+    expect(wrapper.findAll('.entity-property-popover__item').map(item => item.attributes('title')))
+      .toEqual(['fifth: 5', 'sixth: 6'])
+    await more.trigger('click')
+    expect(wrapper.find('.entity-detail-row').exists()).toBe(false)
     wrapper.unmount()
   })
 

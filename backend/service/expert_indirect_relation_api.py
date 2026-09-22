@@ -13,6 +13,7 @@ import httpx
 
 from biz.schema.expert_indirect_relation import ExpertIndirectRelationRequest
 from service.base_module import KGModuleScaffoldService
+from service.business_access import business_graph_app
 
 GRAPH_SPACE = os.getenv("KG_GRAPH_SPACE", "dev")
 MAX_GRAPH_ITEMS = 200
@@ -97,7 +98,7 @@ class GraphQueryApiClient:
         # 与高并发下的自调用饱和。方法体、路径、错误语义（raise_for_status/ValueError→404/
         # GraphQueryApiError）保持不变。app 由 handler 传 request.app，避免在 service 里 import main。
         self._client = httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app),
+            transport=httpx.ASGITransport(app=business_graph_app(app)),
             base_url="https://testserver/api/v1",
             timeout=timeout,
             headers=auth_headers,

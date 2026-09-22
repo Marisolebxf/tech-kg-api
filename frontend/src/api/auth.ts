@@ -52,6 +52,7 @@ export interface PermissionSetSummary {
 }
 
 export interface AuthProfile {
+  businessOnly?: boolean
   user: UserProfile;
   roles: RoleSummary[];
   permissions: string[];

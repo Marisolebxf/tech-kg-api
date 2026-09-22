@@ -49,12 +49,13 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-async function renderLayout(isAdmin: boolean, path = '/expert-direct', collapsed = false) {
+async function renderLayout(isAdmin: boolean, path = '/expert-direct', collapsed = false, businessOnly = false) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const auth = useAuthStore()
   auth.profile = {
     isAdmin,
+    businessOnly,
     user: { id: 'viewer', username: 'viewer', nickname: '测试用户', avatar: '' },
   } as AuthProfile
   useAppStore().collapsed = collapsed
@@ -70,6 +71,16 @@ async function renderLayout(isAdmin: boolean, path = '/expert-direct', collapsed
 }
 
 describe('既有侧边栏按有效管理员身份显隐', () => {
+  it.each([false, true])('业务限定账号只保留九大模块，收起=%s', async (collapsed) => {
+    const { wrapper } = await renderLayout(true, '/expert-direct', collapsed, true)
+    const navigation = wrapper.get('.app-nav')
+    for (const path of ['/overview', ...queryPaths, ...managementPaths]) {
+      expect(navigation.find(`a[href="${path}"]`).exists()).toBe(false)
+    }
+    for (const path of sharedPaths) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(true)
+    expect(navigation.text()).not.toContain('工作台')
+  })
+
   it('普通用户可见工作台/平台总览与业务服务，管理菜单隐藏', async () => {
     const { wrapper } = await renderLayout(false)
     const navigation = wrapper.get('.app-nav')

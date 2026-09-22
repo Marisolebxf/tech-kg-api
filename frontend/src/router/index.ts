@@ -118,15 +118,22 @@ router.beforeEach(async (to) => {
     return to.name === 'login' ? { path: '/overview' } : true
   }
 
-  if (to.meta.public) return true
+  if (to.name === 'login') return true
 
   const authStore = useAuthStore()
   try {
     // 每次导航重新读取有效身份，及时反映门户或本系统的授权、撤权。
     const profile = await authStore.loadCurrentUser(true)
+    if (to.meta.public && !profile?.businessOnly) return true
     if (!profile) {
       if (!authStore.skipSilentLogin) notifySessionExpired('登录状态已失效或已超时，请重新登录')
       return loginRedirect(to.fullPath, '登录状态已失效或已超时，请重新登录')
+    }
+    if (profile.businessOnly && ![
+      ...serviceRoutes.map((route) => route.path),
+      '/user-center', '/account-security', '/operation-logs',
+    ].includes(to.path)) {
+      return { path: '/expert-direct', query: to.query, hash: to.hash }
     }
     const requiredPermission = typeof to.meta.permission === 'string' ? to.meta.permission : ''
     // 平台总览对所有登录用户开放；卡片入口对普通用户只读（见 PlatformWorkbenchView）。
@@ -142,6 +149,7 @@ router.beforeEach(async (to) => {
     }
     return true
   } catch {
+    if (to.meta.public) return true
     return loginRedirect(to.fullPath, '登录服务暂时不可用，请稍后重试')
   }
 })

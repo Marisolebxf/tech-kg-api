@@ -1,10 +1,13 @@
-# 图谱 ETL 源表 MySQL 建表语句
+# 图谱 ETL 源表 MySQL 建表语句（九大业务模块）
 
-> 九大业务模块图数据的全部 MySQL 源表 DDL，取自 dev 共享 MySQL（`host.docker.internal:30306`，库 `gkx_element`）实测 `SHOW CREATE TABLE`（2026-09-22），共 73 张、无缺表。用于在空库重建源表、验证各 ETL 脚本可行性与完整性。行数为导出时实测。
+> 覆盖九大业务模块图数据抽取脚本实际消费的 MySQL 源表 DDL，共 66 张，取自 dev 共享 MySQL（`host.docker.internal:30306`，库 `gkx_element`）实测 `SHOW CREATE TABLE`（2026-09-22）。用于在空库重建源表、验证各抽取脚本可行性与完整性。行数为导出时实测。
 
-## 学者域（load_scholar_entities / load_scholar_relations）
+> 收录口径：模块服务代码中实际读取的边类型/点类型 → 反推装载该边/点的 ETL 脚本 → 该脚本读的源表（硬依赖闭包，含边端点必须预先存在的实体表）。未收录表见文末。
+
+## 学者域（load_scholar_entities / load_scholar_relations → Person + AFFILIATED_WITH / COAUTHOR_WITH / STUDIED_AT / AUTHORED_BY）
 
 ### `dwd_scholar`（2175 行）
+
 ```sql
 CREATE TABLE `dwd_scholar` (
   `scholar_id` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '学者ID/varchar(32) ',
@@ -46,6 +49,7 @@ CREATE TABLE `dwd_scholar` (
 ```
 
 ### `dwd_scholar_talent_flag`（2075 行）
+
 ```sql
 CREATE TABLE `dwd_scholar_talent_flag` (
   `scholar_id` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '学者ID/varchar(32) ',
@@ -60,6 +64,7 @@ CREATE TABLE `dwd_scholar_talent_flag` (
 ```
 
 ### `dwd_scholar_research_direction`（2155 行）
+
 ```sql
 CREATE TABLE `dwd_scholar_research_direction` (
   `scholar_id` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '学者ID/varchar(32) ',
@@ -73,6 +78,7 @@ CREATE TABLE `dwd_scholar_research_direction` (
 ```
 
 ### `dwd_scholar_coauthor`（156542 行）
+
 ```sql
 CREATE TABLE `dwd_scholar_coauthor` (
   `scholar_id` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '学者ID/varchar(32) ',
@@ -96,6 +102,7 @@ CREATE TABLE `dwd_scholar_coauthor` (
 ```
 
 ### `dwd_scholar_paper_relation`（345324 行）
+
 ```sql
 CREATE TABLE `dwd_scholar_paper_relation` (
   `paper_id` bigint NOT NULL COMMENT '论文ID/bigint ',
@@ -117,9 +124,10 @@ CREATE TABLE `dwd_scholar_paper_relation` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='学者论文关系';
 ```
 
-## 论文期刊域（load_paper_journal_graph / paper_journal_relation）
+## 论文期刊域（load_paper_journal_graph / paper_journal_relation → Paper / Journal / 作者Person + AUTHORED_BY / PUBLISHED_IN / CITES / CITED_BY / RELATED_TO / HAS_KEYWORD）
 
 ### `dwd_zh_paper`（2000 行）
+
 ```sql
 CREATE TABLE `dwd_zh_paper` (
   `id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '文献id/varchar(64) ',
@@ -154,6 +162,7 @@ CREATE TABLE `dwd_zh_paper` (
 ```
 
 ### `dwd_en_paper`（2000 行）
+
 ```sql
 CREATE TABLE `dwd_en_paper` (
   `id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '文献id/varchar(64) ',
@@ -192,6 +201,7 @@ CREATE TABLE `dwd_en_paper` (
 ```
 
 ### `dwd_zh_journal`（2080 行）
+
 ```sql
 CREATE TABLE `dwd_zh_journal` (
   `paper_id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '文献id/varchar(64) ',
@@ -235,6 +245,7 @@ CREATE TABLE `dwd_zh_journal` (
 ```
 
 ### `dwd_en_journal`（2126 行）
+
 ```sql
 CREATE TABLE `dwd_en_journal` (
   `publication_id` bigint NOT NULL COMMENT '期刊id/bigint ',
@@ -271,70 +282,8 @@ CREATE TABLE `dwd_en_journal` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='英文期刊详情信息';
 ```
 
-### `dwd_zh_report`（2000 行）
-```sql
-CREATE TABLE `dwd_zh_report` (
-  `report_id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '中文报告id/varchar(64) ',
-  `report_category` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '报告类别/varchar(64) ',
-  `title_cn` varchar(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '中文题名/varchar(512) ',
-  `authors` json DEFAULT NULL COMMENT '作者/json ',
-  `organization` json DEFAULT NULL COMMENT '作者单位/完成单位/json ',
-  `abstract_cn` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci COMMENT '中文摘要/longtext ',
-  `keywords_cn` json DEFAULT NULL COMMENT '中文关键词/json ',
-  `report_type` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '报告类型/varchar(32) ',
-  `page_count` int DEFAULT NULL COMMENT '全文页数/int ',
-  `preparation_time` varchar(8) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '编制时间/varchar(8) ',
-  `approval_year` int DEFAULT NULL COMMENT '立项批准年/int ',
-  `related_literature` json DEFAULT NULL COMMENT '相关文献/json ',
-  `related_scholars` json DEFAULT NULL COMMENT '相关学者/json ',
-  `related_institutions` json DEFAULT NULL COMMENT '相关机构/json ',
-  `related_projects` json DEFAULT NULL COMMENT '相关项目/json ',
-  `source_org` json DEFAULT NULL COMMENT '报告来源/json ',
-  `source_url` text CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci COMMENT '报告原文链接/text ',
-  `visibility_scope` varchar(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '可见范围/varchar(16) ',
-  `project_annual_number` int DEFAULT NULL COMMENT '项目年度编号/int ',
-  `contact_phone` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '联系电话/varchar(64) ',
-  `updated_time` varchar(8) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '更新时间/varchar(8) ',
-  `scholar_id` json DEFAULT NULL COMMENT '相关学者ID/json ',
-  `org_id` json DEFAULT NULL COMMENT '相关机构ID/json ',
-  `paper_id` json DEFAULT NULL COMMENT '相关论文ID/json ',
-  `project_id` json DEFAULT NULL COMMENT '相关项目ID/json ',
-  `file_path` json DEFAULT NULL COMMENT '文件路径/json ',
-  KEY `idx_report_id` (`report_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='中文科技报告信息表';
-```
-
-### `dwd_en_report`（1000 行）
-```sql
-CREATE TABLE `dwd_en_report` (
-  `report_id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '外文报告id/varchar(64) ',
-  `report_number` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '报告编号/varchar(64) ',
-  `title_en` varchar(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '英文题名/varchar(512) ',
-  `publication_date` varchar(8) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '发布时间/出版日期/varchar(8) ',
-  `authors` json DEFAULT NULL COMMENT '作者/json ',
-  `corporate_author` json DEFAULT NULL COMMENT '团体作者/json ',
-  `source_agency` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '来源机构/出版社/varchar(64) ',
-  `source_url` varchar(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '报告原文链接/varchar(512) ',
-  `abstract_en` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci COMMENT '英文摘要/longtext ',
-  `keywords_en` json DEFAULT NULL COMMENT '英文关键词/json ',
-  `page_count` int DEFAULT NULL COMMENT '全文页数/int ',
-  `document_type` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '文档类型/varchar(64) ',
-  `contract_number` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '合同编号/varchar(32) ',
-  `content` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci COMMENT '正文内容/longtext ',
-  `related_literature` json DEFAULT NULL COMMENT '相关文献/json ',
-  `related_scholars` json DEFAULT NULL COMMENT '相关学者/json ',
-  `updated_time` varchar(8) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
-  `literature_id` json DEFAULT NULL COMMENT '相关文献ID/json ',
-  `org_id` json DEFAULT NULL COMMENT '相关机构ID/json ',
-  `authors_id` json DEFAULT NULL COMMENT '相关作者ID/json ',
-  `scholar_id` json DEFAULT NULL COMMENT '相关学者ID/json ',
-  `file_path` json DEFAULT NULL COMMENT '文件路径/json ',
-  KEY `idx_report_id` (`report_id`),
-  KEY `idx_report_number` (`report_number`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='外文科技报告信息表';
-```
-
 ### `dwd_zh_paper_related`（39900 行）
+
 ```sql
 CREATE TABLE `dwd_zh_paper_related` (
   `id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '文献id/varchar(64) ',
@@ -352,6 +301,7 @@ CREATE TABLE `dwd_zh_paper_related` (
 ```
 
 ### `dwd_en_paper_related`（39740 行）
+
 ```sql
 CREATE TABLE `dwd_en_paper_related` (
   `logic_id` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '逻辑主键/varchar(128) ',
@@ -369,6 +319,7 @@ CREATE TABLE `dwd_en_paper_related` (
 ```
 
 ### `dwd_zh_paper_reference`（23019 行）
+
 ```sql
 CREATE TABLE `dwd_zh_paper_reference` (
   `id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '文献id/varchar(64) ',
@@ -393,6 +344,7 @@ CREATE TABLE `dwd_zh_paper_reference` (
 ```
 
 ### `dwd_en_paper_reference`（66989 行）
+
 ```sql
 CREATE TABLE `dwd_en_paper_reference` (
   `id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '文献id/varchar(64) ',
@@ -417,6 +369,7 @@ CREATE TABLE `dwd_en_paper_reference` (
 ```
 
 ### `dwd_zh_paper_citation`（2032 行）
+
 ```sql
 CREATE TABLE `dwd_zh_paper_citation` (
   `id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '文献id/varchar(64) ',
@@ -435,6 +388,7 @@ CREATE TABLE `dwd_zh_paper_citation` (
 ```
 
 ### `dwd_en_paper_citation`（527 行）
+
 ```sql
 CREATE TABLE `dwd_en_paper_citation` (
   `id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '文献id/varchar(64) ',
@@ -453,6 +407,7 @@ CREATE TABLE `dwd_en_paper_citation` (
 ```
 
 ### `dwd_zh_paper_classification`（2081 行）
+
 ```sql
 CREATE TABLE `dwd_zh_paper_classification` (
   `id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '文献id/varchar(64) ',
@@ -467,6 +422,7 @@ CREATE TABLE `dwd_zh_paper_classification` (
 ```
 
 ### `dwd_en_paper_classification`（2000 行）
+
 ```sql
 CREATE TABLE `dwd_en_paper_classification` (
   `id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '文献id/varchar(64) ',
@@ -482,26 +438,10 @@ CREATE TABLE `dwd_en_paper_classification` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='英文论文分类信息';
 ```
 
-### `dwd_zh_report_paper`（12806 行）
-```sql
-CREATE TABLE `dwd_zh_report_paper` (
-  `paper_id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '论文ID/varchar(64) ',
-  `paper_name` varchar(320) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
-  `paper_doi` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
-  `report_source` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '报告所属来源/varchar(32) ',
-  `report_id` json NOT NULL COMMENT '中文报告ID集合/json ',
-  `paper_source` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '论文来源/varchar(32) ',
-  KEY `idx_paper_id` (`paper_id`),
-  KEY `idx_paper_name` (`paper_name`),
-  KEY `idx_paper_doi` (`paper_doi`),
-  KEY `idx_report_source` (`report_source`),
-  KEY `idx_paper_source` (`paper_source`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='报告-论文关联表';
-```
-
-## 项目域（load_project_graph）
+## 项目域（load_project_graph → Project + FUNDED_BY / LEADS / HAS_PARTICIPANT / HAS_KEYWORD / HAS_OUTPUT）
 
 ### `dwd_zh_project`（2010 行）
+
 ```sql
 CREATE TABLE `dwd_zh_project` (
   `id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '项目索引/varchar(255) ',
@@ -535,6 +475,7 @@ CREATE TABLE `dwd_zh_project` (
 ```
 
 ### `dwd_en_project`（1994 行）
+
 ```sql
 CREATE TABLE `dwd_en_project` (
   `id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '项目索引/varchar(64) ',
@@ -568,6 +509,7 @@ CREATE TABLE `dwd_en_project` (
 ```
 
 ### `dwd_zh_project_output`（2010 行）
+
 ```sql
 CREATE TABLE `dwd_zh_project_output` (
   `id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '项目索引/varchar(255) ',
@@ -595,6 +537,7 @@ CREATE TABLE `dwd_zh_project_output` (
 ```
 
 ### `dwd_en_project_output`（1994 行）
+
 ```sql
 CREATE TABLE `dwd_en_project_output` (
   `id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '项目索引/varchar(64) ',
@@ -622,9 +565,10 @@ CREATE TABLE `dwd_en_project_output` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='国外项目-产出信息';
 ```
 
-## 专利域（load_patent_graph / load_patent_relations）
+## 专利域（load_patent_graph / load_patent_relations → Patent / Keyword + INVENTED_BY / APPLIED_BY / HAS_KEYWORD）
 
 ### `dwd_patent`（2010 行）
+
 ```sql
 CREATE TABLE `dwd_patent` (
   `id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
@@ -672,6 +616,7 @@ CREATE TABLE `dwd_patent` (
 ```
 
 ### `dwd_patent_abstract`（2000 行）
+
 ```sql
 CREATE TABLE `dwd_patent_abstract` (
   `id` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
@@ -688,6 +633,7 @@ CREATE TABLE `dwd_patent_abstract` (
 ```
 
 ### `dwd_patent_cited`（2000 行）
+
 ```sql
 CREATE TABLE `dwd_patent_cited` (
   `id` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
@@ -713,6 +659,7 @@ CREATE TABLE `dwd_patent_cited` (
 ```
 
 ### `dwd_patent_family`（2000 行）
+
 ```sql
 CREATE TABLE `dwd_patent_family` (
   `id` bigint NOT NULL,
@@ -732,6 +679,7 @@ CREATE TABLE `dwd_patent_family` (
 ```
 
 ### `dwd_patent_legal`（2000 行）
+
 ```sql
 CREATE TABLE `dwd_patent_legal` (
   `id` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
@@ -751,6 +699,7 @@ CREATE TABLE `dwd_patent_legal` (
 ```
 
 ### `dwd_patent_title`（2010 行）
+
 ```sql
 CREATE TABLE `dwd_patent_title` (
   `id` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
@@ -766,9 +715,10 @@ CREATE TABLE `dwd_patent_title` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='专利标题信息表';
 ```
 
-## 机构域（organization_entity_etl / organization_relation_etl，39 张 spec 全集）
+## 机构域（organization_entity_etl / organization_relation_etl → 供间接关系与产业链事件遍历的股权/高管/实控/投资/并购/产品边 + News/Event 点 + HAS_NEWS / INVOLVED_IN）
 
 ### `dwd_org_base_info`（1674 行）
+
 ```sql
 CREATE TABLE `dwd_org_base_info` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -813,6 +763,7 @@ CREATE TABLE `dwd_org_base_info` (
 ```
 
 ### `dwd_org_shareholder_info`（2501 行）
+
 ```sql
 CREATE TABLE `dwd_org_shareholder_info` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -833,6 +784,7 @@ CREATE TABLE `dwd_org_shareholder_info` (
 ```
 
 ### `dwd_org_executive_info`（5600 行）
+
 ```sql
 CREATE TABLE `dwd_org_executive_info` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -850,6 +802,7 @@ CREATE TABLE `dwd_org_executive_info` (
 ```
 
 ### `dwd_org_org_product_info`（1184 行）
+
 ```sql
 CREATE TABLE `dwd_org_org_product_info` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -868,6 +821,7 @@ CREATE TABLE `dwd_org_org_product_info` (
 ```
 
 ### `dwd_org_annual_financial_info`（5452 行）
+
 ```sql
 CREATE TABLE `dwd_org_annual_financial_info` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -893,6 +847,7 @@ CREATE TABLE `dwd_org_annual_financial_info` (
 ```
 
 ### `dwd_org_important_news_info`（1013 行）
+
 ```sql
 CREATE TABLE `dwd_org_important_news_info` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -913,6 +868,7 @@ CREATE TABLE `dwd_org_important_news_info` (
 ```
 
 ### `dwd_org_changerecord_info`（100 行）
+
 ```sql
 CREATE TABLE `dwd_org_changerecord_info` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -933,6 +889,7 @@ CREATE TABLE `dwd_org_changerecord_info` (
 ```
 
 ### `dwd_org_merger_acquisition_info`（1022 行）
+
 ```sql
 CREATE TABLE `dwd_org_merger_acquisition_info` (
   `acquiring_org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '发起收购企业id/varchar(255) ',
@@ -954,6 +911,7 @@ CREATE TABLE `dwd_org_merger_acquisition_info` (
 ```
 
 ### `dwd_org_financing_info`（1073 行）
+
 ```sql
 CREATE TABLE `dwd_org_financing_info` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -974,6 +932,7 @@ CREATE TABLE `dwd_org_financing_info` (
 ```
 
 ### `dwd_org_invest_info`（4298 行）
+
 ```sql
 CREATE TABLE `dwd_org_invest_info` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -996,6 +955,7 @@ CREATE TABLE `dwd_org_invest_info` (
 ```
 
 ### `dwd_org_recruit_info`（2100 行）
+
 ```sql
 CREATE TABLE `dwd_org_recruit_info` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -1015,59 +975,8 @@ CREATE TABLE `dwd_org_recruit_info` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='招聘信息';
 ```
 
-### `dwd_org_heis_info`（100 行）
-```sql
-CREATE TABLE `dwd_org_heis_info` (
-  `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
-  `name_cn` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '学校名称/varchar(255) ',
-  `school_code` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '学校标识码/varchar(255) ',
-  `external_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '统一社会信用代码/varchar(255) ',
-  `name_en` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '学校英文名称/varchar(255) ',
-  `est_year` decimal(20,0) DEFAULT NULL COMMENT '建立时间/decimal(20,0) ',
-  `address` text CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci COMMENT '学校地址/text ',
-  `addr_lng` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '地址对应经度/varchar(255) ',
-  `addr_lat` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '地址对应维度/varchar(255) ',
-  `province` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '地址所在省/varchar(255) ',
-  `city` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '地址所在市/varchar(255) ',
-  `area` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '地址所在区/varchar(255) ',
-  `univ_type` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '学校类型/varchar(255) ',
-  `web_link` text CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci COMMENT '官方网址/text ',
-  `comp_dept` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '主管部门/varchar(255) ',
-  `school_nature` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '办学层次/varchar(255) ',
-  `postal_code` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '邮政编码/varchar(255) ',
-  `data_source` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '数据来源/varchar(255) ',
-  `created_time` datetime NOT NULL COMMENT '创建时间/datetime ',
-  `updated_time` datetime NOT NULL COMMENT '更新时间/datetime ',
-  KEY `idx_org_id` (`org_id`),
-  KEY `idx_name_cn` (`name_cn`),
-  KEY `idx_school_code` (`school_code`),
-  KEY `idx_external_id` (`external_id`),
-  KEY `idx_name_en` (`name_en`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='高校基本信息';
-```
-
-### `dwd_org_stock_base`（5945 行）
-```sql
-CREATE TABLE `dwd_org_stock_base` (
-  `stock_code` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '股票代码/varchar(255) ',
-  `stock_noun` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '股票简称/varchar(255) ',
-  `stock_type` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '上市板块/varchar(255) ',
-  `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
-  `name_cn` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构名称/varchar(255) ',
-  `external_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '统一社会信用代码/varchar(255) ',
-  `listed_date` datetime DEFAULT NULL COMMENT '上市日期/datetime ',
-  `listed_status` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '上市状态/varchar(255) ',
-  `data_source` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '数据来源/varchar(255) ',
-  `created_time` datetime NOT NULL COMMENT '创建时间/datetime ',
-  `updated_time` datetime NOT NULL COMMENT '更新时间/datetime ',
-  KEY `idx_stock_code` (`stock_code`),
-  KEY `idx_org_id` (`org_id`),
-  KEY `idx_name_cn` (`name_cn`),
-  KEY `idx_external_id` (`external_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='上市企业基本信息';
-```
-
 ### `dwd_org_stock_finance_info`（5553 行）
+
 ```sql
 CREATE TABLE `dwd_org_stock_finance_info` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -1099,6 +1008,7 @@ CREATE TABLE `dwd_org_stock_finance_info` (
 ```
 
 ### `dwd_org_company_abnormal`（2062 行）
+
 ```sql
 CREATE TABLE `dwd_org_company_abnormal` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -1122,6 +1032,7 @@ CREATE TABLE `dwd_org_company_abnormal` (
 ```
 
 ### `dwd_org_company_punish`（335 行）
+
 ```sql
 CREATE TABLE `dwd_org_company_punish` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -1154,6 +1065,7 @@ CREATE TABLE `dwd_org_company_punish` (
 ```
 
 ### `dwd_org_company_illegal`（2100 行）
+
 ```sql
 CREATE TABLE `dwd_org_company_illegal` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -1178,6 +1090,7 @@ CREATE TABLE `dwd_org_company_illegal` (
 ```
 
 ### `dwd_org_risk_tax_punish`（2100 行）
+
 ```sql
 CREATE TABLE `dwd_org_risk_tax_punish` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -1213,6 +1126,7 @@ CREATE TABLE `dwd_org_risk_tax_punish` (
 ```
 
 ### `dwd_org_opt_judicial_case`（2100 行）
+
 ```sql
 CREATE TABLE `dwd_org_opt_judicial_case` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -1237,6 +1151,7 @@ CREATE TABLE `dwd_org_opt_judicial_case` (
 ```
 
 ### `dwd_org_risk_shixin`（2100 行）
+
 ```sql
 CREATE TABLE `dwd_org_risk_shixin` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -1272,6 +1187,7 @@ CREATE TABLE `dwd_org_risk_shixin` (
 ```
 
 ### `dwd_org_risk_zhixing`（2100 行）
+
 ```sql
 CREATE TABLE `dwd_org_risk_zhixing` (
   `exec_person_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '唯一索引id/varchar(255) ',
@@ -1303,6 +1219,7 @@ CREATE TABLE `dwd_org_risk_zhixing` (
 ```
 
 ### `dwd_org_bankruptcy_public_cases`（2100 行）
+
 ```sql
 CREATE TABLE `dwd_org_bankruptcy_public_cases` (
   `case_no` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '案号/varchar(255) ',
@@ -1324,6 +1241,7 @@ CREATE TABLE `dwd_org_bankruptcy_public_cases` (
 ```
 
 ### `dwd_org_bankruptcy_public_cases_list`（2100 行）
+
 ```sql
 CREATE TABLE `dwd_org_bankruptcy_public_cases_list` (
   `bankruptcy_party_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '唯一索引id/varchar(255) ',
@@ -1345,36 +1263,8 @@ CREATE TABLE `dwd_org_bankruptcy_public_cases_list` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='破产案件当事人';
 ```
 
-### `dwd_special_hongkong_company`（100 行）
-```sql
-CREATE TABLE `dwd_special_hongkong_company` (
-  `province_en` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '省份(英文缩写)/varchar(255) ',
-  `name_cn` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构名称/varchar(255) ',
-  `name_en` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '机构英文名称/varchar(255) ',
-  `traditional_name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构繁体名称/varchar(255) ',
-  `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
-  `company_code` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '机构编号/varchar(255) ',
-  `company_type` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '机构类别/varchar(255) ',
-  `incorporation_date` datetime DEFAULT NULL COMMENT '成立日期/datetime ',
-  `company_status` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '机构现况/varchar(255) ',
-  `remark` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '备注/varchar(255) ',
-  `liquidation_mode` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '清盘模式/varchar(255) ',
-  `cancel_date` datetime DEFAULT NULL COMMENT '解散日期/datetime ',
-  `mortgage` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '押记登记册/varchar(255) ',
-  `imp_matters` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '重要事项/varchar(255) ',
-  `create_time` datetime NOT NULL COMMENT '入库时间/datetime ',
-  `br_code` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '商业登记代码/varchar(255) ',
-  `data_source` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '数据来源/varchar(255) ',
-  `created_time` datetime NOT NULL COMMENT '创建时间/datetime ',
-  `updated_time` datetime NOT NULL COMMENT '更新时间/datetime ',
-  KEY `idx_name_cn` (`name_cn`),
-  KEY `idx_name_en` (`name_en`),
-  KEY `idx_traditional_name` (`traditional_name`),
-  KEY `idx_org_id` (`org_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='香港企业';
-```
-
 ### `dwd_special_taiwan_company`（100 行）
+
 ```sql
 CREATE TABLE `dwd_special_taiwan_company` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -1421,36 +1311,8 @@ CREATE TABLE `dwd_special_taiwan_company` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='台湾企业';
 ```
 
-### `dwd_special_aomen_company`（100 行）
-```sql
-CREATE TABLE `dwd_special_aomen_company` (
-  `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
-  `org_loc_name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构本地名称/varchar(255) ',
-  `en_name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '机构英文名称/varchar(255) ',
-  `incorporation_year` decimal(20,0) DEFAULT NULL COMMENT '成立年份/decimal(20,0) ',
-  `incorporation_date` datetime DEFAULT NULL COMMENT '成立日期/datetime ',
-  `country_code` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '注册国家代码/varchar(255) ',
-  `city` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '注册城市/varchar(255) ',
-  `listing_status` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '上市状态/varchar(255) ',
-  `owners_type` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '机构经济类型/varchar(255) ',
-  `person_num` decimal(20,0) DEFAULT NULL COMMENT '员工人数/decimal(20,0) ',
-  `company_code` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '统一编号/varchar(255) ',
-  `company_status` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '登记状态/varchar(255) ',
-  `capital` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '注册资本/varchar(255) ',
-  `currency_code` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '注册资本币种/varchar(255) ',
-  `company_est_status` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '机构运营状态代码/varchar(255) ',
-  `address` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '地址/varchar(255) ',
-  `data_source` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '数据来源/varchar(255) ',
-  `created_time` datetime NOT NULL COMMENT '创建时间/datetime ',
-  `updated_time` datetime NOT NULL COMMENT '更新时间/datetime ',
-  KEY `idx_org_id` (`org_id`),
-  KEY `idx_org_loc_name` (`org_loc_name`),
-  KEY `idx_en_name` (`en_name`),
-  KEY `idx_company_code` (`company_code`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='澳门企业';
-```
-
 ### `dwd_bid_base_out`（100 行）
+
 ```sql
 CREATE TABLE `dwd_bid_base_out` (
   `u_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '公告唯一标识id/varchar(255) ',
@@ -1514,6 +1376,7 @@ CREATE TABLE `dwd_bid_base_out` (
 ```
 
 ### `dwd_bid_win_candidate_out`（100 行）
+
 ```sql
 CREATE TABLE `dwd_bid_win_candidate_out` (
   `u_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '公告唯一标识id/varchar(255) ',
@@ -1539,6 +1402,7 @@ CREATE TABLE `dwd_bid_win_candidate_out` (
 ```
 
 ### `dwd_bid_purchase_agency_out`（100 行）
+
 ```sql
 CREATE TABLE `dwd_bid_purchase_agency_out` (
   `u_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '公告唯一标识id/varchar(255) ',
@@ -1558,6 +1422,7 @@ CREATE TABLE `dwd_bid_purchase_agency_out` (
 ```
 
 ### `dwd_bid_target_item_out`（100 行）
+
 ```sql
 CREATE TABLE `dwd_bid_target_item_out` (
   `u_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '公告唯一标识id/varchar(255) ',
@@ -1583,6 +1448,7 @@ CREATE TABLE `dwd_bid_target_item_out` (
 ```
 
 ### `dwd_research_institute_base_info`（100 行）
+
 ```sql
 CREATE TABLE `dwd_research_institute_base_info` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -1612,6 +1478,7 @@ CREATE TABLE `dwd_research_institute_base_info` (
 ```
 
 ### `dwd_forg_base_info`（1100 行）
+
 ```sql
 CREATE TABLE `dwd_forg_base_info` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -1638,6 +1505,7 @@ CREATE TABLE `dwd_forg_base_info` (
 ```
 
 ### `dwd_forg_shareholder_info`（21197 行）
+
 ```sql
 CREATE TABLE `dwd_forg_shareholder_info` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -1649,6 +1517,7 @@ CREATE TABLE `dwd_forg_shareholder_info` (
 ```
 
 ### `dwd_forg_subsidiary_info`（12299 行）
+
 ```sql
 CREATE TABLE `dwd_forg_subsidiary_info` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -1661,6 +1530,7 @@ CREATE TABLE `dwd_forg_subsidiary_info` (
 ```
 
 ### `dwd_forg_executive_info`（4911 行）
+
 ```sql
 CREATE TABLE `dwd_forg_executive_info` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -1673,6 +1543,7 @@ CREATE TABLE `dwd_forg_executive_info` (
 ```
 
 ### `dwd_forg_product_info`（1099 行）
+
 ```sql
 CREATE TABLE `dwd_forg_product_info` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -1682,6 +1553,7 @@ CREATE TABLE `dwd_forg_product_info` (
 ```
 
 ### `dwd_forg_beneficiary_info`（6376 行）
+
 ```sql
 CREATE TABLE `dwd_forg_beneficiary_info` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -1698,6 +1570,7 @@ CREATE TABLE `dwd_forg_beneficiary_info` (
 ```
 
 ### `dwd_forg_act_contro_info`（1127 行）
+
 ```sql
 CREATE TABLE `dwd_forg_act_contro_info` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -1715,6 +1588,7 @@ CREATE TABLE `dwd_forg_act_contro_info` (
 ```
 
 ### `dwd_forg_stock_fin_info`（100 行）
+
 ```sql
 CREATE TABLE `dwd_forg_stock_fin_info` (
   `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
@@ -1735,9 +1609,10 @@ CREATE TABLE `dwd_forg_stock_fin_info` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='海外上市企业财务信息';
 ```
 
-## 产业链域（industry_chain_etl / backfill_chain_org_nodes）
+## 产业链域（industry_chain_etl / backfill_chain_org_nodes → IndustryChain / IndustryNode / News + HAS_NODE / CHILD_OF / DOWNSTREAM_OF / BELONGS_TO_NODE / COVERS_CHAIN）
 
 ### `dwd_industry_chain_info`（180 行）
+
 ```sql
 CREATE TABLE `dwd_industry_chain_info` (
   `chain_code` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '产业链代码/varchar(255) ',
@@ -1763,6 +1638,7 @@ CREATE TABLE `dwd_industry_chain_info` (
 ```
 
 ### `dwd_org_industry_chain_dtl`（2951 行）
+
 ```sql
 CREATE TABLE `dwd_org_industry_chain_dtl` (
   `chain_code` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '产业链代码/varchar(255) ',
@@ -1782,6 +1658,7 @@ CREATE TABLE `dwd_org_industry_chain_dtl` (
 ```
 
 ### `dwd_org_industry_chain_prod_dtl`（6059 行）
+
 ```sql
 CREATE TABLE `dwd_org_industry_chain_prod_dtl` (
   `chain_code` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '产业链代码/varchar(255) ',
@@ -1800,6 +1677,7 @@ CREATE TABLE `dwd_org_industry_chain_prod_dtl` (
 ```
 
 ### `dwd_industry_chain_news_info`（476 行）
+
 ```sql
 CREATE TABLE `dwd_industry_chain_news_info` (
   `chain_code` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '产业链代码/varchar(255) ',
@@ -1816,6 +1694,12 @@ CREATE TABLE `dwd_industry_chain_news_info` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='产业动态资讯';
 ```
 
-## 缺表备注
+## 未收录的表（全量 spec 中有、但九模块不消费）
 
-- `dwd_org_tag_info`（企业标签）：ORM 模型 `DwdOrgTagInfo` 与 `OrganizationDAO.get_tags` 在用，但 dev 库无此表（见《九大业务模块MySQL表结构.md》）；不属于 ETL 源表，重建源库时按需补建。
+| 表 | 原因 |
+|---|---|
+| `dwd_zh_report` / `dwd_en_report` / `dwd_zh_report_paper` | Report 顶点与 REFERENCED_BY 边；九模块不读 Report 域（AUTHOR_OF_REPORT / REPORT_ORG / REPORT_RELATED_PROJECT 无装载脚本） |
+| `dwd_org_heis_info` / `dwd_special_hongkong_company` / `dwd_special_aomen_company` | 纯 Organization 顶点补充，不产生任何九模块读取的边（顶点仅提升学者机构名匹配率，非硬依赖） |
+| `dwd_org_stock_base` | 上市公司 Organization 顶点补充；抽取脚本侧不产九模块读的边（模块 7 运行时经 gkx 会话使用，见《九大业务模块MySQL表结构.md》） |
+| `dwd_org_tag_info` | 无 ETL 脚本引用；ORM/运行时在用但 dev 库缺表 |
+| `scholar` | 仅 legacy `load_graph.py`（techkg 旧空间）使用，dev 库无此表 |

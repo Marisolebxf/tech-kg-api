@@ -30,6 +30,7 @@ from typing import Any
 from infra.graph_api_client import GraphAPIClient, GraphAPIError, graph_api
 from infra.graph_db.config import TRSGraphSettings
 from service.base_module import KGModuleScaffoldService
+from service.provenance_recorder import record_node_source
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,12 @@ _INDUSTRY_EXPERT_TERMS: dict[str, tuple[str, ...]] = {
 }
 # 子图合并时最多取多少个种子节点。
 _MAX_SUBGRAPH_SEEDS = 5
+# 锚点（产业链）结构子图：HAS_NODE 一跳最多带多少个链下环节进图。
+_ANCHOR_CHAIN_NODE_LIMIT = 40
+# 最多对多少个叶子环节探查 BELONGS_TO_NODE 企业边（每个环节一次一跳子图请求）。
+_ANCHOR_ORG_PROBE_COUNT = 6
+# 摘要「产业链名称」最多统计多少条产业链。
+_INDUSTRY_CHAIN_LABEL_LIMIT = 10
 # 图服务（trs-graph）承受不住太高并发，全标签扫描类请求并发过多会 500，
 # 用信号量把同时打到图服务的请求数压住。
 _GRAPH_API_CONCURRENCY = 6
@@ -103,7 +110,6 @@ _FALLBACK_REASON_TEXT = {
     "keyword_no_match": "产业关键词未命中任何实体",
     "graph_api_error": "图查询服务不可用",
     "unexpected_error": "图查询过程异常",
-    "keyword_fallback_overview": "关键词未命中，已回退到紧凑全景",
 }
 
 _LAYER_DEFINITIONS: list[dict[str, Any]] = [
@@ -203,21 +209,20 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         layers: list[dict[str, Any]] = []
         seed_vids: list[str] = []
         graph: dict[str, list[Any]] = {"nodes": [], "edges": []}
+        industry_chains: list[str] = []
         fallback_reason: str | None = None
 
         try:
             async with graph_api(auth_headers=auth_headers) as client:
-                resolved_anchor, layer_payload = await asyncio.gather(
+                resolved_anchor, layer_payload, industry_chains = await asyncio.gather(
                     self._resolve_anchor_from_keyword(client, industry_kw, anchor),
-                    self._fetch_layers(
-                        client, industry_kw, top_k, anchor is None and industry_kw is None
-                    ),
+                    self._fetch_layers(client, industry_kw, top_k),
+                    self._fetch_industry_chain_labels(client),
                 )
                 layers, seed_vids = layer_payload
                 anchor = resolved_anchor
-                if industry_kw and not anchor and not any(layer["items"] for layer in layers):
-                    layers, seed_vids = await self._fetch_layers(client, None, top_k, True)
-                    fallback_reason = "keyword_fallback_overview"
+                # 关键词未命中不兜底：不再回退到全库紧凑全景，让结果保持空，
+                # 由 reason=keyword_no_match 驱动前端「未查询到数据」提示。
                 if rel_types:
                     graph = await self._fetch_graph(
                         client,
@@ -229,7 +234,15 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                 else:
                     graph = await self._fetch_graph(client, seed_vids, anchor, depth)
                 layers = self._backfill_empty_layers_from_graph(layers, graph, top_k)
-                graph = self._filter_graph_by_relation_types(graph, rel_types)
+                if anchor and seed_vids and any(not layer["items"] for layer in layers):
+                    # 锚点子图只覆盖链自身结构（新入图的链可能只挂了新闻），
+                    # 第一轮回填后空层仍可能拿不到实体：用分层种子再扩一轮
+                    # 子图合并进图、只补仍为空的分层（已非空的层回填不动）。
+                    # 无锚点时子图本就从种子扩展而来，不做重复拉取。
+                    seed_graph = await self._fetch_graph(client, seed_vids, None, depth)
+                    graph = self._merge_graphs(graph, seed_graph)
+                    layers = self._backfill_empty_layers_from_graph(layers, graph, top_k)
+                graph = self._filter_graph_by_relation_types(graph, rel_types, anchor_id=anchor)
                 query_input["anchorId"] = anchor or ""
         except GraphAPIError as exc:
             logger.warning("graph API unavailable for panorama, falling back: %s", exc)
@@ -247,7 +260,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                 fallback_reason,
                 industry_kw,
             )
-        summary = self._build_summary(industry_kw, layers, graph)
+        summary = self._build_summary(industry_kw, layers, graph, industry_chains)
 
         source = {
             "requested": "all",
@@ -372,15 +385,6 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         return str(resolved.get("id") or "") if resolved else None
 
     @staticmethod
-    def _select_layer_definitions(compact_without_anchor: bool) -> list[dict[str, Any]]:
-        if not compact_without_anchor:
-            return list(_LAYER_DEFINITIONS)
-        allowed_keys = {"core_technology", "leading_enterprise"}
-        return [
-            definition for definition in _LAYER_DEFINITIONS if definition["key"] in allowed_keys
-        ]
-
-    @staticmethod
     def _normalize_relation_types(relation_types: list[str] | None) -> list[str]:
         """规整关系筛选入参：去空、大写、去重，最多保留 20 项。
 
@@ -406,13 +410,23 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
 
     @staticmethod
     def _filter_graph_by_relation_types(
-        graph: dict[str, list[Any]], relation_types: list[str]
+        graph: dict[str, list[Any]],
+        relation_types: list[str],
+        *,
+        anchor_id: str | None = None,
     ) -> dict[str, list[Any]]:
         """按边类型筛选子图，并丢掉筛选后不再有连边的节点。
+
+        链节点（IndustryChain）与锚点节点是子图的结构骨架：链只通过 HAS_NODE
+        结构边连环节，若筛选不含 HAS_NODE（如只选产业链归属 BELONGS_TO_NODE），
+        裁边会把链节点一并裁掉，前端中心只能退化为页面合成的虚拟节点，链的
+        溯源信息（源数据表/英文字段名/图空间 VID）随之丢失。骨架节点始终
+        保留，其余节点仍在裁掉无连边者之列。
 
         Args:
             graph: ``_fetch_graph`` 产出的子图。
             relation_types: 规整后的边类型；为空表示不筛选。
+            anchor_id: 调用方指定或关键词解析出的锚点 VID；始终保留。
 
         Returns:
             筛选后的子图；不筛选时原样返回。
@@ -424,7 +438,50 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         kept_ids = {str(e.get("source") or "") for e in edges} | {
             str(e.get("target") or "") for e in edges
         }
-        nodes = [n for n in (graph.get("nodes") or []) if str(n.get("id") or "") in kept_ids]
+        skeleton_ids = {anchor_id} if anchor_id else set()
+        nodes = [
+            n
+            for n in (graph.get("nodes") or [])
+            if str(n.get("id") or "") in kept_ids
+            or str(n.get("id") or "") in skeleton_ids
+            or "industrychain" in str(n.get("type") or "").casefold()
+        ]
+        return {"nodes": nodes, "edges": edges}
+
+    @staticmethod
+    def _merge_graphs(
+        base: dict[str, list[Any]], extra: dict[str, list[Any]]
+    ) -> dict[str, list[Any]]:
+        """合并两个子图，节点按 id、边按 (source, target, label) 去重（base 优先）。
+
+        Args:
+            base: 锚点子图。
+            extra: 分层种子扩展出的补充子图。
+
+        Returns:
+            合并后的 ``{"nodes": [...], "edges": [...]}``。
+        """
+        nodes: list[dict[str, Any]] = []
+        edges: list[dict[str, Any]] = []
+        seen_nodes: set[str] = set()
+        seen_edges: set[tuple[str, str, str]] = set()
+        for graph in (base, extra):
+            for node in graph.get("nodes") or []:
+                node_id = str(node.get("id") or "")
+                if not node_id or node_id in seen_nodes:
+                    continue
+                seen_nodes.add(node_id)
+                nodes.append(node)
+            for edge in graph.get("edges") or []:
+                key = (
+                    str(edge.get("source") or ""),
+                    str(edge.get("target") or ""),
+                    str(edge.get("label") or ""),
+                )
+                if key in seen_edges:
+                    continue
+                seen_edges.add(key)
+                edges.append(edge)
         return {"nodes": nodes, "edges": edges}
 
     @staticmethod
@@ -434,11 +491,13 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         top_k: int,
     ) -> list[dict[str, Any]]:
         """用锚点真实子图补齐空分层，避免关键词索引缺失时展示无关抽样。"""
+        # 各层接受的实体类型（casefold 后比较）。News 是挂在链上的产业动态
+        # （COVERS_CHAIN），作为「产业动态事件」层的回填来源。
         types_by_layer = {
             "core_technology": {"keyword", "industrynode", "technology"},
             "leading_enterprise": {"organization", "company"},
             "leading_expert": {"person", "scholar", "expert"},
-            "flagship_achievement": {"event"},
+            "flagship_achievement": {"event", "news"},
         }
         entity_type_by_layer = {
             "core_technology": "technology",
@@ -463,7 +522,20 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             for node in graph.get("nodes") or []:
                 node_type = str(node.get("type") or "").casefold()
                 node_id = str(node.get("id") or "")
-                if node_type not in allowed_types or not node_id or node_id in seen_ids:
+                # organization_base 是入图时打到几乎所有节点上的基础标签（论文、
+                # 专家、关键词都会带），节点的 type（首个标签）因此常是它而非真实
+                # 类型。这里对节点的全部标签做匹配：真企业同时带 Organization 等
+                # 企业标签，纯 organization_base（或叠加 Paper/Person 等标签）的
+                # 节点不会命中任何分层，避免论文被误当成领军企业。
+                raw_labels = node.get("data", {}).get("labels") or node.get("labels") or []
+                label_set = {
+                    str(label or "").casefold() for label in raw_labels if str(label or "").strip()
+                }
+                if (
+                    (node_type not in allowed_types and not label_set & allowed_types)
+                    or not node_id
+                    or node_id in seen_ids
+                ):
                     continue
                 seen_ids.add(node_id)
                 node_label = str(node.get("label") or node_id)
@@ -478,6 +550,14 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                         "subtitle": node.get("subtitle"),
                         "metric": None,
                         "metricValue": None,
+                        # 查到即记：子图节点已记录的溯源字段随回填透传，点击
+                        # 分层连线时溯源三要素不缺（此前回填丢字段，前端
+                        # 只能显示「—」）。
+                        "sourceTable": node.get("sourceTable"),
+                        "sourceField": node.get("sourceField"),
+                        "sourceRecordId": node.get("sourceRecordId"),
+                        "ingestBatch": node.get("ingestBatch"),
+                        "ingestTime": node.get("ingestTime"),
                     }
                 )
                 if len(items) >= layer_limit:
@@ -527,9 +607,11 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         client: GraphAPIClient,
         industry: str | None,
         top_k: int,
-        compact_without_anchor: bool,
     ) -> tuple[list[dict[str, Any]], list[str]]:
         """构造四个分层，并收集可用于扩展子图的种子 VID。
+
+        无关键词、无锚点（如重置参数后执行）时同样收集全部四层：此时各层走
+        单页 ``list_nodes`` 廉价路径，核心专家/产业动态事件不会因省成本被裁掉。
 
         Args:
             client: 图查询 API 客户端。
@@ -542,15 +624,13 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         """
         layers: list[dict[str, Any]] = []
         seed_candidates_by_key: dict[str, list[dict[str, Any]]] = {}
-        selected_definitions = self._select_layer_definitions(compact_without_anchor)
-        # 无显式 anchorId 时只保留技术/产业节点 + 企业两层，减少全景发现成本。
         collected = await asyncio.gather(
             *(
                 self._collect_layer_nodes(client, definition, industry, top_k)
-                for definition in selected_definitions
+                for definition in _LAYER_DEFINITIONS
             )
         )
-        for definition, nodes in zip(selected_definitions, collected, strict=True):
+        for definition, nodes in zip(_LAYER_DEFINITIONS, collected, strict=True):
             layer_limit = (
                 min(top_k, 3)
                 if definition["key"] in {"leading_expert", "flagship_achievement"}
@@ -569,6 +649,27 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
 
         seed_vids = await self._resolve_seed_vids(client, seed_candidates_by_key)
         return layers, seed_vids
+
+    async def _fetch_industry_chain_labels(self, client: GraphAPIClient) -> list[str]:
+        """列出图库中的产业链名称，供摘要「产业链名称」统计展示。
+
+        IndustryChain 数量很少（个位数），单页列举即可；失败按空处理，
+        不影响其余分层结果。
+        """
+        try:
+            nodes = await self._list_by_label(client, "IndustryChain", _INDUSTRY_CHAIN_LABEL_LIMIT)
+        except GraphAPIError:
+            return []
+        labels: list[str] = []
+        seen: set[str] = set()
+        for node in nodes:
+            props = node.get("properties") or {}
+            label = str(props.get("name") or props.get("chain_name") or "").strip()
+            if not label or label in seen:
+                continue
+            seen.add(label)
+            labels.append(label)
+        return labels
 
     async def _collect_layer_nodes(
         self,
@@ -813,13 +914,21 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         depth: int,
         relation_types: list[str] | None = None,
     ) -> dict[str, list[Any]]:
-        """以锚点或首个可寻址实体为中心扩展子图。
+        """以锚点或分层种子为中心扩展子图。
+
+        锚点是产业链时，链上 News（COVERS_CHAIN 常有数十条）会先把统一 limit
+        占满，HAS_NODE 环节与 BELONGS_TO_NODE 企业边全被挤掉，图里只剩新闻，
+        重点企业分层与关系置信度随之缺失。因此有锚点时补两路结构子图：
+        HAS_NODE 一跳带出链下环节（环节名常不含产业关键词，分层搜索会 miss），
+        再对前几个叶子环节各取 BELONGS_TO_NODE 一跳，把企业和 chain_score
+        置信度带进图。用户筛选了单一关系类型时严格按筛选返回，不做额外扩展。
 
         Args:
             client: 图查询 API 客户端。
             seed_vids: 备选种子 VID，按偏好排序。
             anchor_id: 调用方指定的锚点 VID，优先使用。
             depth: 扩展跳数。
+            relation_types: 规整后的边类型筛选；为空表示不筛选。
 
         Returns:
             ``{"nodes": [...], "edges": [...]}``；没有可用种子或查询失败时为空图。
@@ -827,9 +936,6 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         seed = anchor_id or (seed_vids[0] if seed_vids else None)
         if not seed:
             return {"nodes": [], "edges": []}
-        seeds = [seed] if anchor_id else [s for s in seed_vids if s != seed][:_MAX_SUBGRAPH_SEEDS]
-        if not seeds:
-            seeds = [seed]
         nodes: list[dict[str, Any]] = []
         edges: list[dict[str, Any]] = []
         seen_nodes: set[str] = set()
@@ -837,13 +943,19 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
 
         # 多 seed 子图互相独立，并行拉取（套 semaphore 防压垮 trs-graph）；
         # 单 seed 失败 except GraphAPIError → None 跳过，合并后统一去重，结果不变。
-        async def _fetch_one(seed_vid: str, edge_type: str | None = None) -> dict[str, Any] | None:
+        async def _fetch_one(
+            seed_vid: str,
+            edge_type: str | None = None,
+            *,
+            fetch_depth: int | None = None,
+            limit: int = 60,
+        ) -> dict[str, Any] | None:
             async with _graph_api_semaphore:
                 try:
                     return await client.get_subgraph(
                         seed_vid,
-                        depth=depth,
-                        limit=60,
+                        depth=fetch_depth if fetch_depth is not None else depth,
+                        limit=limit,
                         edge_type=edge_type,
                     )
                 except GraphAPIError:
@@ -852,13 +964,41 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         pushed_edge_types = (
             relation_types if relation_types and len(relation_types) == 1 else [None]
         )
-        subgraphs = await asyncio.gather(
-            *[
-                _fetch_one(seed_vid, edge_type)
-                for seed_vid in seeds
+        if anchor_id:
+            jobs: list[tuple[str, str | None, int]] = [
+                (anchor_id, edge_type, 60) for edge_type in pushed_edge_types
+            ]
+            if "HAS_NODE" not in pushed_edge_types:
+                jobs.append((anchor_id, "HAS_NODE", _ANCHOR_CHAIN_NODE_LIMIT))
+        else:
+            jobs = [
+                (vid, edge_type, 60)
+                for vid in seed_vids[:_MAX_SUBGRAPH_SEEDS]
                 for edge_type in pushed_edge_types
             ]
+        subgraphs = list(
+            await asyncio.gather(
+                *(_fetch_one(vid, edge_type, limit=limit) for vid, edge_type, limit in jobs)
+            )
         )
+
+        if anchor_id and pushed_edge_types == [None]:
+            # 企业边几乎只挂叶子环节；从 HAS_NODE 子图挑叶子环节探 BELONGS_TO_NODE。
+            has_node_subgraph = next(
+                (
+                    subgraph
+                    for (_, edge_type, _), subgraph in zip(jobs, subgraphs, strict=True)
+                    if edge_type == "HAS_NODE"
+                ),
+                None,
+            )
+            probe_vids = self._select_org_probe_vids(has_node_subgraph)
+            subgraphs.extend(
+                await asyncio.gather(
+                    *(_fetch_one(vid, "BELONGS_TO_NODE", fetch_depth=1) for vid in probe_vids)
+                )
+            )
+
         for subgraph in subgraphs:
             if not subgraph:
                 continue
@@ -875,6 +1015,35 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                     edges.append(edge)
         return {"nodes": nodes, "edges": edges}
 
+    @staticmethod
+    def _select_org_probe_vids(has_node_subgraph: dict[str, Any] | None) -> list[str]:
+        """从 HAS_NODE 子图里挑最可能挂企业的环节做企业边探测。
+
+        企业边（BELONGS_TO_NODE）几乎只挂在叶子/产品环节（node_type=2）上，
+        分类环节（node_type=1）基本没有；重点环节（node_imp_level=1，源数据
+        标注的核心方向）挂的企业最多，优先探测。节点缺这些属性时退化为按
+        原顺序取。
+        """
+        if not has_node_subgraph:
+            return []
+        key_leaf_vids: list[str] = []
+        leaf_vids: list[str] = []
+        fallback_vids: list[str] = []
+        for node in has_node_subgraph.get("nodes", []):
+            vid = str(node.get("id") or "").strip()
+            if not vid or "IndustryNode" not in (node.get("labels") or []):
+                continue
+            props = node.get("properties") or {}
+            fallback_vids.append(vid)
+            if str(props.get("node_type") or "") != "2":
+                continue
+            leaf_vids.append(vid)
+            if str(props.get("node_imp_level") or "") == "1":
+                key_leaf_vids.append(vid)
+        return (key_leaf_vids + [v for v in leaf_vids if v not in key_leaf_vids] or fallback_vids)[
+            :_ANCHOR_ORG_PROBE_COUNT
+        ]
+
     # ---------------- 转换器 ----------------
     def _node_to_key_entity(
         self, node: dict[str, Any], definition: dict[str, Any]
@@ -889,6 +1058,8 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         subtitle_prop = self._first_prop_value(
             props, ("scholar_org", "org_name", "affiliation", "industry_class", "node_type")
         )
+        # 查到即记：入图血缘透传；无血缘时记录图库查询来源（保证非空）。
+        recorded = record_node_source(props, node.get("labels") or [], space=self._graph_space())
         return {
             "id": str(node.get("id") or ""),
             "label": label,
@@ -897,8 +1068,8 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             "metric": definition["metric_label"] if metric_value_num is not None else None,
             "metricValue": metric_value_num,
             "sourceSystem": self._first_prop_value(props, ("source_system", "source")),
-            "sourceTable": self._first_prop_value(props, ("source_table",)),
-            "sourceField": self._first_prop_key(props, definition["name_props"]),
+            "sourceTable": recorded["sourceTable"],
+            "sourceField": recorded["sourceField"],
             "sourceRecordId": self._first_prop_value(props, ("source_record_id",)),
             "ingestBatch": self._first_prop_value(props, ("ingest_batch",)),
             "ingestTime": self._first_prop_value(props, ("ingest_time",)),
@@ -949,9 +1120,18 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             items = layer.get("items") or []
             if not items:
                 continue
-            for item in items[:5]:
-                if not item.get("sourceRecordId"):
-                    continue
+            # 覆盖分层全部 items（每层数量已被 topK 封顶），保证前端
+            # 点击任意分层节点都能按 graphVid 筛中证据；查到即记——
+            # 无入图血缘的 item 也如实记录图库查询来源。
+            for item in items:
+                source_table = str(item.get("sourceTable") or "")
+                if source_table.startswith("trs-graph / space="):
+                    item_note = "节点未携带入图血缘，来源为本次图库查询"
+                else:
+                    item_note = (
+                        f"入库批次：{item.get('ingestBatch') or '—'}；"
+                        f"入库时间：{item.get('ingestTime') or '—'}"
+                    )
                 evidences.append(
                     {
                         "title": f"{layer.get('title') or layer.get('key')} · {item.get('label')}",
@@ -960,16 +1140,13 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                         "recordId": str(item.get("sourceRecordId") or ""),
                         "fieldIdentifier": str(item.get("id") or ""),
                         # 溯源三要素：MySQL 源表名 / MySQL 英文字段名 / 图空间 VID
-                        "sourceTable": str(item.get("sourceTable") or "—"),
+                        "sourceTable": source_table or "—",
                         "sourceField": str(item.get("sourceField") or "—"),
                         "graphVid": str(item.get("id") or ""),
-                        "summary": (
-                            f"入库批次：{item.get('ingestBatch') or '—'}；"
-                            f"入库时间：{item.get('ingestTime') or '—'}"
-                        ),
+                        "summary": item_note,
                     }
                 )
-            labels = [str(item.get("label") or item.get("id") or "") for item in items[:5]]
+            labels = [str(item.get("label") or item.get("id") or "") for item in items]
             evidences.append(
                 {
                     "title": f"分层 · {layer.get('title') or layer.get('key')}",
@@ -1013,10 +1190,17 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             "evidences": evidences,
         }
 
+    @staticmethod
+    def _graph_space() -> str:
+        return TRSGraphSettings.from_env().space or "dev"
+
     def _node_to_graph_node(self, node: dict[str, Any]) -> dict[str, Any]:
         props = node.get("properties") or {}
         labels = node.get("labels") or []
         primary_label = labels[0] if labels else "Node"
+        # 查到即记：子图（展开层）节点的溯源字段。带血缘透传；无血缘时
+        # 记录图库查询来源标记，保证前端点击任意展开层节点都能合成溯源卡。
+        recorded = record_node_source(props, labels, space=self._graph_space())
         return {
             "id": str(node.get("id") or ""),
             "type": primary_label,
@@ -1039,6 +1223,11 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             "subtitle": self._first_prop_value(
                 props, ("scholar_org", "org_name", "affiliation", "industry_class", "node_type")
             ),
+            "sourceTable": recorded["sourceTable"],
+            "sourceField": recorded["sourceField"],
+            "sourceRecordId": self._first_prop_value(props, ("source_record_id",)),
+            "ingestBatch": self._first_prop_value(props, ("ingest_batch",)),
+            "ingestTime": self._first_prop_value(props, ("ingest_time",)),
             "data": {"labels": labels},
         }
 
@@ -1076,19 +1265,12 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                 return str(value)
         return None
 
-    @staticmethod
-    def _first_prop_key(props: dict[str, Any], keys: tuple[str, ...]) -> str | None:
-        """返回第一个有非空值的候选属性名，用于溯源展示「英文字段名」。"""
-        for key in keys:
-            if props.get(key):
-                return key
-        return None
-
     def _build_summary(
         self,
         industry: str | None,
         layers: list[dict[str, Any]],
         graph: dict[str, list[Any]],
+        industry_chains: list[str] | None = None,
     ) -> dict[str, Any]:
         """汇总本次查询命中的实体和关系，不做全库扫描。"""
         nodes_by_label = {
@@ -1101,6 +1283,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             edges_by_type[edge_type] = edges_by_type.get(edge_type, 0) + 1
         return {
             "industry": industry,
+            "industryChains": list(industry_chains or []),
             "totalNodes": sum(nodes_by_label.values()),
             "totalEdges": sum(edges_by_type.values()),
             "nodesByLabel": nodes_by_label,

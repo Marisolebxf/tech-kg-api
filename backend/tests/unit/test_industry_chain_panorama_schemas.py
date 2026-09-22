@@ -37,30 +37,57 @@ def test_request_rejects_overlong_and_abnormal_industry() -> None:
     assert request.industry == "集成电路 / 半导体（材料）"
 
 
+def test_request_requires_industry() -> None:
+    # industry 为必填：缺失、None、空串、纯空白都要拒绝
+    with pytest.raises(ValidationError, match="Field required"):
+        IndustryChainPanoramaQueryRequest.model_validate({"anchorId": "person_4G7t0B0t"})
+
+    with pytest.raises(ValidationError, match="不能为空"):
+        IndustryChainPanoramaQueryRequest.model_validate({"industry": None})
+
+    with pytest.raises(ValidationError, match="不能为空"):
+        IndustryChainPanoramaQueryRequest.model_validate({"industry": ""})
+
+    with pytest.raises(ValidationError, match="不能为空"):
+        IndustryChainPanoramaQueryRequest.model_validate({"industry": "   "})
+
+
 def test_request_rejects_overlong_and_abnormal_anchor_id() -> None:
     with pytest.raises(ValidationError, match="64"):
-        IndustryChainPanoramaQueryRequest.model_validate({"anchorId": OVERLONG})
+        IndustryChainPanoramaQueryRequest.model_validate(
+            {"industry": "人工智能", "anchorId": OVERLONG}
+        )
 
     with pytest.raises(ValidationError, match="异常字符"):
-        IndustryChainPanoramaQueryRequest.model_validate({"anchorId": "person_a!@#￥%&"})
+        IndustryChainPanoramaQueryRequest.model_validate(
+            {"industry": "人工智能", "anchorId": "person_a!@#￥%&"}
+        )
 
     with pytest.raises(ValidationError, match="空格"):
-        IndustryChainPanoramaQueryRequest.model_validate({"anchorId": "person a"})
+        IndustryChainPanoramaQueryRequest.model_validate(
+            {"industry": "人工智能", "anchorId": "person a"}
+        )
 
-    request = IndustryChainPanoramaQueryRequest.model_validate({"anchorId": "person_4G7t0B0t"})
+    request = IndustryChainPanoramaQueryRequest.model_validate(
+        {"industry": "人工智能", "anchorId": "person_4G7t0B0t"}
+    )
     assert request.anchorId == "person_4G7t0B0t"
 
 
 def test_request_rejects_removed_data_source_parameter() -> None:
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        IndustryChainPanoramaQueryRequest.model_validate({"dataSource": "all"})
+        IndustryChainPanoramaQueryRequest.model_validate(
+            {"industry": "人工智能", "dataSource": "all"}
+        )
 
 
 def test_request_keeps_internal_refresh_control() -> None:
-    request = IndustryChainPanoramaQueryRequest.model_validate({"refresh": True})
+    request = IndustryChainPanoramaQueryRequest.model_validate(
+        {"industry": "人工智能", "refresh": True}
+    )
     assert request.refresh is True
 
 
 def test_request_rejects_overlong_top_k() -> None:
     with pytest.raises(ValidationError, match="64"):
-        IndustryChainPanoramaQueryRequest.model_validate({"topK": "9" * 65})
+        IndustryChainPanoramaQueryRequest.model_validate({"industry": "人工智能", "topK": "9" * 65})

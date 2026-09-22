@@ -276,8 +276,8 @@ describe('Schema 管理输入框达上限提示', () => {
   })
 })
 
-describe('Schema 列表说明列截断与删除脏行兜底', () => {
-  it('实体/关系说明超 20 字截断显示，短说明原样展示', async () => {
+describe('Schema 列表说明列全文显示与删除脏行兜底', () => {
+  it('实体/关系说明全文展示（不再截断），短说明原样展示', async () => {
     vi.mocked(listSchemasPaged).mockResolvedValue({
       items: [schemaFixture({ kind: 'entity', description: '说'.repeat(25) })],
       total: 1, page: 1, pageSize: 10,
@@ -286,9 +286,9 @@ describe('Schema 列表说明列截断与删除脏行兜底', () => {
     await flushPromises()
 
     const entityDesc = view.findAll('.schema-table-wrap tbody tr')[0].findAll('td')[2]
-    expect(entityDesc.text()).toBe('说'.repeat(20) + '…')
+    expect(entityDesc.text()).toBe('说'.repeat(25))
 
-    // 关系子页面：说明（basis=description）同样截断
+    // 关系子页面：说明（basis=description）同样全文显示
     vi.mocked(listSchemasPaged).mockResolvedValue({
       items: [schemaFixture({
         kind: 'relation', name: 'USES_TECH', description: '长'.repeat(30),
@@ -301,7 +301,7 @@ describe('Schema 列表说明列截断与删除脏行兜底', () => {
     await flushPromises()
 
     const relationDesc = view.findAll('.schema-table-wrap tbody tr')[0].findAll('td')[4]
-    expect(relationDesc.text()).toBe('长'.repeat(20) + '…')
+    expect(relationDesc.text()).toBe('长'.repeat(30))
 
     // 短说明不截断（重新挂载拿新 mock 数据）
     view.unmount()

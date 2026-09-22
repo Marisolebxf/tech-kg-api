@@ -21,8 +21,12 @@ BearerDependency = Annotated[HTTPAuthorizationCredentials | None, Depends(bearer
 
 def _enforce_account_scope(request: Request, application: AuthApplication, context: AuthContext):
     if application.settings.business_only_user_ids:
-        user_id = str(application.service.profile(context).user.id)
-        if user_id in application.settings.business_only_user_ids:
+        # 只需比对用户 id：直接读会话 userInfo，不走 profile() 的完整模型校验
+        # （可选字段为 null 的账号会让 profile() 抛 ValidationError，且逐请求构建
+        # AuthProfile 的开销也大——此前导致名单非空时全部受保护接口 500）
+        raw_user = context.permission_info.get("userInfo") or {}
+        user_id = str(raw_user.get("id", ""))
+        if user_id and user_id in application.settings.business_only_user_ids:
             enforce_business_access(request)
     return context
 

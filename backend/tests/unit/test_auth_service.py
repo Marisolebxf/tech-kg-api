@@ -7,11 +7,11 @@ import pytest
 from sqlalchemy.exc import SQLAlchemyError
 
 from application.auth import AuthApplication
-from biz.schemas.auth import MenuSummary, PermissionSetSummary, RoleMenuSummary
+from biz.schemas.auth import MenuSummary, PermissionSetSummary, RoleMenuSummary, UserProfile
 from config.auth import AuthSettings
 from infra.redis import MemoryJsonStore
 from service import platform_access
-from service.auth import AuthenticationError, AuthService
+from service.auth import AuthContext, AuthenticationError, AuthService
 
 
 class FakeUserCenter:
@@ -336,3 +336,51 @@ def test_permission_models_normalize_null_lists() -> None:
     assert permission_set.menus == []
     assert permission_set.permissions == []
     assert role_menu.menus == []
+
+
+def test_user_profile_normalizes_null_text_fields() -> None:
+    """用户中心对未设置的可选字段返回 null（如无昵称账号），应归一为空串而非校验失败。"""
+    profile = UserProfile.model_validate(
+        {
+            "id": 2711,
+            "username": "18403788469",
+            "nickname": None,
+            "email": None,
+            "mobile": "18403788469",
+        }
+    )
+
+    assert profile.id == 2711
+    assert profile.nickname == ""
+    assert profile.email == ""
+
+
+def test_enforce_account_scope_matches_id_without_profile_validation() -> None:
+    """名单非空时逐请求执行：只读会话 userInfo.id 比对，不触发 profile() 模型校验。"""
+    from fastapi import HTTPException
+
+    from biz.dependencies.auth import _enforce_account_scope
+
+    application = AuthApplication.__new__(AuthApplication)
+    application.settings = replace(AuthSettings.from_env(), business_only_user_ids=("2711",))
+    context = AuthContext(
+        access_token="",
+        permission_info={"userInfo": {"id": 2711, "username": "18403788469", "nickname": None}},
+        expires_at=None,
+    )
+
+    class _Route:
+        path = "/api/v1/schema-management/entities"
+
+    class _Request:
+        scope = {"route": _Route()}
+        method = "GET"
+
+    # 名单内账号访问非业务接口 → 403，且 nickname=None 不再导致 500
+    with pytest.raises(HTTPException) as exc_info:
+        _enforce_account_scope(_Request(), application, context)  # type: ignore[arg-type]
+    assert exc_info.value.status_code == 403
+
+    # 名单外账号不受影响
+    application.settings = replace(AuthSettings.from_env(), business_only_user_ids=("2687",))
+    assert _enforce_account_scope(_Request(), application, context) is context  # type: ignore[arg-type]

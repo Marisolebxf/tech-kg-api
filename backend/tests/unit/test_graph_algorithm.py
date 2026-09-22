@@ -379,6 +379,15 @@ def test_degree_builds_index_when_edge_not_indexed(algo_backend, monkeypatch) ->
                     status_code=400,
                     body="",
                 )
+            if query == "SHOW EDGE INDEX STATUS":
+                return SimpleNamespace(
+                    records=[
+                        {
+                            "Name": graph_algorithm._degree_index_name("HAS_KEYWORD"),
+                            "Index Status": "FINISHED",
+                        }
+                    ]
+                )
             if "LIMIT 1" in query:
                 return SimpleNamespace(records=[{"s": "a"}])
             return SimpleNamespace(
@@ -448,9 +457,8 @@ def test_degree_lookup_is_paginated(algo_backend, monkeypatch) -> None:
     assert [query.rsplit(" ", 1)[-1] for query in queries] == ["0", "2"]
 
 
-def test_degree_empty_edge_type_skips_scan(algo_backend, monkeypatch) -> None:
-    # SHOW STATS 为 0 的边类型（如 dev2 的 ALUMNI）：结果本就为空，不应触发
-    # 任何 LOOKUP/MATCH——共享存储饱和窗口实测全空间扫描 28ms 快败
+def test_degree_stale_zero_stats_does_not_skip_lookup(algo_backend, monkeypatch) -> None:
+    # SHOW STATS 是预计算快照，可能仍为 0；Degree 必须以索引实际结果为准。
     calls = []
 
     class EmptyEdgeClient:
@@ -462,15 +470,59 @@ def test_degree_empty_edge_type_skips_scan(algo_backend, monkeypatch) -> None:
 
         def execute_read(self, query: str, params=None, *, timeout=None):
             calls.append(query)
-            raise AssertionError("无边数据的类型不应触发图查询")
+            return SimpleNamespace(records=[{"s": "expert-a", "d": "keyword-b"}])
 
     monkeypatch.setattr("infra.graph_db.get_space_client", lambda space: EmptyEdgeClient())
     data = submit_job(_actor(), "shared_business", "degreestatic", ["ALUMNI"], {})
     assert data["status"] == "succeeded"
     result = get_result(_actor(), "shared_business", data["jobId"])
-    assert result["rows"] == []
-    assert result["count"] == 0
-    assert calls == []
+    assert result["rows"] == [
+        {"vid": "expert-a", "out_degree": "1", "in_degree": "0", "degree": "1"},
+        {"vid": "keyword-b", "out_degree": "0", "in_degree": "1", "degree": "1"},
+    ]
+    assert len(calls) == 1
+
+
+def test_degree_rebuilds_created_but_empty_index(algo_backend, monkeypatch) -> None:
+    class EmptyIndexClient:
+        rebuilt = False
+        writes = []
+
+        def edge_types(self):
+            return ["HAS_KEYWORD"]
+
+        def execute_read(self, query: str, params=None, *, timeout=None):
+            if query == "SHOW EDGE INDEX STATUS":
+                records = []
+                if self.rebuilt:
+                    records = [
+                        {
+                            "Name": graph_algorithm._degree_index_name("HAS_KEYWORD"),
+                            "Index Status": "FINISHED",
+                        }
+                    ]
+                return SimpleNamespace(records=records)
+            if "LIMIT 1" in query and self.rebuilt:
+                return SimpleNamespace(records=[{"s": "a"}])
+            if self.rebuilt:
+                return SimpleNamespace(records=[{"s": "a", "d": "b"}])
+            return SimpleNamespace(records=[])
+
+        def execute_write(self, query: str):
+            self.writes.append(query)
+            if query.startswith("REBUILD"):
+                self.rebuilt = True
+
+    client = EmptyIndexClient()
+    monkeypatch.setattr(graph_algorithm, "_DEGREE_INDEX_POLL_SECONDS", 0)
+    monkeypatch.setattr("infra.graph_db.get_space_client", lambda space: client)
+    data = submit_job(_actor(), "shared_business", "degreestatic", ["HAS_KEYWORD"], {})
+    result = get_result(_actor(), "shared_business", data["jobId"])
+    assert result["rows"] == [
+        {"vid": "a", "out_degree": "1", "in_degree": "0", "degree": "1"},
+        {"vid": "b", "out_degree": "0", "in_degree": "1", "degree": "1"},
+    ]
+    assert any(query.startswith("REBUILD EDGE INDEX") for query in client.writes)
 
 
 def test_degree_mixed_labels_keep_lookup_and_build_missing_index(algo_backend, monkeypatch) -> None:
@@ -496,6 +548,15 @@ def test_degree_mixed_labels_keep_lookup_and_build_missing_index(algo_backend, m
                     "POST /api/v1/query/read -> 400: There is no index to use at runtime",
                     status_code=400,
                     body="",
+                )
+            if query == "SHOW EDGE INDEX STATUS":
+                return SimpleNamespace(
+                    records=[
+                        {
+                            "Name": graph_algorithm._degree_index_name("STUDIED_AT"),
+                            "Index Status": "FINISHED",
+                        }
+                    ]
                 )
             if "LIMIT 1" in query:
                 return SimpleNamespace(records=[{"s": "a"}])

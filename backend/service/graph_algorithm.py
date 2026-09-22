@@ -322,6 +322,22 @@ def _lookup_degree_pairs(client: Any, label: str) -> Iterable[tuple[str, str]]:
         offset += len(records)
 
 
+def _degree_edge_index_status(client: Any, index_name: str) -> str | None:
+    """读取 Degree 专用边索引最近一次重建状态。"""
+    result = client.execute_read("SHOW EDGE INDEX STATUS", timeout=30.0)
+    for record in result.records or []:
+        if not isinstance(record, dict):
+            continue
+        normalized = {
+            str(key).strip().lower().replace("_", " "): value for key, value in record.items()
+        }
+        name = str(normalized.get("name") or "").strip("\"'`")
+        if name != index_name:
+            continue
+        return str(normalized.get("index status") or "").strip("\"'`").upper() or None
+    return None
+
+
 def _ensure_degree_edge_index(client: Any, label: str) -> None:
     """为无索引边类型创建并重建 Degree 专用索引，等待到 LOOKUP 可用。
 
@@ -361,6 +377,22 @@ def _ensure_degree_edge_index(client: Any, label: str) -> None:
 
     while True:
         try:
+            status = _degree_edge_index_status(client, index_name)
+            if status in {"FAILED", "STOPPED", "INVALID"}:
+                raise GraphAlgorithmError(
+                    f"关系类型 {label} 的索引 {index_name} 重建状态为 {status}",
+                    status_code=502,
+                )
+            if status != "FINISHED":
+                if time.monotonic() >= deadline:
+                    raise GraphAlgorithmError(
+                        f"关系类型 {label} 的索引 {index_name} 重建超过 "
+                        f"{int(_DEGREE_INDEX_BUILD_TIMEOUT_SECONDS)} 秒，请稍后重试",
+                        status_code=504,
+                    )
+                time.sleep(_DEGREE_INDEX_POLL_SECONDS)
+                continue
+            # FINISHED 后再确认 LOOKUP 已可用；空结果也是合法结果。
             client.execute_read(f"LOOKUP ON `{label}` YIELD src(edge) AS s | LIMIT 1", timeout=30.0)
             logger.info("Degree 边索引已可用: label=%s index=%s", label, index_name)
             return
@@ -381,11 +413,11 @@ def _ensure_degree_edge_index(client: Any, label: str) -> None:
 def _degree_rows_via_ngql(space: str, labels: list[str]) -> tuple[list[dict[str, str]], bool]:
     """出/入度聚合并合并为逐顶点行（总度降序，上限对齐图服务 10000 行截断）。
 
-    先按 SHOW STATS 跳过无边数据的边类型（对度数零贡献，结果本就为空，
-    免去扫描；统计有滞后，仅作加速不改语义）。其余逐类型通过边索引分页
-    LOOKUP 枚举 src/dst 并本地聚合：代价只跟该边类型的边数相关。若关系类型
-    尚无索引，则自动创建、重建 Degree 专用空属性索引，等待可用后继续；绝不
-    回退全空间 MATCH，避免 CITES 等大边类型扫描 90 秒超时拖垮共享图库。
+    逐类型通过边索引分页 LOOKUP 枚举 src/dst 并本地聚合：代价只跟该边类型
+    的边数相关。若关系类型尚无索引，或索引已创建但历史数据尚未重建进去，
+    则自动创建/重建 Degree 专用空属性索引，并等待 SHOW EDGE INDEX STATUS
+    返回 FINISHED 后继续；绝不回退全空间 MATCH，避免 CITES 等大边类型扫描
+    90 秒超时拖垮共享图库。SHOW STATS 可能滞后，不能据其 0 值跳过真实数据。
     """
     from infra.graph_db import get_space_client
     from infra.graph_db.exceptions import GraphRequestError
@@ -396,17 +428,6 @@ def _degree_rows_via_ngql(space: str, labels: list[str]) -> tuple[list[dict[str,
     if unknown:
         raise GraphAlgorithmError(f"图空间 {space} 不存在边类型: {', '.join(unknown)}")
 
-    active = list(labels)
-    try:
-        edge_counts = client.stats_snapshot().get("edges", {})
-    except Exception as exc:  # noqa: BLE001 — 统计读失败不拦计算，走常规路径
-        logger.warning("Degree 读 SHOW STATS 失败，跳过空边类型加速: %s", exc)
-        edge_counts = {}
-    skipped = [label for label in active if edge_counts.get(label) == 0]
-    if skipped:
-        logger.info("Degree 跳过无边数据的边类型: %s", ", ".join(skipped))
-        active = [label for label in active if edge_counts.get(label) != 0]
-
     degrees: dict[str, dict[str, int]] = {}
 
     def absorb_pairs(pairs: Iterable[tuple[str, str]]) -> None:
@@ -416,7 +437,7 @@ def _degree_rows_via_ngql(space: str, labels: list[str]) -> tuple[list[dict[str,
             degrees.setdefault(src, {"out": 0, "in": 0})["out"] += 1
             degrees.setdefault(dst, {"out": 0, "in": 0})["in"] += 1
 
-    for label in active:
+    for label in labels:
         try:
             pairs = _lookup_degree_pairs(client, label)
             # 生成器在迭代时才发请求，先取首项以便捕获无索引错误后自动补建。
@@ -427,6 +448,14 @@ def _degree_rows_via_ngql(space: str, labels: list[str]) -> tuple[list[dict[str,
             _ensure_degree_edge_index(client, label)
             pairs = _lookup_degree_pairs(client, label)
             first = next(pairs, None)
+        if first is None:
+            # CREATE 成功但 REBUILD 未启动时，LOOKUP 会“成功返回 0 行”。只有本专用
+            # 索引最近一次重建已 FINISHED，才能把空结果视为真实无边数据。
+            index_name = _degree_index_name(label)
+            if _degree_edge_index_status(client, index_name) != "FINISHED":
+                _ensure_degree_edge_index(client, label)
+                pairs = _lookup_degree_pairs(client, label)
+                first = next(pairs, None)
         if first is not None:
             absorb_pairs((first,))
             absorb_pairs(pairs)

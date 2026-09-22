@@ -443,10 +443,15 @@ def run(
                 ingest_batch=ingest_batch,
                 ingest_time=ingest_time,
             )
-            institution = normalize_text(row.funded_institution).rstrip("；;")
+            # 与 load_project_graph 同口径 parse_list 拆分：串中多值逐个匹配，各写一条边。
+            institutions = sorted(
+                value
+                for value in (normalize_text(v) for v in parse_list(row.funded_institution))
+                if value
+            )
             discipline = normalize_text(row.discipline)
 
-            if institution:
+            for institution in institutions:
                 report.increment("organization_candidates")
                 result = _align_organization(
                     matcher,
@@ -480,8 +485,14 @@ def run(
                         _merge_edge(graph, pvid, target, "FUNDED_BY", props)
                     report.increment("edges_FUNDED_BY")
 
-            host = normalize_text(row.project_host)
-            if host:
+            # 负责人对齐的机构上下文取排序后的首个资助机构（主机构）。
+            primary_institution = institutions[0] if institutions else ""
+            hosts = sorted(
+                value
+                for value in (normalize_text(v) for v in parse_list(row.project_host))
+                if value
+            )
+            for host in hosts:
                 report.increment("person_candidates")
                 result = _align_person(
                     matcher,
@@ -489,7 +500,7 @@ def run(
                     person_bm25,
                     person_dense,
                     host,
-                    institution=institution,
+                    institution=primary_institution,
                     discipline=discipline,
                 )
                 target = _record_match(
@@ -524,7 +535,7 @@ def run(
                     person_bm25,
                     person_dense,
                     participant,
-                    institution=institution,
+                    institution=primary_institution,
                     discipline=discipline,
                 )
                 target = _record_match(

@@ -79,6 +79,46 @@ def test_project_relations_only_write_project_origin_edges(tmp_path):
     assert report.stats["cross_domain"] == 1
 
 
+def test_project_relations_split_multivalue_host_and_funder(tmp_path):
+    """funded_institution/project_host 串中多值（“A；B”）应拆分逐个匹配，各写一条边。"""
+    graph = MagicMock()
+    matcher = ProjectEntityMatcher()
+    matcher.organization.add("清华大学", "org_1")
+    matcher.organization.add("科技部", "org_2")
+    matcher.person.add("张伟", "person_1")
+    matcher.person.add("李四", "person_2")
+    row = SimpleNamespace(
+        id="p2",
+        funded_institution="清华大学；科技部",
+        funded_amount=0,
+        fund_category="",
+        project_host="张伟，李四",
+        participants=None,
+        participating_institution=None,
+    )
+    report = _report(tmp_path)
+
+    stage_project_relations(
+        graph,
+        [(row, "en_project", "dwd_en_project")],
+        matcher,
+        report,
+        ingest_batch="BATCH_TEST",
+        ingest_time="2026-07-26 20:00:00",
+        dry_run=False,
+    )
+
+    edges = [(call.args[2], call.args[1]) for call in graph.merge_edge.call_args_list]
+    assert ("FUNDED_BY", "org_1") in edges
+    assert ("FUNDED_BY", "org_2") in edges
+    assert ("LEADS", "person_1") in edges
+    assert ("LEADS", "person_2") in edges
+    assert report.stats["edges_FUNDED_BY"] == 2
+    assert report.stats["edges_LEADS"] == 2
+    assert "person_not_found" not in report.stats
+    assert "organization_not_found" not in report.stats
+
+
 def test_output_creates_project_to_paper_has_output(tmp_path):
     graph = MagicMock()
     graph.get_node.return_value = object()

@@ -26,8 +26,14 @@ def collect_match_candidates(
     }
     allowed_ids = {str(row.id) for row, _source, _table in projects}
     for row, _source, _table in projects:
-        _add(result["organization"], row.funded_institution)
-        _add(result["person"], row.project_host)
+        # funded_institution/project_host 与 participants 同口径 parse_list 拆分，
+        # 否则多值串整串进池永远查不到图上对应实体。
+        result["organization"].update(
+            value.strip() for value in parse_list(row.funded_institution) if value.strip()
+        )
+        result["person"].update(
+            value.strip() for value in parse_list(row.project_host) if value.strip()
+        )
         result["person"].update(
             value.strip() for value in parse_list(row.participants) if value.strip()
         )

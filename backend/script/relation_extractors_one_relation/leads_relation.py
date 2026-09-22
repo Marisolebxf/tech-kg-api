@@ -1,9 +1,9 @@
 """One-relation transform for LEADS（Project → Person）（平台喂数抽取：只输出边 JSON）.
 
 复刻旧 load_project_graph.py stage_project_relations 口径：dwd_zh/en_project 的
-project_host（normalize_text）经 ProjectEntityMatcher 的 person 索引
-（name_zh/name_cn/name_en 精确唯一）匹配既有 Person 顶点，仅 matched 写边；
-ambiguous/not_found 进 ProjectIngestReport 复核目录。候选集沿用旧
+project_host（parse_list 拆分多值后逐个 normalize_text）经 ProjectEntityMatcher 的
+person 索引（name_zh/name_cn/name_en 精确唯一）匹配既有 Person 顶点，仅 matched
+写边（多值各写一条）；ambiguous/not_found 进 ProjectIngestReport 复核目录。候选集沿用旧
 collect_match_candidates 的 person 通道（project_host + participants 全集，二者
 会并入同一索引）。REST merge_edge 按 source_record_id（= 项目 ID）幂等。
 
@@ -81,9 +81,9 @@ def collect_person_candidates(
         sql = apply_since(f"SELECT project_host, participants FROM {table} ORDER BY id", since)
         params = {"since": since} if since else None
         for row in iter_rows(engine, sql, batch_size=batch_size, limit=limit, params=params):
-            host = str(row.get("project_host") or "").strip().rstrip("；;，,、")
-            if host:
-                candidates.add(host)
+            for value in parse_list(row.get("project_host")):
+                if value.strip():
+                    candidates.add(value.strip())
             for value in parse_list(row.get("participants")):
                 if value.strip():
                     candidates.add(value.strip())
@@ -96,34 +96,40 @@ def make_leads_mapper(
 ) -> Callable[[str, dict[str, Any], str], list[EdgeRecord]]:
     def leads(table: str, row: dict[str, Any], batch: str) -> list[EdgeRecord]:
         project_id = str(row.get("id") or "")
-        host = normalize_text(row.get("project_host")).rstrip("；;，,、")
-        if not project_id or not host:
+        if not project_id:
             return []
-        report.increment("person_candidates")
-        host_result = matcher.person.match(host, method="name_exact")
-        target = _matched_vid(
-            report,
-            host_result,
-            "person",
-            {"project_id": project_id, "field": "project_host", "value": host},
-        )
-        if not target:
-            return []
-        props = {
-            **edge_provenance(source_table=table, source_record_id=project_id, ingest_batch=batch),
-            **match_audit_props(host_result.method, host_result.evidence),
-        }
-        report.increment("edges_LEADS")
-        return [
-            EdgeRecord(
-                "LEADS",
-                f"project_{project_id}",
-                target,
-                props,
-                source_tag="Project",
-                target_tag="Person",
+        records: list[EdgeRecord] = []
+        # 与旧通道同口径 parse_list 拆分：串中多值（“A；B”）逐个匹配，各写一条边。
+        hosts = {normalize_text(value) for value in parse_list(row.get("project_host"))}
+        for host in sorted(value for value in hosts if value):
+            report.increment("person_candidates")
+            host_result = matcher.person.match(host, method="name_exact")
+            target = _matched_vid(
+                report,
+                host_result,
+                "person",
+                {"project_id": project_id, "field": "project_host", "value": host},
             )
-        ]
+            if not target:
+                continue
+            props = {
+                **edge_provenance(
+                    source_table=table, source_record_id=project_id, ingest_batch=batch
+                ),
+                **match_audit_props(host_result.method, host_result.evidence),
+            }
+            report.increment("edges_LEADS")
+            records.append(
+                EdgeRecord(
+                    "LEADS",
+                    f"project_{project_id}",
+                    target,
+                    props,
+                    source_tag="Project",
+                    target_tag="Person",
+                )
+            )
+        return records
 
     return leads
 
@@ -154,7 +160,7 @@ def _collect_candidates(
         engine.dispose()
 
 
-def _load_matcher(candidates: set[str], dry_run: bool) -> tuple[ProjectEntityMatcher, bool]:
+def _load_matcher(candidates: set[str], dry_run: bool) -> ProjectEntityMatcher:
     """连图加载 matcher；dry_run 时也连图（matcher.from_graph 不写图，旧口径如此）。"""
     graph = graph_client()
     try:
@@ -179,9 +185,9 @@ def transform(payload: dict[str, Any]) -> dict[str, Any]:
     rows = payload.get("rows") or []
     candidates = set()
     for r in rows:
-        host = str(r.get("project_host") or "").strip().rstrip("；;，,、")
-        if host:
-            candidates.add(host)
+        for value in parse_list(r.get("project_host")):
+            if str(value).strip():
+                candidates.add(str(value).strip())
         for value in parse_list(r.get("participants")):
             if str(value).strip():
                 candidates.add(str(value).strip())

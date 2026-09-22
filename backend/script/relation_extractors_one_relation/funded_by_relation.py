@@ -1,9 +1,9 @@
 """One-relation transform for FUNDED_BY（Project → Organization）（平台喂数抽取：只输出边 JSON）.
 
 复刻旧 load_project_graph.py stage_project_relations 口径：dwd_zh/en_project 的
-funded_institution（normalize_text 后去尾部分号）经 ProjectEntityMatcher 的
+funded_institution（parse_list 拆分多值后逐个 normalize_text）经 ProjectEntityMatcher 的
 organization 索引（name_cn/name_en 精确唯一）匹配既有 Organization 顶点，仅
-matched 写边；ambiguous/not_found 进 ProjectIngestReport 复核目录（报告路径沿用
+matched 写边（多值各写一条）；ambiguous/not_found 进 ProjectIngestReport 复核目录（报告路径沿用
 旧默认 /tmp/project-ingest-reports/{batch}）。参与单位（participating_institution）
 按旧口径只记 cross_domain 报告（PARTICIPATES_IN 归机构域），不建边。
 REST merge_edge 按 source_record_id（= 项目 ID）幂等。
@@ -86,15 +86,15 @@ def collect_organization_candidates(
     limit: int | None,
     since: str | None,
 ) -> set[str]:
-    """旧 collect_match_candidates 的 organization 通道：候选为原始 funded_institution。"""
+    """旧 collect_match_candidates 的 organization 通道：候选为 funded_institution 拆分值。"""
     candidates: set[str] = set()
     for table in tables:
         sql = apply_since(f"SELECT funded_institution FROM {table} ORDER BY id", since)
         params = {"since": since} if since else None
         for row in iter_rows(engine, sql, batch_size=batch_size, limit=limit, params=params):
-            cleaned = str(row.get("funded_institution") or "").strip()
-            if cleaned:
-                candidates.add(cleaned)
+            for value in parse_list(row.get("funded_institution")):
+                if value.strip():
+                    candidates.add(value.strip())
     return candidates
 
 
@@ -106,9 +106,12 @@ def make_funded_by_mapper(
         project_id = str(row.get("id") or "")
         if not project_id:
             return []
-        institution = normalize_text(row.get("funded_institution")).rstrip("；;")
         records: list[EdgeRecord] = []
-        if institution:
+        # 与旧通道同口径 parse_list 拆分：串中多值（“A；B”）逐个匹配，各写一条边。
+        institutions = {
+            normalize_text(value) for value in parse_list(row.get("funded_institution"))
+        }
+        for institution in sorted(value for value in institutions if value):
             report.increment("organization_candidates")
             org_result = matcher.organization.match(institution, method="name_exact")
             target = _matched_vid(
@@ -206,8 +209,11 @@ def transform(payload: dict[str, Any]) -> dict[str, Any]:
     source = payload.get("source") or {}
     batch = f"se-{str(source.get('id') or 'x')[:8]}"
     rows = payload.get("rows") or []
-    candidates = {str(r.get("funded_institution") or "").strip() for r in rows}
-    candidates.discard("")
+    candidates = set()
+    for r in rows:
+        for value in parse_list(r.get("funded_institution")):
+            if str(value).strip():
+                candidates.add(str(value).strip())
     matcher = _load_matcher(candidates, dry_run=False)
     report = ProjectIngestReport(
         resolve_report_dir(payload, batch), ingest_batch=batch, dry_run=False

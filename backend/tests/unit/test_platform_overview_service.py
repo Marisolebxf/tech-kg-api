@@ -1,7 +1,9 @@
 from service.platform_overview import (
     GraphStatsSnapshot,
     PlatformOverviewService,
+    TodayChangesSnapshot,
     TRSGraphStatsProvider,
+    parse_execution_records,
 )
 
 
@@ -36,6 +38,23 @@ class FakeStatsProvider:
 class FailingStatsProvider:
     def get_stats(self, space: str | None = None) -> GraphStatsSnapshot:
         raise RuntimeError("graph unavailable")
+
+
+class FakeChangesProvider:
+    """控制库今日增量替身：固定返回可断言的写图计数与明细行。"""
+
+    def __init__(self, snapshot: TodayChangesSnapshot | None = None) -> None:
+        self.snapshot = snapshot or TodayChangesSnapshot()
+        self.spaces: list[str | None] = []
+
+    def get_today_changes(self, space: str | None = None) -> TodayChangesSnapshot:
+        self.spaces.append(space)
+        return self.snapshot
+
+
+class FailingChangesProvider:
+    def get_today_changes(self, space: str | None = None) -> TodayChangesSnapshot:
+        raise RuntimeError("control db unavailable")
 
 
 def test_overview_uses_live_graph_totals_and_explicit_partial_mode() -> None:
@@ -134,3 +153,174 @@ def test_stats_provider_rest_fallback_when_cache_missing() -> None:
     assert snapshot.total_edges == 5
     assert snapshot.nodes == {"Expert": 3}
     assert snapshot.edges == {"PUBLISH": 5}
+
+
+def test_overview_uses_control_plane_today_changes() -> None:
+    """今日新增/运行中执行数来自工作流控制库，明细行替换演示数据。"""
+    from biz.schemas.platform_overview import AssetChangeRow
+
+    entity_rows = [
+        AssetChangeRow(
+            type="审测挂件",
+            object="techkg_e2e_liz.review_widgets",
+            change="写图 61 条",
+            source="手动触发",
+            time="10:30:00",
+        )
+    ]
+    changes = FakeChangesProvider(
+        TodayChangesSnapshot(
+            entity_added=61,
+            relation_added=7,
+            running_count=3,
+            entity_rows=entity_rows,
+            relation_rows=[],
+        )
+    )
+    service = PlatformOverviewService(stats_provider=FakeStatsProvider(), changes_provider=changes)
+
+    result = service.get_overview("dev2")
+
+    # 控制库查询随全局图空间选择器传递（与图统计同空间口径）
+    assert changes.spaces == ["dev2"]
+    entity = result.asset_overview_groups[0]
+    assert entity.added == "+61"
+    assert entity.added_label == "今日新增（抽取写图）"
+    assert result.asset_overview_groups[1].added == "+7"
+    assert result.pending_batch_count == 3
+    assert result.data_sources["todayChanges"] == "workflow-control-live"
+    assert result.asset_change_rows["entity"] == entity_rows
+    assert result.asset_change_rows["relation"] == []
+    # 属性值卡片仍为占位演示行（前端不展示该分组）
+    assert result.asset_change_rows["property"]
+
+
+def test_overview_tolerates_control_plane_failure() -> None:
+    """控制库不可读时占位 + 警告，绝不回填虚构演示行。"""
+    result = PlatformOverviewService(
+        stats_provider=FakeStatsProvider(), changes_provider=FailingChangesProvider()
+    ).get_overview()
+
+    assert result.asset_overview_groups[0].added == "--"
+    assert "控制库暂不可读" in result.asset_overview_groups[0].added_label
+    assert result.asset_overview_groups[1].added == "--"
+    assert result.asset_change_rows["entity"] == []
+    assert result.asset_change_rows["relation"] == []
+    assert result.pending_batch_count == 0
+    assert result.data_sources["todayChanges"] == "demo-fallback"
+    assert any("控制库不可用" in warning for warning in result.warnings)
+
+
+def _execution_record(
+    *,
+    status: str = "COMPLETED",
+    completed_at: str = "2026-09-22 10:30:00",
+    kind: str = "entity",
+    written: int = 5,
+    payload_space: str | None = "dev2",
+    payload_space_key: str = "graph_space",
+    schema_label: str = "审测挂件",
+    table: str = "techkg_e2e_liz.review_widgets",
+    trigger: str = "SCHEDULE",
+) -> str:
+    import json
+
+    record: dict = {
+        "status": status,
+        "completedAt": completed_at,
+        "triggerSource": trigger,
+        "payload": {payload_space_key: payload_space} if payload_space else {},
+        "output": {
+            "kind": kind,
+            "schemaLabel": schema_label,
+            "sources": [{"table": table, "written": written}],
+        },
+    }
+    return json.dumps(record, ensure_ascii=False)
+
+
+def test_parse_execution_records_aggregates_today_by_kind_and_space() -> None:
+    snapshot = parse_execution_records(
+        [
+            _execution_record(written=5, completed_at="2026-09-22 10:30:00"),
+            _execution_record(
+                kind="relation",
+                written=2,
+                trigger="RERUN",
+                completed_at="2026-09-22 11:00:00",
+            ),
+            # 昨日完成：不计入今日
+            _execution_record(written=99, completed_at="2026-09-21 23:59:59"),
+            # 其他空间：不计入
+            _execution_record(payload_space="other_space"),
+            # 写入 0：不产生明细行也不计数
+            _execution_record(written=0),
+            # 运行中：计入 running_count
+            _execution_record(status="RUNNING", completed_at=""),
+            # 坏数据：跳过不炸
+            "not-a-json",
+            "[]",
+        ],
+        today="2026-09-22",
+        target_space="dev2",
+        default_space="dev2",
+    )
+
+    assert snapshot.entity_added == 5
+    assert snapshot.relation_added == 2
+    assert snapshot.running_count == 1
+    assert len(snapshot.entity_rows) == 1
+    row = snapshot.entity_rows[0]
+    assert row.type == "审测挂件"
+    assert row.object == "techkg_e2e_liz.review_widgets"
+    assert row.change == "写图 5 条"
+    assert row.source == "定时调度"
+    assert row.time == "10:30:00"
+    assert len(snapshot.relation_rows) == 1
+    assert snapshot.relation_rows[0].source == "失败重跑"
+
+
+def test_parse_execution_records_space_key_variants_and_default_bucket() -> None:
+    # 手动/重跑执行的 payload 记 graphSpace（驼峰），同样按空间过滤
+    assert (
+        parse_execution_records(
+            [_execution_record(payload_space_key="graphSpace")],
+            today="2026-09-22",
+            target_space="dev2",
+            default_space="dev2",
+        ).entity_added
+        == 5
+    )
+    # 未记录空间的历史执行归属默认空间；查询非默认空间时排除
+    assert (
+        parse_execution_records(
+            [_execution_record(payload_space=None)],
+            today="2026-09-22",
+            target_space="dev2",
+            default_space="dev2",
+        ).entity_added
+        == 5
+    )
+    assert (
+        parse_execution_records(
+            [_execution_record(payload_space=None)],
+            today="2026-09-22",
+            target_space="gaoxing_test",
+            default_space="dev2",
+        ).entity_added
+        == 0
+    )
+
+
+def test_parse_execution_records_sorts_rows_by_completion_desc() -> None:
+    snapshot = parse_execution_records(
+        [
+            _execution_record(written=1, completed_at="2026-09-22 09:00:00"),
+            _execution_record(written=2, completed_at="2026-09-22 18:00:00"),
+        ],
+        today="2026-09-22",
+        target_space="dev2",
+        default_space="dev2",
+    )
+
+    assert [row.time for row in snapshot.entity_rows] == ["18:00:00", "09:00:00"]

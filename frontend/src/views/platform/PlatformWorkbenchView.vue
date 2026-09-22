@@ -19,6 +19,7 @@ import {
   type PlatformOverviewData,
   type StructureItem,
 } from '../../api/platformOverview'
+import { donutGradient } from './donutGradient'
 import {
   countJobUnifiedStatuses,
   deriveJobUnifiedStatus,
@@ -633,6 +634,10 @@ const activeAssetOverview = computed(() => assetOverviewGroups.value.find((item)
 const entityAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === 'entity'))
 const relationAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === 'relation'))
 
+// 占比环形图分段由图例数据驱动（donutGradient 纯函数，随图例 tone+ratio 变化）
+const entityDonutStyle = computed(() => ({ background: donutGradient(entityStructure.value) }))
+const relationDonutStyle = computed(() => ({ background: donutGradient(relationStructure.value) }))
+
 const sourceRows = [
   { object: '专家人才基础信息', table: 'expert_profile', domain: '人才域', schedule: '每日定时', frequency: '02:00', latest: '2026-07-13 02:04', status: '正常', task: 'DP-20260713-0150' },
   { object: '专家教育经历', table: 'expert_education', domain: '人才域', schedule: '每日定时', frequency: '02:10', latest: '2026-07-13 02:12', status: '正常', task: 'DP-20260713-0150' },
@@ -1109,7 +1114,7 @@ const pageMeta = computed(() => {
       <div class="platform-hero__main">
         <h1>{{ pageMeta.title }}</h1>
       </div>
-      <div class="platform-hero__actions"><span :title="overviewMeta.warnings.join('\n')"><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个批次待处理 · {{ overviewMeta.dataMode === 'live' ? '实时数据' : overviewMeta.dataMode === 'partial' ? '部分实时' : '降级数据' }}</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看任务</RouterLink><RouterLink v-if="canEnterAdminPages" to="/manual-review">进入人工处理</RouterLink></div>
+      <div class="platform-hero__actions"><span :title="overviewMeta.warnings.join('\n')"><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个执行运行中 · {{ overviewMeta.dataMode === 'live' ? '实时数据' : overviewMeta.dataMode === 'partial' ? '部分实时' : '降级数据' }}</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看任务</RouterLink><RouterLink v-if="canEnterAdminPages" to="/manual-review">进入人工处理</RouterLink></div>
     </header>
 
     <header v-else-if="activeTab !== 'query'" class="platform-page-head">
@@ -1129,8 +1134,8 @@ const pageMeta = computed(() => {
       <section class="kg-panel platform-structure-overview">
         <div class="kg-panel__header"><div><h2 class="kg-panel__title">当前图谱资产</h2></div><span>实体 {{ entityAssetOverview?.total ?? '--' }} · 关系 {{ relationAssetOverview?.total ?? '--' }} · 数据截至 {{ overviewMeta.updatedAt }}</span></div>
         <div class="platform-structure-grid">
-          <div class="platform-structure-chart"><header><strong>实体分类占比</strong></header><div class="platform-donut-layout"><div class="platform-donut is-entity"><span><strong>{{ entityAssetOverview?.total ?? '--' }}</strong><em>{{ entityAssetOverview?.totalLabel ?? '实体总量' }}</em></span></div><div class="platform-structure-legend"><article v-for="item in entityStructure" :key="item.schema"><span><i :style="{ background: item.tone }" />{{ item.label }}<em>{{ item.schema }}</em></span><strong>{{ item.count }}<em>{{ item.ratio }}%</em></strong></article></div></div></div>
-          <div class="platform-structure-chart"><header><strong>关系分类占比</strong></header><div class="platform-donut-layout"><div class="platform-donut is-relation"><span><strong>{{ relationAssetOverview?.total ?? '--' }}</strong><em>{{ relationAssetOverview?.totalLabel ?? '关系总量' }}</em></span></div><div class="platform-structure-legend"><article v-for="item in relationStructure" :key="item.schema"><span><i :style="{ background: item.tone }" />{{ item.label }}<em>{{ item.schema }}</em></span><strong>{{ item.count }}<em>{{ item.ratio }}%</em></strong></article></div></div></div>
+          <div class="platform-structure-chart"><header><strong>实体分类占比</strong></header><div class="platform-donut-layout"><div class="platform-donut is-entity" :style="entityDonutStyle"><span><strong>{{ entityAssetOverview?.total ?? '--' }}</strong><em>{{ entityAssetOverview?.totalLabel ?? '实体总量' }}</em></span></div><div class="platform-structure-legend"><article v-for="item in entityStructure" :key="item.schema"><span><i :style="{ background: item.tone }" />{{ item.label }}<em>{{ item.schema }}</em></span><strong>{{ item.count }}<em>{{ item.ratio }}%</em></strong></article></div></div></div>
+          <div class="platform-structure-chart"><header><strong>关系分类占比</strong></header><div class="platform-donut-layout"><div class="platform-donut is-relation" :style="relationDonutStyle"><span><strong>{{ relationAssetOverview?.total ?? '--' }}</strong><em>{{ relationAssetOverview?.totalLabel ?? '关系总量' }}</em></span></div><div class="platform-structure-legend"><article v-for="item in relationStructure" :key="item.schema"><span><i :style="{ background: item.tone }" />{{ item.label }}<em>{{ item.schema }}</em></span><strong>{{ item.count }}<em>{{ item.ratio }}%</em></strong></article></div></div></div>
         </div>
       </section>
 
@@ -1816,7 +1821,7 @@ print(response.json())</pre>
     <aside aria-label="辅助区域 4" v-if="selectedAssetChange && activeAssetOverview" class="asset-change-drawer">
       <header><div><span>今日图谱数据变化</span><h2>{{ activeAssetOverview.title }}新增明细</h2><p>{{ activeAssetOverview.addedLabel }} {{ activeAssetOverview.added }} · 数据更新至 {{ overviewMeta.updatedAt }}</p></div><button type="button" @click="selectedAssetChange = null">×</button></header>
       <section class="asset-change-summary"><article><span>当前总量</span><strong>{{ activeAssetOverview.total }}</strong></article><article><span>{{ activeAssetOverview.addedLabel }}</span><strong>{{ activeAssetOverview.added }}</strong></article></section>
-      <div class="asset-change-table"><table aria-label="数据表"><thead><tr><th>数据类型</th><th>具体对象</th><th>变更内容</th><th>来源</th><th>识别时间</th></tr></thead><tbody><tr v-for="row in assetChangeRows[selectedAssetChange]" :key="`${row.object}-${row.time}`"><td>{{ row.type }}</td><td><strong>{{ row.object }}</strong></td><td>{{ row.change }}</td><td><code>{{ row.source }}</code></td><td>{{ row.time }}</td></tr></tbody></table></div>
+      <div class="asset-change-table"><table aria-label="数据表"><thead><tr><th>数据类型</th><th>具体对象</th><th>变更内容</th><th>来源</th><th>识别时间</th></tr></thead><tbody><tr v-if="!assetChangeRows[selectedAssetChange].length"><td colspan="5">今日暂无写图记录</td></tr><tr v-for="row in assetChangeRows[selectedAssetChange]" :key="`${row.object}-${row.time}`"><td>{{ row.type }}</td><td><strong>{{ row.object }}</strong></td><td>{{ row.change }}</td><td><code>{{ row.source }}</code></td><td>{{ row.time }}</td></tr></tbody></table></div>
       <footer><span>{{ assetChangeRows[selectedAssetChange].length }} 条变化</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看对应更新任务 →</RouterLink></footer>
     </aside>
 
@@ -2169,8 +2174,7 @@ print(response.json())</pre>
 .platform-donut-layout { display:grid;grid-template-columns:170px minmax(0,1fr);align-items:center;gap:20px;min-height:150px; }
 .platform-donut { position:relative;display:grid;place-items:center;width:154px;height:154px;border-radius:50%; }
 .platform-donut::after { position:absolute;inset:25px;border-radius:50%;background:#fff;box-shadow:0 0 0 1px #e5edf8;content:""; }
-.platform-donut.is-entity { background:conic-gradient(#2e90fa 0 34%,#7a5af8 34% 57%,#067647 57% 74%,#f79009 74% 85%,#59636f 85% 100%); }
-.platform-donut.is-relation { background:conic-gradient(#004ecc 0 32%,#2e90fa 32% 52%,#06aed4 52% 70%,#7a5af8 70% 84%,#59636f 84% 100%); }
+/* 占比分段由组件按图例 tone+ratio 内联生成（is-entity/is-relation 仅作语义锚点） */
 .platform-donut>span { position:relative;z-index:1;display:grid;gap:2px;text-align:center; }
 .platform-donut>span strong { color:#10264c;font-size:19px; }
 .platform-donut>span em { color:#52627a;font-size:10px;font-style:normal; }

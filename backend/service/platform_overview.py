@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Any, Protocol
 
 from biz.schemas.platform_overview import (
@@ -127,6 +128,145 @@ def _format_count(value: int) -> str:
     return f"{value:,}"
 
 
+@dataclass(frozen=True, slots=True)
+class TodayChangesSnapshot:
+    """今日写图增量（来自工作流控制库，按图空间过滤）。
+
+    entity/relation_added 为今日完成执行的 ``output.sources[].written`` 合计；
+    running_count 为当前 RUNNING 执行数；*_rows 为逐执行的新增明细行。
+    """
+
+    entity_added: int = 0
+    relation_added: int = 0
+    running_count: int = 0
+    entity_rows: list[AssetChangeRow] = field(default_factory=list)
+    relation_rows: list[AssetChangeRow] = field(default_factory=list)
+
+
+class TodayChangesProvider(Protocol):
+    def get_today_changes(self, space: str | None = None) -> TodayChangesSnapshot: ...
+
+
+_TRIGGER_LABELS = {"SCHEDULE": "定时调度", "MANUAL": "手动触发", "RERUN": "失败重跑"}
+
+
+def _execution_space(record: dict[str, Any]) -> str:
+    """执行记录的目标图空间：调度下发记 ``graph_space``、手动/重跑记 ``graphSpace``。"""
+    payload = record.get("payload") or {}
+    return str(payload.get("graph_space") or payload.get("graphSpace") or "")
+
+
+def _written_of(output: dict[str, Any]) -> int:
+    return sum(max(0, int(source.get("written") or 0)) for source in output.get("sources") or [])
+
+
+def parse_execution_records(
+    payloads: list[str],
+    *,
+    today: str,
+    target_space: str,
+    default_space: str,
+) -> TodayChangesSnapshot:
+    """从控制库执行记录 JSON 解析今日写图增量（纯函数，便于单测）。
+
+    只统计 ``target_space`` 空间的执行；未记录空间的旧执行按默认空间归属。
+    """
+    entity_added = 0
+    relation_added = 0
+    running = 0
+    entity_rows: list[tuple[str, AssetChangeRow]] = []
+    relation_rows: list[tuple[str, AssetChangeRow]] = []
+    for raw in payloads:
+        try:
+            record = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        space = _execution_space(record)
+        if space != target_space and not (not space and target_space == default_space):
+            continue
+        status = str(record.get("status") or "")
+        if status == "RUNNING":
+            running += 1
+            continue
+        if status != "COMPLETED":
+            continue
+        completed_at = str(record.get("completedAt") or "")
+        if completed_at[:10] != today:
+            continue
+        output = record.get("output") or {}
+        kind = str(output.get("kind") or "")
+        written = _written_of(output)
+        if kind not in ("entity", "relation") or written <= 0:
+            continue
+        schema_label = str(output.get("schemaLabel") or output.get("schemaKey") or "")
+        sources = output.get("sources") or []
+        table = str((sources[0] or {}).get("table") or "") if sources else ""
+        trigger = str(record.get("triggerSource") or "")
+        row = AssetChangeRow(
+            type=schema_label or ("实体 Schema" if kind == "entity" else "关系 Schema"),
+            object=table or "-",
+            change=f"写图 {written:,} 条",
+            source=_TRIGGER_LABELS.get(trigger, trigger or "-"),
+            time=completed_at[11:19] or "-",
+        )
+        if kind == "entity":
+            entity_added += written
+            entity_rows.append((completed_at, row))
+        else:
+            relation_added += written
+            relation_rows.append((completed_at, row))
+    # 明细按完成时间倒序（最新写图在前）
+    entity_rows.sort(key=lambda pair: pair[0], reverse=True)
+    relation_rows.sort(key=lambda pair: pair[0], reverse=True)
+    return TodayChangesSnapshot(
+        entity_added=entity_added,
+        relation_added=relation_added,
+        running_count=running,
+        entity_rows=[row for _, row in entity_rows],
+        relation_rows=[row for _, row in relation_rows],
+    )
+
+
+class WorkflowControlTodayChangesProvider:
+    """默认实现：从工作流控制库（techkg_control.workflow_executions）读今日增量。
+
+    覆盖平台唯一写图通道 ``kg.schema.extract`` 的执行记录；直连 ETL 脚本与
+    T_DIRECT 审核直写不经过控制库，不计入（明细行口径即任务中心执行历史）。
+    """
+
+    # 抽取执行最长可跑数小时：取 7 天窗口兜住跨日完成的长执行
+    _LOOKBACK_DAYS = 7
+
+    def get_today_changes(self, space: str | None = None) -> TodayChangesSnapshot:
+        from sqlalchemy import text
+
+        from infra.graph_db.config import TRSGraphSettings
+        from infra.workflow_mysql import get_workflow_engine
+
+        target_space = space or TRSGraphSettings.from_env().space
+        default_space = TRSGraphSettings.from_env().space
+        now = datetime.now().astimezone()
+        since = (now - timedelta(days=self._LOOKBACK_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
+        engine = get_workflow_engine()
+        with engine.connect() as connection:
+            result = connection.execute(
+                text(
+                    "SELECT payload FROM workflow_executions "
+                    "WHERE status IN ('COMPLETED', 'RUNNING') AND started_at >= :since"
+                ),
+                {"since": since},
+            )
+            payloads = [row[0] for row in result.fetchall()]
+        return parse_execution_records(
+            payloads,
+            today=now.strftime("%Y-%m-%d"),
+            target_space=target_space,
+            default_space=default_space,
+        )
+
+
 def _ratios(values: list[int]) -> list[int]:
     total = sum(values)
     if total <= 0:
@@ -207,8 +347,13 @@ def _build_structure(
 class PlatformOverviewService:
     """优先读取真实图统计；无法读取时保留可演示、可识别的降级结果。"""
 
-    def __init__(self, stats_provider: GraphStatsProvider | None = None) -> None:
+    def __init__(
+        self,
+        stats_provider: GraphStatsProvider | None = None,
+        changes_provider: TodayChangesProvider | None = None,
+    ) -> None:
         self._stats_provider = stats_provider or TRSGraphStatsProvider()
+        self._changes_provider = changes_provider or WorkflowControlTodayChangesProvider()
         self._cache_seconds = int(os.getenv("PLATFORM_OVERVIEW_CACHE_SECONDS", "60"))
         # 缓存按空间隔离：总览随全局图空间选择器切换后 60s 内不串空间
         self._cached: dict[str | None, tuple[float, PlatformOverviewData]] = {}
@@ -241,22 +386,47 @@ class PlatformOverviewService:
                 }
             )
         else:
+            # 今日新增来自工作流控制库（唯一写图通道 kg.schema.extract 的执行记录）；
+            # 读不到时保持占位并给出警告，绝不回填虚构演示行
+            changes: TodayChangesSnapshot | None = None
+            try:
+                changes = self._changes_provider.get_today_changes(space)
+            except Exception as exc:
+                logger.warning("首页今日新增读取失败（工作流控制库不可用）: %s", exc)
+            if changes is not None:
+                added_label = "今日新增（抽取写图）"
+                entity_added = f"+{_format_count(changes.entity_added)}"
+                relation_added = f"+{_format_count(changes.relation_added)}"
+                change_rows = dict(fallback.asset_change_rows)
+                change_rows["entity"] = changes.entity_rows
+                change_rows["relation"] = changes.relation_rows
+                today_source = "workflow-control-live"
+                extra_warnings: list[str] = []
+            else:
+                added_label = "今日新增（控制库暂不可读）"
+                entity_added = "--"
+                relation_added = "--"
+                change_rows = dict(fallback.asset_change_rows)
+                change_rows["entity"] = []
+                change_rows["relation"] = []
+                today_source = "demo-fallback"
+                extra_warnings = ["今日新增暂时不可读：工作流控制库不可用。"]
             groups = [
                 AssetOverviewGroup(
                     key="entity",
                     title="实体数据",
                     total=_format_count(stats.total_nodes),
                     total_label="实体总量",
-                    added="--",
-                    added_label="今日新增（任务中心待接入）",
+                    added=entity_added,
+                    added_label=added_label,
                 ),
                 AssetOverviewGroup(
                     key="relation",
                     title="关系数据",
                     total=_format_count(stats.total_edges),
                     total_label="关系总量",
-                    added="--",
-                    added_label="今日新增（任务中心待接入）",
+                    added=relation_added,
+                    added_label=added_label,
                 ),
                 AssetOverviewGroup(
                     key="property",
@@ -270,19 +440,23 @@ class PlatformOverviewService:
             result = fallback.model_copy(
                 update={
                     "platform_status": "图数据库连接正常",
+                    "pending_batch_count": changes.running_count if changes else 0,
                     "updated_at": datetime.now().strftime("%H:%M"),
                     "asset_overview_groups": groups,
+                    "asset_change_rows": change_rows,
                     "entity_structure": _build_structure(stats.nodes, entity=True),
                     "relation_structure": _build_structure(stats.edges, entity=False),
                     "data_mode": "partial",
                     "data_sources": {
                         "graphAssets": "trsgraph-live",
-                        "todayChanges": "demo-fallback",
+                        "todayChanges": today_source,
                         "managementRisks": "demo-fallback",
                     },
                     "warnings": [
                         "实体与关系统计来自图数据库实时接口。",
-                        "属性值、今日变化和管理风险等待任务中心接口接入。",
+                        "今日新增与运行中执行数来自工作流控制库（按抽取写图计数）。",
+                        "属性值统计和管理风险等待任务中心接口接入。",
+                        *extra_warnings,
                     ],
                 }
             )

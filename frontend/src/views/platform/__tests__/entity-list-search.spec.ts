@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import EntityListView from '../EntityListView.vue'
 import { browseEntities, searchEntities } from '../../../api/entitySearch'
+import ListPagination from '../../../components/list-pagination.vue'
 
 vi.mock('../../../api/entitySearch', () => ({
   browseEntities: vi.fn(), searchEntities: vi.fn(),
@@ -39,9 +40,20 @@ describe('实体搜索结果', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('第 1 / 3 页')
     expect(wrapper.text()).toContain('精确匹配')
-    await wrapper.findAll('button').find(button => button.text() === '下一页')!.trigger('click')
+    wrapper.findComponent(ListPagination).vm.$emit('change', 2)
     await flushPromises()
     expect(searchEntities).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 10, space: 'dev2', keyword: '目标实体' }))
+    wrapper.unmount()
+  })
+
+  it('浏览模式左侧先显示实体总数，右侧使用统一分页导航', async () => {
+    vi.mocked(browseEntities).mockResolvedValue({ items: [row], total: 527336, offset: 0, limit: 10, entityType: null, mode: 'browse' })
+    const wrapper = await setup()
+    await wrapper.get('input').setValue('')
+    await wrapper.findAll('button').find(button => button.text() === '搜索')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('共 527336 个实体 · 第 1 / 52734 页 · 检索模式：浏览（图直查）')
+    expect(wrapper.findComponent(ListPagination).exists()).toBe(true)
     wrapper.unmount()
   })
 

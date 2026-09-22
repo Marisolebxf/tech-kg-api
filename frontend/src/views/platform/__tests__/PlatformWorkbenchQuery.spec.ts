@@ -1,7 +1,7 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { defineComponent, nextTick } from 'vue'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 
 import { runNgql, type GraphConsoleResult } from '../../../api/graphConsole'
 import {
@@ -16,6 +16,8 @@ import {
 import { useGraphSpaceStore } from '../../../stores/graphSpace'
 import PlatformWorkbenchView from '../PlatformWorkbenchView.vue'
 
+// 提升 showToast mock，便于在用例里断言右上角提示文案。
+const { showToast } = vi.hoisted(() => ({ showToast: vi.fn() }))
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }), RouterLink: { template: '<a><slot /></a>' } }))
 vi.mock('../../../api/graphConsole', () => ({ runNgql: vi.fn() }))
 vi.mock('../../../api/graphAlgorithm', () => ({
@@ -25,7 +27,7 @@ vi.mock('../../../api/graphAlgorithm', () => ({
   getAlgorithmJobResult: vi.fn(),
   submitAlgorithmJob: vi.fn(),
 }))
-vi.mock('../../../composables/use-toast', () => ({ useToast: () => ({ showToast: vi.fn() }) }))
+vi.mock('../../../composables/use-toast', () => ({ useToast: () => ({ showToast }) }))
 vi.mock('@arco-design/web-vue/es/icon', () => ({ IconInfoCircle: { template: '<i />' } }))
 
 // Preserve v-model and user selection without depending on Arco's popup layout.
@@ -619,5 +621,62 @@ describe('Query page concise controls and graph VIDs', () => {
     expect(runNgql).not.toHaveBeenCalled()
     await enterAlgorithms()
     expect(wrapper.get('.platform-query-algo__actions button').classes()).toContain('arco-btn-primary')
+  })
+})
+
+
+describe('nGQL error toast stays concise and in Chinese', () => {
+  let consoleError: MockInstance
+
+  beforeEach(() => {
+    // 组件会把完整错误打进控制台；用例里静音以免刷屏。
+    consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    consoleError.mockRestore()
+  })
+
+  async function runFailingQuery(detail: string): Promise<void> {
+    vi.mocked(runNgql).mockRejectedValueOnce(
+      Object.assign(new Error(detail), { response: { status: 400, data: { detail } } }),
+    )
+    await wrapper.get('textarea').setValue('MATCH (v) RETURN v')
+    await clickButton('执行 nGQL')
+    await flushPromises()
+  }
+
+  // 错误原文均取自真实后端响应（语句执行失败 + HTTP 传输前缀 + NebulaGraph 原始报错）。
+  it.each([
+    ["语句执行失败: POST /api/v1/query/read -> 400: SemanticError: `Scholar': Unknown tag", '标签「Scholar」不存在'],
+    ["语句执行失败: POST /api/v1/query/read -> 400: TagNotFound: TagName `Aaa`", '标签「Aaa」不存在'],
+    ["语句执行失败: POST /api/v1/query/read -> 400: SemanticError: Unknown column 'bad_prop' in schema", '属性「bad_prop」不存在'],
+    ['语句执行失败: POST /api/v1/query/read -> 400: SemanticError: no_such_edge not found in space [dev2].', '边类型「no_such_edge」不存在'],
+    ['语句执行失败: POST /api/v1/query/read -> 400: Schema not exist: Aaa', '标签或边类型「Aaa」不存在'],
+    ["语句执行失败: POST /api/v1/query/read -> 400: SyntaxError: syntax error near `= 1 RETU'", '语法错误：「= 1 RETU」附近有误'],
+    ['语句执行失败: POST /api/v1/query/read -> 400: -1005: No valid index found by LOOKUP', '未找到可用索引'],
+  ])('translates %s into a Chinese hint', async (detail, hint) => {
+    await runFailingQuery(detail)
+    expect(showToast).toHaveBeenCalledTimes(1)
+    const shown = showToast.mock.calls[0]!.join(' ')
+    expect(shown).toContain(hint)
+    expect(shown).toContain('warning')
+    expect(shown).not.toMatch(/SemanticError|SyntaxError|TagNotFound|Schema not exist|No valid index|->/)
+  })
+
+  it('truncates unrecognized errors to one short line without transport prefixes', async () => {
+    await runFailingQuery(`语句执行失败: POST /api/v1/query/read -> 400: ExecutionError: ${'x'.repeat(80)}`)
+    expect(showToast).toHaveBeenCalledTimes(1)
+    const shown = String(showToast.mock.calls[0]![0])
+    expect(shown).toBe(`ExecutionError: ${'x'.repeat(60 - 'ExecutionError: '.length)}…`)
+    expect(showToast.mock.calls[0]![1]).toBe('warning')
+  })
+
+  it('keeps backend validation messages in Chinese as-is', async () => {
+    await runFailingQuery('不支持的语句开头 “MATCHH”；允许的只读语句：MATCH / LOOKUP / GO / SHOW / DESCRIBE / FIND / FETCH / GET / UNWIND 等，管理员另可执行 INSERT / UPDATE / DELETE / UPSERT')
+    expect(showToast).toHaveBeenCalledTimes(1)
+    const shown = String(showToast.mock.calls[0]![0])
+    expect(shown).toContain('不支持的语句开头')
+    expect(shown.endsWith('…')).toBe(true)
   })
 })

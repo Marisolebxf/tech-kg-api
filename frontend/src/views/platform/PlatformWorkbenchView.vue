@@ -718,6 +718,50 @@ async function runWithLoading(message: string, action?: () => void) {
   isActionLoading.value = false
 }
 
+/** NebulaGraph 常见英文报错的中文映射：命中即换成用户能定位问题的一句话（按序取第一条命中）。 */
+const NGQL_ERROR_ZH_RULES: Array<{ test: RegExp; text: (match: RegExpMatchArray) => string }> = [
+  {
+    test: /Unknown column [`'"](.*?)[`'"]\s*in schema/i,
+    text: ([, column]) => `属性「${column}」不存在，请检查属性名拼写`,
+  },
+  {
+    test: /[`'"](.*?)[`'"]\s*:\s*Unknown tag|TagNotFound:.*?TagName\s*[`'"](.*?)[`'"]/i,
+    text: (match) => `标签「${match[1] ?? match[2]}」不存在，可用 SHOW TAGS 查看全部标签`,
+  },
+  {
+    test: /SemanticError:\s*[`'"]?(.*?)[`'"]?\s+not found in space/i,
+    text: ([, edge]) => `边类型「${edge}」不存在，可用 SHOW EDGES 查看全部边类型`,
+  },
+  {
+    test: /Schema not exist\s*:?\s*[`'"]?(.*?)[`'"]?\s*$/i,
+    text: ([, schema]) => `标签或边类型「${schema}」不存在，请检查名称拼写`,
+  },
+  {
+    test: /SyntaxError:.*?near\s+[`'"](.*?)[`'"]/i,
+    text: ([, near]) => `语法错误：「${near.trim().slice(0, 20)}」附近有误，请检查语句写法`,
+  },
+  {
+    test: /No valid index|The index of the (?:tag|edge)/i,
+    text: () => '未找到可用索引，LOOKUP / FIND 语句需要标签或边类型已建立索引',
+  },
+]
+
+/** nGQL 报错短文案：剥掉「语句执行失败」/HTTP 传输前缀与换行，常见英文错误换中文，
+ *  其余超长截断（完整错误始终进控制台）。 */
+function conciseNgqlError(error: unknown): string {
+  const message = getErrorMessage(error, 'nGQL 执行失败')
+    .replace(/^语句执行失败[:：]\s*/, '')
+    .replace(/^(?:GET|POST|PUT|DELETE|PATCH)\s+\S+\s*->\s*\d+[:：]\s*/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!message) return 'nGQL 执行失败'
+  for (const rule of NGQL_ERROR_ZH_RULES) {
+    const match = message.match(rule.test)
+    if (match) return rule.text(match)
+  }
+  return message.length > 60 ? `${message.slice(0, 60)}…` : message
+}
+
 async function handleNgqlQuery(): Promise<void> {
   if (ngqlLoading.value) return
   const context = graphContextVersion
@@ -745,10 +789,9 @@ async function handleNgqlQuery(): Promise<void> {
     ngqlResult.value = result
   } catch (error) {
     if (context !== graphContextVersion) return
-    showToast(
-      getErrorMessage(error, 'nGQL 执行失败'),
-      'warning',
-    )
+    // 完整错误进控制台便于排查；右上角提示只保留单行短文案
+    console.error('[nGQL] 执行失败:', error)
+    showToast(conciseNgqlError(error), 'warning')
   } finally {
     if (context === graphContextVersion) ngqlLoading.value = false
   }

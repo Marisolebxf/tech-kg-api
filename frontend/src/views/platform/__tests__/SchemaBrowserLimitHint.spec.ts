@@ -2,6 +2,7 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { defineComponent } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { Form, FormItem } from '@arco-design/web-vue'
 
 import {
   deleteSchema,
@@ -34,6 +35,21 @@ vi.mock('../../../api/currentGraphSpace', () => ({ currentGraphSpace: vi.fn(() =
 vi.mock('../../../api/mysqlDatasource', () => ({ listMysqlDatasources: vi.fn(async () => []) }))
 vi.mock('../../../composables/use-toast', () => ({ useToast: () => ({ showToast: vi.fn() }) }))
 vi.mock('@arco-design/web-vue/es/icon', () => ({ IconSearch: { template: '<i />' } }))
+
+// jsdom 没有 window.matchMedia：真实 arco FormItem（内部走 Grid 响应式）挂载时需要它
+if (!window.matchMedia) {
+  window.matchMedia = (query: string) =>
+    ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    }) as MediaQueryList
+}
 
 // v-model 透传 stub：只保留输入与值同步，不依赖 Arco 内部实现
 const AInputStub = defineComponent({
@@ -90,6 +106,21 @@ function mountView() {
     global: {
       components: {
         AInput: AInputStub, ATextarea: ATextareaStub, AForm: SlotStub, AFormItem: AFormItemStub,
+        ASelect: ASelectStub, AOption: AOptionStub, ACheckbox: ACheckboxStub, ATooltip: SlotStub,
+      },
+      stubs: { KgGraphCanvas: true, teleport: true },
+    },
+  })
+  return wrapper
+}
+
+// 校验文案用例需要真的跑 arco 表单校验：AForm/AFormItem 换成真实组件
+// （stub 没有 validate 方法，saveItem 会静默落到 toast 兜底，DOM 里看不到提示）。
+function mountViewWithRealForm() {
+  wrapper = mount(SchemaBrowserView, {
+    global: {
+      components: {
+        AInput: AInputStub, ATextarea: ATextareaStub, AForm: Form, AFormItem: FormItem,
         ASelect: ASelectStub, AOption: AOptionStub, ACheckbox: ACheckboxStub, ATooltip: SlotStub,
       },
       stubs: { KgGraphCanvas: true, teleport: true },
@@ -245,8 +276,8 @@ describe('Schema 管理输入框达上限提示', () => {
   })
 })
 
-describe('Schema 列表说明列截断与删除脏行兜底', () => {
-  it('实体/关系说明超 20 字截断显示，短说明原样展示', async () => {
+describe('Schema 列表说明列全文显示与删除脏行兜底', () => {
+  it('实体/关系说明全文展示（不再截断），短说明原样展示', async () => {
     vi.mocked(listSchemasPaged).mockResolvedValue({
       items: [schemaFixture({ kind: 'entity', description: '说'.repeat(25) })],
       total: 1, page: 1, pageSize: 10,
@@ -255,9 +286,9 @@ describe('Schema 列表说明列截断与删除脏行兜底', () => {
     await flushPromises()
 
     const entityDesc = view.findAll('.schema-table-wrap tbody tr')[0].findAll('td')[2]
-    expect(entityDesc.text()).toBe('说'.repeat(20) + '…')
+    expect(entityDesc.text()).toBe('说'.repeat(25))
 
-    // 关系子页面：说明（basis=description）同样截断
+    // 关系子页面：说明（basis=description）同样全文显示
     vi.mocked(listSchemasPaged).mockResolvedValue({
       items: [schemaFixture({
         kind: 'relation', name: 'USES_TECH', description: '长'.repeat(30),
@@ -270,7 +301,7 @@ describe('Schema 列表说明列截断与删除脏行兜底', () => {
     await flushPromises()
 
     const relationDesc = view.findAll('.schema-table-wrap tbody tr')[0].findAll('td')[4]
-    expect(relationDesc.text()).toBe('长'.repeat(20) + '…')
+    expect(relationDesc.text()).toBe('长'.repeat(30))
 
     // 短说明不截断（重新挂载拿新 mock 数据）
     view.unmount()
@@ -307,5 +338,38 @@ describe('Schema 列表说明列截断与删除脏行兜底', () => {
     // 弹窗关闭且列表被重新拉取（脏行清除）
     expect(view.find('.schema-delete-modal').exists()).toBe(false)
     expect(vi.mocked(listSchemasPaged).mock.calls.length).toBeGreaterThan(listCallsBefore)
+  })
+})
+
+describe('Schema 新增弹窗必填提示文案', () => {
+  it('关系页：留空提交提示「请输入关系英文名/请选择起点实体/请选择终点实体」', async () => {
+    const view = mountViewWithRealForm()
+    await flushPromises()
+
+    const relationTab = view.findAll('.schema-tabs__items button').find((button) => button.text() === '关系')
+    await relationTab!.trigger('click')
+    await view.get('.schema-tabs .primary').trigger('click')
+
+    await view.get('.schema-create-modal footer .primary').trigger('click')
+    await flushPromises()
+
+    const text = view.get('.schema-create-modal').text()
+    expect(text).toContain('请输入关系英文名')
+    expect(text).toContain('请选择起点实体')
+    expect(text).toContain('请选择终点实体')
+    expect(text).not.toContain('请输入名称')
+  })
+
+  it('实体页：留空提交提示「请输入实体名」', async () => {
+    const view = mountViewWithRealForm()
+    await flushPromises()
+
+    await view.get('.schema-tabs .primary').trigger('click')
+    await view.get('.schema-create-modal footer .primary').trigger('click')
+    await flushPromises()
+
+    const text = view.get('.schema-create-modal').text()
+    expect(text).toContain('请输入实体名')
+    expect(text).not.toContain('请输入名称')
   })
 })

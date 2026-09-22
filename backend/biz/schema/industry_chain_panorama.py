@@ -13,6 +13,13 @@ INDUSTRY_PATTERN = re.compile(r"[\w\u4e00-\u9fff·.\-()（）、，,/\s]+")
 ANCHOR_ID_PATTERN = re.compile(r"[\w\u4e00-\u9fff·.\-]+")
 # 关系类型（Nebula 边类型）：大写字母、数字和下划线
 RELATION_TYPE_PATTERN = re.compile(r"[A-Za-z]\w*")
+# 关系筛选中文文案 → 边类型码（与前端下拉 PANORAMA_RELATION_TYPES 同口径）：
+# 接口容错，直接传中文文案（如下拉折叠标签「产业链归属+论文合作」）时自动转码。
+RELATION_TYPE_LABELS: dict[str, str] = {
+    "产业链归属": "BELONGS_TO_NODE",
+    "论文合作": "COAUTHOR_WITH",
+    "机构任职": "AFFILIATED_WITH",
+}
 
 
 class IndustryChainPanoramaQueryRequest(BaseModel):
@@ -83,7 +90,7 @@ class IndustryChainPanoramaQueryRequest(BaseModel):
     def normalize_relation_types(cls, value: Any) -> list[str] | None:
         if value is None or value == "":
             return None
-        # 兼容前端用逗号拼接传参
+        # 兼容前端用逗号拼接传参；"+" 拼接（下拉折叠标签「产业链归属+论文合作」）同样拆开
         items = value.split(",") if isinstance(value, str) else value
         if not isinstance(items, list):
             raise ValueError("关系筛选必须是边类型数组")
@@ -91,15 +98,18 @@ class IndustryChainPanoramaQueryRequest(BaseModel):
         for item in items:
             if not isinstance(item, str):
                 raise ValueError("关系筛选必须是边类型数组")
-            name = item.strip().upper()
-            if not name:
-                continue
-            if len(name) > MAX_TEXT_LENGTH:
-                raise ValueError(f"关系类型长度不能超过 {MAX_TEXT_LENGTH} 个字符")
-            if not RELATION_TYPE_PATTERN.fullmatch(name):
-                raise ValueError("关系类型只能包含字母、数字和下划线")
-            if name not in normalized:
-                normalized.append(name)
+            for part in re.split(r"[,+]", item):
+                token = part.strip()
+                # 中文文案直转边类型码，其余按英文码规整
+                name = RELATION_TYPE_LABELS.get(token, token).upper()
+                if not name:
+                    continue
+                if len(name) > MAX_TEXT_LENGTH:
+                    raise ValueError(f"关系类型长度不能超过 {MAX_TEXT_LENGTH} 个字符")
+                if not RELATION_TYPE_PATTERN.fullmatch(name):
+                    raise ValueError("关系类型只能包含字母、数字和下划线")
+                if name not in normalized:
+                    normalized.append(name)
         if not normalized:
             return None
         if len(normalized) > MAX_RELATION_TYPES:

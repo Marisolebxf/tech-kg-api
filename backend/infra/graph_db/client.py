@@ -323,10 +323,18 @@ class TRSGraphClient:
         跑过 SUBMIT JOB STATS（SHOW STATS 直接 400 "no any stats info"）时回退
         nGQL 标签 count 直查（走标签索引，亚秒级）。不用 REST /schema/stats/
         node-count 兜底——其在 trs-graph 侧全表扫描，11 顶点空间实测 31s+，
-        大标签必超时。"""
+        大标签必超时。
+
+        容量型失败（会话池打满 / 连接错误）直接上抛：此时逐标签 nGQL count
+        只会再抢会话、把池越占越死（冷启动预热实测打出几十秒 COUNT 风暴），
+        让调用方显式降级（各处均有 TTL 缓存或空值兜底）。"""
         try:
             counts = self.stats_tag_counts()
-        except (GraphRequestError, GraphConnectionError) as exc:
+        except GraphConnectionError:
+            raise
+        except GraphRequestError as exc:
+            if "no extra session" in str(exc):
+                raise
             logger.warning(
                 "SHOW STATS 不可用（space=%s label=%s），回退 nGQL 标签计数: %s",
                 self._settings.space,

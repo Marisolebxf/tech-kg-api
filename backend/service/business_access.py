@@ -1,8 +1,9 @@
 """Server-owned account scope for the nine business modules.
 
 Match registered route templates and methods, never user-controlled prefixes or headers.
-The two business analyzers may use graph APIs internally without exposing those APIs
-to restricted browser/API clients.
+Business analyzers that self-call graph APIs in-process (indirect / paper-cooperation /
+key-enterprise-relation / colleague) wrap the app with business_graph_app so the internal
+marker lets those calls through without exposing the graph APIs to restricted clients.
 """
 
 from __future__ import annotations
@@ -44,6 +45,14 @@ _INTERNAL_GRAPH_ROUTES = {
     ("GET", "/graph-search/nodes/{node_id:path}"),
     ("GET", "/graph-search/subgraph/{node_id:path}"),
     ("POST", "/graph-search/paths/search"),
+    # 重点关注科技企业关系（filtered-subgraph 取治理/合作边）与专家同事关系
+    # （nodes/search 按 Person 属性定位专家）的内部自调用路径
+    ("GET", "/graph-search/filtered-subgraph/{node_id}"),
+    ("POST", "/graph-search/nodes/search"),
+    # 产业链全景图（graph_api 回环）：无属性索引时按标签翻页扫描用 nodes 集合路由；
+    # 专家直接关系（graph_api 回环）取专家的合作/任职边
+    ("GET", "/graph-search/nodes"),
+    ("GET", "/graph-search/node/{node_id}/edges"),
 }
 
 

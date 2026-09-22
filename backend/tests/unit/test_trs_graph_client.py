@@ -1246,6 +1246,29 @@ class TestStatsAndPagedNodes:
         assert repo.label_count("Expert") == 11  # SHOW STATS 400 → nGQL count 兜底
         repo.close()
 
+    def test_label_count_raises_fast_when_session_pool_exhausted(self):
+        """会话池打满（500 no extra session）时快速上抛：不再逐标签 nGQL count
+        回退——那会在池最紧张的时刻再抢会话（冷启动预热 COUNT 风暴的根因）。"""
+        queries = []
+
+        def handler(request):
+            if request.url.path == "/health":
+                return _health_ok(request)
+            if request.url.path == "/api/v1/query/read":
+                queries.append(json.loads(request.content)["query"])
+                return httpx.Response(
+                    500,
+                    json={"error": "Query execution failed: no extra session available"},
+                )
+            return httpx.Response(404)
+
+        repo = _make_repo(handler)
+        with pytest.raises(GraphRequestError, match="no extra session"):
+            repo.label_count("Paper")
+        # 只有 SHOW STATS 一次往返，没有跟进任何 nGQL count
+        assert len(queries) == 1 and queries[0].endswith("SHOW STATS;")
+        repo.close()
+
     def test_stats_snapshot_cached_even_when_show_stats_later_fails(self):
         """stats 任务卡死（SHOW STATS 开始报错）时，300s 内成功过的快照仍可读。"""
         state = {"fail": False}

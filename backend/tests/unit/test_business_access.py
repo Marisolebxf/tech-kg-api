@@ -65,6 +65,8 @@ def make_app(*, restricted=True, user_id="limited", portal=False):
         ("/auth/refresh", ["POST"]),
         ("/graph-search/spaces", ["GET"]),
         ("/graph-search/nodes/{node_id:path}", ["GET"]),
+        ("/graph-search/nodes", ["GET"]),
+        ("/graph-search/node/{node_id}/edges", ["GET"]),
         ("/graph-search/subgraph/{node_id:path}", ["GET"]),
         ("/graph-search/paths/search", ["POST"]),
         ("/entity-search/entities", ["GET"]),
@@ -159,6 +161,13 @@ async def test_internal_business_queries_work_without_exposing_general_graph_api
                 200 if internal else 403
             )
             assert (await client.post("/api/v1/graph-search/paths/search")).status_code == (
+                200 if internal else 403
+            )
+            # 全景图标签翻页扫描（nodes 集合）与专家直接关系取边也走内部白名单
+            assert (await client.get("/api/v1/graph-search/nodes")).status_code == (
+                200 if internal else 403
+            )
+            assert (await client.get("/api/v1/graph-search/node/person_x/edges")).status_code == (
                 200 if internal else 403
             )
             assert (await client.get("/api/v1/entity-search/entities")).status_code == 403

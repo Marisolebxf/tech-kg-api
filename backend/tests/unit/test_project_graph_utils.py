@@ -31,6 +31,18 @@ def test_parse_list_empty():
     assert parse_list("") == []
 
 
+def test_parse_list_chinese_separators():
+    # 全角逗号/分号、顿号、半角分号串起的多个值同样切分，不再整串当一个名字。
+    assert parse_list("祁玉青，吴斌") == ["祁玉青", "吴斌"]
+    assert parse_list("清华大学；北京大学") == ["清华大学", "北京大学"]
+    assert parse_list("方叶祥、贺明明、王二朋") == ["方叶祥", "贺明明", "王二朋"]
+    assert parse_list("张三;李四") == ["张三", "李四"]
+    # 单个分隔符收尾不影响单值；名字本身不含分隔符时行为不变。
+    assert parse_list("张三") == ["张三"]
+    assert parse_list("，") == []
+    assert parse_list("张三，") == ["张三"]
+
+
 def test_vids_stable():
     assert project_vid("fake-zh-proj-001") == "project_fake-zh-proj-001"
     assert person_vid("张伟") == person_vid(" 张伟 ")

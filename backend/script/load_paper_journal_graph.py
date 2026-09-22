@@ -313,11 +313,12 @@ def load_journals(client: TRSGraphClient, session) -> int:
     journals = []
     edges = []
 
-    # 中文期刊
+    # 中文期刊（classify_list=中文核心分类 → zh_core；sub_quartile=分区）
     rows = session.execute(
         text(
             "SELECT paper_id, publication_id, zh_name, en_name, name_abbr, issn, eissn, country, "
-            "founding_time, impact_factor, is_sci, cite_nums, annual_publication, publication_cycle "
+            "founding_time, impact_factor, is_sci, sub_quartile, classify_list, "
+            "cite_nums, annual_publication, publication_cycle "
             "FROM dwd_zh_journal WHERE publication_id IS NOT NULL"
         )
     ).all()
@@ -340,9 +341,13 @@ def load_journals(client: TRSGraphClient, session) -> int:
                         r[9],
                         r[10],
                         None,
+                        None,
                         r[11],
+                        None,
                         r[12],
                         r[13],
+                        r[14],
+                        r[15],
                         "zh_journal",
                     ),
                 )
@@ -350,11 +355,12 @@ def load_journals(client: TRSGraphClient, session) -> int:
         paper_vid = f"paper_{r[0]}"
         edges.append((paper_vid, jvid, None, None, None, None, None))
 
-    # 英文期刊
+    # 英文期刊（top=国际顶级期刊标记；scope_zone=中科院分区）
     rows = session.execute(
         text(
             "SELECT publication_id, en_name, name_abbr, issn_print, issn_online, country, "
-            "establish_time, impact_factor, jcr_zone, is_sci, annual_publication, publish_period "
+            "establish_time, impact_factor, jcr_zone, scope_zone, top, is_sci, "
+            "annual_publication, publish_period "
             "FROM dwd_en_journal WHERE publication_id IS NOT NULL"
         )
     ).all()
@@ -375,11 +381,15 @@ def load_journals(client: TRSGraphClient, session) -> int:
                         r[5],
                         str(r[6]) if r[6] else None,
                         r[7],
-                        r[9] or 0,
+                        r[11] or 0,
                         r[8],
+                        r[9],
                         None,
                         r[10],
-                        r[11],
+                        None,
+                        None,
+                        r[12],
+                        r[13],
                         "en_journal",
                     ),
                 )
@@ -410,6 +420,10 @@ def load_journals(client: TRSGraphClient, session) -> int:
             "impact_factor",
             "is_sci",
             "jcr_zone",
+            "scope_zone",
+            "sub_quartile",
+            "top",
+            "zh_core",
             "cite_nums",
             "annual_publication",
             "publication_cycle",

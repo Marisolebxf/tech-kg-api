@@ -180,6 +180,11 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         except GraphAPIError as exc:
             logger.warning("graph API unavailable: %s", exc)
             fallback_reason = "graph_api_error"
+        except TimeoutError:
+            # graph_api 总预算耗尽：与 GraphAPIError 同口径如实降级为图服务
+            # 故障，不落进 unexpected_error 误导排障。
+            logger.warning("graph API timeout while querying expert direct relations")
+            fallback_reason = "graph_api_error"
         except Exception:  # noqa: BLE001 - 图服务异常一律降级
             logger.exception("unexpected error while querying graph API")
             fallback_reason = "unexpected_error"

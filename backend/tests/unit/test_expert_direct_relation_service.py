@@ -319,3 +319,21 @@ def test_build_graph_institution_edges_carry_confidence():
         assert edge["data"]["strength"] == 75  # edge_confidence 边类型兜底 0.75
     relation_edge = next(e for e in graph["edges"] if e["label"] != "关联机构")
     assert relation_edge["data"]["strength"] > 0
+
+
+@pytest.mark.asyncio
+async def test_query_reports_graph_api_error_on_timeout(monkeypatch) -> None:
+    """graph_api 总预算耗尽（TimeoutError）须如实报 graph_api_error，不落 unexpected_error。"""
+
+    class _TimeoutCtx:
+        async def __aenter__(self):
+            raise TimeoutError("budget exhausted")
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr("service.expert_direct_relation.graph_api", lambda **kw: _TimeoutCtx())
+
+    result = await ExpertDirectRelationService().query(expert_a_id="专家甲")
+
+    assert result["source"]["reason"] == "graph_api_error"

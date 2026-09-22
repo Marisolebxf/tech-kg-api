@@ -33,11 +33,9 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      # === 与 docker-compose.yml api.environment 基本一致；差异：TRS_GRAPH_SPACE 锁死 dev，
+      # === 与 docker-compose.yml api.environment 基本一致；差异：TRS_GRAPH_SPACE 锁死 dev2，
       # 且 MySQL/trs-graph 默认走 host.docker.internal（dev2 不在生产 engine/trs-graph 网络上，
       # 容器名 mysql/trs-graph-service 在本栈解析不到；宿主机已发布 3306/8090 端口）===
-      # 2026-09-22 改查 dev 空间：学者图谱（4万 Person/2万 AUTHORED_BY）在 dev，
-      # 项目抽取数据在 dev2 —— 九大业务专家模块需要 dev；仅改 api，worker 仍写 dev2 ===
       TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://host.docker.internal:8090}
       TRS_GRAPH_SPACE: dev
       TRS_GRAPH_API_KEY: ${TRS_GRAPH_API_KEY:-ysukeg}

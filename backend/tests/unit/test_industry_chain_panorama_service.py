@@ -53,7 +53,7 @@ async def test_resolve_seed_vids_stops_after_enough_resolved_ids() -> None:
 async def test_search_by_keyword_falls_back_to_small_scan(monkeypatch) -> None:
     service = IndustryChainPanoramaService()
 
-    async def _fake_list_by_label_throttled(client, label, limit, offset):
+    async def _fake_list_by_label_throttled(client, label, limit, offset, *, diagnostics=None):
         assert label == "Keyword"
         assert limit == 50
         assert offset == 0
@@ -214,7 +214,7 @@ async def test_query_returns_keyword_no_match_when_keyword_misses(monkeypatch) -
 
     service = IndustryChainPanoramaService()
 
-    async def _fake_fetch_layers(client, industry, top_k):
+    async def _fake_fetch_layers(client, industry, top_k, *, diagnostics=None):
         assert industry == "人工智能"
         return (
             [
@@ -252,10 +252,75 @@ async def test_query_returns_keyword_no_match_when_keyword_misses(monkeypatch) -
 
 
 @pytest.mark.asyncio
+async def test_query_reports_graph_api_error_when_searches_swallowed_failures(
+    monkeypatch,
+) -> None:
+    """分层搜索全被按未命中吞掉（如会话池打满）时，reason 必须如实报
+    graph_api_error，不能谎报 keyword_no_match 误导排障。"""
+
+    service = IndustryChainPanoramaService()
+
+    async def _fake_fetch_layers(client, industry, top_k, *, diagnostics=None):
+        assert diagnostics is not None
+        diagnostics["graph_query_errors"] += 1
+        return (
+            [
+                {"key": "core_technology", "title": "核心技术", "total": 0, "items": []},
+                {"key": "leading_enterprise", "title": "领军企业", "total": 0, "items": []},
+            ],
+            [],
+        )
+
+    async def _fake_fetch_graph(client, seed_vids, anchor_id, depth):
+        return {"nodes": [], "edges": []}
+
+    class _GraphCtx:
+        async def __aenter__(self):
+            return _FakeGraphClient()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(service, "_fetch_layers", _fake_fetch_layers)
+    monkeypatch.setattr(service, "_fetch_graph", _fake_fetch_graph)
+    monkeypatch.setattr(
+        service,
+        "_resolve_anchor_from_keyword",
+        lambda *args, **kwargs: __import__("asyncio").sleep(0, result=None),
+    )
+    monkeypatch.setattr("service.industry_chain_panorama.graph_api", lambda **kwargs: _GraphCtx())
+
+    result = await service.query(industry="人工智能", depth=1, top_k=3)
+
+    assert result["source"]["reason"] == "graph_api_error"
+    assert result["source"]["fallback"] is False
+
+
+@pytest.mark.asyncio
+async def test_safe_search_nodes_counts_swallowed_graph_errors() -> None:
+    """属性搜索吞掉 GraphAPIError 的同时要计入诊断，供 query() 区分故障与未命中。"""
+
+    from infra.graph_api_client import GraphAPIError
+
+    class _ErrClient:
+        async def search_nodes(self, *, label, properties=None, limit=20, space=None):
+            raise GraphAPIError("no extra session available")
+
+    diagnostics: dict[str, int] = {}
+
+    payload = await IndustryChainPanoramaService._safe_search_nodes(
+        _ErrClient(), "Keyword", "keyword", "集成电路", 5, diagnostics=diagnostics
+    )
+
+    assert payload == {}
+    assert diagnostics == {"graph_query_errors": 1}
+
+
+@pytest.mark.asyncio
 async def test_resolve_anchor_scans_exact_value_when_property_index_is_missing(monkeypatch) -> None:
     service = IndustryChainPanoramaService()
 
-    async def _fake_list(client, label, limit, offset):
+    async def _fake_list(client, label, limit, offset, *, diagnostics=None):
         assert label == "IndustryChain"
         assert limit == 50
         assert offset == 0
@@ -282,6 +347,142 @@ async def test_resolve_anchor_scans_exact_value_when_property_index_is_missing(m
     )
 
     assert resolved == "chain_IC0007"
+
+
+@pytest.mark.asyncio
+async def test_resolve_anchor_picks_shortest_prefix_contains_hit_when_exact_misses(
+    monkeypatch,
+) -> None:
+    """严格等值落空时按包含匹配选锚：多候选取「以关键词开头且名称最短」的环节。
+
+    dev 图空间实证：「集成电路」在 IndustryNode 里没有同名节点，只有
+    集成电路设计（6 字，第 2 页）/集成电路制造服务/集成电路封测服务。
+    """
+    service = IndustryChainPanoramaService()
+    requested_offsets: list[int] = []
+
+    async def _fake_list(client, label, limit, offset, *, diagnostics=None):
+        assert label == "IndustryNode"
+        assert limit == 50
+        requested_offsets.append(offset)
+        if offset == 0:
+            return [
+                {
+                    "id": "node_IC0007012",
+                    "labels": ["IndustryNode"],
+                    "properties": {"node_name": "集成电路制造服务"},
+                },
+                {
+                    "id": "node_OTHER",
+                    "labels": ["IndustryNode"],
+                    "properties": {"node_name": "新材料制备"},
+                },
+            ]
+        if offset == 50:
+            return [
+                {
+                    "id": "node_IC0007007",
+                    "labels": ["IndustryNode"],
+                    "properties": {"node_name": "集成电路设计"},
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(service, "_list_by_label_throttled", _fake_list)
+
+    resolved = await service._resolve_unique_anchor_candidate(
+        _FakeGraphClient(),
+        "IndustryNode",
+        ("node_name", "name"),
+        "集成电路",
+    )
+
+    assert resolved == "node_IC0007007"
+    # IndustryNode 翻页上限 4 页，第 2 页命中的环节不能被首页截断漏掉。
+    assert sorted(requested_offsets) == [0, 50, 100, 150]
+
+
+@pytest.mark.asyncio
+async def test_resolve_anchor_contains_tie_returns_none(monkeypatch) -> None:
+    """包含命中「以关键词开头且名称最短」并列时无法裁决，宁缺毋滥返回 None。"""
+    service = IndustryChainPanoramaService()
+
+    async def _fake_list(client, label, limit, offset, *, diagnostics=None):
+        return [
+            {
+                "id": "node_A",
+                "labels": ["IndustryNode"],
+                "properties": {"node_name": "集成电路设计"},
+            },
+            {
+                "id": "node_B",
+                "labels": ["IndustryNode"],
+                "properties": {"node_name": "集成电路制造"},
+            },
+        ]
+
+    monkeypatch.setattr(service, "_list_by_label_throttled", _fake_list)
+    client = _FakeGraphClient()
+
+    resolved = await service._resolve_unique_anchor_candidate(
+        client, "IndustryNode", ("node_name", "name"), "集成电路"
+    )
+
+    assert resolved is None
+    assert client.resolve_calls == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_anchor_prefers_exact_hit_over_contains(monkeypatch) -> None:
+    """索引精确命中时直接采用，不再进入包含兜底（扫描不应发生）。"""
+    service = IndustryChainPanoramaService()
+    client = _FakeGraphClient()
+    client.search_payloads[("IndustryNode", "node_name", "集成电路")] = {
+        "items": [
+            {"id": "node_exact", "labels": ["IndustryNode"], "properties": {}},
+        ]
+    }
+
+    async def _unexpected_list(client_, label, limit, offset, *, diagnostics=None):
+        raise AssertionError("精确命中不应触发标签扫描")
+
+    monkeypatch.setattr(service, "_list_by_label_throttled", _unexpected_list)
+
+    resolved = await service._resolve_unique_anchor_candidate(
+        client, "IndustryNode", ("node_name", "name"), "集成电路"
+    )
+
+    assert resolved == "node_exact"
+
+
+@pytest.mark.asyncio
+async def test_search_by_keyword_scans_all_industry_node_pages(monkeypatch) -> None:
+    """分层包含匹配同样要翻满 IndustryNode 页数上限，首页之外的环节可命中。"""
+    service = IndustryChainPanoramaService()
+    requested_offsets: list[int] = []
+
+    async def _fake_list(client, label, limit, offset, *, diagnostics=None):
+        assert label == "IndustryNode"
+        assert limit == 50
+        requested_offsets.append(offset)
+        if offset == 50:
+            return [
+                {"id": "node_IC0007007", "properties": {"node_name": "集成电路设计"}},
+            ]
+        return []
+
+    monkeypatch.setattr(service, "_list_by_label_throttled", _fake_list)
+
+    result = await service._search_by_keyword(
+        client=_FakeGraphClient(),
+        label="IndustryNode",
+        definition={"keyword_props": ("node_name",)},
+        industry="集成电路",
+        top_k=3,
+    )
+
+    assert [node["id"] for node in result] == ["node_IC0007007"]
+    assert sorted(requested_offsets) == [0, 50, 100, 150]
 
 
 def test_backfill_empty_layers_uses_real_anchor_subgraph() -> None:
@@ -491,7 +692,8 @@ def test_filter_graph_keeps_chain_and_anchor_skeleton() -> None:
         "node_IC0007007",
         "org_1",
     ]
-    assert [edge["label"] for edge in result["edges"]] == ["BELONGS_TO_NODE"]
+    # 链与已保留环节之间的 HAS_NODE 结构边回接：骨架节点不悬空。
+    assert [edge["label"] for edge in result["edges"]] == ["BELONGS_TO_NODE", "HAS_NODE"]
     # 链节点的溯源字段随骨架保留，前端中心可展示真实溯源信息。
     chain = result["nodes"][0]
     assert chain["sourceTable"] == "dwd_industry_chain_info"
@@ -522,7 +724,7 @@ def test_filter_graph_without_skeleton_keeps_only_connected_nodes() -> None:
 async def test_expert_scan_ranks_research_fields_and_returns_real_nodes(monkeypatch) -> None:
     service = IndustryChainPanoramaService()
 
-    async def _fake_list(client, label, limit, offset):
+    async def _fake_list(client, label, limit, offset, *, diagnostics=None):
         assert label == "Person"
         assert limit == 500
         return [
@@ -563,7 +765,7 @@ async def test_low_altitude_economy_scans_bounded_pages_for_three_experts(
     service = IndustryChainPanoramaService()
     requested_offsets: list[int] = []
 
-    async def _fake_list(client, label, limit, offset):
+    async def _fake_list(client, label, limit, offset, *, diagnostics=None):
         assert label == "Person"
         assert limit == 500
         requested_offsets.append(offset)
@@ -818,7 +1020,7 @@ async def test_query_refills_still_empty_layers_from_seed_expansion(monkeypatch)
     service = IndustryChainPanoramaService()
     fetch_graph_anchors: list[str | None] = []
 
-    async def _fake_fetch_layers(client, industry, top_k):
+    async def _fake_fetch_layers(client, industry, top_k, *, diagnostics=None):
         return (
             [
                 {
@@ -888,7 +1090,7 @@ async def test_query_skips_seed_expansion_when_layers_already_filled(monkeypatch
     service = IndustryChainPanoramaService()
     fetch_graph_anchors: list[str | None] = []
 
-    async def _fake_fetch_layers(client, industry, top_k):
+    async def _fake_fetch_layers(client, industry, top_k, *, diagnostics=None):
         return (
             [
                 {
@@ -948,3 +1150,60 @@ async def test_query_skips_seed_expansion_when_layers_already_filled(monkeypatch
 
     assert fetch_graph_anchors == ["chain_1"]
     assert {node["id"] for node in result["graph"]["nodes"]} == {"chain_1", "news_1"}
+
+
+@pytest.mark.asyncio
+async def test_query_reports_graph_api_error_on_timeout(monkeypatch) -> None:
+    """graph_api 组装总预算耗尽（TimeoutError）须与 GraphAPIError 同口径降级。
+
+    之前 TimeoutError 落进 except Exception 被报成 unexpected_error，
+    误导排障方向（真正原因是图服务慢查询把预算吃光）。"""
+
+    service = IndustryChainPanoramaService()
+
+    class _TimeoutCtx:
+        async def __aenter__(self):
+            raise TimeoutError("budget exhausted")
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr("service.industry_chain_panorama.graph_api", lambda **kwargs: _TimeoutCtx())
+
+    result = await service.query(industry="量子科技", depth=1, top_k=3)
+
+    assert result["source"]["reason"] == "graph_api_error"
+    assert result["layers"] == []
+
+
+def test_filter_graph_by_relation_types_reattaches_chain_skeleton_edges() -> None:
+    """筛选不含 HAS_NODE 时链骨架不悬空：与已保留环节之间的结构边补回。
+
+    链节点按骨架规则保留但结构边被裁掉时会变成画布孤立点；只补两端
+    都已在结果集里的 HAS_NODE，不引入新节点。"""
+
+    graph = {
+        "nodes": [
+            {"id": "chain_IC0007", "type": "IndustryChain", "name": "集成电路"},
+            {"id": "node_IC0007007", "type": "IndustryNode", "name": "已保留环节"},
+            {"id": "node_IC9999999", "type": "IndustryNode", "name": "未保留环节"},
+            {"id": "org_1", "type": "organization_base", "name": "企业甲"},
+        ],
+        "edges": [
+            {"label": "BELONGS_TO_NODE", "source": "org_1", "target": "node_IC0007007"},
+            {"label": "HAS_NODE", "source": "chain_IC0007", "target": "node_IC0007007"},
+            {"label": "HAS_NODE", "source": "chain_IC0007", "target": "node_IC9999999"},
+        ],
+    }
+
+    filtered = IndustryChainPanoramaService._filter_graph_by_relation_types(
+        graph, ["BELONGS_TO_NODE"]
+    )
+
+    node_ids = {str(n["id"]) for n in filtered["nodes"]}
+    edge_keys = {(str(e["label"]), str(e["source"]), str(e["target"])) for e in filtered["edges"]}
+    assert "node_IC9999999" not in node_ids
+    assert ("HAS_NODE", "chain_IC0007", "node_IC0007007") in edge_keys
+    assert ("HAS_NODE", "chain_IC0007", "node_IC9999999") not in edge_keys
+    touched = {src for _, src, _ in edge_keys} | {tgt for _, _, tgt in edge_keys}
+    assert "chain_IC0007" in touched

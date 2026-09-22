@@ -68,6 +68,36 @@ const { laidOutNodes } = useForceLayout(
   () => ({ ...props.layoutOptions, nodeShape: props.nodeShape }),
 )
 
+/** 连线端点一次性算好（O(V+E)，id→端点查表）。此前模板里每条边要反复
+ *  调 getLineCoords：每边十余次 laidOutNodes.find（O(n) 查找），平移/缩放
+ *  每帧全量重算，节点一多拖动就明显掉帧。 */
+const lineCoords = computed(() => {
+  const nodeById = new Map(laidOutNodes.value.map((node) => [node.id, node]))
+  const map = new Map<string, { x1: number; y1: number; x2: number; y2: number }>()
+  for (const edge of props.edges) {
+    const from = nodeById.get(edge.from)
+    const to = nodeById.get(edge.to)
+    if (!from || !to) continue
+    const dx = to.x - from.x
+    const dy = to.y - from.y
+    // gap=0：线端点正好落在节点边界；节点绘制在线之上，
+    // 任何亚像素溢出被节点覆盖，视觉上线与节点严丝合缝无间隙。
+    const sourceOffset = nodeBoundaryOffset(from, dx, dy, 0)
+    const targetOffset = nodeBoundaryOffset(to, -dx, -dy, 0)
+    map.set(edge.id, {
+      x1: from.x + sourceOffset.x,
+      y1: from.y + sourceOffset.y,
+      x2: to.x + targetOffset.x,
+      y2: to.y + targetOffset.y,
+    })
+  }
+  return map
+})
+
+function coordsOf(edge: GraphEdgeData) {
+  return lineCoords.value.get(edge.id) ?? null
+}
+
 const edgeToneMap: Record<string, string> = {
   论文合作: 'is-primary',
   同事: 'is-green',
@@ -176,26 +206,31 @@ function nodeBoundaryOffset(node: GraphNodeData, dx: number, dy: number, gap = 0
   return { x: dx * factor, y: dy * factor }
 }
 
-function getNodeById(id: string) {
-  return laidOutNodes.value.find((node) => node.id === id)
-}
+/** 拖动判定阈值（屏幕像素）：按下后位移超过它才算拖动平移，以内仍视为
+ *  点击——保证从节点/边上发起的拖动能平移画布，而同一位置的单击选择不受影响。 */
+const DRAG_THRESHOLD = 3
+/** 本次手势是否已判定为拖动：拖动结束后的 click 不再触发节点/边选中。 */
+let didPan = false
+/** 是否处于按下（未超阈值）状态：阈值内的移动不更新平移。 */
+let pointerDown = false
+let downX = 0
+let downY = 0
+/** 高轮询率鼠标的 pointermove 可能比刷新率更密：待应用的指针位置先存这里，
+ *  每帧最多写一次响应式状态，避免每个事件都触发 Vue 全量重渲染造成拖动掉帧。 */
+let pendingClient: { x: number; y: number } | null = null
+let panRafId = 0
 
-function getLineCoords(edge: GraphEdgeData) {
-  const from = getNodeById(edge.from)
-  const to = getNodeById(edge.to)
-  if (!from || !to) return null
-  const dx = to.x - from.x
-  const dy = to.y - from.y
-  // gap=0：线端点正好落在节点边界；节点绘制在线之上，
-  // 任何亚像素溢出被节点覆盖，视觉上线与节点严丝合缝无间隙。
-  const sourceOffset = nodeBoundaryOffset(from, dx, dy, 0)
-  const targetOffset = nodeBoundaryOffset(to, -dx, -dy, 0)
-  return {
-    x1: from.x + sourceOffset.x,
-    y1: from.y + sourceOffset.y,
-    x2: to.x + targetOffset.x,
-    y2: to.y + targetOffset.y,
-  }
+function applyPanInRaf(x: number, y: number) {
+  pendingClient = { x, y }
+  if (panRafId) return
+  panRafId = requestAnimationFrame(() => {
+    panRafId = 0
+    const pending = pendingClient
+    pendingClient = null
+    if (!pending || !isPanning.value) return
+    panX.value = panStart.value.panX + (pending.x - panStart.value.x)
+    panY.value = panStart.value.panY + (pending.y - panStart.value.y)
+  })
 }
 
 /**
@@ -236,35 +271,55 @@ function setScale(v: number | [number, number]) {
 }
 
 function handlePointerDown(event: PointerEvent) {
-  if ((event.target as Element).closest('.platform-node')) return
-  if ((event.target as Element).closest('.platform-network-line, .platform-network-hit-area')) return
+  // 控制条上的按下不触发平移；节点/边上的按下不再排除——超阈值即接管为拖动，
+  // 让悬停在实体/关系上也能长按拖动图谱（见 DRAG_THRESHOLD 注释）。
   if ((event.target as Element).closest('.kg-graph-map-controls')) return
-  isPanning.value = true
+  pointerDown = true
+  didPan = false
+  downX = event.clientX
+  downY = event.clientY
   panStart.value = {
     x: event.clientX,
     y: event.clientY,
     panX: panX.value,
     panY: panY.value,
   }
-  containerRef.value?.setPointerCapture(event.pointerId)
 }
 
 function handlePointerMove(event: PointerEvent) {
-  if (!isPanning.value) return
-  panX.value = panStart.value.panX + (event.clientX - panStart.value.x)
-  panY.value = panStart.value.panY + (event.clientY - panStart.value.y)
+  if (!pointerDown) return
+  if (!isPanning.value) {
+    if (Math.hypot(event.clientX - downX, event.clientY - downY) < DRAG_THRESHOLD) return
+    isPanning.value = true
+    didPan = true
+    // 拖动确定后才捕获指针：拖出画布范围仍持续平移；
+    // 捕获前松手则 click 落回原目标，节点/边单击选择保持原生行为。
+    containerRef.value?.setPointerCapture?.(event.pointerId)
+  }
+  applyPanInRaf(event.clientX, event.clientY)
 }
 
 function handlePointerUp(event: PointerEvent) {
+  pointerDown = false
   isPanning.value = false
-  containerRef.value?.releasePointerCapture(event.pointerId)
+  pendingClient = null
+  if (panRafId) {
+    cancelAnimationFrame(panRafId)
+    panRafId = 0
+  }
+  if (containerRef.value?.hasPointerCapture?.(event.pointerId)) {
+    containerRef.value?.releasePointerCapture?.(event.pointerId)
+  }
 }
 
 function handleNodeClick(node: GraphNodeData) {
+  // 刚完成拖动平移（从节点上发起）的 click 不触发选中
+  if (didPan) return
   emit('selectNode', node)
 }
 
 function handleEdgeClick(edge: GraphEdgeData) {
+  if (didPan) return
   if (!isEdgeActive(edge)) return
   emit('selectEdge', edge)
 }
@@ -282,6 +337,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   containerRef.value?.removeEventListener('wheel', handleWheel)
+  if (panRafId) cancelAnimationFrame(panRafId)
 })
 </script>
 
@@ -305,37 +361,37 @@ onUnmounted(() => {
           <line
             v-for="edge in edges"
             :key="`${edge.id}-base`"
-            :x1="getLineCoords(edge)?.x1"
-            :y1="getLineCoords(edge)?.y1"
-            :x2="getLineCoords(edge)?.x2"
-            :y2="getLineCoords(edge)?.y2"
+            :x1="coordsOf(edge)?.x1"
+            :y1="coordsOf(edge)?.y1"
+            :x2="coordsOf(edge)?.x2"
+            :y2="coordsOf(edge)?.y2"
             :class="{ 'is-dimmed': !isEdgeActive(edge) }"
           />
         </g>
         <template v-for="edge in edges" :key="edge.id">
           <line
-            v-if="getLineCoords(edge)"
+            v-if="coordsOf(edge)"
             :class="edgeClass(edge)"
-            :x1="getLineCoords(edge)!.x1"
-            :y1="getLineCoords(edge)!.y1"
-            :x2="getLineCoords(edge)!.x2"
-            :y2="getLineCoords(edge)!.y2"
+            :x1="coordsOf(edge)!.x1"
+            :y1="coordsOf(edge)!.y1"
+            :x2="coordsOf(edge)!.x2"
+            :y2="coordsOf(edge)!.y2"
             @click.stop="handleEdgeClick(edge)"
           />
           <line
-            v-if="getLineCoords(edge)"
+            v-if="coordsOf(edge)"
             class="platform-network-hit-area"
-            :x1="getLineCoords(edge)!.x1"
-            :y1="getLineCoords(edge)!.y1"
-            :x2="getLineCoords(edge)!.x2"
-            :y2="getLineCoords(edge)!.y2"
+            :x1="coordsOf(edge)!.x1"
+            :y1="coordsOf(edge)!.y1"
+            :x2="coordsOf(edge)!.x2"
+            :y2="coordsOf(edge)!.y2"
             @click.stop="handleEdgeClick(edge)"
           />
           <text
-            v-if="showEdgeLabels && edge.label && getLineCoords(edge)"
+            v-if="showEdgeLabels && edge.label && coordsOf(edge)"
             :class="['platform-network-line__label', { 'is-dimmed': !isEdgeActive(edge) }]"
-            :x="(getLineCoords(edge)!.x1 + getLineCoords(edge)!.x2) / 2"
-            :y="(getLineCoords(edge)!.y1 + getLineCoords(edge)!.y2) / 2"
+            :x="(coordsOf(edge)!.x1 + coordsOf(edge)!.x2) / 2"
+            :y="(coordsOf(edge)!.y1 + coordsOf(edge)!.y2) / 2"
           >{{ displayEdgeLabel(edge) }}</text>
         </template>
         <g

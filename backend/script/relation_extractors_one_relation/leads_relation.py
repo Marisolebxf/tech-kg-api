@@ -81,7 +81,7 @@ def collect_person_candidates(
         sql = apply_since(f"SELECT project_host, participants FROM {table} ORDER BY id", since)
         params = {"since": since} if since else None
         for row in iter_rows(engine, sql, batch_size=batch_size, limit=limit, params=params):
-            host = str(row.get("project_host") or "").strip()
+            host = str(row.get("project_host") or "").strip().rstrip("；;，,、")
             if host:
                 candidates.add(host)
             for value in parse_list(row.get("participants")):
@@ -96,7 +96,7 @@ def make_leads_mapper(
 ) -> Callable[[str, dict[str, Any], str], list[EdgeRecord]]:
     def leads(table: str, row: dict[str, Any], batch: str) -> list[EdgeRecord]:
         project_id = str(row.get("id") or "")
-        host = normalize_text(row.get("project_host"))
+        host = normalize_text(row.get("project_host")).rstrip("；;，,、")
         if not project_id or not host:
             return []
         report.increment("person_candidates")
@@ -179,7 +179,7 @@ def transform(payload: dict[str, Any]) -> dict[str, Any]:
     rows = payload.get("rows") or []
     candidates = set()
     for r in rows:
-        host = str(r.get("project_host") or "").strip()
+        host = str(r.get("project_host") or "").strip().rstrip("；;，,、")
         if host:
             candidates.add(host)
         for value in parse_list(r.get("participants")):

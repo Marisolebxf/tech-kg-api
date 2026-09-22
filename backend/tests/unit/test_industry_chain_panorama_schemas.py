@@ -24,6 +24,34 @@ def test_request_normalizes_blank_filters_and_clamps_top_k() -> None:
     assert request.topK == MAX_KEY_ENTITIES
 
 
+def test_request_maps_chinese_relation_labels_to_edge_codes() -> None:
+    # 中文文案（含"+"拼接的下拉折叠标签）自动转英文边类型码
+    request = IndustryChainPanoramaQueryRequest.model_validate(
+        {"industry": "集成电路", "relationTypes": ["产业链归属+论文合作"]}
+    )
+    assert request.relationTypes == ["BELONGS_TO_NODE", "COAUTHOR_WITH"]
+
+    # 中文、小写英文码混传均规整为大写码
+    request = IndustryChainPanoramaQueryRequest.model_validate(
+        {"industry": "集成电路", "relationTypes": ["机构任职", "belongs_to_node"]}
+    )
+    assert request.relationTypes == ["AFFILIATED_WITH", "BELONGS_TO_NODE"]
+
+    # 中文与英文码同义去重
+    request = IndustryChainPanoramaQueryRequest.model_validate(
+        {"industry": "集成电路", "relationTypes": "产业链归属,BELONGS_TO_NODE"}
+    )
+    assert request.relationTypes == ["BELONGS_TO_NODE"]
+
+
+def test_request_rejects_unknown_relation_labels() -> None:
+    # 映射表之外的中文文案仍按非法关系类型拒绝
+    with pytest.raises(ValidationError, match="关系类型只能包含字母、数字和下划线"):
+        IndustryChainPanoramaQueryRequest.model_validate(
+            {"industry": "集成电路", "relationTypes": ["不存在的关系"]}
+        )
+
+
 def test_request_rejects_overlong_and_abnormal_industry() -> None:
     with pytest.raises(ValidationError, match="64"):
         IndustryChainPanoramaQueryRequest.model_validate({"industry": OVERLONG})

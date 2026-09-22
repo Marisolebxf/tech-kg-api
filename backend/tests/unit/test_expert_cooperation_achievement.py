@@ -496,3 +496,50 @@ def test_fields_fallback_to_node_keywords_when_no_has_keyword():
     assert resp["items"][0]["type"] == "patent"
     assert "知识图谱" in resp["items"][0]["fields"]
     assert "推理" in resp["items"][0]["fields"]
+
+
+def test_query_project_time_from_approval_fields():
+    """项目成果时间取 approval_time/approval_year：此前不在 TIME_KEYS 候选链，
+    项目 time 恒 None，一加时间过滤项目类成果（含奖项）整体消失。"""
+    nodes = {
+        "S1": _node("S1", {"name_zh": "甲"}),
+        "S2": _node("S2", {"name_zh": "乙"}),
+        "PJ1": _node(
+            "PJ1",
+            {
+                "title": "范围内项目",
+                "approval_year": "2023",
+                "output_awards": json.dumps([{"year": 2023, "title": "应用示范奖"}]),
+            },
+        ),
+        "PJ2": _node("PJ2", {"title": "范围外项目", "approval_time": "2020-03-01 00:00:00"}),
+    }
+    edges = {
+        "S1": [
+            _edge("LEADS", "PJ1", "S1"),
+            _edge("HAS_PARTICIPANT", "PJ2", "S1"),
+        ],
+        "S2": [
+            _edge("HAS_PARTICIPANT", "PJ1", "S2"),
+            _edge("HAS_PARTICIPANT", "PJ2", "S2"),
+        ],
+    }
+    graph = MagicMock()
+    graph.get_node = MagicMock(side_effect=lambda nid: nodes.get(str(nid)))
+    graph.get_node_edges = MagicMock(side_effect=lambda nid, **kw: edges.get(str(nid), []))
+    graph._settings = SimpleNamespace(space="dev")
+
+    resp = _svc(graph).query(
+        source_expert_id="S1",
+        target_expert_id="S2",
+        time_range_start="2023-01",
+        time_range_end="2026-01",
+    )
+    titles = [i["title"] for i in resp["items"]]
+    assert "范围内项目" in titles
+    assert "范围外项目" not in titles
+    item = next(i for i in resp["items"] if i["title"] == "范围内项目")
+    assert item["time"] == "2023"
+    assert len(item["awards"]) == 1
+    assert resp["summary"]["projects"] == 1
+    assert resp["summary"]["awards"] == 1

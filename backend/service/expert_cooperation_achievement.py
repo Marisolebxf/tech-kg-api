@@ -65,7 +65,8 @@ TIME_KEYS = (
     "start_date",
     "start_year",
     "date",
-    # Project 节点只有立项时间属性（无完成时间），放最后兜底读取。
+    # 项目域批准时间。此前不在候选链，项目成果 time 恒为 None，
+    # 一加时间过滤项目类成果（含奖项）整体消失。
     "approval_time",
     "approval_year",
 )

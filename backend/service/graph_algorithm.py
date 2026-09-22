@@ -7,6 +7,7 @@ labels 传 EDGE（边类型）名——Spark 侧按边类型构建计算图。
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -181,6 +182,13 @@ def _shared_job_load(job_id: str) -> dict | None:
 
 _DEGREE_JOB_CAPACITY = 50
 _DEGREE_RESULT_LIMIT = 10_000
+_DEGREE_LOOKUP_PAGE_SIZE = max(
+    1, min(int(os.getenv("GRAPH_ALGO_DEGREE_LOOKUP_PAGE_SIZE", "5000")), 10_000)
+)
+_DEGREE_INDEX_BUILD_TIMEOUT_SECONDS = float(
+    os.getenv("GRAPH_ALGO_DEGREE_INDEX_BUILD_TIMEOUT_SECONDS", "300")
+)
+_DEGREE_INDEX_POLL_SECONDS = float(os.getenv("GRAPH_ALGO_DEGREE_INDEX_POLL_SECONDS", "2"))
 _degree_jobs: dict[str, dict[str, Any]] = {}
 _degree_jobs_lock = threading.Lock()
 
@@ -269,30 +277,147 @@ def _local_job_to_data(job: dict[str, Any]) -> dict:
     }
 
 
-def _match_count_with_storage_retry(client: Any, query: str) -> Any:
-    """MATCH 全空间聚合读。共享存储瞬时饱和时会立刻快败
-    （`Storage Error: RPC failure, probably timeout`，实测 28ms），小睡后重试一次；
-    真把 90s 耗尽的失败（连接层超时）不重试——大概率同样超时，白等一轮。"""
+def _degree_index_name(label: str) -> str:
+    """生成稳定、合法且长度受控的 Degree 专用 EDGE 索引名。"""
+    digest = hashlib.sha1(label.encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
+    return f"degree_{label.lower()[:40]}_{digest}_idx"
+
+
+def _is_missing_index_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    # NebulaGraph 的真实错误会把索引名插在 Index 与 not found 之间，例如：
+    # "Index degree_has_keyword_..._idx not found in space dev2"。
+    return "no index" in message or ("index" in message and "not found" in message)
+
+
+def _is_transient_index_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return _is_missing_index_error(exc) or any(
+        marker in message for marker in ("does not exist", "not ready", "building", "running")
+    )
+
+
+def _is_index_building_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(
+        marker in message
+        for marker in ("already rebuilding", "is rebuilding", "in progress", "job is running")
+    )
+
+
+def _lookup_degree_pairs(client: Any, label: str) -> Iterable[tuple[str, str]]:
+    """通过边索引分页枚举端点，避免单次返回过大及无索引全空间 MATCH。"""
+    offset = 0
+    while True:
+        result = client.execute_read(
+            f"LOOKUP ON `{label}` YIELD src(edge) AS s, dst(edge) AS d "
+            f"| LIMIT {_DEGREE_LOOKUP_PAGE_SIZE} OFFSET {offset}",
+            timeout=90.0,
+        )
+        records = [record for record in (result.records or []) if isinstance(record, dict)]
+        for record in records:
+            yield str(record.get("s") or ""), str(record.get("d") or "")
+        if len(records) < _DEGREE_LOOKUP_PAGE_SIZE:
+            return
+        offset += len(records)
+
+
+def _degree_edge_index_status(client: Any, index_name: str) -> str | None:
+    """读取 Degree 专用边索引最近一次重建状态。"""
+    result = client.execute_read("SHOW EDGE INDEX STATUS", timeout=30.0)
+    for record in result.records or []:
+        if not isinstance(record, dict):
+            continue
+        normalized = {
+            str(key).strip().lower().replace("_", " "): value for key, value in record.items()
+        }
+        name = str(normalized.get("name") or "").strip("\"'`")
+        if name != index_name:
+            continue
+        return str(normalized.get("index status") or "").strip("\"'`").upper() or None
+    return None
+
+
+def _ensure_degree_edge_index(client: Any, label: str) -> None:
+    """为无索引边类型创建并重建 Degree 专用索引，等待到 LOOKUP 可用。
+
+    Degree 在 FastAPI BackgroundTasks 中运行，索引重建期间前端保持 running；
+    不再回退两次全空间 MATCH，从根源上避免共享图库 90 秒扫描超时。
+    """
     from infra.graph_db.exceptions import GraphRequestError
 
+    index_name = _degree_index_name(label)
+    deadline = time.monotonic() + _DEGREE_INDEX_BUILD_TIMEOUT_SECONDS
     try:
-        return client.execute_read(query, timeout=90.0)
-    except GraphRequestError as exc:
-        if "rpc failure" not in str(exc).lower():
-            raise
-        time.sleep(1.0)
-        return client.execute_read(query, timeout=90.0)
+        client.execute_write(f"CREATE EDGE INDEX IF NOT EXISTS `{index_name}` ON `{label}`()")
+    except Exception as exc:  # noqa: BLE001
+        raise GraphAlgorithmError(
+            f"关系类型 {label} 缺少边索引，自动创建索引失败: {exc}", status_code=502
+        ) from exc
+
+    # CREATE DDL 需要短暂传播；并发 worker 可能发现同一索引已在重建，均转入可用性轮询。
+    while True:
+        try:
+            client.execute_write(f"REBUILD EDGE INDEX `{index_name}`")
+            break
+        except GraphRequestError as exc:
+            # 另一 worker 已触发相同索引的重建时，不再重复提交，直接等待可用。
+            if _is_index_building_error(exc):
+                break
+            if not _is_transient_index_error(exc):
+                raise GraphAlgorithmError(
+                    f"关系类型 {label} 的索引 {index_name} 重建失败: {exc}", status_code=502
+                ) from exc
+            if time.monotonic() >= deadline:
+                raise GraphAlgorithmError(
+                    f"关系类型 {label} 的索引 {index_name} 在创建后未及时可见，请稍后重试",
+                    status_code=504,
+                ) from exc
+            time.sleep(_DEGREE_INDEX_POLL_SECONDS)
+
+    while True:
+        try:
+            status = _degree_edge_index_status(client, index_name)
+            if status in {"FAILED", "STOPPED", "INVALID"}:
+                raise GraphAlgorithmError(
+                    f"关系类型 {label} 的索引 {index_name} 重建状态为 {status}",
+                    status_code=502,
+                )
+            if status != "FINISHED":
+                if time.monotonic() >= deadline:
+                    raise GraphAlgorithmError(
+                        f"关系类型 {label} 的索引 {index_name} 重建超过 "
+                        f"{int(_DEGREE_INDEX_BUILD_TIMEOUT_SECONDS)} 秒，请稍后重试",
+                        status_code=504,
+                    )
+                time.sleep(_DEGREE_INDEX_POLL_SECONDS)
+                continue
+            # FINISHED 后再确认 LOOKUP 已可用；空结果也是合法结果。
+            client.execute_read(f"LOOKUP ON `{label}` YIELD src(edge) AS s | LIMIT 1", timeout=30.0)
+            logger.info("Degree 边索引已可用: label=%s index=%s", label, index_name)
+            return
+        except GraphRequestError as exc:
+            if not _is_transient_index_error(exc):
+                raise GraphAlgorithmError(
+                    f"关系类型 {label} 的索引 {index_name} 校验失败: {exc}", status_code=502
+                ) from exc
+            if time.monotonic() >= deadline:
+                raise GraphAlgorithmError(
+                    f"关系类型 {label} 的索引 {index_name} 重建超过 "
+                    f"{int(_DEGREE_INDEX_BUILD_TIMEOUT_SECONDS)} 秒，请稍后重试",
+                    status_code=504,
+                ) from exc
+            time.sleep(_DEGREE_INDEX_POLL_SECONDS)
 
 
 def _degree_rows_via_ngql(space: str, labels: list[str]) -> tuple[list[dict[str, str]], bool]:
     """出/入度聚合并合并为逐顶点行（总度降序，上限对齐图服务 10000 行截断）。
 
-    先按 SHOW STATS 跳过无边数据的边类型（对度数零贡献，结果本就为空，
-    免去扫描；统计有滞后，仅作加速不改语义）。其余逐类型边索引 LOOKUP
-    枚举 src/dst 本地聚合：代价只跟该边类型的边数相关。无索引的类型收集后
-    回退一次全空间 MATCH 聚合（服务端 count）——其代价是全顶点扫描，共享图库
-    缓存变冷或存储瞬时饱和时会失败（2026-09-21 实测 STUDIED_AT 92 条边也
-    >90s、ALUMNI 0 条边在存储饱和窗口 28ms 快败），仅作兜底。
+    逐类型通过边索引分页 LOOKUP 枚举 src/dst 并本地聚合：代价只跟该边类型
+    的边数相关。若关系类型尚无索引，或索引已创建但历史数据尚未重建进去，
+    则自动创建/重建 Degree 专用空属性索引，并等待 SHOW EDGE INDEX STATUS
+    返回 FINISHED 后继续；绝不回退全空间 MATCH，避免 CITES 等大边类型扫描
+    90 秒超时拖垮共享图库。SHOW STATS 可能滞后，不能据其 0 值跳过真实数据。
     """
     from infra.graph_db import get_space_client
     from infra.graph_db.exceptions import GraphRequestError
@@ -303,17 +428,6 @@ def _degree_rows_via_ngql(space: str, labels: list[str]) -> tuple[list[dict[str,
     if unknown:
         raise GraphAlgorithmError(f"图空间 {space} 不存在边类型: {', '.join(unknown)}")
 
-    active = list(labels)
-    try:
-        edge_counts = client.stats_snapshot().get("edges", {})
-    except Exception as exc:  # noqa: BLE001 — 统计读失败不拦计算，走常规路径
-        logger.warning("Degree 读 SHOW STATS 失败，跳过空边类型加速: %s", exc)
-        edge_counts = {}
-    skipped = [label for label in active if edge_counts.get(label) == 0]
-    if skipped:
-        logger.info("Degree 跳过无边数据的边类型: %s", ", ".join(skipped))
-        active = [label for label in active if edge_counts.get(label) != 0]
-
     degrees: dict[str, dict[str, int]] = {}
 
     def absorb_pairs(pairs: Iterable[tuple[str, str]]) -> None:
@@ -323,50 +437,28 @@ def _degree_rows_via_ngql(space: str, labels: list[str]) -> tuple[list[dict[str,
             degrees.setdefault(src, {"out": 0, "in": 0})["out"] += 1
             degrees.setdefault(dst, {"out": 0, "in": 0})["in"] += 1
 
-    def absorb_counts(records: list[dict[str, Any]], field: str) -> None:
-        for record in records:
-            vid = str(record.get("vid") or "")
-            if not vid:
-                continue
-            entry = degrees.setdefault(vid, {"out": 0, "in": 0})
-            try:
-                entry[field] += int(record.get("cnt") or 0)
-            except (TypeError, ValueError):
-                continue
-
-    fallback_labels: list[str] = []
-    for label in active:
+    for label in labels:
         try:
-            result = client.execute_read(
-                f"LOOKUP ON `{label}` YIELD src(edge) AS s, dst(edge) AS d", timeout=90.0
-            )
+            pairs = _lookup_degree_pairs(client, label)
+            # 生成器在迭代时才发请求，先取首项以便捕获无索引错误后自动补建。
+            first = next(pairs, None)
         except GraphRequestError as exc:
-            if "no index" not in str(exc).lower():
+            if not _is_missing_index_error(exc):
                 raise
-            fallback_labels.append(label)  # 无索引：稍后合并一次 MATCH
-            continue
-        absorb_pairs(
-            (str(record.get("s") or ""), str(record.get("d") or ""))
-            for record in (result.records or [])
-            if isinstance(record, dict)
-        )
-
-    if fallback_labels:
-        edge_expr = "|".join(fallback_labels)
-        try:
-            out_result = _match_count_with_storage_retry(
-                client, f"MATCH (v)-[e:{edge_expr}]->(v2) RETURN id(v) AS vid, count(e) AS cnt"
-            )
-            in_result = _match_count_with_storage_retry(
-                client, f"MATCH (v)<-[e:{edge_expr}]-(v2) RETURN id(v) AS vid, count(e) AS cnt"
-            )
-        except Exception as exc:  # noqa: BLE001
-            raise GraphAlgorithmError(
-                f"关系类型 {', '.join(fallback_labels)} 无边索引，全空间扫描失败"
-                f"（共享图库繁忙）: {exc}。建议改选有索引的关系类型或稍后重试"
-            ) from exc
-        absorb_counts(out_result.records, "out")
-        absorb_counts(in_result.records, "in")
+            _ensure_degree_edge_index(client, label)
+            pairs = _lookup_degree_pairs(client, label)
+            first = next(pairs, None)
+        if first is None:
+            # CREATE 成功但 REBUILD 未启动时，LOOKUP 会“成功返回 0 行”。只有本专用
+            # 索引最近一次重建已 FINISHED，才能把空结果视为真实无边数据。
+            index_name = _degree_index_name(label)
+            if _degree_edge_index_status(client, index_name) != "FINISHED":
+                _ensure_degree_edge_index(client, label)
+                pairs = _lookup_degree_pairs(client, label)
+                first = next(pairs, None)
+        if first is not None:
+            absorb_pairs((first,))
+            absorb_pairs(pairs)
 
     ordered = sorted(degrees.items(), key=lambda item: item[1]["out"] + item[1]["in"], reverse=True)
     truncated = len(ordered) > _DEGREE_RESULT_LIMIT

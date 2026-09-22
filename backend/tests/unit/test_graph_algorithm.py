@@ -357,11 +357,15 @@ def test_degree_via_ngql_returns_merged_result(algo_backend) -> None:
     assert job["status"] == "succeeded"
 
 
-def test_degree_falls_back_to_match_when_edge_not_indexed(algo_backend, monkeypatch) -> None:
-    # 无索引边类型：LOOKUP 报 "no index" → 回退全空间 MATCH 聚合（服务端 count）
+def test_degree_builds_index_when_edge_not_indexed(algo_backend, monkeypatch) -> None:
+    # 无索引边类型：自动 CREATE + REBUILD，索引可用后重新 LOOKUP；不再全空间 MATCH
     from infra.graph_db.exceptions import GraphRequestError
 
     class NoIndexGraphClient:
+        indexed = False
+        rebuild_attempts = 0
+        writes = []
+
         def edge_types(self):
             return ["HAS_KEYWORD", "EMPLOYED_BY"]
 
@@ -369,32 +373,92 @@ def test_degree_falls_back_to_match_when_edge_not_indexed(algo_backend, monkeypa
             return {"tags": {}, "edges": {"HAS_KEYWORD": 8, "EMPLOYED_BY": 3}}
 
         def execute_read(self, query: str, params=None, *, timeout=None):
-            if query.startswith("LOOKUP"):
+            if query.startswith("LOOKUP") and not self.indexed:
                 raise GraphRequestError(
                     "POST /api/v1/query/read -> 400: There is no index to use at runtime",
                     status_code=400,
                     body="",
                 )
-            if "<-[e:" in query:
-                return SimpleNamespace(records=[{"vid": "a", "cnt": 1}, {"vid": "c", "cnt": 4}])
-            return SimpleNamespace(records=[{"vid": "a", "cnt": 2}, {"vid": "b", "cnt": 5}])
+            if query == "SHOW EDGE INDEX STATUS":
+                return SimpleNamespace(
+                    records=[
+                        {
+                            "Name": graph_algorithm._degree_index_name("HAS_KEYWORD"),
+                            "Index Status": "FINISHED",
+                        }
+                    ]
+                )
+            if "LIMIT 1" in query:
+                return SimpleNamespace(records=[{"s": "a"}])
+            return SimpleNamespace(
+                records=[{"s": "a", "d": "b"}, {"s": "a", "d": "c"}, {"s": "d", "d": "a"}]
+            )
 
-    monkeypatch.setattr("infra.graph_db.get_space_client", lambda space: NoIndexGraphClient())
+        def execute_write(self, query: str):
+            self.writes.append(query)
+            if query.startswith("REBUILD"):
+                self.rebuild_attempts += 1
+                if self.rebuild_attempts == 1:
+                    # CREATE 已返回但 Schema 尚未传播完成：复现 dev2 的真实报错格式。
+                    raise GraphRequestError(
+                        "POST /api/v1/query/write -> 400: SemanticError: Index "
+                        "degree_has_keyword_8d55a8e7_idx not found in space dev2",
+                        status_code=400,
+                        body="",
+                    )
+                self.indexed = True
+
+    client = NoIndexGraphClient()
+    monkeypatch.setattr(graph_algorithm, "_DEGREE_INDEX_POLL_SECONDS", 0)
+    monkeypatch.setattr("infra.graph_db.get_space_client", lambda space: client)
     data = submit_job(_actor(), "shared_business", "degreestatic", ["HAS_KEYWORD"], {})
     assert data["status"] == "succeeded"
     result = get_result(_actor(), "shared_business", data["jobId"])
-    # MATCH 聚合：出度 {a:2,b:5}、入度 {a:1,c:4} 合并后按总度降序
     assert result["rows"] == [
-        {"vid": "b", "out_degree": "5", "in_degree": "0", "degree": "5"},
-        {"vid": "c", "out_degree": "0", "in_degree": "4", "degree": "4"},
         {"vid": "a", "out_degree": "2", "in_degree": "1", "degree": "3"},
+        {"vid": "b", "out_degree": "0", "in_degree": "1", "degree": "1"},
+        {"vid": "c", "out_degree": "0", "in_degree": "1", "degree": "1"},
+        {"vid": "d", "out_degree": "1", "in_degree": "0", "degree": "1"},
     ]
-    assert result["count"] == 3
+    assert result["count"] == 4
+    assert client.writes[0].startswith("CREATE EDGE INDEX IF NOT EXISTS")
+    assert client.writes[1].startswith("REBUILD EDGE INDEX")
+    assert client.writes[2].startswith("REBUILD EDGE INDEX")
 
 
-def test_degree_empty_edge_type_skips_scan(algo_backend, monkeypatch) -> None:
-    # SHOW STATS 为 0 的边类型（如 dev2 的 ALUMNI）：结果本就为空，不应触发
-    # 任何 LOOKUP/MATCH——共享存储饱和窗口实测全空间扫描 28ms 快败
+def test_degree_lookup_is_paginated(algo_backend, monkeypatch) -> None:
+    queries = []
+
+    class PagedClient:
+        def edge_types(self):
+            return ["HAS_KEYWORD"]
+
+        def stats_snapshot(self):
+            return {"tags": {}, "edges": {"HAS_KEYWORD": 3}}
+
+        def execute_read(self, query: str, params=None, *, timeout=None):
+            queries.append(query)
+            if "OFFSET 0" in query:
+                return SimpleNamespace(records=[{"s": "a", "d": "b"}, {"s": "a", "d": "c"}])
+            if "OFFSET 2" in query:
+                return SimpleNamespace(records=[{"s": "d", "d": "a"}])
+            raise AssertionError(f"unexpected query: {query}")
+
+    monkeypatch.setattr(graph_algorithm, "_DEGREE_LOOKUP_PAGE_SIZE", 2)
+    monkeypatch.setattr("infra.graph_db.get_space_client", lambda space: PagedClient())
+    data = submit_job(_actor(), "shared_business", "degreestatic", ["HAS_KEYWORD"], {})
+    result = get_result(_actor(), "shared_business", data["jobId"])
+    assert result["rows"] == [
+        {"vid": "a", "out_degree": "2", "in_degree": "1", "degree": "3"},
+        {"vid": "b", "out_degree": "0", "in_degree": "1", "degree": "1"},
+        {"vid": "c", "out_degree": "0", "in_degree": "1", "degree": "1"},
+        {"vid": "d", "out_degree": "1", "in_degree": "0", "degree": "1"},
+    ]
+    assert [query.rsplit(" ", 1)[-1] for query in queries] == ["0", "2"]
+
+
+def test_degree_stale_zero_stats_does_not_skip_lookup(algo_backend, monkeypatch) -> None:
+    # SHOW STATS 是预计算快照，可能仍为 0；Degree 必须以索引实际结果为准。
     calls = []
 
     class EmptyEdgeClient:
@@ -406,24 +470,69 @@ def test_degree_empty_edge_type_skips_scan(algo_backend, monkeypatch) -> None:
 
         def execute_read(self, query: str, params=None, *, timeout=None):
             calls.append(query)
-            raise AssertionError("无边数据的类型不应触发图查询")
+            return SimpleNamespace(records=[{"s": "expert-a", "d": "keyword-b"}])
 
     monkeypatch.setattr("infra.graph_db.get_space_client", lambda space: EmptyEdgeClient())
     data = submit_job(_actor(), "shared_business", "degreestatic", ["ALUMNI"], {})
     assert data["status"] == "succeeded"
     result = get_result(_actor(), "shared_business", data["jobId"])
-    assert result["rows"] == []
-    assert result["count"] == 0
-    assert calls == []
+    assert result["rows"] == [
+        {"vid": "expert-a", "out_degree": "1", "in_degree": "0", "degree": "1"},
+        {"vid": "keyword-b", "out_degree": "0", "in_degree": "1", "degree": "1"},
+    ]
+    assert len(calls) == 1
 
 
-def test_degree_mixed_labels_keep_lookup_and_match_fallback(algo_backend, monkeypatch) -> None:
-    # 有索引类型走 LOOKUP、无索引类型仅自身回退 MATCH：有索引的结果不被丢弃
+def test_degree_rebuilds_created_but_empty_index(algo_backend, monkeypatch) -> None:
+    class EmptyIndexClient:
+        rebuilt = False
+        writes = []
+
+        def edge_types(self):
+            return ["HAS_KEYWORD"]
+
+        def execute_read(self, query: str, params=None, *, timeout=None):
+            if query == "SHOW EDGE INDEX STATUS":
+                records = []
+                if self.rebuilt:
+                    records = [
+                        {
+                            "Name": graph_algorithm._degree_index_name("HAS_KEYWORD"),
+                            "Index Status": "FINISHED",
+                        }
+                    ]
+                return SimpleNamespace(records=records)
+            if "LIMIT 1" in query and self.rebuilt:
+                return SimpleNamespace(records=[{"s": "a"}])
+            if self.rebuilt:
+                return SimpleNamespace(records=[{"s": "a", "d": "b"}])
+            return SimpleNamespace(records=[])
+
+        def execute_write(self, query: str):
+            self.writes.append(query)
+            if query.startswith("REBUILD"):
+                self.rebuilt = True
+
+    client = EmptyIndexClient()
+    monkeypatch.setattr(graph_algorithm, "_DEGREE_INDEX_POLL_SECONDS", 0)
+    monkeypatch.setattr("infra.graph_db.get_space_client", lambda space: client)
+    data = submit_job(_actor(), "shared_business", "degreestatic", ["HAS_KEYWORD"], {})
+    result = get_result(_actor(), "shared_business", data["jobId"])
+    assert result["rows"] == [
+        {"vid": "a", "out_degree": "1", "in_degree": "0", "degree": "1"},
+        {"vid": "b", "out_degree": "0", "in_degree": "1", "degree": "1"},
+    ]
+    assert any(query.startswith("REBUILD EDGE INDEX") for query in client.writes)
+
+
+def test_degree_mixed_labels_keep_lookup_and_build_missing_index(algo_backend, monkeypatch) -> None:
+    # 有索引类型直接 LOOKUP；无索引类型补建索引后 LOOKUP，两类结果均保留
     from infra.graph_db.exceptions import GraphRequestError
 
-    match_queries = []
-
     class MixedClient:
+        studied_at_indexed = False
+        writes = []
+
         def edge_types(self):
             return ["HAS_KEYWORD", "STUDIED_AT"]
 
@@ -434,34 +543,46 @@ def test_degree_mixed_labels_keep_lookup_and_match_fallback(algo_backend, monkey
             if query.startswith("LOOKUP ON `HAS_KEYWORD`"):
                 pairs = [("b", "t1"), ("b", "t2"), ("a", "c")]
                 return SimpleNamespace(records=[{"s": s, "d": d} for s, d in pairs])
-            if query.startswith("LOOKUP"):
+            if query.startswith("LOOKUP ON `STUDIED_AT`") and not self.studied_at_indexed:
                 raise GraphRequestError(
                     "POST /api/v1/query/read -> 400: There is no index to use at runtime",
                     status_code=400,
                     body="",
                 )
-            match_queries.append(query)
-            if "<-[e:" in query:
-                return SimpleNamespace(records=[{"vid": "c", "cnt": 3}])
-            return SimpleNamespace(records=[{"vid": "a", "cnt": 2}])
+            if query == "SHOW EDGE INDEX STATUS":
+                return SimpleNamespace(
+                    records=[
+                        {
+                            "Name": graph_algorithm._degree_index_name("STUDIED_AT"),
+                            "Index Status": "FINISHED",
+                        }
+                    ]
+                )
+            if "LIMIT 1" in query:
+                return SimpleNamespace(records=[{"s": "a"}])
+            return SimpleNamespace(records=[{"s": "a", "d": "c"}, {"s": "a", "d": "c"}])
 
-    monkeypatch.setattr("infra.graph_db.get_space_client", lambda space: MixedClient())
+        def execute_write(self, query: str):
+            self.writes.append(query)
+            if query.startswith("REBUILD"):
+                self.studied_at_indexed = True
+
+    client = MixedClient()
+    monkeypatch.setattr("infra.graph_db.get_space_client", lambda space: client)
     data = submit_job(
         _actor(), "shared_business", "degreestatic", ["HAS_KEYWORD", "STUDIED_AT"], {}
     )
     assert data["status"] == "succeeded"
     result = get_result(_actor(), "shared_business", data["jobId"])
-    # LOOKUP：b 出2、a 出1；MATCH 回退（仅 STUDIED_AT）：a 再出2、c 入3
+    # HAS_KEYWORD：b 出2、a 出1；STUDIED_AT：a 再出2、c 入2
     assert result["rows"] == [
-        {"vid": "c", "out_degree": "0", "in_degree": "4", "degree": "4"},
         {"vid": "a", "out_degree": "3", "in_degree": "0", "degree": "3"},
+        {"vid": "c", "out_degree": "0", "in_degree": "3", "degree": "3"},
         {"vid": "b", "out_degree": "2", "in_degree": "0", "degree": "2"},
         {"vid": "t1", "out_degree": "0", "in_degree": "1", "degree": "1"},
         {"vid": "t2", "out_degree": "0", "in_degree": "1", "degree": "1"},
     ]
-    # MATCH 只覆盖无索引类型，不再拖上有索引的 HAS_KEYWORD
-    assert len(match_queries) == 2
-    assert all("STUDIED_AT" in q and "HAS_KEYWORD" not in q for q in match_queries)
+    assert any("STUDIED_AT" in query for query in client.writes)
 
 
 def test_degree_unknown_label_rejected(algo_backend) -> None:

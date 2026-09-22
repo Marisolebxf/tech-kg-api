@@ -48,6 +48,7 @@ from script.entity_extractors_one_entity.common import (
     to_int_or_zero,
 )
 from script.entity_extractors_one_entity.org_catalog import SPEC_BY_NAME, organization_kind
+from script.project_graph_utils import to_output_awards_json
 
 _PAPER_SUFFIX_RE = re.compile(r"__\d+$")
 
@@ -438,6 +439,9 @@ def project_record(table: str, row: Mapping[str, Any], batch: str) -> list[Entit
         "clinical_trials_count": to_int_or_zero(row.get("clinical_trials_count")),
         "products_count": to_int_or_zero(row.get("products_count")),
         "awards_count": to_int_or_zero(row.get("awards_count")),
+        # 奖项明细 JSON（dwd_*_project_output.output_awards），两点合作成果「奖项/评价」读取；
+        # 与旧通道 load_project_graph.stage_outputs → build_output_count_props 同一规范函数。
+        "output_awards": to_output_awards_json(row.get("output_awards")),
         "reports_count": to_int_or_zero(row.get("reports_count")),
         "other_outputs_count": to_int_or_zero(row.get("other_outputs_count")),
         "extra_json": extra_json(row),

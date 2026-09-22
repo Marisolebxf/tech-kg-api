@@ -219,7 +219,7 @@ def stage_project_relations(
                     _merge_edge(graph, pvid, target, "FUNDED_BY", props)
                 report.increment("edges_FUNDED_BY")
 
-        host = normalize_text(row.project_host)
+        host = normalize_text(row.project_host).rstrip("；;，,、")
         if host:
             report.increment("person_candidates")
             host_result = matcher.person.match(host, method="name_exact")

@@ -13,14 +13,16 @@ QUERY_SQL_BY_TABLE = {
     "dwd_zh_project": """
         SELECT p.*, o.total_outputs, o.journal_articles_count, o.conference_papers_count,
                o.books_count, o.degree_papers_count, o.patents_count, 0 AS clinical_trials_count,
-               0 AS products_count, o.awards_count, o.reports_count, o.other_outputs_count
+               0 AS products_count, o.awards_count, o.output_awards, o.reports_count,
+               o.other_outputs_count
         FROM dwd_zh_project p
         LEFT JOIN dwd_zh_project_output o ON o.id = p.id
     """,
     "dwd_en_project": """
         SELECT p.*, o.total_outputs, o.journal_articles_count, o.conference_papers_count,
                o.books_count, o.degree_papers_count, o.patents_count, o.clinical_trials_count,
-               0 AS products_count, o.awards_count, o.reports_count, o.other_outputs_count
+               0 AS products_count, o.awards_count, o.output_awards, o.reports_count,
+               o.other_outputs_count
         FROM dwd_en_project p
         LEFT JOIN dwd_en_project_output o ON o.id = p.id
     """,

@@ -77,6 +77,10 @@ def parse_list(raw: Any) -> list[str]:
             pass
     if "," in text:
         return [normalize_name(p) for p in text.split(",") if normalize_name(p)]
+    # 中文分隔符（全角逗号/分号、顿号、半角分号）串起的多个值同样切分，
+    # 否则整串被当成一个名字必然 not_found（participants/机构/关键词常见此形态）。
+    if any(sep in text for sep in ("，", "；", "、", ";")):
+        return [p for p in (normalize_name(part) for part in re.split(r"[，；、;]", text)) if p]
     return [normalize_name(text)]
 
 

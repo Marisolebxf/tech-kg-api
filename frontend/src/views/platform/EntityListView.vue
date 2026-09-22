@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { Popover as APopover } from '@arco-design/web-vue'
 import { IconSearch } from '@arco-design/web-vue/es/icon'
 
 import {
@@ -36,7 +37,6 @@ const status = ref<EntityIndexStatus | null>(null)
 const result = ref<EntityListResult | null>(null)
 const loading = ref(false)
 const searchError = ref('')
-const expandedRows = ref<Set<string>>(new Set())
 
 const items = computed(() => result.value?.items ?? [])
 const isBrowseMode = computed(() => !appliedKeyword.value)
@@ -131,18 +131,12 @@ function visiblePropertyEntries(item: EntityListResult['items'][number]): Array<
   return propertyEntries(item).slice(0, PROPERTY_CHIP_LIMIT)
 }
 
-function propertyOverflow(item: EntityListResult['items'][number]): number {
-  return Math.max(propertyEntries(item).length - PROPERTY_CHIP_LIMIT, 0)
+function hiddenPropertyEntries(item: EntityListResult['items'][number]): Array<[string, string]> {
+  return propertyEntries(item).slice(PROPERTY_CHIP_LIMIT)
 }
 
-function toggleRowDetail(vid: string) {
-  const next = new Set(expandedRows.value)
-  if (next.has(vid)) {
-    next.delete(vid)
-  } else {
-    next.add(vid)
-  }
-  expandedRows.value = next
+function propertyOverflow(item: EntityListResult['items'][number]): number {
+  return hiddenPropertyEntries(item).length
 }
 
 onMounted(() => {
@@ -248,28 +242,40 @@ watch(
                         <b>{{ key }}</b>
                         <em>{{ value }}</em>
                       </span>
-                      <button
+                      <APopover
                         v-if="propertyOverflow(item)"
-                        type="button"
-                        class="entity-props__more"
-                        title="展开全部属性"
-                        @click="toggleRowDetail(item.vid)"
+                        :trigger="['hover', 'click']"
+                        position="bl"
+                        content-class="entity-property-popover"
                       >
-                        +{{ propertyOverflow(item) }}
-                      </button>
+                        <button
+                          type="button"
+                          class="entity-props__more"
+                          :aria-label="`查看其余 ${propertyOverflow(item)} 个公共属性`"
+                        >
+                          +{{ propertyOverflow(item) }}
+                        </button>
+                        <template #content>
+                          <div class="entity-property-popover__content">
+                            <p class="entity-property-popover__title">其他公共属性（{{ propertyOverflow(item) }}）</p>
+                            <div class="entity-property-popover__grid">
+                              <span
+                                v-for="[key, value] in hiddenPropertyEntries(item)"
+                                :key="key"
+                                class="entity-property-popover__item"
+                                :title="`${key}: ${value}`"
+                              >
+                                <b>{{ key }}</b>
+                                <em>{{ value }}</em>
+                              </span>
+                            </div>
+                          </div>
+                        </template>
+                      </APopover>
                       <span v-if="!propertyEntries(item).length" class="entity-props__empty">—</span>
                     </div>
                   </td>
                   <td>{{ item.score ?? '' }}</td>
-                </tr>
-                <tr v-if="expandedRows.has(item.vid)" class="entity-detail-row">
-                  <td :colspan="5">
-                    <div class="entity-detail">
-                      <span v-for="[key, value] in propertyEntries(item)" :key="key" class="entity-detail__item">
-                        <code>{{ key }}</code><em>{{ value }}</em>
-                      </span>
-                    </div>
-                  </td>
                 </tr>
               </template>
             </tbody>
@@ -323,11 +329,6 @@ watch(
 .entity-props__more{justify-self:start;padding:4px 8px;border:1px solid #bcd4f7;border-radius:4px;background:#eaf2ff;color:#165dff;font-size:12px;line-height:20px;cursor:pointer}
 .entity-props__more:hover{background:#dcebff}
 .entity-props__empty{color:#c9cdd4;font-size:12px}
-.entity-detail-row>td{background:#f9fbff}
-.entity-detail{display:flex;flex-wrap:wrap;gap:8px 18px}
-.entity-detail__item{display:inline-flex;align-items:center;gap:6px;font-size:12px;line-height:20px;color:#4e5969;white-space:nowrap}
-.entity-detail__item code{padding:1px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:11px}
-.entity-detail__item em{color:#86909c;font-style:normal;font-size:11px;word-break:break-all}
 .entity-pagination__info{min-width:0;overflow:hidden;color:#86909c;font-size:12px;line-height:20px;text-overflow:ellipsis;white-space:nowrap}
 </style>
 
@@ -347,4 +348,12 @@ watch(
 .app-workspace .entity-toolbar-shell #entity-filter-type .arco-select-view-input-hidden{position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important}
 .app-workspace .entity-toolbar-shell #entity-filter-type .arco-select-view-value{min-width:0;overflow:hidden;font-size:14px;line-height:22px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
 .app-workspace .entity-toolbar-shell #entity-filter-type :is(.arco-select-view-input,.arco-select-view-value){background:transparent!important}
+.entity-property-popover{box-sizing:border-box;width:440px;max-width:calc(100vw - 48px);padding:12px 16px!important}
+.entity-property-popover__content{max-height:240px;overflow:auto}
+.entity-property-popover__title{margin:0 0 8px;color:#1d2129;font-size:13px;line-height:20px;font-weight:500}
+.entity-property-popover__grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.entity-property-popover__item{display:flex;box-sizing:border-box;align-items:center;min-width:0;gap:4px;padding:4px 8px;border:1px solid #e5e6eb;border-radius:4px;background:#f7f8fa;color:#1d2129;font-size:12px;line-height:20px;white-space:nowrap}
+.entity-property-popover__item b{flex:0 1 auto;min-width:0;overflow:hidden;color:#4e5969;font-weight:500;text-overflow:ellipsis}
+.entity-property-popover__item b::after{content:":"}
+.entity-property-popover__item em{flex:1;min-width:0;overflow:hidden;color:#1d2129;font-style:normal;text-overflow:ellipsis}
 </style>

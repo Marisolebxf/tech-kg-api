@@ -119,6 +119,38 @@ def test_project_relations_split_multivalue_host_and_funder(tmp_path):
     assert "organization_not_found" not in report.stats
 
 
+def test_project_relations_western_name_not_split(tmp_path):
+    """西文“姓， 名”不拆分：整串进索引（找不到就进复核），不出残名候选。"""
+    graph = MagicMock()
+    matcher = ProjectEntityMatcher()
+    matcher.person.add("Zhang", "person_z")  # 图上恰有单名 Person 也不能命中残名
+    row = SimpleNamespace(
+        id="p3",
+        funded_institution="US Ignite， Inc.",
+        funded_amount=0,
+        fund_category="",
+        project_host="BO， Zhang",
+        participants=None,
+        participating_institution=None,
+    )
+    report = _report(tmp_path)
+
+    stage_project_relations(
+        graph,
+        [(row, "en_project", "dwd_en_project")],
+        matcher,
+        report,
+        ingest_batch="BATCH_TEST",
+        ingest_time="2026-07-26 20:00:00",
+        dry_run=False,
+    )
+
+    graph.merge_edge.assert_not_called()
+    not_found_values = [e["value"] for e in report.records.get("person_not_found", [])]
+    assert "bo， zhang" in not_found_values
+    assert "zhang" not in not_found_values
+
+
 def test_output_creates_project_to_paper_has_output(tmp_path):
     graph = MagicMock()
     graph.get_node.return_value = object()

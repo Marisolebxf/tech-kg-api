@@ -52,6 +52,7 @@ from script.project_graph_utils import (
     funded_by_org_props,
     parse_json_objects,
     parse_list,
+    parse_name_list,
     project_vid,
 )
 from script.project_ingest_report import ProjectIngestReport
@@ -443,10 +444,11 @@ def run(
                 ingest_batch=ingest_batch,
                 ingest_time=ingest_time,
             )
-            # 与 load_project_graph 同口径 parse_list 拆分：串中多值逐个匹配，各写一条边。
+            # 与 load_project_graph 同口径 parse_name_list 拆分：汉字多值逐个
+            # 匹配，西文名不拆。
             institutions = sorted(
                 value
-                for value in (normalize_text(v) for v in parse_list(row.funded_institution))
+                for value in (normalize_text(v) for v in parse_name_list(row.funded_institution))
                 if value
             )
             discipline = normalize_text(row.discipline)
@@ -489,7 +491,7 @@ def run(
             primary_institution = institutions[0] if institutions else ""
             hosts = sorted(
                 value
-                for value in (normalize_text(v) for v in parse_list(row.project_host))
+                for value in (normalize_text(v) for v in parse_name_list(row.project_host))
                 if value
             )
             for host in hosts:

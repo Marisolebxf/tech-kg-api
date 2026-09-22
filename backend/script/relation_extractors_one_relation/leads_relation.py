@@ -1,7 +1,7 @@
 """One-relation transform for LEADS（Project → Person）（平台喂数抽取：只输出边 JSON）.
 
 复刻旧 load_project_graph.py stage_project_relations 口径：dwd_zh/en_project 的
-project_host（parse_list 拆分多值后逐个 normalize_text）经 ProjectEntityMatcher 的
+project_host（parse_name_list 拆汉字多值、西文名不拆，逐个 normalize_text）经 ProjectEntityMatcher 的
 person 索引（name_zh/name_cn/name_en 精确唯一）匹配既有 Person 顶点，仅 matched
 写边（多值各写一条）；ambiguous/not_found 进 ProjectIngestReport 复核目录。候选集沿用旧
 collect_match_candidates 的 person 通道（project_host + participants 全集，二者
@@ -16,7 +16,7 @@ from typing import Any
 
 from script.extract_transform_common import edge_transform
 from script.project_entity_matcher import ProjectEntityMatcher, normalize_text
-from script.project_graph_utils import match_audit_props, parse_list
+from script.project_graph_utils import match_audit_props, parse_list, parse_name_list
 from script.project_ingest_report import ProjectIngestReport
 from script.relation_extractors_one_relation.common import (
     EdgeRecord,
@@ -81,7 +81,7 @@ def collect_person_candidates(
         sql = apply_since(f"SELECT project_host, participants FROM {table} ORDER BY id", since)
         params = {"since": since} if since else None
         for row in iter_rows(engine, sql, batch_size=batch_size, limit=limit, params=params):
-            for value in parse_list(row.get("project_host")):
+            for value in parse_name_list(row.get("project_host")):
                 if value.strip():
                     candidates.add(value.strip())
             for value in parse_list(row.get("participants")):
@@ -99,8 +99,8 @@ def make_leads_mapper(
         if not project_id:
             return []
         records: list[EdgeRecord] = []
-        # 与旧通道同口径 parse_list 拆分：串中多值（“A；B”）逐个匹配，各写一条边。
-        hosts = {normalize_text(value) for value in parse_list(row.get("project_host"))}
+        # 与旧通道同口径 parse_name_list 拆分：汉字多值逐个匹配，西文名不拆。
+        hosts = {normalize_text(value) for value in parse_name_list(row.get("project_host"))}
         for host in sorted(value for value in hosts if value):
             report.increment("person_candidates")
             host_result = matcher.person.match(host, method="name_exact")
@@ -185,7 +185,7 @@ def transform(payload: dict[str, Any]) -> dict[str, Any]:
     rows = payload.get("rows") or []
     candidates = set()
     for r in rows:
-        for value in parse_list(r.get("project_host")):
+        for value in parse_name_list(r.get("project_host")):
             if str(value).strip():
                 candidates.add(str(value).strip())
         for value in parse_list(r.get("participants")):

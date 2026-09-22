@@ -35,6 +35,7 @@ from script.project_graph_utils import (
     match_audit_props,
     parse_json_objects,
     parse_list,
+    parse_name_list,
     project_confidence,
     project_vid,
 )
@@ -204,9 +205,9 @@ def stage_project_relations(
             ingest_batch=ingest_batch,
             ingest_time=ingest_time,
         )
-        # 资助机构/负责人与 participants 同口径走 parse_list：串中多值
-        # （“A；B”）整串匹配必然 not_found，en 表 funded_institution 有 80+ 行多值。
-        institutions = {normalize_text(value) for value in parse_list(row.funded_institution)}
+        # 资助机构/负责人走 parse_name_list：含汉字的多值串拆分逐个匹配；
+        # 纯西文串不拆（“BO， Zhang”的逗号是姓名内部，拆了会出残名错边）。
+        institutions = {normalize_text(value) for value in parse_name_list(row.funded_institution)}
         for institution in sorted(value for value in institutions if value):
             report.increment("organization_candidates")
             org_result = matcher.organization.match(institution, method="name_exact")
@@ -228,7 +229,7 @@ def stage_project_relations(
                     _merge_edge(graph, pvid, target, "FUNDED_BY", props)
                 report.increment("edges_FUNDED_BY")
 
-        hosts = {normalize_text(value) for value in parse_list(row.project_host)}
+        hosts = {normalize_text(value) for value in parse_name_list(row.project_host)}
         for host in sorted(value for value in hosts if value):
             report.increment("person_candidates")
             host_result = matcher.person.match(host, method="name_exact")
@@ -246,8 +247,6 @@ def stage_project_relations(
                 if not dry_run:
                     _merge_edge(graph, pvid, target, "LEADS", props)
                 report.increment("edges_LEADS")
-
-        _MULTIVALUE_MARKER = None  # placeholder
 
         participants = {normalize_text(value) for value in parse_list(row.participants)}
         for participant in sorted(value for value in participants if value):

@@ -6,7 +6,7 @@ from typing import Any
 
 from dao.project import ProjectDAO
 from script.project_entity_matcher import normalize_doi, normalize_patent_number
-from script.project_graph_utils import parse_json_objects, parse_list
+from script.project_graph_utils import parse_json_objects, parse_list, parse_name_list
 
 
 def collect_match_candidates(
@@ -26,13 +26,13 @@ def collect_match_candidates(
     }
     allowed_ids = {str(row.id) for row, _source, _table in projects}
     for row, _source, _table in projects:
-        # funded_institution/project_host 与 participants 同口径 parse_list 拆分，
+        # funded_institution/project_host 走 parse_name_list（汉字多值拆、西文不拆），
         # 否则多值串整串进池永远查不到图上对应实体。
         result["organization"].update(
-            value.strip() for value in parse_list(row.funded_institution) if value.strip()
+            value.strip() for value in parse_name_list(row.funded_institution) if value.strip()
         )
         result["person"].update(
-            value.strip() for value in parse_list(row.project_host) if value.strip()
+            value.strip() for value in parse_name_list(row.project_host) if value.strip()
         )
         result["person"].update(
             value.strip() for value in parse_list(row.participants) if value.strip()

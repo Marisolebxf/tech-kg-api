@@ -1,7 +1,7 @@
 """One-relation transform for FUNDED_BY（Project → Organization）（平台喂数抽取：只输出边 JSON）.
 
 复刻旧 load_project_graph.py stage_project_relations 口径：dwd_zh/en_project 的
-funded_institution（parse_list 拆分多值后逐个 normalize_text）经 ProjectEntityMatcher 的
+funded_institution（parse_name_list 拆汉字多值、西文名不拆，逐个 normalize_text）经 ProjectEntityMatcher 的
 organization 索引（name_cn/name_en 精确唯一）匹配既有 Organization 顶点，仅
 matched 写边（多值各写一条）；ambiguous/not_found 进 ProjectIngestReport 复核目录（报告路径沿用
 旧默认 /tmp/project-ingest-reports/{batch}）。参与单位（participating_institution）
@@ -21,6 +21,7 @@ from script.project_graph_utils import (
     funded_by_org_props,
     match_audit_props,
     parse_list,
+    parse_name_list,
     to_float,
 )
 from script.project_ingest_report import ProjectIngestReport
@@ -92,7 +93,7 @@ def collect_organization_candidates(
         sql = apply_since(f"SELECT funded_institution FROM {table} ORDER BY id", since)
         params = {"since": since} if since else None
         for row in iter_rows(engine, sql, batch_size=batch_size, limit=limit, params=params):
-            for value in parse_list(row.get("funded_institution")):
+            for value in parse_name_list(row.get("funded_institution")):
                 if value.strip():
                     candidates.add(value.strip())
     return candidates
@@ -107,9 +108,9 @@ def make_funded_by_mapper(
         if not project_id:
             return []
         records: list[EdgeRecord] = []
-        # 与旧通道同口径 parse_list 拆分：串中多值（“A；B”）逐个匹配，各写一条边。
+        # 与旧通道同口径 parse_name_list 拆分：汉字多值逐个匹配，西文名不拆。
         institutions = {
-            normalize_text(value) for value in parse_list(row.get("funded_institution"))
+            normalize_text(value) for value in parse_name_list(row.get("funded_institution"))
         }
         for institution in sorted(value for value in institutions if value):
             report.increment("organization_candidates")
@@ -211,7 +212,7 @@ def transform(payload: dict[str, Any]) -> dict[str, Any]:
     rows = payload.get("rows") or []
     candidates = set()
     for r in rows:
-        for value in parse_list(r.get("funded_institution")):
+        for value in parse_name_list(r.get("funded_institution")):
             if str(value).strip():
                 candidates.add(str(value).strip())
     matcher = _load_matcher(candidates, dry_run=False)

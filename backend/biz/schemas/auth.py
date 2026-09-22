@@ -34,6 +34,12 @@ class UserProfile(CamelCaseModel):
     status: int = 0
     user_type: int = 1
 
+    @field_validator("username", "nickname", "email", "mobile", "avatar", mode="before")
+    @classmethod
+    def _null_text_to_empty(cls, value: Any) -> Any:
+        # 用户中心对未设置的可选字段会返回 null（如无昵称账号 nickname=null），归一为空串
+        return "" if value is None else value
+
 
 class RoleSummary(CamelCaseModel):
     id: int | str

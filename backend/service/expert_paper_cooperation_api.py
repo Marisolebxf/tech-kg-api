@@ -13,6 +13,7 @@ import httpx
 
 from biz.schema.expert_paper_cooperation import ExpertPaperCooperationDemoRequest
 from service.base_module import KGModuleScaffoldService
+from service.business_access import business_graph_app
 
 MAX_SHARED_PAPERS = 1000
 GRAPH_PAGE_SIZE = 200
@@ -48,7 +49,7 @@ class GraphSearchApiClient:
         # 与高并发自调用饱和。方法体、路径、错误语义（raise_for_status/ValueError→404/
         # GraphSearchApiError/空值兜底）保持不变。app 由 handler 传 request.app，避免 import main。
         self._client = httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app),
+            transport=httpx.ASGITransport(app=business_graph_app(app)),
             base_url="https://testserver/api/v1",
             timeout=timeout,
             headers=auth_headers,

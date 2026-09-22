@@ -217,7 +217,8 @@ class TRSGraphClient:
         try:
             resp = self._client.request(method, path, json=json, params=params, timeout=timeout)
         except httpx.HTTPError as exc:
-            raise GraphConnectionError(f"Request failed: {method} {path}") from exc
+            detail = f"{type(exc).__name__}: {exc}".rstrip(": ")
+            raise GraphConnectionError(f"Request failed: {method} {path} ({detail})") from exc
         if resp.status_code == 404:
             raise GraphNotFoundError(f"{method} {path} -> 404")
         if not resp.is_success:

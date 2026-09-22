@@ -4,6 +4,8 @@
 
 > 收录口径：模块服务代码中实际读取的边类型/点类型 → 反推装载该边/点的 ETL 脚本 → 该脚本读的源表（硬依赖闭包，含边端点必须预先存在的实体表）。未收录表见文末。
 
+> ⚠️ **核查反馈（2026-09-22，待修订）**：经对本仓库代码逐条核对，本文"硬依赖闭包（66 张）"**不成立**——另有 9 张注入脚本硬依赖的表与 1 个探针列未收录，"未收录的表"一节多条排除理由与代码事实相反。**补齐前请勿以本文为空库重建源表 / 验证抽取脚本可行性的依据**；实际硬依赖应为 75 张表 + 1 列。明细与证据见文末「核查反馈」一节。
+
 ## 学者域（load_scholar_entities / load_scholar_relations → Person + AFFILIATED_WITH / COAUTHOR_WITH / STUDIED_AT / AUTHORED_BY）
 
 ### `dwd_scholar`（2175 行）
@@ -1703,3 +1705,56 @@ CREATE TABLE `dwd_industry_chain_news_info` (
 | `dwd_org_stock_base` | 上市公司 Organization 顶点补充；抽取脚本侧不产九模块读的边（模块 7 运行时经 gkx 会话使用，见《九大业务模块MySQL表结构.md》） |
 | `dwd_org_tag_info` | 无 ETL 脚本引用；ORM/运行时在用但 dev 库缺表 |
 | `scholar` | 仅 legacy `load_graph.py`（techkg 旧空间）使用，dev 库无此表 |
+
+## 核查反馈（2026-09-22，待修订）
+
+对本文"收录口径（硬依赖闭包，66 张）"与"未收录的表"两节做了代码级核查。基准：本仓库 `backend/`（与 kgetl@7778e52 在 `backend/script/` 下仅差 `semantic_research_entity_extract.py`，结论两边通用）。
+
+**总结论：66 张已收录表全部真实被消费、无凑数，抽查 SQL 引用列名与本文 DDL 全部对得上；但闭包不成立——另有 9 张硬依赖表与 1 个探针列未收录，"未收录的表"一节多条排除理由与代码事实相反。补齐前，本文档不能支撑"空库重建源表、验证各抽取脚本可行性"的目标。实际硬依赖应为 75 张表 + 1 列。**
+
+### 1. 缺失的硬依赖表（9 张，按本文口径重建即失败 / 建不出边）
+
+| 表 | 消费证据（backend/ 内 file:line） | 缺失后果 |
+|---|---|---|
+| `dwd_zh_author` / `dwd_en_author` | `script/load_paper_journal_graph.py:264`（主流程步骤 2，无条件执行）；`script/relation_extractors_one_relation/authored_by_relation.py:18-25`；`script/entity_extractors_one_entity/person_entity.py:124-125`（平台 SOURCES）；`script/paper_journal_relation/attach_provenance.py:61,67` | 步骤 2 直接抛错，期刊/引文/报告后续步骤全部不跑、水位不推进。论文期刊域头部声称的"作者 Person + AUTHORED_BY"唯一来源就是这两张表 |
+| `dwd_zh_report` / `dwd_en_report` | `script/load_paper_journal_graph.py:472,497`（步骤 6，无条件执行）；`script/entity_extractors_one_entity/report_entity.py:9-10`（Report 顶点，且已注册平台抽取 `register_platform_extraction.py:52`）；`attach_provenance.py:85,91` | 步骤 6 崩。"九模块不读 Report 域"混淆了运行时读取与注入装载：Report 顶点每轮都在装 |
+| `dwd_zh_report_paper` | `script/paper_journal_relation/load_paper_relation.py:393`（默认 RELATION_TYPES 含 paper_report，:447-453，默认必跑）；`script/relation_extractors_one_relation/referenced_by_relation.py:15-19`；`script/workflow/paper_journal_chain_etl.py:409,425` | 与《关联关系脚本整理说明》序号 7"REFERENCED_BY 已实现（referenced_by_relation.py）"直接矛盾——该脚本源表即本表 |
+| `dwd_org_heis_info` | `script/relation_extractors_one_relation/resolvers.py:68-84`（`ExactOrganizationResolver._SOURCES` 七表 SELECT，机构域全部边脚本共用，`org_edges.py:505` 每次 transform 加载）；`script/entity_extractors_one_entity/org_catalog.py:70`（39 张 TableSpec 之一）；`organization_ETL/run_etl.py` preflight 对全部 39 张做 information_schema 校验，缺表即硬错误 | "纯顶点补充，非硬依赖"不成立：不产边属实，但缺表则机构域**一条边都建不出来**（resolver 抛错、preflight 拒跑） |
+| `dwd_special_hongkong_company` / `dwd_special_aomen_company` | 同上 `resolvers.py:73-76,82`；`org_catalog.py:117,123`；另 `script/load_patent_relations.py:44-54` 与 `relation_extractors_one_relation/patent_matching.py:38-44` 将其（含 heis）列为 APPLIED_BY/OWNED_BY 唯一合法机构目标来源 | 同上；且这三张缺席时专利申请边目标候选池静默缩水（不崩、丢边） |
+| `dwd_org_stock_base` | `script/entity_extractors_one_entity/org_catalog.py:72-77`（organization_enrichment 顶点）；`script/organization_etl_common.py:143`；属 39 张 preflight 范围 | "抽取脚本侧不产九模块读的边"前半句属实，但表本身被实体注入读取；只建本文 35 张机构表，org ETL preflight 直接失败 |
+
+### 2. 缺失列 / 列口径问题
+
+- `dwd_scholar.scholar_org_id`：`script/load_scholar_entities.py:144-155`、`load_scholar_relations.py:214-221` 均按 information_schema 探测该列（dev 库实际存在），`person_entity.py:81` 映射 `organization_id`。按本文 DDL 重建不报错，但 AFFILIATED_WITH 会从 confidence 1.0（org_id 直连）**静默降级**为 0.6（机构名匹配），Person.organization_id 溯源丢失。
+- 境外机构（forg）系列 DDL 无 `data_source`/`created_time`/`updated_time` 审计列（若为实测输出则属实情，但需注明）：`organization_relation_etl.py:985-993` 的水位增量对无时间列表静默退化为全量重跑，`source_update_time` 溯源为空。
+- ORM 与本文 DDL 存在版本差待对齐：`db_model/scholar.py` 映射 `id`/`scholar_org_id`；`db_model/domestic_organization.py:1222-1248` 将 stock 两表信用代码列映射为 `social_credit_code`，而本文 DDL 为 `external_id`；`dwd_org_org_product_info` ORM 的 `industry_class`（背景分析在用）不在本文 DDL。请注明本文 DDL 实测自哪个库哪个版本，避免"修好库指向后又撞 unknown-column"。
+
+### 3. "未收录的表"理由勘误
+
+| 原排除理由 | 核查结论 |
+|---|---|
+| Report 三表"九模块不读 Report 域（AUTHOR_OF_REPORT / REPORT_ORG / REPORT_RELATED_PROJECT 无装载脚本）" | **错误**。Report 顶点有装载（report_entity.py，已平台注册）；dwd_zh_report_paper 是 REFERENCED_BY 的源表且默认必跑。"无装载脚本"仅对 AUTHOR_OF_REPORT / REPORT_ORG / REPORT_RELATED_PROJECT 三条边成立 |
+| heis / hongkong / aomen"纯顶点补充，不产生任何九模块读取的边（非硬依赖）" | **错误**。是机构域边解析器（resolvers.py 七表）与 org ETL preflight（39 表）的硬依赖 |
+| `dwd_org_stock_base`"抽取脚本侧不产九模块读的边" | **半对**。无边属实；但被 organization_enrichment 实体装载读取，且在 preflight 39 表内 |
+| `dwd_org_tag_info`"无 ETL 脚本引用" | 属实（仅 `dao/organization.py:51-53` + `db_model/domestic_organization.py:1284-1302` 运行时用） |
+| `scholar`"仅 legacy load_graph.py 使用" | 属实（且 load_graph.py 实际读的也是 DwdScholar/dwd_scholar，`scholar` ORM 类为死代码） |
+
+软性漏记（建议补入"未收录"并注明理由）：`dwd_rel_project_paper` / `dwd_rel_project_patent`——`load_project_graph.py:400-427`、`has_output_relation.py:162-163` 存在性保护读取，仅产出 cross_domain 报告项、不建边。
+
+### 4. 抽取脚本执行层已知问题（影响"验证各抽取脚本可行性"的目标）
+
+- `load_paper_journal_graph.py`：BATCH=1 逐行 HTTP INSERT；`batch_insert_vertex/edge`（:81-89,107-112）首错后全部吞掉、ok 计数虚高 → **静默丢点/丢边**；增量模式对期刊/引文/报告仍是全量扫；CITES/CITED_BY 写向本脚本不创建的 `paper_ref_`/`paper_cit_` 桩 VID（须先跑 `load_paper_relation.py`，否则悬空边）。
+- `industry_chain_etl/load_industry_chain_graph.py:74-80`、`backfill_chain_org_nodes.py:88-94`：`_write` 吞一切异常仍返回 len(rows)，"写入完成 N"虚报实际写入量。
+- 陈旧硬编码溯源：`load_paper_relation.py:66-67`（INGEST_BATCH="paper_relation_0725" / INGEST_TIME="2026-07-26"）、`attach_provenance.py:40-41` 与 `backfill_stub_journals.py`（"2026-08-11T00:00:00Z"）、产业链两脚本（2026-08-05/10）——重跑仍打旧时间戳。
+- `org_edges.py:502-507`：`ExactOrganizationResolver` 每个 transform 全量扫 7 张表重建索引，批量越多浪费越大。
+- `relation_extractors_one_relation/common.py:346-366`：非唯一 `ORDER BY 1` 上 LIMIT/OFFSET 分页，运行中写入会跳行/重行；水位为本地文件（`script/.etl_watermark/`），跨机器/容器不共享。
+- 学者/专利关系脚本整表 `.all()` 进内存、无水位全量重跑（靠写侧幂等兜底）：dev 量级可行，生产量级不可。
+
+正面确认：66 张收录表分域逐一核对全部真实消费（学者 5/5、论文期刊 12/12、项目 4/4、专利 6/6、机构 35/35、产业链 4/4，无 padding）；抽查 SQL 引用列名全部存在于本文 DDL；`etl_watermark.py` 原子写、成功才推进；`load_patent_graph.py` keyset 分页 + 批内去重 + 被拒批次二分重试；one-relation 包确定性 rank 的 `INSERT EDGE @rank` 幂等覆盖设计良好。
+
+### 5. 修订清单（待办）
+
+1. 补 §1 的 9 张表 DDL（dev 库 `SHOW CREATE TABLE`），并为 `dwd_scholar` 补 `scholar_org_id` 列 → "共 66 张"改 75 张。
+2. 按 §3 重写"未收录的表"，补记 `dwd_rel_project_paper` / `dwd_rel_project_patent`。
+3. 若坚持 66 张口径，收录口径须改为"平台 one-relation 通道闭包"并逐条声明排除的旧 monolithic 入口，同时修正《关联关系脚本整理说明》序号 7 与本文的矛盾表述。
+4. 按 §2 注明 DDL 实测库/版本，并核齐 ORM ↔ DDL 差异。

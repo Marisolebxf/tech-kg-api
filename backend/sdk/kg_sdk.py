@@ -139,6 +139,19 @@ class SemanticToolkitClient:
         """返回服务当前公开的功能点目录。"""
         return self._request("GET", "/catalog")
 
+    def general_entities(
+        self,
+        document_title: str,
+        text: str,
+        **params: Any,
+    ) -> dict[str, Any]:
+        """通用实体识别：抽取 PERSON/LOCATION/ORGANIZATION/EVENT。"""
+        return self._request(
+            "POST",
+            "/ner/general/text",
+            {"document_title": document_title, "text": text, **params},
+        )
+
     def research_entities(
         self,
         document_title: str,
@@ -149,6 +162,92 @@ class SemanticToolkitClient:
         return self._request(
             "POST",
             "/ner/research/text",
+            {"document_title": document_title, "text": text, **params},
+        )
+
+    def domain_entities(
+        self,
+        document_title: str,
+        text: str,
+        *,
+        domain: str = "",
+        **params: Any,
+    ) -> dict[str, Any]:
+        """专业领域实体识别；未指定领域时由服务自动识别。"""
+        payload = {"document_title": document_title, "text": text, **params}
+        if domain:
+            payload["domain"] = domain
+        return self._request("POST", "/ner/domain/text", payload)
+
+    def classify_zh(
+        self,
+        document_title: str,
+        text: str,
+        **params: Any,
+    ) -> dict[str, Any]:
+        """中文科技文献自动分类。"""
+        return self._request(
+            "POST",
+            "/classify/clc/zh/text",
+            {"document_title": document_title, "text": text, **params},
+        )
+
+    def classify_en(
+        self,
+        document_title: str,
+        text: str,
+        **params: Any,
+    ) -> dict[str, Any]:
+        """英文科技文献自动分类。"""
+        return self._request(
+            "POST",
+            "/classify/clc/en/text",
+            {"document_title": document_title, "text": text, **params},
+        )
+
+    def classify_domain(
+        self,
+        document_title: str,
+        text: str,
+        *,
+        domain: str,
+        **params: Any,
+    ) -> dict[str, Any]:
+        """专业领域科技文献分类。"""
+        return self._request(
+            "POST",
+            "/classify/domain/text",
+            {
+                "document_title": document_title,
+                "text": text,
+                "domain": domain,
+                **params,
+            },
+        )
+
+    def keywords_zh(
+        self,
+        document_title: str,
+        text: str,
+        **params: Any,
+    ) -> dict[str, Any]:
+        """中文科技文献关键词识别。"""
+        return self._request(
+            "POST",
+            "/keywords/zh/text",
+            {"document_title": document_title, "text": text, **params},
+        )
+
+    def keywords_en(
+        self,
+        document_title: str,
+        text: str,
+        **params: Any,
+    ) -> dict[str, Any]:
+        """英文科技文献关键词识别。"""
+        return self._request(
+            "POST",
+            "/keywords/en/text",
             {"document_title": document_title, "text": text, **params},
         )
 
@@ -169,6 +268,45 @@ class SemanticToolkitClient:
             {"document_title": document_title, "text": text, **params},
         )
 
+    def moves_zh(
+        self,
+        document_title: str,
+        abstract: str,
+        **params: Any,
+    ) -> dict[str, Any]:
+        """中文摘要语步识别。"""
+        return self._request(
+            "POST",
+            "/move/abstract/zh/text",
+            {"document_title": document_title, "text": abstract, **params},
+        )
+
+    def moves_en(
+        self,
+        document_title: str,
+        abstract: str,
+        **params: Any,
+    ) -> dict[str, Any]:
+        """英文摘要语步识别。"""
+        return self._request(
+            "POST",
+            "/move/abstract/en/text",
+            {"document_title": document_title, "text": abstract, **params},
+        )
+
+    def fund_moves(
+        self,
+        project_name: str,
+        full_text: str,
+        **params: Any,
+    ) -> dict[str, Any]:
+        """基金申请书、进展报告或结题报告语步识别。"""
+        return self._request(
+            "POST",
+            "/move/fund/zh/text",
+            {"project_name": project_name, "text": full_text, **params},
+        )
+
     def citation_intent(
         self,
         document_title: str,
@@ -186,6 +324,79 @@ class SemanticToolkitClient:
         if reference_entries:
             payload["reference_entries"] = reference_entries
         return self._request("POST", "/citation-intent/text", payload)
+
+    def citation_sentiment(
+        self,
+        document_title: str,
+        full_text: str,
+        *,
+        reference_entries: str = "",
+        **params: Any,
+    ) -> dict[str, Any]:
+        """识别论文引用句的引用情感。"""
+        payload = {
+            "document_title": document_title,
+            "scientific_document_full_text": full_text,
+            **params,
+        }
+        if reference_entries:
+            payload["reference_entries"] = reference_entries
+        return self._request("POST", "/citation-sentiment/text", payload)
+
+    def relation_extract(self, record_id: str) -> dict[str, Any]:
+        """根据上游 NER 响应的 record_id 抽取实体关系。"""
+        if not record_id:
+            raise ValueError("relation_extract 需要非空 NER record_id")
+        return self._request(
+            "POST",
+            "/relation/from-ner-record",
+            {"upstream_ner_record_id": record_id},
+        )
+
+    def deep_cluster(
+        self,
+        documents: list[dict[str, Any]],
+        *,
+        dimension: str = "technology",
+        output_format: str = "JSON",
+        **params: Any,
+    ) -> dict[str, Any]:
+        """对至少四篇文献执行深度聚类。"""
+        if len(documents) < 4:
+            raise ValueError("deep_cluster 至少需要四篇文献")
+        metadata = [
+            {
+                "document_id": document["document_id"],
+                "title": document.get("title", ""),
+                "publication_date": document.get("publication_date", ""),
+            }
+            for document in documents
+        ]
+        return self._request(
+            "POST",
+            "/cluster/deep/texts",
+            {
+                "scientific_document_texts": documents,
+                "document_metadata": metadata,
+                "cluster_dimension": dimension,
+                "output_format": output_format,
+                **params,
+            },
+        )
+
+    def cluster_labels(
+        self,
+        phrase_sets: list[dict[str, Any]],
+        **params: Any,
+    ) -> dict[str, Any]:
+        """根据深度聚类结果生成统一主题标签。"""
+        if not phrase_sets:
+            raise ValueError("cluster_labels 需要非空 cluster_phrase_sets")
+        return self._request(
+            "POST",
+            "/cluster-labels/generate",
+            {"cluster_phrase_sets": phrase_sets, **params},
+        )
 
     def structured_review(
         self,
@@ -221,6 +432,11 @@ class SemanticToolkitClient:
         return list(data.get("entity_results") or data.get("entities") or [])
 
     @staticmethod
+    def data_of(response: dict[str, Any]) -> dict[str, Any]:
+        data = response.get("data") or {}
+        return dict(data) if isinstance(data, dict) else {"value": data}
+
+    @staticmethod
     def definitions_of(response: dict[str, Any]) -> list[dict[str, Any]]:
         return list((response.get("data") or {}).get("definitions") or [])
 
@@ -232,6 +448,45 @@ class SemanticToolkitClient:
             or data.get("research_question_sentences")
             or []
         )
+
+    @staticmethod
+    def record_id_of(response: dict[str, Any]) -> str:
+        return str(
+            (response.get("meta") or {}).get("record_id")
+            or (response.get("data") or {}).get("record_id")
+            or ""
+        )
+
+    @staticmethod
+    def triples_of(response: dict[str, Any]) -> list[dict[str, Any]]:
+        data = response.get("data") or {}
+        return list(
+            data.get("relation_triples")
+            or data.get("triples")
+            or data.get("relations")
+            or []
+        )
+
+    @staticmethod
+    def keywords_of(response: dict[str, Any]) -> list[dict[str, Any]]:
+        return list((response.get("data") or {}).get("keywords") or [])
+
+    @staticmethod
+    def classifications_of(response: dict[str, Any]) -> list[dict[str, Any]]:
+        data = response.get("data") or {}
+        return list(
+            data.get("classifications")
+            or data.get("multilevel_classification_results")
+            or []
+        )
+
+    @staticmethod
+    def clusters_of(response: dict[str, Any]) -> list[dict[str, Any]]:
+        return list((response.get("data") or {}).get("clusters") or [])
+
+    @staticmethod
+    def cluster_labels_of(response: dict[str, Any]) -> list[dict[str, Any]]:
+        return list((response.get("data") or {}).get("labels") or [])
 
 
 def get_semantic_client(

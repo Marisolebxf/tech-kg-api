@@ -694,7 +694,9 @@ onMounted(loadReviews)
 .rerun-confirm-text{font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
 /* 操作列撤销旧的右侧固定列实现；static 只作用 td——表头单元格要保留全局 th 的吸顶 */
 .ops-review-table-scroll td.review-action-col{position:static;box-sizing:border-box;width:auto;min-width:0;box-shadow:none;white-space:nowrap}
-.review-action-col .alert-actions{display:flex;width:max-content;min-width:0;align-items:center;gap:8px}
+/* 按钮组在列内水平居中（A 类单按钮不再贴左），表头同步居中 */
+.ops-review-table-scroll th.review-action-col{text-align:center}
+.review-action-col .alert-actions{display:flex;width:100%;min-width:0;align-items:center;justify-content:center;gap:8px}
 .ops-review-table-scroll th,.ops-review-table-scroll td{box-sizing:border-box;padding-right:16px;padding-left:16px}
 /* 固定列合计 1076px，最小表宽为对象列保留 268px；勾选列额外占 52px。 */
 .ops-review-table-scroll table.review-case-table{width:100%;min-width:1344px;table-layout:fixed}

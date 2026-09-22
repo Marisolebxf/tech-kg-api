@@ -1,12 +1,10 @@
 # 图谱 ETL 源表 MySQL 建表语句（九大业务模块）
 
-> 覆盖九大业务模块图数据抽取脚本实际消费的 MySQL 源表 DDL，共 66 张，取自 dev 共享 MySQL（`host.docker.internal:30306`，库 `gkx_element`）实测 `SHOW CREATE TABLE`（2026-09-22）。用于在空库重建源表、验证各抽取脚本可行性与完整性。行数为导出时实测。
+> 覆盖九大业务模块图数据全部注入脚本的 MySQL 源表闭包，共 75 张。DDL 实测自 dev 共享 MySQL 8.0.46（`host.docker.internal:30306`，库 `gkx_element`）`SHOW CREATE TABLE`（2026-09-22）。用于在空库重建源表、验证各抽取脚本可行性与完整性。行数为导出时实测。
 
-> 收录口径：模块服务代码中实际读取的边类型/点类型 → 反推装载该边/点的 ETL 脚本 → 该脚本读的源表（硬依赖闭包，含边端点必须预先存在的实体表）。未收录表见文末。
+> 收录口径（2026-09-22 按核查反馈修订，66→75）：注入脚本读到的全部源表——含每轮无条件执行的装载步骤（论文作者/报告）、机构边解析器 ExactOrganizationResolver 七表联查、org ETL preflight 的 39 张校验范围。缺任何一张，对应脚本直接失败或静默丢边。
 
-> ⚠️ **核查反馈（2026-09-22，待修订）**：经对本仓库代码逐条核对，本文"硬依赖闭包（66 张）"**不成立**——另有 9 张注入脚本硬依赖的表与 1 个探针列未收录，"未收录的表"一节多条排除理由与代码事实相反。**补齐前请勿以本文为空库重建源表 / 验证抽取脚本可行性的依据**；实际硬依赖应为 75 张表 + 1 列。明细与证据见文末「核查反馈」一节。
-
-## 学者域（load_scholar_entities / load_scholar_relations → Person + AFFILIATED_WITH / COAUTHOR_WITH / STUDIED_AT / AUTHORED_BY）
+## 学者域（load_scholar_entities / load_scholar_relations → Person + AFFILIATED_WITH / COAUTHOR_WITH / STUDIED_AT / AUTHORED_BY 兜底）
 
 ### `dwd_scholar`（2175 行）
 
@@ -124,9 +122,10 @@ CREATE TABLE `dwd_scholar_paper_relation` (
   KEY `idx_create_time` (`create_time`),
   KEY `idx_update_time` (`update_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='学者论文关系';
+@@@DOMAIN paper
 ```
 
-## 论文期刊域（load_paper_journal_graph / paper_journal_relation → Paper / Journal / 作者Person + AUTHORED_BY / PUBLISHED_IN / CITES / CITED_BY / RELATED_TO / HAS_KEYWORD）
+## 论文期刊域（load_paper_journal_graph / paper_journal_relation → Paper / 作者 Person / Journal / Report + AUTHORED_BY / PUBLISHED_IN / CITES / CITED_BY / RELATED_TO / HAS_KEYWORD / REFERENCED_BY。作者与报告步骤每轮无条件装载，虽九模块运行时不读 Report 出边）
 
 ### `dwd_zh_paper`（2000 行）
 
@@ -200,6 +199,50 @@ CREATE TABLE `dwd_en_paper` (
   KEY `idx_cover_year_start` (`cover_year_start`),
   KEY `idx_cover_date_start` (`cover_date_start`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='英文论文详情信息';
+```
+
+### `dwd_zh_author`（7906 行）
+
+```sql
+CREATE TABLE `dwd_zh_author` (
+  `paper_id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '文献id/varchar(64) ',
+  `author_sequence` int NOT NULL COMMENT '作者顺序/int ',
+  `author_id` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '文献作者 id/varchar(32) ',
+  `en_name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '文献作者英文名/varchar(255) ',
+  `zh_name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '文献作者中文名/varchar(255) ',
+  `email` json DEFAULT NULL COMMENT '文献作者email/json ',
+  `correspond` tinyint DEFAULT NULL COMMENT '是否为通讯作者/tinyint ',
+  `institution` text CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci COMMENT '作者单位名称/text ',
+  `affiliation` json DEFAULT NULL COMMENT '文献作者地址/json ',
+  `data_source` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '数据来源/varchar(255) ',
+  `created_time` datetime NOT NULL COMMENT '创建时间/datetime ',
+  `updated_time` datetime NOT NULL COMMENT '更新时间/datetime ',
+  KEY `idx_paper_id` (`paper_id`),
+  KEY `idx_author_sequence` (`author_sequence`),
+  KEY `idx_author_id` (`author_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='中文文献作者详情信息';
+```
+
+### `dwd_en_author`（12977 行）
+
+```sql
+CREATE TABLE `dwd_en_author` (
+  `paper_id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '文献id/varchar(64) ',
+  `author_sequence` int NOT NULL COMMENT '作者顺序/int ',
+  `author_id` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '文献作者 id/varchar(32) ',
+  `en_name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '文献作者英文名/varchar(255) ',
+  `zh_name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '文献作者中文名/varchar(255) ',
+  `email` json DEFAULT NULL COMMENT '文献作者email/json ',
+  `correspond` tinyint DEFAULT NULL COMMENT '是否为通讯作者/tinyint ',
+  `institution` text CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci COMMENT '作者单位名称/text ',
+  `affiliation` json DEFAULT NULL COMMENT '文献作者地址/json ',
+  `data_source` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '数据来源/varchar(255) ',
+  `created_time` datetime NOT NULL COMMENT '创建时间/datetime ',
+  `updated_time` datetime NOT NULL COMMENT '更新时间/datetime ',
+  KEY `idx_paper_id` (`paper_id`),
+  KEY `idx_author_sequence` (`author_sequence`),
+  KEY `idx_author_id` (`author_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='英文文献作者详情信息';
 ```
 
 ### `dwd_zh_journal`（2080 行）
@@ -440,6 +483,90 @@ CREATE TABLE `dwd_en_paper_classification` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='英文论文分类信息';
 ```
 
+### `dwd_zh_report`（2000 行）
+
+```sql
+CREATE TABLE `dwd_zh_report` (
+  `report_id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '中文报告id/varchar(64) ',
+  `report_category` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '报告类别/varchar(64) ',
+  `title_cn` varchar(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '中文题名/varchar(512) ',
+  `authors` json DEFAULT NULL COMMENT '作者/json ',
+  `organization` json DEFAULT NULL COMMENT '作者单位/完成单位/json ',
+  `abstract_cn` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci COMMENT '中文摘要/longtext ',
+  `keywords_cn` json DEFAULT NULL COMMENT '中文关键词/json ',
+  `report_type` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '报告类型/varchar(32) ',
+  `page_count` int DEFAULT NULL COMMENT '全文页数/int ',
+  `preparation_time` varchar(8) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '编制时间/varchar(8) ',
+  `approval_year` int DEFAULT NULL COMMENT '立项批准年/int ',
+  `related_literature` json DEFAULT NULL COMMENT '相关文献/json ',
+  `related_scholars` json DEFAULT NULL COMMENT '相关学者/json ',
+  `related_institutions` json DEFAULT NULL COMMENT '相关机构/json ',
+  `related_projects` json DEFAULT NULL COMMENT '相关项目/json ',
+  `source_org` json DEFAULT NULL COMMENT '报告来源/json ',
+  `source_url` text CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci COMMENT '报告原文链接/text ',
+  `visibility_scope` varchar(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '可见范围/varchar(16) ',
+  `project_annual_number` int DEFAULT NULL COMMENT '项目年度编号/int ',
+  `contact_phone` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '联系电话/varchar(64) ',
+  `updated_time` varchar(8) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '更新时间/varchar(8) ',
+  `scholar_id` json DEFAULT NULL COMMENT '相关学者ID/json ',
+  `org_id` json DEFAULT NULL COMMENT '相关机构ID/json ',
+  `paper_id` json DEFAULT NULL COMMENT '相关论文ID/json ',
+  `project_id` json DEFAULT NULL COMMENT '相关项目ID/json ',
+  `file_path` json DEFAULT NULL COMMENT '文件路径/json ',
+  KEY `idx_report_id` (`report_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='中文科技报告信息表';
+```
+
+### `dwd_en_report`（1000 行）
+
+```sql
+CREATE TABLE `dwd_en_report` (
+  `report_id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '外文报告id/varchar(64) ',
+  `report_number` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '报告编号/varchar(64) ',
+  `title_en` varchar(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '英文题名/varchar(512) ',
+  `publication_date` varchar(8) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '发布时间/出版日期/varchar(8) ',
+  `authors` json DEFAULT NULL COMMENT '作者/json ',
+  `corporate_author` json DEFAULT NULL COMMENT '团体作者/json ',
+  `source_agency` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '来源机构/出版社/varchar(64) ',
+  `source_url` varchar(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '报告原文链接/varchar(512) ',
+  `abstract_en` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci COMMENT '英文摘要/longtext ',
+  `keywords_en` json DEFAULT NULL COMMENT '英文关键词/json ',
+  `page_count` int DEFAULT NULL COMMENT '全文页数/int ',
+  `document_type` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '文档类型/varchar(64) ',
+  `contract_number` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '合同编号/varchar(32) ',
+  `content` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci COMMENT '正文内容/longtext ',
+  `related_literature` json DEFAULT NULL COMMENT '相关文献/json ',
+  `related_scholars` json DEFAULT NULL COMMENT '相关学者/json ',
+  `updated_time` varchar(8) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `literature_id` json DEFAULT NULL COMMENT '相关文献ID/json ',
+  `org_id` json DEFAULT NULL COMMENT '相关机构ID/json ',
+  `authors_id` json DEFAULT NULL COMMENT '相关作者ID/json ',
+  `scholar_id` json DEFAULT NULL COMMENT '相关学者ID/json ',
+  `file_path` json DEFAULT NULL COMMENT '文件路径/json ',
+  KEY `idx_report_id` (`report_id`),
+  KEY `idx_report_number` (`report_number`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='外文科技报告信息表';
+```
+
+### `dwd_zh_report_paper`（12806 行）
+
+```sql
+CREATE TABLE `dwd_zh_report_paper` (
+  `paper_id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '论文ID/varchar(64) ',
+  `paper_name` varchar(320) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+  `paper_doi` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `report_source` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '报告所属来源/varchar(32) ',
+  `report_id` json NOT NULL COMMENT '中文报告ID集合/json ',
+  `paper_source` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '论文来源/varchar(32) ',
+  KEY `idx_paper_id` (`paper_id`),
+  KEY `idx_paper_name` (`paper_name`),
+  KEY `idx_paper_doi` (`paper_doi`),
+  KEY `idx_report_source` (`report_source`),
+  KEY `idx_paper_source` (`paper_source`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='报告-论文关联表';
+@@@DOMAIN project
+```
+
 ## 项目域（load_project_graph → Project + FUNDED_BY / LEADS / HAS_PARTICIPANT / HAS_KEYWORD / HAS_OUTPUT）
 
 ### `dwd_zh_project`（2010 行）
@@ -565,6 +692,7 @@ CREATE TABLE `dwd_en_project_output` (
   `create_time` datetime DEFAULT NULL COMMENT '创建时间',
   KEY `idx_id` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='国外项目-产出信息';
+@@@DOMAIN patent
 ```
 
 ## 专利域（load_patent_graph / load_patent_relations → Patent / Keyword + INVENTED_BY / APPLIED_BY / HAS_KEYWORD）
@@ -715,9 +843,10 @@ CREATE TABLE `dwd_patent_title` (
   PRIMARY KEY (`patent_id`),
   KEY `idx_dwd_patent_title_id` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='专利标题信息表';
+@@@DOMAIN organization
 ```
 
-## 机构域（organization_entity_etl / organization_relation_etl → 供间接关系与产业链事件遍历的股权/高管/实控/投资/并购/产品边 + News/Event 点 + HAS_NEWS / INVOLVED_IN）
+## 机构域（organization_entity_etl / organization_relation_etl → 股权/高管/实控/投资/并购/产品边 + News / Event 点 + HAS_NEWS / INVOLVED_IN。含 ExactOrganizationResolver 七表联查与 preflight 全 39 张校验范围，缺表即拒跑）
 
 ### `dwd_org_base_info`（1674 行）
 
@@ -975,6 +1104,60 @@ CREATE TABLE `dwd_org_recruit_info` (
   KEY `idx_name_cn` (`name_cn`),
   KEY `idx_external_id` (`external_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='招聘信息';
+```
+
+### `dwd_org_heis_info`（100 行）
+
+```sql
+CREATE TABLE `dwd_org_heis_info` (
+  `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
+  `name_cn` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '学校名称/varchar(255) ',
+  `school_code` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '学校标识码/varchar(255) ',
+  `external_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '统一社会信用代码/varchar(255) ',
+  `name_en` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '学校英文名称/varchar(255) ',
+  `est_year` decimal(20,0) DEFAULT NULL COMMENT '建立时间/decimal(20,0) ',
+  `address` text CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci COMMENT '学校地址/text ',
+  `addr_lng` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '地址对应经度/varchar(255) ',
+  `addr_lat` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '地址对应维度/varchar(255) ',
+  `province` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '地址所在省/varchar(255) ',
+  `city` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '地址所在市/varchar(255) ',
+  `area` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '地址所在区/varchar(255) ',
+  `univ_type` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '学校类型/varchar(255) ',
+  `web_link` text CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci COMMENT '官方网址/text ',
+  `comp_dept` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '主管部门/varchar(255) ',
+  `school_nature` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '办学层次/varchar(255) ',
+  `postal_code` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '邮政编码/varchar(255) ',
+  `data_source` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '数据来源/varchar(255) ',
+  `created_time` datetime NOT NULL COMMENT '创建时间/datetime ',
+  `updated_time` datetime NOT NULL COMMENT '更新时间/datetime ',
+  KEY `idx_org_id` (`org_id`),
+  KEY `idx_name_cn` (`name_cn`),
+  KEY `idx_school_code` (`school_code`),
+  KEY `idx_external_id` (`external_id`),
+  KEY `idx_name_en` (`name_en`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='高校基本信息';
+```
+
+### `dwd_org_stock_base`（5945 行）
+
+```sql
+CREATE TABLE `dwd_org_stock_base` (
+  `stock_code` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '股票代码/varchar(255) ',
+  `stock_noun` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '股票简称/varchar(255) ',
+  `stock_type` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '上市板块/varchar(255) ',
+  `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
+  `name_cn` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构名称/varchar(255) ',
+  `external_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '统一社会信用代码/varchar(255) ',
+  `listed_date` datetime DEFAULT NULL COMMENT '上市日期/datetime ',
+  `listed_status` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '上市状态/varchar(255) ',
+  `data_source` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '数据来源/varchar(255) ',
+  `created_time` datetime NOT NULL COMMENT '创建时间/datetime ',
+  `updated_time` datetime NOT NULL COMMENT '更新时间/datetime ',
+  KEY `idx_stock_code` (`stock_code`),
+  KEY `idx_org_id` (`org_id`),
+  KEY `idx_name_cn` (`name_cn`),
+  KEY `idx_external_id` (`external_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='上市企业基本信息';
 ```
 
 ### `dwd_org_stock_finance_info`（5553 行）
@@ -1265,6 +1448,36 @@ CREATE TABLE `dwd_org_bankruptcy_public_cases_list` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='破产案件当事人';
 ```
 
+### `dwd_special_hongkong_company`（100 行）
+
+```sql
+CREATE TABLE `dwd_special_hongkong_company` (
+  `province_en` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '省份(英文缩写)/varchar(255) ',
+  `name_cn` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构名称/varchar(255) ',
+  `name_en` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '机构英文名称/varchar(255) ',
+  `traditional_name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构繁体名称/varchar(255) ',
+  `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
+  `company_code` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '机构编号/varchar(255) ',
+  `company_type` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '机构类别/varchar(255) ',
+  `incorporation_date` datetime DEFAULT NULL COMMENT '成立日期/datetime ',
+  `company_status` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '机构现况/varchar(255) ',
+  `remark` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '备注/varchar(255) ',
+  `liquidation_mode` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '清盘模式/varchar(255) ',
+  `cancel_date` datetime DEFAULT NULL COMMENT '解散日期/datetime ',
+  `mortgage` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '押记登记册/varchar(255) ',
+  `imp_matters` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '重要事项/varchar(255) ',
+  `create_time` datetime NOT NULL COMMENT '入库时间/datetime ',
+  `br_code` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '商业登记代码/varchar(255) ',
+  `data_source` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '数据来源/varchar(255) ',
+  `created_time` datetime NOT NULL COMMENT '创建时间/datetime ',
+  `updated_time` datetime NOT NULL COMMENT '更新时间/datetime ',
+  KEY `idx_name_cn` (`name_cn`),
+  KEY `idx_name_en` (`name_en`),
+  KEY `idx_traditional_name` (`traditional_name`),
+  KEY `idx_org_id` (`org_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='香港企业';
+```
+
 ### `dwd_special_taiwan_company`（100 行）
 
 ```sql
@@ -1311,6 +1524,36 @@ CREATE TABLE `dwd_special_taiwan_company` (
   KEY `idx_company_code` (`company_code`),
   KEY `idx_history_company_code` (`history_company_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='台湾企业';
+```
+
+### `dwd_special_aomen_company`（100 行）
+
+```sql
+CREATE TABLE `dwd_special_aomen_company` (
+  `org_id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构id/varchar(255) ',
+  `org_loc_name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '机构本地名称/varchar(255) ',
+  `en_name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '机构英文名称/varchar(255) ',
+  `incorporation_year` decimal(20,0) DEFAULT NULL COMMENT '成立年份/decimal(20,0) ',
+  `incorporation_date` datetime DEFAULT NULL COMMENT '成立日期/datetime ',
+  `country_code` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '注册国家代码/varchar(255) ',
+  `city` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '注册城市/varchar(255) ',
+  `listing_status` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '上市状态/varchar(255) ',
+  `owners_type` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '机构经济类型/varchar(255) ',
+  `person_num` decimal(20,0) DEFAULT NULL COMMENT '员工人数/decimal(20,0) ',
+  `company_code` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '统一编号/varchar(255) ',
+  `company_status` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '登记状态/varchar(255) ',
+  `capital` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '注册资本/varchar(255) ',
+  `currency_code` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '注册资本币种/varchar(255) ',
+  `company_est_status` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '机构运营状态代码/varchar(255) ',
+  `address` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '地址/varchar(255) ',
+  `data_source` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '数据来源/varchar(255) ',
+  `created_time` datetime NOT NULL COMMENT '创建时间/datetime ',
+  `updated_time` datetime NOT NULL COMMENT '更新时间/datetime ',
+  KEY `idx_org_id` (`org_id`),
+  KEY `idx_org_loc_name` (`org_loc_name`),
+  KEY `idx_en_name` (`en_name`),
+  KEY `idx_company_code` (`company_code`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='澳门企业';
 ```
 
 ### `dwd_bid_base_out`（100 行）
@@ -1609,6 +1852,7 @@ CREATE TABLE `dwd_forg_stock_fin_info` (
   `research_development_amount` decimal(20,2) DEFAULT NULL COMMENT '研发投入金额/decimal(20,2) ',
   `research_development_employees_number` decimal(20,2) DEFAULT NULL COMMENT '研发人员数（无数据）/decimal(20,2) '
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='海外上市企业财务信息';
+@@@DOMAIN industry_chain
 ```
 
 ## 产业链域（industry_chain_etl / backfill_chain_org_nodes → IndustryChain / IndustryNode / News + HAS_NODE / CHILD_OF / DOWNSTREAM_OF / BELONGS_TO_NODE / COVERS_CHAIN）
@@ -1696,65 +1940,24 @@ CREATE TABLE `dwd_industry_chain_news_info` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='产业动态资讯';
 ```
 
-## 未收录的表（全量 spec 中有、但九模块不消费）
+## 与实测库的已知差异（重建时注意）
+
+以下为「实测 DDL ↔ 代码期望」的漂移。按实测输出重建后脚本**不会报错**，但会走降级路径：
+
+- `dwd_scholar`：实测无 `scholar_org_id` 与 `id` 列（`SHOW COLUMNS` 复核为空）。`load_scholar_entities.py` / `load_scholar_relations.py` 按 information_schema 探测 `scholar_org_id`，缺列时 AFFILIATED_WITH 从 org_id 直连（confidence 1.0）静默降级为机构名匹配（0.6），`Person.organization_id` 溯源为空。**当前 dev 库即处于降级态**；重建若要直连可自行补 `scholar_org_id varchar(64) NULL`。
+- `dwd_org_org_product_info`：实测无 ORM 映射的 `industry_class` 列（背景分析在用，缺列该维度降级）。
+- 上市两表（`dwd_org_stock_base` / `dwd_org_stock_finance_info`）：ORM 将信用代码列映射为 `social_credit_code`，实测 DDL 为 `external_id`（列漂移，ORM 查询会 unknown-column）。
+- `dwd_forg_*` 系列实测无 `data_source` / `created_time` / `updated_time` 审计列：`organization_relation_etl` 水位增量对无时间列表静默退化为全量重跑，`source_update_time` 溯源为空。
+
+## 未收录的表
 
 | 表 | 原因 |
 |---|---|
-| `dwd_zh_report` / `dwd_en_report` / `dwd_zh_report_paper` | Report 顶点与 REFERENCED_BY 边；九模块不读 Report 域（AUTHOR_OF_REPORT / REPORT_ORG / REPORT_RELATED_PROJECT 无装载脚本） |
-| `dwd_org_heis_info` / `dwd_special_hongkong_company` / `dwd_special_aomen_company` | 纯 Organization 顶点补充，不产生任何九模块读取的边（顶点仅提升学者机构名匹配率，非硬依赖） |
-| `dwd_org_stock_base` | 上市公司 Organization 顶点补充；抽取脚本侧不产九模块读的边（模块 7 运行时经 gkx 会话使用，见《九大业务模块MySQL表结构.md》） |
-| `dwd_org_tag_info` | 无 ETL 脚本引用；ORM/运行时在用但 dev 库缺表 |
-| `scholar` | 仅 legacy `load_graph.py`（techkg 旧空间）使用，dev 库无此表 |
+| `dwd_org_tag_info` | 无 ETL 脚本引用；仅运行时 `dao/organization.py::get_tags` + ORM 在用，dev 库缺表（见《九大业务模块MySQL表结构.md》） |
+| `scholar` | 仅 legacy `load_graph.py`（techkg 旧空间）名义使用；其 ORM 类为死代码，`load_graph.py` 实际读的也是 `dwd_scholar` |
+| `dwd_rel_project_paper` / `dwd_rel_project_patent` | `load_project_graph.py` 与 `has_output_relation.py` 做存在性保护读取，仅产出 cross_domain 报告项、不建边；dev 库无此二表，脚本按不存在处理 |
 
-## 核查反馈（2026-09-22，待修订）
+## 修订记录
 
-对本文"收录口径（硬依赖闭包，66 张）"与"未收录的表"两节做了代码级核查。基准：本仓库 `backend/`（与 kgetl@7778e52 在 `backend/script/` 下仅差 `semantic_research_entity_extract.py`，结论两边通用）。
-
-**总结论：66 张已收录表全部真实被消费、无凑数，抽查 SQL 引用列名与本文 DDL 全部对得上；但闭包不成立——另有 9 张硬依赖表与 1 个探针列未收录，"未收录的表"一节多条排除理由与代码事实相反。补齐前，本文档不能支撑"空库重建源表、验证各抽取脚本可行性"的目标。实际硬依赖应为 75 张表 + 1 列。**
-
-### 1. 缺失的硬依赖表（9 张，按本文口径重建即失败 / 建不出边）
-
-| 表 | 消费证据（backend/ 内 file:line） | 缺失后果 |
-|---|---|---|
-| `dwd_zh_author` / `dwd_en_author` | `script/load_paper_journal_graph.py:264`（主流程步骤 2，无条件执行）；`script/relation_extractors_one_relation/authored_by_relation.py:18-25`；`script/entity_extractors_one_entity/person_entity.py:124-125`（平台 SOURCES）；`script/paper_journal_relation/attach_provenance.py:61,67` | 步骤 2 直接抛错，期刊/引文/报告后续步骤全部不跑、水位不推进。论文期刊域头部声称的"作者 Person + AUTHORED_BY"唯一来源就是这两张表 |
-| `dwd_zh_report` / `dwd_en_report` | `script/load_paper_journal_graph.py:472,497`（步骤 6，无条件执行）；`script/entity_extractors_one_entity/report_entity.py:9-10`（Report 顶点，且已注册平台抽取 `register_platform_extraction.py:52`）；`attach_provenance.py:85,91` | 步骤 6 崩。"九模块不读 Report 域"混淆了运行时读取与注入装载：Report 顶点每轮都在装 |
-| `dwd_zh_report_paper` | `script/paper_journal_relation/load_paper_relation.py:393`（默认 RELATION_TYPES 含 paper_report，:447-453，默认必跑）；`script/relation_extractors_one_relation/referenced_by_relation.py:15-19`；`script/workflow/paper_journal_chain_etl.py:409,425` | 与《关联关系脚本整理说明》序号 7"REFERENCED_BY 已实现（referenced_by_relation.py）"直接矛盾——该脚本源表即本表 |
-| `dwd_org_heis_info` | `script/relation_extractors_one_relation/resolvers.py:68-84`（`ExactOrganizationResolver._SOURCES` 七表 SELECT，机构域全部边脚本共用，`org_edges.py:505` 每次 transform 加载）；`script/entity_extractors_one_entity/org_catalog.py:70`（39 张 TableSpec 之一）；`organization_ETL/run_etl.py` preflight 对全部 39 张做 information_schema 校验，缺表即硬错误 | "纯顶点补充，非硬依赖"不成立：不产边属实，但缺表则机构域**一条边都建不出来**（resolver 抛错、preflight 拒跑） |
-| `dwd_special_hongkong_company` / `dwd_special_aomen_company` | 同上 `resolvers.py:73-76,82`；`org_catalog.py:117,123`；另 `script/load_patent_relations.py:44-54` 与 `relation_extractors_one_relation/patent_matching.py:38-44` 将其（含 heis）列为 APPLIED_BY/OWNED_BY 唯一合法机构目标来源 | 同上；且这三张缺席时专利申请边目标候选池静默缩水（不崩、丢边） |
-| `dwd_org_stock_base` | `script/entity_extractors_one_entity/org_catalog.py:72-77`（organization_enrichment 顶点）；`script/organization_etl_common.py:143`；属 39 张 preflight 范围 | "抽取脚本侧不产九模块读的边"前半句属实，但表本身被实体注入读取；只建本文 35 张机构表，org ETL preflight 直接失败 |
-
-### 2. 缺失列 / 列口径问题
-
-- `dwd_scholar.scholar_org_id`：`script/load_scholar_entities.py:144-155`、`load_scholar_relations.py:214-221` 均按 information_schema 探测该列（dev 库实际存在），`person_entity.py:81` 映射 `organization_id`。按本文 DDL 重建不报错，但 AFFILIATED_WITH 会从 confidence 1.0（org_id 直连）**静默降级**为 0.6（机构名匹配），Person.organization_id 溯源丢失。
-- 境外机构（forg）系列 DDL 无 `data_source`/`created_time`/`updated_time` 审计列（若为实测输出则属实情，但需注明）：`organization_relation_etl.py:985-993` 的水位增量对无时间列表静默退化为全量重跑，`source_update_time` 溯源为空。
-- ORM 与本文 DDL 存在版本差待对齐：`db_model/scholar.py` 映射 `id`/`scholar_org_id`；`db_model/domestic_organization.py:1222-1248` 将 stock 两表信用代码列映射为 `social_credit_code`，而本文 DDL 为 `external_id`；`dwd_org_org_product_info` ORM 的 `industry_class`（背景分析在用）不在本文 DDL。请注明本文 DDL 实测自哪个库哪个版本，避免"修好库指向后又撞 unknown-column"。
-
-### 3. "未收录的表"理由勘误
-
-| 原排除理由 | 核查结论 |
-|---|---|
-| Report 三表"九模块不读 Report 域（AUTHOR_OF_REPORT / REPORT_ORG / REPORT_RELATED_PROJECT 无装载脚本）" | **错误**。Report 顶点有装载（report_entity.py，已平台注册）；dwd_zh_report_paper 是 REFERENCED_BY 的源表且默认必跑。"无装载脚本"仅对 AUTHOR_OF_REPORT / REPORT_ORG / REPORT_RELATED_PROJECT 三条边成立 |
-| heis / hongkong / aomen"纯顶点补充，不产生任何九模块读取的边（非硬依赖）" | **错误**。是机构域边解析器（resolvers.py 七表）与 org ETL preflight（39 表）的硬依赖 |
-| `dwd_org_stock_base`"抽取脚本侧不产九模块读的边" | **半对**。无边属实；但被 organization_enrichment 实体装载读取，且在 preflight 39 表内 |
-| `dwd_org_tag_info`"无 ETL 脚本引用" | 属实（仅 `dao/organization.py:51-53` + `db_model/domestic_organization.py:1284-1302` 运行时用） |
-| `scholar`"仅 legacy load_graph.py 使用" | 属实（且 load_graph.py 实际读的也是 DwdScholar/dwd_scholar，`scholar` ORM 类为死代码） |
-
-软性漏记（建议补入"未收录"并注明理由）：`dwd_rel_project_paper` / `dwd_rel_project_patent`——`load_project_graph.py:400-427`、`has_output_relation.py:162-163` 存在性保护读取，仅产出 cross_domain 报告项、不建边。
-
-### 4. 抽取脚本执行层已知问题（影响"验证各抽取脚本可行性"的目标）
-
-- `load_paper_journal_graph.py`：BATCH=1 逐行 HTTP INSERT；`batch_insert_vertex/edge`（:81-89,107-112）首错后全部吞掉、ok 计数虚高 → **静默丢点/丢边**；增量模式对期刊/引文/报告仍是全量扫；CITES/CITED_BY 写向本脚本不创建的 `paper_ref_`/`paper_cit_` 桩 VID（须先跑 `load_paper_relation.py`，否则悬空边）。
-- `industry_chain_etl/load_industry_chain_graph.py:74-80`、`backfill_chain_org_nodes.py:88-94`：`_write` 吞一切异常仍返回 len(rows)，"写入完成 N"虚报实际写入量。
-- 陈旧硬编码溯源：`load_paper_relation.py:66-67`（INGEST_BATCH="paper_relation_0725" / INGEST_TIME="2026-07-26"）、`attach_provenance.py:40-41` 与 `backfill_stub_journals.py`（"2026-08-11T00:00:00Z"）、产业链两脚本（2026-08-05/10）——重跑仍打旧时间戳。
-- `org_edges.py:502-507`：`ExactOrganizationResolver` 每个 transform 全量扫 7 张表重建索引，批量越多浪费越大。
-- `relation_extractors_one_relation/common.py:346-366`：非唯一 `ORDER BY 1` 上 LIMIT/OFFSET 分页，运行中写入会跳行/重行；水位为本地文件（`script/.etl_watermark/`），跨机器/容器不共享。
-- 学者/专利关系脚本整表 `.all()` 进内存、无水位全量重跑（靠写侧幂等兜底）：dev 量级可行，生产量级不可。
-
-正面确认：66 张收录表分域逐一核对全部真实消费（学者 5/5、论文期刊 12/12、项目 4/4、专利 6/6、机构 35/35、产业链 4/4，无 padding）；抽查 SQL 引用列名全部存在于本文 DDL；`etl_watermark.py` 原子写、成功才推进；`load_patent_graph.py` keyset 分页 + 批内去重 + 被拒批次二分重试；one-relation 包确定性 rank 的 `INSERT EDGE @rank` 幂等覆盖设计良好。
-
-### 5. 修订清单（待办）
-
-1. 补 §1 的 9 张表 DDL（dev 库 `SHOW CREATE TABLE`），并为 `dwd_scholar` 补 `scholar_org_id` 列 → "共 66 张"改 75 张。
-2. 按 §3 重写"未收录的表"，补记 `dwd_rel_project_paper` / `dwd_rel_project_patent`。
-3. 若坚持 66 张口径，收录口径须改为"平台 one-relation 通道闭包"并逐条声明排除的旧 monolithic 入口，同时修正《关联关系脚本整理说明》序号 7 与本文的矛盾表述。
-4. 按 §2 注明 DDL 实测库/版本，并核齐 ORM ↔ DDL 差异。
+- 2026-09-22：初版 73 张（全量 spec）→ 66 张（九模块读取闭包，剔除判定有误）→ 按核查反馈补录 9 张成 75：`dwd_zh_author` / `dwd_en_author`（AUTHORED_BY 唯一源表，装载步骤无条件执行）、`dwd_zh_report` / `dwd_en_report` / `dwd_zh_report_paper`（报告装载与 REFERENCED_BY 默认必跑）、`dwd_org_heis_info` / `dwd_special_hongkong_company` / `dwd_special_aomen_company`（机构边解析器七表联查 + preflight 硬依赖）、`dwd_org_stock_base`（organization_enrichment 装载 + preflight 范围）。
+- 对核查反馈的一处更正：反馈称 `dwd_scholar.scholar_org_id`「dev 库实际存在」——实测（SHOW COLUMNS，2026-09-22）该列与 `id` 列均不存在，降级路径即当前现状，已记入「与实测库的已知差异」。

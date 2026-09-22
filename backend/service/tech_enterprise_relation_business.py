@@ -84,7 +84,6 @@ _NON_ENTERPRISE_KEYWORDS = (
     "管理局",
     "委员会",
     "MOCK",
-    "测试",
 )
 
 _ROLE_LEVEL_RULES = [

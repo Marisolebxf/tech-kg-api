@@ -35,7 +35,13 @@ def make_app(*, restricted=True, user_id="limited", portal=False):
         business_only_user_ids=("limited",),
         portal_cookie_login_enabled=portal,
     )
-    context = SimpleNamespace(token_source="oauth", access_token="token", session_id="session")
+    context = SimpleNamespace(
+        token_source="oauth",
+        access_token="token",
+        session_id="session",
+        # _enforce_account_scope 直接读会话 userInfo.id 比对名单（不再走 profile()）
+        permission_info={"userInfo": {"id": user_id if restricted else "other"}},
+    )
     application = SimpleNamespace(
         settings=settings,
         service=SimpleNamespace(

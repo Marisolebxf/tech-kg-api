@@ -37,7 +37,9 @@ function onSelectChange(value: unknown) {
 
 <template>
   <footer class="list-pagination" aria-label="列表分页">
-    <span>共 {{ total }} 条 · 第 {{ page }} / {{ totalPages }} 页</span>
+    <slot name="summary" :total-pages="totalPages">
+      <span>共 {{ total }} 条 · 第 {{ page }} / {{ totalPages }} 页</span>
+    </slot>
     <span class="list-pagination__size">每页
       <a-select
         class="list-pagination__size-select"

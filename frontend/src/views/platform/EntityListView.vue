@@ -13,13 +13,13 @@ import {
   type EntityTypeCount,
 } from '../../api/entitySearch'
 import { currentGraphSpace } from '../../api/currentGraphSpace'
+import ListPagination from '../../components/list-pagination.vue'
 import { SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
 import { useToast } from '../../composables/use-toast'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
 
 const { showToast } = useToast()
 
-const PAGE_SIZE_OPTIONS = [10, 20, 50, 100]
 const PROPERTY_CHIP_LIMIT = 4
 
 const keyword = ref('')
@@ -40,11 +40,13 @@ const expandedRows = ref<Set<string>>(new Set())
 
 const items = computed(() => result.value?.items ?? [])
 const isBrowseMode = computed(() => !appliedKeyword.value)
+const paginationTotal = computed(() => {
+  if (!result.value) return 0
+  return result.value.total
+    ?? (result.value.returned ?? result.value.items.length) + (page.value - 1) * pageSize.value
+})
 const totalPages = computed(() => {
-  if (!result.value) return 1
-  const total =
-    result.value.total ?? (result.value.returned ?? result.value.items.length) + (page.value - 1) * pageSize.value
-  return Math.max(Math.ceil(total / pageSize.value), 1)
+  return Math.max(Math.ceil(paginationTotal.value / pageSize.value), 1)
 })
 const modeLabel = computed(() => {
   const mode = result.value?.mode
@@ -109,7 +111,8 @@ function onEntityTypeChange() {
   resetPagingAndSearch()
 }
 
-function onPageSizeChange() {
+function onPageSizeChange(next: number) {
+  pageSize.value = next
   page.value = 1
   void doSearch()
 }
@@ -272,29 +275,20 @@ watch(
             </tbody>
           </table>
         </div>
-        <footer class="entity-pagination">
-          <div class="entity-pagination__size">
-            <span>每页</span>
-            <a-select
-              id="entity-page-size"
-              :model-value="pageSize"
-              class="entity-pagination__size-select"
-              :scrollbar="false"
-              @change="(value: number | string | boolean | Record<string, unknown> | Array<number | string | boolean | Record<string, unknown>> | undefined) => { pageSize = Number(value) || 10; onPageSizeChange() }"
-            >
-              <a-option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</a-option>
-            </a-select>
-            <span>条</span>
-          </div>
-          <span class="entity-pagination__info">
-            第 {{ page }} / {{ totalPages }} 页 · 检索模式：{{ modeLabel }}
-            <template v-if="isBrowseMode && result?.total != null"> · 共 {{ result.total }} 个实体</template>
-          </span>
-          <div class="entity-pagination__actions">
-            <button type="button" :disabled="page <= 1 || loading" @click="goPage(page - 1)">上一页</button>
-            <button type="button" :disabled="page >= totalPages || loading" @click="goPage(page + 1)">下一页</button>
-          </div>
-        </footer>
+        <ListPagination
+          :total="paginationTotal"
+          :page="page"
+          :page-size="pageSize"
+          :disabled="loading"
+          @change="goPage"
+          @change-size="onPageSizeChange"
+        >
+          <template #summary>
+            <span class="entity-pagination__info">
+              <template v-if="isBrowseMode && result?.total != null">共 {{ result.total }} 个实体 · </template>第 {{ page }} / {{ totalPages }} 页 · 检索模式：{{ modeLabel }}
+            </span>
+          </template>
+        </ListPagination>
       </template>
     </section>
   </main>
@@ -334,14 +328,7 @@ watch(
 .entity-detail__item{display:inline-flex;align-items:center;gap:6px;font-size:12px;line-height:20px;color:#4e5969;white-space:nowrap}
 .entity-detail__item code{padding:1px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:11px}
 .entity-detail__item em{color:#86909c;font-style:normal;font-size:11px;word-break:break-all}
-.entity-pagination{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:8px 16px;border-top:1px solid #f2f3f5}
-.entity-pagination__size{display:flex;align-items:center;gap:8px;flex:0 0 auto;color:#86909c;font-size:12px;line-height:20px;white-space:nowrap}
-.entity-pagination__size-select{width:72px}
 .entity-pagination__info{min-width:0;overflow:hidden;color:#86909c;font-size:12px;line-height:20px;text-overflow:ellipsis;white-space:nowrap}
-.entity-pagination__actions{display:flex;gap:8px;flex:0 0 auto}
-.entity-pagination__actions button{height:32px;padding:0 12px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:12px;cursor:pointer;white-space:nowrap}
-.entity-pagination__actions button:hover:not(:disabled){border-color:#165dff;color:#165dff}
-.entity-pagination__actions button:disabled{opacity:.5;cursor:not-allowed}
 </style>
 
 <style>
@@ -360,10 +347,4 @@ watch(
 .app-workspace .entity-toolbar-shell #entity-filter-type .arco-select-view-input-hidden{position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important}
 .app-workspace .entity-toolbar-shell #entity-filter-type .arco-select-view-value{min-width:0;overflow:hidden;font-size:14px;line-height:22px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
 .app-workspace .entity-toolbar-shell #entity-filter-type :is(.arco-select-view-input,.arco-select-view-value){background:transparent!important}
-.app-workspace .entity-result-shell #entity-page-size.entity-pagination__size-select.arco-select-view{display:inline-flex;box-sizing:border-box;align-items:center;width:72px;min-width:72px;max-width:72px;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:0 0 72px}
-.app-workspace .entity-result-shell #entity-page-size.entity-pagination__size-select.arco-select-view:hover{border-color:#4080ff!important;background:#fff!important}
-.app-workspace .entity-result-shell #entity-page-size.entity-pagination__size-select.arco-select-view:focus-within,.app-workspace .entity-result-shell #entity-page-size.entity-pagination__size-select.arco-select-view-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
-.app-workspace .entity-result-shell #entity-page-size input.arco-select-view-input{box-sizing:border-box;width:100%;height:30px!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:12px!important;line-height:20px!important;box-shadow:none!important;outline:0!important}
-.app-workspace .entity-result-shell #entity-page-size .arco-select-view-input-hidden{position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important;pointer-events:none!important}
-.app-workspace .entity-result-shell #entity-page-size .arco-select-view-value{min-width:0;overflow:hidden;background:transparent!important;font-size:12px;line-height:20px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
 </style>

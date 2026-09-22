@@ -672,11 +672,12 @@ describe('nGQL error toast stays concise and in Chinese', () => {
     expect(showToast.mock.calls[0]![1]).toBe('warning')
   })
 
-  it('keeps backend validation messages in Chinese as-is', async () => {
+  it('collapses the unsupported-statement-prefix rejection to a fixed short hint', async () => {
     await runFailingQuery('不支持的语句开头 “MATCHH”；允许的只读语句：MATCH / LOOKUP / GO / SHOW / DESCRIBE / FIND / FETCH / GET / UNWIND 等，管理员另可执行 INSERT / UPDATE / DELETE / UPSERT')
     expect(showToast).toHaveBeenCalledTimes(1)
-    const shown = String(showToast.mock.calls[0]![0])
-    expect(shown).toContain('不支持的语句开头')
-    expect(shown.endsWith('…')).toBe(true)
+    expect(showToast.mock.calls[0]).toEqual([
+      '不支持的语句开头；允许的只读语句：MATCH / LOOKUP / GO / SHOW 等',
+      'warning',
+    ])
   })
 })

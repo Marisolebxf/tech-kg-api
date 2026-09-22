@@ -718,8 +718,13 @@ async function runWithLoading(message: string, action?: () => void) {
   isActionLoading.value = false
 }
 
-/** NebulaGraph 常见英文报错的中文映射：命中即换成用户能定位问题的一句话（按序取第一条命中）。 */
+/** 常见报错的精简中文文案：英文错误换中文、后端长校验文案收敛为一句（按序取第一条命中）。 */
 const NGQL_ERROR_ZH_RULES: Array<{ test: RegExp; text: (match: RegExpMatchArray) => string }> = [
+  {
+    // 后端原文含全部允许清单与管理员说明，toast 只留开头类型 + 常用只读语句示例
+    test: /^不支持的语句开头/,
+    text: () => '不支持的语句开头；允许的只读语句：MATCH / LOOKUP / GO / SHOW 等',
+  },
   {
     test: /Unknown column [`'"](.*?)[`'"]\s*in schema/i,
     text: ([, column]) => `属性「${column}」不存在，请检查属性名拼写`,

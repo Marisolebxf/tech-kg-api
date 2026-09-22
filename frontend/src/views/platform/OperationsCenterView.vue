@@ -14,18 +14,46 @@ type CenterMode = 'review'
 
 const props = defineProps<{ mode: CenterMode }>()
 const route = useRoute()
-const keyword = ref(clampSearchKeyword(String(route.query.keyword || '')))
+
+/** 队列视图状态快照（sessionStorage）：点「查看记录」跳详情再返回时恢复页码/页大小/分类/筛选/排序，
+ *  不再回落第 1 页。每次拉取前落盘（兼覆盖手动刷新场景）；显式深链 query（category/keyword）优先于快照。 */
+const QUEUE_SNAPSHOT_KEY = 'techkg.manual-review-queue.v1'
+type QueueSnapshot = {
+  category: 'A' | 'C'
+  page: number
+  pageSize: number
+  status: '全部' | '待处理' | '已处理' | '重跑中'
+  kind: '全部' | '实体' | '关系'
+  time: '全部' | '近1小时' | '近24小时' | '近7天' | '近30天'
+  sort: 'default' | 'desc' | 'asc'
+  keyword: string
+}
+function readQueueSnapshot(): Partial<QueueSnapshot> | null {
+  try {
+    const raw = sessionStorage.getItem(QUEUE_SNAPSHOT_KEY)
+    return raw ? (JSON.parse(raw) as Partial<QueueSnapshot>) : null
+  } catch {
+    return null
+  }
+}
+/** 快照值仅在合法枚举内才恢复，否则用默认值（防手改存储/字段演进出脏值）。 */
+function pickSnapshotOption<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
+  return allowed.includes(value as T) ? (value as T) : fallback
+}
+const queueSnapshot = readQueueSnapshot()
+
+const keyword = ref(clampSearchKeyword(String(route.query.keyword || queueSnapshot?.keyword || '')))
 /** 人工审核筛选：状态分组（待处理/已处理）与对象种类（实体/关系/都看）；C 类额外支持 重跑中 精确过滤。
  *  重跑仍失败的记录会重建为新待处理案（attempt+1），不存在「重跑失败」状态，故不提供该筛选项。
  *  undefined = 未选择（清空），语义等同「全部」。 */
-const reviewStatusFilter = ref<'全部' | '待处理' | '已处理' | '重跑中' | undefined>('全部')
-const reviewKindFilter = ref<'全部' | '实体' | '关系' | undefined>('全部')
+const reviewStatusFilter = ref<'全部' | '待处理' | '已处理' | '重跑中' | undefined>(pickSnapshotOption(queueSnapshot?.status, ['全部', '待处理', '已处理', '重跑中'] as const, '全部'))
+const reviewKindFilter = ref<'全部' | '实体' | '关系' | undefined>(pickSnapshotOption(queueSnapshot?.kind, ['全部', '实体', '关系'] as const, '全部'))
 /** 时间过滤（按更新时间）：全部/近1小时/近24小时/近7天/近30天 → updatedWithin 查询参数。 */
-const reviewTimeFilter = ref<'全部' | '近1小时' | '近24小时' | '近7天' | '近30天' | undefined>('全部')
+const reviewTimeFilter = ref<'全部' | '近1小时' | '近24小时' | '近7天' | '近30天' | undefined>(pickSnapshotOption(queueSnapshot?.time, ['全部', '近1小时', '近24小时', '近7天', '近30天'] as const, '全部'))
 const reviewTimeOptions = ['全部', '近1小时', '近24小时', '近7天', '近30天']
 const REVIEW_TIME_PARAMS: Record<string, string | undefined> = { '全部': undefined, '近1小时': '1h', '近24小时': '24h', '近7天': '7d', '近30天': '30d' }
 /** 更新时间排序：default=风险+创建时间（默认）；desc=新→旧；asc=旧→新。 */
-const reviewTimeSort = ref<'default' | 'desc' | 'asc'>('default')
+const reviewTimeSort = ref<'default' | 'desc' | 'asc'>(pickSnapshotOption(queueSnapshot?.sort, ['default', 'desc', 'asc'] as const, 'default'))
 const reviewTotal = ref(0)
 /** 队列行 = manual-review-data 的 ReviewRecord + 重跑/删除/跳转所需的原始字段。 */
 type ReviewRow = ReviewRecord & { templateId?: string; rawStatus?: string; jobId?: string }
@@ -48,17 +76,26 @@ let reviewDisposed = false
 const reviewRows = computed(() => reviewRecords.value)
 
 /** 分页状态：服务端分页，翻页/改页大小都会重新拉取当前筛选下的数据。
- *  默认每页 20：表格区可视高度约 13~14 行，10 行填不满会在面板内留大片空白。 */
-const reviewPage = ref(1)
-const reviewPageSize = ref(20)
+ *  默认每页 20：表格区可视高度约 13~14 行，10 行填不满会在面板内留大片空白。
+ *  页码/页大小从快照恢复（跳详情返回不回第 1 页）；恢复页超出总页数时由 loadReviews 收敛。 */
+const snapshotPage = Math.trunc(Number(queueSnapshot?.page))
+const snapshotPageSize = Number(queueSnapshot?.pageSize)
 const reviewPageSizeOptions = [10, 20, 50]
+const reviewPage = ref(snapshotPage >= 1 ? snapshotPage : 1)
+const reviewPageSize = ref(reviewPageSizeOptions.includes(snapshotPageSize) ? snapshotPageSize : 20)
 const reviewTotalPages = computed(() => Math.max(1, Math.ceil(reviewTotal.value / reviewPageSize.value)))
 
 watch(() => route.query.keyword, (value) => { keyword.value = clampSearchKeyword(String(value || '')) })
 
 /** 审核队列分类：A=入库决策（Tab 只筛 T_LINK 实体对齐，T_DIRECT 详情由工作台总览/实例详情直达）；C=抽取失败重跑（T_EXTRACT_FAIL）。
- *  支持 ?category=A|C 深链初始定位子页（工作台总览的「抽取失败重跑」卡片直达 C 子页）。 */
-const reviewCategory = ref<'A' | 'C'>(route.query.category === 'C' ? 'C' : 'A')
+ *  支持 ?category=A|C 深链初始定位子页（工作台总览的「抽取失败重跑」卡片直达 C 子页），深链优先于快照恢复。 */
+const reviewCategory = ref<'A' | 'C'>(
+  route.query.category === 'A' || route.query.category === 'C'
+    ? route.query.category
+    : queueSnapshot?.category === 'C' ? 'C' : 'A',
+)
+// A 类没有「重跑中」筛选项：快照恢复后按当前分类收敛，避免 Select 挂着不属于该分类的选项
+if (reviewCategory.value === 'A' && reviewStatusFilter.value === '重跑中') reviewStatusFilter.value = '全部'
 /** C 类勾选的待重跑 case。 */
 const rerunSelection = ref<Set<string>>(new Set())
 const rerunSubmitting = ref(false)
@@ -260,6 +297,21 @@ onUnmounted(() => {
 
 async function loadReviews() {
   if (props.mode !== 'review' || reviewDisposed) return
+  // 拉取前把当前视图状态落快照：跳详情返回 / 手动刷新都能回到本页
+  try {
+    sessionStorage.setItem(QUEUE_SNAPSHOT_KEY, JSON.stringify({
+      category: reviewCategory.value,
+      page: reviewPage.value,
+      pageSize: reviewPageSize.value,
+      status: reviewStatusFilter.value ?? '全部',
+      kind: reviewKindFilter.value ?? '全部',
+      time: reviewTimeFilter.value ?? '全部',
+      sort: reviewTimeSort.value,
+      keyword: keyword.value,
+    } satisfies QueueSnapshot))
+  } catch {
+    /* 隐私模式等存储不可用：跳过快照，返回时退回默认第 1 页 */
+  }
   const requestId = ++reviewRequestId
   reviewLoading.value = true
   reviewLoadError.value = ''

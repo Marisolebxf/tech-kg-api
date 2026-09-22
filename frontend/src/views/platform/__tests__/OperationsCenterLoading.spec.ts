@@ -30,7 +30,11 @@ function render() {
   wrappers.push(wrapper)
   return wrapper
 }
-beforeEach(() => { mocks.getProductionReviews.mockReset() })
+beforeEach(() => {
+  mocks.getProductionReviews.mockReset()
+  // 清队列视图状态快照，保证每次挂载都从默认第 1 页/默认筛选加载
+  sessionStorage.removeItem('techkg.manual-review-queue.v1')
+})
 afterEach(() => {
   wrappers.splice(0).forEach(wrapper => wrapper.unmount())
   vi.useRealTimers()

@@ -65,6 +65,8 @@ const rowCheckboxes = (wrapper: ReturnType<typeof mount>) =>
 const batchButton = (wrapper: ReturnType<typeof mount>) => wrapper.get('.rerun-batch-action')
 
 beforeEach(() => {
+  // 清队列视图状态快照，避免上一用例写入的页码/筛选串扰本用例的默认加载断言
+  sessionStorage.removeItem('techkg.manual-review-queue.v1')
   routeState.query = {}
   mocks.getProductionReviews.mockReset().mockResolvedValue({ items: C_ROWS, total: 4, page: 1, pageSize: 10 })
   mocks.rerunExtractFailures.mockReset().mockResolvedValue({ executions: [], cases: 2 })
@@ -375,6 +377,38 @@ describe('分页统计与页数收缩收敛（FUNC-00781）/ 处理实例 ID 纯
     // 61 条 = 4 页，第 3 页仍有效：筛选后停在原页
     expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ page: 3, statusGroup: 'pending' }))
     expect(wrapper.get('.review-pagination > span').text()).toBe('共 61 条 · 第 3 / 4 页')
+  })
+
+  it('跳详情返回后恢复页码/页大小/分类/筛选（sessionStorage 快照），不回第 1 页', async () => {
+    // 模拟上一会话留下的队列状态：C 类第 3 页、每页 50、待处理 + 实体 + 近7天 + 新→旧 + 关键字
+    sessionStorage.setItem('techkg.manual-review-queue.v1', JSON.stringify({
+      category: 'C', page: 3, pageSize: 50, status: '待处理', kind: '实体',
+      time: '近7天', sort: 'desc', keyword: '论文',
+    }))
+    mocks.getProductionReviews.mockResolvedValue({ items: C_ROWS, total: 120, page: 3, pageSize: 50 })
+
+    const wrapper = renderReview()
+    await flushPromises()
+
+    // 重挂载后首次加载即按快照状态请求，且 C 类 Tab 高亮
+    expect(mocks.getProductionReviews).toHaveBeenCalledWith(expect.objectContaining({
+      category: 'C', page: 3, pageSize: 50, statusGroup: 'pending', kind: 'entity',
+      updatedWithin: '7d', sort: 'updated_desc', keyword: '论文',
+    }))
+    expect(wrapper.get('.review-pagination > span').text()).toBe('共 120 条 · 第 3 / 3 页')
+    expect(wrapper.findAll('.review-tabs nav button')[1].classes()).toContain('active')
+  })
+
+  it('深链 query 优先于快照：?category=A 覆盖快照分类，A 类下快照的「重跑中」收敛回「全部」', async () => {
+    routeState.query = { category: 'A' }
+    sessionStorage.setItem('techkg.manual-review-queue.v1', JSON.stringify({ category: 'C', page: 5, status: '重跑中' }))
+
+    renderReview()
+    await flushPromises()
+
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({
+      category: 'A', templateId: 'T_LINK', statusGroup: undefined, status: undefined,
+    }))
   })
 
   it('处理实例 ID 为纯文本（中性色 code，非链接），title 悬停提供全称', async () => {

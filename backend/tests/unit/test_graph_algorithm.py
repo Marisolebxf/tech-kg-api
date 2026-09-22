@@ -363,6 +363,7 @@ def test_degree_builds_index_when_edge_not_indexed(algo_backend, monkeypatch) ->
 
     class NoIndexGraphClient:
         indexed = False
+        rebuild_attempts = 0
         writes = []
 
         def edge_types(self):
@@ -387,9 +388,19 @@ def test_degree_builds_index_when_edge_not_indexed(algo_backend, monkeypatch) ->
         def execute_write(self, query: str):
             self.writes.append(query)
             if query.startswith("REBUILD"):
+                self.rebuild_attempts += 1
+                if self.rebuild_attempts == 1:
+                    # CREATE 已返回但 Schema 尚未传播完成：复现 dev2 的真实报错格式。
+                    raise GraphRequestError(
+                        "POST /api/v1/query/write -> 400: SemanticError: Index "
+                        "degree_has_keyword_8d55a8e7_idx not found in space dev2",
+                        status_code=400,
+                        body="",
+                    )
                 self.indexed = True
 
     client = NoIndexGraphClient()
+    monkeypatch.setattr(graph_algorithm, "_DEGREE_INDEX_POLL_SECONDS", 0)
     monkeypatch.setattr("infra.graph_db.get_space_client", lambda space: client)
     data = submit_job(_actor(), "shared_business", "degreestatic", ["HAS_KEYWORD"], {})
     assert data["status"] == "succeeded"
@@ -403,6 +414,7 @@ def test_degree_builds_index_when_edge_not_indexed(algo_backend, monkeypatch) ->
     assert result["count"] == 4
     assert client.writes[0].startswith("CREATE EDGE INDEX IF NOT EXISTS")
     assert client.writes[1].startswith("REBUILD EDGE INDEX")
+    assert client.writes[2].startswith("REBUILD EDGE INDEX")
 
 
 def test_degree_lookup_is_paginated(algo_backend, monkeypatch) -> None:

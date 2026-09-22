@@ -285,7 +285,9 @@ def _degree_index_name(label: str) -> str:
 
 def _is_missing_index_error(exc: Exception) -> bool:
     message = str(exc).lower()
-    return "no index" in message or "index not found" in message
+    # NebulaGraph 的真实错误会把索引名插在 Index 与 not found 之间，例如：
+    # "Index degree_has_keyword_..._idx not found in space dev2"。
+    return "no index" in message or ("index" in message and "not found" in message)
 
 
 def _is_transient_index_error(exc: Exception) -> bool:
@@ -331,9 +333,7 @@ def _ensure_degree_edge_index(client: Any, label: str) -> None:
     index_name = _degree_index_name(label)
     deadline = time.monotonic() + _DEGREE_INDEX_BUILD_TIMEOUT_SECONDS
     try:
-        client.execute_write(
-            f"CREATE EDGE INDEX IF NOT EXISTS `{index_name}` ON `{label}`()"
-        )
+        client.execute_write(f"CREATE EDGE INDEX IF NOT EXISTS `{index_name}` ON `{label}`()")
     except Exception as exc:  # noqa: BLE001
         raise GraphAlgorithmError(
             f"关系类型 {label} 缺少边索引，自动创建索引失败: {exc}", status_code=502
@@ -361,9 +361,7 @@ def _ensure_degree_edge_index(client: Any, label: str) -> None:
 
     while True:
         try:
-            client.execute_read(
-                f"LOOKUP ON `{label}` YIELD src(edge) AS s | LIMIT 1", timeout=30.0
-            )
+            client.execute_read(f"LOOKUP ON `{label}` YIELD src(edge) AS s | LIMIT 1", timeout=30.0)
             logger.info("Degree 边索引已可用: label=%s index=%s", label, index_name)
             return
         except GraphRequestError as exc:

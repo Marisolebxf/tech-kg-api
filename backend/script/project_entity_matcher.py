@@ -3,12 +3,58 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Any
 
 from infra.graph_db import GraphRequestError, TRSGraphClient
 from script.project_graph_utils import resolve_organization_id
+
+logger = logging.getLogger("script.project_entity_matcher")
+
+# 共享图库的瞬态拒绝：内存高水位（use space failed / watermark）与会话池被
+# 其它租户瞬时占满（no extra session）。过一会儿自然恢复，读操作重试无副作用。
+_TRANSIENT_GRAPH_ERROR_TOKENS = ("watermark", "use space failed", "no extra session")
+
+
+def retry_transient(fn: Any, *, tries: int = 10, wait_seconds: float = 30.0) -> Any:
+    """通用瞬态重试：仅用于幂等调用（读 / merge / update）。
+
+    共享宿主内存贴近 0.80 高水位时，trs-graph 的 nGQL 或 schema REST 调用会在
+    USE space 准入阶段被整批拒绝（400/500），会话池也可能被其它租户瞬时占满；
+    这类失败过一会儿自然恢复，直接抛出会把长 ETL 在写入前整体打死。
+    """
+    for attempt in range(1, tries + 1):
+        try:
+            return fn()
+        except GraphRequestError as exc:
+            text = f"{exc} {getattr(exc, 'body', '')}"
+            if attempt < tries and any(token in text for token in _TRANSIENT_GRAPH_ERROR_TOKENS):
+                logger.warning(
+                    "共享图库水位/会话池瞬时不足（第 %d/%d 次），%.0fs 后重试: %s",
+                    attempt,
+                    tries - 1,
+                    wait_seconds,
+                    str(exc)[:200],
+                )
+                time.sleep(wait_seconds)
+                continue
+            raise
+
+
+def _read_with_transient_retry(
+    graph: TRSGraphClient,
+    query: str,
+    *,
+    tries: int = 10,
+    wait_seconds: float = 30.0,
+) -> Any:
+    """池加载查询的水位退避重试。"""
+    return retry_transient(
+        lambda: graph.execute_read(query), tries=tries, wait_seconds=wait_seconds
+    )
 
 
 def normalize_text(value: Any) -> str:
@@ -221,7 +267,7 @@ def _candidate_rows(
                 f"RETURN id(n) AS vid, {projection};"
             )
             try:
-                result = graph.execute_read(query)
+                result = _read_with_transient_retry(graph, query)
             except GraphRequestError as exc:
                 if "IndexNotFound" not in exc.body:
                     raise
@@ -251,7 +297,7 @@ def _scan_candidate_rows(
         query = (
             f"MATCH (n:{label}) RETURN id(n) AS vid, {projection} SKIP {offset} LIMIT {page_size};"
         )
-        page = graph.execute_read(query).records
+        page = _read_with_transient_retry(graph, query).records
         for row in page:
             if any(
                 normalize_text(row.get(prop)) in wanted

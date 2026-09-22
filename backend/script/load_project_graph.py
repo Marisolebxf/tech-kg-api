@@ -20,7 +20,12 @@ from infra.graph_db import TRSGraphClient, close_trs_graph_client, get_trs_graph
 from infra.graph_db.exceptions import GraphRequestError
 from infra.mysql import get_mysql_client
 from script.project_edge_schema import ensure_alignment_edge_schema, ensure_project_tag_confidence
-from script.project_entity_matcher import MatchResult, ProjectEntityMatcher, normalize_text
+from script.project_entity_matcher import (
+    MatchResult,
+    ProjectEntityMatcher,
+    normalize_text,
+    retry_transient,
+)
 from script.project_graph_utils import (
     build_output_count_props,
     build_project_props,
@@ -57,8 +62,8 @@ def preflight_graph(graph: TRSGraphClient, *, relations: bool) -> None:
         required_edges.update(
             {"FUNDED_BY", "LEADS", "HAS_PARTICIPANT", "HAS_KEYWORD", "HAS_OUTPUT"}
         )
-    missing_labels = required_labels - set(graph.labels())
-    missing_edges = required_edges - set(graph.edge_types())
+    missing_labels = required_labels - set(retry_transient(graph.labels))
+    missing_edges = required_edges - set(retry_transient(graph.edge_types))
     if missing_labels or missing_edges:
         raise RuntimeError(
             "Project graph schema incomplete; run init_project_schema first. "
@@ -68,7 +73,7 @@ def preflight_graph(graph: TRSGraphClient, *, relations: bool) -> None:
 
 def _merge_node(graph: TRSGraphClient, labels: list[str], vid: str, props: dict[str, Any]) -> None:
     try:
-        graph.merge_node(labels, {"vid": vid}, {**props, "vid": vid})
+        retry_transient(lambda: graph.merge_node(labels, {"vid": vid}, {**props, "vid": vid}))
     except GraphRequestError as exc:
         logger.exception("merge_node failed labels=%s vid=%s body=%s", labels, vid, exc.body)
         raise
@@ -84,12 +89,14 @@ def _merge_edge(
     identity = str(properties.get("source_record_id") or "")
     if not identity:
         raise ValueError(f"{edge_type} requires non-empty source_record_id")
-    graph.merge_edge(
-        source_id,
-        target_id,
-        edge_type,
-        {"source_record_id": identity},
-        properties,
+    retry_transient(
+        lambda: graph.merge_edge(
+            source_id,
+            target_id,
+            edge_type,
+            {"source_record_id": identity},
+            properties,
+        )
     )
 
 
@@ -290,7 +297,7 @@ def stage_keywords(
         keywords = {normalize_text(value) for value in parse_list(row.keywords)}
         for keyword in sorted(value for value in keywords if value):
             kvid = keyword_vid(keyword)
-            if not dry_run and graph.get_node(kvid) is None:
+            if not dry_run and retry_transient(lambda kvid=kvid: graph.get_node(kvid)) is None:
                 _merge_node(graph, ["Keyword"], kvid, {"keyword": keyword})
                 report.increment("keywords_created")
             if not dry_run:
@@ -348,10 +355,14 @@ def stage_outputs(
                 processed += 1
                 pvid = project_vid(project_id)
                 if not dry_run:
-                    if graph.get_node(pvid) is None:
+                    if retry_transient(lambda pvid=pvid: graph.get_node(pvid)) is None:
                         report.increment("missing_project_nodes")
                         continue
-                    graph.update_node(pvid, build_output_count_props(row))
+                    retry_transient(
+                        lambda pvid=pvid, row=row: graph.update_node(
+                            pvid, build_output_count_props(row)
+                        )
+                    )
                 report.increment("outputs_updated")
 
                 for field, output_type, target_type in OUTPUT_FIELDS:

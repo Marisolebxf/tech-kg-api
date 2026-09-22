@@ -140,6 +140,31 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     expect(wrapper.find('thead .pick-col').exists()).toBe(true)
   })
 
+  it('不可重跑行（重跑中/已完成）的重跑、删除按钮置灰禁用而非隐藏', async () => {
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+
+    // C_ROWS：MR-1 OPEN、MR-2 RERUN_FAILED 可操作；MR-3 RERUNNING、MR-4 RESOLVED 置灰
+    const rows = wrapper.findAll('tbody tr')
+    const openRow = rows[0].findAll('.review-action-btn')
+    expect(openRow).toHaveLength(3)
+    expect(openRow[1].attributes('disabled')).toBeUndefined()
+    expect(openRow[2].attributes('disabled')).toBeUndefined()
+
+    const rerunningRow = rows[2].findAll('.review-action-btn')
+    expect(rerunningRow).toHaveLength(3)
+    expect(rerunningRow[1].attributes('disabled')).toBeDefined()
+    expect(rerunningRow[2].attributes('disabled')).toBeDefined()
+    expect(rerunningRow[1].attributes('title')).toBe('重跑中：等待本次重跑完成后再操作')
+
+    const resolvedRow = rows[3].findAll('.review-action-btn')
+    expect(resolvedRow).toHaveLength(3)
+    expect(resolvedRow[1].attributes('disabled')).toBeDefined()
+    expect(resolvedRow[2].attributes('disabled')).toBeDefined()
+    expect(resolvedRow[2].attributes('title')).toBe('已处理：仅「待处理 / 重跑失败」的记录可重跑或删除')
+  })
+
   it('表头全选只勾选当前页可重跑行（OPEN/RERUN_FAILED），批量重跑按钮随之点亮', async () => {
     const wrapper = renderReview()
     await flushPromises()

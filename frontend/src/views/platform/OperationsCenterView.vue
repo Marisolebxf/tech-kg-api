@@ -58,8 +58,14 @@ const reviewTotal = ref(0)
 /** 队列行 = manual-review-data 的 ReviewRecord + 重跑/删除/跳转所需的原始字段。 */
 type ReviewRow = ReviewRecord & { templateId?: string; rawStatus?: string; jobId?: string }
 
-/** 可重跑/可删除：与后端 rerun 门控同口径（未处理）。 */
+/** 可重跑/可删除：与后端 rerun 门控同口径（未处理）。不可操作时按钮置灰禁用而非隐藏（保持操作列布局稳定）。 */
 const isRerunnable = (row: ReviewRow) => row.rawStatus === 'OPEN' || row.rawStatus === 'RERUN_FAILED'
+
+/** 置灰按钮的悬停说明：按记录状态给出不可操作的原因。 */
+function rerunDisabledReason(row: ReviewRow): string {
+  if (row.rawStatus === 'RERUNNING') return '重跑中：等待本次重跑完成后再操作'
+  return '已处理：仅「待处理 / 重跑失败」的记录可重跑或删除'
+}
 
 /** 类型列：objectType（entity/relation）→ 实体/关系；T_LINK 是实体对齐，恒实体。 */
 function rowKindLabel(row: ReviewRow): string {
@@ -500,18 +506,19 @@ onMounted(loadReviews)
               </div>
               <div v-else class="alert-actions">
                 <button class="review-action-btn" type="button" @click="openLog(row)">日志</button>
+                <!-- 不可重跑/删除的行（重跑中、已处理）按钮保留占位但置灰禁用，悬停说明原因 -->
                 <button
-                  v-if="isRerunnable(row)"
                   class="review-action-btn"
                   type="button"
-                  :disabled="rerunSubmitting"
+                  :disabled="!isRerunnable(row) || rerunSubmitting"
+                  :title="!isRerunnable(row) ? rerunDisabledReason(row) : undefined"
                   @click="rerunSelected([row.id])"
                 >重跑</button>
                 <button
-                  v-if="isRerunnable(row)"
                   class="review-action-btn is-danger"
                   type="button"
-                  :disabled="deleteSubmitting"
+                  :disabled="!isRerunnable(row) || deleteSubmitting"
+                  :title="!isRerunnable(row) ? rerunDisabledReason(row) : undefined"
                   @click="askDelete(row)"
                 >删除</button>
               </div>

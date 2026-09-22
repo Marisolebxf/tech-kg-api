@@ -140,9 +140,11 @@ const overview = ref<SchemaOverview>({
 const modalOpen = ref(false)
 const createForm = ref<CreateForm>(emptyCreateForm())
 const createFormRef = ref()
-const createFormRules = {
+// 必填提示文案跟当前页签走（关系英文名/实体名）；起点/终点显式给中文 message，
+// 避免落到 arco 默认英文消息。computed 随页签切换自动重算。
+const createFormRules = computed(() => ({
   name: [
-    { required: true, message: '请输入名称' },
+    { required: true, message: isRelationTab() ? '请输入关系英文名' : '请输入实体名' },
     {
       validator: (value: string, callback: (error?: string) => void) => {
         const isRelation = isRelationTab()
@@ -165,22 +167,16 @@ const createFormRules = {
   description: [
     {
       validator: (value: string, callback: (error?: string) => void) =>
-        callback(value ? (validateText('说明', value, SCHEMA_DESC_RULE) ?? undefined) : undefined),
+        callback(value ? (validateText('说明', value || '', SCHEMA_DESC_RULE) ?? undefined) : undefined),
     },
   ],
-  sourceEntityId: [{
-    validator: (value: string, callback: (error?: string) => void) =>
-      callback(!isRelationTab() || value ? undefined : '请选择起点实体'),
-  }],
-  targetEntityId: [{
-    validator: (value: string, callback: (error?: string) => void) =>
-      callback(!isRelationTab() || value ? undefined : '请选择终点实体'),
-  }],
+  sourceEntityId: [{ required: true, message: '请选择起点实体' }],
+  targetEntityId: [{ required: true, message: '请选择终点实体' }],
   properties: [{
     validator: (value: PropertyRow[], callback: (error?: string) => void) =>
       callback(value.some((property) => property.name.trim()) ? undefined : '请至少填写一个属性名称'),
   }],
-}
+}))
 
 function validatePropName(value: string, callback: (error?: string) => void) {
   callback(value.trim() ? (validateText('属性名', value, PROP_NAME_RULE) ?? undefined) : undefined)

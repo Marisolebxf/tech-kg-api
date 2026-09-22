@@ -198,6 +198,20 @@ _DEGREE_LOOKUP_RETRY_LIMIT = max(
 _DEGREE_LOOKUP_TIMEOUT_SECONDS = max(
     5.0, float(os.getenv("GRAPH_ALGO_DEGREE_LOOKUP_TIMEOUT_SECONDS", "60"))
 )
+_DEGREE_SESSION_RETRY_LIMIT = max(
+    0, min(int(os.getenv("GRAPH_ALGO_DEGREE_SESSION_RETRY_LIMIT", "8")), 20)
+)
+_DEGREE_SESSION_RETRY_BASE_SECONDS = max(
+    0.1, float(os.getenv("GRAPH_ALGO_DEGREE_SESSION_RETRY_BASE_SECONDS", "1"))
+)
+_DEGREE_SESSION_RETRY_MAX_SECONDS = max(
+    _DEGREE_SESSION_RETRY_BASE_SECONDS,
+    float(os.getenv("GRAPH_ALGO_DEGREE_SESSION_RETRY_MAX_SECONDS", "15")),
+)
+_DEGREE_QUERY_CONCURRENCY = max(
+    1, min(int(os.getenv("GRAPH_ALGO_DEGREE_QUERY_CONCURRENCY", "1")), 4)
+)
+_degree_query_slots = threading.BoundedSemaphore(_DEGREE_QUERY_CONCURRENCY)
 _DEGREE_INDEX_BUILD_TIMEOUT_SECONDS = float(
     os.getenv("GRAPH_ALGO_DEGREE_INDEX_BUILD_TIMEOUT_SECONDS", "300")
 )
@@ -318,6 +332,64 @@ def _is_index_building_error(exc: Exception) -> bool:
     )
 
 
+def _is_graph_session_busy_error(exc: Exception) -> bool:
+    """识别拓尔思图服务会话池暂时耗尽的可重试 5xx。"""
+    from infra.graph_db.exceptions import GraphRequestError
+
+    if not isinstance(exc, GraphRequestError) or exc.status_code < 500:
+        return False
+    message = f"{exc} {exc.body}".lower()
+    return any(
+        marker in message
+        for marker in (
+            "no extra session available",
+            "no available session",
+            "session pool exhausted",
+            "session pool is full",
+        )
+    )
+
+
+def _execute_degree_read(
+    client: Any,
+    query: str,
+    *,
+    timeout: float,
+    context: str,
+) -> Any:
+    """串行执行 Degree 图查询；会话池繁忙时退避重试，不重跑已成功步骤。"""
+    from infra.graph_db.exceptions import GraphRequestError
+
+    for attempt in range(_DEGREE_SESSION_RETRY_LIMIT + 1):
+        try:
+            # 单个 worker 内最多一个 Degree 请求占用图服务会话；多作业仍可在
+            # 后台排队，避免同进程并发查询进一步耗尽共享会话池。
+            with _degree_query_slots:
+                return client.execute_read(query, timeout=timeout)
+        except GraphRequestError as exc:
+            if not _is_graph_session_busy_error(exc):
+                raise
+            if attempt >= _DEGREE_SESSION_RETRY_LIMIT:
+                raise GraphAlgorithmError(
+                    f"{context}时拓尔思图服务会话池持续繁忙，已重试 "
+                    f"{_DEGREE_SESSION_RETRY_LIMIT} 次，请检查图服务会话池配置或稍后重试",
+                    status_code=503,
+                ) from exc
+            delay = min(
+                _DEGREE_SESSION_RETRY_BASE_SECONDS * (2**attempt),
+                _DEGREE_SESSION_RETRY_MAX_SECONDS,
+            )
+            logger.warning(
+                "Degree 图服务会话池繁忙，退避后重试: context=%s retry=%s/%s delay=%.1fs",
+                context,
+                attempt + 1,
+                _DEGREE_SESSION_RETRY_LIMIT,
+                delay,
+            )
+            time.sleep(delay)
+    raise AssertionError("unreachable")
+
+
 def _lookup_degree_pairs(client: Any, label: str) -> Iterable[tuple[str, str]]:
     """通过边索引分页枚举端点；连接超时时自动缩页并重试当前 offset。"""
     from infra.graph_db.exceptions import GraphConnectionError
@@ -327,10 +399,12 @@ def _lookup_degree_pairs(client: Any, label: str) -> Iterable[tuple[str, str]]:
     retry_count = 0
     while True:
         try:
-            result = client.execute_read(
+            result = _execute_degree_read(
+                client,
                 f"LOOKUP ON `{label}` YIELD src(edge) AS s, dst(edge) AS d "
                 f"| LIMIT {page_size} OFFSET {offset}",
                 timeout=_DEGREE_LOOKUP_TIMEOUT_SECONDS,
+                context=f"读取关系类型 {label}（offset={offset}）",
             )
         except GraphConnectionError as exc:
             if page_size > _DEGREE_LOOKUP_MIN_PAGE_SIZE:
@@ -373,13 +447,15 @@ def _lookup_degree_pairs(client: Any, label: str) -> Iterable[tuple[str, str]]:
 
 
 def _lookup_degree_counts(client: Any, label: str, endpoint: str) -> dict[str, int]:
-    """用边索引在 Nebula 服务端按端点聚合，避免大关系集全量传输。"""
+    """通过拓尔思图服务按端点聚合，避免大关系集全量传输。"""
     if endpoint not in {"src", "dst"}:
         raise ValueError(f"unsupported edge endpoint: {endpoint}")
-    result = client.execute_read(
+    result = _execute_degree_read(
+        client,
         f"LOOKUP ON `{label}` YIELD {endpoint}(edge) AS vid "
         "| GROUP BY $-.vid YIELD $-.vid AS vid, count(*) AS cnt",
         timeout=_DEGREE_LOOKUP_TIMEOUT_SECONDS,
+        context=f"聚合关系类型 {label} 的{'出度' if endpoint == 'src' else '入度'}",
     )
     counts: dict[str, int] = {}
     for record in result.records or []:
@@ -446,7 +522,12 @@ def _degree_counts_for_label(client: Any, label: str) -> tuple[dict[str, int], d
 
 def _degree_edge_index_status(client: Any, index_name: str) -> str | None:
     """读取 Degree 专用边索引最近一次重建状态。"""
-    result = client.execute_read("SHOW EDGE INDEX STATUS", timeout=30.0)
+    result = _execute_degree_read(
+        client,
+        "SHOW EDGE INDEX STATUS",
+        timeout=30.0,
+        context=f"检查索引 {index_name} 状态",
+    )
     for record in result.records or []:
         if not isinstance(record, dict):
             continue
@@ -515,7 +596,12 @@ def _ensure_degree_edge_index(client: Any, label: str) -> None:
                 time.sleep(_DEGREE_INDEX_POLL_SECONDS)
                 continue
             # FINISHED 后再确认 LOOKUP 已可用；空结果也是合法结果。
-            client.execute_read(f"LOOKUP ON `{label}` YIELD src(edge) AS s | LIMIT 1", timeout=30.0)
+            _execute_degree_read(
+                client,
+                f"LOOKUP ON `{label}` YIELD src(edge) AS s | LIMIT 1",
+                timeout=30.0,
+                context=f"校验关系类型 {label} 的索引",
+            )
             logger.info("Degree 边索引已可用: label=%s index=%s", label, index_name)
             return
         except GraphRequestError as exc:
@@ -535,7 +621,7 @@ def _ensure_degree_edge_index(client: Any, label: str) -> None:
 def _degree_rows_via_ngql(space: str, labels: list[str]) -> tuple[list[dict[str, str]], bool]:
     """出/入度聚合并合并为逐顶点行（总度降序，上限对齐图服务 10000 行截断）。
 
-    逐类型通过边索引在 Nebula 服务端按 src/dst 聚合，避免 CITES 等大关系集
+    逐类型通过拓尔思图服务按 src/dst 聚合，避免 CITES 等大关系集
     把全部边传回应用层。若查询代理连接超时，降级为可自动缩页和重试的端点
     枚举。关系类型尚无索引或索引未填充时，自动创建/重建 Degree 专用索引并
     等待 FINISHED；绝不回退全空间 MATCH。SHOW STATS 可能滞后，不能据其 0

@@ -499,6 +499,53 @@ def test_degree_group_timeout_falls_back_to_smaller_pages(algo_backend, monkeypa
     assert any("LIMIT 2 OFFSET 0" in query for query in queries)
 
 
+def test_degree_retries_session_pool_busy_without_repeating_successful_out_degree(
+    algo_backend, monkeypatch
+) -> None:
+    calls = {"src": 0, "dst": 0}
+    sleeps = []
+
+    class BusyThenReadyClient:
+        def execute_read(self, query: str, params=None, *, timeout=None):
+            endpoint = "src" if "src(edge)" in query else "dst"
+            calls[endpoint] += 1
+            if endpoint == "dst" and calls[endpoint] <= 2:
+                raise GraphRequestError(
+                    "POST /api/v1/query/read -> 500: Query execution failed: "
+                    "no extra session available",
+                    status_code=500,
+                    body='{"message":"Query execution failed: no extra session available"}',
+                )
+            if endpoint == "src":
+                return SimpleNamespace(records=[{"vid": "paper-a", "cnt": 3}])
+            return SimpleNamespace(records=[{"vid": "paper-b", "cnt": 2}])
+
+    monkeypatch.setattr(graph_algorithm.time, "sleep", sleeps.append)
+    out_counts, in_counts = graph_algorithm._degree_counts_for_label(BusyThenReadyClient(), "CITES")
+    assert out_counts == {"paper-a": 3}
+    assert in_counts == {"paper-b": 2}
+    assert calls == {"src": 1, "dst": 3}
+    assert sleeps == [1.0, 2.0]
+
+
+def test_degree_session_pool_busy_exhaustion_returns_clear_503(algo_backend, monkeypatch) -> None:
+    class AlwaysBusyClient:
+        def execute_read(self, query: str, params=None, *, timeout=None):
+            raise GraphRequestError(
+                "POST /api/v1/query/read -> 500: Query execution failed: "
+                "no extra session available",
+                status_code=500,
+                body="",
+            )
+
+    monkeypatch.setattr(graph_algorithm, "_DEGREE_SESSION_RETRY_LIMIT", 2)
+    monkeypatch.setattr(graph_algorithm.time, "sleep", lambda _: None)
+    with pytest.raises(GraphAlgorithmError) as exc_info:
+        graph_algorithm._lookup_degree_counts(AlwaysBusyClient(), "CITES", "src")
+    assert exc_info.value.status_code == 503
+    assert "拓尔思图服务会话池持续繁忙" in str(exc_info.value)
+
+
 def test_degree_stale_zero_stats_does_not_skip_lookup(algo_backend, monkeypatch) -> None:
     # SHOW STATS 是预计算快照，可能仍为 0；Degree 必须以索引实际结果为准。
     calls = []

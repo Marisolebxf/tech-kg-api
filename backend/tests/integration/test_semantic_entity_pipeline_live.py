@@ -17,6 +17,7 @@ sys.path.insert(0, str(BACKEND / "sdk"))
 sys.path.insert(0, str(BACKEND))
 
 from kg_sdk import reset_current_context  # noqa: E402
+
 from script.semantic_research_entity_extract import extract_research_entities  # noqa: E402
 
 
@@ -40,6 +41,11 @@ class SemanticEntityPipelineLiveTest(unittest.TestCase):
         )
         result = extract_research_entities(
             {
+                "capabilities": [
+                    "research_ner",
+                    "concept_definition",
+                    "research_question",
+                ],
                 "rows": [
                     {
                         "id": "live-e2e-paper-1",

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from biz.schemas.auth import AccountSecurityData, AuthProfile, OperationLogPage
 from config.auth import AuthSettings
 from infra.redis import AsyncJsonStore, get_json_store
@@ -64,6 +66,9 @@ class AuthApplication:
         profile.platform_roles = actor.roles
         profile.platform_permissions = actor.permissions
         profile.is_admin = actor.is_admin
+        profile.business_only = str(profile.user.id) in self.settings.business_only_user_ids
+        if profile.business_only:
+            profile.platform_permissions = ["business:read"]
         return profile
 
     def platform_actor(self, context: AuthContext) -> PlatformActor:
@@ -73,13 +78,17 @@ class AuthApplication:
         user_id = str(profile.user.id)
         if self.settings.dev_first_user_admin and self._dev_admin_user_id is None:
             self._dev_admin_user_id = user_id
-        return actor_from_profile(
+        actor = actor_from_profile(
             profile,
             initial_admin_ids=self.settings.initial_admin_user_ids,
             auth_enabled=self.settings.enabled,
             bootstrap_first_admin=self.settings.bootstrap_first_admin,
             force_admin=(self.settings.dev_first_user_admin and self._dev_admin_user_id == user_id),
         )
+        # Explicit account scope caps effective access without changing either role source.
+        if user_id in self.settings.business_only_user_ids:
+            return replace(actor, is_admin=False)
+        return actor
 
     def dev_context(self) -> AuthContext:
         return self.service.dev_context()

@@ -58,6 +58,20 @@ beforeEach(async () => {
 })
 
 describe('角色控制与默认入口', () => {
+  it.each(['/overview', '/', '/graph-query', '/graph-query/entities', '/demo/t-direct', ...restrictedPaths])('业务限定账号无法访问 %s', async (path) => {
+    mocks.loadCurrentUser.mockResolvedValue({ businessOnly: true, isAdmin: true, permissions: ['*'] })
+    await router.push(`${path}?embedded=1#entry`)
+    expect(router.currentRoute.value.path).toBe('/expert-direct')
+    expect(router.currentRoute.value.query.embedded).toBe('1')
+    expect(router.currentRoute.value.hash).toBe('#entry')
+  })
+
+  it.each([...sharedPaths, '/user-center', '/account-security', '/operation-logs'])('业务限定账号仍可访问 %s', async (path) => {
+    mocks.loadCurrentUser.mockResolvedValue({ businessOnly: true, isAdmin: false, permissions: [] })
+    await router.push(path)
+    expect(router.currentRoute.value.path).toBe(path)
+  })
+
   it.each(restrictedPaths)('普通用户直接访问 %s 被拒绝', async (path) => {
     await router.push(path)
     expect(router.currentRoute.value.path).toBe('/forbidden')

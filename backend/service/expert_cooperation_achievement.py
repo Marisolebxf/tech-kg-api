@@ -64,6 +64,10 @@ TIME_KEYS = (
     "start_date",
     "start_year",
     "date",
+    # 项目域批准时间。此前不在候选链，项目成果 time 恒为 None，
+    # 一加时间过滤项目类成果（含奖项）整体消失。
+    "approval_time",
+    "approval_year",
 )
 FIELD_KEYS = (
     "keywords",

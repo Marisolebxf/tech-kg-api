@@ -140,7 +140,7 @@ class ExtractExecutionInfo:
     schema_key: str
     schema_label: str
     completed_at: str  # YYYY-MM-DD HH:MM:SS
-    window_lo: str  # 反查时间窗下界：源表水位最早值，缺省当日 00:00:00
+    window_lo: str  # 反查时间窗下界：源表读取起点水位最早值，缺省当日 00:00:00
     fallback_rows: list[AssetChangeRow] = field(default_factory=list)
 
 
@@ -252,7 +252,10 @@ def parse_execution_records(
             )
             target_rows.append((completed_at, row))
             exec_rows.append(row)
-            watermark = str(source.get("watermark") or "")
+            # 反查窗口下界优先用开跑前的起点水位（startWatermark）：watermark 是
+            # 跑完后的终值，取 min 后窗口会缩成最后一批同秒，写图时间落在窗口内的
+            # 顶点/边查不全；旧执行没有 startWatermark 时退回 watermark
+            watermark = str(source.get("startWatermark") or source.get("watermark") or "")
             if watermark:
                 watermarks.append(watermark)
         descriptor = ExtractExecutionInfo(
@@ -260,7 +263,7 @@ def parse_execution_records(
             schema_key=schema_key,
             schema_label=schema_label or display_label,
             completed_at=completed_at,
-            # 源表水位（读取快照时刻）必然早于写图时刻，作反查窗下界；缺省当日零点
+            # 源表水位（读取起点）必然早于写图时刻，作反查窗下界；缺省当日零点
             window_lo=min(watermarks) if watermarks else f"{completed_at[:10]} 00:00:00",
             fallback_rows=exec_rows,
         )

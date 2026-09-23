@@ -607,7 +607,8 @@ def test_parse_execution_records_collects_graph_lookup_descriptors() -> None:
                     {
                         "table": "techkg_e2e_liz.review_widgets",
                         "written": 3,
-                        "watermark": "2026-09-23 03:00:24",
+                        "watermark": "2026-09-23 03:41:50",
+                        "startWatermark": "2026-09-23 03:00:24",
                     }
                 ],
             ),
@@ -626,7 +627,8 @@ def test_parse_execution_records_collects_graph_lookup_descriptors() -> None:
 
     entity_exec = snapshot.entity_executions[0]
     assert entity_exec.schema_key == "review-widget-64d0d5"
-    assert entity_exec.window_lo == "2026-09-23 03:00:24"  # 源表水位作反查窗下界
+    # 反查窗下界优先取开跑前起点水位（startWatermark），而非跑完后的 watermark 终值
+    assert entity_exec.window_lo == "2026-09-23 03:00:24"
     assert entity_exec.completed_at == "2026-09-23 03:41:54"
     assert [row.object for row in entity_exec.fallback_rows] == ["审测挂件 · 3 条"]
 

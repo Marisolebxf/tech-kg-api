@@ -144,11 +144,36 @@ describe('角色控制与默认入口', () => {
     expect(router.currentRoute.value.query).toEqual({ embedded: '1', portalState: 'session-expired' })
   })
 
-  it('显式免登录开发模式保留管理页访问', async () => {
+  it('后端明确允许的免登录开发身份保留管理页访问', async () => {
     mocks.authDisabled = true
+    mocks.loadCurrentUser.mockResolvedValue({ authEnabled: false, isAdmin: true, permissions: [] })
     await router.push('/schema')
     expect(router.currentRoute.value.path).toBe('/schema')
-    expect(mocks.loadCurrentUser).not.toHaveBeenCalled()
+    expect(mocks.loadCurrentUser).toHaveBeenCalledWith(true)
+  })
+
+  it.each(restrictedPaths)('前端误关闭认证也不能放行普通用户访问 %s', async (path) => {
+    mocks.authDisabled = true
+    await router.push(path)
+    expect(router.currentRoute.value.path).toBe('/forbidden')
+    expect(mocks.loadCurrentUser).toHaveBeenCalledWith(true)
+  })
+
+  it('前端误关闭认证不跳过未登录和业务限定检查', async () => {
+    mocks.authDisabled = true
+    mocks.loadCurrentUser.mockResolvedValue(null)
+    await router.push('/overview')
+    expect(router.currentRoute.value.path).toBe('/login')
+    mocks.loadCurrentUser.mockResolvedValue({ businessOnly: true, isAdmin: true, permissions: ['*'] })
+    await router.push('/schema')
+    expect(router.currentRoute.value.path).toBe('/expert-direct')
+  })
+
+  it('前端误关闭认证但身份服务异常时不得进入管理页', async () => {
+    mocks.authDisabled = true
+    mocks.loadCurrentUser.mockRejectedValue(new Error('identity unavailable'))
+    await router.push('/manual-review')
+    expect(router.currentRoute.value.path).toBe('/login')
   })
 })
 

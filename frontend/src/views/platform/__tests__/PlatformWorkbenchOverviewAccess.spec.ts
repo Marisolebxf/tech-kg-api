@@ -9,6 +9,11 @@ import { useGraphSpaceStore } from '../../../stores/graphSpace'
 import { getProductionReviews, listJobs } from '../../../api/workflowOperations'
 import PlatformWorkbenchView from '../PlatformWorkbenchView.vue'
 
+// 模拟线上误配：关闭前端认证不能覆盖后端返回的普通用户身份。
+vi.mock('../../../config', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../../config')>(), authDisabled: true,
+}))
+
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }), RouterLink: { template: '<a><slot /></a>' } }))
 vi.mock('../../../api/graphConsole', () => ({ runNgql: vi.fn() }))
 vi.mock('../../../api/graphAlgorithm', () => ({

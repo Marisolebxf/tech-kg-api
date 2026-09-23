@@ -107,6 +107,40 @@ class ManualReviewService:
     def __init__(self, session_factory=None):
         self.sf = session_factory or get_session_factory()
 
+    def require_case_access(self, identity, review_case):
+        identity.ensure_space(review_case.graph_space)
+        require_domain_access(identity, review_case.domain)
+
+    def authorize_case(self, case_id, identity):
+        with self.sf() as s:
+            self.require_case_access(identity, self.need(s, case_id))
+
+    def authorize_rerun(self, identity, *, case_ids=None, execution_id=None):
+        """Authorize the complete selected set, then freeze IDs for the rerun service."""
+        identity.review_spaces()
+        with self.sf() as s:
+            if case_ids:
+                rows = [self.need(s, case_id) for case_id in dict.fromkeys(case_ids)]
+            elif execution_id:
+                rows = s.scalars(
+                    select(ReviewCase).where(
+                        ReviewCase.template_id == "T_EXTRACT_FAIL",
+                        ReviewCase.status.in_(("OPEN", "RERUN_FAILED")),
+                    )
+                ).all()
+                rows = [
+                    row
+                    for row in rows
+                    if (load(row.input_snapshot) or {}).get("executionId") == execution_id
+                ]
+            else:
+                raise ReviewValidationError("请选择审核记录或指定执行记录")
+            for row in rows:
+                self.require_case_access(identity, row)
+            if not rows:
+                raise ReviewValidationError("没有可重跑的审核记录")
+            return [row.id for row in rows]
+
     def _ingress_response(self, c, duplicate):
         return {
             "reviewId": c.id,
@@ -130,6 +164,9 @@ class ManualReviewService:
         page = max(int(f.get("page") or 1), 1)
         size = min(max(int(f.get("page_size") or 50), 1), 200)
         q = []
+        review_spaces = a.review_spaces()
+        if review_spaces is not None:
+            q.append(ReviewCase.graph_space.in_(review_spaces))
         for k, col in (
             ("status", ReviewCase.status),
             ("risk", ReviewCase.risk_level),
@@ -220,14 +257,14 @@ class ManualReviewService:
     def get_case(self, i, a):
         with self.sf() as s:
             c = self.need(s, i)
-            require_domain_access(a, c.domain)
+            self.require_case_access(a, c)
             return self.detail(s, c)
 
     def claim(self, i, v, a):
         t = now()
         with self.sf() as s:
             c = self.need(s, i)
-            require_domain_access(a, c.domain)
+            self.require_case_access(a, c)
             if not role_can_review(a, c.phase):
                 raise ReviewForbiddenError("角色与任务阶段不匹配")
             r = s.execute(
@@ -252,7 +289,7 @@ class ManualReviewService:
     def mutate(self, i, v, a, values, event, admin=False):
         with self.sf() as s:
             c = self.need(s, i)
-            require_domain_access(a, c.domain)
+            self.require_case_access(a, c)
             if not admin and c.assignee_id != a.user_id:
                 raise ReviewForbiddenError("任务不属于当前用户")
             if c.version != v:
@@ -285,7 +322,12 @@ class ManualReviewService:
         )
 
     def transfer(self, i, v, uid, name, a):
-        require_role(a, "review_admin")
+        require_role(a, "reviewer" if a.platform_actor else "review_admin")
+        if a.platform_actor and not a.platform_actor.is_admin:
+            from service.business_access_control import owner_in_business
+
+            if not owner_in_business(a.platform_actor, uid):
+                raise ReviewForbiddenError("不能将审核任务转交其他业务账号")
         return self.mutate(
             i,
             v,
@@ -317,7 +359,7 @@ class ManualReviewService:
         """
         with self.sf() as s:
             c = self.need(s, i)
-            require_domain_access(a, c.domain)
+            self.require_case_access(a, c)
             if not role_can_review(a, c.phase):
                 raise ReviewForbiddenError("角色与任务阶段不匹配")
             if c.status in ("CLAIMED", "IN_REVIEW") and c.assignee_id != a.user_id:
@@ -399,6 +441,7 @@ class ManualReviewService:
         exception_code: str | None = None,
         resume_token: str | None = None,
         extra_snapshot: dict[str, Any] | None = None,
+        graph_space: str | None = None,
     ) -> dict[str, Any]:
         """直接 OPEN 状态入队（打开即可裁决，无需领取）。
 
@@ -408,6 +451,20 @@ class ManualReviewService:
         ``extra_snapshot`` 合入 input_snapshot 供对应处理端读取。
         """
         t = now()
+        recorded_spaces = {
+            str(value).strip()
+            for value in (
+                candidate.get("_graphSpace"),
+                (extra_snapshot or {}).get("_graphSpace"),
+            )
+            if value
+        }
+        if not graph_space and len(recorded_spaces) > 1:
+            raise ReviewValidationError("审核记录的图空间信息冲突")
+        graph_space = (graph_space or next(iter(recorded_spaces), "")).strip() or None
+        if graph_space:
+            candidate = {**candidate, "_graphSpace": graph_space}
+            extra_snapshot = {**(extra_snapshot or {}), "_graphSpace": graph_space}
         obj_id = (
             object_id
             or candidate.get("id")
@@ -429,6 +486,7 @@ class ManualReviewService:
         effective_workflow_type = workflow_type or "kg.custom.steps"
         c = ReviewCase(
             id=f"MR-{t:%Y%m%d}-{uuid4().hex[:12].upper()}",
+            graph_space=graph_space,
             dedupe_key=dedupe_key,
             event_id=f"kg-step-{uuid4().hex}",
             source_task_id=task_id,
@@ -549,6 +607,7 @@ class ManualReviewService:
             result.append(
                 {
                     "caseId": c.id,
+                    "graphSpace": c.graph_space,
                     "recordId": record_id,
                     "sourceBindingId": str(snapshot.get("sourceBindingId") or ""),
                     "schemaId": snapshot.get("schemaId"),
@@ -713,6 +772,7 @@ class ManualReviewService:
             next_attempt = int(snapshot.get("attempt") or 1) + 1
             try:
                 self.create_direct_case(
+                    graph_space=case.graph_space,
                     task_id=case.source_task_id or task_id,
                     execution_id=rerun_execution_id,
                     step_id=case.pipeline_step_id or "extract",
@@ -858,6 +918,12 @@ class ManualReviewService:
         员重新提交即重试（幂等安全）。存量写后 case（无 ``_incoming``）只记录决议。
         """
         snapshot = load(c.candidate_snapshot) or {}
+        from service.business_access_control import rbac_enabled
+
+        if rbac_enabled():
+            if not c.graph_space:
+                raise ReviewForbiddenError("审核记录未明确归属图空间")
+            snapshot["_graphSpace"] = c.graph_space
         incoming = snapshot.get("_incoming")
         if not incoming:
             return {"applied": False, "note": "存量写后 case：实体已在图，仅记录决议"}
@@ -1066,7 +1132,7 @@ class ManualReviewService:
                 raise ReviewValidationError("修正后的候选超出大小限制")
         with self.sf() as s:
             c = self.need(s, case_id)
-            require_domain_access(identity, c.domain)
+            self.require_case_access(identity, c)
             if c.template_id != "T_DIRECT":
                 raise ReviewValidationError("仅 T_DIRECT 案例支持 direct_decide")
             if c.version != version or c.status != "OPEN":
@@ -1115,12 +1181,18 @@ class ManualReviewService:
         字段先 ``_coerce_to_schema`` 对齐 tag/edge schema（多余字段塞 extra_json），
         避免 NebulaGraph ``Unknown column`` 400。
         """
-        from infra.graph_db import get_trs_graph_client
+        from infra.graph_db import get_space_client, get_trs_graph_client
+        from service.business_access_control import rbac_enabled
 
         snapshot = load(c.candidate_snapshot)
         kind = snapshot.get("_kind") or c.object_type
         candidate = {k: v for k, v in snapshot.items() if not k.startswith("_")}
-        graph = get_trs_graph_client()
+        if rbac_enabled():
+            if not c.graph_space:
+                raise ReviewForbiddenError("审核记录未明确归属图空间")
+            graph = get_space_client(c.graph_space)
+        else:
+            graph = get_trs_graph_client()
         if kind == "entity":
             node_label = snapshot.get("_nodeLabel")
             if not node_label:
@@ -1247,7 +1319,7 @@ class ManualReviewService:
 
     def cancel(self, i, v, reason, a):
         _ = reason
-        require_role(a, "review_admin")
+        require_role(a, "reviewer" if a.platform_actor else "review_admin")
         return self.mutate(
             i, v, a, {"status": "CANCELLED", "completed_at": now()}, "CASE_CANCELLED", True
         )
@@ -1258,9 +1330,10 @@ class ManualReviewService:
         仅非终态（OPEN/RERUN_FAILED 等未处理）可删——与可重跑同门控；
         已处理的记录保留作历史，不给删。review_admin 专用。
         """
-        require_role(a, "review_admin")
+        require_role(a, "reviewer" if a.platform_actor else "review_admin")
         with self.sf() as s:
             c = self.need(s, i)
+            self.require_case_access(a, c)
             if c.status in TERMINAL_STATUSES:
                 raise ReviewConflictError("已处理的记录不可删除")
             s.execute(delete(ReviewDraft).where(ReviewDraft.case_id == i))
@@ -1274,7 +1347,7 @@ class ManualReviewService:
     def logs(self, i, a):
         with self.sf() as s:
             c = self.need(s, i)
-            require_domain_access(a, c.domain)
+            self.require_case_access(a, c)
             return [
                 {
                     "eventType": x.event_type,
@@ -1330,6 +1403,7 @@ class ManualReviewService:
         }
 
     def evidence_complete(self, i, p, a):
+        self.authorize_case(i, a)
         st = self.storage()
         head = st.client.head_object(Bucket=p["bucket"], Key=p["objectKey"])
         if (
@@ -1403,7 +1477,7 @@ class ManualReviewService:
 
     def owned(self, s, i, a):
         c = self.need(s, i)
-        require_domain_access(a, c.domain)
+        self.require_case_access(a, c)
         if c.assignee_id != a.user_id and not a.has_any("review_admin"):
             raise ReviewForbiddenError("任务未由当前用户领取")
         return c
@@ -1428,6 +1502,7 @@ class ManualReviewService:
         execution_id = input_data.get("executionId")
         return {
             "id": c.id,
+            "graphSpace": c.graph_space,
             "sourceTaskId": c.source_task_id,
             "batchId": c.batch_id,
             # 图谱构建任务：产生该 case 的 job（job-xxx，前端「来源记录」跳 /graph-build/jobs）。

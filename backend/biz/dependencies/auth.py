@@ -112,7 +112,7 @@ CurrentActor = Annotated[PlatformActor, Depends(require_platform_actor)]
 def require_platform_admin(
     actor: CurrentActor,
 ) -> PlatformActor:
-    if not actor.is_admin:
+    if not actor.is_admin or actor.business_only:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="仅全局管理员可以执行该操作",
@@ -121,6 +121,17 @@ def require_platform_admin(
 
 
 CurrentAdmin = Annotated[PlatformActor, Depends(require_platform_admin)]
+
+
+def require_platform_maintainer(actor: CurrentActor) -> PlatformActor:
+    from service.business_access_control import rbac_enabled
+
+    if not (actor.can_develop if rbac_enabled() else actor.is_admin):
+        raise HTTPException(status_code=403, detail="仅开发维护或管理员可以执行该操作")
+    return actor
+
+
+CurrentMaintainer = Annotated[PlatformActor, Depends(require_platform_maintainer)]
 
 
 def require_permission(permission: str):

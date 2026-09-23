@@ -8,11 +8,16 @@ jobId 关联回 Job，详情页据此列出执行历史。
 from __future__ import annotations
 
 import asyncio
-
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
+from fastapi import HTTPException
+
+from service.business_access_control import (
+    ensure_space_access,
+    rbac_enabled,
+)
 from service.platform_access import PlatformActor
 from service.temporal_runtime import temporal_runtime
 from service.workflow_repository import repository
@@ -39,6 +44,182 @@ _SELECTOR_PAYLOAD_KEYS = {
     "graphSpace": "graph_space",
     "since": "since",
 }
+
+
+def authorize_workflow_resource(actor, resource, action="read"):
+    """Check persisted target spaces, including every schema in a chain.
+
+    Missing scope in legacy records is deliberately administrator-only.
+    """
+    if not rbac_enabled():
+        return
+    if actor.business_only:
+        raise HTTPException(status_code=403, detail="测试账号仅允许九大业务")
+    if actor.is_admin and action == "read":
+        return
+    if action != "read" and not actor.can_develop:
+        raise HTTPException(status_code=403, detail="当前角色无权维护构建任务")
+    values = [resource]
+    for key in ("payload", "input"):
+        if isinstance(resource.get(key), dict):
+            values.append(resource[key])
+    persistent_record = any(
+        key in resource
+        for key in ("owner", "taskType", "workflowId", "payload", "input", "actorUserId", "jobId")
+    )
+    client_ids = {value.get("clientId") for value in values if value.get("clientId")}
+    if not actor.is_admin and persistent_record and client_ids != {actor.business_id}:
+        raise HTTPException(status_code=403, detail="任务尚未登记本业务归属，请由管理员重新保存")
+    spaces = set()
+    schema_ids = set()
+    for value in values:
+        if not actor.is_admin and value.get("clientId") and value["clientId"] != actor.business_id:
+            raise HTTPException(status_code=403, detail="无权访问其他业务任务")
+        for key in ("graphSpace", "graph_space"):
+            if value.get(key):
+                spaces.add(value[key])
+        if value.get("schemaId"):
+            schema_ids.add(value["schemaId"])
+        schema_ids.update(value.get("schemaIds") or [])
+        for step in value.get("steps") or []:
+            if isinstance(step, dict) and step.get("schemaId"):
+                schema_ids.add(step["schemaId"])
+    if action != "read" and not actor.is_admin:
+        from biz.dependencies.resources import ensure_owner_access
+        from dao.embedding_config import EmbeddingConfigDAO
+        from dao.llm_config import LlmConfigDAO
+        from dao.milvus_config import MilvusConfigDAO
+        from dao.mysql_datasource import MysqlDatasourceDAO
+        from infra.mysql import session_scope
+
+        config_types = (
+            ("llmConfigId", "llm_config_id", LlmConfigDAO),
+            ("embeddingConfigId", "embedding_config_id", EmbeddingConfigDAO),
+            ("mysqlDatasourceId", "mysql_datasource_id", MysqlDatasourceDAO),
+            ("milvusConfigId", "milvus_config_id", MilvusConfigDAO),
+        )
+        with session_scope() as session:
+            for value in values:
+                for camel, snake, dao_type in config_types:
+                    for config_id in {value.get(camel), value.get(snake)} - {None, ""}:
+                        row = dao_type(session).get(config_id)
+                        if row is None:
+                            raise HTTPException(status_code=403, detail="任务配置不存在或不可访问")
+                        ensure_owner_access(actor, row.owner or "")
+    explicit_spaces = set(spaces)
+    if schema_ids:
+        from dao.schema_management import SchemaManagementDAO
+        from infra.workflow_mysql import workflow_session_scope
+
+        with workflow_session_scope() as session:
+            dao = SchemaManagementDAO(session)
+            for schema_id in schema_ids:
+                row = dao.get(schema_id)
+                if row is None:
+                    raise HTTPException(status_code=404, detail="任务关联 Schema 不存在")
+                if action != "read" and explicit_spaces and explicit_spaces != {row.graph_space}:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="目标空间必须与 Schema 所属空间一致，请选择目标空间的 Schema",
+                    )
+                spaces.add(row.graph_space)
+    if not spaces and not actor.is_admin:
+        raise HTTPException(status_code=403, detail="历史任务尚未登记图空间归属")
+    for space in spaces:
+        ensure_space_access(actor, space, action)
+
+
+def _job_business(actor, resource):
+    """Persist ownership from actual private spaces, never from creator membership."""
+    from dao.schema_management import SchemaManagementDAO
+    from db_model.business_access import BusinessGraphSpace
+    from infra.mysql import session_scope
+    from infra.workflow_mysql import workflow_session_scope
+
+    spaces = {resource.get("graphSpace"), resource.get("graph_space")} - {None, ""}
+    schema_ids = list(resource.get("schemaIds") or [])
+    if resource.get("schemaId"):
+        schema_ids.append(resource["schemaId"])
+    if schema_ids:
+        with workflow_session_scope() as session:
+            for schema_id in schema_ids:
+                row = SchemaManagementDAO(session).get(schema_id)
+                if row:
+                    spaces.add(row.graph_space)
+    private_clients = set()
+    unknown_space = False
+    with session_scope() as session:
+        for space in spaces:
+            row = session.get(BusinessGraphSpace, space)
+            if row is None or (not row.is_shared_production and not row.client_id):
+                unknown_space = True
+            if row and not row.is_shared_production and row.client_id:
+                private_clients.add(row.client_id)
+    if len(private_clients) > 1:
+        raise HTTPException(403, "一个构建任务不能跨多个业务的私有空间")
+    if unknown_space:
+        return None
+    return next(iter(private_clients)) if private_clients else actor.business_id or None
+
+
+def authorize_background_execution(payload):
+    """Re-resolve persisted users; a scheduled payload cannot grant itself a role."""
+    if not rbac_enabled():
+        return
+    from sqlalchemy import select
+
+    from config.auth import AuthSettings
+    from db_model.platform_governance import PlatformUser, PlatformUserRole
+    from infra.mysql import session_scope
+    from service.business_access_control import resolve_membership
+    from service.platform_access import ADMIN_ROLE
+
+    user_id = str(payload.get("actorUserId") or "")
+    if not user_id:
+        raise HTTPException(status_code=403, detail="任务缺少执行身份，请由管理员重新保存任务")
+    settings = AuthSettings.from_env()
+    with session_scope() as session:
+        user = session.get(PlatformUser, user_id)
+        if user is None:
+            raise HTTPException(status_code=403, detail="任务执行账号不存在")
+        local_admin = (
+            session.scalar(
+                select(PlatformUserRole.id).where(
+                    PlatformUserRole.user_id == user_id, PlatformUserRole.role_code == ADMIN_ROLE
+                )
+            )
+            is not None
+        )
+        actor = PlatformActor(
+            user_id=user_id,
+            username=user.username or "",
+            display_name=user.nickname or user.username or "",
+            email=user.email or "",
+            is_admin=local_admin or user_id in settings.initial_admin_user_ids,
+            business_only=user_id in settings.business_only_user_ids,
+        )
+    from dataclasses import replace
+
+    client_id, role = resolve_membership(user_id)
+    actor = replace(actor, business_id=client_id, business_role=role)
+    if not actor.can_develop:
+        raise HTTPException(
+            403, "执行账号缺少本地开发维护或管理员授权；门户管理员请先在配置管理保存本地管理员角色"
+        )
+    if not actor.is_admin and payload.get("clientId") != client_id:
+        raise HTTPException(status_code=403, detail="任务所属业务已变更，请重新保存任务")
+    authorize_workflow_resource(actor, payload, "write")
+    return actor
+
+
+def workflow_resource_visible(actor, resource):
+    try:
+        authorize_workflow_resource(actor, resource)
+        return True
+    except HTTPException as exc:
+        if exc.status_code not in (403, 404):
+            raise
+        return False
 
 
 def _now() -> str:
@@ -77,8 +258,10 @@ class WorkflowJobService:
         status: str | None = None,
         task_type: str | None = None,
     ) -> list[dict[str, Any]]:
-        owner = None if actor.is_admin else actor.user_id
+        owner = None if actor.is_admin or rbac_enabled() else actor.user_id
         jobs = self.repo.list_jobs(name=name, status=status, task_type=task_type, owner=owner)
+        if rbac_enabled():
+            jobs = [job for job in jobs if workflow_resource_visible(actor, job)]
         await self._refresh_running_jobs(jobs)
         return jobs
 
@@ -122,6 +305,8 @@ class WorkflowJobService:
 
         job = self.get_job(actor, job_id)
         executions = self.repo.list_executions(limit=200, job_id=job_id)
+        if rbac_enabled():
+            executions = [item for item in executions if workflow_resource_visible(actor, item)]
         latest = executions[0] if executions else None
         if latest and latest.get("status") == "RUNNING":
             # 惰性刷新最新一条（每 job 最多 1 次 Temporal RPC）
@@ -138,6 +323,9 @@ class WorkflowJobService:
     # ---------- 创建 / 编辑 / 删除 ----------
 
     async def create_job(self, actor: PlatformActor, request: dict[str, Any]) -> dict[str, Any]:
+        if rbac_enabled():
+            request = {**request, "clientId": _job_business(actor, request)}
+        authorize_workflow_resource(actor, request, "write")
         task_type = request.get("taskType", "extract")
         if task_type not in {"extract", "chain"}:
             # single/upload 已随 D2 下线：脚本唯一通道是 Schema 管理。chain 为
@@ -191,6 +379,8 @@ class WorkflowJobService:
             "definitionName": definition.get("name", definition["id"]),
             "schedule": schedule,
             "owner": actor.user_id,
+            "executorUserId": actor.user_id,
+            "clientId": request.get("clientId") if rbac_enabled() else actor.business_id,
             "status": "启用",
             "createdAt": _now(),
             "updatedAt": _now(),
@@ -225,6 +415,8 @@ class WorkflowJobService:
         self, actor: PlatformActor, job_id: str, request: dict[str, Any]
     ) -> dict[str, Any]:
         job = self.get_job(actor, job_id)
+        authorize_workflow_resource(actor, job, "write")
+        authorize_workflow_resource(actor, {**job, **request}, "write")
         if request.get("name"):
             job["name"] = request["name"].strip()
         for key in _SELECTOR_KEYS:
@@ -234,6 +426,22 @@ class WorkflowJobService:
                 else:
                     job[key] = request[key]
         job["updatedAt"] = _now()
+        job["executorUserId"] = actor.user_id
+        if rbac_enabled() and not job.get("clientId"):
+            job["clientId"] = _job_business(actor, job)
+        if rbac_enabled() and job.get("taskType") == "extract":
+            from service.schema_extraction import (
+                build_extract_definition,
+                ensure_extract_script_ready,
+                persist_extract_definition,
+            )
+
+            definition = persist_extract_definition(
+                build_extract_definition(ensure_extract_script_ready(job["schemaId"]))
+            )
+            job["definitionId"] = definition["id"]
+            job["definitionIds"] = [definition["id"]]
+            job["definitionName"] = definition["name"]
 
         # chain 任务改步序：同 id 原地重建定义（只影响后续触发）
         if job.get("taskType") == "chain" and request.get("schemaIds") is not None:
@@ -257,6 +465,12 @@ class WorkflowJobService:
                         job.get("scheduleId") or f"{job['id']}-sched", job, definition
                     )
 
+        if rbac_enabled() and (job.get("schedule") or {}).get("kind") == "cron":
+            definition = self.repo.get_definition(job["definitionId"])
+            if definition is not None:
+                await self._create_job_schedule(
+                    job.get("scheduleId") or f"{job['id']}-sched", job, definition
+                )
         self.repo.save_job(job)
         return job
 
@@ -264,6 +478,7 @@ class WorkflowJobService:
         from service.workflow_operations import workflow_operations_service
 
         job = self.get_job(actor, job_id)
+        authorize_workflow_resource(actor, job, "write")
         if job.get("status") == "暂停":
             raise WorkflowJobConflictError("任务已暂停，请先恢复后再触发")
         if job.get("lastExecutionStatus") in _NON_TERMINAL_RUNNING and job.get("lastExecutionId"):
@@ -289,6 +504,9 @@ class WorkflowJobService:
             except Exception as exc:
                 raise WorkflowJobError(str(exc)) from exc
         payload = self.selector_payload(job)
+        if rbac_enabled():
+            payload["actorUserId"] = actor.user_id
+            payload["clientId"] = job.get("clientId")
         payload["jobId"] = job["id"]
         payload["jobName"] = job["name"]
         if job.get("taskType") == "chain":
@@ -319,6 +537,7 @@ class WorkflowJobService:
         self, actor: PlatformActor, job_id: str, active: bool
     ) -> dict[str, Any]:
         job = self.get_job(actor, job_id)
+        authorize_workflow_resource(actor, job, "write")
         if job["schedule"].get("kind") == "cron":
             schedule_id = job.get("scheduleId")
             if schedule_id:
@@ -351,6 +570,7 @@ class WorkflowJobService:
 
     async def delete_job(self, actor: PlatformActor, job_id: str) -> bool:
         job = self.get_job(actor, job_id)
+        authorize_workflow_resource(actor, job, "write")
         schedule_id = job.get("scheduleId")
         if schedule_id:
             try:
@@ -420,6 +640,9 @@ class WorkflowJobService:
     def selector_payload(self, job: dict[str, Any]) -> dict[str, Any]:
         """job 上的 camelCase 选择器 → workflow payload 的 snake_case 键。"""
         payload: dict[str, Any] = {}
+        if rbac_enabled():
+            payload["actorUserId"] = job.get("executorUserId") or job.get("owner")
+            payload["clientId"] = job.get("clientId")
         for camel, snake in _SELECTOR_PAYLOAD_KEYS.items():
             if job.get(camel) not in (None, ""):
                 payload[snake] = job[camel]
@@ -440,6 +663,8 @@ class WorkflowJobService:
             schedule_payload["chainDefinitionId"] = job["definitionId"]
             if job.get("batchSize"):
                 schedule_payload["batchSize"] = job["batchSize"]
+        if rbac_enabled():
+            authorize_background_execution(schedule_payload)
         schedule = {
             "id": schedule_id,
             "cron": job["schedule"]["cron"],
@@ -465,6 +690,9 @@ class WorkflowJobService:
         self.repo.save_job(job)
 
     def _ensure_owner(self, actor: PlatformActor, job: dict[str, Any]) -> None:
+        if rbac_enabled():
+            authorize_workflow_resource(actor, job)
+            return
         if actor.is_admin:
             return
         if (job.get("owner") or "") != actor.user_id:

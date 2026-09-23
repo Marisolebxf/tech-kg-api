@@ -42,16 +42,16 @@ const currentUser = computed(() => authStore.profile?.user);
 const userAvatar = computed(() => currentUser.value?.avatar || accountAvatar);
 const businessOnly = computed(() => authStore.businessOnly);
 const isAdminUser = computed(() =>
-  !businessOnly.value && (authDisabled || authStore.isAdmin),
+  !businessOnly.value && (authDisabled || authStore.canDevelop),
 );
 const userRoleName = computed(() =>
-  isAdminUser.value ? "管理员" : "普通用户",
+  (!businessOnly.value && (authDisabled || authStore.isAdmin)) ? "管理员" : isAdminUser.value ? "开发维护" : "普通用户",
 );
 const userDisplayName = computed(() =>
   currentUser.value?.nickname || currentUser.value?.username || userRoleName.value,
 );
 const userRoleDescription = computed(() =>
-  isAdminUser.value ? "系统管理与审核权限" : "知识图谱业务服务",
+  authStore.isAdmin ? "系统管理与审核权限" : isAdminUser.value ? "业务图空间开发与维护" : "知识图谱业务服务",
 );
 const pageTitle = computed(() => String(route.meta.title ?? "亿级知识图谱"));
 const routeError = ref("");

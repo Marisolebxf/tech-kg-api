@@ -1,0 +1,8 @@
+FROM python:3.11.13-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+RUN pip install --no-cache-dir SQLAlchemy==2.0.42
+WORKDIR /opt/runtime
+COPY sandbox/runtime.py /opt/runtime/runtime.py
+COPY backend/sdk/kg_sdk.py backend/sdk/access.py backend/sdk/sandbox_proxy.py /opt/runtime/sdk/
+USER 65532:65532
+ENTRYPOINT ["python", "-I", "/opt/runtime/runtime.py"]

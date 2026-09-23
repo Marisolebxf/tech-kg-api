@@ -12,7 +12,11 @@ from sqlalchemy.orm import Session
 
 from application.llm_config import LlmConfigApplication
 from biz.dependencies.auth import CurrentActor
-from biz.dependencies.resources import ensure_owner_access, resource_owner_filter
+from biz.dependencies.resources import (
+    assigned_resource_owner,
+    ensure_owner_access,
+    resource_owner_filter,
+)
 from biz.schemas.common import ApiResponse
 from biz.schemas.llm_config import LlmConfigCreate, LlmConfigUpdate, LlmConfigVerifyRequest
 from infra.mysql import get_session
@@ -68,7 +72,9 @@ def list_llm_configs(
 ) -> Response:
     owner = resource_owner_filter(actor)
     cache_key = f"llm-configs:{owner}:{actor.user_id}:{actor.is_admin}"
-    cached = _config_cache_get(cache_key)
+    from service.business_access_control import rbac_enabled
+
+    cached = None if rbac_enabled() else _config_cache_get(cache_key)
     if cached is not None:
         return Response(cached, media_type="application/json")
     payload = json.dumps(
@@ -105,7 +111,7 @@ def create_llm_config(
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
     data = payload.model_dump()
-    data["owner"] = actor.user_id if not actor.is_admin else (data.get("owner") or actor.user_id)
+    data["owner"] = assigned_resource_owner(actor, data.get("owner", ""))
     result = _application(session).create_config(data, scope_owner=resource_owner_filter(actor))
     _config_cache_clear()
     return ApiResponse(data=result, msg="LLM 配置已创建")

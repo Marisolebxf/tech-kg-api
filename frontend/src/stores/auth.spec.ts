@@ -98,3 +98,19 @@ describe('session state recovery', () => {
     expect(store.profile).toBeNull()
   })
 })
+
+describe('业务角色菜单权限', () => {
+  it('开发维护不是管理员，但能进入管理功能', () => {
+    const store = useAuthStore()
+    store.profile = { ...profile, businessRbacEnabled: true, platformRole: 'developer', canDevelop: true }
+    expect(store.isAdmin).toBe(false)
+    expect(store.canDevelop).toBe(true)
+    store.profile.businessOnly = true
+    expect(store.canDevelop).toBe(false)
+  })
+  it('旧模式保持管理员门槛', () => {
+    const store = useAuthStore()
+    store.profile = { ...profile, businessRbacEnabled: false, canDevelop: true }
+    expect(store.canDevelop).toBe(false)
+  })
+})

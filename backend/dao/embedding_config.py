@@ -27,6 +27,10 @@ class EmbeddingConfigDAO(BaseDAO[EmbeddingConfig]):
                 .order_by(EmbeddingConfig.updated_at.desc())
                 .limit(1)
             )
+            from service.business_access_control import rbac_enabled
+
+            if rbac_enabled():
+                stmt = stmt.where(~EmbeddingConfig.owner.like("business:%"))
             return session.scalars(stmt).first()
         finally:
             if should_close:
@@ -37,6 +41,14 @@ class EmbeddingConfigDAO(BaseDAO[EmbeddingConfig]):
         session, should_close = self._get_session()
         try:
             conditions = [EmbeddingConfig.is_default.is_(True), EmbeddingConfig.id != exclude_id]
+            from service.business_access_control import rbac_enabled
+
+            if rbac_enabled() and owner is None:
+                target = session.get(EmbeddingConfig, exclude_id)
+                if target is not None and target.owner.startswith("business:"):
+                    owner = target.owner
+                else:
+                    conditions.append(~EmbeddingConfig.owner.like("business:%"))
             if owner is not None:
                 conditions.append(EmbeddingConfig.owner == owner)
             stmt = update(EmbeddingConfig).where(*conditions).values(is_default=False)

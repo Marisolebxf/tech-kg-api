@@ -184,6 +184,11 @@ def _ensure_space_access(actor: Any, space: str | None) -> None:
 
     在端点 try 块之前调用，HTTPException 不会被 except Exception 吞成 500。
     """
+    from service.business_access_control import ensure_space_access, rbac_enabled
+
+    if rbac_enabled():
+        ensure_space_access(actor, space)
+        return
     if not space or actor.is_admin:
         return
     from service.graph_space import GraphSpaceService, default_graph_space
@@ -897,6 +902,10 @@ async def list_spaces(actor: CurrentActor) -> ApiResponse:
         return ApiResponse(data={"spaces": [item["name"] for item in items]})
     except Exception:  # noqa: BLE001
         # 绑定库不可用时仅返回默认业务空间，不泄露其他空间列表。
+        from service.business_access_control import rbac_enabled
+
+        if rbac_enabled():
+            raise HTTPException(503, "无法读取授权图空间") from None
         from service.graph_space import default_graph_space
 
         return ApiResponse(data={"spaces": [default_graph_space()]})

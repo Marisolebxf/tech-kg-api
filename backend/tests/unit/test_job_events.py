@@ -139,19 +139,34 @@ async def test_hub_stops_watcher_after_last_subscriber() -> None:
 
 
 @pytest.mark.asyncio
-async def test_jobs_events_endpoint_streams_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("business_rbac", [False, True])
+async def test_jobs_events_endpoint_streams_changes(
+    monkeypatch: pytest.MonkeyPatch, business_rbac: bool
+) -> None:
     """直接驱动端点返回的 body_iterator——httpx ASGITransport 会等 app 整体
     跑完才返回响应，无限 SSE 流在 transport 层必然死锁，走不了 client.stream。"""
     import json
 
     from biz.handler import workflow_system
     from service import job_events as job_events_module
+    from service.platform_access import PlatformActor
+
+    monkeypatch.setenv("BUSINESS_RBAC_ENABLED", "true" if business_rbac else "false")
+    actor = PlatformActor(
+        user_id="business-developer",
+        username="developer",
+        display_name="Developer",
+        email="",
+        is_admin=False,
+        business_id="business-a",
+        business_role="developer",
+    )
 
     poll = FakePoll()
     monkeypatch.setattr(job_events_module.hub, "_poll", poll)
     monkeypatch.setattr(job_events_module.hub, "_interval", 0.02)
 
-    response = await workflow_system.stream_job_events()
+    response = await workflow_system.stream_job_events(actor)
     assert response.media_type.startswith("text/event-stream")
     # nginx 默认缓冲代理响应会攒住流，必须显式关掉
     assert response.headers["x-accel-buffering"] == "no"
@@ -176,8 +191,11 @@ async def test_jobs_events_endpoint_streams_changes(monkeypatch: pytest.MonkeyPa
 
     data_line = next(line for line in event_chunk.splitlines() if line.startswith("data:"))
     payload = json.loads(data_line.removeprefix("data: "))
-    assert payload["changed"] == ["job:a"]
-    assert payload["removed"] == []
+    if business_rbac:
+        assert payload == {}  # Invalidate the list without disclosing another business's IDs.
+    else:
+        assert payload["changed"] == ["job:a"]
+        assert payload["removed"] == []
 
 
 @pytest.mark.external

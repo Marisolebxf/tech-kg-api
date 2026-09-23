@@ -436,7 +436,9 @@ async def _spawn_script(
     timeout: float,
     runner: str,
     context_label: str,
-) -> tuple[dict[str, Any], str]:
+    *,
+    request: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], str | None]:
     """共享的脚本子进程启动逻辑（平台喂数抽取 execute_transform 共用）。
 
     在隔离子进程中以 ``runner`` 调 ``script_path`` 的 ``function_name``；``ctx``
@@ -444,6 +446,37 @@ async def _spawn_script(
     返回 ``(解析后的 stdout 包装 dict, sidecar 路径)``——调用方负责合并 access
     报告并在 finally 里 ``_cleanup_sidecar``。超时/非零退出抛 RuntimeError。
     """
+    from service.business_access_control import rbac_enabled
+
+    if rbac_enabled():
+        if request is None:
+            raise RuntimeError("隔离脚本缺少已授权的执行上下文")
+        from service.script_resource_broker import ScriptResourceBroker
+        from service.script_sandbox_client import execute_script
+
+        # This capability scope is supplied by Temporal, never by uploaded code or API input.
+        try:
+            execution = activity.info()
+            run_identity = [execution.workflow_id, execution.workflow_run_id]
+        except RuntimeError:
+            from uuid import uuid4
+
+            run_identity = ["direct-test", uuid4().hex]
+        trusted_request = {
+            **request,
+            "_sandboxRunKey": hashlib.sha256(json.dumps(run_identity).encode()).hexdigest(),
+        }
+        broker = ScriptResourceBroker(trusted_request, ctx)
+        try:
+            public_context = broker.public_context()
+        except Exception:
+            broker.close()
+            raise
+        wrapped = await execute_script(
+            script_path, function_name, stdin_data, public_context, timeout, broker
+        )
+        return wrapped, None
+
     # 上传脚本需要 backend 模块（infra/dao/sdk）与凭据（MySQL/TRSGraph）。
     # worker 进程不 import infra，故这里显式加载 backend/.env，并把 backend + backend/sdk
     # 目录加入 PYTHONPATH。密钥经 env 传递的安全面与 MYSQL_PASSWORD 等
@@ -628,6 +661,7 @@ def _enqueue_entity_pending_item(
     if top:
         reason += f"，最高得分 {top[0]['score']:.2f}"
     manual_review_service.create_direct_case(
+        graph_space=space,
         task_id=task_id,
         execution_id=execution_id,
         step_id=step_id,
@@ -782,19 +816,52 @@ def _jsonable(value: Any) -> Any:
 
 
 @activity.defn
-async def load_schema_extract_plan(schema_id: str) -> dict[str, Any]:
+async def load_schema_extract_plan(schema_id: str | dict[str, Any]) -> dict[str, Any]:
     """读控制库组装抽取计划：kind/name/activeProps（目录属性全集）/sources/脚本（S3 下载到临时文件）。"""
     from sqlalchemy.orm import Session as OrmSession
 
+    from biz.dependencies.resources import ensure_owner_access
     from db_model.schema_management import GraphSchemaDefinition
     from infra.s3 import get_schema_s3_storage
     from infra.workflow_mysql import get_workflow_engine
+    from service.business_access_control import rbac_enabled
+    from service.workflow_jobs import authorize_background_execution
 
+    actor = None
+    context = schema_id if isinstance(schema_id, dict) else {"schemaId": schema_id}
+    if rbac_enabled():
+        try:
+            actor = authorize_background_execution(context)
+        except Exception as exc:
+            raise ApplicationError(
+                str(exc), type="BusinessAuthorizationDenied", non_retryable=True
+            ) from exc
+    schema_id = context["schemaId"]
     engine = get_workflow_engine()
     with OrmSession(engine) as session:
         definition = session.get(GraphSchemaDefinition, schema_id)
         if definition is None or definition.is_deleted:
             raise ValueError(f"Schema 不存在: {schema_id}")
+        graph_space = definition.graph_space
+        if rbac_enabled():
+            from service.script_resource_broker import validate_source_sql
+
+            for source_binding in definition.sources:
+                sql = (
+                    source_binding.query_sql
+                    or f"SELECT * FROM `{source_binding.database_name}`.`{source_binding.table_name}`"
+                )
+                validate_source_sql(sql, source_binding.database_name)
+        if actor is not None and not actor.is_admin:
+            from dao.mysql_datasource import MysqlDatasourceDAO
+            from infra.mysql import session_scope
+
+            with session_scope() as source_session:
+                for source in definition.sources:
+                    source_row = MysqlDatasourceDAO(source_session).get(source.datasource_id)
+                    if source_row is None:
+                        raise ApplicationError("来源配置不存在", non_retryable=True)
+                    ensure_owner_access(actor, source_row.owner or "")
         kind = definition.kind
         name = definition.name
         label = definition.label
@@ -868,9 +935,13 @@ async def load_schema_extract_plan(schema_id: str) -> dict[str, Any]:
         )
     except ValueError as exc:
         raise ValueError(f"Schema 脚本步声明非法: {exc}") from exc
+    from service.schema_extraction import extract_definition_id
+
     return {
+        "definitionId": extract_definition_id(schema_key, schema_id),
         "schemaId": schema_id,
         "schemaKey": schema_key,
+        "graphSpace": graph_space,
         "kind": kind,
         "name": name,
         "label": label,
@@ -989,8 +1060,35 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
     database = request.get("database") or ""
     table = request.get("table") or ""
     time_column = (request.get("timeColumn") or "").strip()
+    if time_column:
+        time_column = _require_identifier(time_column)
     pk_column = _require_identifier(request["pkColumn"])
     query_sql = request.get("querySql") or None
+    from service.business_access_control import rbac_enabled
+
+    if rbac_enabled():
+        from service.script_resource_broker import (
+            ScriptAccessDenied,
+            validate_script_resources,
+            validate_source_sql,
+        )
+
+        validate_script_resources(request)
+        source = request.get("source") or {}
+        for read_key, source_key in (
+            ("datasourceId", "datasourceId"),
+            ("database", "databaseName"),
+            ("table", "tableName"),
+            ("querySql", "querySql"),
+            ("pkColumn", "pkColumn"),
+            ("timeColumn", "timeColumn"),
+        ):
+            if str(request.get(read_key) or "") != str(source.get(source_key) or ""):
+                raise ScriptAccessDenied("读取参数与已授权来源绑定不一致")
+        if query_sql:
+            query_sql = validate_source_sql(query_sql, database)
+        else:
+            validate_source_sql(f"SELECT * FROM `{database}`.`{table}`", database)
     batch_size = min(max(int(request.get("batchSize", 500)), 1), 5000)
     record_ids = request.get("recordIds")
 
@@ -1242,11 +1340,28 @@ async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
     脚本内 resolver 可用 ``current_context().mysql.engine`` 加载查找表）。
     脚本的 ``_watermark``/``_checkpoint`` 元字段被忽略（水位由平台管理）。
     """
+    from service.business_access_control import rbac_enabled
+
+    if rbac_enabled():
+        from service.script_resource_broker import validate_script_resources
+        from service.workflow_jobs import authorize_background_execution
+
+        authorize_background_execution({**request, **(request.get("selectors") or {})})
+        validate_script_resources(request)
     script_path = Path(request["scriptPath"])
     if not script_path.is_file():
         # worker 崩溃/容器重建导致本地 tempfile 丢失：按 run 副本重物化
         # （sha256 钉版本，换 worker 接手也拿到同一份字节）
         script_path = Path(await _rematerialize_run_script(request))
+    expected_hash = request.get("scriptSha256")
+    if rbac_enabled() and not expected_hash:
+        raise RuntimeError("隔离脚本缺少内容校验值，请重新启动任务")
+    if expected_hash:
+        actual_hash = await asyncio.to_thread(
+            lambda: hashlib.sha256(script_path.read_bytes()).hexdigest()
+        )
+        if actual_hash != expected_hash:
+            raise RuntimeError("脚本 sha256 校验失败，禁止执行修改后的脚本")
     function_name = request["functionName"]
     source = request.get("source") or {}
     kind = request.get("kind", "entity")
@@ -1320,6 +1435,7 @@ async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
             float(request.get("timeoutSeconds", 600)),
             _SINGLE_ARG_RUNNER,
             "平台喂数转换脚本",
+            request=request,
         )
         output = (
             wrapped.get("result") if isinstance(wrapped, dict) and "result" in wrapped else wrapped
@@ -1632,6 +1748,7 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
         elif outcome["decision"] == "gray":
             try:
                 manual_review_service.create_direct_case(
+                    graph_space=graph.get("space"),
                     task_id=task_id,
                     execution_id=execution_id,
                     step_id=request.get("stepId") or "align",
@@ -1775,6 +1892,7 @@ async def detect_extract_collisions(request: dict[str, Any]) -> dict[str, Any]:
         collisions += 1
         try:
             manual_review_service.create_direct_case(
+                graph_space=graph.get("space"),
                 task_id=task_id,
                 execution_id=execution_id,
                 step_id=request.get("stepId") or "align",
@@ -1843,6 +1961,7 @@ async def record_extract_failures(request: dict[str, Any]) -> dict[str, Any]:
         error = str(item.get("error") or "")[:1000]
         try:
             manual_review_service.create_direct_case(
+                graph_space=request.get("graphSpace"),
                 task_id=task_id,
                 execution_id=execution_id,
                 step_id="extract",
@@ -2268,13 +2387,22 @@ class SchemaExtractWorkflow:
         graph = {"space": graph_space} if graph_space else {}
         plan = await workflow.execute_activity(
             load_schema_extract_plan,
-            schema_id,
+            (
+                {**request, "schemaId": schema_id}
+                if workflow.patched("business-rbac-context-v1")
+                else schema_id
+            ),
             start_to_close_timeout=timedelta(seconds=120),
             retry_policy=ACTIVITY_RETRY_POLICY,
         )
+        if workflow.patched("business-rbac-context-v1") and not graph_space:
+            graph_space = plan.get("graphSpace")
+            graph = {"space": graph_space} if graph_space else {}
         timeout_seconds = max(int(plan.get("timeoutSeconds", 3600)), 60)
         kind = plan.get("kind", "entity")
-        definition_id = f"schema-extract-{plan['schemaKey']}"
+        definition_id = (
+            plan.get("definitionId") if workflow.patched("business-rbac-context-v1") else None
+        ) or f"schema-extract-{plan['schemaKey']}"
         # 步清单：@step 声明是唯一脚本形态（上传与计划组装双重校验），批内步序
         # 串行，每步一次 execute_transform 独立重试
         steps: list[dict[str, str]] = plan["steps"]
@@ -2310,6 +2438,10 @@ class SchemaExtractWorkflow:
         selectors = {
             key: request[key] for key in _EXTRACT_SELECTOR_KEYS if request.get(key) is not None
         }
+        if workflow.patched("business-script-sandbox-v1"):
+            # Use the resolved Schema space for scripts and pending-review creation,
+            # including runs started without an explicit graph-space override.
+            selectors["graph_space"] = graph_space
 
         async def extract_source(source: dict[str, Any]) -> dict[str, Any]:
             source_id = source["id"]
@@ -2360,6 +2492,15 @@ class SchemaExtractWorkflow:
                     "definitionId": definition_id,
                     "stepId": step_id,
                 }
+                if workflow.patched("business-source-sandbox-v1"):
+                    read_base.update(
+                        actorUserId=request.get("actorUserId"),
+                        clientId=request.get("clientId"),
+                        schemaId=schema_id,
+                        graphSpace=graph_space,
+                        source=source,
+                        selectors=selectors,
+                    )
                 if rerun_mode:
                     read_base["recordIds"] = rerun_ids.get(source_id)
                     try:
@@ -2480,6 +2621,13 @@ class SchemaExtractWorkflow:
                                     "batchIdx": idx,
                                     "chunkIdx": chunk["index"],
                                 }
+                                if workflow.patched("business-script-sandbox-v1"):
+                                    transform_request.update(
+                                        actorUserId=request.get("actorUserId"),
+                                        clientId=request.get("clientId"),
+                                        schemaId=schema_id,
+                                        graphSpace=graph_space,
+                                    )
                                 if seq:
                                     if "outKey" in prev_output:
                                         # S3 中转：input/prevOutputs 以 key 传递（无截断，
@@ -2808,6 +2956,7 @@ class SchemaExtractWorkflow:
                     {
                         "failures": inline_failures,
                         "failureRefs": failure_refs,
+                        "graphSpace": graph_space,
                         "cap": failure_cap,
                         "schemaId": schema_id,
                         "schemaKey": plan["schemaKey"],

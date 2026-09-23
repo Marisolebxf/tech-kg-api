@@ -129,12 +129,13 @@ class GraphSpaceService:
         return names
 
     def list_spaces_for_actor(self, actor: PlatformActor) -> list[dict]:
-        """配置页绑定入口：管理员看全量（需可选列表），普通用户按可工作空间收敛。"""
+        """配置页绑定入口：管理员看全量（需可选列表），普通用户与开发维护
+        （platform_developer，空间由管理员分配）按可工作空间收敛。"""
         from service.business_access_control import rbac_enabled, space_items
 
         if rbac_enabled():
             return space_items(actor)
-        if not actor.is_admin:
+        if not actor.is_admin or actor.is_developer:
             return self.list_work_spaces_for_actor(actor)
         bound_names = [item["name"] for item in self.bound_spaces(actor.user_id)]
         bound = set(bound_names)

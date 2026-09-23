@@ -117,6 +117,8 @@ class AuthProfile(CamelCaseModel):
     )
     is_admin: bool = False
     portal_is_admin: bool = False
+    # platform_developer：与管理员同权，但图空间由管理员分配（选择器/配置页按绑定收敛）
+    is_developer: bool = False
     business_only: bool = False
     business_rbac_enabled: bool = False
     business_id: str = ""

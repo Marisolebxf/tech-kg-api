@@ -119,6 +119,10 @@ def console_backend(monkeypatch):
             assert not self.session.closed
             return (user_id, space) in bindings
 
+        def _all_spaces(self):
+            # 控制台空间存在性校验走 SHOW SPACES 的 30s 缓存入口（同配置页）
+            return client.list_spaces()
+
     monkeypatch.setattr("infra.mysql.create_session", Session)
     monkeypatch.setattr("service.graph_space.GraphSpaceService", SpaceService)
     monkeypatch.setattr("infra.graph_db.get_space_client", lambda space: client)

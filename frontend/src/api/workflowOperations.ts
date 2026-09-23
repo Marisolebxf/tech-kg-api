@@ -378,6 +378,16 @@ export function countJobUnifiedStatuses(
   return counts
 }
 
+/** 任务归属空间（列表页/总览卡共用同一口径）：payload 未带 graphSpace 的历史任务
+ *  落默认业务空间（空间列表首位恒为默认）。 */
+export function jobGraphSpace(
+  job: Pick<WorkflowJob, 'graphSpace'>,
+  defaultSpace: string,
+  current: string,
+): string {
+  return job.graphSpace || defaultSpace || current
+}
+
 export const createJob = (input: JobCreateInput) =>
   unwrap(http.post('/v1/workflow-system/jobs', input)) as Promise<WorkflowJob>
 

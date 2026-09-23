@@ -40,12 +40,21 @@ export interface ManagementRisk {
   reviewTo: string
 }
 
+export interface StructureMember {
+  name: string
+  count: number
+}
+
 export interface StructureItem {
   label: string
   schema: string
+  /** 全部非零成员（按计数降序，展示名=Schema 目录中文名）；降级演示数据无此字段 */
+  members?: StructureMember[]
   count: string
   ratio: number
   tone: string
+  /** 「其他实体/其他关系」聚合段：只有它开悬浮（浮窗列成员 Schema 清单） */
+  isOther?: boolean
 }
 
 export interface PlatformOverviewData {
@@ -58,6 +67,9 @@ export interface PlatformOverviewData {
   managementRisks: ManagementRisk[]
   entityStructure: StructureItem[]
   relationStructure: StructureItem[]
+  /** 环形图中心数 = 各分段之和（Σ标签/Σ边类型计数），与分段自洽；资产卡 total 仍是去重口径 */
+  entityStructureTotal?: string
+  relationStructureTotal?: string
   dataMode: 'live' | 'partial' | 'mock'
   dataSources: Record<string, string>
   warnings: string[]

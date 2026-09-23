@@ -133,7 +133,8 @@ class TodayChangesSnapshot:
     """今日写图增量（来自工作流控制库，按图空间过滤）。
 
     entity/relation_added 为今日完成执行的 ``output.sources[].written`` 合计；
-    running_count 为当前 RUNNING 执行数；*_rows 为逐执行的新增明细行。
+    running_count 为当前 RUNNING 执行数；*_rows 为新增明细行（按来源表拆分，
+    一次执行绑定多个来源表时逐表一行）。
     """
 
     entity_added: int = 0
@@ -145,9 +146,6 @@ class TodayChangesSnapshot:
 
 class TodayChangesProvider(Protocol):
     def get_today_changes(self, space: str | None = None) -> TodayChangesSnapshot: ...
-
-
-_TRIGGER_LABELS = {"SCHEDULE": "定时调度", "MANUAL": "手动触发", "RERUN": "失败重跑"}
 
 
 def _execution_space(record: dict[str, Any]) -> str:
@@ -170,6 +168,9 @@ def parse_execution_records(
     """从控制库执行记录 JSON 解析今日写图增量（纯函数，便于单测）。
 
     只统计 ``target_space`` 空间的执行；未记录空间的旧执行按默认空间归属。
+    明细行列语义对齐 kgetl 演示行：类型 = Schema 名、变更内容 = 新增 + schemaKey、
+    来源 = 物理源表名、时间 = 完成时刻；具体对象因执行 output 无逐对象清单，
+    以「Schema 名 · N 条」聚合描述。
     """
     entity_added = 0
     relation_added = 0
@@ -201,22 +202,40 @@ def parse_execution_records(
         if kind not in ("entity", "relation") or written <= 0:
             continue
         schema_label = str(output.get("schemaLabel") or output.get("schemaKey") or "")
-        sources = output.get("sources") or []
-        table = str((sources[0] or {}).get("table") or "") if sources else ""
-        trigger = str(record.get("triggerSource") or "")
-        row = AssetChangeRow(
-            type=schema_label or ("实体 Schema" if kind == "entity" else "关系 Schema"),
-            object=table or "-",
-            change=f"写图 {written:,} 条",
-            source=_TRIGGER_LABELS.get(trigger, trigger or "-"),
-            time=completed_at[11:19] or "-",
+        # 明细行列语义对齐 kgetl 演示行：变更内容 = 新增 + Schema 英文标识（schemaKey），
+        # 来源 = 物理源表名。执行 output 只携带 written 计数、无逐对象清单
+        # （载荷 S3 中转默认关闭，无 records artifact 可查），故具体对象列降级为
+        # 「Schema 名 · N 条」的诚实聚合描述，不编造对象名。
+        schema_key = str(
+            output.get("schemaKey") or schema_label or ("实体" if kind == "entity" else "关系")
         )
+        display_label = schema_label or ("实体 Schema" if kind == "entity" else "关系 Schema")
+        change = f"新增 {schema_key}"
+        completed_time = completed_at[11:19] or "-"
+        target_rows = entity_rows if kind == "entity" else relation_rows
+        # 一次执行绑定多个来源表时按表拆行（来源列各自取本表名），只出 written>0 的表
+        for source in output.get("sources") or []:
+            if not isinstance(source, dict):
+                continue
+            source_written = max(0, int(source.get("written") or 0))
+            if source_written <= 0:
+                continue
+            target_rows.append(
+                (
+                    completed_at,
+                    AssetChangeRow(
+                        type=display_label,
+                        object=f"{display_label} · {source_written:,} 条",
+                        change=change,
+                        source=str(source.get("table") or source.get("source") or "-"),
+                        time=completed_time,
+                    ),
+                )
+            )
         if kind == "entity":
             entity_added += written
-            entity_rows.append((completed_at, row))
         else:
             relation_added += written
-            relation_rows.append((completed_at, row))
     # 明细按完成时间倒序（最新写图在前）
     entity_rows.sort(key=lambda pair: pair[0], reverse=True)
     relation_rows.sort(key=lambda pair: pair[0], reverse=True)

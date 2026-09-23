@@ -33,9 +33,9 @@ class _IntegrationChangesProvider:
             entity_rows=[
                 AssetChangeRow(
                     type="审测挂件",
-                    object="techkg_e2e_liz.review_widgets",
-                    change="写图 5 条",
-                    source="手动触发",
+                    object="审测挂件 · 5 条",
+                    change="新增 review-widget-64d0d5",
+                    source="techkg_e2e_liz.review_widgets",
                     time="10:30:00",
                 )
             ],
@@ -82,7 +82,7 @@ async def test_platform_overview_returns_frontend_contract(
     assert data["assetOverviewGroups"][0]["addedLabel"] == "今日新增"
     assert data["assetOverviewGroups"][1]["added"] == "+2"
     assert len(data["assetChangeRows"]["entity"]) == 1
-    assert data["assetChangeRows"]["entity"][0]["change"] == "写图 5 条"
+    assert data["assetChangeRows"]["entity"][0]["change"] == "新增 review-widget-64d0d5"
     assert data["assetChangeRows"]["relation"] == []
     assert len(data["latestChanges"]) == 5
     assert len(data["managementRisks"]) == 3

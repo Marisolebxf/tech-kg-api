@@ -162,9 +162,9 @@ def test_overview_uses_control_plane_today_changes() -> None:
     entity_rows = [
         AssetChangeRow(
             type="审测挂件",
-            object="techkg_e2e_liz.review_widgets",
-            change="写图 61 条",
-            source="手动触发",
+            object="审测挂件 · 61 条",
+            change="新增 review-widget-64d0d5",
+            source="techkg_e2e_liz.review_widgets",
             time="10:30:00",
         )
     ]
@@ -233,8 +233,10 @@ def _execution_record(
     payload_space: str | None = "dev2",
     payload_space_key: str = "graph_space",
     schema_label: str = "审测挂件",
+    schema_key: str = "review-widget-64d0d5",
     table: str = "techkg_e2e_liz.review_widgets",
     trigger: str = "SCHEDULE",
+    sources: list[dict] | None = None,
 ) -> str:
     import json
 
@@ -246,7 +248,8 @@ def _execution_record(
         "output": {
             "kind": kind,
             "schemaLabel": schema_label,
-            "sources": [{"table": table, "written": written}],
+            "schemaKey": schema_key,
+            "sources": sources if sources is not None else [{"table": table, "written": written}],
         },
     }
     return json.dumps(record, ensure_ascii=False)
@@ -285,12 +288,12 @@ def test_parse_execution_records_aggregates_today_by_kind_and_space() -> None:
     assert len(snapshot.entity_rows) == 1
     row = snapshot.entity_rows[0]
     assert row.type == "审测挂件"
-    assert row.object == "techkg_e2e_liz.review_widgets"
-    assert row.change == "写图 5 条"
-    assert row.source == "定时调度"
+    assert row.object == "审测挂件 · 5 条"
+    assert row.change == "新增 review-widget-64d0d5"
+    assert row.source == "techkg_e2e_liz.review_widgets"
     assert row.time == "10:30:00"
     assert len(snapshot.relation_rows) == 1
-    assert snapshot.relation_rows[0].source == "失败重跑"
+    assert snapshot.relation_rows[0].source == "techkg_e2e_liz.review_widgets"
 
 
 def test_parse_execution_records_space_key_variants_and_default_bucket() -> None:
@@ -337,3 +340,59 @@ def test_parse_execution_records_sorts_rows_by_completion_desc() -> None:
     )
 
     assert [row.time for row in snapshot.entity_rows] == ["18:00:00", "09:00:00"]
+
+
+def test_parse_execution_records_splits_rows_by_source() -> None:
+    """一次执行绑定多个来源表时逐表拆行，written=0 的表不出行也不计数。"""
+    snapshot = parse_execution_records(
+        [
+            _execution_record(
+                written=5,
+                completed_at="2026-09-22 10:30:00",
+                sources=[
+                    {"table": "techkg_e2e_liz.review_widgets", "written": 3},
+                    {"table": "techkg_e2e_liz.review_edges", "written": 2},
+                    {"table": "techkg_e2e_liz.empty_source", "written": 0},
+                ],
+            )
+        ],
+        today="2026-09-22",
+        target_space="dev2",
+        default_space="dev2",
+    )
+
+    assert snapshot.entity_added == 5
+    assert [(row.source, row.object) for row in snapshot.entity_rows] == [
+        ("techkg_e2e_liz.review_widgets", "审测挂件 · 3 条"),
+        ("techkg_e2e_liz.review_edges", "审测挂件 · 2 条"),
+    ]
+    # 变更内容与识别时间在同一执行的各行保持一致
+    assert {row.change for row in snapshot.entity_rows} == {"新增 review-widget-64d0d5"}
+    assert {row.time for row in snapshot.entity_rows} == {"10:30:00"}
+
+
+def test_parse_execution_records_change_falls_back_without_schema_key() -> None:
+    """schemaKey 缺失时变更内容回退 schemaLabel，再缺回退实体/关系。"""
+    snapshot = parse_execution_records(
+        [
+            _execution_record(
+                schema_key="",
+                completed_at="2026-09-22 10:30:00",
+                sources=[{"table": "techkg_e2e_liz.t1", "written": 1}],
+            ),
+            _execution_record(
+                schema_key="",
+                schema_label="",
+                completed_at="2026-09-22 11:00:00",
+                sources=[{"table": "techkg_e2e_liz.t2", "written": 1}],
+            ),
+        ],
+        today="2026-09-22",
+        target_space="dev2",
+        default_space="dev2",
+    )
+
+    # 倒序排列：11:00（schemaKey/schemaLabel 均缺）在前，10:30（仅缺 schemaKey）在后
+    assert snapshot.entity_rows[0].change == "新增 实体"
+    assert snapshot.entity_rows[0].type == "实体 Schema"
+    assert snapshot.entity_rows[1].change == "新增 审测挂件"

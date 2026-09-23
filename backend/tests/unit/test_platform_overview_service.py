@@ -112,6 +112,36 @@ def test_overview_total_is_deduped_with_multi_tag_vertices() -> None:
     assert sum(item.ratio for item in result.entity_structure) == 100
 
 
+def test_structure_schema_names_list_real_members() -> None:
+    """分段 schema 小字数据驱动：列桶内计数前 3 的真实成员名，超出 +N，零计数不列。
+
+    取代写死的演示文案（Expert / Scholar 等——点名 schema 在图里不存在或零计数），
+    数量仍是各成员计数之和（口径不变，只换名称）。"""
+    stats = GraphStatsSnapshot(
+        total_nodes=100,
+        total_edges=100,
+        nodes={"Paper": 50, "Report": 30, "Journal": 15, "Publication": 5, "Paper1": 0},
+        edges={"CITES": 60, "COAUTHOR_WITH": 30, "AUTHORED_BY": 5, "PUBLISH": 5, "OUTPUT_OF": 0},
+    )
+
+    class MemberStatsProvider:
+        def get_stats(self, space: str | None = None) -> GraphStatsSnapshot:
+            return stats
+
+    result = PlatformOverviewService(
+        stats_provider=MemberStatsProvider(), changes_provider=FakeChangesProvider()
+    ).get_overview()
+
+    entity_segs = {item.label: item.schema_name for item in result.entity_structure}
+    # 论文桶 4 个非零成员按计数降序取前 3，Publication 落 +1；Paper1 零计数不列
+    assert entity_segs["论文成果"] == "Paper / Report / Journal +1"
+    # 空桶给占位符（前端图例 v-for 的 key 已换 item.label，不依赖 schema 唯一）
+    assert entity_segs["专家 / 人才"] == "-"
+    relation_segs = {item.label: item.schema_name for item in result.relation_structure}
+    # 计数并列时按名字稳定排序：AUTHORED_BY 先于 PUBLISH，后者落 +1；OUTPUT_OF 零计数不列
+    assert relation_segs["发表 / 引用 / 成果"] == "CITES / COAUTHOR_WITH / AUTHORED_BY +1"
+
+
 def test_overview_cache_is_isolated_per_space() -> None:
     """总览随全局图空间查询（00918）：不同空间各自缓存、不串数据。"""
     provider = FakeStatsProvider()

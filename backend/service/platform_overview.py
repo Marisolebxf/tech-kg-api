@@ -463,42 +463,62 @@ def _relation_bucket(name: str) -> int:
     return 4
 
 
+def _member_names(members: list[tuple[str, int]], limit: int = 3) -> str:
+    """分段 schema 小字：桶内真实成员名（按计数降序取前 N，超出加 +N）。
+
+    取代写死的演示文案（Expert / Scholar 等——点名 schema 近半在图里不存在
+    或零计数），让小字与图内实际标签/边名一致、随图变化；零计数成员不列
+    （Paper1/Test 等测试残壳不进展示），桶空时给 -。
+    """
+    names = [name for name, _ in members]
+    if not names:
+        return "-"
+    if len(names) <= limit:
+        return " / ".join(names)
+    return " / ".join(names[:limit]) + f" +{len(names) - limit}"
+
+
 def _build_structure(
     counts: dict[str, int],
     *,
     entity: bool,
 ) -> list[StructureItem]:
     buckets = [0, 0, 0, 0, 0]
+    members: list[list[tuple[str, int]]] = [[], [], [], [], []]
     classifier = _entity_bucket if entity else _relation_bucket
     for name, count in counts.items():
-        buckets[classifier(name)] += max(0, int(count))
+        count = max(0, int(count))
+        index = classifier(name)
+        buckets[index] += count
+        if count > 0:
+            members[index].append((name, count))
     ratios = _ratios(buckets)
     definitions = (
         [
-            (EXPERT_ENTITY_LABEL, "Expert / Scholar", "#2e90fa"),
-            ("论文成果", "Paper / Journal", "#7a5af8"),
-            (ORGANIZATION_ENTITY_LABEL, "Organization / Enterprise", "#12b76a"),
-            ("项目 / 专利", "Project / Patent", "#f79009"),
-            ("其他实体", "Other", "#98a2b3"),
+            (EXPERT_ENTITY_LABEL, "#2e90fa"),
+            ("论文成果", "#7a5af8"),
+            (ORGANIZATION_ENTITY_LABEL, "#12b76a"),
+            ("项目 / 专利", "#f79009"),
+            ("其他实体", "#98a2b3"),
         ]
         if entity
         else [
-            ("发表 / 引用 / 成果", "PUBLISH / CITES / OUTPUT", "#165dff"),
-            ("任职 / 就读 / 作者单位", "WORKS_AT / STUDY_AT", "#2e90fa"),
-            ("项目 / 专利参与", "LEAD_PROJECT / INVENT_PATENT", "#06aed4"),
-            ("企业 / 产品 / 事件", "HAS_PRODUCT / HAS_EVENT", "#7a5af8"),
-            ("其他关系", "Other", "#98a2b3"),
+            ("发表 / 引用 / 成果", "#165dff"),
+            ("任职 / 就读 / 作者单位", "#2e90fa"),
+            ("项目 / 专利参与", "#06aed4"),
+            ("企业 / 产品 / 事件", "#7a5af8"),
+            ("其他关系", "#98a2b3"),
         ]
     )
     return [
         StructureItem(
             label=label,
-            schema=schema,
+            schema=_member_names(sorted(members[index], key=lambda m: (-m[1], m[0]))),
             count=_format_count(buckets[index]),
             ratio=ratios[index],
             tone=tone,
         )
-        for index, (label, schema, tone) in enumerate(definitions)
+        for index, (label, tone) in enumerate(definitions)
     ]
 
 

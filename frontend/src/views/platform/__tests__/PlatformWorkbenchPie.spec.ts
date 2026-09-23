@@ -196,33 +196,38 @@ describe('平台总览构成饼图随数据驱动', () => {
       .filter((chart) => chart.text().includes('实体标签构成'))[0]!
     const [first, other] = entityChart.findAll('g.platform-pie-slice')
 
-    // 前 4 单 Schema 段：外移放大 + 浮窗（名称/数量/占比），不列成员清单
+    // 前 4 单 Schema 段：外移放大 + 浮窗（名称/数量/占比），不列成员清单。
+    // 浮窗 Teleport 到 body：脱离 .kg-panel 的 backdrop-filter 层叠上下文与
+    // overflow:hidden 裁剪（否则溢出面板就被相邻卡片盖住），须用 document 查询。
     await first.trigger('mouseenter')
     expect(first.classes()).not.toContain('is-other')
     expect(first.attributes('style')).toContain('translate(')
-    const firstTip = entityChart.get('.platform-pie-tip')
-    expect(firstTip.text()).toContain('专家')
-    expect(firstTip.text()).toContain('600')
-    expect(firstTip.text()).toContain('60%')
-    expect(firstTip.find('.platform-pie-tip-members').exists()).toBe(false)
+    const firstTip = document.body.querySelector('.platform-pie-tip')
+    expect(firstTip).toBeTruthy()
+    expect(firstTip!.closest('.platform-structure-overview')).toBe(null)
+    expect(firstTip!.textContent).toContain('专家')
+    expect(firstTip!.textContent).toContain('600')
+    expect(firstTip!.textContent).toContain('60%')
+    expect(firstTip!.querySelector('.platform-pie-tip-members')).toBe(null)
     await first.trigger('mouseleave')
     expect(first.attributes('style') ?? '').not.toContain('translate')
-    expect(entityChart.find('.platform-pie-tip').exists()).toBe(false)
+    expect(document.body.querySelector('.platform-pie-tip')).toBe(null)
 
     // 「其他」段：外移放大 + 浮窗（合计+占比+成员 Schema 中文名清单）
     await other.trigger('mouseenter')
     expect(other.classes()).toContain('is-other')
     expect(other.attributes('style')).toContain('translate(')
-    const tip = entityChart.get('.platform-pie-tip')
-    expect(tip.text()).toContain('其他实体')
-    expect(tip.text()).toContain('400')
-    expect(tip.text()).toContain('40%')
-    expect(tip.text()).toContain('事件 · 40,000')
-    expect(tip.text()).toContain('组织机构 · 8,183')
+    const tip = document.body.querySelector('.platform-pie-tip')
+    expect(tip).toBeTruthy()
+    expect(tip!.textContent).toContain('其他实体')
+    expect(tip!.textContent).toContain('400')
+    expect(tip!.textContent).toContain('40%')
+    expect(tip!.textContent).toContain('事件 · 40,000')
+    expect(tip!.textContent).toContain('组织机构 · 8,183')
 
     await other.trigger('mouseleave')
     expect(other.attributes('style') ?? '').not.toContain('translate')
-    expect(entityChart.find('.platform-pie-tip').exists()).toBe(false)
+    expect(document.body.querySelector('.platform-pie-tip')).toBe(null)
 
     // 图例：只有「其他」行带悬浮（手型提示光标），前 4 段纯文本标签
     const hoverableLegend = entityChart.findAll('.platform-structure-legend .platform-legend-label')
@@ -248,10 +253,11 @@ describe('平台总览构成饼图随数据驱动', () => {
       .filter((chart) => chart.text().includes('实体标签构成'))[0]!
     const other = entityChart.findAll('g.platform-pie-slice')[1]!
     await other.trigger('mouseenter')
-    const tip = entityChart.get('.platform-pie-tip')
-    expect(tip.text()).toContain('类型10 · 10')
-    expect(tip.text()).not.toContain('类型11 ·')
-    expect(tip.text()).toContain('…还有 3 类')
+    const tip = document.body.querySelector('.platform-pie-tip')
+    expect(tip).toBeTruthy()
+    expect(tip!.textContent).toContain('类型10 · 10')
+    expect(tip!.textContent).not.toContain('类型11 ·')
+    expect(tip!.textContent).toContain('…还有 3 类')
 
     // 图例（含无悬浮的前 4 段）中文标签照常渲染
     const legendLabels = entityChart.findAll('.platform-structure-legend article > span')

@@ -105,6 +105,19 @@ def test_queue_filters_business_and_shared_production(review_service):
     assert admin["total"] == 3
 
 
+def test_queue_graph_space_filter_intersects_rbac_spaces(review_service):
+    # 队列页跟随图空间选择：graph_space 过滤与授权空间集合 AND 相交，
+    # 请求未授权空间得到空列表而非报错（不额外 403）
+    for space in ("space_a", "space_b", "production"):
+        create_case(review_service, space)
+    own = review_service.list_cases({"graph_space": "space_a"}, identity())
+    assert own["total"] == 1
+    assert own["items"][0]["graphSpace"] == "space_a"
+    assert review_service.list_cases({"graph_space": "space_b"}, identity())["total"] == 0
+    admin = review_service.list_cases({"graph_space": "space_b"}, identity(role="admin"))
+    assert admin["total"] == 1
+
+
 @pytest.mark.parametrize("space", ["space_b", "production", None])
 @pytest.mark.parametrize(
     "operation", ["detail", "claim", "draft", "submit", "cancel", "delete", "logs"]

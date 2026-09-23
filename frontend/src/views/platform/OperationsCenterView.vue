@@ -4,6 +4,8 @@ import { useRoute } from 'vue-router'
 import { IconSearch } from '@arco-design/web-vue/es/icon'
 
 import { deleteProductionReview, getExecution, getProductionReview, getProductionReviews, getTask, rerunExtractFailures, TRIGGER_SOURCE_LABEL, type ProcessingInstance, type ProductionReviewCase, type WorkflowExecution } from '../../api/workflowOperations'
+import { currentGraphSpace } from '../../api/currentGraphSpace'
+import { useGraphSpaceStore } from '../../stores/graphSpace'
 import { clampSearchKeyword, SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
 import ListPagination from '../../components/list-pagination.vue'
 import { PAGE_SIZE_OPTIONS } from '../../composables/use-client-pagination'
@@ -16,6 +18,7 @@ type CenterMode = 'review'
 
 const props = defineProps<{ mode: CenterMode }>()
 const route = useRoute()
+const graphSpaceStore = useGraphSpaceStore()
 
 /** 队列视图状态快照（sessionStorage）：点「查看记录」跳详情再返回时恢复页码/页大小/分类/筛选/排序，
  *  不再回落第 1 页。每次拉取前落盘（兼覆盖手动刷新场景）；显式深链 query（category/keyword）优先于快照。 */
@@ -327,6 +330,7 @@ async function loadReviews() {
     // A=入库决策：Tab 只筛 T_LINK（实体对齐裁决）——T_DIRECT case 不进队列，
     // 详情由工作台总览/处理实例详情直达；C=抽取失败重跑（T_EXTRACT_FAIL）
     const response = await getProductionReviews({
+      graphSpace: currentGraphSpace() || undefined,
       category: reviewCategory.value,
       templateId: reviewCategory.value === 'A' ? 'T_LINK' : undefined,
       keyword: keyword.value || undefined,
@@ -387,6 +391,14 @@ function toggleReviewTimeSort() {
 /** 筛选条件变化：保留当前页重新加载；总页数收缩、当前页超出时由 loadReviews 收敛到最后有效页（FUNC-00781）。 */
 watch([reviewStatusFilter, reviewKindFilter, reviewTimeFilter], () => {
   if (props.mode !== 'review') return
+  void loadReviews()
+})
+
+/** 图空间切换：待审核队列跟随当前空间重新拉取（换的是整份数据，页码归 1；空间是全局态，不进 sessionStorage 快照，
+ *  与其他业务页「切空间即重查」同口径）。 */
+watch(() => graphSpaceStore.current, () => {
+  if (props.mode !== 'review') return
+  reviewPage.value = 1
   void loadReviews()
 })
 

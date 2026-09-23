@@ -155,3 +155,50 @@ async def test_http_delete_open_case_and_queue_exposes_execution_id(async_client
         assert conflict.status_code == 409
     finally:
         app.dependency_overrides[get_review_identity] = lambda: identity()
+
+
+@pytest.mark.anyio
+async def test_http_queue_follows_graph_space_param(async_client, production_api):
+    """队列跟随图空间：graphSpace 查询参数过滤 + 响应缓存按空间分键（连续查不同空间不得命中彼此缓存）。"""
+    from biz.handler import manual_review as handler_module
+
+    _, service = production_api
+    handler_module._queue_cache_clear()
+    try:
+        service.create_direct_case(**_link_kwargs(graph_space="dev2"))
+        service.create_direct_case(
+            **_link_kwargs(
+                task_id="TASK-API-2",
+                execution_id="EXEC-API-2",
+                object_id="S-API-2",
+                candidate={
+                    "scholar_id": "S-API-2",
+                    "name_zh": "测试专家二号",
+                    "existingCandidates": [{"id": "E-1"}],
+                },
+                reason="同名冲突待人工裁决（第二条）",
+                graph_space="gaoxing_test",
+            )
+        )
+        dev2 = (
+            await async_client.get(
+                "/api/v1/manual-reviews/production/queue", params={"graphSpace": "dev2"}
+            )
+        ).json()["data"]
+        assert dev2["total"] == 1
+        assert dev2["items"][0]["graphSpace"] == "dev2"
+        # 紧接着查另一空间：缓存键含 graphSpace，不得串台
+        gx = (
+            await async_client.get(
+                "/api/v1/manual-reviews/production/queue", params={"graphSpace": "gaoxing_test"}
+            )
+        ).json()["data"]
+        assert gx["total"] == 1
+        assert gx["items"][0]["graphSpace"] == "gaoxing_test"
+        # 不带空间=跨空间全量（老口径兜底）
+        everything = (await async_client.get("/api/v1/manual-reviews/production/queue")).json()[
+            "data"
+        ]
+        assert everything["total"] == 2
+    finally:
+        handler_module._queue_cache_clear()

@@ -48,13 +48,14 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-async function renderLayout(isAdmin: boolean, path = '/expert-direct', collapsed = false, businessOnly = false) {
+async function renderLayout(isAdmin: boolean, path = '/expert-direct', collapsed = false, businessOnly = false, isDeveloper = false) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const auth = useAuthStore()
   auth.profile = {
     isAdmin,
     businessOnly,
+    isDeveloper,
     user: { id: 'viewer', username: 'viewer', nickname: '测试用户', avatar: '' },
   } as AuthProfile
   useAppStore().collapsed = collapsed
@@ -133,5 +134,28 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
     const link = shown.wrapper.find('.app-nav a[href="/graph-query/visualization"]')
     expect(link.exists()).toBe(true)
     expect(link.text()).toContain('图谱可视化')
+  })
+})
+
+describe('右上角身份标识按角色区分', () => {
+  it('开发维护账号（platform_developer）显示开发人员而非管理员，管理菜单同管理员全量可见', async () => {
+    const { wrapper } = await renderLayout(true, '/graph-query', false, false, true)
+    const chip = wrapper.get('.app-top-actions__user')
+    expect(chip.text()).toContain('开发人员')
+    expect(chip.text()).not.toContain('管理员')
+    expect(chip.attributes('aria-label')).toContain('开发人员')
+    for (const path of managementPaths) {
+      expect(wrapper.find(`.app-nav a[href="${path}"]`).exists()).toBe(true)
+    }
+  })
+
+  it('管理员与普通用户的标识不受影响', async () => {
+    const admin = await renderLayout(true, '/graph-query')
+    const adminChip = admin.wrapper.get('.app-top-actions__user')
+    expect(adminChip.text()).toContain('管理员')
+    expect(adminChip.text()).not.toContain('开发人员')
+
+    const regular = await renderLayout(false)
+    expect(regular.wrapper.get('.app-top-actions__user').text()).toContain('普通用户')
   })
 })

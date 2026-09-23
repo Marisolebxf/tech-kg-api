@@ -44,14 +44,20 @@ const businessOnly = computed(() => authStore.businessOnly);
 const isAdminUser = computed(() =>
   !businessOnly.value && (authDisabled || authStore.canDevelop),
 );
+// 开发维护账号（platform_developer）与管理员同权，但身份标识须区分：
+// 右上角与账号菜单显示「开发人员」，不得显示「管理员」（2026-09-24 修复）。
 const userRoleName = computed(() =>
-  (!businessOnly.value && (authDisabled || authStore.isAdmin)) ? "管理员" : isAdminUser.value ? "开发维护" : "普通用户",
+  (!businessOnly.value && (authDisabled || authStore.isAdmin))
+    ? (authStore.profile?.isDeveloper === true && !authDisabled ? "开发人员" : "管理员")
+    : isAdminUser.value ? "开发维护" : "普通用户",
 );
 const userDisplayName = computed(() =>
   currentUser.value?.nickname || currentUser.value?.username || userRoleName.value,
 );
 const userRoleDescription = computed(() =>
-  authStore.isAdmin ? "系统管理与审核权限" : isAdminUser.value ? "业务图空间开发与维护" : "知识图谱业务服务",
+  authStore.profile?.isDeveloper === true && authStore.isAdmin
+    ? "开发与审核权限，图空间由管理员分配"
+    : authStore.isAdmin ? "系统管理与审核权限" : isAdminUser.value ? "业务图空间开发与维护" : "知识图谱业务服务",
 );
 const pageTitle = computed(() => String(route.meta.title ?? "亿级知识图谱"));
 const routeError = ref("");

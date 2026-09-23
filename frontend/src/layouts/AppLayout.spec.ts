@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AuthProfile } from '../api/auth'
 import { useAuthStore } from '../stores/auth'
 import { useAppStore } from '../stores/app'
-import { useGraphSpaceStore } from '../stores/graphSpace'
 import AppLayout from './AppLayout.vue'
 
 const mocks = vi.hoisted(() => ({ authDisabled: false, graphVisualization: false }))
@@ -122,13 +121,6 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
     mocks.authDisabled = true
     const { wrapper } = await renderLayout(false)
     expect(wrapper.find('.app-nav a[href="/schema"]').exists()).toBe(true)
-  })
-
-  it('顶栏渲染全局图空间选择器并加载空间列表', async () => {
-    const { wrapper } = await renderLayout(true, '/graph-query')
-    const selector = wrapper.get('.app-space-select')
-    expect(selector.text()).toContain('图空间')
-    expect(useGraphSpaceStore().current).toBe('dev2')
   })
 
   it('图谱可视化入口默认隐藏，开关开启后出现在图谱查询组', async () => {

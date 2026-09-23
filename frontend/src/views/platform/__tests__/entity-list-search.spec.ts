@@ -35,13 +35,12 @@ async function setup() {
 }
 
 describe('实体搜索结果', () => {
-  it('精确结果按服务端总数分页，并显示精确匹配模式', async () => {
+  it('精确结果按服务端总数分页（统一分页条默认摘要）', async () => {
     vi.mocked(searchEntities).mockResolvedValue({ items: [row], total: 21, offset: 0, limit: 10, entityType: null, mode: 'graph-exact' })
     const wrapper = await setup()
     await wrapper.findAll('button').find(button => button.text() === '搜索')!.trigger('click')
     await flushPromises()
-    expect(wrapper.text()).toContain('第 1 / 3 页')
-    expect(wrapper.text()).toContain('精确匹配')
+    expect(wrapper.text()).toContain('共 21 条 · 第 1 / 3 页')
     wrapper.findComponent(ListPagination).vm.$emit('change', 2)
     await flushPromises()
     expect(searchEntities).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 10, space: 'dev2', keyword: '目标实体' }))
@@ -54,7 +53,7 @@ describe('实体搜索结果', () => {
     await wrapper.get('input').setValue('')
     await wrapper.findAll('button').find(button => button.text() === '搜索')!.trigger('click')
     await flushPromises()
-    expect(wrapper.text()).toContain('共 527336 个实体 · 第 1 / 52734 页 · 检索模式：浏览（图直查）')
+    expect(wrapper.text()).toContain('共 527336 条 · 第 1 / 52734 页')
     expect(wrapper.findComponent(ListPagination).exists()).toBe(true)
     wrapper.unmount()
   })

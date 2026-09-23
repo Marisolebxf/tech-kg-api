@@ -10,7 +10,10 @@ vi.mock('../api/businessAccess', () => ({
   getBusinessAccessState: vi.fn(), saveBusiness: vi.fn(), saveBusinessMember: vi.fn(), saveBusinessSpace: vi.fn(),
   requestBusinessSpace: vi.fn(), decideBusinessSpace: vi.fn(), retryBusinessSpace: vi.fn(),
 }))
-vi.mock('../stores/graphSpace', () => ({ useGraphSpaceStore: () => ({ ensureLoaded: vi.fn() }) }))
+// 头部的 GraphSpaceSelector 会读 spaces/current 等字段，mock 需给出完整 store 形状
+vi.mock('../stores/graphSpace', () => ({
+  useGraphSpaceStore: () => ({ ensureLoaded: vi.fn(), spaces: [], current: '', loading: false, loadError: false, initialized: true }),
+}))
 const state = { businesses: [{ clientId: 'a', name: '业务 A', enabled: true }], members: [], spaces: [], requests: [], currentBusinessId: 'a' }
 beforeEach(() => {
   setActivePinia(createPinia())

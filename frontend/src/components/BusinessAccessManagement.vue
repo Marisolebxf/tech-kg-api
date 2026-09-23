@@ -5,6 +5,7 @@ import { useGraphSpaceStore } from '../stores/graphSpace'
 import { getErrorMessage } from '../api/http'
 import { validateGraphSpaceName } from '../utils/configFieldValidation'
 import { getBusinessAccessState, saveBusiness, saveBusinessMember, saveBusinessSpace, requestBusinessSpace, decideBusinessSpace, retryBusinessSpace, type BusinessAccessState, type BusinessRole } from '../api/businessAccess'
+import GraphSpaceSelector from './GraphSpaceSelector.vue'
 
 const auth = useAuthStore()
 const graph = useGraphSpaceStore()
@@ -35,7 +36,8 @@ onMounted(() => void run(load))
 
 <template>
   <section class="business-access" aria-label="业务与图空间管理">
-    <header><h2>业务与图空间</h2><button :disabled="busy" @click="run(load)">刷新</button></header>
+    <!-- 全局图空间切换入口：顶栏已撤、本组件在 RBAC 模式下替换整个图数据空间页，选择器挂头部保证仍可切换 -->
+    <header><h2>业务与图空间</h2><GraphSpaceSelector /><button :disabled="busy" @click="run(load)">刷新</button></header>
     <p>同一业务的账号共享所属图空间；共享生产空间允许查询、开发维护写入与构建，人工审核由管理员处理。</p>
     <p v-if="error" role="alert" class="error">{{ error }}</p><p v-if="success" role="status">{{ success }}</p>
     <fieldset v-if="isAdmin" :disabled="busy">

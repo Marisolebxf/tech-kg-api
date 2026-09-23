@@ -173,7 +173,7 @@ describe('平台总览构成饼图随数据驱动', () => {
     expect(wrapper.text()).not.toContain('类型合计')
   })
 
-  it('悬浮互动只留「其他」段：外移放大+浮窗列成员 Schema 中文名，前 4 段无悬浮', async () => {
+  it('饼图扇区全部可悬浮：单 Schema 段浮窗只列名称/数量/占比，「其他」段加成员中文名；图例前 4 段纯文本', async () => {
     vi.mocked(getPlatformOverview).mockResolvedValue({
       ...baseOverview,
       entityStructure: [
@@ -196,9 +196,16 @@ describe('平台总览构成饼图随数据驱动', () => {
       .filter((chart) => chart.text().includes('实体标签构成'))[0]!
     const [first, other] = entityChart.findAll('g.platform-pie-slice')
 
-    // 前 4 单 Schema 段自身已可读：不外移、不出浮窗、无手型（is-other 类）
+    // 前 4 单 Schema 段：外移放大 + 浮窗（名称/数量/占比），不列成员清单
     await first.trigger('mouseenter')
     expect(first.classes()).not.toContain('is-other')
+    expect(first.attributes('style')).toContain('translate(')
+    const firstTip = entityChart.get('.platform-pie-tip')
+    expect(firstTip.text()).toContain('专家')
+    expect(firstTip.text()).toContain('600')
+    expect(firstTip.text()).toContain('60%')
+    expect(firstTip.find('.platform-pie-tip-members').exists()).toBe(false)
+    await first.trigger('mouseleave')
     expect(first.attributes('style') ?? '').not.toContain('translate')
     expect(entityChart.find('.platform-pie-tip').exists()).toBe(false)
 
@@ -216,6 +223,10 @@ describe('平台总览构成饼图随数据驱动', () => {
     await other.trigger('mouseleave')
     expect(other.attributes('style') ?? '').not.toContain('translate')
     expect(entityChart.find('.platform-pie-tip').exists()).toBe(false)
+
+    // 图例：只有「其他」行带悬浮（手型提示光标），前 4 段纯文本标签
+    const hoverableLegend = entityChart.findAll('.platform-structure-legend .platform-legend-label')
+    expect(hoverableLegend.map((label) => label.text())).toEqual(['其他实体'])
   })
 
   it('「其他」浮窗成员超过 10 类折叠为「还有 N 类」，图例标签全部照常渲染', async () => {
@@ -243,7 +254,7 @@ describe('平台总览构成饼图随数据驱动', () => {
     expect(tip.text()).toContain('…还有 3 类')
 
     // 图例（含无悬浮的前 4 段）中文标签照常渲染
-    const legendLabels = entityChart.findAll('.platform-structure-legend .platform-legend-label')
+    const legendLabels = entityChart.findAll('.platform-structure-legend article > span')
       .map((label) => label.text())
     expect(legendLabels).toEqual(['专家', '其他实体'])
   })

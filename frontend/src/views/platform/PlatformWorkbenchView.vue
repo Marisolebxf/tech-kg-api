@@ -19,6 +19,7 @@ import {
   type AssetOverviewKey,
   type PlatformOverviewData,
   type StructureItem,
+  type StructureMember,
 } from '../../api/platformOverview'
 import { pieSlices } from './pieSlices'
 import {
@@ -657,20 +658,36 @@ const entityAssetOverview = computed(() => assetOverviewGroups.value.find((item)
 const relationAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === 'relation'))
 
 // 构成图饼图分段由图例数据驱动（pieSlices 纯函数，随图例 tone+ratio 生成扇形 path）；
-// 图上只标百分比，数量挪到悬浮浮窗。悬浮分段沿中角外移形成放大互动。
+// 图上只标百分比。悬浮互动只留「其他」段（isOther）：外移放大 + 浮窗列成员 Schema
+// 中文名清单（前 4 单 Schema 段自身已可读，不需要悬浮）。
 const entityPieSlices = computed(() => pieSlices(entityStructure.value))
 const relationPieSlices = computed(() => pieSlices(relationStructure.value))
+/** 「其他」段浮窗最多列出的成员数，超出折叠为「还有 N 类」 */
+const PIE_TIP_MEMBER_CAP = 10
 const pieHoverKey = ref('')
-const pieTip = ref<{ chart: string; label: string; count: string; ratio: number; x: number; y: number } | null>(null)
+const pieTip = ref<{
+  chart: string
+  label: string
+  count: string
+  ratio: number
+  members: StructureMember[]
+  moreCount: number
+  x: number
+  y: number
+} | null>(null)
 function showPieTip(chart: string, slice: { item: StructureItem }, event: MouseEvent) {
+  if (!slice.item.isOther) return // 前 4 单 Schema 段无悬浮
   pieHoverKey.value = `${chart}-${slice.item.label}`
   const host = (event.currentTarget as SVGElement | null)?.closest('.platform-pie-wrap') as HTMLElement | null
   const rect = host?.getBoundingClientRect()
+  const members = slice.item.members ?? []
   pieTip.value = {
     chart,
     label: slice.item.label,
     count: slice.item.count,
     ratio: slice.item.ratio,
+    members: members.slice(0, PIE_TIP_MEMBER_CAP),
+    moreCount: Math.max(0, members.length - PIE_TIP_MEMBER_CAP),
     x: event.clientX - (rect?.left ?? 0) + 12,
     y: event.clientY - (rect?.top ?? 0) - 8,
   }
@@ -1191,8 +1208,8 @@ const pageMeta = computed(() => {
       <section class="kg-panel platform-structure-overview">
         <div class="kg-panel__header"><div><h2 class="kg-panel__title">当前图谱资产</h2></div><span>实体 {{ entityAssetOverview?.total ?? '--' }} · 关系 {{ relationAssetOverview?.total ?? '--' }} · 数据截至 {{ overviewMeta.updatedAt }}</span></div>
         <div class="platform-structure-grid">
-          <div class="platform-structure-chart"><header><strong>实体标签构成</strong></header><div class="platform-pie-layout"><div class="platform-pie-wrap"><svg class="platform-pie is-entity" viewBox="0 0 160 160" role="img" aria-label="实体标签构成饼图"><circle v-if="!entityPieSlices.length" cx="80" cy="80" r="64" fill="#e5edf8" /><g v-for="slice in entityPieSlices" :key="slice.item.label" class="platform-pie-slice" :style="{ transform: pieHoverKey === `entity-${slice.item.label}` ? `translate(${slice.dx}px, ${slice.dy}px)` : undefined }" @mouseenter="showPieTip('entity', slice, $event)" @mousemove="movePieTip" @mouseleave="hidePieTip('entity')"><path :d="slice.path" :fill="slice.item.tone" /><text v-if="slice.showLabel" :x="slice.labelX" :y="slice.labelY">{{ slice.percent }}%</text></g></svg><div v-if="pieTip && pieTip.chart === 'entity'" class="platform-pie-tip" :style="{ left: pieTip.x + 'px', top: pieTip.y + 'px' }"><strong>{{ pieTip.label }}</strong><span>{{ pieTip.count }} · {{ pieTip.ratio }}%</span></div></div><div class="platform-structure-legend"><article v-for="item in entityStructure" :key="item.label"><span><i :style="{ background: item.tone }" /><a-tooltip position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><span class="platform-legend-label">{{ item.label }}</span><template #content><div class="platform-legend-members"><template v-if="item.members?.length"><div v-for="m in item.members" :key="m.name">{{ m.name }} · {{ m.count.toLocaleString() }}</div></template><div v-else>暂无标签数据</div></div></template></a-tooltip></span><strong class="platform-legend-ratio">{{ item.ratio }}%</strong></article></div></div></div>
-          <div class="platform-structure-chart"><header><strong>关系类型构成</strong></header><div class="platform-pie-layout"><div class="platform-pie-wrap"><svg class="platform-pie is-relation" viewBox="0 0 160 160" role="img" aria-label="关系类型构成饼图"><circle v-if="!relationPieSlices.length" cx="80" cy="80" r="64" fill="#e5edf8" /><g v-for="slice in relationPieSlices" :key="slice.item.label" class="platform-pie-slice" :style="{ transform: pieHoverKey === `relation-${slice.item.label}` ? `translate(${slice.dx}px, ${slice.dy}px)` : undefined }" @mouseenter="showPieTip('relation', slice, $event)" @mousemove="movePieTip" @mouseleave="hidePieTip('relation')"><path :d="slice.path" :fill="slice.item.tone" /><text v-if="slice.showLabel" :x="slice.labelX" :y="slice.labelY">{{ slice.percent }}%</text></g></svg><div v-if="pieTip && pieTip.chart === 'relation'" class="platform-pie-tip" :style="{ left: pieTip.x + 'px', top: pieTip.y + 'px' }"><strong>{{ pieTip.label }}</strong><span>{{ pieTip.count }} · {{ pieTip.ratio }}%</span></div></div><div class="platform-structure-legend"><article v-for="item in relationStructure" :key="item.label"><span><i :style="{ background: item.tone }" /><a-tooltip position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><span class="platform-legend-label">{{ item.label }}</span><template #content><div class="platform-legend-members"><template v-if="item.members?.length"><div v-for="m in item.members" :key="m.name">{{ m.name }} · {{ m.count.toLocaleString() }}</div></template><div v-else>暂无类型数据</div></div></template></a-tooltip></span><strong class="platform-legend-ratio">{{ item.ratio }}%</strong></article></div></div></div>
+          <div class="platform-structure-chart"><header><strong>实体标签构成</strong></header><div class="platform-pie-layout"><div class="platform-pie-wrap"><svg class="platform-pie is-entity" viewBox="0 0 160 160" role="img" aria-label="实体标签构成饼图"><circle v-if="!entityPieSlices.length" cx="80" cy="80" r="64" fill="#e5edf8" /><g v-for="slice in entityPieSlices" :key="slice.item.label" class="platform-pie-slice" :class="{ 'is-other': slice.item.isOther }" :style="{ transform: pieHoverKey === `entity-${slice.item.label}` ? `translate(${slice.dx}px, ${slice.dy}px)` : undefined }" @mouseenter="showPieTip('entity', slice, $event)" @mousemove="movePieTip" @mouseleave="hidePieTip('entity')"><path :d="slice.path" :fill="slice.item.tone" /><text v-if="slice.showLabel" :x="slice.labelX" :y="slice.labelY">{{ slice.percent }}%</text></g></svg><div v-if="pieTip && pieTip.chart === 'entity'" class="platform-pie-tip" :style="{ left: pieTip.x + 'px', top: pieTip.y + 'px' }"><strong>{{ pieTip.label }}</strong><span>{{ pieTip.count }} · {{ pieTip.ratio }}%</span><div v-if="pieTip.members.length" class="platform-pie-tip-members"><div v-for="m in pieTip.members" :key="m.name">{{ m.name }} · {{ m.count.toLocaleString() }}</div><div v-if="pieTip.moreCount" class="platform-pie-tip-more">…还有 {{ pieTip.moreCount }} 类</div></div></div></div><div class="platform-structure-legend"><article v-for="item in entityStructure" :key="item.label"><span><i :style="{ background: item.tone }" /><a-tooltip v-if="item.isOther" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><span class="platform-legend-label">{{ item.label }}</span><template #content><div class="platform-legend-members"><template v-if="item.members?.length"><div v-for="m in item.members" :key="m.name">{{ m.name }} · {{ m.count.toLocaleString() }}</div></template><div v-else>暂无标签数据</div></div></template></a-tooltip><span v-else class="platform-legend-label">{{ item.label }}</span></span><strong class="platform-legend-ratio">{{ item.ratio }}%</strong></article></div></div></div>
+          <div class="platform-structure-chart"><header><strong>关系类型构成</strong></header><div class="platform-pie-layout"><div class="platform-pie-wrap"><svg class="platform-pie is-relation" viewBox="0 0 160 160" role="img" aria-label="关系类型构成饼图"><circle v-if="!relationPieSlices.length" cx="80" cy="80" r="64" fill="#e5edf8" /><g v-for="slice in relationPieSlices" :key="slice.item.label" class="platform-pie-slice" :class="{ 'is-other': slice.item.isOther }" :style="{ transform: pieHoverKey === `relation-${slice.item.label}` ? `translate(${slice.dx}px, ${slice.dy}px)` : undefined }" @mouseenter="showPieTip('relation', slice, $event)" @mousemove="movePieTip" @mouseleave="hidePieTip('relation')"><path :d="slice.path" :fill="slice.item.tone" /><text v-if="slice.showLabel" :x="slice.labelX" :y="slice.labelY">{{ slice.percent }}%</text></g></svg><div v-if="pieTip && pieTip.chart === 'relation'" class="platform-pie-tip" :style="{ left: pieTip.x + 'px', top: pieTip.y + 'px' }"><strong>{{ pieTip.label }}</strong><span>{{ pieTip.count }} · {{ pieTip.ratio }}%</span><div v-if="pieTip.members.length" class="platform-pie-tip-members"><div v-for="m in pieTip.members" :key="m.name">{{ m.name }} · {{ m.count.toLocaleString() }}</div><div v-if="pieTip.moreCount" class="platform-pie-tip-more">…还有 {{ pieTip.moreCount }} 类</div></div></div></div><div class="platform-structure-legend"><article v-for="item in relationStructure" :key="item.label"><span><i :style="{ background: item.tone }" /><a-tooltip v-if="item.isOther" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><span class="platform-legend-label">{{ item.label }}</span><template #content><div class="platform-legend-members"><template v-if="item.members?.length"><div v-for="m in item.members" :key="m.name">{{ m.name }} · {{ m.count.toLocaleString() }}</div></template><div v-else>暂无类型数据</div></div></template></a-tooltip><span v-else class="platform-legend-label">{{ item.label }}</span></span><strong class="platform-legend-ratio">{{ item.ratio }}%</strong></article></div></div></div>
         </div>
       </section>
 
@@ -2232,13 +2249,17 @@ print(response.json())</pre>
 .platform-pie-wrap { position:relative;width:154px;height:154px; }
 .platform-pie { display:block;width:154px;height:154px; }
 /* 饼图悬浮放大互动：分段沿中角外移（transform 由模板按悬浮态内联绑定），白描边分隔 */
-.platform-pie-slice { transition:transform .18s ease;cursor:pointer; }
+.platform-pie-slice { transition:transform .18s ease;cursor:default; }
+.platform-pie-slice.is-other { cursor:pointer; }
 .platform-pie-slice path { stroke:#fff;stroke-width:1.5; }
 .platform-pie-slice text { pointer-events:none;fill:#fff;font-size:11px;font-weight:600;text-anchor:middle;dominant-baseline:middle; }
 /* 扇区悬浮白底浮窗（分类名 + 数量 + 占比；图上静态只标百分比） */
 .platform-pie-tip { position:absolute;z-index:5;display:grid;gap:2px;padding:6px 10px;border:1px solid #e5edf8;border-radius:6px;background:#fff;box-shadow:0 4px 14px rgba(16,38,76,.14);pointer-events:none;white-space:nowrap; }
 .platform-pie-tip strong { color:#10264c;font-size:11px; }
 .platform-pie-tip span { color:#52627a;font-size:10px; }
+.platform-pie-tip-members { display:grid;gap:1px;margin-top:4px;padding-top:4px;border-top:1px solid #e5edf8; }
+.platform-pie-tip-members div { color:#52627a;font-size:10px; }
+.platform-pie-tip-members .platform-pie-tip-more { color:#98a2b3; }
 .platform-structure-legend article { display:grid;grid-template-columns:minmax(0,1fr) 160px;align-items:center;gap:14px;min-height:34px;border-bottom:1px solid #edf2f8; }
 .platform-structure-legend article:last-child { border-bottom:0; }
 .platform-structure-legend article>span { display:flex;align-items:center;gap:7px;min-width:0;overflow:hidden;color:#40516c;font-size:11px;white-space:nowrap; }

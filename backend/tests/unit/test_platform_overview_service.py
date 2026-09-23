@@ -140,6 +140,8 @@ def test_structure_orders_per_schema_top4_then_other() -> None:
     other = entity[4]
     assert other.count == "7"  # Event 4 + News 3
     assert [(m.name, m.count) for m in other.members] == [("Event", 4), ("News", 3)]
+    # 只有「其他」段带 is_other 标记（前端只对它开悬浮浮窗）
+    assert [item.is_other for item in entity] == [False, False, False, False, True]
 
     # 非零分类 ≤ 4 时不造「其他」段（不出现死数据）
     relation = _build_structure(
@@ -152,6 +154,7 @@ def test_structure_orders_per_schema_top4_then_other() -> None:
         "INVOLVED_IN",
     ]
     assert [item.ratio for item in relation] == [40, 35, 20, 5]
+    assert [item.is_other for item in relation] == [False, False, False, False]
 
 
 def test_structure_uses_schema_catalog_chinese_labels() -> None:
@@ -161,17 +164,34 @@ def test_structure_uses_schema_catalog_chinese_labels() -> None:
     entity = _build_structure(
         {"Keyword": 50, "Person": 30, "Paper": 15, "Project": 5, "Event": 4},
         entity=True,
-        labels={"Keyword": "技术主题", "Person": "科技专家", "Paper": "论文", "Project": "项目"},
+        labels={
+            "Keyword": "技术主题",
+            "Person": "科技专家",
+            "Paper": "论文",
+            "Project": "项目",
+            "Event": "事件",
+        },
     )
     assert [item.label for item in entity] == ["技术主题", "科技专家", "论文", "项目", "其他实体"]
-    # 单 Schema 段：schema 字段=图内原名、members 只含自己；「其他」段 schema=成员名摘要
+    # 单 Schema 段：schema 字段=图内原名；成员展示名取目录中文名（悬浮浮窗列它）
     assert entity[0].schema_name == "Keyword"
-    assert [(m.name, m.count) for m in entity[0].members] == [("Keyword", 50)]
-    assert entity[4].schema_name == "Event"
+    assert [(m.name, m.count) for m in entity[0].members] == [("技术主题", 50)]
+    # 「其他」段：schema 摘要与成员都显示目录中文名
+    assert entity[4].schema_name == "事件"
+    assert [(m.name, m.count) for m in entity[4].members] == [("事件", 4)]
 
-    # 两个 Schema 的目录中文名撞车：后者退图内原名，保证 label 全表唯一（前端 key）
+    # 两个 Schema 的目录中文名撞车：分段展示名退图内原名保证唯一；单成员段内无撞车
     dup = _build_structure({"A": 10, "B": 5}, entity=True, labels={"A": "论文", "B": "论文"})
     assert [item.label for item in dup] == ["论文", "B"]
+    assert [(m.name, m.count) for m in dup[1].members] == [("论文", 5)]
+    # 「其他」段成员中文名互撞时后者退图内原名，保证 v-for key 唯一
+    clash = _build_structure(
+        {"A": 10, "Q": 9, "R": 8, "S": 7, "B": 5, "C": 1},
+        entity=True,
+        labels={"B": "报告", "C": "报告"},
+    )
+    assert clash[4].label == "其他实体"
+    assert [(m.name, m.count) for m in clash[4].members] == [("报告", 5), ("C", 1)]
 
 
 def test_overview_builds_structure_with_catalog_labels_for_space(monkeypatch) -> None:

@@ -173,12 +173,19 @@ describe('平台总览构成饼图随数据驱动', () => {
     expect(wrapper.text()).not.toContain('类型合计')
   })
 
-  it('悬浮扇区外移放大并出白底浮窗（分类名+数量+占比），移开复位', async () => {
+  it('悬浮互动只留「其他」段：外移放大+浮窗列成员 Schema 中文名，前 4 段无悬浮', async () => {
     vi.mocked(getPlatformOverview).mockResolvedValue({
       ...baseOverview,
       entityStructure: [
-        { label: '专家', schema: 'Expert', count: '600', ratio: 60, tone: '#2e90fa' },
-        { label: '其他实体', schema: 'Other', count: '400', ratio: 40, tone: '#98a2b3' },
+        { label: '专家', schema: 'Person', count: '600', ratio: 60, tone: '#2e90fa' },
+        {
+          label: '其他实体', schema: 'Other', count: '400', ratio: 40, tone: '#98a2b3', isOther: true,
+          members: [
+            { name: '事件', count: 40000 },
+            { name: '组织机构', count: 8183 },
+            { name: '项目', count: 4004 },
+          ],
+        },
       ],
       relationStructure: [],
     })
@@ -187,22 +194,58 @@ describe('平台总览构成饼图随数据驱动', () => {
 
     const entityChart = wrapper.findAll('.platform-structure-chart')
       .filter((chart) => chart.text().includes('实体标签构成'))[0]!
-    const first = entityChart.findAll('g.platform-pie-slice')[0]!
-    // 未悬浮：无位移、无浮窗
-    expect(first.attributes('style') ?? '').not.toContain('translate')
-    expect(entityChart.find('.platform-pie-tip').exists()).toBe(false)
+    const [first, other] = entityChart.findAll('g.platform-pie-slice')
 
+    // 前 4 单 Schema 段自身已可读：不外移、不出浮窗、无手型（is-other 类）
     await first.trigger('mouseenter')
-    // 悬浮：分段沿中角外移（放大互动）
-    expect(first.attributes('style')).toContain('translate(')
-    const tip = entityChart.get('.platform-pie-tip')
-    expect(tip.text()).toContain('专家')
-    expect(tip.text()).toContain('600')
-    expect(tip.text()).toContain('60%')
-
-    await first.trigger('mouseleave')
+    expect(first.classes()).not.toContain('is-other')
     expect(first.attributes('style') ?? '').not.toContain('translate')
     expect(entityChart.find('.platform-pie-tip').exists()).toBe(false)
+
+    // 「其他」段：外移放大 + 浮窗（合计+占比+成员 Schema 中文名清单）
+    await other.trigger('mouseenter')
+    expect(other.classes()).toContain('is-other')
+    expect(other.attributes('style')).toContain('translate(')
+    const tip = entityChart.get('.platform-pie-tip')
+    expect(tip.text()).toContain('其他实体')
+    expect(tip.text()).toContain('400')
+    expect(tip.text()).toContain('40%')
+    expect(tip.text()).toContain('事件 · 40,000')
+    expect(tip.text()).toContain('组织机构 · 8,183')
+
+    await other.trigger('mouseleave')
+    expect(other.attributes('style') ?? '').not.toContain('translate')
+    expect(entityChart.find('.platform-pie-tip').exists()).toBe(false)
+  })
+
+  it('「其他」浮窗成员超过 10 类折叠为「还有 N 类」，图例标签全部照常渲染', async () => {
+    vi.mocked(getPlatformOverview).mockResolvedValue({
+      ...baseOverview,
+      entityStructure: [
+        { label: '专家', schema: 'Person', count: '880', ratio: 88, tone: '#2e90fa' },
+        {
+          label: '其他实体', schema: 'Other', count: '120', ratio: 12, tone: '#98a2b3', isOther: true,
+          members: Array.from({ length: 13 }, (_, idx) => ({ name: `类型${idx + 1}`, count: 10 })),
+        },
+      ],
+      relationStructure: [],
+    })
+    wrapper = mountOverview()
+    await flushPromises()
+
+    const entityChart = wrapper.findAll('.platform-structure-chart')
+      .filter((chart) => chart.text().includes('实体标签构成'))[0]!
+    const other = entityChart.findAll('g.platform-pie-slice')[1]!
+    await other.trigger('mouseenter')
+    const tip = entityChart.get('.platform-pie-tip')
+    expect(tip.text()).toContain('类型10 · 10')
+    expect(tip.text()).not.toContain('类型11 ·')
+    expect(tip.text()).toContain('…还有 3 类')
+
+    // 图例（含无悬浮的前 4 段）中文标签照常渲染
+    const legendLabels = entityChart.findAll('.platform-structure-legend .platform-legend-label')
+      .map((label) => label.text())
+    expect(legendLabels).toEqual(['专家', '其他实体'])
   })
 
   it('结构数据为空时饼图落空态占位、图例为空', async () => {

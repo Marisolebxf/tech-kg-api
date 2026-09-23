@@ -733,28 +733,44 @@ def _build_structure(
         used_labels.add(label)
         return label
 
-    # (展示名, 图内原名, 计数, 成员清单)——前 4 单 Schema 各一段，其余并「其他」
-    segments: list[tuple[str, str, int, list[tuple[str, int]]]] = [
-        (_display(name), name, count, [(name, count)]) for name, count in entries[:4]
+    def _members(members: list[tuple[str, int]]) -> list[StructureMember]:
+        # 成员展示名同分段口径取目录中文名；中文名撞车退图内原名保证前端 key 唯一
+        used: set[str] = set()
+        shown: list[StructureMember] = []
+        for name, count in members:
+            display = labels.get(name) or name
+            if display in used:
+                display = name
+            used.add(display)
+            shown.append(StructureMember(name=display, count=count))
+        return shown
+
+    # (展示名, 图内原名, 计数, 成员清单, 是否「其他」段)——前 4 单 Schema 各一段
+    segments: list[tuple[str, str, int, list[tuple[str, int]], bool]] = [
+        (_display(name), name, count, [(name, count)], False) for name, count in entries[:4]
     ]
     rest = entries[4:]
     if rest:
         segments.append(
-            ("其他实体" if entity else "其他关系", "", sum(count for _, count in rest), rest)
+            ("其他实体" if entity else "其他关系", "", sum(count for _, count in rest), rest, True)
         )
-    ratios = _ratios([count for _, _, count, _ in segments])
-    return [
-        StructureItem(
-            label=label,
-            schema=name or _member_names(members),
-            # 完整成员清单（含计数）随响应下发，供前端悬停浮窗展示
-            members=[StructureMember(name=m, count=c) for m, c in members],
-            count=_format_count(count),
-            ratio=ratios[position],
-            tone=tones[position],
+    ratios = _ratios([seg[2] for seg in segments])
+    items: list[StructureItem] = []
+    for position, (label, name, count, members, is_other) in enumerate(segments):
+        shown = _members(members)
+        items.append(
+            StructureItem(
+                label=label,
+                schema=name or _member_names([(m.name, m.count) for m in shown]),
+                # 成员清单（展示名=目录中文名）随响应下发，「其他」段悬浮浮窗列它
+                members=shown,
+                count=_format_count(count),
+                ratio=ratios[position],
+                tone=tones[position],
+                is_other=is_other,
+            )
         )
-        for position, (label, name, count, members) in enumerate(segments)
-    ]
+    return items
 
 
 class PlatformOverviewService:

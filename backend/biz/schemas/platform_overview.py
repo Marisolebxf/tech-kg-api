@@ -66,11 +66,13 @@ class StructureMember(CamelCaseModel):
 class StructureItem(CamelCaseModel):
     label: str
     schema_name: str = Field(alias="schema")
-    # 桶内全部非零成员（按计数降序）；降级演示数据无成员给空表
+    # 全部非零成员（按计数降序，展示名=Schema 目录中文名）；降级演示数据无成员给空表
     members: list[StructureMember] = []
     count: str
     ratio: int
     tone: str
+    # 「其他实体/其他关系」聚合段：前端只对它开悬浮（浮窗列成员 Schema 清单）
+    is_other: bool = False
 
 
 class PlatformOverviewData(CamelCaseModel):

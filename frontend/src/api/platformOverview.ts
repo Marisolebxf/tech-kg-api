@@ -48,11 +48,13 @@ export interface StructureMember {
 export interface StructureItem {
   label: string
   schema: string
-  /** 桶内全部非零成员（按计数降序），悬停中文标签的浮窗展示；降级演示数据无此字段 */
+  /** 全部非零成员（按计数降序，展示名=Schema 目录中文名）；降级演示数据无此字段 */
   members?: StructureMember[]
   count: string
   ratio: number
   tone: string
+  /** 「其他实体/其他关系」聚合段：只有它开悬浮（浮窗列成员 Schema 清单） */
+  isOther?: boolean
 }
 
 export interface PlatformOverviewData {

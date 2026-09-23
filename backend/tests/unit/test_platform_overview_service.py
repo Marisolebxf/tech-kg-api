@@ -108,6 +108,9 @@ def test_overview_total_is_deduped_with_multi_tag_vertices() -> None:
     # 中心总量 = 去重 vid / 边总数（真实体数），Σ标签计数 32.03 万不冒充实体总量
     assert result.asset_overview_groups[0].total == "29.48 万"  # 294,800 ≠ Σ标签 32.03 万
     assert result.asset_overview_groups[1].total == "54.46 万"  # 544,600
+    # 环形图中心数 = 各分段之和（Σ标签/Σ边类型计数），与分段自洽、与卡片去重口径并存
+    assert result.entity_structure_total == "32.03 万"  # Σ标签 = 32,000+10,000+230,700+29,988+17,600
+    assert result.relation_structure_total == "54.46 万"  # Σ边类型 = 544,600
     # 分段仍按标签计数：实体分段合计 32.03 万 > 中心 29.48 万（多标签顶点重复计入）
     assert sum(item.ratio for item in result.entity_structure) == 100
 
@@ -176,6 +179,9 @@ def test_overview_marks_demo_fallback_when_graph_is_unavailable() -> None:
     assert result.data_sources["graphAssets"] == "demo-fallback"
     assert "降级" in result.platform_status
     assert result.warnings
+    # 降级态环形图中心 = 演示分段各自的合计（与分段自洽），不是卡片演示总量
+    assert result.entity_structure_total == "1.27 亿"
+    assert result.relation_structure_total == "6.42 亿"
 
 
 def test_stats_provider_prefers_cached_snapshot_when_show_stats_fails() -> None:

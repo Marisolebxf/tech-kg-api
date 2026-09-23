@@ -83,6 +83,10 @@ class PlatformOverviewData(CamelCaseModel):
     management_risks: list[ManagementRisk]
     entity_structure: list[StructureItem]
     relation_structure: list[StructureItem]
+    # 环形图中心数 = 各分段之和（Σ标签/Σ边类型计数），与分段自洽；资产卡
+    # total 仍是去重口径，两口径并存。默认值 = 降级演示分段各自的合计。
+    entity_structure_total: str = "1.27 亿"
+    relation_structure_total: str = "6.42 亿"
     data_mode: Literal["live", "partial", "mock"] = "mock"
     data_sources: dict[str, str] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)

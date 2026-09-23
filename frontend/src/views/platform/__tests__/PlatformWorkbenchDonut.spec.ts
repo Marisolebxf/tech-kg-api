@@ -114,8 +114,9 @@ describe('平台总览占比环形图随数据驱动', () => {
     vi.mocked(getPlatformOverview).mockResolvedValue({
       ...baseOverview,
       assetOverviewGroups: [
-        { key: 'entity', title: '实体数据', total: '1,000', totalLabel: '实体总量', added: '+5', addedLabel: '今日新增' },
-        { key: 'relation', title: '关系数据', total: '2,000', totalLabel: '关系总量', added: '+2', addedLabel: '今日新增' },
+        // 卡片去重总量故意 ≠ 分段之和（900/1,500 vs 1,000/2,000），证明中心绑定的是分段和
+        { key: 'entity', title: '实体数据', total: '900', totalLabel: '实体总量', added: '+5', addedLabel: '今日新增' },
+        { key: 'relation', title: '关系数据', total: '1,500', totalLabel: '关系总量', added: '+2', addedLabel: '今日新增' },
       ],
       entityStructure: [
         { label: '专家', schema: 'Expert', count: '600', ratio: 60, tone: '#2e90fa' },
@@ -126,6 +127,9 @@ describe('平台总览占比环形图随数据驱动', () => {
         { label: '发表', schema: 'PUBLISH', count: '1,200', ratio: 60, tone: '#165dff' },
         { label: '任职', schema: 'WORKS_AT', count: '800', ratio: 40, tone: '#2e90fa' },
       ],
+      // 环形图中心 = 各分段之和（Σ计数），不再用资产卡去重总量
+      entityStructureTotal: '1,000',
+      relationStructureTotal: '2,000',
     })
     wrapper = mountOverview()
     await flushPromises()
@@ -134,17 +138,21 @@ describe('平台总览占比环形图随数据驱动', () => {
     expect(entityDonut.attributes('style')).toContain(
       'conic-gradient(#2e90fa 0% 60%,#7a5af8 60% 85%,#98a2b3 85% 100%)',
     )
-    // 图例占比与 donut 分段同源：600/1000=60%、250/1000=25%、150/1000=15%
+    // 图例只留中文标签与占比（真实成员名移到悬停浮窗）：600/1000=60%、250/1000=25%、150/1000=15%
     const legendRatios = wrapper.findAll('.platform-structure-chart')
       .filter((chart) => chart.text().includes('实体标签构成'))[0]
       .findAll('.platform-structure-legend article em')
       .map((em) => em.text())
-    expect(legendRatios).toEqual(['Expert', '60%', 'Paper', '25%', 'Other', '15%'])
+    expect(legendRatios).toEqual(['60%', '25%', '15%'])
 
     const relationDonut = wrapper.get('.platform-donut.is-relation')
     expect(relationDonut.attributes('style')).toContain(
       'conic-gradient(#165dff 0% 60%,#2e90fa 60% 100%)',
     )
+
+    // 中心显示各分段之和与「标签合计/类型合计」，不是资产卡的去重总量（900/1,500）
+    expect(entityDonut.get('span').text()).toBe('1,000标签合计')
+    expect(relationDonut.get('span').text()).toBe('2,000类型合计')
   })
 
   it('结构数据为空时图例为空、donut 保持中性灰回落（单段灰环见纯函数用例）', async () => {

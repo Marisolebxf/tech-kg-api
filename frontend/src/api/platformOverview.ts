@@ -65,6 +65,9 @@ export interface PlatformOverviewData {
   managementRisks: ManagementRisk[]
   entityStructure: StructureItem[]
   relationStructure: StructureItem[]
+  /** 环形图中心数 = 各分段之和（Σ标签/Σ边类型计数），与分段自洽；资产卡 total 仍是去重口径 */
+  entityStructureTotal?: string
+  relationStructureTotal?: string
   dataMode: 'live' | 'partial' | 'mock'
   dataSources: Record<string, string>
   warnings: string[]

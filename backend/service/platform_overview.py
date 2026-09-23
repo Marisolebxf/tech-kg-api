@@ -604,7 +604,8 @@ class PlatformOverviewService:
             # 关系总量用 Space/edges。环形图分段按标签计数、无法去重（需逐
             # vid 查标签），多标签顶点（如同一机构 vid 同挂
             # organization_base+Organization，dev2 实测两口径差 ~23 万）会让
-            # 分段合计大于中心数——总量与分段是两个口径，中心不跟分段虚高。
+            # 分段合计大于中心数——两个口径并存：卡片去重、环形图中心取
+            # Σ标签/Σ边类型计数（entity/relation_structure_total），与分段自洽。
             entity_total = stats.total_nodes
             relation_total = stats.total_edges
             groups = [
@@ -642,6 +643,9 @@ class PlatformOverviewService:
                     "asset_change_rows": change_rows,
                     "entity_structure": _build_structure(stats.nodes, entity=True),
                     "relation_structure": _build_structure(stats.edges, entity=False),
+                    # 环形图中心 = 各分段之和（Σ标签/Σ边类型计数），与分段自洽
+                    "entity_structure_total": _format_count(sum(stats.nodes.values())),
+                    "relation_structure_total": _format_count(sum(stats.edges.values())),
                     "data_mode": "partial",
                     "data_sources": {
                         "graphAssets": "trsgraph-live",

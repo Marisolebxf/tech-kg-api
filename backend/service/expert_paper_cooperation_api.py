@@ -5,6 +5,7 @@ import json
 import os
 import threading
 import time
+import weakref
 from collections import Counter, defaultdict
 from collections.abc import Mapping
 from typing import Any
@@ -31,6 +32,25 @@ GRAPH_SPACE = os.getenv("KG_GRAPH_SPACE") or os.getenv("TRS_GRAPH_SPACE") or "de
 _RESULT_CACHE_TTL = float(os.getenv("RESULT_CACHE_TTL", "60"))
 _result_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _result_cache_lock = threading.Lock()
+
+# 上下文子图并发的进程级上限：旧实现在每个请求里各建 Semaphore(8)，N 个不同
+# 参数的冷请求可叠加 8N 个在飞子图任务——每个占一个默认线程池槽 + 一个
+# trs 会话，而线程池（~32）和 trs 会话池都是进程共享资源（会话池打满曾致
+# 502）。按事件循环惰性建全局信号量：asyncio 原语绑定首个使用它的循环、
+# 跨循环复用会 RuntimeError（测试每个用例各自建循环），服务进程单循环下
+# 即全局一个；WeakKeyDictionary 随循环销毁回收，避免循环对象/id 复用拿到
+# 绑死旧循环的信号量。
+_CONTEXT_CONCURRENCY = int(os.getenv("PAPER_CONTEXT_CONCURRENCY", "16"))
+_context_semaphores: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def _context_semaphore() -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    semaphore = _context_semaphores.get(loop)
+    if semaphore is None:
+        semaphore = asyncio.Semaphore(_CONTEXT_CONCURRENCY)
+        _context_semaphores[loop] = semaphore
+    return semaphore
 
 
 def clear_caches() -> None:
@@ -117,6 +137,33 @@ class GraphSearchApiClient:
                 "depth": 1,
                 "limit": limit,
                 "edge_type": edge_type,
+                "direction": direction,
+                "space": space,
+            },
+        )
+        return data or {"nodes": [], "edges": []}
+
+    async def get_filtered_subgraph(
+        self,
+        node_id: str,
+        *,
+        edge_types: list[str],
+        direction: str,
+        space: str,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        """多边类型一跳子图（/filtered-subgraph，逗号分隔类型、内部按类型批量）。
+
+        端点是单段路径参数（无 :path 转换器），含 ``/`` 的 DOI 类 VID 不能走
+        这里——调用方须回退 get_subgraph。limit 语义是「每种边类型每跳上限」。
+        """
+        data = await self._request(
+            "GET",
+            f"/graph-search/filtered-subgraph/{node_id}",
+            params={
+                "depth": 1,
+                "limit": limit,
+                "edge_types": ",".join(edge_types),
                 "direction": direction,
                 "space": space,
             },
@@ -328,6 +375,7 @@ def _path_request(
     body: ExpertPaperCooperationDemoRequest,
     *,
     offset: int,
+    count_total: bool = True,
 ) -> dict[str, Any]:
     return {
         "sourceId": _person_vid(body.expertAId),
@@ -348,6 +396,7 @@ def _path_request(
         ],
         "limit": GRAPH_PAGE_SIZE,
         "offset": offset,
+        "countTotal": count_total,
         "space": GRAPH_SPACE,
     }
 
@@ -359,13 +408,17 @@ async def _fetch_shared_paths(
     items: list[dict[str, Any]] = []
     offset = 0
     while offset < MAX_SHARED_PAPERS:
-        page = await graph_api.search_paths(_path_request(body, offset=offset))
+        # count 是无 LIMIT 的全路径聚合、翻页期间结果还会变动：只有首页统计
+        # total（兼容旧语义），后续页传 countTotal=False 省掉重复聚合，翻页
+        # 终止改用"页不满即止"，比对比 total 更稳健。
+        page = await graph_api.search_paths(
+            _path_request(body, offset=offset, count_total=offset == 0)
+        )
         page_items = page.get("items") or []
         items.extend(page_items)
-        total = int(page.get("total") or len(items))
-        offset += len(page_items)
-        if not page_items or offset >= total:
+        if len(page_items) < GRAPH_PAGE_SIZE:
             break
+        offset += len(page_items)
     return items[:MAX_SHARED_PAPERS]
 
 
@@ -388,6 +441,8 @@ def _coauthor_request(
         ],
         "limit": GRAPH_PAGE_SIZE,
         "offset": 0,
+        # 单页即止、不读 total：省掉服务端最重的全量 count 聚合
+        "countTotal": False,
         "space": GRAPH_SPACE,
     }
 
@@ -468,6 +523,77 @@ def _dedupe_shared_papers(paths: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(papers.values())
 
 
+_EMPTY_SUBGRAPH: dict[str, Any] = {"nodes": [], "edges": []}
+
+# 上下文三类边 (字段, 边类型, 原单类型调用的方向)：techkg 的 AUTHORED 为
+# Scholar→Paper（in）；dev 的 AUTHORED_BY 为 Paper→Person（out）。
+_CONTEXT_EDGE_SPECS: list[tuple[str, str, str]] = [
+    ("authored", _AUTHORED_EDGE, _PAPER_TO_PERSON_DIRECTION),
+    ("published", "PUBLISHED_IN", "out"),
+    ("keywords", "HAS_KEYWORD", "out"),
+]
+
+
+def _split_context_subgraph(merged: dict[str, Any], center_id: str) -> dict[str, dict[str, Any]]:
+    """把三类边的合并子图拆回各类型的单类型上下文。
+
+    filtered-subgraph 按 ``both`` 返回存储真方向的边，这里按「原单类型调用
+    的方向」滤回原口径（out=中心为存储源、in=中心为存储目标），节点集取
+    「中心 + 该类型边对端」、相对顺序沿用合并结果的节点顺序——与旧的逐
+    类型 /subgraph 调用一致（消费方只走 _nodes_without_center 的节点列表，
+    不读这三类的边；CITED_BY 的边单独按需拉取）。
+    """
+    nodes = merged.get("nodes") or []
+    center = next((n for n in nodes if str(n.get("id") or "") == center_id), None)
+    neighbors: dict[str, set[str]] = {field: set() for field, _t, _d in _CONTEXT_EDGE_SPECS}
+    edges_by_field: dict[str, list[dict[str, Any]]] = {
+        field: [] for field, _t, _d in _CONTEXT_EDGE_SPECS
+    }
+    for edge in merged.get("edges") or []:
+        src = str(edge.get("source") or "")
+        tgt = str(edge.get("target") or "")
+        etype = str(edge.get("type") or "")
+        for field, spec_type, direction in _CONTEXT_EDGE_SPECS:
+            if etype != spec_type:
+                continue
+            if direction == "out" and src != center_id:
+                continue
+            if direction == "in" and tgt != center_id:
+                continue
+            edges_by_field[field].append(edge)
+            neighbors[field].add(tgt if src == center_id else src)
+    result: dict[str, dict[str, Any]] = {}
+    for field, _t, _d in _CONTEXT_EDGE_SPECS:
+        field_nodes = [n for n in nodes if str(n.get("id") or "") in neighbors[field]]
+        if center is not None:
+            field_nodes = [center, *field_nodes]
+        result[field] = {"nodes": field_nodes, "edges": edges_by_field[field]}
+    return result
+
+
+def _reliable_citation_count(paper: dict[str, Any]) -> int:
+    """_paper_citations 的前两级：Paper.citation_count > 作者边 citations。
+
+    >0 时引用数不依赖 CITED_BY 子图（_paper_citations 不会走到第三级回退），
+    据此跳过该子图拉取，输出不变。
+    """
+    props = paper.get("properties") or {}
+    try:
+        citation_count = int(props.get("citation_count") or 0)
+        if citation_count > 0:
+            return citation_count
+    except (TypeError, ValueError):
+        pass
+    values: list[int] = []
+    for edge in paper.get("pathEdges") or []:
+        raw = (edge.get("properties") or {}).get("citations")
+        try:
+            values.append(int(raw or 0))
+        except (TypeError, ValueError):
+            continue
+    return max(values, default=0)
+
+
 async def _fetch_paper_context(
     graph_api: GraphSearchApiClient,
     paper: dict[str, Any],
@@ -475,29 +601,70 @@ async def _fetch_paper_context(
     space: str,
     semaphore: asyncio.Semaphore,
 ) -> dict[str, Any]:
-    _EMPTY_SUBGRAPH: dict[str, Any] = {"nodes": [], "edges": []}
+    paper_id = str(paper["id"])
 
-    async def fetch(edge_type: str, direction: str = "out") -> dict[str, Any]:
+    async def guarded(edge_type: str, direction: str) -> dict[str, Any]:
         async with semaphore:
             try:
                 return await graph_api.get_subgraph(
-                    paper["id"],
-                    edge_type=edge_type,
-                    direction=direction,
-                    space=space,
+                    paper_id, edge_type=edge_type, direction=direction, space=space
                 )
             except (GraphSearchApiError, httpx.HTTPStatusError, ValueError):
                 # 边类型在图空间中不存在时 trs-graph-service 返回 400，
                 # 降级为空子图而非让整篇论文的上下文获取失败。
                 return _EMPTY_SUBGRAPH
 
-    # techkg 的 AUTHORED 为 Scholar→Paper；dev 的 AUTHORED_BY 为 Paper→Person。
-    authored, published, keywords, cited = await asyncio.gather(
-        fetch(_AUTHORED_EDGE, _PAPER_TO_PERSON_DIRECTION),
-        fetch("PUBLISHED_IN", "out"),
-        fetch("HAS_KEYWORD", "out"),
-        fetch("CITED_BY", "out"),
-    )
+    async def merged_context() -> dict[str, Any]:
+        async with semaphore:
+            try:
+                return await graph_api.get_filtered_subgraph(
+                    paper_id,
+                    edge_types=[spec_type for _f, spec_type, _d in _CONTEXT_EDGE_SPECS],
+                    direction="both",
+                    space=space,
+                )
+            except (GraphSearchApiError, httpx.HTTPStatusError, ValueError):
+                return _EMPTY_SUBGRAPH
+
+    # 引用数已有可信来源（Paper.citation_count / 作者边 citations）时不再拉
+    # CITED_BY 子图——下游只有 _paper_citations 的最终回退会用到它。
+    cited_coro = None if _reliable_citation_count(paper) > 0 else guarded("CITED_BY", "out")
+
+    if "/" in paper_id:
+        # 斜杠 VID（DOI 类）走不了 filtered-subgraph 的单段路径参数，保持旧的
+        # 逐类型调用（/subgraph 路由带 :path 转换器，可承载斜杠）。
+        tasks = [
+            guarded(_AUTHORED_EDGE, _PAPER_TO_PERSON_DIRECTION),
+            guarded("PUBLISHED_IN", "out"),
+            guarded("HAS_KEYWORD", "out"),
+        ]
+        if cited_coro is not None:
+            tasks.append(cited_coro)
+        results = await asyncio.gather(*tasks)
+        authored, published, keywords = results[:3]
+        cited = results[3] if len(results) > 3 else _EMPTY_SUBGRAPH
+    else:
+        # 作者/期刊/关键词三类合并为一次 filtered-subgraph 调用（端点内部按
+        # 类型批量取邻接），替代旧的逐类型 /subgraph——每篇论文的上下文往返
+        # 从 4 次降到 1-2 次；结果按类型/方向拆回，口径与逐类型调用一致。
+        # 边数超 limit（每类型 200）的截断选取两通道已实测一致（2026-09-23
+        # dev 空间：260 邻居截 200/50、120 个乱序 hash VID 跨 10 partition
+        # 截 50，边集合/顺序/节点序均一致，两通道各自重复调用也稳定）：两
+        # 通道都不显式排序，行序同源于 Nebula 边键迭代序（同 rank 下按对端
+        # VID）与 graphd 的分区合并序，与数据规模无关。图引擎大版本升级后
+        # 如需复核：对同一超 limit 中心分别调 /subgraph 与 /filtered-subgraph，
+        # 比对两边边 id 序列。
+        if cited_coro is not None:
+            merged, cited = await asyncio.gather(merged_context(), cited_coro)
+        else:
+            merged = await merged_context()
+            cited = _EMPTY_SUBGRAPH
+        split = _split_context_subgraph(merged, paper_id)
+        authored, published, keywords = (
+            split["authored"],
+            split["published"],
+            split["keywords"],
+        )
     return {
         **paper,
         "authored": authored,
@@ -590,24 +757,11 @@ def _venue_level(node: dict[str, Any]) -> str:
 
 
 def _paper_citations(paper: dict[str, Any]) -> int:
-    # 优先从 Paper 节点属性获取 citation_count
-    props = paper.get("properties") or {}
-    try:
-        cc = int(props.get("citation_count") or 0)
-        if cc > 0:
-            return cc
-    except (TypeError, ValueError):
-        pass
-    # 回退：从 AUTHORED 边的 citations 属性获取
-    values: list[int] = []
-    for edge in paper.get("pathEdges") or []:
-        raw = (edge.get("properties") or {}).get("citations")
-        try:
-            values.append(int(raw or 0))
-        except (TypeError, ValueError):
-            continue
-    if values and max(values) > 0:
-        return max(values)
+    # 前两级（节点 citation_count / 作者边 citations）与 _reliable_citation_count
+    # 共用：>0 时引用数与 CITED_BY 子图是否拉取无关（跳过拉取的依据）。
+    reliable = _reliable_citation_count(paper)
+    if reliable > 0:
+        return reliable
 
     # 最终回退：统计 CITED_BY 边数量
     citation_keys = set()
@@ -1008,7 +1162,10 @@ async def _build_structured_result(
             fallback_collaborators,
             _,
         ) = await _fetch_coauthor_fallback(graph_api, body)
-    semaphore = asyncio.Semaphore(8)
+    # 进程级并发上限（按事件循环共享）：上下文子图并发放开到多个冷请求时，
+    # 在飞任务叠加会占满默认线程池并挤压 trs 会话池——旧实现每请求各建
+    # Semaphore(8) 只限单请求，不限全服务。
+    semaphore = _context_semaphore()
     contexts = await asyncio.gather(
         *[
             _fetch_paper_context(

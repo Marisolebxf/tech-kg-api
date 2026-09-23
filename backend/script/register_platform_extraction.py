@@ -27,6 +27,8 @@ from uuid import uuid4
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
+from script.schema_label_map import SCHEMA_LABELS
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("register_platform_extraction")
 
@@ -352,11 +354,18 @@ def main() -> None:
             schema_id = _find_schema(session, kind=kind, name=name)
             created = False
             if schema_id is None:
+                label = SCHEMA_LABELS.get(name, name)
+                if label == name:
+                    logger.warning(
+                        "%s 无中文名映射，label 暂用英文名（补 script/schema_label_map.py 后"
+                        "跑 backfill_schema_labels 回补）",
+                        name,
+                    )
                 # 直接调 service 层（无 HTTP CamelModel 转换），payload 用 snake_case
                 payload = {
                     "schema_key": f"{name.lower().replace('_', '-')}-{uuid4().hex[:6]}",
                     "name": name,
-                    "label": name,
+                    "label": label,
                     "description": f"{name} 平台喂数抽取（register_platform_extraction 创建）",
                     "identity_key": "id" if kind == "entity" else "",
                     "mappings": [],

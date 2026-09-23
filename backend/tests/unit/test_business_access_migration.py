@@ -96,3 +96,25 @@ def test_mysql_migration_twice_preserves_unknown_history():
         assert actual == {"a": "private_a", "b": "private_b", "c": None, "d": None, "e": None}
         assert connection.scalar(text("SELECT COUNT(*) FROM kg_business_member")) == 0
     engine.dispose()
+
+
+def test_grant_table_requires_composite_primary_key():
+    from sqlalchemy import create_engine
+
+    from script.migrate_business_access import schema_report
+
+    engine = create_engine("sqlite://")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE kg_script_resource_grant (run_key VARCHAR(64) PRIMARY KEY, record_id VARCHAR(128), graph_space VARCHAR(64), client_id VARCHAR(64), actor_user_id VARCHAR(128), expires_at DATETIME)"
+            )
+        )
+    report = schema_report(engine)
+    assert {
+        "table": "kg_script_resource_grant",
+        "columns": ["run_key", "record_id"],
+        "constraint": "primary_key",
+    } in report["missing_unique_constraints"]
+    assert not report["schema_ready"]
+    engine.dispose()

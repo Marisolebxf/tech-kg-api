@@ -23,6 +23,7 @@ from db_model.business_access import (
     BusinessSpaceRequest,
 )
 from db_model.business_algorithm_job import BusinessAlgorithmJob
+from db_model.script_resource_grant import ScriptResourceGrant
 from infra.mysql import get_engine
 
 BUSINESS_TABLES = tuple(
@@ -33,6 +34,7 @@ BUSINESS_TABLES = tuple(
         BusinessGraphSpace,
         BusinessSpaceRequest,
         BusinessAlgorithmJob,
+        ScriptResourceGrant,
     )
 )
 REVIEW_TABLE = "manual_review_case"
@@ -86,6 +88,17 @@ def schema_report(engine) -> dict:
     # create(checkfirst=True) cannot repair an incompatible pre-release table.
     # Report its exact missing columns instead of silently claiming success.
     unique_gaps = []
+    grant_table = ScriptResourceGrant.__tablename__
+    if grant_table in existing:
+        grant_pk = inspector.get_pk_constraint(grant_table).get("constrained_columns") or []
+        if set(grant_pk) != {"run_key", "record_id"}:
+            unique_gaps.append(
+                {
+                    "table": grant_table,
+                    "columns": ["run_key", "record_id"],
+                    "constraint": "primary_key",
+                }
+            )
     for table, columns in (
         ("kg_business_graph_space", ("shared_key",)),
         ("kg_business_space_request", ("client_id", "active_space_name")),

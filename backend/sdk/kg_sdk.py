@@ -461,10 +461,7 @@ class SemanticToolkitClient:
     def triples_of(response: dict[str, Any]) -> list[dict[str, Any]]:
         data = response.get("data") or {}
         return list(
-            data.get("relation_triples")
-            or data.get("triples")
-            or data.get("relations")
-            or []
+            data.get("relation_triples") or data.get("triples") or data.get("relations") or []
         )
 
     @staticmethod
@@ -475,9 +472,7 @@ class SemanticToolkitClient:
     def classifications_of(response: dict[str, Any]) -> list[dict[str, Any]]:
         data = response.get("data") or {}
         return list(
-            data.get("classifications")
-            or data.get("multilevel_classification_results")
-            or []
+            data.get("classifications") or data.get("multilevel_classification_results") or []
         )
 
     @staticmethod
@@ -496,6 +491,15 @@ def get_semantic_client(
     timeout: float | None = None,
 ) -> SemanticToolkitClient | None:
     """从显式参数或环境变量构造语义计算客户端；未配置服务地址时返回 None。"""
+    raw_context = os.getenv("KG_SCRIPT_CTX", "")
+    if raw_context:
+        try:
+            sandbox = json.loads(raw_context).get("_sandbox") is True
+        except (ValueError, AttributeError):
+            sandbox = False
+        if sandbox:
+            context = current_context()
+            return context.semantic if context else None
     resolved_url = base_url or os.getenv("SEMANTIC_TOOLKIT_BASE_URL")
     if not resolved_url:
         return None
@@ -535,6 +539,12 @@ class Context:
     """
 
     def __init__(self, raw: dict[str, Any] | None) -> None:
+        if raw and raw.get("_sandbox") is True:
+            try:
+                from .sandbox_proxy import public_context
+            except ImportError:
+                from sandbox_proxy import public_context
+            raw = public_context(raw)
         self._raw: dict[str, Any] = raw or {}
         self._mysql: Any = _UNSET
         self._graph: Any = _UNSET
@@ -560,6 +570,8 @@ class Context:
     @property
     def mysql(self) -> Any:
         """:class:`infra.mysql.MySQLClient` 或 None（未选数据源）。"""
+        if self._raw.get("_sandbox") is True:
+            return self._sandbox_resource("mysql")
         if self._mysql is _UNSET:
             params = self._raw.get("mysql")
             if not params:
@@ -580,6 +592,8 @@ class Context:
     @property
     def graph(self) -> Any:
         """:class:`infra.graph_db.TRSGraphClient`（按所选图空间）或 None。"""
+        if self._raw.get("_sandbox") is True:
+            return self._sandbox_resource("graph")
         if self._graph is _UNSET:
             params = self._raw.get("graph")
             if not params:
@@ -602,6 +616,8 @@ class Context:
     @property
     def milvus(self) -> Any:
         """``pymilvus.MilvusClient``（按所选 Milvus 库）或 None。"""
+        if self._raw.get("_sandbox") is True:
+            return self._sandbox_resource("milvus")
         if self._milvus is _UNSET:
             params = self._raw.get("milvus")
             if not params:
@@ -622,6 +638,8 @@ class Context:
     @property
     def llm(self) -> Any:
         """:class:`infra.llm.LLMClient` 或 None（未选 LLM）。"""
+        if self._raw.get("_sandbox") is True:
+            return self._sandbox_resource("llm")
         if self._llm is _UNSET:
             params = self._raw.get("llm")
             if not params or not params.get("api_key"):
@@ -640,6 +658,8 @@ class Context:
     @property
     def embedding(self) -> Any:
         """:class:`infra.llm.EmbeddingClient` 或 None（未选 embedding）。"""
+        if self._raw.get("_sandbox") is True:
+            return self._sandbox_resource("embedding")
         if self._embedding is _UNSET:
             params = self._raw.get("embedding")
             if not params or not params.get("api_key"):
@@ -659,6 +679,8 @@ class Context:
     @property
     def semantic(self) -> SemanticToolkitClient | None:
         """语义计算工具客户端；支持 ctx.semantic 配置或环境变量。"""
+        if self._raw.get("_sandbox") is True:
+            return self._sandbox_resource("semantic")
         if self._semantic is _UNSET:
             params = self._raw.get("semantic") or {}
             self._semantic = get_semantic_client(
@@ -667,6 +689,18 @@ class Context:
                 timeout=float(params["timeout"]) if params.get("timeout") else None,
             )
         return self._semantic
+
+    def _sandbox_resource(self, resource: str) -> Any:
+        if not self._raw.get(resource):
+            return None
+        try:
+            from .sandbox_proxy import make_proxy
+        except ImportError:
+            from sandbox_proxy import make_proxy
+        attribute = "_" + resource
+        if getattr(self, attribute) is _UNSET:
+            setattr(self, attribute, make_proxy(resource, SemanticToolkitClient))
+        return getattr(self, attribute)
 
     def to_dict(self) -> dict[str, Any]:
         """返回原始 ctx dict（调试用）。"""

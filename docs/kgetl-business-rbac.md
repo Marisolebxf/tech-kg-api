@@ -2,11 +2,15 @@
 
 本说明对应 `BUSINESS_RBAC_ENABLED=true` 的三角色方案。默认值为 `false`，保留旧权限行为和公司测试账号限制。本次交付代码、迁移工具及示例，不预置真实业务/账号名单，不代表线上已启用。
 
-## 当前合并阻塞项
+## 开发维护脚本执行
 
-本稿尚不能作为业务隔离完成版合并启用：开发维护可上传的 Python 抽取脚本，目前由后台子进程执行，并继承后台环境凭据与模块访问能力，能够绕过接口层的空间鉴权。现有 AST/LLM 检查不构成执行沙箱。
+保留开发维护自行上传、修改和运行 Python 脚本的能力。开启业务权限后，所有角色的上传脚本都通过独立容器运行：没有网络、后台源码、环境文件、全局凭据或 Docker socket；每次运行独立文件系统及进程空间，只读根目录，资源限额和超时后清理。运行器不可用或未配置时任务明确失败，绝不退回原后台子进程执行。AST/LLM 检查继续作为上传检查，不承担隔离边界。
 
-需确定并实现其中一种方案后再解除 Draft：由管理员维护脚本、开发维护配置和运行已维护脚本；或者保留开发维护自行上传脚本的能力，并增加受限执行服务与受控数据访问。当前代码尚未实施这两种方案中的任何一种，权限专项测试通过不代表脚本执行隔离已经完成。以下启用步骤仅供完成该项后使用。
+脚本通过 `kg_sdk.current_context()` 使用受控资源代理。数据库连接与密钥留在可信 worker，脚本只能发送 JSON 请求，不能指定客户端、连接地址、凭据、图空间或任意方法。每次调用重新检查账号、业务、实际 Schema 来源绑定和配置归属。图读写固定到任务空间；生产空间仍允许开发维护写入，但没有审核 RPC。Milvus 固定到任务图空间同名数据库。MySQL 只支持所选数据源库的单条只读查询，禁止跨库、平台权限/凭据/工作流内部表、存储函数及文件操作；采用解析后的 SQL、只读事务、超时及行数上限。语义服务记录只允许在同一次任务运行中跨步骤继续使用，不能引用其他任务的记录。
+
+已有脚本的 `@step`、批次输入、异步函数、多步输出及常用 SDK 图查询、数据写入、模型调用保持可用。不能继续直接导入 `infra`/`dao`、读取后台 `.env`、使用任意网络连接或通过 `.engine` 取得真实数据库连接；需要改用 SDK 代理。SQLAlchemy 风格的 `ctx.mysql.session_scope()` / `.engine.connect()` 查询及 `.mappings().all()` 等由代理适配，SQL 写入不开放。复杂图 ID 含路径控制字符时，使用参数化图查询而非拼 REST 路径。依赖额外第三方计算包时，由部署人员构建固定运行时镜像，脚本不能临时联网安装包。
+
+运行器部署、三个环境的 Compose overlay、镜像构建与实测命令见 [脚本隔离运行说明](../sandbox/README.md)。运行器自身是可信基础设施，仅它连接 Docker daemon；脚本容器没有该权限。容器共享宿主内核，不等同于独立虚拟机。
 
 ## 权限边界
 
@@ -28,7 +32,7 @@
 
 ## 数据与兼容
 
-业务库新增 `kg_business_client`、`kg_business_member`、`kg_business_graph_space`、`kg_business_space_request`；算法任务另用 `kg_business_algorithm_job` 记录远程任务与目标空间。业务空间的 `shared_key='production'` 使用唯一约束，限制单个共享生产槽位；申请的 `(client_id, active_space_name)` 唯一约束防止重复活跃申请。成功/拒绝后释放活跃申请槽位，失败可重试。
+业务库新增 `kg_business_client`、`kg_business_member`、`kg_business_graph_space`、`kg_business_space_request`；算法任务另用 `kg_business_algorithm_job` 记录远程任务与目标空间。`kg_script_resource_grant` 记录实际语义服务响应与服务端运行身份的关联，允许同一任务运行的多个步骤、重试及不同 worker 继续使用已生成记录，拒绝其他运行、业务、账号或空间引用；记录30天过期。业务空间的 `shared_key='production'` 使用唯一约束，限制单个共享生产槽位；申请的 `(client_id, active_space_name)` 唯一约束防止重复活跃申请。成功/拒绝后释放活跃申请槽位，失败可重试。
 
 `manual_review_case` 新增可空 `graph_space` 及索引。**部署新 API/worker 前就必须完成这项迁移，即使权限开关仍为 false**，因为新版 ORM 会读取该列。迁移只回填服务端历史 `input_snapshot`/`candidate_snapshot` 中明确的 `_graphSpace`，两份快照冲突、格式损坏、缺少空间时保持未知，不猜当前默认生产空间。未知记录不会对开发者开放，管理员也须核实并补归属后才能处理。
 
@@ -53,7 +57,7 @@ LLM、Embedding、Milvus、MySQL 数据源配置的业务归属保存在 `owner=
 
 3. 用 [绑定 SQL 模板](../backend/script/sql/business_access_bindings.example.sql) 准备已核实的业务、账号、空间与配置归属。所有写语句均被注释，需要替换明确占位符后单独执行，模板不预置名单。后续管理可使用配置管理页；不要把初次启用前缺少绑定与“接口故障”混为一谈。
 4. 将实际 `TRS_GRAPH_SPACE` 显式登记为唯一共享生产空间。九大业务继续读取这一公共生产源，不会自动随顶栏私有空间切换到另一份数据。API 与 worker 的默认空间应一致，不能把默认私有空间无条件共享。
-5. 确认开发/生产业务配置、未知审核归属、后台任务本地身份后，将 API 与全部 worker 的 `BUSINESS_RBAC_ENABLED` 同时设为 `true`，重建镜像并重新创建相关容器。只执行 `docker restart` 不会重新读取 Compose 环境变量。保持认证、登录会话、项目及 `businessOnly` 现有配置。
+5. 按脚本隔离运行说明构建固定 SDK 运行时与 runner 镜像，使用对应环境的 overlay 启动内网 runner；为 worker/runner 配置同一随机 `SCRIPT_RUNNER_TOKEN`（至少32字符），worker 配置 `SCRIPT_RUNNER_URL`。token 不给前端、API或脚本。先用 SDK 示例验证隔离抽取，再确认开发/生产业务配置、未知审核归属、后台任务本地身份，将 API 与全部 worker 的 `BUSINESS_RBAC_ENABLED` 同时设为 `true`，重建镜像并重新创建相关容器。只执行 `docker restart` 不会重新读取 Compose 环境变量。保持认证、登录会话、项目及 `businessOnly` 现有配置。
 6. 用两个业务的普通/开发账号和管理员验证：同业务协作、跨业务请求拒绝、生产可构建不可审核、创建申请批准后才出现空间、九大业务正常、公司测试账号仍只有原入口。自动测试不能替代这一步真实身份联调。
 
 如需暂停上线，保持开关关闭并保留已迁移结构；已经启用业务隔离的环境不要简单关开关作为常规回退，这会恢复旧权限语义。应在阻止新操作的维护窗口统一回退 API/worker 和配置，并先审查旧绑定是否会重新扩大可见范围。

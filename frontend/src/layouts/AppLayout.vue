@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { appBase, authDisabled, graphVisualizationEnabled } from "../config";
+import { appBase, graphVisualizationEnabled } from "../config";
 import { IconHistory } from "@arco-design/web-vue/es/icon";
 import {
   computed,
@@ -43,10 +43,10 @@ const currentUser = computed(() => authStore.profile?.user);
 const userAvatar = computed(() => currentUser.value?.avatar || accountAvatar);
 const businessOnly = computed(() => authStore.businessOnly);
 const isAdminUser = computed(() =>
-  !businessOnly.value && (authDisabled || authStore.canDevelop),
+  !businessOnly.value && authStore.canDevelop,
 );
 const userRoleName = computed(() =>
-  (!businessOnly.value && (authDisabled || authStore.isAdmin)) ? "管理员" : isAdminUser.value ? "开发维护" : "普通用户",
+  authStore.isAdmin ? "管理员" : isAdminUser.value ? "开发维护" : "普通用户",
 );
 const userDisplayName = computed(() =>
   currentUser.value?.nickname || currentUser.value?.username || userRoleName.value,

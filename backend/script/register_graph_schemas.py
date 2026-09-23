@@ -47,6 +47,15 @@ TYPE_MAP = {
 # 与 biz/schemas/schema_management.py 的 KEY_PATTERN 一致
 KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 
+# 端点提示：只有 DDL 没有数据的空类型采样不到两端，按业务语义给定
+# （端点口径与图内同类已登记边一致，如 HAS_NEWS 为 organization_base→News）
+ENDPOINT_HINTS: dict[str, tuple[str, str]] = {
+    "BID_FOR": ("organization_base", "BidNotice"),
+    "OUTPUT_OF": ("organization_base", "Project"),
+    "PARTICIPATES_IN": ("organization_base", "Project"),
+    "SOURCED_FROM": ("News", "DataSource"),
+}
+
 
 def build_client() -> httpx.Client:
     base = os.getenv("TRS_GRAPH_BASE_URL", "http://localhost:8090")
@@ -188,6 +197,9 @@ def main() -> int:
 
             for edge in [e for e in edges if e not in existing]:
                 endpoints = sample_edge_endpoints(client, space, edge)
+                if endpoints is None and edge in ENDPOINT_HINTS:
+                    endpoints = ENDPOINT_HINTS[edge]
+                    logger.info("边 %s 无数据可采样，采用端点提示 %s", edge, endpoints)
                 if endpoints is None:
                     logger.error("✗ EDGE %s 无法推断两端（跳过，需手动登记）", edge)
                     exit_code = 1

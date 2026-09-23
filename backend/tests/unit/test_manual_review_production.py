@@ -312,6 +312,46 @@ def test_queue_rows_expose_execution_and_workflow_id(service):
     assert row["workflowId"] is None or isinstance(row["workflowId"], str)
 
 
+def test_queue_filters_by_graph_space(service):
+    # 队列跟随全局图空间选择：graph_space 只看该空间；不传=跨空间全量（含 NULL 空间存量案）
+    service.create_direct_case(**link_case_kwargs(graph_space="dev2"))
+    service.create_direct_case(
+        **link_case_kwargs(
+            task_id="TASK-2",
+            execution_id="EXEC-2",
+            object_id="S-2",
+            candidate={
+                "scholar_id": "S-2",
+                "name_zh": "李四",
+                "existingCandidates": [{"id": "E-1"}],
+            },
+            reason="同名冲突待人工裁决（第二条）",
+            graph_space="gaoxing_test",
+        )
+    )
+    service.create_direct_case(
+        **link_case_kwargs(
+            task_id="TASK-3",
+            execution_id="EXEC-3",
+            object_id="S-3",
+            candidate={
+                "scholar_id": "S-3",
+                "name_zh": "王五",
+                "existingCandidates": [{"id": "E-1"}],
+            },
+            reason="同名冲突待人工裁决（第三条）",
+        )
+    )
+    reviewer = actor("r", ("reviewer",))
+    only = service.list_cases({"graph_space": "dev2"}, reviewer)
+    assert only["total"] == 1
+    assert only["items"][0]["graphSpace"] == "dev2"
+    # 没有案的空间 → 空队列（页面切到该空间即空列表）
+    assert service.list_cases({"graph_space": "dev"}, reviewer)["total"] == 0
+    everything = service.list_cases({}, reviewer)
+    assert everything["total"] == 3
+
+
 def test_queue_rows_expose_job_id(service, monkeypatch):
     # 来源记录跳任务详情：快照 jobId（建案写入）优先，存量案靠 EXEC→job 批量解析兜底
     import service.manual_review_production as mrp

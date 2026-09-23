@@ -21,6 +21,17 @@ vi.mock('vue-router', () => ({ useRoute: () => ({ query: routeState.query }) }))
 vi.mock('@arco-design/web-vue/es/icon', () => ({
   IconSearch: { name: 'IconSearch', setup: () => () => null },
 }))
+// 全局图空间 store：reactive 包装（Vue 对同一 target 缓存同一代理），
+// 用例经 graphSpaceMock.state 改 current 才能触发组件的切空间重拉 watch
+const graphSpaceMock = vi.hoisted(() => {
+  const raw = { current: 'dev' }
+  return { raw, state: null as { current: string } | null }
+})
+vi.mock('../../../stores/graphSpace', async () => {
+  const { reactive } = await import('vue')
+  graphSpaceMock.state = reactive(graphSpaceMock.raw)
+  return { useGraphSpaceStore: () => graphSpaceMock.state }
+})
 
 /** C 类队列行：OPEN/RERUN_FAILED 可勾选，RERUNNING/RESOLVED 不可。 */
 const caseRow = (id: string, status: string) => ({
@@ -69,6 +80,8 @@ beforeEach(() => {
   // 清队列视图状态快照，避免上一用例写入的页码/筛选串扰本用例的默认加载断言
   sessionStorage.removeItem('techkg.manual-review-queue.v1')
   routeState.query = {}
+  // 图空间复位默认 dev（经 raw 写：组件未挂载，无需触发响应式）
+  graphSpaceMock.raw.current = 'dev'
   mocks.getProductionReviews.mockReset().mockResolvedValue({ items: C_ROWS, total: 4, page: 1, pageSize: 10 })
   mocks.rerunExtractFailures.mockReset().mockResolvedValue({ executions: [], cases: 2 })
   mocks.getProductionReview.mockReset()
@@ -448,5 +461,32 @@ describe('分页统计与页数收缩收敛（FUNC-00781）/ 处理实例 ID 纯
     expect(code.text()).toBe('MR-1')
     expect(idCell.find('router-link-stub').exists()).toBe(false)
     expect(idCell.find('a').exists()).toBe(false)
+  })
+})
+
+describe('队列跟随图空间切换', () => {
+  it('请求带当前空间；切空间后按新空间重拉且页码归 1（空间是全局态，不进快照）', async () => {
+    // 60 条 = 每页 20 共 3 页，允许翻到第 3 页后再切空间
+    mocks.getProductionReviews.mockImplementation(
+      async (params: { page?: number }) => ({ items: C_ROWS, total: 60, page: params?.page ?? 1, pageSize: 20 }),
+    )
+    const wrapper = renderReview()
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
+      expect.objectContaining({ graphSpace: 'dev' }),
+    )
+
+    wrapper.findComponent(ListPagination).vm.$emit('change', 3)
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
+      expect.objectContaining({ graphSpace: 'dev', page: 3 }),
+    )
+
+    // 切到 dev2：整份数据更换，页码归 1 并带新空间参数
+    graphSpaceMock.state!.current = 'dev2'
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
+      expect.objectContaining({ graphSpace: 'dev2', page: 1 }),
+    )
   })
 })

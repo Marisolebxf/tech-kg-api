@@ -108,6 +108,12 @@ async def production_queue(
     domain: str | None = None,
     template_id: str | None = Query(None, alias="templateId"),
     assignee_id: str | None = Query(None, alias="assigneeId"),
+    graph_space: str | None = Query(
+        None,
+        alias="graphSpace",
+        max_length=64,
+        description="按图空间过滤：只看该空间的 case；不传=所有空间（跨空间全量）",
+    ),
     category: str | None = Query(
         None,
         description="A=入库决策 (T_DIRECT/T_LINK)；C=抽取失败重跑 (T_EXTRACT_FAIL)；不传=所有",
@@ -138,6 +144,7 @@ async def production_queue(
                 domain,
                 template_id,
                 assignee_id,
+                graph_space,
                 category,
                 keyword,
                 updated_within,

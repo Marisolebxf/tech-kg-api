@@ -11,6 +11,8 @@ vi.mock('../../../api/workflowOperations', () => ({
 }))
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }) }))
 vi.mock('@arco-design/web-vue/es/icon', () => ({ IconSearch: { template: '<span />' } }))
+// 队列页消费全局图空间 store（请求带 graphSpace、watch 切空间重拉）：此处只需静态当前空间
+vi.mock('../../../stores/graphSpace', () => ({ useGraphSpaceStore: () => ({ current: 'dev' }) }))
 
 function pending() {
   let resolve!: (value: { items: unknown[]; total: number }) => void

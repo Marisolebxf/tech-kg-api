@@ -152,6 +152,8 @@ export interface ProductionReviewCase {
   executionId?: string
   /** 图谱构建任务（job-xxx，「来源记录」跳 /graph-build/jobs 用）；后端快照/执行关联解析。 */
   jobId?: string
+  /** 建案时绑定的图空间（产生该 case 的抽取任务所在空间；队列按其过滤）。 */
+  graphSpace?: string
   errorType: string; category: string; templateId: string; domain: string; phase: string; riskLevel: 'P0'|'P1'|'P2'; scope: string
   status: ProductionReviewStatus; assigneeId?: string; assigneeName?: string; version: number; slaClaimAt: string; slaResolveAt: string
   diagnosis: string; sourceTable?: string; sourceRecordId?: string; createdAt: string; updatedAt: string

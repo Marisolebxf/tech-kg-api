@@ -167,6 +167,10 @@ class ManualReviewService:
         review_spaces = a.review_spaces()
         if review_spaces is not None:
             q.append(ReviewCase.graph_space.in_(review_spaces))
+        # 图空间过滤（队列页跟随全局空间选择）：显式传入时只看该空间，不传=跨空间全量；
+        # 与上面 RBAC 授权空间集合是 AND 相交——请求未授权空间自然得到空列表
+        if f.get("graph_space"):
+            q.append(ReviewCase.graph_space == f["graph_space"])
         for k, col in (
             ("status", ReviewCase.status),
             ("risk", ReviewCase.risk_level),

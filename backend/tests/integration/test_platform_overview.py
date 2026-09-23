@@ -14,11 +14,14 @@ from service.platform_overview import (
 
 class _IntegrationStatsProvider:
     def get_stats(self, space: str | None = None) -> GraphStatsSnapshot:
+        # 资产卡总量与分桶同口径（Σ标签/边类型计数）：替身数字自洽，
+        # Σnodes=1.28 亿、Σedges=6.42 亿，与 total_nodes/total_edges 相等
+        # （单标签图场景；多标签顶点场景见单测 test_overview_total_matches_bucket_sum）。
         return GraphStatsSnapshot(
             total_nodes=128_000_000,
             total_edges=642_000_000,
-            nodes={"Expert": 70, "Paper": 30},
-            edges={"PUBLISH": 80, "WORKS_AT": 20},
+            nodes={"Expert": 70_000_000, "Paper": 58_000_000},
+            edges={"PUBLISH": 380_000_000, "WORKS_AT": 262_000_000},
         )
 
 

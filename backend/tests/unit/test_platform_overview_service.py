@@ -77,6 +77,40 @@ def test_overview_uses_live_graph_totals_and_explicit_partial_mode() -> None:
     assert provider.calls == 1
 
 
+def test_overview_total_matches_bucket_sum_with_multi_tag_vertices() -> None:
+    """多标签顶点时资产卡总量与分桶同口径（Σ标签计数），不再用去重 vid 数。
+
+    dev2 实测（2026-09-23）：SHOW STATS 的 Space/vertices=29.48 万（去重 vid），
+    Σ每标签计数=52.53 万（同一机构 vid 同挂 organization_base+Organization 双标签
+    被计两次）。环形图中心若用去重数，分段加总就会超过总量。"""
+    stats = GraphStatsSnapshot(
+        total_nodes=294_800,
+        total_edges=544_600,
+        nodes={
+            "Person": 32_000,
+            "Organization": 10_000,
+            "organization_base": 230_700,
+            "Keyword": 29_988,
+            "Paper": 17_600,
+        },
+        edges={"EMPLOYED_BY": 380_000, "AUTHOR": 120_000, "RELATED_TO": 44_600},
+    )
+
+    class MultiTagStatsProvider:
+        def get_stats(self, space: str | None = None) -> GraphStatsSnapshot:
+            return stats
+
+    result = PlatformOverviewService(
+        stats_provider=MultiTagStatsProvider(), changes_provider=FakeChangesProvider()
+    ).get_overview()
+
+    # 中心总量 = Σ标签/边类型计数（与分段、实体列表按标签口径一致），不是去重 vid 数
+    assert result.asset_overview_groups[0].total == "32.03 万"  # 320,288 ≠ 29.48 万
+    assert result.asset_overview_groups[1].total == "54.46 万"  # 544,600
+    # 分段计数合计与中心同口径：实体 32.03 万 = 3.20 万 + 1.76 万 + 24.07 万 + 0 + 3.00 万
+    assert sum(item.ratio for item in result.entity_structure) == 100
+
+
 def test_overview_cache_is_isolated_per_space() -> None:
     """总览随全局图空间查询（00918）：不同空间各自缓存、不串数据。"""
     provider = FakeStatsProvider()

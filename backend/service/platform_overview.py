@@ -574,11 +574,18 @@ class PlatformOverviewService:
                 change_rows["relation"] = []
                 today_source = "demo-fallback"
                 extra_warnings = ["今日新增暂时不可读：工作流控制库不可用。"]
+            # 资产卡总量与分桶同口径（Σ每标签/边类型计数）：SHOW STATS 的
+            # Space/vertices 是去重 vid 数，多标签顶点（如同一机构 vid 同挂
+            # organization_base+Organization，dev2 实测两口径差 ~23 万）会让
+            # 分段合计大于中心数——环形图中心必须与分段一致才自洽，且与实体
+            # 列表页按标签计数的口径一致。
+            entity_total = sum(stats.nodes.values())
+            relation_total = sum(stats.edges.values())
             groups = [
                 AssetOverviewGroup(
                     key="entity",
                     title="实体数据",
-                    total=_format_count(stats.total_nodes),
+                    total=_format_count(entity_total),
                     total_label="实体总量",
                     added=entity_added,
                     added_label=added_label,
@@ -586,7 +593,7 @@ class PlatformOverviewService:
                 AssetOverviewGroup(
                     key="relation",
                     title="关系数据",
-                    total=_format_count(stats.total_edges),
+                    total=_format_count(relation_total),
                     total_label="关系总量",
                     added=relation_added,
                     added_label=added_label,

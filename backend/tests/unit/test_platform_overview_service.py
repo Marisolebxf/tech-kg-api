@@ -396,3 +396,111 @@ def test_parse_execution_records_change_falls_back_without_schema_key() -> None:
     assert snapshot.entity_rows[0].change == "新增 实体"
     assert snapshot.entity_rows[0].type == "实体 Schema"
     assert snapshot.entity_rows[1].change == "新增 审测挂件"
+
+
+def test_entity_bucket_covers_real_graph_tag_names() -> None:
+    """真实图 tag 名落桶（dev2/dev 空间 2026-09-23 实测名单，中英文混合）。"""
+    from service.platform_overview import _entity_bucket
+
+    cases = {
+        # 专家人才
+        "Person": 0,
+        "Expert": 0,
+        "Scholar": 0,
+        "专家": 0,
+        "学者": 0,
+        # 论文成果
+        "Paper": 1,
+        "Journal": 1,
+        "Report": 1,
+        "Publication": 1,
+        "论文": 1,
+        "期刊": 1,
+        # 机构企业
+        "Organization": 2,
+        "organization_base": 2,
+        "Institute": 2,
+        "University": 2,
+        "机构": 2,
+        "企业": 2,
+        "研究院": 2,
+        # 项目专利
+        "Project": 3,
+        "Patent": 3,
+        "PatentFamily": 3,
+        "项目": 3,
+        "专利": 3,
+        # 五类之外：泛型/测试/元数据类型落「其他」
+        "Keyword": 4,
+        "Event": 4,
+        "Product": 4,
+        "News": 4,
+        "IndustryNode": 4,
+        "DataSource": 4,
+        "KnowledgePoint": 4,
+        "Course": 4,
+    }
+    for name, expected in cases.items():
+        assert _entity_bucket(name) == expected, name
+
+
+def test_relation_bucket_covers_real_graph_edge_names() -> None:
+    """真实图边名落桶（dev2/dev 空间 2026-09-23 实测名单，中英文混合）。"""
+    from service.platform_overview import _relation_bucket
+
+    cases = {
+        # 发表/引用/成果
+        "CITES": 0,
+        "CITED_BY": 0,
+        "REFERENCED_BY": 0,
+        "COAUTHOR_WITH": 0,
+        "AUTHORED_BY": 0,
+        "PUBLISHED_IN": 0,
+        "HAS_OUTPUT": 0,
+        "发表": 0,
+        "合著": 0,
+        # 任职/就读（含高管/法人/校友）
+        "WORKS_AT": 1,
+        "AFFILIATED_WITH": 1,
+        "EXECUTIVE_OF": 1,
+        "LEGAL_REP_OF": 1,
+        "ALUMNI": 1,
+        "STUDIED_AT": 1,
+        "任职": 1,
+        "校友": 1,
+        "作者单位关系": 1,
+        # 项目/专利参与（含参与/主持/资助/申请）
+        "INVOLVED_IN": 2,
+        "LEADS": 2,
+        "LEAD_PROJECT": 2,
+        "FUNDED_BY": 2,
+        "INVENTED_BY": 2,
+        "APPLIED_BY": 2,
+        "PARTICIPATE_IN_PROJECT": 2,
+        "参与": 2,
+        # 企业/产品/事件（含产业链/股权治理/投融资）
+        "PRODUCES": 3,
+        "BENEFICIAL_OWNER_OF": 3,
+        "SUBSIDIARY_OF": 3,
+        "SHAREHOLDER_OF": 3,
+        "INVESTS_IN": 3,
+        "ACQUIRES": 3,
+        "ACTUAL_CONTROLLER_OF": 3,
+        "HAS_PRODUCT": 3,
+        "COVERS_CHAIN": 3,
+        "HAS_NEWS": 3,
+        "HAS_PARTICIPANT": 2,
+        "投资": 3,
+        "产业链": 3,
+        "合作": 3,
+        # 泛化关联/关键词挂载等五类之外落「其他」
+        "RELATED_TO": 4,
+        "HAS_KEYWORD": 4,
+        "MEMBER_OF_FAMILY": 4,
+        "CHILD_OF": 4,
+        "SAME_AS": 4,
+        "COLLEAGUE": 4,
+        "COMPOSED_OF": 4,
+    }
+    for name, expected in cases.items():
+        assert _relation_bucket(name) == expected, name

@@ -295,32 +295,171 @@ def _ratios(values: list[int]) -> list[int]:
     return result
 
 
+# 五类分桶的关键字词表：英文 token（对名字 upper 后子串匹配）+ 中文关键字（upper 恒等，
+# 直接子串匹配）。词表覆盖共享图 dev2/dev 空间的全部真实 tag/边名（2026-09-23 实测），
+# 中文名暂未出现但 Schema 目录支持中文 label，一并兼容。泛化关联（RELATED_TO）、
+# 关键词挂载（HAS_KEYWORD/Keyword）等五类之外的类型一律落「其他」。
+_ENTITY_BUCKET_TOKENS: tuple[tuple[str, ...], ...] = (
+    # 0 专家人才
+    ("EXPERT", "SCHOLAR", "PERSON", "TALENT", "专家", "学者", "人才", "人物", "作者"),
+    # 1 论文成果（报告/出版物属文献成果）
+    (
+        "PAPER",
+        "JOURNAL",
+        "ARTICLE",
+        "THESIS",
+        "PUBLICATION",
+        "REPORT",
+        "论文",
+        "期刊",
+        "文献",
+        "成果",
+        "报告",
+        "出版物",
+    ),
+    # 2 机构企业
+    (
+        "ORGANIZATION",
+        "ORGANISATION",
+        "ENTERPRISE",
+        "COMPANY",
+        "INSTITUTE",
+        "ACADEMY",
+        "UNIVERSITY",
+        "COLLEGE",
+        "机构",
+        "企业",
+        "公司",
+        "单位",
+        "院所",
+        "大学",
+        "高校",
+        "学院",
+        "院",
+        "校",
+        "所",
+    ),
+    # 3 项目专利
+    ("PROJECT", "PATENT", "项目", "专利", "课题"),
+)
+
+# 关系侧用扁平有序规则：复合词必须排在泛化词前面（如「作者单位」先于「作者」）。
+_RELATION_BUCKET_RULES: tuple[tuple[str, int], ...] = (
+    # 1 任职/就读/作者单位——复合词提前
+    ("作者单位", 1),
+    # 0 发表/引用/成果（REFERENCED_BY 引证、COAUTHOR 合著归此）
+    *(
+        (token, 0)
+        for token in (
+            "PUBLISH",
+            "CITE",
+            "CITATION",
+            "REFERENCE",
+            "AUTHOR",
+            "OUTPUT",
+            "发表",
+            "出版",
+            "引用",
+            "引证",
+            "合著",
+            "撰写",
+        )
+    ),
+    # 1 任职/就读（EXECUTIVE_OF 高管、LEGAL_REP_OF 法人、ALUMNI 校友）
+    *(
+        (token, 1)
+        for token in (
+            "WORK",
+            "STUDI",
+            "AFFILIAT",
+            "EMPLOY",
+            "EXECUTIVE",
+            "LEGAL_REP",
+            "ALUMN",
+            "任职",
+            "就职",
+            "雇佣",
+            "就业",
+            "就读",
+            "毕业",
+            "校友",
+            "单位",
+            "法人",
+            "高管",
+            "董事",
+        )
+    ),
+    # 2 项目/专利参与（INVOLVED_IN 参与、LEADS 主持、FUNDED_BY 资助、APPLIED_BY 申请）
+    *(
+        (token, 2)
+        for token in (
+            "PROJECT",
+            "PATENT",
+            "INVENT",
+            "INVOLV",
+            "LEAD",
+            "FUND",
+            "PARTICIP",
+            "APPLI",
+            "项目",
+            "专利",
+            "参与",
+            "承担",
+            "主持",
+            "资助",
+            "发明",
+        )
+    ),
+    # 3 企业/产品/事件（产业链 CHAIN、股权治理 OWN/CONTROLLER/SHAREHOLDER、投融资 INVEST/ACQUIRE）
+    *(
+        (token, 3)
+        for token in (
+            "PRODUCT",
+            "PRODUCE",
+            "EVENT",
+            "ENTERPRISE",
+            "COMPANY",
+            "INVEST",
+            "ACQUIRE",
+            "SUBSIDIARY",
+            "SHAREHOLDER",
+            "OWN",
+            "CONTROLLER",
+            "CHAIN",
+            "NEWS",
+            "UPSTREAM",
+            "DOWNSTREAM",
+            "企业",
+            "产品",
+            "事件",
+            "投资",
+            "融资",
+            "收购",
+            "股东",
+            "控股",
+            "供应",
+            "供需",
+            "合作",
+            "产业链",
+            "竞争",
+        )
+    ),
+)
+
+
 def _entity_bucket(name: str) -> int:
     normalized = name.upper()
-    if any(token in normalized for token in ("EXPERT", "SCHOLAR", "PERSON", "TALENT")):
-        return 0
-    if any(token in normalized for token in ("PAPER", "JOURNAL", "ARTICLE", "THESIS")):
-        return 1
-    if any(
-        token in normalized
-        for token in ("ORGANIZATION", "ORGANISATION", "ENTERPRISE", "COMPANY", "INSTITUTE")
-    ):
-        return 2
-    if any(token in normalized for token in ("PROJECT", "PATENT")):
-        return 3
+    for bucket, tokens in enumerate(_ENTITY_BUCKET_TOKENS):
+        if any(token in normalized for token in tokens):
+            return bucket
     return 4
 
 
 def _relation_bucket(name: str) -> int:
     normalized = name.upper()
-    if any(token in normalized for token in ("PUBLISH", "CITE", "AUTHOR", "OUTPUT")):
-        return 0
-    if any(token in normalized for token in ("WORK", "STUDY", "AFFILIAT", "EMPLOY")):
-        return 1
-    if any(token in normalized for token in ("PROJECT", "PATENT", "INVENT")):
-        return 2
-    if any(token in normalized for token in ("PRODUCT", "EVENT", "ENTERPRISE", "COMPANY")):
-        return 3
+    for token, bucket in _RELATION_BUCKET_RULES:
+        if token in normalized:
+            return bucket
     return 4
 
 

@@ -204,7 +204,7 @@ def authorize_background_execution(payload):
     actor = replace(actor, business_id=client_id, business_role=role)
     if not actor.can_develop:
         raise HTTPException(
-            403, "执行账号缺少本地开发维护或管理员授权；门户管理员请先在配置管理保存本地管理员角色"
+            403, "执行账号缺少本地开发维护或管理员授权，请管理员核实业务成员及本地角色绑定"
         )
     if not actor.is_admin and payload.get("clientId") != client_id:
         raise HTTPException(status_code=403, detail="任务所属业务已变更，请重新保存任务")

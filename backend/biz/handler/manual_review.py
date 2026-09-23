@@ -22,6 +22,7 @@ from biz.schemas.manual_review_production import (
     TransferRequest,
     VersionRequest,
 )
+from service.business_access_control import rbac_enabled
 from service.manual_review_domain import (
     ReviewConflictError,
     ReviewForbiddenError,
@@ -43,6 +44,10 @@ _queue_payload_cache: dict[str, tuple[float, str]] = {}
 
 
 def _queue_cache_get(key: str) -> str | None:
+    # Case ownership may be corrected directly in SQL. A space-scope cache key
+    # cannot detect a moved case, even when the caller's scope is unchanged.
+    if rbac_enabled():
+        return None
     entry = _queue_payload_cache.get(key)
     if entry and entry[0] > time.monotonic():
         return entry[1]
@@ -50,6 +55,8 @@ def _queue_cache_get(key: str) -> str | None:
 
 
 def _queue_cache_put(key: str, payload: str) -> None:
+    if rbac_enabled():
+        return
     if len(_queue_payload_cache) > 512:
         now = time.monotonic()
         for stale in [k for k, v in _queue_payload_cache.items() if v[0] <= now]:
@@ -57,7 +64,7 @@ def _queue_cache_put(key: str, payload: str) -> None:
     _queue_payload_cache[key] = (time.monotonic() + _QUEUE_CACHE_SECONDS, payload)
 
 
-# 平台总览「人工审核」卡片对普通用户只读开放：仅队列查询；处理/认领等仍走管理端路由组。
+# 保留总览队列入口契约；真实审核权限仍由 get_review_identity 校验。
 readonly_router = APIRouter(prefix="/manual-reviews", tags=["manual-review-readonly"])
 
 
@@ -112,7 +119,7 @@ async def production_queue(
         None,
         alias="graphSpace",
         max_length=64,
-        description="按图空间过滤：只看该空间的 case；不传=所有空间（跨空间全量）",
+        description="按图空间过滤；不传=当前账号全部可审核空间",
     ),
     category: str | None = Query(
         None,

@@ -49,6 +49,8 @@ class ReviewIdentity:
         actor = self.platform_actor
         if actor is None or actor.business_only or not actor.can_develop:
             raise ReviewForbiddenError("当前账号无人工审核权限")
+        if actor.is_admin and space not in self.review_spaces():
+            raise ReviewForbiddenError("审核记录归属图空间不存在，请先核实历史归属")
         ensure_space_access(actor, space, action="review")
 
     def has_any(self, *roles: str) -> bool:

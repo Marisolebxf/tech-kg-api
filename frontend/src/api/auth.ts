@@ -56,8 +56,6 @@ export interface AuthProfile {
   businessId?: string
   platformRole?: 'user' | 'developer' | 'admin'
   canDevelop?: boolean
-  /** platform_developer：与管理员同权，但图空间由管理员分配，无自助绑定入口 */
-  isDeveloper?: boolean
   businessOnly?: boolean
   user: UserProfile;
   roles: RoleSummary[];

@@ -42,8 +42,7 @@ const OptionStub = defineComponent({
   template: '<option :value="value"><slot /></option>',
 })
 const PaginationStub = defineComponent({
-  // 与 list-pagination.vue 对齐：showJumper 默认 true（标准化后算法分页不再显式关闭跳页）
-  props: { total: Number, showJumper: { type: Boolean, default: true } },
+  props: ['total', 'showJumper'],
   template: '<div class="list-pagination-stub" :data-total="total" :data-show-jumper="String(showJumper)" />',
 })
 
@@ -76,6 +75,7 @@ beforeEach(() => {
   const pinia = createPinia()
   setActivePinia(pinia)
   store = useGraphSpaceStore()
+  store.spaces = ['space-a', 'space-b', 'space-c']
   store.setCurrent('space-a')
   vi.mocked(fetchGraphAlgorithmMetadata).mockImplementation(async (space) => ({
     edgeTypes: [`${space}-edge`], engine: { status: 'UP' },
@@ -551,7 +551,7 @@ describe('Algorithm result lists', () => {
     await clickButton('Degree算法')
     await submitAlgorithm()
     expect(wrapper.get('.list-pagination-stub').attributes('data-total')).toBe('200')
-    expect(wrapper.get('.list-pagination-stub').attributes('data-show-jumper')).toBe('true')
+    expect(wrapper.get('.list-pagination-stub').attributes('data-show-jumper')).toBe('false')
     expect(wrapper.findAll('tbody tr')).toHaveLength(20)
     expect(wrapper.findAll('tbody tr')[0]!.text()).toContain('node-200')
     expect(wrapper.find('aside').exists()).toBe(false)

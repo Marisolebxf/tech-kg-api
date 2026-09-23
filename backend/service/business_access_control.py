@@ -105,7 +105,8 @@ def space_items(actor: PlatformActor) -> list[dict]:
                 {
                     "name": name,
                     "bound": True,
-                    "mine": bool(row and actor.business_id and row.client_id == actor.business_id),
+                    # 原配置页用 mine 筛选可显示行；新模式表示已授权，不能作为写权限。
+                    "mine": True,
                     "clientId": row.client_id if row else None,
                     "isSharedProduction": bool(row and row.is_shared_production),
                     "readAllowed": True,

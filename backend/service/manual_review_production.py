@@ -327,11 +327,20 @@ class ManualReviewService:
 
     def transfer(self, i, v, uid, name, a):
         require_role(a, "reviewer" if a.platform_actor else "review_admin")
-        if a.platform_actor and not a.platform_actor.is_admin:
-            from service.business_access_control import owner_in_business
+        if a.platform_actor:
+            from service.business_access_control import ensure_space_access, resolve_membership
 
-            if not owner_in_business(a.platform_actor, uid):
-                raise ReviewForbiddenError("不能将审核任务转交其他业务账号")
+            with self.sf() as session:
+                review_case = self.need(session, i)
+                self.require_case_access(a, review_case)
+                space = review_case.graph_space
+            from service.workflow_jobs import authorize_background_execution
+
+            client_id, _ = resolve_membership(uid)
+            target = authorize_background_execution(
+                {"actorUserId": uid, "clientId": client_id, "graphSpace": space}
+            )
+            ensure_space_access(target, space, action="review")
         return self.mutate(
             i,
             v,
@@ -1409,6 +1418,20 @@ class ManualReviewService:
     def evidence_complete(self, i, p, a):
         self.authorize_case(i, a)
         st = self.storage()
+        # An authorized case must not become a route to another case's S3
+        # evidence. These are the exact identifiers returned by upload-url.
+        from service.business_access_control import rbac_enabled
+
+        if rbac_enabled():
+            safe_name = os.path.basename(p["fileName"]).replace("\\", "_")
+            expected_key = f"{i}/{p['evidenceId']}/{safe_name}"
+            if (
+                p["bucket"] != st.bucket
+                or p["objectKey"] != expected_key
+                or not p["evidenceId"].startswith("EVD-")
+                or any(char in p["evidenceId"] for char in "/\\")
+            ):
+                raise ReviewForbiddenError("附件不属于当前审核记录")
         head = st.client.head_object(Bucket=p["bucket"], Key=p["objectKey"])
         if (
             int(head.get("ContentLength", -1)) != int(p["sizeBytes"])

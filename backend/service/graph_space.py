@@ -129,13 +129,12 @@ class GraphSpaceService:
         return names
 
     def list_spaces_for_actor(self, actor: PlatformActor) -> list[dict]:
-        """配置页绑定入口：管理员看全量（需可选列表），普通用户与开发维护
-        （platform_developer，空间由管理员分配）按可工作空间收敛。"""
+        """配置页列表：新模式按业务授权，管理员可见全部真实空间。"""
         from service.business_access_control import rbac_enabled, space_items
 
         if rbac_enabled():
             return space_items(actor)
-        if not actor.is_admin or actor.is_developer:
+        if not actor.is_admin:
             return self.list_work_spaces_for_actor(actor)
         bound_names = [item["name"] for item in self.bound_spaces(actor.user_id)]
         bound = set(bound_names)
@@ -181,11 +180,15 @@ class GraphSpaceService:
     # ---------- 创建 ----------
 
     def create_space(self, actor: PlatformActor, space_name: str) -> dict:
-        """真实创建图空间并绑定到创建者。
+        """管理员真实创建图空间；业务归属由线下数据库配置。
 
         CREATE SPACE 需要一个已存在的空间作为执行上下文，因此走默认 env 空间客户端；
-        创建后有 schema 传播延迟，轮询 SHOW SPACES 确认后再绑定。
+        创建后有 schema 传播延迟，轮询 SHOW SPACES 确认；旧模式保留创建者绑定。
         """
+        from fastapi import HTTPException
+
+        if not actor.is_admin or actor.business_only:
+            raise HTTPException(403, "图空间须由管理员线下批准后创建")
         space_name = _validate_name(space_name)
         try:
             existing = self.client.list_spaces()
@@ -210,12 +213,12 @@ class GraphSpaceService:
             raise GraphSpaceError(f"创建图空间失败: {exc}{hint}") from exc
 
         if not self._wait_for_space(space_name):
-            logger.warning(
-                "图空间 %s 创建后未在 %s 秒内可见，继续绑定",
-                space_name,
-                _PROPAGATION_ATTEMPTS * _PROPAGATION_INTERVAL_SECONDS,
+            raise GraphSpaceError(
+                f"图空间 {space_name} 的创建请求已提交，但尚未确认空间可见；请稍后核实，勿重复创建"
             )
-        if not self.is_bound(actor.user_id, space_name):
+        from service.business_access_control import rbac_enabled
+
+        if not rbac_enabled() and not self.is_bound(actor.user_id, space_name):
             self._session.add(
                 UserGraphSpace(
                     user_id=actor.user_id, space_name=space_name, created_at=datetime.now(UTC)
@@ -317,10 +320,19 @@ def backfill_vector_databases(
 
 
 def _backfill_vector_databases_with(session: Session, milvus_client: Any | None) -> dict:
-    bound_spaces = sorted({r.space_name for r in session.execute(select(UserGraphSpace)).scalars()})
+    from service.business_access_control import rbac_enabled
+
+    candidates = {r.space_name for r in session.execute(select(UserGraphSpace)).scalars()}
     status_by_space = {
         r.graph_space: r.status for r in session.execute(select(GraphSpaceVectorDatabase)).scalars()
     }
+    # 新模式不再写个人绑定；创建失败的向量映射及 SQL 登记的业务空间也必须重试。
+    candidates.update(status_by_space)
+    if rbac_enabled():
+        from db_model.business_access import BusinessGraphSpace
+
+        candidates.update(session.scalars(select(BusinessGraphSpace.space_name)))
+    bound_spaces = sorted(candidates)
     targets = [name for name in bound_spaces if status_by_space.get(name) != "ready"]
     service = GraphSpaceService(session, milvus_client=milvus_client)
     ensured = failed = 0

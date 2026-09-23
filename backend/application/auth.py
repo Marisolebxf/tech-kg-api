@@ -66,6 +66,7 @@ class AuthApplication:
         profile.platform_roles = actor.roles
         profile.platform_permissions = actor.permissions
         profile.is_admin = actor.is_admin
+        profile.is_developer = actor.is_developer
         from service.business_access_control import rbac_enabled
 
         profile.business_rbac_enabled = rbac_enabled()

@@ -3,6 +3,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { appBase, authDisabled, graphVisualizationEnabled } from '../config'
 
 import { useAuthStore } from '../stores/auth'
+import { useGraphSpaceStore } from '../stores/graphSpace'
 import { installSessionRecovery, loginRedirect, notifySessionExpired } from './sessionRecovery'
 import BusinessServiceView from '../views/business-service/BusinessServiceView.vue'
 import LoginView from '../views/auth/LoginView.vue'
@@ -124,6 +125,19 @@ router.beforeEach(async (to) => {
   try {
     // 每次导航重新读取有效身份，及时反映门户或本系统的授权、撤权。
     const profile = await authStore.loadCurrentUser(true)
+    if (profile) {
+      // 身份就绪后先绑定图空间上下文并拉取本人空间列表（换账号时丢弃上一用户
+      // 的选中空间），页面挂载后拿到的 current 必在本人列表内——否则总览等
+      // 页面会带着上一用户的空间发请求（无权空间串数据/403）。空间上下文的
+      // 任何异常都不允许影响路由（外层 catch 会误判为登录失效）。
+      try {
+        const spaceStore = useGraphSpaceStore()
+        spaceStore.bindUser(String(profile.user?.id ?? ''))
+        await spaceStore.ensureLoaded()
+      } catch {
+        // store 静默降级到构建默认空间
+      }
+    }
     if (to.meta.public && !profile?.businessOnly) return true
     if (!profile) {
       if (!authStore.skipSilentLogin) notifySessionExpired('登录状态已失效或已超时，请重新登录')

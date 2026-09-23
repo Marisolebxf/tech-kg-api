@@ -37,6 +37,13 @@ def _require_legacy_binding() -> None:
         raise HTTPException(409, "请在业务与图空间管理中审批创建或设置业务归属")
 
 
+def _reject_developer(actor) -> None:
+    # 开发维护账号（platform_developer）与管理员同权，但图空间由管理员分配
+    # （写 kg_user_graph_space），不开放自助创建/绑定/解绑。
+    if actor.is_developer:
+        raise HTTPException(403, "开发维护账号的图空间由管理员分配，不能自助创建/绑定/解绑")
+
+
 def _to_response(exc: GraphSpaceError) -> HTTPException:
     return HTTPException(status_code=400, detail=str(exc))
 
@@ -59,6 +66,7 @@ def create_graph_space(
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
     _require_legacy_binding()
+    _reject_developer(actor)
     try:
         data = _service(session).create_space(actor, payload.name)
     except GraphSpaceError as exc:
@@ -73,6 +81,7 @@ def bind_graph_space(
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
     _require_legacy_binding()
+    _reject_developer(actor)
     try:
         data = _service(session).bind(actor, space_name)
     except GraphSpaceError as exc:
@@ -87,6 +96,7 @@ def unbind_graph_space(
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
     _require_legacy_binding()
+    _reject_developer(actor)
     if not _service(session).unbind(actor, space_name):
         raise HTTPException(status_code=404, detail="未绑定该图空间")
     return ApiResponse(data={"unbound": True}, msg="已解除绑定（图空间数据保留）")

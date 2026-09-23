@@ -97,6 +97,8 @@ const graphSpaceStore = useGraphSpaceStore()
 
 const authStore = useAuthStore()
 const businessRbacEnabled = computed(() => authStore.profile?.businessRbacEnabled === true)
+// 开发维护账号（platform_developer）：图空间由管理员分配，隐藏新建/绑定/解绑自助入口
+const spaceAdminManaged = computed(() => authStore.profile?.isDeveloper === true)
 const categories = computed(() => [
   { key: '语言模型', label: '语言模型', icon: 'AI', hint: 'LLM 语言模型配置' },
   { key: '向量模型', label: '向量模型', icon: 'EM', hint: 'embedding 向量模型配置' },
@@ -605,7 +607,7 @@ onMounted(() => {
       </aside>
 
       <BusinessAccessManagement v-if="businessRbacEnabled && isGraphSpaceCategory" class="config-list" /><main v-else class="config-list">
-        <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilter" allow-clear placeholder="全部状态"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><a-input v-model="keyword" class="config-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识或地址" placeholder="搜索名称、标识或地址"><template #prefix><IconSearch /></template></a-input></nav><nav v-else class="bind-nav"><button class="primary" type="button" @click="spaceDialogOpen = true">＋ 新建图数据空间</button><a-select v-if="isAdmin && bindableSpaces.length" v-model="bindTarget" placeholder="绑定已有图数据空间" allow-clear><a-option v-for="space in bindableSpaces" :key="space.name" :value="space.name">{{ space.name }}</a-option></a-select><button v-if="isAdmin && bindableSpaces.length" type="button" :disabled="spaceWorking" @click="bindSpace">绑定</button><!-- 全局图空间切换：从顶栏迁入，落在「绑定」右边（业务页仍跟随 store 自动切换）；RBAC 模式整页换成业务管理面板，选择器挂在该面板头部 --><GraphSpaceSelector /></nav></header>
+        <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilter" allow-clear placeholder="全部状态"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><a-input v-model="keyword" class="config-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识或地址" placeholder="搜索名称、标识或地址"><template #prefix><IconSearch /></template></a-input></nav><nav v-else class="bind-nav"><button v-if="!spaceAdminManaged" class="primary" type="button" @click="spaceDialogOpen = true">＋ 新建图数据空间</button><a-select v-if="isAdmin && !spaceAdminManaged && bindableSpaces.length" v-model="bindTarget" placeholder="绑定已有图数据空间" allow-clear><a-option v-for="space in bindableSpaces" :key="space.name" :value="space.name">{{ space.name }}</a-option></a-select><button v-if="isAdmin && !spaceAdminManaged && bindableSpaces.length" type="button" :disabled="spaceWorking" @click="bindSpace">绑定</button><!-- 全局图空间切换：从顶栏迁入，落在「绑定」右边（业务页仍跟随 store 自动切换）；RBAC 模式整页换成业务管理面板，选择器挂在该面板头部 --><GraphSpaceSelector /></nav></header>
         <div v-if="isGraphSpaceCategory" class="table-wrap space-table">
           <table>
             <thead><tr><th>图数据空间</th><th>绑定状态</th><th>操作</th></tr></thead>
@@ -613,12 +615,13 @@ onMounted(() => {
               <tr v-for="space in mySpaces" :key="space.name">
                 <td><div class="config-name"><i>GS</i><span><strong>{{ space.name }}</strong><small>NebulaGraph 图空间</small></span></div></td>
                 <td><span class="status is-正常"><i />已绑定</span></td>
-                <td><button class="link" type="button" @click="unbindSpace(space.name)">解除绑定</button></td>
+                <td><button v-if="!spaceAdminManaged" class="link" type="button" @click="unbindSpace(space.name)">解除绑定</button><span v-else class="space-hint-inline">由管理员分配</span></td>
               </tr>
               <tr v-if="!mySpaces.length"><td class="empty" colspan="3">还没有绑定的图数据空间，点击右上角“新建图数据空间”创建一个</td></tr>
             </tbody>
           </table>
           <p class="space-hint">新建图数据空间会真实执行 CREATE SPACE（创建后有秒级传播延迟）；解除绑定只取消关联，不会删除图数据空间数据。</p>
+          <p v-if="spaceAdminManaged" class="space-hint">开发维护账号的图空间由管理员分配，如需新增请联系管理员。</p>
         </div>
         <div v-else class="table-wrap">
           <table>

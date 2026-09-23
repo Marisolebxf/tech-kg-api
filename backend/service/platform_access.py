@@ -16,6 +16,10 @@ from infra.mysql import session_scope
 logger = logging.getLogger(__name__)
 
 ADMIN_ROLE = "platform_admin"
+# 平台级开发维护角色：写角色表授权（kg_platform_user_role），拥有与管理员完全
+# 相同的页面与接口权限；唯一差异是图空间——仅可见 默认空间+管理员绑定的空间，
+# 且不能自助绑定/解绑/新建（见 GraphSpaceService 的 is_developer 分支）。
+DEVELOPER_ROLE = "platform_developer"
 # 仅供成员列表展示的最近一次门户身份；绝不作为接口授权或本地管理员依据。
 PORTAL_ROLE_SNAPSHOT = "portal_admin_snapshot"
 USER_PERMISSIONS = ("analysis:read", "correction:submit")
@@ -37,6 +41,9 @@ class PlatformActor:
     email: str
     is_admin: bool
     portal_is_admin: bool = False
+    # platform_developer 角色：is_admin 已含开发者（页面/接口同管理员），
+    # 本标记仅供图空间范围收敛与空间自助操作拦截使用。
+    is_developer: bool = False
     business_id: str = ""
     business_role: str = "user"
     business_only: bool = False
@@ -105,6 +112,7 @@ def actor_from_profile(
             is_admin=bootstrap_admin,
         )
     database_admin = False
+    database_developer = False
     try:
         with session_scope() as session:
             _upsert_user(session, profile)
@@ -114,14 +122,18 @@ def actor_from_profile(
                 _DEV_ACTOR_UPSERTED.add(user_id)
             if auth_enabled:
                 _sync_portal_role_snapshot(session, user_id, portal_admin)
-                role_id = session.scalar(
-                    select(PlatformUserRole.id).where(
-                        PlatformUserRole.user_id == user_id,
-                        PlatformUserRole.role_code == ADMIN_ROLE,
+                # 一次取回本用户的平台角色（管理员/开发维护），供下方各判定使用。
+                role_codes = set(
+                    session.scalars(
+                        select(PlatformUserRole.role_code).where(
+                            PlatformUserRole.user_id == user_id,
+                            PlatformUserRole.role_code.in_((ADMIN_ROLE, DEVELOPER_ROLE)),
+                        )
                     )
                 )
-                database_admin = role_id is not None
-                if bootstrap_first_admin and role_id is None and not portal_admin:
+                database_admin = ADMIN_ROLE in role_codes
+                database_developer = DEVELOPER_ROLE in role_codes
+                if bootstrap_first_admin and not database_admin and not portal_admin:
                     first_admin_exists = bool(initial_admin_ids) or (
                         session.scalar(
                             select(PlatformUserRole.id)
@@ -148,8 +160,10 @@ def actor_from_profile(
         username=profile.user.username,
         display_name=profile.user.nickname or profile.user.username,
         email=profile.user.email,
-        is_admin=bootstrap_admin or database_admin or portal_admin,
+        # 开发维护与管理员同权（is_admin 直通），差异只在图空间范围（is_developer 标记）。
+        is_admin=bootstrap_admin or database_admin or database_developer or portal_admin,
         portal_is_admin=portal_admin,
+        is_developer=database_developer,
     )
 
 

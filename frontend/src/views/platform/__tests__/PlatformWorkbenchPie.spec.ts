@@ -285,4 +285,43 @@ describe('平台总览构成饼图随数据驱动', () => {
     expect(text).toContain('+61')
     expect(text).toContain('今日新增')
   })
+
+  it('「查看今日新增」抽屉 Teleport 到 body：脱离 .app-stage backdrop-filter 圈住的子树，多行全量渲染', async () => {
+    vi.mocked(getPlatformOverview).mockResolvedValue({
+      ...baseOverview,
+      assetOverviewGroups: [
+        { key: 'entity', title: '实体数据', total: '900', totalLabel: '实体总量', added: '+5', addedLabel: '今日新增' },
+      ],
+      assetChangeRows: {
+        entity: Array.from({ length: 30 }, (_, idx) => ({
+          type: '审测挂件',
+          object: `总览造数-实体${String(idx + 1).padStart(2, '0')}`,
+          change: '新增 ReviewWidget',
+          source: 'techkg_e2e_liz.review_widgets',
+          time: '11:57:41',
+        })),
+        relation: [],
+        property: [],
+      },
+    })
+    wrapper = mountOverview()
+    await flushPromises()
+
+    const openButton = wrapper.findAll('button').filter((btn) => btn.text().includes('查看今日新增'))[0]!
+    await openButton.trigger('click')
+    await flushPromises()
+
+    // 抽屉/遮罩 Teleport 到 body：祖先 .app-stage 带 backdrop-filter，会成为 fixed
+    // 后代的 containing block——留在页面子树里时 100vh 的底部整段被顶出视口、
+    // 表尾与 footer 永久不可见（回归点：别把 Teleport 拿掉）
+    const drawer = document.body.querySelector('.asset-change-drawer')
+    expect(drawer).toBeTruthy()
+    expect(document.body.querySelector('.asset-change-mask')).toBeTruthy()
+    expect(drawer!.closest('.platform-page')).toBeNull()
+
+    // 行数多时表格全量渲染、footer 计数可达（视口内滚动，不裁数据）
+    expect(drawer!.querySelectorAll('.asset-change-table tbody tr')).toHaveLength(30)
+    expect(drawer!.textContent).toContain('实体数据新增明细')
+    expect(drawer!.textContent).toContain('30 条变化')
+  })
 })

@@ -1891,13 +1891,18 @@ print(response.json())</pre>
       </template>
     </main>
 
-    <button v-if="selectedAssetChange" class="asset-change-mask" type="button" aria-label="关闭新增数据详情" @click="selectedAssetChange = null" />
-    <aside aria-label="辅助区域 4" v-if="selectedAssetChange && activeAssetOverview" class="asset-change-drawer">
-      <header><div><span>今日图谱数据变化</span><h2>{{ activeAssetOverview.title }}新增明细</h2><p>{{ activeAssetOverview.addedLabel }} {{ activeAssetOverview.added }} · 数据更新至 {{ overviewMeta.updatedAt }}</p></div><button type="button" @click="selectedAssetChange = null">×</button></header>
-      <section class="asset-change-summary"><article><span>当前总量</span><strong>{{ activeAssetOverview.total }}</strong></article><article><span>{{ activeAssetOverview.addedLabel }}</span><strong>{{ activeAssetOverview.added }}</strong></article></section>
-      <div class="asset-change-table"><table aria-label="数据表"><thead><tr><th>数据类型</th><th>具体对象</th><th>变更内容</th><th>来源</th><th>识别时间</th></tr></thead><tbody><tr v-if="!assetChangeRows[selectedAssetChange].length"><td colspan="5">今日暂无写图记录</td></tr><tr v-for="(row, idx) in assetChangeRows[selectedAssetChange]" :key="`${row.object}-${row.time}`"><td>{{ row.type }}</td><td><a-tooltip :popup-visible="assetTipVisible.has(`obj-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`obj-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><span class="asset-change-object" @mouseenter="showAssetTipIfTruncated(`obj-${idx}`, $event)" @mouseleave="hideAssetTip(`obj-${idx}`)"><strong>{{ row.object }}</strong></span><template #content>{{ row.object }}</template></a-tooltip></td><td>{{ row.change }}</td><td><a-tooltip :popup-visible="assetTipVisible.has(`src-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`src-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><code class="asset-change-source" @mouseenter="showAssetTipIfTruncated(`src-${idx}`, $event)" @mouseleave="hideAssetTip(`src-${idx}`)">{{ row.source }}</code><template #content>{{ row.source }}</template></a-tooltip></td><td>{{ row.time }}</td></tr></tbody></table></div>
-      <footer><span>{{ assetChangeRows[selectedAssetChange].length }} 条变化</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看对应更新任务 →</RouterLink></footer>
-    </aside>
+    <!-- 今日新增抽屉/遮罩必须 Teleport 到 body：祖先 .app-stage 带 backdrop-filter，
+         会成为 fixed 后代的 containing block——不传送时 fixed 是相对 .app-stage（顶栏
+         之下）定位的，height:100vh 的底部整段被顶出视口，表尾与 footer 永久看不见。 -->
+    <Teleport to="body">
+      <button v-if="selectedAssetChange" class="asset-change-mask" type="button" aria-label="关闭新增数据详情" @click="selectedAssetChange = null" />
+      <aside aria-label="辅助区域 4" v-if="selectedAssetChange && activeAssetOverview" class="asset-change-drawer">
+        <header><div><span>今日图谱数据变化</span><h2>{{ activeAssetOverview.title }}新增明细</h2><p>{{ activeAssetOverview.addedLabel }} {{ activeAssetOverview.added }} · 数据更新至 {{ overviewMeta.updatedAt }}</p></div><button type="button" @click="selectedAssetChange = null">×</button></header>
+        <section class="asset-change-summary"><article><span>当前总量</span><strong>{{ activeAssetOverview.total }}</strong></article><article><span>{{ activeAssetOverview.addedLabel }}</span><strong>{{ activeAssetOverview.added }}</strong></article></section>
+        <div class="asset-change-table"><table aria-label="数据表"><thead><tr><th>数据类型</th><th>具体对象</th><th>变更内容</th><th>来源</th><th>识别时间</th></tr></thead><tbody><tr v-if="!assetChangeRows[selectedAssetChange].length"><td colspan="5">今日暂无写图记录</td></tr><tr v-for="(row, idx) in assetChangeRows[selectedAssetChange]" :key="`${row.object}-${row.time}`"><td>{{ row.type }}</td><td><a-tooltip :popup-visible="assetTipVisible.has(`obj-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`obj-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><span class="asset-change-object" @mouseenter="showAssetTipIfTruncated(`obj-${idx}`, $event)" @mouseleave="hideAssetTip(`obj-${idx}`)"><strong>{{ row.object }}</strong></span><template #content>{{ row.object }}</template></a-tooltip></td><td>{{ row.change }}</td><td><a-tooltip :popup-visible="assetTipVisible.has(`src-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`src-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><code class="asset-change-source" @mouseenter="showAssetTipIfTruncated(`src-${idx}`, $event)" @mouseleave="hideAssetTip(`src-${idx}`)">{{ row.source }}</code><template #content>{{ row.source }}</template></a-tooltip></td><td>{{ row.time }}</td></tr></tbody></table></div>
+        <footer><span>{{ assetChangeRows[selectedAssetChange].length }} 条变化</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看对应更新任务 →</RouterLink></footer>
+      </aside>
+    </Teleport>
 
   </div>
 </template>

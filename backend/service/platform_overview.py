@@ -436,7 +436,8 @@ def _entity_object_rows(
     except Exception:
         # tag 无任何索引（LOOKUP 400）或属性形态不符——退回聚合行
         return None, []
-    # 数据类型列 = 单个 Schema 的目录中文名（与图谱资产构成图同口径），查不到用原名
+    # 数据类型/变更内容列都用单个 Schema 的目录中文名（与图谱资产构成图同口径），
+    # 查不到目录名时退原 tag 名
     type_label = schema_labels.get(tag) or tag
     fallback_source = execution.fallback_rows[0].source if execution.fallback_rows else "-"
     rows: list[AssetChangeRow] = []
@@ -448,7 +449,7 @@ def _entity_object_rows(
             AssetChangeRow(
                 type=type_label,
                 object=_vertex_display_name(props, vid),
-                change=f"新增 {tag}",
+                change=f"新增 {type_label}",
                 source=str(props.get("source_table") or fallback_source),
                 time=_time_hhmmss(props.get(time_prop), execution.completed_at[11:19]),
             )
@@ -542,7 +543,8 @@ def _relation_object_rows(
             if vid not in endpoint_vids:
                 endpoint_vids.append(vid)
     names = _endpoint_names(client, endpoint_vids)
-    # 数据类型列 = 单个 Schema 的目录中文名（与图谱资产构成图同口径），查不到用原名
+    # 数据类型/变更内容列都用单个 Schema 的目录中文名（与图谱资产构成图同口径），
+    # 查不到目录名时退原边类型名
     type_label = schema_labels.get(edge_type) or edge_type
     fallback_source = execution.fallback_rows[0].source if execution.fallback_rows else "-"
     fallback_time = execution.completed_at[11:19]
@@ -552,7 +554,7 @@ def _relation_object_rows(
             AssetChangeRow(
                 type=type_label,
                 object=f"{names.get(src, src)} → {names.get(dst, dst)}",
-                change=f"新增 {edge_type}",
+                change=f"新增 {type_label}",
                 source=str(edge_props.get("source_table") or fallback_source),
                 time=_time_hhmmss(edge_props.get(time_prop), fallback_time) if time_prop else fallback_time,
             )

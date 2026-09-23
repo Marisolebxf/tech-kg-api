@@ -783,8 +783,8 @@ def test_enrich_today_rows_lists_graph_objects_per_vertex() -> None:
     # 实体行：数据类型=单个 Schema 的目录中文名（与构成图同口径）、对象=name 公共
     # 字段、来源=source_table 公共字段、时间=逐对象写入时间（非执行完成时刻）
     assert [(row.type, row.object, row.change) for row in result.entity_rows] == [
-        ("审测挂件", "总览造数-实体01", "新增 ReviewWidget"),
-        ("审测挂件", "总览造数-实体02", "新增 ReviewWidget"),
+        ("审测挂件", "总览造数-实体01", "新增 审测挂件"),
+        ("审测挂件", "总览造数-实体02", "新增 审测挂件"),
     ]
     assert result.entity_rows[0].source == "techkg_e2e_liz.review_widgets"
     assert result.entity_rows[0].time == "03:00:35"
@@ -793,7 +793,7 @@ def test_enrich_today_rows_lists_graph_objects_per_vertex() -> None:
         ("审测关联", "总览造数-实体01 → 总览造数-实体02"),
         ("审测关联", "总览造数-实体02 → 总览造数-实体03"),
     ]
-    assert result.relation_rows[0].change == "新增 REVIEW_LINKED"
+    assert result.relation_rows[0].change == "新增 审测关联"
     assert result.relation_rows[0].source == "techkg_e2e_liz.review_widgets"
     assert result.relation_rows[0].time == "03:44:48"
     # 徽标计数不变（仍按执行 written 聚合，与明细行数解耦）
@@ -866,7 +866,7 @@ def test_graph_time_prop_skips_datetime_columns() -> None:
     assert '`Patent`.`source_update_time` >= "2026-09-24 02:00:01"' in lookup
     assert "`Patent`.`update_time`" not in lookup  # datetime 型 update_time 被跳过
     row = result.entity_rows[0]
-    assert (row.type, row.object, row.change) == ("专利", "一种数据处理方法", "新增 Patent")
+    assert (row.type, row.object, row.change) == ("专利", "一种数据处理方法", "新增 专利")
     assert row.time == "02:05:30"  # 逐对象写入时间取自 source_update_time
 
 

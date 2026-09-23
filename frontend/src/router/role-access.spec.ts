@@ -58,6 +58,21 @@ beforeEach(async () => {
 })
 
 describe('角色控制与默认入口', () => {
+  it.each(restrictedPaths)('业务开发维护可以访问 %s', async (path) => {
+    mocks.loadCurrentUser.mockResolvedValue({ businessRbacEnabled: true, canDevelop: true, isAdmin: false, permissions: [] })
+    await router.push(path)
+    expect(router.currentRoute.value.path).toBe(path)
+  })
+  it('旧模式不因 canDevelop 字段意外放开管理页面', async () => {
+    mocks.loadCurrentUser.mockResolvedValue({ businessRbacEnabled: false, canDevelop: true, isAdmin: false, permissions: [] })
+    await router.push('/configurations')
+    expect(router.currentRoute.value.path).toBe('/forbidden')
+  })
+  it('公司测试限制优先于业务开发维护角色', async () => {
+    mocks.loadCurrentUser.mockResolvedValue({ businessOnly: true, businessRbacEnabled: true, canDevelop: true, isAdmin: false, permissions: ['*'] })
+    await router.push('/configurations')
+    expect(router.currentRoute.value.path).toBe('/expert-direct')
+  })
   it.each(['/overview', '/', '/graph-query', '/graph-query/entities', '/demo/t-direct', ...restrictedPaths])('业务限定账号无法访问 %s', async (path) => {
     mocks.loadCurrentUser.mockResolvedValue({ businessOnly: true, isAdmin: true, permissions: ['*'] })
     await router.push(`${path}?embedded=1#entry`)

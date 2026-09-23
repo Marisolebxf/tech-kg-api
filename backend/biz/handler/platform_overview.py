@@ -3,9 +3,10 @@
 import asyncio
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from application.platform_overview import PlatformOverviewApplication
+from biz.dependencies.auth import CurrentActor
 from biz.schemas.platform_overview import (
     AssetOverviewKey,
     PlatformActivityData,
@@ -21,29 +22,39 @@ from biz.schemas.platform_overview import (
     PlatformStructureData,
     PlatformStructureResponse,
 )
+from service.business_access_control import allowed_space_names, ensure_space_access, rbac_enabled
 
 router = APIRouter(prefix="/platform/overview", tags=["platform-overview"])
 application = PlatformOverviewApplication()
 
 
-async def _get_overview(space: str | None = None) -> PlatformOverviewData:
+async def _get_overview(space: str | None = None, actor=None) -> PlatformOverviewData:
     # TRSGraph 客户端为同步实现，放在线程中避免阻塞 FastAPI 事件循环。
     # space：全局图空间选择器当前空间（缺省回落 env 默认空间，兼容旧调用方）。
+    if rbac_enabled():
+        if not space:
+            spaces = allowed_space_names(actor)
+            if not spaces:
+                raise HTTPException(status_code=403, detail="尚未分配可访问图空间")
+            space = spaces[0]
+        ensure_space_access(actor, space)
     return await asyncio.to_thread(application.get_overview, space)
 
 
 @router.get("")
 async def get_platform_overview(
+    actor: CurrentActor,
     space: Annotated[str | None, Query(max_length=64)] = None,
 ) -> PlatformOverviewResponse:
-    return PlatformOverviewResponse(data=await _get_overview(space))
+    return PlatformOverviewResponse(data=await _get_overview(space, actor))
 
 
 @router.get("/assets")
 async def get_platform_assets(
+    actor: CurrentActor,
     space: Annotated[str | None, Query(max_length=64)] = None,
 ) -> PlatformAssetSummaryResponse:
-    overview = await _get_overview(space)
+    overview = await _get_overview(space, actor)
     return PlatformAssetSummaryResponse(
         data=PlatformAssetSummaryData(
             platform_status=overview.platform_status,
@@ -59,10 +70,11 @@ async def get_platform_assets(
 
 @router.get("/changes")
 async def get_platform_asset_changes(
+    actor: CurrentActor,
     asset_type: Annotated[AssetOverviewKey, Query(alias="assetType")] = "entity",
     space: Annotated[str | None, Query(max_length=64)] = None,
 ) -> PlatformAssetChangesResponse:
-    overview = await _get_overview(space)
+    overview = await _get_overview(space, actor)
     return PlatformAssetChangesResponse(
         data=PlatformAssetChangesData(
             asset_type=asset_type,
@@ -74,9 +86,10 @@ async def get_platform_asset_changes(
 
 @router.get("/activity")
 async def get_platform_activity(
+    actor: CurrentActor,
     space: Annotated[str | None, Query(max_length=64)] = None,
 ) -> PlatformActivityResponse:
-    overview = await _get_overview(space)
+    overview = await _get_overview(space, actor)
     return PlatformActivityResponse(
         data=PlatformActivityData(
             items=overview.latest_changes,
@@ -87,9 +100,10 @@ async def get_platform_activity(
 
 @router.get("/risks")
 async def get_platform_risks(
+    actor: CurrentActor,
     space: Annotated[str | None, Query(max_length=64)] = None,
 ) -> PlatformRiskResponse:
-    overview = await _get_overview(space)
+    overview = await _get_overview(space, actor)
     return PlatformRiskResponse(
         data=PlatformRiskData(
             items=overview.management_risks,
@@ -100,9 +114,10 @@ async def get_platform_risks(
 
 @router.get("/structures")
 async def get_platform_structures(
+    actor: CurrentActor,
     space: Annotated[str | None, Query(max_length=64)] = None,
 ) -> PlatformStructureResponse:
-    overview = await _get_overview(space)
+    overview = await _get_overview(space, actor)
     return PlatformStructureResponse(
         data=PlatformStructureData(
             entity=overview.entity_structure,

@@ -753,7 +753,7 @@ def test_degree_returns_running_before_background_computation(algo_backend, monk
     assert exc.value.status_code == 409
     if fail:
 
-        def reject(*args):
+        def reject(*args, **kwargs):
             raise RuntimeError("graph offline")
 
         monkeypatch.setattr("service.graph_algorithm._degree_rows_via_ngql", reject)
@@ -766,3 +766,47 @@ def test_degree_returns_running_before_background_computation(algo_backend, monk
         assert "graph offline" in job["error"]
     else:
         assert get_result(_actor(), "shared_business", data["jobId"])["count"] == 10
+
+
+@pytest.mark.parametrize("entry", [graph_algorithm.metadata, graph_algorithm.engine_status])
+def test_business_scope_checked_before_algorithm_cache(monkeypatch, algo_backend, entry):
+    from fastapi import HTTPException
+
+    # 管理员/旧模式先填缓存，随后业务权限必须仍然重新校验。
+    entry(_actor(True), "shared_business")
+    monkeypatch.setenv("BUSINESS_RBAC_ENABLED", "true")
+
+    def denied(actor, space, action):
+        raise HTTPException(403, "其他业务空间")
+
+    monkeypatch.setattr("service.business_access_control.ensure_space_access", denied)
+    with pytest.raises(HTTPException) as exc:
+        entry(_actor(), "shared_business")
+    assert exc.value.status_code == 403
+
+
+def test_business_scope_replaces_legacy_personal_binding(monkeypatch, algo_backend):
+    from fastapi import HTTPException
+
+    monkeypatch.setenv("BUSINESS_RBAC_ENABLED", "true")
+
+    def check(actor, space, action):
+        if space == "bound_private":
+            raise HTTPException(403, "旧个人绑定不能覆盖业务归属")
+
+    monkeypatch.setattr("service.business_access_control.ensure_space_access", check)
+    with pytest.raises(HTTPException):
+        graph_algorithm._ensure_space_access(_actor(), "bound_private")
+    # 业务授权空间不再要求旧个人绑定。
+    graph_algorithm._ensure_space_access(_actor(), "other_private")
+
+
+def test_readonly_degree_does_not_create_or_rebuild_indexes(monkeypatch):
+    writes = []
+    client = SimpleNamespace(execute_write=writes.append)
+    monkeypatch.setattr(graph_algorithm, "_lookup_degree_counts", lambda *args: {})
+    monkeypatch.setattr(graph_algorithm, "_degree_edge_index_status", lambda *args: None)
+    with pytest.raises(GraphAlgorithmError, match="开发维护") as exc:
+        graph_algorithm._degree_counts_for_label(client, "CITES", allow_index_writes=False)
+    assert exc.value.status_code == 403
+    assert writes == []

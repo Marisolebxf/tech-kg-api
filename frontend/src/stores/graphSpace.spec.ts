@@ -1,3 +1,5 @@
+import { useAuthStore } from './auth'
+import type { AuthProfile } from '../api/auth'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -7,6 +9,7 @@ import { GRAPH_SPACE_STORAGE_KEY, useGraphSpaceStore } from './graphSpace'
 vi.mock('../api/graphSearch', () => ({
   listGraphSpaces: vi.fn(),
 }))
+vi.mock('../api/auth', () => ({ getCurrentProfile: vi.fn(), getLoginUrl: vi.fn(), logoutCurrentSession: vi.fn(), refreshCurrentSession: vi.fn() }))
 vi.mock('../config', () => ({ graphSpace: 'cfg-space' }))
 
 beforeEach(() => {
@@ -82,5 +85,19 @@ describe('全局图空间 store', () => {
     await store.ensureLoaded(true)
     expect(listGraphSpaces).toHaveBeenCalledTimes(2)
     expect(store.spaces).toEqual(['dev', 'dev2'])
+  })
+})
+
+describe('业务空间隔离', () => {
+  it('授权空间为空时清除旧账号选中空间，不回退到默认空间', async () => {
+    localStorage.setItem(GRAPH_SPACE_STORAGE_KEY, 'private-other-business')
+    useAuthStore().profile = { businessRbacEnabled: true } as AuthProfile
+    vi.mocked(listGraphSpaces).mockResolvedValue({ data: { spaces: [] } } as never)
+    const store = useGraphSpaceStore()
+    await store.ensureLoaded()
+    expect(store.current).toBe('')
+    expect(localStorage.getItem(GRAPH_SPACE_STORAGE_KEY)).toBe('')
+    store.setCurrent('private-other-business')
+    expect(store.current).toBe('')
   })
 })

@@ -9,7 +9,11 @@ from sqlalchemy.orm import Session
 
 from application.milvus_config import MilvusConfigApplication
 from biz.dependencies.auth import CurrentActor
-from biz.dependencies.resources import ensure_owner_access, resource_owner_filter
+from biz.dependencies.resources import (
+    assigned_resource_owner,
+    ensure_owner_access,
+    resource_owner_filter,
+)
 from biz.schemas.common import ApiResponse
 from biz.schemas.milvus_config import MilvusConfigCreate, MilvusConfigUpdate
 from infra.mysql import get_session
@@ -57,7 +61,7 @@ def create_milvus_config(
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
     data = payload.model_dump()
-    data["owner"] = actor.user_id if not actor.is_admin else (data.get("owner") or actor.user_id)
+    data["owner"] = assigned_resource_owner(actor, data.get("owner", ""))
     result = _application(session).create_config(data, scope_owner=resource_owner_filter(actor))
     return ApiResponse(data=result, msg="Milvus 配置已创建")
 

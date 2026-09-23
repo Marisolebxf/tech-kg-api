@@ -28,6 +28,10 @@ class MysqlDatasourceDAO(BaseDAO[MysqlDatasource]):
                 .order_by(MysqlDatasource.updated_at.desc())
                 .limit(1)
             )
+            from service.business_access_control import rbac_enabled
+
+            if rbac_enabled():
+                stmt = stmt.where(~MysqlDatasource.owner.like("business:%"))
             return session.scalars(stmt).first()
         finally:
             if should_close:
@@ -38,6 +42,14 @@ class MysqlDatasourceDAO(BaseDAO[MysqlDatasource]):
         session, should_close = self._get_session()
         try:
             conditions = [MysqlDatasource.is_default.is_(True), MysqlDatasource.id != exclude_id]
+            from service.business_access_control import rbac_enabled
+
+            if rbac_enabled() and owner is None:
+                target = session.get(MysqlDatasource, exclude_id)
+                if target is not None and target.owner.startswith("business:"):
+                    owner = target.owner
+                else:
+                    conditions.append(~MysqlDatasource.owner.like("business:%"))
             if owner is not None:
                 conditions.append(MysqlDatasource.owner == owner)
             stmt = update(MysqlDatasource).where(*conditions).values(is_default=False)

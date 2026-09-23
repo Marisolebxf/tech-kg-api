@@ -16,9 +16,11 @@ class ReviewCase(Base):
         UniqueConstraint("dedupe_key", name="uk_manual_review_case_dedupe"),
         Index("ix_review_queue", "status", "risk_level", "domain", "created_at"),
         Index("ix_review_assignee", "assignee_id", "status"),
+        Index("ix_review_graph_space", "graph_space"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    graph_space: Mapped[str | None] = mapped_column(String(64), nullable=True)
     dedupe_key: Mapped[str] = mapped_column(String(64), nullable=False)
     event_id: Mapped[str | None] = mapped_column(String(128), unique=True)
     source_task_id: Mapped[str] = mapped_column(String(128), nullable=False)

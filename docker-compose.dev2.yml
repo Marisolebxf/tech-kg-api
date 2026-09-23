@@ -40,6 +40,7 @@ services:
       TRS_GRAPH_SPACE: dev
       TRS_GRAPH_API_KEY: ${TRS_GRAPH_API_KEY:-ysukeg}
       TRS_GRAPH_TIMEOUT: ${TRS_GRAPH_TIMEOUT:-30}
+      BUSINESS_RBAC_ENABLED: ${BUSINESS_RBAC_ENABLED:-false}
       MYSQL_HOST: ${MYSQL_HOST:-host.docker.internal}
       MYSQL_PORT: ${MYSQL_PORT:-3306}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-gkx_element}
@@ -164,10 +165,13 @@ services:
     env_file:
       - ./backend/.env
     environment:
+      PLATFORM_INITIAL_ADMIN_USER_IDS: ${PLATFORM_INITIAL_ADMIN_USER_IDS:-}
+      PLATFORM_BUSINESS_ONLY_USER_IDS: ${PLATFORM_BUSINESS_ONLY_USER_IDS:-}
       TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://host.docker.internal:8090}
       TRS_GRAPH_SPACE: dev2
       TRS_GRAPH_API_KEY: ${TRS_GRAPH_API_KEY:-ysukeg}
       TRS_GRAPH_TIMEOUT: ${TRS_GRAPH_TIMEOUT:-30}
+      BUSINESS_RBAC_ENABLED: ${BUSINESS_RBAC_ENABLED:-false}
       MYSQL_HOST: ${MYSQL_HOST:-host.docker.internal}
       MYSQL_PORT: ${MYSQL_PORT:-3306}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-gkx_element}

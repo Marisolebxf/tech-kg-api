@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends
 
 from application.expert_enterprise_mining import ExpertEnterpriseMiningApplication
-from biz.dependencies.auth import require_platform_admin
+from biz.dependencies.default_space_write import require_default_space_writer
 from biz.schemas.common import ApiResponse
 from biz.schemas.expert_enterprise_mining import (
     ExpertEnterpriseMiningRequest,
@@ -29,7 +29,7 @@ async def query_expert_enterprise_relation(req: ExpertEnterpriseQueryRequest) ->
 
 @router.post(
     "/mine",
-    dependencies=[Depends(require_platform_admin)],
+    dependencies=[Depends(require_default_space_writer)],
 )
 async def mine_expert_enterprise_relation(req: ExpertEnterpriseMiningRequest) -> ApiResponse:
     try:

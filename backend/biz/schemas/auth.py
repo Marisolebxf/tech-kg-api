@@ -118,6 +118,10 @@ class AuthProfile(CamelCaseModel):
     is_admin: bool = False
     portal_is_admin: bool = False
     business_only: bool = False
+    business_rbac_enabled: bool = False
+    business_id: str = ""
+    platform_role: str = "user"
+    can_develop: bool = False
 
 
 class LogoutData(CamelCaseModel):

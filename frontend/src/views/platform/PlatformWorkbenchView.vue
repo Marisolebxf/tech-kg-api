@@ -24,6 +24,7 @@ import {
   countJobUnifiedStatuses,
   deriveJobUnifiedStatus,
   getProductionReviews,
+  jobGraphSpace,
   JOB_STATUS_TONE,
   listJobs,
   type ProductionReviewCase,
@@ -43,6 +44,7 @@ import QueryResultTable from './QueryResultTable.vue'
 import { IconInfoCircle } from '@arco-design/web-vue/es/icon'
 import { authDisabled } from '../../config'
 import { useAuthStore } from '../../stores/auth'
+import { useGraphSpaceStore } from '../../stores/graphSpace'
 import {
   fetchGraphAlgorithmEngine,
   fetchGraphAlgorithmMetadata,
@@ -277,6 +279,7 @@ const router = useRouter()
 // 图谱构建与人工审核面板、资产抽屉的更新任务链接）对普通用户直接隐藏，仅管理员可见。
 const authStore = useAuthStore()
 const canEnterAdminPages = computed(() => authDisabled || authStore.isAdmin)
+const graphSpaceStore = useGraphSpaceStore()
 
 const activeTab = ref<PlatformTab>(props.initialTab ?? 'overview')
 const activeServiceKey = ref(props.initialServiceKey ?? modules[0]?.key ?? '')
@@ -566,7 +569,9 @@ const assetChangeRows = ref<Record<AssetOverviewKey, AssetChangeRow[]>>({
 const entityStructure = ref<StructureItem[]>([])
 const relationStructure = ref<StructureItem[]>([])
 
-// 总览两卡片：直连任务/审核队列真实数据（不进 platform_overview 的 60s 缓存），各自容错
+// 总览两卡片：直连任务/审核队列真实数据（不进 platform_overview 的 60s 缓存），各自容错。
+// 任务卡与图谱构建页同空间口径：默认只看当前图空间（历史无空间任务落默认空间），
+// 不带「全部空间」开关——与图资产/今日新增随全局图空间过滤的语义一致。
 const overviewJobs = ref<WorkflowJob[]>([])
 const overviewJobsState = ref<'loading' | 'ready' | 'error'>('loading')
 const overviewJobsError = ref('')
@@ -575,8 +580,14 @@ const overviewReviewsTotal = ref(0)
 const overviewReviewsState = ref<'loading' | 'ready' | 'empty' | 'forbidden' | 'error'>('loading')
 const overviewReviewsError = ref('')
 
+const visibleOverviewJobs = computed(() =>
+  overviewJobs.value.filter(
+    (job) => jobGraphSpace(job, graphSpaceStore.spaces[0] ?? '', algoSpace.value) === algoSpace.value,
+  ),
+)
+
 const overviewJobStats = computed(() => {
-  const counts = countJobUnifiedStatuses(overviewJobs.value)
+  const counts = countJobUnifiedStatuses(visibleOverviewJobs.value)
   return [
     { label: '运行中', value: counts['运行中'], tone: JOB_STATUS_TONE['运行中'] },
     { label: '已完成', value: counts['已完成'], tone: JOB_STATUS_TONE['已完成'] },
@@ -586,7 +597,7 @@ const overviewJobStats = computed(() => {
 })
 
 const recentOverviewJobs = computed(() =>
-  [...overviewJobs.value]
+  [...visibleOverviewJobs.value]
     .sort((a, b) => String(b.lastRunAt || b.createdAt || '').localeCompare(String(a.lastRunAt || a.createdAt || '')))
     .slice(0, 5),
 )
@@ -1049,20 +1060,25 @@ async function loadPlatformOverview(): Promise<void> {
 }
 
 
-// 总览数据只在 overview tab 首次可见时加载：/graph-query 等其他 tab 挂载时
-// 不渲染总览内容，提前拉取是纯浪费（listJobs 还会触发后端 Temporal 复核级联）
+// 总览数据只在 overview tab 可见时加载：/graph-query 等其他 tab 挂载时
+// 不渲染总览内容，提前拉取是纯浪费（listJobs 还会触发后端 Temporal 复核级联）。
+// 资产数据首次可见加载一次（后端自带 60s 缓存）；任务卡每次切回总览都刷新（状态可能已变）。
 const overviewDataLoaded = ref(false)
 watch(activeTab, (tab) => {
-  if (tab === 'overview' && !overviewDataLoaded.value) {
+  if (tab !== 'overview') return
+  if (!overviewDataLoaded.value) {
     overviewDataLoaded.value = true
+    void loadPlatformOverview()
+  }
+  void loadOverviewCards()
+}, { immediate: true })
+
+// 全局图空间切换后重载已展示的总览（图资产/今日新增/任务卡均按空间隔离）
+watch(algoSpace, () => {
+  if (overviewDataLoaded.value) {
     void loadPlatformOverview()
     void loadOverviewCards()
   }
-}, { immediate: true })
-
-// 全局图空间切换后重载已展示的总览（统计按空间隔离）
-watch(algoSpace, () => {
-  if (overviewDataLoaded.value) void loadPlatformOverview()
 })
 
 

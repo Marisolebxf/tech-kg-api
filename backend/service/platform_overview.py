@@ -343,6 +343,7 @@ _NAME_PROP_CANDIDATES = (
     "keyword",
     "title_zh",
     "title_en",
+    "title",  # Project 无 name/title_zh，展示名就是 title
 )
 
 

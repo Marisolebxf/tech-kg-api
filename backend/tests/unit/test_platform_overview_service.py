@@ -870,6 +870,15 @@ def test_graph_time_prop_skips_datetime_columns() -> None:
     assert row.time == "02:05:30"  # 逐对象写入时间取自 source_update_time
 
 
+def test_vertex_display_name_falls_back_to_title() -> None:
+    """Project 无 name/title_zh，展示名退 title；候选序内更靠前的键优先。"""
+    from service.platform_overview import _vertex_display_name
+
+    assert _vertex_display_name({"title": "面向城域网的全光交换方法"}, "proj-1") == "面向城域网的全光交换方法"
+    assert _vertex_display_name({"title_zh": "中文题名", "title": "兜底"}, "p-2") == "中文题名"
+    assert _vertex_display_name({}, "vid-x") == "vid-x"
+
+
 def test_enrich_today_rows_falls_back_to_aggregate_when_graph_unavailable() -> None:
     snapshot = parse_execution_records(
         [_execution_record(written=5, completed_at="2026-09-22 10:30:00")],

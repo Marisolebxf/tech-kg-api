@@ -40,6 +40,9 @@ _RELATION_BUCKET_LABELS: tuple[str, ...] = (
     "企业 / 产品 / 事件",
     "其他关系",
 )
+# 「其他」桶下标——_entity_bucket/_relation_bucket 未命中词表时的落点，须与两个
+# 分类器的 fallthrough 返回值保持一致；构成图把它固定排在最后并吸收溢出桶。
+_OTHER_BUCKET_INDEX = 4
 
 logger = logging.getLogger(__name__)
 
@@ -816,7 +819,7 @@ def _entity_bucket(name: str) -> int:
     for bucket, tokens in enumerate(_ENTITY_BUCKET_TOKENS):
         if any(token in normalized for token in tokens):
             return bucket
-    return 4
+    return _OTHER_BUCKET_INDEX
 
 
 def _relation_bucket(name: str) -> int:
@@ -824,7 +827,7 @@ def _relation_bucket(name: str) -> int:
     for token, bucket in _RELATION_BUCKET_RULES:
         if token in normalized:
             return bucket
-    return 4
+    return _OTHER_BUCKET_INDEX
 
 
 def _member_names(members: list[tuple[str, int]], limit: int = 3) -> str:
@@ -856,7 +859,6 @@ def _build_structure(
         buckets[index] += count
         if count > 0:
             members[index].append((name, count))
-    ratios = _ratios(buckets)
     definitions = (
         [
             (_ENTITY_BUCKET_LABELS[index], tone)
@@ -868,20 +870,46 @@ def _build_structure(
             for index, tone in enumerate(("#165dff", "#2e90fa", "#06aed4", "#7a5af8", "#98a2b3"))
         ]
     )
+    # 展示序（饼图口径）：非「其他」桶按数量降序取前 4，其余桶并入「其他」并固定最后——
+    # 用户 2026-09-23 拍板：分类只展示 5 个，前四个按数量排，第五个算其他。当前分类器
+    # 恰好 4 个实质桶，合并分支是为桶表扩充预留的等价语义。
+    real = sorted(
+        range(_OTHER_BUCKET_INDEX),
+        key=lambda index: (-buckets[index], definitions[index][0]),
+    )
+    ordered = [*real[:4]]
+    other_count = buckets[_OTHER_BUCKET_INDEX] + sum(buckets[index] for index in real[4:])
+    other_members = [
+        *members[_OTHER_BUCKET_INDEX],
+        *(m for index in real[4:] for m in members[index]),
+    ]
+    ordered.append(_OTHER_BUCKET_INDEX)
+    counts_ordered = [
+        other_count if index == _OTHER_BUCKET_INDEX else buckets[index] for index in ordered
+    ]
+    ratios = _ratios(counts_ordered)
     return [
         StructureItem(
-            label=label,
-            schema=_member_names(sorted(members[index], key=lambda m: (-m[1], m[0]))),
+            label=definitions[index][0],
+            schema=_member_names(
+                sorted(
+                    other_members if index == _OTHER_BUCKET_INDEX else members[index],
+                    key=lambda m: (-m[1], m[0]),
+                )
+            ),
             # 完整成员清单（含计数）随响应下发，供前端悬停中文标签时浮窗展示
             members=[
                 StructureMember(name=name, count=count)
-                for name, count in sorted(members[index], key=lambda m: (-m[1], m[0]))
+                for name, count in sorted(
+                    other_members if index == _OTHER_BUCKET_INDEX else members[index],
+                    key=lambda m: (-m[1], m[0]),
+                )
             ],
-            count=_format_count(buckets[index]),
-            ratio=ratios[index],
-            tone=tone,
+            count=_format_count(other_count if index == _OTHER_BUCKET_INDEX else buckets[index]),
+            ratio=ratios[position],
+            tone=definitions[index][1],
         )
-        for index, (label, tone) in enumerate(definitions)
+        for position, index in enumerate(ordered)
     ]
 
 

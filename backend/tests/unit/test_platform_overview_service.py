@@ -116,6 +116,46 @@ def test_overview_total_is_deduped_with_multi_tag_vertices() -> None:
     assert sum(item.ratio for item in result.entity_structure) == 100
 
 
+def test_structure_orders_top4_by_count_with_other_last() -> None:
+    """构成图展示序（2026-09-23 拍板）：前四个分类按数量降序，「其他」固定最后。
+
+    分类只展示 5 个——非「其他」桶按计数降序取前 4（零计数桶垫底但仍列出，
+    与旧口径一致），「其他实体/其他关系」永远排第 5 位；占比按新顺序重算仍合计 100。"""
+    stats = GraphStatsSnapshot(
+        total_nodes=100,
+        total_edges=100,
+        nodes={"Keyword": 50, "Person": 30, "Paper": 15, "Project": 5},
+        edges={"RELATED_TO": 40, "CITES": 35, "EXECUTIVE_OF": 20, "INVOLVED_IN": 5},
+    )
+
+    class OrderedStatsProvider:
+        def get_stats(self, space: str | None = None) -> GraphStatsSnapshot:
+            return stats
+
+    result = PlatformOverviewService(
+        stats_provider=OrderedStatsProvider(), changes_provider=FakeChangesProvider()
+    ).get_overview()
+
+    # 实体：专家30 > 论文15 > 项目5 > 机构0（零计数垫底），其他实体 50 固定最后
+    assert [item.label for item in result.entity_structure] == [
+        "专家 / 人才",
+        "论文成果",
+        "项目 / 专利",
+        "机构 / 企业",
+        "其他实体",
+    ]
+    assert [item.ratio for item in result.entity_structure] == [30, 15, 5, 0, 50]
+    # 关系：发表35 > 任职20 > 项目参与5 > 企业/产品/事件0，其他关系 40 固定最后
+    assert [item.label for item in result.relation_structure] == [
+        "发表 / 引用 / 成果",
+        "任职 / 就读 / 作者单位",
+        "项目 / 专利参与",
+        "企业 / 产品 / 事件",
+        "其他关系",
+    ]
+    assert [item.ratio for item in result.relation_structure] == [35, 20, 5, 0, 40]
+
+
 def test_structure_schema_names_list_real_members() -> None:
     """分段 schema 小字数据驱动：列桶内计数前 3 的真实成员名，超出 +N，零计数不列。
 

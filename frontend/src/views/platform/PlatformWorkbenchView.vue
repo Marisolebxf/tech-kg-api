@@ -20,7 +20,7 @@ import {
   type PlatformOverviewData,
   type StructureItem,
 } from '../../api/platformOverview'
-import { donutGradient } from './donutGradient'
+import { pieSlices } from './pieSlices'
 import {
   countJobUnifiedStatuses,
   deriveJobUnifiedStatus,
@@ -579,9 +579,6 @@ function hideAssetTip(key: string) {
 }
 const entityStructure = ref<StructureItem[]>([])
 const relationStructure = ref<StructureItem[]>([])
-// 环形图中心 = 各分段之和（Σ标签/Σ边类型计数），与分段自洽；资产卡 total 仍是去重口径
-const entityStructureTotal = ref('')
-const relationStructureTotal = ref('')
 
 // 总览两卡片：直连任务/审核队列真实数据（不进 platform_overview 的 60s 缓存），各自容错。
 // 任务卡与图谱构建页同空间口径：默认只看当前图空间（历史无空间任务落默认空间），
@@ -659,9 +656,39 @@ const activeAssetOverview = computed(() => assetOverviewGroups.value.find((item)
 const entityAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === 'entity'))
 const relationAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === 'relation'))
 
-// 占比环形图分段由图例数据驱动（donutGradient 纯函数，随图例 tone+ratio 变化）
-const entityDonutStyle = computed(() => ({ background: donutGradient(entityStructure.value) }))
-const relationDonutStyle = computed(() => ({ background: donutGradient(relationStructure.value) }))
+// 构成图饼图分段由图例数据驱动（pieSlices 纯函数，随图例 tone+ratio 生成扇形 path）；
+// 图上只标百分比，数量挪到悬浮浮窗。悬浮分段沿中角外移形成放大互动。
+const entityPieSlices = computed(() => pieSlices(entityStructure.value))
+const relationPieSlices = computed(() => pieSlices(relationStructure.value))
+const pieHoverKey = ref('')
+const pieTip = ref<{ chart: string; label: string; count: string; ratio: number; x: number; y: number } | null>(null)
+function showPieTip(chart: string, slice: { item: StructureItem }, event: MouseEvent) {
+  pieHoverKey.value = `${chart}-${slice.item.label}`
+  const host = (event.currentTarget as SVGElement | null)?.closest('.platform-pie-wrap') as HTMLElement | null
+  const rect = host?.getBoundingClientRect()
+  pieTip.value = {
+    chart,
+    label: slice.item.label,
+    count: slice.item.count,
+    ratio: slice.item.ratio,
+    x: event.clientX - (rect?.left ?? 0) + 12,
+    y: event.clientY - (rect?.top ?? 0) - 8,
+  }
+}
+function movePieTip(event: MouseEvent) {
+  if (!pieTip.value) return
+  const host = (event.currentTarget as SVGElement | null)?.closest('.platform-pie-wrap') as HTMLElement | null
+  const rect = host?.getBoundingClientRect()
+  pieTip.value = {
+    ...pieTip.value,
+    x: event.clientX - (rect?.left ?? 0) + 12,
+    y: event.clientY - (rect?.top ?? 0) - 8,
+  }
+}
+function hidePieTip(chart: string) {
+  if (pieTip.value?.chart === chart) pieTip.value = null
+  pieHoverKey.value = ''
+}
 
 const sourceRows = [
   { object: '专家人才基础信息', table: 'expert_profile', domain: '人才域', schedule: '每日定时', frequency: '02:00', latest: '2026-07-13 02:04', status: '正常', task: 'DP-20260713-0150' },
@@ -1067,8 +1094,6 @@ async function loadPlatformOverview(): Promise<void> {
     assetChangeRows.value = data.assetChangeRows
     entityStructure.value = data.entityStructure
     relationStructure.value = data.relationStructure
-    entityStructureTotal.value = data.entityStructureTotal ?? ''
-    relationStructureTotal.value = data.relationStructureTotal ?? ''
   } catch (error) {
     const message = error instanceof Error ? error.message : '未知错误'
     showToast(`首页总览数据加载失败：${message}`, 'warning')
@@ -1166,8 +1191,8 @@ const pageMeta = computed(() => {
       <section class="kg-panel platform-structure-overview">
         <div class="kg-panel__header"><div><h2 class="kg-panel__title">当前图谱资产</h2></div><span>实体 {{ entityAssetOverview?.total ?? '--' }} · 关系 {{ relationAssetOverview?.total ?? '--' }} · 数据截至 {{ overviewMeta.updatedAt }}</span></div>
         <div class="platform-structure-grid">
-          <div class="platform-structure-chart"><header><strong>实体标签构成</strong></header><div class="platform-donut-layout"><div class="platform-donut is-entity" :style="entityDonutStyle"><span><strong>{{ entityStructureTotal || '--' }}</strong><em>标签合计</em></span></div><div class="platform-structure-legend"><article v-for="item in entityStructure" :key="item.label"><span><i :style="{ background: item.tone }" /><a-tooltip position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><span class="platform-legend-label">{{ item.label }}</span><template #content><div class="platform-legend-members"><template v-if="item.members?.length"><div v-for="m in item.members" :key="m.name">{{ m.name }} · {{ m.count.toLocaleString() }}</div></template><div v-else>暂无标签数据</div></div></template></a-tooltip></span><strong>{{ item.count }}<em>{{ item.ratio }}%</em></strong></article></div></div></div>
-          <div class="platform-structure-chart"><header><strong>关系类型构成</strong></header><div class="platform-donut-layout"><div class="platform-donut is-relation" :style="relationDonutStyle"><span><strong>{{ relationStructureTotal || '--' }}</strong><em>类型合计</em></span></div><div class="platform-structure-legend"><article v-for="item in relationStructure" :key="item.label"><span><i :style="{ background: item.tone }" /><a-tooltip position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><span class="platform-legend-label">{{ item.label }}</span><template #content><div class="platform-legend-members"><template v-if="item.members?.length"><div v-for="m in item.members" :key="m.name">{{ m.name }} · {{ m.count.toLocaleString() }}</div></template><div v-else>暂无类型数据</div></div></template></a-tooltip></span><strong>{{ item.count }}<em>{{ item.ratio }}%</em></strong></article></div></div></div>
+          <div class="platform-structure-chart"><header><strong>实体标签构成</strong></header><div class="platform-pie-layout"><div class="platform-pie-wrap"><svg class="platform-pie is-entity" viewBox="0 0 160 160" role="img" aria-label="实体标签构成饼图"><circle v-if="!entityPieSlices.length" cx="80" cy="80" r="64" fill="#e5edf8" /><g v-for="slice in entityPieSlices" :key="slice.item.label" class="platform-pie-slice" :style="{ transform: pieHoverKey === `entity-${slice.item.label}` ? `translate(${slice.dx}px, ${slice.dy}px)` : undefined }" @mouseenter="showPieTip('entity', slice, $event)" @mousemove="movePieTip" @mouseleave="hidePieTip('entity')"><path :d="slice.path" :fill="slice.item.tone" /><text v-if="slice.showLabel" :x="slice.labelX" :y="slice.labelY">{{ slice.percent }}%</text></g></svg><div v-if="pieTip && pieTip.chart === 'entity'" class="platform-pie-tip" :style="{ left: pieTip.x + 'px', top: pieTip.y + 'px' }"><strong>{{ pieTip.label }}</strong><span>{{ pieTip.count }} · {{ pieTip.ratio }}%</span></div></div><div class="platform-structure-legend"><article v-for="item in entityStructure" :key="item.label"><span><i :style="{ background: item.tone }" /><a-tooltip position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><span class="platform-legend-label">{{ item.label }}</span><template #content><div class="platform-legend-members"><template v-if="item.members?.length"><div v-for="m in item.members" :key="m.name">{{ m.name }} · {{ m.count.toLocaleString() }}</div></template><div v-else>暂无标签数据</div></div></template></a-tooltip></span><strong class="platform-legend-ratio">{{ item.ratio }}%</strong></article></div></div></div>
+          <div class="platform-structure-chart"><header><strong>关系类型构成</strong></header><div class="platform-pie-layout"><div class="platform-pie-wrap"><svg class="platform-pie is-relation" viewBox="0 0 160 160" role="img" aria-label="关系类型构成饼图"><circle v-if="!relationPieSlices.length" cx="80" cy="80" r="64" fill="#e5edf8" /><g v-for="slice in relationPieSlices" :key="slice.item.label" class="platform-pie-slice" :style="{ transform: pieHoverKey === `relation-${slice.item.label}` ? `translate(${slice.dx}px, ${slice.dy}px)` : undefined }" @mouseenter="showPieTip('relation', slice, $event)" @mousemove="movePieTip" @mouseleave="hidePieTip('relation')"><path :d="slice.path" :fill="slice.item.tone" /><text v-if="slice.showLabel" :x="slice.labelX" :y="slice.labelY">{{ slice.percent }}%</text></g></svg><div v-if="pieTip && pieTip.chart === 'relation'" class="platform-pie-tip" :style="{ left: pieTip.x + 'px', top: pieTip.y + 'px' }"><strong>{{ pieTip.label }}</strong><span>{{ pieTip.count }} · {{ pieTip.ratio }}%</span></div></div><div class="platform-structure-legend"><article v-for="item in relationStructure" :key="item.label"><span><i :style="{ background: item.tone }" /><a-tooltip position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><span class="platform-legend-label">{{ item.label }}</span><template #content><div class="platform-legend-members"><template v-if="item.members?.length"><div v-for="m in item.members" :key="m.name">{{ m.name }} · {{ m.count.toLocaleString() }}</div></template><div v-else>暂无类型数据</div></div></template></a-tooltip></span><strong class="platform-legend-ratio">{{ item.ratio }}%</strong></article></div></div></div>
         </div>
       </section>
 
@@ -2203,20 +2228,24 @@ print(response.json())</pre>
 .platform-structure-chart header { display:flex;align-items:center;justify-content:space-between;margin-bottom:8px; }
 .platform-structure-chart header>strong { color:#253752;font-size:13px; }
 .platform-structure-chart header>a { color:#004ecc;font-size:11px;text-decoration:none; }
-.platform-donut-layout { display:grid;grid-template-columns:170px minmax(0,1fr);align-items:center;gap:20px;min-height:150px; }
-.platform-donut { position:relative;display:grid;place-items:center;width:154px;height:154px;border-radius:50%; }
-.platform-donut::after { position:absolute;inset:25px;border-radius:50%;background:#fff;box-shadow:0 0 0 1px #e5edf8;content:""; }
-/* 占比分段由组件按图例 tone+ratio 内联生成（is-entity/is-relation 仅作语义锚点） */
-.platform-donut>span { position:relative;z-index:1;display:grid;gap:2px;text-align:center; }
-.platform-donut>span strong { color:#10264c;font-size:19px; }
-.platform-donut>span em { color:#52627a;font-size:10px;font-style:normal; }
+.platform-pie-layout { display:grid;grid-template-columns:170px minmax(0,1fr);align-items:center;gap:20px;min-height:150px; }
+.platform-pie-wrap { position:relative;width:154px;height:154px; }
+.platform-pie { display:block;width:154px;height:154px; }
+/* 饼图悬浮放大互动：分段沿中角外移（transform 由模板按悬浮态内联绑定），白描边分隔 */
+.platform-pie-slice { transition:transform .18s ease;cursor:pointer; }
+.platform-pie-slice path { stroke:#fff;stroke-width:1.5; }
+.platform-pie-slice text { pointer-events:none;fill:#fff;font-size:11px;font-weight:600;text-anchor:middle;dominant-baseline:middle; }
+/* 扇区悬浮白底浮窗（分类名 + 数量 + 占比；图上静态只标百分比） */
+.platform-pie-tip { position:absolute;z-index:5;display:grid;gap:2px;padding:6px 10px;border:1px solid #e5edf8;border-radius:6px;background:#fff;box-shadow:0 4px 14px rgba(16,38,76,.14);pointer-events:none;white-space:nowrap; }
+.platform-pie-tip strong { color:#10264c;font-size:11px; }
+.platform-pie-tip span { color:#52627a;font-size:10px; }
 .platform-structure-legend article { display:grid;grid-template-columns:minmax(0,1fr) 160px;align-items:center;gap:14px;min-height:34px;border-bottom:1px solid #edf2f8; }
 .platform-structure-legend article:last-child { border-bottom:0; }
 .platform-structure-legend article>span { display:flex;align-items:center;gap:7px;min-width:0;overflow:hidden;color:#40516c;font-size:11px;white-space:nowrap; }
 .platform-structure-legend article>span>i { flex:0 0 auto;width:8px;height:8px;border-radius:50%; }
 .platform-structure-legend article em { overflow:hidden;color:#59636f;font-size:9px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }
-.platform-structure-legend article>strong { display:grid;grid-template-columns:minmax(82px,1fr) 44px;align-items:center;gap:12px;color:#40516c;font-size:11px;text-align:right;white-space:nowrap; }
-.platform-structure-legend article>strong em { overflow:visible;text-overflow:clip; }
+/* 图例右侧只展示百分比（数量在扇区悬浮浮窗里） */
+.platform-structure-legend article>strong { color:#40516c;font-size:12px;font-weight:600;text-align:right;white-space:nowrap; }
 
 .platform-table {
   width: 100%;
@@ -4420,8 +4449,9 @@ print(response.json())</pre>
   .platform-change-body { grid-template-columns:minmax(0,1fr); }
   .platform-change-body>aside { border-top:1px solid #e1eaf5;border-left:0; }
   .platform-hero__actions { display:none; }
-  .platform-donut-layout { grid-template-columns:150px minmax(0,1fr);gap:12px; }
-  .platform-donut { width:138px;height:138px; }
+  .platform-pie-layout { grid-template-columns:150px minmax(0,1fr);gap:12px; }
+  .platform-pie-wrap { width:138px;height:138px; }
+  .platform-pie { width:138px;height:138px; }
   .platform-review-notice {
     grid-template-columns: 34px minmax(0, 1fr);
   }
@@ -4665,14 +4695,12 @@ print(response.json())</pre>
 .platform-query-algo__job-long-hint{color:#ad6800}
 .platform-query-algo__job-log summary{color:#4e5969;font-size:13px;line-height:20px;cursor:pointer}
 .platform-query-algo__job-log pre{max-height:160px;margin:8px 0 0;overflow:auto;padding:8px;border-radius:4px;background:#0d1117;color:#e6edf3;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
-/* 窄屏（此前该宽度区间对分布图无任何处理）：donut 与图例上下堆叠，避免固定列挤压 */
+/* 窄屏（此前该宽度区间对分布图无任何处理）：饼图与图例上下堆叠，避免固定列挤压 */
 @media(max-width:760px){
-  .platform-donut-layout{grid-template-columns:minmax(0,1fr);justify-items:center;gap:12px;min-height:0;padding-bottom:8px}
-  .platform-donut{width:120px;height:120px}
-  .platform-donut::after{inset:20px}
-  .platform-donut>span strong{font-size:15px}
+  .platform-pie-layout{grid-template-columns:minmax(0,1fr);justify-items:center;gap:12px;min-height:0;padding-bottom:8px}
+  .platform-pie-wrap{width:120px;height:120px}
+  .platform-pie{width:120px;height:120px}
   .platform-structure-legend{width:100%}
-  .platform-structure-legend article>strong{grid-template-columns:minmax(60px,1fr) 40px}
   .platform-jobs-list a{grid-template-columns:minmax(0,1fr) auto}
   .platform-jobs-list em{display:none}
   .platform-review-list a{grid-template-columns:minmax(0,1fr)}

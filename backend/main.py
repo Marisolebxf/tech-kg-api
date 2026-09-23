@@ -62,10 +62,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     }:
         correction_dispatcher = asyncio.create_task(_run_correction_dispatcher())
     try:
-        # 确保平台配置表存在（LLM/数据源/Milvus/embedding/水位 持久化）。
+        # 确保平台配置表存在（LLM/数据源/Milvus/embedding/水位 持久化；
+        # 间接关系人工标注）。
         # MySQL 不可达时跳过建表：CI 无 MySQL 服务，运行期访问配置接口会单独报错。
         from db_model.base import Base
         from db_model.embedding_config import EmbeddingConfig
+        from db_model.indirect_relation_annotation import IndirectRelationAnnotation
         from db_model.llm_config import LlmConfig
         from db_model.milvus_config import MilvusConfig
         from db_model.mysql_datasource import MysqlDatasource
@@ -84,6 +86,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     ScriptWatermark.__table__,
                     UserGraphSpace.__table__,
                     GraphSpaceVectorDatabase.__table__,
+                    IndirectRelationAnnotation.__table__,
                 ],
             )
         except Exception as exc:

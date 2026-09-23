@@ -20,6 +20,7 @@ from service.confidence_scoring import (
     edge_confidence,
     expert_entity_confidence,
 )
+from service.provenance_recorder import record_node_source
 
 PAPER_EDGE_TYPES = frozenset({"AUTHORED_BY"})
 PATENT_EDGE_TYPES = frozenset({"INVENTED_BY"})
@@ -187,10 +188,14 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             self._frontend_view(
                 source_id=source_expert_id,
                 source_name=source_name,
-                source_provenance=self._entity_provenance(source_props, source_expert_id),
+                source_provenance=self._entity_provenance(
+                    source_props, source_expert_id, labels=("Person",), space=space
+                ),
                 target_id=target_expert_id,
                 target_name=target_name,
-                target_provenance=self._entity_provenance(target_props, target_expert_id),
+                target_provenance=self._entity_provenance(
+                    target_props, target_expert_id, labels=("Person",), space=space
+                ),
                 papers=papers,
                 patents=patents,
                 projects=projects,
@@ -318,7 +323,15 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             "fields": fields,
             "awards": awards,
             "evaluation": self._pick_evaluation(props),
-            "provenance": self._entity_provenance(props, vid),
+            "provenance": self._entity_provenance(
+                props,
+                vid,
+                labels=tuple(str(item) for item in (getattr(node, "labels", None) or [])),
+                space=(
+                    getattr(getattr(graph, "_settings", None), "space", None)
+                    or TRSGraphSettings.from_env().space
+                ),
+            ),
             **entity_score,
             "expertRelations": expert_relations,
         }
@@ -375,11 +388,18 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
         return text or None
 
     @staticmethod
-    def _entity_provenance(props: dict[str, Any], vid: str) -> dict[str, str]:
-        """Return only provenance values physically stored on the graph node."""
+    def _entity_provenance(
+        props: dict[str, Any],
+        vid: str,
+        *,
+        labels: tuple[str, ...] = (),
+        space: str | None = None,
+    ) -> dict[str, str]:
+        """查到即记：入图血缘透传；无血缘时如实记录图库查询来源。"""
+        recorded = record_node_source(props, labels, space=space)
         return {
-            "sourceTable": str(props.get("source_table") or "-"),
-            "sourceField": str(props.get("source_field") or "-"),
+            "sourceTable": recorded["sourceTable"],
+            "sourceField": recorded["sourceField"],
             "graphVid": vid,
         }
 
@@ -981,7 +1001,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             ach_type = str(item.get("type") or "paper")
             node_type, type_label, relation_template, base_x, base_y = type_node_map.get(
                 ach_type,
-                ("paper", "成果", "由{experts}共同产出", 370.0, 320.0),
+                ("paper", "科技成果", "由{experts}共同产出", 370.0, 320.0),
             )
             nid = str(item.get("id") or f"ach-{idx}")
             title = str(item.get("title") or nid)

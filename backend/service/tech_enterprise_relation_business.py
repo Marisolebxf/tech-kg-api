@@ -34,8 +34,10 @@ from biz.schemas.tech_enterprise_relation_business import (
     KeyEnterpriseRelationRequest,
     KeyEnterpriseRelationResponse,
 )
+from service.business_access import business_graph_app
 from service.entity_confidence import fill_entity_confidence, parse_confidence
 from service.industry_node_top_events_business import RISK_EVENT_TYPES
+from service.provenance_recorder import record_node_source
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +86,6 @@ _NON_ENTERPRISE_KEYWORDS = (
     "管理局",
     "委员会",
     "MOCK",
-    "测试",
 )
 
 _ROLE_LEVEL_RULES = [
@@ -318,8 +319,10 @@ class KeyEnterpriseRelationService:
         # ASGI 进程内 transport：替代真实 HTTP 回环 8200，消除 socket/accept 队列开销
         # 与高并发自调用饱和。app 由 handler 传 request.app，避免在 service 里 import main。
         # graph-search 路由受鉴权保护，须带上调用方凭证头，否则 401 被当成空图。
+        # business_graph_app 打内部调用标记：名单账号（business_access）下
+        # filtered-subgraph 自调用不再被 403 当成空图（"专家不存在"）。
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app),
+            transport=httpx.ASGITransport(app=business_graph_app(app)),
             headers=dict(auth_headers) if auth_headers else None,
         ) as client:
             # 1) filtered-subgraph(depth=2) 只拿业务需要的 12 种边，不捞论文/合作者/引用
@@ -532,28 +535,18 @@ class KeyEnterpriseRelationService:
         vid: str | None = None,
         client: Any = None,
     ) -> EntityProvenance:
-        """从图节点 properties 抽取实体溯源，与同事关系 _entity_data 同口径。
+        """查到即记：入图血缘透传；无血缘时如实记录图库查询来源。
 
-        Person 节点取 source_record_id（dwd_scholar 时字段名为 scholar_id）；
-        Organization 节点取 organization_id；均缺失时回退 source_record_id。
-        source_table 取 organization_base 或 source_table 属性。
-        置信度：图上已有值 → 证据规则计算并尽力写回 → 默认 0.80。
+        置信度逻辑不变：图上已有值 → 证据规则计算并尽力写回 → 默认 0.80。
         """
-        source_table = properties.get("organization_base") or properties.get("source_table")
-        if "Person" in labels and properties.get("source_record_id") not in (None, ""):
-            source_field = "scholar_id" if source_table == "dwd_scholar" else "source_record_id"
-            source_value = properties.get("source_record_id")
-        elif properties.get("organization_id") not in (None, ""):
-            source_field, source_value = "organization_id", properties.get("organization_id")
-        else:
-            source_field, source_value = "source_record_id", properties.get("source_record_id")
+        recorded = record_node_source(properties, labels, space=SPACE)
         confidence = fill_entity_confidence(properties, labels, vid=vid, client=client)
         return EntityProvenance(
-            sourceTable=str(source_table or "-"),
-            sourceField=str(source_field or "-"),
-            sourceValue=str(source_value or "-"),
-            ingestBatch=str(properties.get("ingest_batch") or "-"),
-            ingestTime=str(properties.get("ingest_time") or "-"),
+            sourceTable=recorded["sourceTable"],
+            sourceField=recorded["sourceField"],
+            sourceValue=recorded["sourceValue"],
+            ingestBatch=recorded["ingestBatch"],
+            ingestTime=recorded["ingestTime"],
             confidence=confidence,
         )
 
@@ -569,7 +562,7 @@ class KeyEnterpriseRelationService:
         if not org_id:
             return
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app),
+            transport=httpx.ASGITransport(app=business_graph_app(app)),
             headers=dict(auth_headers) if auth_headers else None,
         ) as client:
             try:

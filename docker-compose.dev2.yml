@@ -37,7 +37,7 @@ services:
       # 且 MySQL/trs-graph 默认走 host.docker.internal（dev2 不在生产 engine/trs-graph 网络上，
       # 容器名 mysql/trs-graph-service 在本栈解析不到；宿主机已发布 3306/8090 端口）===
       TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://host.docker.internal:8090}
-      TRS_GRAPH_SPACE: dev2
+      TRS_GRAPH_SPACE: dev
       TRS_GRAPH_API_KEY: ${TRS_GRAPH_API_KEY:-ysukeg}
       TRS_GRAPH_TIMEOUT: ${TRS_GRAPH_TIMEOUT:-30}
       MYSQL_HOST: ${MYSQL_HOST:-host.docker.internal}

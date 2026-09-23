@@ -13,6 +13,7 @@ from biz.schemas.expert_colleague_relation import (
     ExpertColleagueRelationRequest,
 )
 from infra.result_cache import get_cached_json, set_cached_json
+from service.business_access import business_graph_app
 
 APPLICATION_JSON = "application/json"
 logger = logging.getLogger(__name__)
@@ -52,7 +53,9 @@ async def query_expert_colleague_relation(
         return Response(content=cached, media_type=APPLICATION_JSON)
     try:
         async with AsyncClient(
-            transport=ASGITransport(app=request.app),
+            # business_graph_app 打内部调用标记：名单账号（business_access）下
+            # nodes/nodes-search/subgraph 自调用不再被 403 当成查询失败。
+            transport=ASGITransport(app=business_graph_app(request.app)),
             base_url="https://fastapi-internal",
             headers=get_internal_api_auth_headers(request),
         ) as client:

@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 
@@ -23,6 +23,23 @@ from infra.graph_db import get_trs_graph_client
 
 EXPERT_ENTITY_LABEL = "专家 / 人才"
 ORGANIZATION_ENTITY_LABEL = "机构 / 企业"
+
+# 五类桶展示名（与图谱资产环形图同序同义）：今日新增明细行的「数据类型」列
+# 按同一分类器把 tag/边类型名归类，命中哪桶就显示哪个（口径与环形图统一）。
+_ENTITY_BUCKET_LABELS: tuple[str, ...] = (
+    EXPERT_ENTITY_LABEL,
+    "论文成果",
+    ORGANIZATION_ENTITY_LABEL,
+    "项目 / 专利",
+    "其他实体",
+)
+_RELATION_BUCKET_LABELS: tuple[str, ...] = (
+    "发表 / 引用 / 成果",
+    "任职 / 就读 / 作者单位",
+    "项目 / 专利参与",
+    "企业 / 产品 / 事件",
+    "其他关系",
+)
 
 logger = logging.getLogger(__name__)
 
@@ -130,12 +147,31 @@ def _format_count(value: int) -> str:
 
 
 @dataclass(frozen=True, slots=True)
+class ExtractExecutionInfo:
+    """当日一次完成执行的图反查描述（今日新增明细按图内对象逐行展示）。
+
+    执行 output 只带 written 计数、无逐对象清单；明细行改按 schemaKey 对应
+    的 tag/边类型 + 时间窗（源表水位 ~ 完成时刻）反查图，拿到每个对象的
+    name/source_table/写入时间。``fallback_rows`` 是反查失败时的聚合降级行
+    （一次执行 × 每个来源表一行，旧口径）。
+    """
+
+    kind: str  # entity | relation
+    schema_key: str
+    schema_label: str
+    completed_at: str  # YYYY-MM-DD HH:MM:SS
+    window_lo: str  # 反查时间窗下界：源表水位最早值，缺省当日 00:00:00
+    fallback_rows: list[AssetChangeRow] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
 class TodayChangesSnapshot:
     """今日写图增量（来自工作流控制库，按图空间过滤）。
 
     entity/relation_added 为今日完成执行的 ``output.sources[].written`` 合计；
-    running_count 为当前 RUNNING 执行数；*_rows 为新增明细行（按来源表拆分，
-    一次执行绑定多个来源表时逐表一行）。
+    running_count 为当前 RUNNING 执行数；*_rows 为新增明细行——图反查成功时
+    为逐对象行（数据类型=五类桶、具体对象=name/两端名、来源=source_table），
+    失败时退回 ``*_executions`` 里各执行携带的聚合降级行。
     """
 
     entity_added: int = 0
@@ -143,6 +179,8 @@ class TodayChangesSnapshot:
     running_count: int = 0
     entity_rows: list[AssetChangeRow] = field(default_factory=list)
     relation_rows: list[AssetChangeRow] = field(default_factory=list)
+    entity_executions: list[ExtractExecutionInfo] = field(default_factory=list)
+    relation_executions: list[ExtractExecutionInfo] = field(default_factory=list)
 
 
 class TodayChangesProvider(Protocol):
@@ -178,6 +216,8 @@ def parse_execution_records(
     running = 0
     entity_rows: list[tuple[str, AssetChangeRow]] = []
     relation_rows: list[tuple[str, AssetChangeRow]] = []
+    entity_execs: list[ExtractExecutionInfo] = []
+    relation_execs: list[ExtractExecutionInfo] = []
     for raw in payloads:
         try:
             record = json.loads(raw)
@@ -215,28 +255,41 @@ def parse_execution_records(
         completed_time = completed_at[11:19] or "-"
         target_rows = entity_rows if kind == "entity" else relation_rows
         # 一次执行绑定多个来源表时按表拆行（来源列各自取本表名），只出 written>0 的表
+        exec_rows: list[AssetChangeRow] = []
+        watermarks: list[str] = []
         for source in output.get("sources") or []:
             if not isinstance(source, dict):
                 continue
             source_written = max(0, int(source.get("written") or 0))
             if source_written <= 0:
                 continue
-            target_rows.append(
-                (
-                    completed_at,
-                    AssetChangeRow(
-                        type=display_label,
-                        object=f"{display_label} · {source_written:,} 条",
-                        change=change,
-                        source=str(source.get("table") or source.get("source") or "-"),
-                        time=completed_time,
-                    ),
-                )
+            row = AssetChangeRow(
+                type=display_label,
+                object=f"{display_label} · {source_written:,} 条",
+                change=change,
+                source=str(source.get("table") or source.get("source") or "-"),
+                time=completed_time,
             )
+            target_rows.append((completed_at, row))
+            exec_rows.append(row)
+            watermark = str(source.get("watermark") or "")
+            if watermark:
+                watermarks.append(watermark)
+        descriptor = ExtractExecutionInfo(
+            kind=kind,
+            schema_key=schema_key,
+            schema_label=schema_label or display_label,
+            completed_at=completed_at,
+            # 源表水位（读取快照时刻）必然早于写图时刻，作反查窗下界；缺省当日零点
+            window_lo=min(watermarks) if watermarks else f"{completed_at[:10]} 00:00:00",
+            fallback_rows=exec_rows,
+        )
         if kind == "entity":
             entity_added += written
+            entity_execs.append(descriptor)
         else:
             relation_added += written
+            relation_execs.append(descriptor)
     # 明细按完成时间倒序（最新写图在前）
     entity_rows.sort(key=lambda pair: pair[0], reverse=True)
     relation_rows.sort(key=lambda pair: pair[0], reverse=True)
@@ -246,6 +299,8 @@ def parse_execution_records(
         running_count=running,
         entity_rows=[row for _, row in entity_rows],
         relation_rows=[row for _, row in relation_rows],
+        entity_executions=entity_execs,
+        relation_executions=relation_execs,
     )
 
 
@@ -279,12 +334,320 @@ class WorkflowControlTodayChangesProvider:
                 {"since": since},
             )
             payloads = [row[0] for row in result.fetchall()]
-        return parse_execution_records(
-            payloads,
-            today=now.strftime("%Y-%m-%d"),
-            target_space=target_space,
-            default_space=default_space,
+        return enrich_today_rows_with_graph(
+            parse_execution_records(
+                payloads,
+                today=now.strftime("%Y-%m-%d"),
+                target_space=target_space,
+                default_space=default_space,
+            ),
+            space,
         )
+
+
+# ---- 今日新增明细行：按图内对象逐行展示（图反查） ------------------------------
+# 单次执行的对象行/端点 vid 上限：防大时间窗把明细表与查询打爆（抽取 written
+# 通常个位~百级；超限截断，行数语义见抽屉 footer）
+_OBJECT_ROW_CAP = 50
+_ENDPOINT_CAP = 40
+# 顶点「对象名」取值候选：公共字段 name 优先，历史 ETL tag 无字面 name 时按
+# 域定制键回退（Person=name_cn、Keyword=keyword、Paper=title_zh…）
+_NAME_PROP_CANDIDATES = (
+    "name",
+    "name_cn",
+    "name_zh",
+    "name_en",
+    "keyword",
+    "title_zh",
+    "title_en",
+)
+
+
+def _vertex_display_name(props: dict[str, Any], vid: str) -> str:
+    for key in _NAME_PROP_CANDIDATES:
+        value = props.get(key)
+        if value:
+            return str(value)
+    return vid
+
+
+def _time_hhmmss(value: Any, fallback: str) -> str:
+    return str(value or "")[11:19] or fallback
+
+
+def _flatten_vertex_props(vertex: Any) -> dict[str, Any]:
+    """FETCH PROP ON * 返回的 vertex.properties 兼平铺/按 tag 嵌套两种形态。"""
+    if not isinstance(vertex, dict):
+        return {}
+    props = vertex.get("properties")
+    if not isinstance(props, dict):
+        return {}
+    if props and all(isinstance(value, dict) for value in props.values()):
+        merged: dict[str, Any] = {}
+        for grouped in props.values():
+            merged.update(grouped)
+        return merged
+    return props
+
+
+def _graph_time_prop(client: Any, kind: str, name: str, cache: dict[tuple[str, str], str | None]) -> str | None:
+    """tag/边类型上可用的写入时间属性：update_time 优先，其次 create_time。"""
+    cache_key = (kind, name)
+    if cache_key in cache:
+        return cache[cache_key]
+    try:
+        statement = f"DESC TAG `{name}`" if kind == "entity" else f"DESC EDGE `{name}`"
+        fields = {rec.get("Field") for rec in client.execute_query(statement).records}
+    except Exception:
+        fields = set()
+    prop = "update_time" if "update_time" in fields else ("create_time" if "create_time" in fields else None)
+    cache[cache_key] = prop
+    return prop
+
+
+def _safe_identifier(name: str) -> str:
+    return name.replace("`", "").strip()
+
+
+def _safe_vid(vid: Any) -> str:
+    return str(vid or "").replace('"', "").strip()
+
+
+def _entity_object_rows(
+    client: Any,
+    execution: ExtractExecutionInfo,
+    schema_name: str,
+    time_props: dict[tuple[str, str], str | None],
+) -> tuple[list[AssetChangeRow] | None, list[str]]:
+    """按 tag + 时间窗反查当日写入的实体顶点，逐对象一行；查不到返回 None 走聚合降级。"""
+    tag = _safe_identifier(schema_name)
+    time_prop = _graph_time_prop(client, "entity", tag, time_props)
+    if not time_prop:
+        return None, []
+    statement = (
+        f'LOOKUP ON `{tag}` WHERE `{tag}`.`{time_prop}` >= "{execution.window_lo}" '
+        f'AND `{tag}`.`{time_prop}` <= "{execution.completed_at}" '
+        "YIELD id(vertex) AS vid, properties(vertex) AS props"
+    )
+    try:
+        records = client.execute_query(statement).records
+    except Exception:
+        # tag 无任何索引（LOOKUP 400）或属性形态不符——退回聚合行
+        return None, []
+    bucket_label = _ENTITY_BUCKET_LABELS[_entity_bucket(tag)]
+    fallback_source = execution.fallback_rows[0].source if execution.fallback_rows else "-"
+    rows: list[AssetChangeRow] = []
+    vids: list[str] = []
+    for record in records[:_OBJECT_ROW_CAP]:
+        props = record.get("props") or {}
+        vid = _safe_vid(record.get("vid"))
+        rows.append(
+            AssetChangeRow(
+                # 数据类型列与图谱资产环形图同分类器同桶名（tag 名命中哪桶就显示哪个）
+                type=bucket_label,
+                object=_vertex_display_name(props, vid),
+                change=f"新增 {tag}",
+                source=str(props.get("source_table") or fallback_source),
+                time=_time_hhmmss(props.get(time_prop), execution.completed_at[11:19]),
+            )
+        )
+        vids.append(vid)
+    if not rows:
+        return None, []
+    return rows, vids
+
+
+def _relation_edges(
+    client: Any,
+    execution: ExtractExecutionInfo,
+    edge_type: str,
+    time_prop: str | None,
+    seed_vids: list[str],
+) -> list[tuple[str, str, dict[str, Any]]]:
+    """当日关系边收集：①边属性时间窗 LOOKUP（需边索引）②退而求其次从当日
+    实体 vid 出发 GO BIDIRECT（边端点通常就是当日写入的实体）再按时间过滤。"""
+    edges: list[tuple[str, str, dict[str, Any]]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _collect(records: Any, *, window_filter: bool) -> None:
+        for record in records:
+            src = _safe_vid(record.get("src"))
+            dst = _safe_vid(record.get("dst"))
+            props = record.get("eprops") or {}
+            # BIDIRECT 会把同一条边正反两个方向都吐回来：按无序 vid 对去重
+            key = (src, dst) if src <= dst else (dst, src)
+            if not src or not dst or key in seen:
+                continue
+            if window_filter and time_prop:
+                stamp = str(props.get(time_prop) or "")
+                if not (execution.window_lo <= stamp <= execution.completed_at):
+                    continue
+            seen.add(key)
+            edges.append((src, dst, props))
+
+    if time_prop:
+        statement = (
+            f'LOOKUP ON `{edge_type}` WHERE `{edge_type}`.`{time_prop}` >= "{execution.window_lo}" '
+            f'AND `{edge_type}`.`{time_prop}` <= "{execution.completed_at}" '
+            "YIELD src(edge) AS src, dst(edge) AS dst, properties(edge) AS eprops"
+        )
+        try:
+            _collect(client.execute_query(statement).records, window_filter=False)
+        except Exception:
+            pass  # 边类型无索引（400）→ 走 GO FROM 兜底
+    if not edges and seed_vids:
+        vid_list = ", ".join(f'"{vid}"' for vid in seed_vids[:_OBJECT_ROW_CAP])
+        statement = (
+            f"GO FROM {vid_list} OVER `{edge_type}` BIDIRECT "
+            "YIELD src(edge) AS src, dst(edge) AS dst, properties(edge) AS eprops"
+        )
+        try:
+            _collect(client.execute_query(statement).records, window_filter=True)
+        except Exception:
+            pass
+    return edges
+
+
+def _endpoint_names(client: Any, vids: list[str]) -> dict[str, str]:
+    names: dict[str, str] = {}
+    for vid in vids[:_ENDPOINT_CAP]:
+        try:
+            records = client.execute_query(f'FETCH PROP ON * "{vid}" YIELD vertex AS v').records
+        except Exception:
+            continue
+        if records:
+            names[vid] = _vertex_display_name(_flatten_vertex_props(records[0].get("v")), vid)
+    return names
+
+
+def _relation_object_rows(
+    client: Any,
+    execution: ExtractExecutionInfo,
+    schema_name: str,
+    time_props: dict[tuple[str, str], str | None],
+    seed_vids: list[str],
+) -> list[AssetChangeRow] | None:
+    """按边类型反查当日关系边，具体对象 = 起点实体名 → 终点实体名。"""
+    edge_type = _safe_identifier(schema_name)
+    time_prop = _graph_time_prop(client, "relation", edge_type, time_props)
+    edges = _relation_edges(client, execution, edge_type, time_prop, seed_vids)
+    if not edges:
+        return None
+    endpoint_vids: list[str] = []
+    for src, dst, _ in edges:
+        for vid in (src, dst):
+            if vid not in endpoint_vids:
+                endpoint_vids.append(vid)
+    names = _endpoint_names(client, endpoint_vids)
+    bucket_label = _RELATION_BUCKET_LABELS[_relation_bucket(edge_type)]
+    fallback_source = execution.fallback_rows[0].source if execution.fallback_rows else "-"
+    fallback_time = execution.completed_at[11:19]
+    rows: list[AssetChangeRow] = []
+    for src, dst, edge_props in edges[:_OBJECT_ROW_CAP]:
+        rows.append(
+            AssetChangeRow(
+                type=bucket_label,
+                object=f"{names.get(src, src)} → {names.get(dst, dst)}",
+                change=f"新增 {edge_type}",
+                source=str(edge_props.get("source_table") or fallback_source),
+                time=_time_hhmmss(edge_props.get(time_prop), fallback_time) if time_prop else fallback_time,
+            )
+        )
+    return rows
+
+
+def _schema_names_by_key(schema_keys: list[str]) -> dict[str, str]:
+    """schemaKey → schema 名（schema 名即图内 tag/边类型名），查控制库 schema 目录。"""
+    if not schema_keys:
+        return {}
+    from sqlalchemy import text
+
+    from infra.workflow_mysql import get_workflow_engine
+
+    quoted = ", ".join(f"'{key.replace(chr(39), '')}'" for key in schema_keys)
+    try:
+        engine = get_workflow_engine()
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text("SELECT schema_key, name FROM kg_schema_definition WHERE schema_key IN (" + quoted + ")")
+            ).fetchall()
+        return {str(row[0]): str(row[1]) for row in rows if row[1]}
+    except Exception:
+        logger.warning("今日新增图反查：schema 名查询失败，明细行退回聚合展示", exc_info=True)
+        return {}
+
+
+def _connect_graph_for_space(space: str | None) -> Any:
+    from infra.graph_db.client import TRSGraphClient
+    from infra.graph_db.config import TRSGraphSettings
+
+    settings = TRSGraphSettings.from_env()
+    if space:
+        settings.space = space
+    client = TRSGraphClient(settings)
+    client.connect()
+    return client
+
+
+def enrich_today_rows_with_graph(
+    snapshot: TodayChangesSnapshot,
+    space: str | None,
+    *,
+    connect_client=None,
+    schema_names: dict[str, str] | None = None,
+) -> TodayChangesSnapshot:
+    """今日新增明细按图内对象逐行展示：反查成功的执行用逐对象行替换聚合行。
+
+    实体行：数据类型=五类桶（与环形图同分类器）、具体对象=name 公共字段、
+    来源=source_table 公共字段、变更内容=新增 Schema 名、时间=写入时间。
+    关系行：具体对象=起点实体名 → 终点实体名，其余同实体口径。图不可达、
+    schema 名缺失、tag 无索引等任一环节失败都退回该执行的聚合降级行。
+    """
+    if not snapshot.entity_executions and not snapshot.relation_executions:
+        return snapshot
+    if schema_names is None:
+        schema_names = _schema_names_by_key(
+            [ex.schema_key for ex in [*snapshot.entity_executions, *snapshot.relation_executions]]
+        )
+    if connect_client is None:
+        connect_client = _connect_graph_for_space
+    try:
+        client = connect_client(space)
+    except Exception:
+        logger.warning("今日新增图反查：图客户端连接失败，明细行退回聚合展示", exc_info=True)
+        return snapshot
+    time_props: dict[tuple[str, str], str | None] = {}
+    entity_rows: list[AssetChangeRow] = []
+    seed_vids: list[str] = []
+    try:
+        for execution in sorted(snapshot.entity_executions, key=lambda ex: ex.completed_at, reverse=True):
+            schema_name = schema_names.get(execution.schema_key)
+            rows, vids = (
+                _entity_object_rows(client, execution, schema_name, time_props) if schema_name else (None, [])
+            )
+            if rows is None:
+                rows = list(execution.fallback_rows)
+            else:
+                # 当日实体 vid 供关系边 GO FROM 兜底反查（边端点常为当日写入实体）
+                seed_vids.extend(vids)
+            entity_rows.extend(rows)
+        relation_rows: list[AssetChangeRow] = []
+        for execution in sorted(snapshot.relation_executions, key=lambda ex: ex.completed_at, reverse=True):
+            schema_name = schema_names.get(execution.schema_key)
+            rows = (
+                _relation_object_rows(client, execution, schema_name, time_props, seed_vids)
+                if schema_name
+                else None
+            )
+            relation_rows.extend(rows if rows is not None else execution.fallback_rows)
+    finally:
+        close = getattr(client, "close", None)
+        if close is not None:
+            try:
+                close()
+            except Exception:  # noqa: BLE001
+                logger.exception("关闭今日新增反查图客户端失败")
+    return replace(snapshot, entity_rows=entity_rows, relation_rows=relation_rows)
 
 
 def _ratios(values: list[int]) -> list[int]:
@@ -496,19 +859,13 @@ def _build_structure(
     ratios = _ratios(buckets)
     definitions = (
         [
-            (EXPERT_ENTITY_LABEL, "#2e90fa"),
-            ("论文成果", "#7a5af8"),
-            (ORGANIZATION_ENTITY_LABEL, "#12b76a"),
-            ("项目 / 专利", "#f79009"),
-            ("其他实体", "#98a2b3"),
+            (_ENTITY_BUCKET_LABELS[index], tone)
+            for index, tone in enumerate(("#2e90fa", "#7a5af8", "#12b76a", "#f79009", "#98a2b3"))
         ]
         if entity
         else [
-            ("发表 / 引用 / 成果", "#165dff"),
-            ("任职 / 就读 / 作者单位", "#2e90fa"),
-            ("项目 / 专利参与", "#06aed4"),
-            ("企业 / 产品 / 事件", "#7a5af8"),
-            ("其他关系", "#98a2b3"),
+            (_RELATION_BUCKET_LABELS[index], tone)
+            for index, tone in enumerate(("#165dff", "#2e90fa", "#06aed4", "#7a5af8", "#98a2b3"))
         ]
     )
     return [

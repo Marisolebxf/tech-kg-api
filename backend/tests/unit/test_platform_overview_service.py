@@ -3,6 +3,7 @@ from service.platform_overview import (
     PlatformOverviewService,
     TodayChangesSnapshot,
     TRSGraphStatsProvider,
+    enrich_today_rows_with_graph,
     parse_execution_records,
 )
 
@@ -584,3 +585,270 @@ def test_relation_bucket_covers_real_graph_edge_names() -> None:
     }
     for name, expected in cases.items():
         assert _relation_bucket(name) == expected, name
+
+
+class _GraphResult:
+    def __init__(self, records: list[dict]) -> None:
+        self.records = records
+
+
+class _ScriptedGraphClient:
+    """按语句片段脚本的假图客户端：命中返回预设 records，预设异常则抛出。"""
+
+    def __init__(self, scripts: list[tuple[str, list[dict] | Exception]]) -> None:
+        self._scripts = scripts
+        self.queries: list[str] = []
+        self.closed = False
+
+    def execute_query(self, statement: str) -> _GraphResult:
+        self.queries.append(statement)
+        for fragment, response in self._scripts:
+            if fragment in statement:
+                if isinstance(response, Exception):
+                    raise response
+                return _GraphResult(response)
+        raise AssertionError(f"unexpected query: {statement}")
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_parse_execution_records_collects_graph_lookup_descriptors() -> None:
+    snapshot = parse_execution_records(
+        [
+            _execution_record(
+                written=3,
+                completed_at="2026-09-23 03:41:54",
+                sources=[
+                    {
+                        "table": "techkg_e2e_liz.review_widgets",
+                        "written": 3,
+                        "watermark": "2026-09-23 03:00:24",
+                    }
+                ],
+            ),
+            _execution_record(
+                kind="relation",
+                schema_key="review-linked-196fe7",
+                schema_label="审测关联",
+                written=3,
+                completed_at="2026-09-23 03:45:52",
+            ),
+        ],
+        today="2026-09-23",
+        target_space="dev2",
+        default_space="dev2",
+    )
+
+    entity_exec = snapshot.entity_executions[0]
+    assert entity_exec.schema_key == "review-widget-64d0d5"
+    assert entity_exec.window_lo == "2026-09-23 03:00:24"  # 源表水位作反查窗下界
+    assert entity_exec.completed_at == "2026-09-23 03:41:54"
+    assert [row.object for row in entity_exec.fallback_rows] == ["审测挂件 · 3 条"]
+
+    relation_exec = snapshot.relation_executions[0]
+    assert relation_exec.schema_key == "review-linked-196fe7"
+    assert relation_exec.window_lo == "2026-09-23 00:00:00"  # 无水位退当日零点
+
+
+def test_enrich_today_rows_lists_graph_objects_per_vertex() -> None:
+    """今日新增明细改逐对象行：实体=桶分类+name+source_table，关系=两端实体名。"""
+    snapshot = parse_execution_records(
+        [
+            _execution_record(
+                written=3,
+                completed_at="2026-09-23 03:41:54",
+                sources=[
+                    {
+                        "table": "techkg_e2e_liz.review_widgets",
+                        "written": 3,
+                        "watermark": "2026-09-23 03:00:24",
+                    }
+                ],
+            ),
+            _execution_record(
+                kind="relation",
+                schema_key="review-linked-196fe7",
+                schema_label="审测关联",
+                written=3,
+                completed_at="2026-09-23 03:45:52",
+                sources=[
+                    {
+                        "table": "techkg_e2e_liz.review_widgets",
+                        "written": 3,
+                        "watermark": "2026-09-23 03:44:46",
+                    }
+                ],
+            ),
+        ],
+        today="2026-09-23",
+        target_space="dev2",
+        default_space="dev2",
+    )
+    widget_props = {
+        "source_table": "techkg_e2e_liz.review_widgets",
+        "update_time": "2026-09-23 03:00:35",
+    }
+    client = _ScriptedGraphClient(
+        [
+            (
+                "DESC TAG `ReviewWidget`",
+                [{"Field": "name"}, {"Field": "source_table"}, {"Field": "update_time"}],
+            ),
+            (
+                "LOOKUP ON `ReviewWidget`",
+                [
+                    {"vid": "rwxT-0923-01", "props": {"name": "总览造数-实体01", **widget_props}},
+                    {"vid": "rwxT-0923-02", "props": {"name": "总览造数-实体02", **widget_props}},
+                ],
+            ),
+            (
+                "DESC EDGE `REVIEW_LINKED`",
+                [{"Field": "source_table"}, {"Field": "update_time"}],
+            ),
+            ("LOOKUP ON `REVIEW_LINKED`", RuntimeError("There is no index to use at runtime")),
+            (
+                "GO FROM",
+                [
+                    {
+                        "src": "rwxT-0923-01",
+                        "dst": "rwxT-0923-02",
+                        "eprops": {
+                            "source_table": "techkg_e2e_liz.review_widgets",
+                            "update_time": "2026-09-23 03:44:48",
+                        },
+                    },
+                    # BIDIRECT 把同一条边反向再吐一遍：按无序 vid 对去重
+                    {
+                        "src": "rwxT-0923-02",
+                        "dst": "rwxT-0923-01",
+                        "eprops": {
+                            "source_table": "techkg_e2e_liz.review_widgets",
+                            "update_time": "2026-09-23 03:44:48",
+                        },
+                    },
+                    {
+                        "src": "rwxT-0923-02",
+                        "dst": "rwxT-0923-03",
+                        "eprops": {
+                            "source_table": "techkg_e2e_liz.review_widgets",
+                            "update_time": "2026-09-23 03:44:48",
+                        },
+                    },
+                ],
+            ),
+            (
+                'FETCH PROP ON * "rwxT-0923-01"',
+                [
+                    {
+                        "v": {
+                            "id": "rwxT-0923-01",
+                            "labels": ["ReviewWidget"],
+                            "properties": {"name": "总览造数-实体01"},
+                        }
+                    }
+                ],
+            ),
+            (
+                'FETCH PROP ON * "rwxT-0923-02"',
+                [
+                    {
+                        "v": {
+                            "id": "rwxT-0923-02",
+                            "labels": ["ReviewWidget"],
+                            "properties": {"name": "总览造数-实体02"},
+                        }
+                    }
+                ],
+            ),
+            (
+                'FETCH PROP ON * "rwxT-0923-03"',
+                [
+                    {
+                        "v": {
+                            "id": "rwxT-0923-03",
+                            "labels": ["ReviewWidget"],
+                            "properties": {"name": "总览造数-实体03"},
+                        }
+                    }
+                ],
+            ),
+        ],
+    )
+
+    result = enrich_today_rows_with_graph(
+        snapshot,
+        "dev2",
+        connect_client=lambda space: client,
+        schema_names={
+            "review-widget-64d0d5": "ReviewWidget",
+            "review-linked-196fe7": "REVIEW_LINKED",
+        },
+    )
+
+    # 实体行：数据类型=五类桶（ReviewWidget 命中「其他实体」）、对象=name 公共字段、
+    # 来源=source_table 公共字段、时间=逐对象写入时间（非执行完成时刻）
+    assert [(row.type, row.object, row.change) for row in result.entity_rows] == [
+        ("其他实体", "总览造数-实体01", "新增 ReviewWidget"),
+        ("其他实体", "总览造数-实体02", "新增 ReviewWidget"),
+    ]
+    assert result.entity_rows[0].source == "techkg_e2e_liz.review_widgets"
+    assert result.entity_rows[0].time == "03:00:35"
+    # 关系行：边类型无索引 LOOKUP 失败 → GO FROM 当日实体 vid 兜底，无序对去重后 2 条
+    assert [(row.type, row.object) for row in result.relation_rows] == [
+        ("其他关系", "总览造数-实体01 → 总览造数-实体02"),
+        ("其他关系", "总览造数-实体02 → 总览造数-实体03"),
+    ]
+    assert result.relation_rows[0].change == "新增 REVIEW_LINKED"
+    assert result.relation_rows[0].source == "techkg_e2e_liz.review_widgets"
+    assert result.relation_rows[0].time == "03:44:48"
+    # 徽标计数不变（仍按执行 written 聚合，与明细行数解耦）
+    assert result.entity_added == 3
+    assert result.relation_added == 3
+    assert client.closed is True
+
+
+def test_enrich_today_rows_falls_back_to_aggregate_when_graph_unavailable() -> None:
+    snapshot = parse_execution_records(
+        [_execution_record(written=5, completed_at="2026-09-22 10:30:00")],
+        today="2026-09-22",
+        target_space="dev2",
+        default_space="dev2",
+    )
+
+    def _boom(space: str | None):
+        raise RuntimeError("graph down")
+
+    result = enrich_today_rows_with_graph(
+        snapshot,
+        "dev2",
+        connect_client=_boom,
+        schema_names={"review-widget-64d0d5": "ReviewWidget"},
+    )
+    # 图不可达：保留聚合降级行，不空转
+    assert [row.object for row in result.entity_rows] == ["审测挂件 · 5 条"]
+
+
+def test_enrich_today_rows_falls_back_when_tag_has_no_index() -> None:
+    snapshot = parse_execution_records(
+        [_execution_record(written=5, completed_at="2026-09-22 10:30:00")],
+        today="2026-09-22",
+        target_space="dev2",
+        default_space="dev2",
+    )
+    client = _ScriptedGraphClient(
+        [
+            ("DESC TAG `ReviewWidget`", [{"Field": "name"}, {"Field": "update_time"}]),
+            ("LOOKUP ON `ReviewWidget`", RuntimeError("There is no index to use at runtime")),
+        ]
+    )
+
+    result = enrich_today_rows_with_graph(
+        snapshot,
+        "dev2",
+        connect_client=lambda space: client,
+        schema_names={"review-widget-64d0d5": "ReviewWidget"},
+    )
+    # tag 无索引（LOOKUP 400）：退回聚合行
+    assert [row.object for row in result.entity_rows] == ["审测挂件 · 5 条"]
+    assert client.closed is True

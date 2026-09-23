@@ -574,13 +574,13 @@ class PlatformOverviewService:
                 change_rows["relation"] = []
                 today_source = "demo-fallback"
                 extra_warnings = ["今日新增暂时不可读：工作流控制库不可用。"]
-            # 资产卡总量与分桶同口径（Σ每标签/边类型计数）：SHOW STATS 的
-            # Space/vertices 是去重 vid 数，多标签顶点（如同一机构 vid 同挂
+            # 资产卡中心 = 真实体数（去重口径）：实体总量用 Space/vertices、
+            # 关系总量用 Space/edges。环形图分段按标签计数、无法去重（需逐
+            # vid 查标签），多标签顶点（如同一机构 vid 同挂
             # organization_base+Organization，dev2 实测两口径差 ~23 万）会让
-            # 分段合计大于中心数——环形图中心必须与分段一致才自洽，且与实体
-            # 列表页按标签计数的口径一致。
-            entity_total = sum(stats.nodes.values())
-            relation_total = sum(stats.edges.values())
+            # 分段合计大于中心数——总量与分段是两个口径，中心不跟分段虚高。
+            entity_total = stats.total_nodes
+            relation_total = stats.total_edges
             groups = [
                 AssetOverviewGroup(
                     key="entity",

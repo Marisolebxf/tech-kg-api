@@ -21,29 +21,6 @@ from biz.schemas.platform_overview import (
 )
 from infra.graph_db import get_trs_graph_client
 
-EXPERT_ENTITY_LABEL = "专家 / 人才"
-ORGANIZATION_ENTITY_LABEL = "机构 / 企业"
-
-# 五类桶展示名（与图谱资产环形图同序同义）：今日新增明细行的「数据类型」列
-# 按同一分类器把 tag/边类型名归类，命中哪桶就显示哪个（口径与环形图统一）。
-_ENTITY_BUCKET_LABELS: tuple[str, ...] = (
-    EXPERT_ENTITY_LABEL,
-    "论文成果",
-    ORGANIZATION_ENTITY_LABEL,
-    "项目 / 专利",
-    "其他实体",
-)
-_RELATION_BUCKET_LABELS: tuple[str, ...] = (
-    "发表 / 引用 / 成果",
-    "任职 / 就读 / 作者单位",
-    "项目 / 专利参与",
-    "企业 / 产品 / 事件",
-    "其他关系",
-)
-# 「其他」桶下标——_entity_bucket/_relation_bucket 未命中词表时的落点，须与两个
-# 分类器的 fallthrough 返回值保持一致；构成图把它固定排在最后并吸收溢出桶。
-_OTHER_BUCKET_INDEX = 4
-
 logger = logging.getLogger(__name__)
 
 
@@ -421,6 +398,7 @@ def _entity_object_rows(
     execution: ExtractExecutionInfo,
     schema_name: str,
     time_props: dict[tuple[str, str], str | None],
+    schema_labels: dict[str, str],
 ) -> tuple[list[AssetChangeRow] | None, list[str]]:
     """按 tag + 时间窗反查当日写入的实体顶点，逐对象一行；查不到返回 None 走聚合降级。"""
     tag = _safe_identifier(schema_name)
@@ -437,7 +415,8 @@ def _entity_object_rows(
     except Exception:
         # tag 无任何索引（LOOKUP 400）或属性形态不符——退回聚合行
         return None, []
-    bucket_label = _ENTITY_BUCKET_LABELS[_entity_bucket(tag)]
+    # 数据类型列 = 单个 Schema 的目录中文名（与图谱资产构成图同口径），查不到用原名
+    type_label = schema_labels.get(tag) or tag
     fallback_source = execution.fallback_rows[0].source if execution.fallback_rows else "-"
     rows: list[AssetChangeRow] = []
     vids: list[str] = []
@@ -446,8 +425,7 @@ def _entity_object_rows(
         vid = _safe_vid(record.get("vid"))
         rows.append(
             AssetChangeRow(
-                # 数据类型列与图谱资产环形图同分类器同桶名（tag 名命中哪桶就显示哪个）
-                type=bucket_label,
+                type=type_label,
                 object=_vertex_display_name(props, vid),
                 change=f"新增 {tag}",
                 source=str(props.get("source_table") or fallback_source),
@@ -529,6 +507,7 @@ def _relation_object_rows(
     schema_name: str,
     time_props: dict[tuple[str, str], str | None],
     seed_vids: list[str],
+    schema_labels: dict[str, str],
 ) -> list[AssetChangeRow] | None:
     """按边类型反查当日关系边，具体对象 = 起点实体名 → 终点实体名。"""
     edge_type = _safe_identifier(schema_name)
@@ -542,14 +521,15 @@ def _relation_object_rows(
             if vid not in endpoint_vids:
                 endpoint_vids.append(vid)
     names = _endpoint_names(client, endpoint_vids)
-    bucket_label = _RELATION_BUCKET_LABELS[_relation_bucket(edge_type)]
+    # 数据类型列 = 单个 Schema 的目录中文名（与图谱资产构成图同口径），查不到用原名
+    type_label = schema_labels.get(edge_type) or edge_type
     fallback_source = execution.fallback_rows[0].source if execution.fallback_rows else "-"
     fallback_time = execution.completed_at[11:19]
     rows: list[AssetChangeRow] = []
     for src, dst, edge_props in edges[:_OBJECT_ROW_CAP]:
         rows.append(
             AssetChangeRow(
-                type=bucket_label,
+                type=type_label,
                 object=f"{names.get(src, src)} → {names.get(dst, dst)}",
                 change=f"新增 {edge_type}",
                 source=str(edge_props.get("source_table") or fallback_source),
@@ -580,6 +560,40 @@ def _schema_names_by_key(schema_keys: list[str]) -> dict[str, str]:
         return {}
 
 
+def _schema_labels_by_name(space: str | None, kind: str) -> dict[str, str]:
+    """图对象名 → Schema 目录中文名：当前图空间行优先，其余空间行兜底。
+
+    「任何图空间都有真实分类」的关键——目录在共享控制库、跨空间共享；当前
+    空间没登记的名字由别的空间同名 Schema 兜底，仍查不到的不进表，调用方回退
+    用图内原名（tag/边类型名）。"""
+    from sqlalchemy import text
+
+    from infra.graph_db.config import TRSGraphSettings
+    from infra.workflow_mysql import get_workflow_engine
+
+    target = space or TRSGraphSettings.from_env().space
+    try:
+        engine = get_workflow_engine()
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    "SELECT name, label FROM kg_schema_definition "
+                    "WHERE is_deleted = 0 AND kind = :kind "
+                    "AND label IS NOT NULL AND label <> '' "
+                    "ORDER BY (graph_space = :space) DESC, updated_at DESC"
+                ),
+                {"kind": kind, "space": target},
+            ).fetchall()
+    except Exception:
+        logger.warning("Schema 目录中文名查询失败，回退用图内原名", exc_info=True)
+        return {}
+    labels: dict[str, str] = {}
+    for name, label in rows:
+        if name and label and str(name) not in labels:
+            labels[str(name)] = str(label)
+    return labels
+
+
 def _connect_graph_for_space(space: str | None) -> Any:
     from infra.graph_db.client import TRSGraphClient
     from infra.graph_db.config import TRSGraphSettings
@@ -598,13 +612,15 @@ def enrich_today_rows_with_graph(
     *,
     connect_client=None,
     schema_names: dict[str, str] | None = None,
+    schema_labels: dict[str, str] | None = None,
 ) -> TodayChangesSnapshot:
     """今日新增明细按图内对象逐行展示：反查成功的执行用逐对象行替换聚合行。
 
-    实体行：数据类型=五类桶（与环形图同分类器）、具体对象=name 公共字段、
-    来源=source_table 公共字段、变更内容=新增 Schema 名、时间=写入时间。
-    关系行：具体对象=起点实体名 → 终点实体名，其余同实体口径。图不可达、
-    schema 名缺失、tag 无索引等任一环节失败都退回该执行的聚合降级行。
+    实体行：数据类型=单个 Schema 的目录中文名（与构成图同口径，查不到用图内
+    原名）、具体对象=name 公共字段、来源=source_table 公共字段、变更内容=新增
+    Schema 名、时间=写入时间。关系行：具体对象=起点实体名 → 终点实体名，其余
+    同实体口径。图不可达、schema 名缺失、tag 无索引等任一环节失败都退回该执行
+    的聚合降级行。
     """
     if not snapshot.entity_executions and not snapshot.relation_executions:
         return snapshot
@@ -612,6 +628,11 @@ def enrich_today_rows_with_graph(
         schema_names = _schema_names_by_key(
             [ex.schema_key for ex in [*snapshot.entity_executions, *snapshot.relation_executions]]
         )
+    if schema_labels is None:
+        schema_labels = {
+            **_schema_labels_by_name(space, "entity"),
+            **_schema_labels_by_name(space, "relation"),
+        }
     if connect_client is None:
         connect_client = _connect_graph_for_space
     try:
@@ -626,7 +647,9 @@ def enrich_today_rows_with_graph(
         for execution in sorted(snapshot.entity_executions, key=lambda ex: ex.completed_at, reverse=True):
             schema_name = schema_names.get(execution.schema_key)
             rows, vids = (
-                _entity_object_rows(client, execution, schema_name, time_props) if schema_name else (None, [])
+                _entity_object_rows(client, execution, schema_name, time_props, schema_labels)
+                if schema_name
+                else (None, [])
             )
             if rows is None:
                 rows = list(execution.fallback_rows)
@@ -638,7 +661,9 @@ def enrich_today_rows_with_graph(
         for execution in sorted(snapshot.relation_executions, key=lambda ex: ex.completed_at, reverse=True):
             schema_name = schema_names.get(execution.schema_key)
             rows = (
-                _relation_object_rows(client, execution, schema_name, time_props, seed_vids)
+                _relation_object_rows(
+                    client, execution, schema_name, time_props, seed_vids, schema_labels
+                )
                 if schema_name
                 else None
             )
@@ -662,174 +687,6 @@ def _ratios(values: list[int]) -> list[int]:
     return result
 
 
-# 五类分桶的关键字词表：英文 token（对名字 upper 后子串匹配）+ 中文关键字（upper 恒等，
-# 直接子串匹配）。词表覆盖共享图 dev2/dev 空间的全部真实 tag/边名（2026-09-23 实测），
-# 中文名暂未出现但 Schema 目录支持中文 label，一并兼容。泛化关联（RELATED_TO）、
-# 关键词挂载（HAS_KEYWORD/Keyword）等五类之外的类型一律落「其他」。
-_ENTITY_BUCKET_TOKENS: tuple[tuple[str, ...], ...] = (
-    # 0 专家人才
-    ("EXPERT", "SCHOLAR", "PERSON", "TALENT", "专家", "学者", "人才", "人物", "作者"),
-    # 1 论文成果（报告/出版物属文献成果）
-    (
-        "PAPER",
-        "JOURNAL",
-        "ARTICLE",
-        "THESIS",
-        "PUBLICATION",
-        "REPORT",
-        "论文",
-        "期刊",
-        "文献",
-        "成果",
-        "报告",
-        "出版物",
-    ),
-    # 2 机构企业
-    (
-        "ORGANIZATION",
-        "ORGANISATION",
-        "ENTERPRISE",
-        "COMPANY",
-        "INSTITUTE",
-        "ACADEMY",
-        "UNIVERSITY",
-        "COLLEGE",
-        "机构",
-        "企业",
-        "公司",
-        "单位",
-        "院所",
-        "大学",
-        "高校",
-        "学院",
-        "院",
-        "校",
-        "所",
-    ),
-    # 3 项目专利
-    ("PROJECT", "PATENT", "项目", "专利", "课题"),
-)
-
-# 关系侧用扁平有序规则：复合词必须排在泛化词前面（如「作者单位」先于「作者」）。
-_RELATION_BUCKET_RULES: tuple[tuple[str, int], ...] = (
-    # 1 任职/就读/作者单位——复合词提前
-    ("作者单位", 1),
-    # 0 发表/引用/成果（REFERENCED_BY 引证、COAUTHOR 合著归此）
-    *(
-        (token, 0)
-        for token in (
-            "PUBLISH",
-            "CITE",
-            "CITATION",
-            "REFERENCE",
-            "AUTHOR",
-            "OUTPUT",
-            "发表",
-            "出版",
-            "引用",
-            "引证",
-            "合著",
-            "撰写",
-        )
-    ),
-    # 1 任职/就读（EXECUTIVE_OF 高管、LEGAL_REP_OF 法人、ALUMNI 校友）
-    *(
-        (token, 1)
-        for token in (
-            "WORK",
-            "STUDI",
-            "AFFILIAT",
-            "EMPLOY",
-            "EXECUTIVE",
-            "LEGAL_REP",
-            "ALUMN",
-            "任职",
-            "就职",
-            "雇佣",
-            "就业",
-            "就读",
-            "毕业",
-            "校友",
-            "单位",
-            "法人",
-            "高管",
-            "董事",
-        )
-    ),
-    # 2 项目/专利参与（INVOLVED_IN 参与、LEADS 主持、FUNDED_BY 资助、APPLIED_BY 申请）
-    *(
-        (token, 2)
-        for token in (
-            "PROJECT",
-            "PATENT",
-            "INVENT",
-            "INVOLV",
-            "LEAD",
-            "FUND",
-            "PARTICIP",
-            "APPLI",
-            "项目",
-            "专利",
-            "参与",
-            "承担",
-            "主持",
-            "资助",
-            "发明",
-        )
-    ),
-    # 3 企业/产品/事件（产业链 CHAIN、股权治理 OWN/CONTROLLER/SHAREHOLDER、投融资 INVEST/ACQUIRE）
-    *(
-        (token, 3)
-        for token in (
-            "PRODUCT",
-            "PRODUCE",
-            "EVENT",
-            "ENTERPRISE",
-            "COMPANY",
-            "INVEST",
-            "ACQUIRE",
-            "SUBSIDIARY",
-            "SHAREHOLDER",
-            "OWN",
-            "CONTROLLER",
-            "CHAIN",
-            "NEWS",
-            "UPSTREAM",
-            "DOWNSTREAM",
-            "企业",
-            "产品",
-            "事件",
-            "投资",
-            "融资",
-            "收购",
-            "股东",
-            "控股",
-            "供应",
-            "供需",
-            "合作",
-            "产业链",
-            "竞争",
-        )
-    ),
-)
-
-
-def _entity_bucket(name: str) -> int:
-    normalized = name.upper()
-    for bucket, tokens in enumerate(_ENTITY_BUCKET_TOKENS):
-        if any(token in normalized for token in tokens):
-            return bucket
-    return _OTHER_BUCKET_INDEX
-
-
-def _relation_bucket(name: str) -> int:
-    normalized = name.upper()
-    for token, bucket in _RELATION_BUCKET_RULES:
-        if token in normalized:
-            return bucket
-    return _OTHER_BUCKET_INDEX
-
-
 def _member_names(members: list[tuple[str, int]], limit: int = 3) -> str:
     """分段 schema 小字：桶内真实成员名（按计数降序取前 N，超出加 +N）。
 
@@ -849,67 +706,54 @@ def _build_structure(
     counts: dict[str, int],
     *,
     entity: bool,
+    labels: dict[str, str] | None = None,
 ) -> list[StructureItem]:
-    buckets = [0, 0, 0, 0, 0]
-    members: list[list[tuple[str, int]]] = [[], [], [], [], []]
-    classifier = _entity_bucket if entity else _relation_bucket
-    for name, count in counts.items():
-        count = max(0, int(count))
-        index = classifier(name)
-        buckets[index] += count
-        if count > 0:
-            members[index].append((name, count))
-    definitions = (
-        [
-            (_ENTITY_BUCKET_LABELS[index], tone)
-            for index, tone in enumerate(("#2e90fa", "#7a5af8", "#12b76a", "#f79009", "#98a2b3"))
-        ]
-        if entity
-        else [
-            (_RELATION_BUCKET_LABELS[index], tone)
-            for index, tone in enumerate(("#165dff", "#2e90fa", "#06aed4", "#7a5af8", "#98a2b3"))
-        ]
+    """构成图按单个 Schema 出分段（2026-09-23 用户口径）：每个 tag/边类型一段，
+    展示名取 Schema 目录中文名（当前空间行优先、跨空间兜底，查不到用原名），
+    按数量降序取前 4，其余并入「其他实体/其他关系」固定最后；零计数不出段——
+    任何图空间都只显示真实存在的分类，不再有固定的空桶。"""
+    labels = labels or {}
+    entries = sorted(
+        ((name, max(0, int(count))) for name, count in counts.items()),
+        key=lambda pair: (-pair[1], pair[0]),
     )
-    # 展示序（饼图口径）：非「其他」桶按数量降序取前 4，其余桶并入「其他」并固定最后——
-    # 用户 2026-09-23 拍板：分类只展示 5 个，前四个按数量排，第五个算其他。当前分类器
-    # 恰好 4 个实质桶，合并分支是为桶表扩充预留的等价语义。
-    real = sorted(
-        range(_OTHER_BUCKET_INDEX),
-        key=lambda index: (-buckets[index], definitions[index][0]),
-    )
-    ordered = [*real[:4]]
-    other_count = buckets[_OTHER_BUCKET_INDEX] + sum(buckets[index] for index in real[4:])
-    other_members = [
-        *members[_OTHER_BUCKET_INDEX],
-        *(m for index in real[4:] for m in members[index]),
+    entries = [(name, count) for name, count in entries if count > 0]
+    tones = ("#2e90fa", "#7a5af8", "#12b76a", "#f79009", "#98a2b3")
+    used_labels: set[str] = set()
+
+    def _display(name: str) -> str:
+        # 目录中文名可能重名（或与「其他」撞名）：先退图内原名，仍撞加序号
+        label = labels.get(name) or name
+        if label in used_labels:
+            label = name
+        suffix = 2
+        while label in used_labels:
+            label = f"{name}#{suffix}"
+            suffix += 1
+        used_labels.add(label)
+        return label
+
+    # (展示名, 图内原名, 计数, 成员清单)——前 4 单 Schema 各一段，其余并「其他」
+    segments: list[tuple[str, str, int, list[tuple[str, int]]]] = [
+        (_display(name), name, count, [(name, count)]) for name, count in entries[:4]
     ]
-    ordered.append(_OTHER_BUCKET_INDEX)
-    counts_ordered = [
-        other_count if index == _OTHER_BUCKET_INDEX else buckets[index] for index in ordered
-    ]
-    ratios = _ratios(counts_ordered)
+    rest = entries[4:]
+    if rest:
+        segments.append(
+            ("其他实体" if entity else "其他关系", "", sum(count for _, count in rest), rest)
+        )
+    ratios = _ratios([count for _, _, count, _ in segments])
     return [
         StructureItem(
-            label=definitions[index][0],
-            schema=_member_names(
-                sorted(
-                    other_members if index == _OTHER_BUCKET_INDEX else members[index],
-                    key=lambda m: (-m[1], m[0]),
-                )
-            ),
-            # 完整成员清单（含计数）随响应下发，供前端悬停中文标签时浮窗展示
-            members=[
-                StructureMember(name=name, count=count)
-                for name, count in sorted(
-                    other_members if index == _OTHER_BUCKET_INDEX else members[index],
-                    key=lambda m: (-m[1], m[0]),
-                )
-            ],
-            count=_format_count(other_count if index == _OTHER_BUCKET_INDEX else buckets[index]),
+            label=label,
+            schema=name or _member_names(members),
+            # 完整成员清单（含计数）随响应下发，供前端悬停浮窗展示
+            members=[StructureMember(name=m, count=c) for m, c in members],
+            count=_format_count(count),
             ratio=ratios[position],
-            tone=definitions[index][1],
+            tone=tones[position],
         )
-        for position, index in enumerate(ordered)
+        for position, (label, name, count, members) in enumerate(segments)
     ]
 
 
@@ -986,11 +830,11 @@ class PlatformOverviewService:
                 today_source = "demo-fallback"
                 extra_warnings = ["今日新增暂时不可读：工作流控制库不可用。"]
             # 资产卡中心 = 真实体数（去重口径）：实体总量用 Space/vertices、
-            # 关系总量用 Space/edges。环形图分段按标签计数、无法去重（需逐
-            # vid 查标签），多标签顶点（如同一机构 vid 同挂
+            # 关系总量用 Space/edges。构成图分段按 Schema(tag/边类型)计数、
+            # 无法去重（需逐 vid 查标签），多标签顶点（如同一机构 vid 同挂
             # organization_base+Organization，dev2 实测两口径差 ~23 万）会让
-            # 分段合计大于中心数——两个口径并存：卡片去重、环形图中心取
-            # Σ标签/Σ边类型计数（entity/relation_structure_total），与分段自洽。
+            # 分段合计大于中心数——两个口径并存：卡片去重、分段合计取
+            # ΣSchema 计数（entity/relation_structure_total），与分段自洽。
             entity_total = stats.total_nodes
             relation_total = stats.total_edges
             groups = [
@@ -1026,8 +870,12 @@ class PlatformOverviewService:
                     "updated_at": datetime.now().strftime("%H:%M"),
                     "asset_overview_groups": groups,
                     "asset_change_rows": change_rows,
-                    "entity_structure": _build_structure(stats.nodes, entity=True),
-                    "relation_structure": _build_structure(stats.edges, entity=False),
+                    "entity_structure": _build_structure(
+                        stats.nodes, entity=True, labels=_schema_labels_by_name(space, "entity")
+                    ),
+                    "relation_structure": _build_structure(
+                        stats.edges, entity=False, labels=_schema_labels_by_name(space, "relation")
+                    ),
                     # 环形图中心 = 各分段之和（Σ标签/Σ边类型计数），与分段自洽
                     "entity_structure_total": _format_count(sum(stats.nodes.values())),
                     "relation_structure_total": _format_count(sum(stats.edges.values())),
@@ -1082,21 +930,21 @@ class PlatformOverviewService:
             asset_change_rows={
                 "entity": [
                     AssetChangeRow(
-                        type=ORGANIZATION_ENTITY_LABEL,
+                        type="组织机构",
                         object="华南智能芯片有限公司",
                         change="新增 Organization",
                         source="enterprise_profile",
                         time="10:30:13",
                     ),
                     AssetChangeRow(
-                        type=EXPERT_ENTITY_LABEL,
+                        type="科技专家",
                         object="周启航",
                         change="新增 Expert",
                         source="expert_profile",
                         time="10:30:18",
                     ),
                     AssetChangeRow(
-                        type="论文成果",
+                        type="论文",
                         object="《多模态大模型知识推理方法研究》",
                         change="新增 Paper",
                         source="paper_record",
@@ -1112,21 +960,21 @@ class PlatformOverviewService:
                 ],
                 "relation": [
                     AssetChangeRow(
-                        type="任职关系",
+                        type="专家任职",
                         object="周启航 → 中国科学院自动化研究所",
                         change="新增 WORKS_AT",
                         source="expert_employment",
                         time="10:30:22",
                     ),
                     AssetChangeRow(
-                        type="成果关系",
+                        type="论文引用",
                         object="周启航 → 多模态大模型知识推理方法研究",
                         change="新增 PUBLISH",
                         source="paper_author",
                         time="10:30:25",
                     ),
                     AssetChangeRow(
-                        type="产品关系",
+                        type="企业关联",
                         object="华南智能芯片 → 边缘推理芯片 X7",
                         change="新增 HAS_PRODUCT",
                         source="enterprise_product",
@@ -1233,28 +1081,28 @@ class PlatformOverviewService:
             ],
             entity_structure=[
                 StructureItem(
-                    label=EXPERT_ENTITY_LABEL,
+                    label="科技专家",
                     schema="Expert",
                     count="4,286 万",
                     ratio=34,
                     tone="#2e90fa",
                 ),
                 StructureItem(
-                    label="论文成果",
+                    label="论文",
                     schema="Paper",
                     count="2,931 万",
                     ratio=23,
                     tone="#7a5af8",
                 ),
                 StructureItem(
-                    label=ORGANIZATION_ENTITY_LABEL,
+                    label="组织机构",
                     schema="Organization",
                     count="2,164 万",
                     ratio=17,
                     tone="#12b76a",
                 ),
                 StructureItem(
-                    label="项目 / 专利",
+                    label="项目",
                     schema="Project / Patent",
                     count="1,438 万",
                     ratio=11,
@@ -1270,28 +1118,28 @@ class PlatformOverviewService:
             ],
             relation_structure=[
                 StructureItem(
-                    label="发表 / 引用 / 成果",
+                    label="论文引用",
                     schema="PUBLISH / CITES / OUTPUT",
                     count="2.04 亿",
                     ratio=32,
                     tone="#165dff",
                 ),
                 StructureItem(
-                    label="任职 / 就读 / 作者单位",
+                    label="专家任职",
                     schema="WORKS_AT / STUDY_AT",
                     count="1.28 亿",
                     ratio=20,
                     tone="#2e90fa",
                 ),
                 StructureItem(
-                    label="项目 / 专利参与",
+                    label="项目参与",
                     schema="LEAD_PROJECT / INVENT_PATENT",
                     count="1.16 亿",
                     ratio=18,
                     tone="#06aed4",
                 ),
                 StructureItem(
-                    label="企业 / 产品 / 事件",
+                    label="企业关联",
                     schema="HAS_PRODUCT / HAS_EVENT",
                     count="0.92 亿",
                     ratio=14,

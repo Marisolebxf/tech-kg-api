@@ -116,83 +116,115 @@ def test_overview_total_is_deduped_with_multi_tag_vertices() -> None:
     assert sum(item.ratio for item in result.entity_structure) == 100
 
 
-def test_structure_orders_top4_by_count_with_other_last() -> None:
-    """构成图展示序（2026-09-23 拍板）：前四个分类按数量降序，「其他」固定最后。
+def test_structure_orders_per_schema_top4_then_other() -> None:
+    """构成图展示序（2026-09-23 用户口径）：按单个 Schema 出分段、数量降序取前 4，
+    其余并入「其他实体/其他关系」固定第 5 位；零计数 Schema 不出段——任何图空间
+    都只显示真实存在的分类，不再有固定空桶。目录中文名查不到时回退图内原名。"""
+    from service.platform_overview import _build_structure
 
-    分类只展示 5 个——非「其他」桶按计数降序取前 4（零计数桶垫底但仍列出，
-    与旧口径一致），「其他实体/其他关系」永远排第 5 位；占比按新顺序重算仍合计 100。"""
+    # 6 个非零 Schema 降序取前 4；Event+News 并入「其他实体」；Organization 零计数不列
+    entity = _build_structure(
+        {
+            "Keyword": 50,
+            "Person": 30,
+            "Paper": 15,
+            "Project": 5,
+            "Event": 4,
+            "News": 3,
+            "Organization": 0,
+        },
+        entity=True,
+    )
+    assert [item.label for item in entity] == ["Keyword", "Person", "Paper", "Project", "其他实体"]
+    assert [item.ratio for item in entity] == [46, 28, 14, 5, 7]
+    other = entity[4]
+    assert other.count == "7"  # Event 4 + News 3
+    assert [(m.name, m.count) for m in other.members] == [("Event", 4), ("News", 3)]
+
+    # 非零分类 ≤ 4 时不造「其他」段（不出现死数据）
+    relation = _build_structure(
+        {"RELATED_TO": 40, "CITES": 35, "EXECUTIVE_OF": 20, "INVOLVED_IN": 5}, entity=False
+    )
+    assert [item.label for item in relation] == [
+        "RELATED_TO",
+        "CITES",
+        "EXECUTIVE_OF",
+        "INVOLVED_IN",
+    ]
+    assert [item.ratio for item in relation] == [40, 35, 20, 5]
+
+
+def test_structure_uses_schema_catalog_chinese_labels() -> None:
+    """展示名取 Schema 目录中文名（空间行优先、跨空间兜底）；重名时退图内原名防撞 key。"""
+    from service.platform_overview import _build_structure
+
+    entity = _build_structure(
+        {"Keyword": 50, "Person": 30, "Paper": 15, "Project": 5, "Event": 4},
+        entity=True,
+        labels={"Keyword": "技术主题", "Person": "科技专家", "Paper": "论文", "Project": "项目"},
+    )
+    assert [item.label for item in entity] == ["技术主题", "科技专家", "论文", "项目", "其他实体"]
+    # 单 Schema 段：schema 字段=图内原名、members 只含自己；「其他」段 schema=成员名摘要
+    assert entity[0].schema_name == "Keyword"
+    assert [(m.name, m.count) for m in entity[0].members] == [("Keyword", 50)]
+    assert entity[4].schema_name == "Event"
+
+    # 两个 Schema 的目录中文名撞车：后者退图内原名，保证 label 全表唯一（前端 key）
+    dup = _build_structure({"A": 10, "B": 5}, entity=True, labels={"A": "论文", "B": "论文"})
+    assert [item.label for item in dup] == ["论文", "B"]
+
+
+def test_overview_builds_structure_with_catalog_labels_for_space(monkeypatch) -> None:
+    """装配处把当前图空间传给目录中文名查询（空间行优先），构成图分段用它做展示名。"""
+    import service.platform_overview as overview
+
+    fetched: list[tuple[str | None, str]] = []
+
+    def _fake_labels(space, kind):
+        fetched.append((space, kind))
+        if kind == "entity":
+            return {"Keyword": "技术主题", "Person": "科技专家", "Paper": "论文"}
+        return {"RELATED_TO": "泛化关联"}
+
+    monkeypatch.setattr(overview, "_schema_labels_by_name", _fake_labels)
     stats = GraphStatsSnapshot(
         total_nodes=100,
         total_edges=100,
-        nodes={"Keyword": 50, "Person": 30, "Paper": 15, "Project": 5},
-        edges={"RELATED_TO": 40, "CITES": 35, "EXECUTIVE_OF": 20, "INVOLVED_IN": 5},
+        nodes={"Keyword": 50, "Person": 30, "Paper": 20},
+        edges={"RELATED_TO": 9},
     )
 
-    class OrderedStatsProvider:
+    class LabeledStatsProvider:
         def get_stats(self, space: str | None = None) -> GraphStatsSnapshot:
             return stats
 
     result = PlatformOverviewService(
-        stats_provider=OrderedStatsProvider(), changes_provider=FakeChangesProvider()
-    ).get_overview()
+        stats_provider=LabeledStatsProvider(), changes_provider=FakeChangesProvider()
+    ).get_overview(space="dev2")
 
-    # 实体：专家30 > 论文15 > 项目5 > 机构0（零计数垫底），其他实体 50 固定最后
-    assert [item.label for item in result.entity_structure] == [
-        "专家 / 人才",
-        "论文成果",
-        "项目 / 专利",
-        "机构 / 企业",
-        "其他实体",
-    ]
-    assert [item.ratio for item in result.entity_structure] == [30, 15, 5, 0, 50]
-    # 关系：发表35 > 任职20 > 项目参与5 > 企业/产品/事件0，其他关系 40 固定最后
-    assert [item.label for item in result.relation_structure] == [
-        "发表 / 引用 / 成果",
-        "任职 / 就读 / 作者单位",
-        "项目 / 专利参与",
-        "企业 / 产品 / 事件",
-        "其他关系",
-    ]
-    assert [item.ratio for item in result.relation_structure] == [35, 20, 5, 0, 40]
+    assert ("dev2", "entity") in fetched
+    assert ("dev2", "relation") in fetched
+    assert [item.label for item in result.entity_structure] == ["技术主题", "科技专家", "论文"]
+    assert [item.label for item in result.relation_structure] == ["泛化关联"]
 
 
-def test_structure_schema_names_list_real_members() -> None:
-    """分段 schema 小字数据驱动：列桶内计数前 3 的真实成员名，超出 +N，零计数不列。
+def test_structure_segments_are_per_schema_with_members() -> None:
+    """每个 Schema 一段：schema 字段=图内原名、members 只含自己；零计数不出段，
+    并列计数按名字稳定排序（AUTHORED_BY 先于 PUBLISH）。"""
+    from service.platform_overview import _build_structure
 
-    取代写死的演示文案（Expert / Scholar 等——点名 schema 在图里不存在或零计数），
-    数量仍是各成员计数之和（口径不变，只换名称）。"""
-    stats = GraphStatsSnapshot(
-        total_nodes=100,
-        total_edges=100,
-        nodes={"Paper": 50, "Report": 30, "Journal": 15, "Publication": 5, "Paper1": 0},
-        edges={"CITES": 60, "COAUTHOR_WITH": 30, "AUTHORED_BY": 5, "PUBLISH": 5, "OUTPUT_OF": 0},
+    entity = _build_structure(
+        {"Paper": 50, "Report": 30, "Journal": 15, "Publication": 5, "Paper1": 0}, entity=True
     )
+    # 零计数 Paper1 不出段；4 个非零 Schema 恰好用满前 4，无「其他」段
+    assert [item.label for item in entity] == ["Paper", "Report", "Journal", "Publication"]
+    assert [(m.name, m.count) for m in entity[0].members] == [("Paper", 50)]
 
-    class MemberStatsProvider:
-        def get_stats(self, space: str | None = None) -> GraphStatsSnapshot:
-            return stats
-
-    result = PlatformOverviewService(
-        stats_provider=MemberStatsProvider(), changes_provider=FakeChangesProvider()
-    ).get_overview()
-
-    entity_segs = {item.label: item.schema_name for item in result.entity_structure}
-    # 论文桶 4 个非零成员按计数降序取前 3，Publication 落 +1；Paper1 零计数不列
-    assert entity_segs["论文成果"] == "Paper / Report / Journal +1"
-    # 空桶给占位符（前端图例 v-for 的 key 已换 item.label，不依赖 schema 唯一）
-    assert entity_segs["专家 / 人才"] == "-"
-    relation_segs = {item.label: item.schema_name for item in result.relation_structure}
-    # 计数并列时按名字稳定排序：AUTHORED_BY 先于 PUBLISH，后者落 +1；OUTPUT_OF 零计数不列
-    assert relation_segs["发表 / 引用 / 成果"] == "CITES / COAUTHOR_WITH / AUTHORED_BY +1"
-    # members 随响应下发完整清单（按计数降序，零计数不进），供前端悬停浮窗展示
-    entity_members = {item.label: item.members for item in result.entity_structure}
-    assert [(m.name, m.count) for m in entity_members["论文成果"]] == [
-        ("Paper", 50),
-        ("Report", 30),
-        ("Journal", 15),
-        ("Publication", 5),
-    ]
-    assert entity_members["专家 / 人才"] == []
+    relation = _build_structure(
+        {"CITES": 60, "COAUTHOR_WITH": 30, "AUTHORED_BY": 5, "PUBLISH": 5, "OUTPUT_OF": 0},
+        entity=False,
+    )
+    assert [item.label for item in relation] == ["CITES", "COAUTHOR_WITH", "AUTHORED_BY", "PUBLISH"]
 
 
 def test_overview_cache_is_isolated_per_space() -> None:
@@ -519,114 +551,6 @@ def test_parse_execution_records_change_falls_back_without_schema_key() -> None:
     assert snapshot.entity_rows[1].change == "新增 审测挂件"
 
 
-def test_entity_bucket_covers_real_graph_tag_names() -> None:
-    """真实图 tag 名落桶（dev2/dev 空间 2026-09-23 实测名单，中英文混合）。"""
-    from service.platform_overview import _entity_bucket
-
-    cases = {
-        # 专家人才
-        "Person": 0,
-        "Expert": 0,
-        "Scholar": 0,
-        "专家": 0,
-        "学者": 0,
-        # 论文成果
-        "Paper": 1,
-        "Journal": 1,
-        "Report": 1,
-        "Publication": 1,
-        "论文": 1,
-        "期刊": 1,
-        # 机构企业
-        "Organization": 2,
-        "organization_base": 2,
-        "Institute": 2,
-        "University": 2,
-        "机构": 2,
-        "企业": 2,
-        "研究院": 2,
-        # 项目专利
-        "Project": 3,
-        "Patent": 3,
-        "PatentFamily": 3,
-        "项目": 3,
-        "专利": 3,
-        # 五类之外：泛型/测试/元数据类型落「其他」
-        "Keyword": 4,
-        "Event": 4,
-        "Product": 4,
-        "News": 4,
-        "IndustryNode": 4,
-        "DataSource": 4,
-        "KnowledgePoint": 4,
-        "Course": 4,
-    }
-    for name, expected in cases.items():
-        assert _entity_bucket(name) == expected, name
-
-
-def test_relation_bucket_covers_real_graph_edge_names() -> None:
-    """真实图边名落桶（dev2/dev 空间 2026-09-23 实测名单，中英文混合）。"""
-    from service.platform_overview import _relation_bucket
-
-    cases = {
-        # 发表/引用/成果
-        "CITES": 0,
-        "CITED_BY": 0,
-        "REFERENCED_BY": 0,
-        "COAUTHOR_WITH": 0,
-        "AUTHORED_BY": 0,
-        "PUBLISHED_IN": 0,
-        "HAS_OUTPUT": 0,
-        "发表": 0,
-        "合著": 0,
-        # 任职/就读（含高管/法人/校友）
-        "WORKS_AT": 1,
-        "AFFILIATED_WITH": 1,
-        "EXECUTIVE_OF": 1,
-        "LEGAL_REP_OF": 1,
-        "ALUMNI": 1,
-        "STUDIED_AT": 1,
-        "任职": 1,
-        "校友": 1,
-        "作者单位关系": 1,
-        # 项目/专利参与（含参与/主持/资助/申请）
-        "INVOLVED_IN": 2,
-        "LEADS": 2,
-        "LEAD_PROJECT": 2,
-        "FUNDED_BY": 2,
-        "INVENTED_BY": 2,
-        "APPLIED_BY": 2,
-        "PARTICIPATE_IN_PROJECT": 2,
-        "参与": 2,
-        # 企业/产品/事件（含产业链/股权治理/投融资）
-        "PRODUCES": 3,
-        "BENEFICIAL_OWNER_OF": 3,
-        "SUBSIDIARY_OF": 3,
-        "SHAREHOLDER_OF": 3,
-        "INVESTS_IN": 3,
-        "ACQUIRES": 3,
-        "ACTUAL_CONTROLLER_OF": 3,
-        "HAS_PRODUCT": 3,
-        "COVERS_CHAIN": 3,
-        "HAS_NEWS": 3,
-        "HAS_PARTICIPANT": 2,
-        "投资": 3,
-        "产业链": 3,
-        "合作": 3,
-        # 泛化关联/关键词挂载等五类之外落「其他」
-        "RELATED_TO": 4,
-        "HAS_KEYWORD": 4,
-        "MEMBER_OF_FAMILY": 4,
-        "CHILD_OF": 4,
-        "SAME_AS": 4,
-        "COLLEAGUE": 4,
-        "COMPOSED_OF": 4,
-    }
-    for name, expected in cases.items():
-        assert _relation_bucket(name) == expected, name
-
-
 class _GraphResult:
     def __init__(self, records: list[dict]) -> None:
         self.records = records
@@ -692,7 +616,7 @@ def test_parse_execution_records_collects_graph_lookup_descriptors() -> None:
 
 
 def test_enrich_today_rows_lists_graph_objects_per_vertex() -> None:
-    """今日新增明细改逐对象行：实体=桶分类+name+source_table，关系=两端实体名。"""
+    """今日新增明细改逐对象行：实体=Schema 目录中文名+name+source_table，关系=两端实体名。"""
     snapshot = parse_execution_records(
         [
             _execution_record(
@@ -824,20 +748,21 @@ def test_enrich_today_rows_lists_graph_objects_per_vertex() -> None:
             "review-widget-64d0d5": "ReviewWidget",
             "review-linked-196fe7": "REVIEW_LINKED",
         },
+        schema_labels={"ReviewWidget": "审测挂件", "REVIEW_LINKED": "审测关联"},
     )
 
-    # 实体行：数据类型=五类桶（ReviewWidget 命中「其他实体」）、对象=name 公共字段、
-    # 来源=source_table 公共字段、时间=逐对象写入时间（非执行完成时刻）
+    # 实体行：数据类型=单个 Schema 的目录中文名（与构成图同口径）、对象=name 公共
+    # 字段、来源=source_table 公共字段、时间=逐对象写入时间（非执行完成时刻）
     assert [(row.type, row.object, row.change) for row in result.entity_rows] == [
-        ("其他实体", "总览造数-实体01", "新增 ReviewWidget"),
-        ("其他实体", "总览造数-实体02", "新增 ReviewWidget"),
+        ("审测挂件", "总览造数-实体01", "新增 ReviewWidget"),
+        ("审测挂件", "总览造数-实体02", "新增 ReviewWidget"),
     ]
     assert result.entity_rows[0].source == "techkg_e2e_liz.review_widgets"
     assert result.entity_rows[0].time == "03:00:35"
     # 关系行：边类型无索引 LOOKUP 失败 → GO FROM 当日实体 vid 兜底，无序对去重后 2 条
     assert [(row.type, row.object) for row in result.relation_rows] == [
-        ("其他关系", "总览造数-实体01 → 总览造数-实体02"),
-        ("其他关系", "总览造数-实体02 → 总览造数-实体03"),
+        ("审测关联", "总览造数-实体01 → 总览造数-实体02"),
+        ("审测关联", "总览造数-实体02 → 总览造数-实体03"),
     ]
     assert result.relation_rows[0].change == "新增 REVIEW_LINKED"
     assert result.relation_rows[0].source == "techkg_e2e_liz.review_widgets"
@@ -864,6 +789,7 @@ def test_enrich_today_rows_falls_back_to_aggregate_when_graph_unavailable() -> N
         "dev2",
         connect_client=_boom,
         schema_names={"review-widget-64d0d5": "ReviewWidget"},
+        schema_labels={},
     )
     # 图不可达：保留聚合降级行，不空转
     assert [row.object for row in result.entity_rows] == ["审测挂件 · 5 条"]
@@ -888,6 +814,7 @@ def test_enrich_today_rows_falls_back_when_tag_has_no_index() -> None:
         "dev2",
         connect_client=lambda space: client,
         schema_names={"review-widget-64d0d5": "ReviewWidget"},
+        schema_labels={},
     )
     # tag 无索引（LOOKUP 400）：退回聚合行
     assert [row.object for row in result.entity_rows] == ["审测挂件 · 5 条"]

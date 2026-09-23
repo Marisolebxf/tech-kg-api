@@ -185,7 +185,7 @@ def test_overview_uses_control_plane_today_changes() -> None:
     assert changes.spaces == ["dev2"]
     entity = result.asset_overview_groups[0]
     assert entity.added == "+61"
-    assert entity.added_label == "今日新增（抽取写图）"
+    assert entity.added_label == "今日新增"
     assert result.asset_overview_groups[1].added == "+7"
     assert result.pending_batch_count == 3
     assert result.data_sources["todayChanges"] == "workflow-control-live"
@@ -195,6 +195,19 @@ def test_overview_uses_control_plane_today_changes() -> None:
     assert result.asset_change_rows["property"]
 
 
+def test_overview_shows_placeholder_when_no_today_changes() -> None:
+    """控制库可读但当日写图为 0：显示 -- 而非 +0，数据源仍标记真实。"""
+    result = PlatformOverviewService(
+        stats_provider=FakeStatsProvider(), changes_provider=FakeChangesProvider()
+    ).get_overview()
+
+    assert result.asset_overview_groups[0].added == "--"
+    assert result.asset_overview_groups[0].added_label == "今日新增"
+    assert result.asset_overview_groups[1].added == "--"
+    assert result.asset_overview_groups[1].added_label == "今日新增"
+    assert result.data_sources["todayChanges"] == "workflow-control-live"
+
+
 def test_overview_tolerates_control_plane_failure() -> None:
     """控制库不可读时占位 + 警告，绝不回填虚构演示行。"""
     result = PlatformOverviewService(
@@ -202,7 +215,7 @@ def test_overview_tolerates_control_plane_failure() -> None:
     ).get_overview()
 
     assert result.asset_overview_groups[0].added == "--"
-    assert "控制库暂不可读" in result.asset_overview_groups[0].added_label
+    assert result.asset_overview_groups[0].added_label == "今日新增"
     assert result.asset_overview_groups[1].added == "--"
     assert result.asset_change_rows["entity"] == []
     assert result.asset_change_rows["relation"] == []

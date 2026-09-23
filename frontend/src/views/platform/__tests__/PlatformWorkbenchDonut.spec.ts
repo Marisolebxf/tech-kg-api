@@ -113,8 +113,8 @@ describe('平台总览占比环形图随数据驱动', () => {
     vi.mocked(getPlatformOverview).mockResolvedValue({
       ...baseOverview,
       assetOverviewGroups: [
-        { key: 'entity', title: '实体数据', total: '1,000', totalLabel: '实体总量', added: '+5', addedLabel: '今日新增（抽取写图）' },
-        { key: 'relation', title: '关系数据', total: '2,000', totalLabel: '关系总量', added: '+2', addedLabel: '今日新增（抽取写图）' },
+        { key: 'entity', title: '实体数据', total: '1,000', totalLabel: '实体总量', added: '+5', addedLabel: '今日新增' },
+        { key: 'relation', title: '关系数据', total: '2,000', totalLabel: '关系总量', added: '+2', addedLabel: '今日新增' },
       ],
       entityStructure: [
         { label: '专家', schema: 'Expert', count: '600', ratio: 60, tone: '#2e90fa' },
@@ -160,7 +160,7 @@ describe('平台总览占比环形图随数据驱动', () => {
       ...baseOverview,
       pendingBatchCount: 3,
       assetOverviewGroups: [
-        { key: 'entity', title: '实体数据', total: '1,000', totalLabel: '实体总量', added: '+61', addedLabel: '今日新增（抽取写图）' },
+        { key: 'entity', title: '实体数据', total: '1,000', totalLabel: '实体总量', added: '+61', addedLabel: '今日新增' },
       ],
     })
     wrapper = mountOverview()
@@ -169,6 +169,6 @@ describe('平台总览占比环形图随数据驱动', () => {
     const text = wrapper.text()
     expect(text).toContain('3 个执行运行中')
     expect(text).toContain('+61')
-    expect(text).toContain('今日新增（抽取写图）')
+    expect(text).toContain('今日新增')
   })
 })

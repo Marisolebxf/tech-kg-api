@@ -394,16 +394,21 @@ class PlatformOverviewService:
             except Exception as exc:
                 logger.warning("首页今日新增读取失败（工作流控制库不可用）: %s", exc)
             if changes is not None:
-                added_label = "今日新增（抽取写图）"
-                entity_added = f"+{_format_count(changes.entity_added)}"
-                relation_added = f"+{_format_count(changes.relation_added)}"
+                # 有数才显示 +N；当日为 0 或读不到一律占位 --，标签统一不带括号说明
+                added_label = "今日新增"
+                entity_added = (
+                    f"+{_format_count(changes.entity_added)}" if changes.entity_added else "--"
+                )
+                relation_added = (
+                    f"+{_format_count(changes.relation_added)}" if changes.relation_added else "--"
+                )
                 change_rows = dict(fallback.asset_change_rows)
                 change_rows["entity"] = changes.entity_rows
                 change_rows["relation"] = changes.relation_rows
                 today_source = "workflow-control-live"
                 extra_warnings: list[str] = []
             else:
-                added_label = "今日新增（控制库暂不可读）"
+                added_label = "今日新增"
                 entity_added = "--"
                 relation_added = "--"
                 change_rows = dict(fallback.asset_change_rows)
@@ -434,7 +439,7 @@ class PlatformOverviewService:
                     total="--",
                     total_label="属性值总量（统计接口待接入）",
                     added="--",
-                    added_label="今日新增及更新（任务中心待接入）",
+                    added_label="今日新增",
                 ),
             ]
             result = fallback.model_copy(
@@ -474,7 +479,7 @@ class PlatformOverviewService:
                     title="实体数据",
                     total="1.28 亿",
                     total_label="实体总量",
-                    added="+1,183.6 万",
+                    added="--",
                     added_label="今日新增",
                 ),
                 AssetOverviewGroup(
@@ -482,7 +487,7 @@ class PlatformOverviewService:
                     title="关系数据",
                     total="6.42 亿",
                     total_label="关系总量",
-                    added="+2,040 万",
+                    added="--",
                     added_label="今日新增",
                 ),
                 AssetOverviewGroup(
@@ -490,8 +495,8 @@ class PlatformOverviewService:
                     title="属性值数据",
                     total="18.76 亿",
                     total_label="属性值总量",
-                    added="+3,264 万",
-                    added_label="今日新增及更新",
+                    added="--",
+                    added_label="今日新增",
                 ),
             ],
             asset_change_rows={

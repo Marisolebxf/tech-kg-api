@@ -79,7 +79,7 @@ async def test_platform_overview_returns_frontend_contract(
     ]
     # 今日新增来自工作流控制库替身：数值与明细行均为真实口径的返回形状
     assert data["assetOverviewGroups"][0]["added"] == "+5"
-    assert data["assetOverviewGroups"][0]["addedLabel"] == "今日新增（抽取写图）"
+    assert data["assetOverviewGroups"][0]["addedLabel"] == "今日新增"
     assert data["assetOverviewGroups"][1]["added"] == "+2"
     assert len(data["assetChangeRows"]["entity"]) == 1
     assert data["assetChangeRows"]["entity"][0]["change"] == "写图 5 条"

@@ -679,7 +679,11 @@ def test_enrich_today_rows_lists_graph_objects_per_vertex() -> None:
         [
             (
                 "DESC TAG `ReviewWidget`",
-                [{"Field": "name"}, {"Field": "source_table"}, {"Field": "update_time"}],
+                [
+                    {"Field": "name", "Type": "string"},
+                    {"Field": "source_table", "Type": "string"},
+                    {"Field": "update_time", "Type": "string"},
+                ],
             ),
             (
                 "LOOKUP ON `ReviewWidget`",
@@ -690,7 +694,10 @@ def test_enrich_today_rows_lists_graph_objects_per_vertex() -> None:
             ),
             (
                 "DESC EDGE `REVIEW_LINKED`",
-                [{"Field": "source_table"}, {"Field": "update_time"}],
+                [
+                    {"Field": "source_table", "Type": "string"},
+                    {"Field": "update_time", "Type": "string"},
+                ],
             ),
             ("LOOKUP ON `REVIEW_LINKED`", RuntimeError("There is no index to use at runtime")),
             (
@@ -795,6 +802,74 @@ def test_enrich_today_rows_lists_graph_objects_per_vertex() -> None:
     assert client.closed is True
 
 
+def test_graph_time_prop_skips_datetime_columns() -> None:
+    """专利路径：update_time/create_time 是 datetime 型列（字符串边界比较会
+    Column type error，datetime("...") 字面量又索引失效查空），反查时间属性
+    跳过它们退到 string 型 source_update_time，时间窗 LOOKUP 语句也用它。"""
+    snapshot = parse_execution_records(
+        [
+            _execution_record(
+                schema_key="patent-2f0c",
+                schema_label="专利",
+                written=1,
+                completed_at="2026-09-24 02:10:00",
+                sources=[
+                    {
+                        "table": "gkx_element.patent",
+                        "written": 1,
+                        "watermark": "2026-09-24 02:09:58",
+                        "startWatermark": "2026-09-24 02:00:01",
+                    }
+                ],
+            )
+        ],
+        today="2026-09-24",
+        target_space="dev2",
+        default_space="dev2",
+    )
+    client = _ScriptedGraphClient(
+        [
+            (
+                "DESC TAG `Patent`",
+                [
+                    {"Field": "name", "Type": "string"},
+                    {"Field": "update_time", "Type": "datetime"},
+                    {"Field": "create_time", "Type": "datetime"},
+                    {"Field": "source_update_time", "Type": "string"},
+                ],
+            ),
+            (
+                "LOOKUP ON `Patent`",
+                [
+                    {
+                        "vid": "patent_CN-A",
+                        "props": {
+                            "name": "一种数据处理方法",
+                            "source_update_time": "2026-09-24 02:05:30",
+                        },
+                    }
+                ],
+            ),
+        ]
+    )
+
+    result = enrich_today_rows_with_graph(
+        snapshot,
+        "dev2",
+        connect_client=lambda space: client,
+        schema_names={"patent-2f0c": "Patent"},
+        schema_labels={"Patent": "专利"},
+    )
+
+    # 时间窗 LOOKUP 用 string 型 source_update_time（datetime 列不进 WHERE）
+    lookup = next(q for q in client.queries if q.startswith("LOOKUP ON `Patent`"))
+    assert '`Patent`.`source_update_time` >= "2026-09-24 02:00:01"' in lookup
+    assert "`Patent`.`update_time`" not in lookup  # datetime 型 update_time 被跳过
+    row = result.entity_rows[0]
+    assert (row.type, row.object, row.change) == ("专利", "一种数据处理方法", "新增 Patent")
+    assert row.time == "02:05:30"  # 逐对象写入时间取自 source_update_time
+
+
 def test_enrich_today_rows_falls_back_to_aggregate_when_graph_unavailable() -> None:
     snapshot = parse_execution_records(
         [_execution_record(written=5, completed_at="2026-09-22 10:30:00")],
@@ -826,7 +901,10 @@ def test_enrich_today_rows_falls_back_when_tag_has_no_index() -> None:
     )
     client = _ScriptedGraphClient(
         [
-            ("DESC TAG `ReviewWidget`", [{"Field": "name"}, {"Field": "update_time"}]),
+            (
+                "DESC TAG `ReviewWidget`",
+                [{"Field": "name", "Type": "string"}, {"Field": "update_time", "Type": "string"}],
+            ),
             ("LOOKUP ON `ReviewWidget`", RuntimeError("There is no index to use at runtime")),
         ]
     )

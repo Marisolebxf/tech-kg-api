@@ -374,16 +374,33 @@ def _flatten_vertex_props(vertex: Any) -> dict[str, Any]:
 
 
 def _graph_time_prop(client: Any, kind: str, name: str, cache: dict[tuple[str, str], str | None]) -> str | None:
-    """tag/边类型上可用的写入时间属性：update_time 优先，其次 create_time。"""
+    """tag/边类型上可进时间窗 LOOKUP 的写入时间属性（仅 string 型列）。
+
+    候选优先序：update_time → create_time → source_update_time（溯源列兜底，
+    专利的 update_time/create_time 建成 datetime 型——datetime 列上字符串
+    边界比较会 Column type error，datetime("...") 字面量又索引失效查空，
+    只有 string 型列能吃 ``>= "下界" AND <= "上界"`` 的字符串比较）。
+    DESCRIBE 未返回 Type 时按 string 兜底（与旧按名匹配行为一致）。
+    """
     cache_key = (kind, name)
     if cache_key in cache:
         return cache[cache_key]
     try:
         statement = f"DESC TAG `{name}`" if kind == "entity" else f"DESC EDGE `{name}`"
-        fields = {rec.get("Field") for rec in client.execute_query(statement).records}
+        types = {
+            str(rec.get("Field")): str(rec.get("Type") or "string").lower()
+            for rec in client.execute_query(statement).records
+        }
     except Exception:
-        fields = set()
-    prop = "update_time" if "update_time" in fields else ("create_time" if "create_time" in fields else None)
+        types = {}
+    prop = next(
+        (
+            candidate
+            for candidate in ("update_time", "create_time", "source_update_time")
+            if types.get(candidate, "").startswith(("string", "fixed_string"))
+        ),
+        None,
+    )
     cache[cache_key] = prop
     return prop
 

@@ -698,7 +698,24 @@ def enrich_today_rows_with_graph(
                 close()
             except Exception:  # noqa: BLE001
                 logger.exception("关闭今日新增反查图客户端失败")
+    # 同一对象常被当日多次执行触碰（重跑/补写），明细按 (类型, 对象) 去重；
+    # 执行按完成时间降序遍历，先到的行即最新一次写入的口径
+    entity_rows = _dedupe_rows(entity_rows)
+    relation_rows = _dedupe_rows(relation_rows)
     return replace(snapshot, entity_rows=entity_rows, relation_rows=relation_rows)
+
+
+def _dedupe_rows(rows: list[AssetChangeRow]) -> list[AssetChangeRow]:
+    """同一 (类型, 对象) 只保留第一行（去重保序）。"""
+    seen: set[tuple[str, str]] = set()
+    unique: list[AssetChangeRow] = []
+    for row in rows:
+        key = (row.type, row.object)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(row)
+    return unique
 
 
 def _ratios(values: list[int]) -> list[int]:

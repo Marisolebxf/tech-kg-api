@@ -879,6 +879,19 @@ def test_vertex_display_name_falls_back_to_title() -> None:
     assert _vertex_display_name({}, "vid-x") == "vid-x"
 
 
+def test_dedupe_rows_keeps_first_occurrence() -> None:
+    """当日多次执行触碰同一对象（重跑/补写），明细按 (类型, 对象) 去重保序。"""
+    from service.platform_overview import AssetChangeRow, _dedupe_rows
+
+    def row(obj: str, time: str) -> AssetChangeRow:
+        return AssetChangeRow(type="专利", object=obj, change="新增 专利", source="-", time=time)
+
+    rows = [row("熔丝元件", "20:01:00"), row("旋转电机", "20:01:01"), row("熔丝元件", "20:05:00")]
+    deduped = _dedupe_rows(rows)
+    # 第一行（最新执行的口径）保留，后到的同对象行丢弃，顺序不变
+    assert [(r.object, r.time) for r in deduped] == [("熔丝元件", "20:01:00"), ("旋转电机", "20:01:01")]
+
+
 def test_enrich_today_rows_falls_back_to_aggregate_when_graph_unavailable() -> None:
     snapshot = parse_execution_records(
         [_execution_record(written=5, completed_at="2026-09-22 10:30:00")],

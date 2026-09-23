@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
@@ -20,6 +21,11 @@ from biz.schemas.platform_overview import (
     StructureMember,
 )
 from infra.graph_db import get_trs_graph_client
+from infra.graph_db.client import is_known_no_index, is_no_index_error, mark_no_index
+
+# 今日新增图反查的单条查询读超时（秒）：反查任一环失败只是该执行退回聚合降级行，
+# 不该用默认 30s 在共享图服务拥塞窗口里把总览冷算拖到分钟级（0924 实测 30s×2=60s+）。
+_SWEEP_QUERY_TIMEOUT_SECONDS = float(os.getenv("PLATFORM_OVERVIEW_QUERY_TIMEOUT_SECONDS", "8"))
 
 logger = logging.getLogger(__name__)
 
@@ -63,59 +69,36 @@ class TRSGraphStatsProvider:
                     logger.exception("关闭图客户端失败")
 
     def _stats_via_client(self, client: Any) -> GraphStatsSnapshot:
-        # 优先用 SHOW STATS：单条 nGQL 一次性返回所有 Tag/Edge 计数与总数（NebulaGraph 预计算，
+        # SHOW STATS：单条 nGQL 一次性返回所有 Tag/Edge 计数与总数（NebulaGraph 预计算，
         # 毫秒级）。比逐 label 调 node_count / 逐 edge_type 调 edge_count（N 次串行 HTTP，
-        # 实测 ~57s）快 4 个数量级。SHOW STATS 需要 SUBMIT JOB STATS 已跑过；若返回空或抛错，
-        # 回退到逐个计数。
+        # 实测 ~57s）快 4 个数量级。SHOW STATS 需要 SUBMIT JOB STATS 已跑过。
+        #
+        # 走 stats_snapshot()（模块级 300s 快照 + 单飞，实体列表浏览同源）而非每次
+        # 直查：总览缓存过期高频回源时不再每分钟多打一遍 SHOW STATS 挤占共享会话池
+        # （0924 实测拥塞窗口内单次冷算被排队超时拖到 60s+）。统计本就只反映最近
+        # 一次 SUBMIT JOB STATS，300s 滞后可接受。快照不可用才回退 REST 逐项计数。
         try:
-            result = client.execute_query("SHOW STATS")
-            nodes: dict[str, int] = {}
-            edges: dict[str, int] = {}
-            total_nodes = 0
-            total_edges = 0
-            for rec in result.records:
-                rtype = rec.get("Type")
-                name = rec.get("Name")
-                count = int(rec.get("Count", 0) or 0)
-                if rtype == "Tag" and name:
-                    nodes[name] = count
-                elif rtype == "Edge" and name:
-                    edges[name] = count
-                elif rtype == "Space":
-                    if name == "vertices":
-                        total_nodes = count
-                    elif name == "edges":
-                        total_edges = count
+            snap = client.stats_snapshot()
+            nodes = dict(snap["tags"])
+            edges = dict(snap["edges"])
             if not nodes and not edges:
-                raise RuntimeError("SHOW STATS returned no rows")
+                raise RuntimeError("SHOW STATS snapshot empty")
             return GraphStatsSnapshot(
-                total_nodes=total_nodes or sum(nodes.values()),
-                total_edges=total_edges or sum(edges.values()),
+                total_nodes=snap["total_nodes"],
+                total_edges=snap["total_edges"],
                 nodes=nodes,
                 edges=edges,
             )
         except Exception as exc:
-            logger.warning("SHOW STATS 失败，先试统计快照缓存，再回退逐项计数: %s", exc)
-            # ① 客户端 300s 统计快照缓存（模块级按空间共享：实体列表浏览等
-            #    可能刚成功取过）——stats 任务卡死时总览仍能秒回
-            try:
-                snap = client.stats_snapshot()
-                return GraphStatsSnapshot(
-                    total_nodes=snap["total_nodes"],
-                    total_edges=snap["total_edges"],
-                    nodes=dict(snap["tags"]),
-                    edges=dict(snap["edges"]),
-                )
-            except Exception:  # noqa: BLE001 — 缓存也没有才走 REST 逐项计数
-                logger.warning("统计快照缓存不可用，回退 REST 逐项计数（会慢）")
-                labels = client.labels()
-                edge_types = client.edge_types()
-                return GraphStatsSnapshot(
-                    total_nodes=client.node_count(),
-                    total_edges=client.edge_count(),
-                    nodes={label: client.node_count(label) for label in labels},
-                    edges={edge_type: client.edge_count(edge_type) for edge_type in edge_types},
-                )
+            logger.warning("SHOW STATS 快照不可用，回退 REST 逐项计数（会慢）: %s", exc)
+            labels = client.labels()
+            edge_types = client.edge_types()
+            return GraphStatsSnapshot(
+                total_nodes=client.node_count(),
+                total_edges=client.edge_count(),
+                nodes={label: client.node_count(label) for label in labels},
+                edges={edge_type: client.edge_count(edge_type) for edge_type in edge_types},
+            )
 
 
 def _format_count(value: int) -> str:
@@ -377,7 +360,10 @@ def _graph_time_prop(client: Any, kind: str, name: str, cache: dict[tuple[str, s
         return cache[cache_key]
     try:
         statement = f"DESC TAG `{name}`" if kind == "entity" else f"DESC EDGE `{name}`"
-        fields = {rec.get("Field") for rec in client.execute_query(statement).records}
+        fields = {
+            rec.get("Field")
+            for rec in client.execute_query(statement, timeout=_SWEEP_QUERY_TIMEOUT_SECONDS).records
+        }
     except Exception:
         fields = set()
     prop = "update_time" if "update_time" in fields else ("create_time" if "create_time" in fields else None)
@@ -405,15 +391,21 @@ def _entity_object_rows(
     time_prop = _graph_time_prop(client, "entity", tag, time_props)
     if not time_prop:
         return None, []
+    space = getattr(client, "space", "")
+    # 无索引负缓存：-1005 是确定性失败（图服务侧还自动重试放大），TTL 内不再重发
+    if space and is_known_no_index(space, "lookup", f"{tag}.{time_prop}"):
+        return None, []
     statement = (
         f'LOOKUP ON `{tag}` WHERE `{tag}`.`{time_prop}` >= "{execution.window_lo}" '
         f'AND `{tag}`.`{time_prop}` <= "{execution.completed_at}" '
         "YIELD id(vertex) AS vid, properties(vertex) AS props"
     )
     try:
-        records = client.execute_query(statement).records
-    except Exception:
+        records = client.execute_query(statement, timeout=_SWEEP_QUERY_TIMEOUT_SECONDS).records
+    except Exception as exc:
         # tag 无任何索引（LOOKUP 400）或属性形态不符——退回聚合行
+        if space and is_no_index_error(exc):
+            mark_no_index(space, "lookup", f"{tag}.{time_prop}")
         return None, []
     # 数据类型列 = 单个 Schema 的目录中文名（与图谱资产构成图同口径），查不到用原名
     type_label = schema_labels.get(tag) or tag
@@ -467,15 +459,23 @@ def _relation_edges(
             edges.append((src, dst, props))
 
     if time_prop:
-        statement = (
-            f'LOOKUP ON `{edge_type}` WHERE `{edge_type}`.`{time_prop}` >= "{execution.window_lo}" '
-            f'AND `{edge_type}`.`{time_prop}` <= "{execution.completed_at}" '
-            "YIELD src(edge) AS src, dst(edge) AS dst, properties(edge) AS eprops"
-        )
-        try:
-            _collect(client.execute_query(statement).records, window_filter=False)
-        except Exception:
-            pass  # 边类型无索引（400）→ 走 GO FROM 兜底
+        space = getattr(client, "space", "")
+        # 无索引负缓存：-1005 是确定性失败（图服务侧还自动重试放大），TTL 内不再重发
+        if not (space and is_known_no_index(space, "lookup", f"{edge_type}.{time_prop}")):
+            statement = (
+                f'LOOKUP ON `{edge_type}` WHERE `{edge_type}`.`{time_prop}` >= "{execution.window_lo}" '
+                f'AND `{edge_type}`.`{time_prop}` <= "{execution.completed_at}" '
+                "YIELD src(edge) AS src, dst(edge) AS dst, properties(edge) AS eprops"
+            )
+            try:
+                _collect(
+                    client.execute_query(statement, timeout=_SWEEP_QUERY_TIMEOUT_SECONDS).records,
+                    window_filter=False,
+                )
+            except Exception as exc:
+                if space and is_no_index_error(exc):
+                    mark_no_index(space, "lookup", f"{edge_type}.{time_prop}")
+                # 边类型无索引（400）→ 走 GO FROM 兜底
     if not edges and seed_vids:
         vid_list = ", ".join(f'"{vid}"' for vid in seed_vids[:_OBJECT_ROW_CAP])
         statement = (
@@ -483,7 +483,10 @@ def _relation_edges(
             "YIELD src(edge) AS src, dst(edge) AS dst, properties(edge) AS eprops"
         )
         try:
-            _collect(client.execute_query(statement).records, window_filter=True)
+            _collect(
+                client.execute_query(statement, timeout=_SWEEP_QUERY_TIMEOUT_SECONDS).records,
+                window_filter=True,
+            )
         except Exception:
             pass
     return edges
@@ -493,7 +496,10 @@ def _endpoint_names(client: Any, vids: list[str]) -> dict[str, str]:
     names: dict[str, str] = {}
     for vid in vids[:_ENDPOINT_CAP]:
         try:
-            records = client.execute_query(f'FETCH PROP ON * "{vid}" YIELD vertex AS v').records
+            records = client.execute_query(
+                f'FETCH PROP ON * "{vid}" YIELD vertex AS v',
+                timeout=_SWEEP_QUERY_TIMEOUT_SECONDS,
+            ).records
         except Exception:
             continue
         if records:
@@ -783,16 +789,51 @@ class PlatformOverviewService:
     ) -> None:
         self._stats_provider = stats_provider or TRSGraphStatsProvider()
         self._changes_provider = changes_provider or WorkflowControlTodayChangesProvider()
-        self._cache_seconds = int(os.getenv("PLATFORM_OVERVIEW_CACHE_SECONDS", "60"))
-        # 缓存按空间隔离：总览随全局图空间选择器切换后 60s 内不串空间
+        self._cache_seconds = int(os.getenv("PLATFORM_OVERVIEW_CACHE_SECONDS", "300"))
+        # 缓存按空间隔离：总览随全局图空间选择器切换后不串空间。
+        # stale-while-revalidate：条目过期时先回旧值、后台线程刷新——共享图服务
+        # 拥塞窗口里页面秒回（旧值自带"数据截至"时间即真实口径），绝不把
+        # 30s 级图查询排队超时暴露给用户；冷路径 per-space 单飞，并发冷请求
+        # 只算一次（0924 前 8 worker × 各自为政，几乎每次进页都是冷算）。
         self._cached: dict[str | None, tuple[float, PlatformOverviewData]] = {}
+        self._compute_locks: dict[str | None, threading.Lock] = {}
+        self._locks_guard = threading.Lock()
+
+    def _lock_for(self, space: str | None) -> threading.Lock:
+        with self._locks_guard:
+            return self._compute_locks.setdefault(space, threading.Lock())
 
     def get_overview(self, space: str | None = None) -> PlatformOverviewData:
-        now = time.monotonic()
         cached = self._cached.get(space)
-        if cached is not None and cached[0] > now:
+        if cached is not None and cached[0] > time.monotonic():
             return cached[1]
+        if cached is not None:
+            # 过期：非阻塞抢刷新权，抢到即后台刷新，旧值立即返回
+            lock = self._lock_for(space)
+            if lock.acquire(blocking=False):
+                threading.Thread(
+                    target=self._refresh_in_background, args=(space, lock), daemon=True
+                ).start()
+            return cached[1]
+        # 冷路径：per-space 单飞同步计算（等锁线程双检命中刚写入的结果）
+        with self._lock_for(space):
+            cached = self._cached.get(space)
+            if cached is not None and cached[0] > time.monotonic():
+                return cached[1]
+            result = self._compute_overview(space)
+            self._cached[space] = (time.monotonic() + self._cache_seconds, result)
+            return result
 
+    def _refresh_in_background(self, space: str | None, lock: threading.Lock) -> None:
+        try:
+            result = self._compute_overview(space)
+            self._cached[space] = (time.monotonic() + self._cache_seconds, result)
+        except Exception:  # noqa: BLE001 - 刷新失败保留旧值，下一个请求再试
+            logger.warning("平台总览后台刷新失败 space=%s，继续沿用旧值", space, exc_info=True)
+        finally:
+            lock.release()
+
+    def _compute_overview(self, space: str | None) -> PlatformOverviewData:
         fallback = self._get_fallback_overview()
         try:
             stats = (
@@ -911,7 +952,6 @@ class PlatformOverviewService:
                     ],
                 }
             )
-        self._cached[space] = (now + self._cache_seconds, result)
         return result
 
     def _get_fallback_overview(self) -> PlatformOverviewData:

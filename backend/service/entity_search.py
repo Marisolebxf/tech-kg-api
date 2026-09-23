@@ -75,6 +75,10 @@ NAME_CANDIDATE_KEYS = (
 )
 # 标签节点数缓存 TTL（Nebula count 是全量扫描）
 _NODE_COUNT_TTL_SECONDS = 300.0
+# 实体类型下拉缓存：types() 每次实体列表页加载都会被调用，未建 Milvus 索引
+# 快照的空间会退到图直查逐标签计数——短 TTL 把这条路径压到每 TTL 一次。
+_TYPES_CACHE_TTL_SECONDS = float(os.getenv("ENTITY_TYPES_CACHE_SECONDS", "60"))
+_types_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
 _reindex_lock = threading.Lock()
 _reindex_running = False
@@ -94,6 +98,7 @@ search_cache = EntityResponseCache(
 
 async def clear_entity_caches() -> None:
     """清掉搜索/浏览的 L1 进程 + L2 Redis 缓存（reindex 完成或写图联动时调用）。"""
+    _types_cache.clear()  # 类型下拉计数随重建变化，一并失效
     await asyncio.gather(browse_cache.clear(), search_cache.clear())
 
 
@@ -337,6 +342,12 @@ def _node_count_cached(graph: TRSGraphClient, space: str, label: str) -> int:
     count = int(graph.label_count(label))
     _node_count_cache[key] = (time.monotonic(), count)
     return count
+
+
+def _remember_types(space: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """写入类型下拉短 TTL 缓存并原样返回（调用方无副本开销）。"""
+    _types_cache[space] = (time.monotonic(), items)
+    return items
 
 
 def _sorted_type_items(counts: dict[str, int]) -> list[dict[str, Any]]:
@@ -1269,8 +1280,15 @@ class EntitySearchService:
         （或快照与 Milvus 不一致）时回退图直查：SHOW TAGS + label_count
         （SHOW STATS/nGQL，亚秒级）。浏览与类型过滤本就不依赖索引——
         下拉只认索引空间会让未建索引的空间永远没有类型可选。
+
+        结果按空间做短 TTL 进程缓存（reindex 后随 clear_entity_caches 失效）：
+        实体列表页每次加载都调本接口，无快照空间的逐标签计数不该跟着页面
+        访问频率打共享图服务。
         """
         resolved_space = space or _default_space()
+        cached = _types_cache.get(resolved_space)
+        if cached and time.monotonic() - cached[0] < _TYPES_CACHE_TTL_SECONDS:
+            return cached[1]
         row = _load_state(self._session, resolved_space)
         if row is not None:
             try:
@@ -1283,7 +1301,7 @@ class EntitySearchService:
                     except ValueError:
                         counts = {}
                     if counts:
-                        return _sorted_type_items(counts)
+                        return _remember_types(resolved_space, _sorted_type_items(counts))
             except Exception:  # noqa: BLE001 - Milvus 故障不拖垮类型下拉，走图直查
                 logger.warning(
                     "校验实体索引类型失败（space=%s），回退图直查", resolved_space, exc_info=True
@@ -1294,8 +1312,8 @@ class EntitySearchService:
             counts = {label: _node_count_cached(graph, resolved_space, label) for label in labels}
         except Exception:  # noqa: BLE001 - 图不可达时返回空，前端下拉降级为不可过滤
             logger.warning("图直查实体类型失败（space=%s）", resolved_space, exc_info=True)
-            return []
-        return _sorted_type_items(counts)
+            return []  # 失败不缓存，下次加载重试
+        return _remember_types(resolved_space, _sorted_type_items(counts))
 
     def status(self, *, space: str | None = None) -> dict[str, Any]:
         """索引状态：同时校验控制库快照和 Milvus 当前空间的真实数据。"""

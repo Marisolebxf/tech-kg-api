@@ -56,9 +56,18 @@ class ManagementRisk(CamelCaseModel):
     review_to: str
 
 
+class StructureMember(CamelCaseModel):
+    """分段成员（图内真实标签/边类型）及其计数，供前端悬停浮窗展示。"""
+
+    name: str
+    count: int
+
+
 class StructureItem(CamelCaseModel):
     label: str
     schema_name: str = Field(alias="schema")
+    # 桶内全部非零成员（按计数降序）；降级演示数据无成员给空表
+    members: list[StructureMember] = []
     count: str
     ratio: int
     tone: str

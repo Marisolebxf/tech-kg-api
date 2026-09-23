@@ -1150,8 +1150,8 @@ const pageMeta = computed(() => {
       <section class="kg-panel platform-structure-overview">
         <div class="kg-panel__header"><div><h2 class="kg-panel__title">当前图谱资产</h2></div><span>实体 {{ entityAssetOverview?.total ?? '--' }} · 关系 {{ relationAssetOverview?.total ?? '--' }} · 数据截至 {{ overviewMeta.updatedAt }}</span></div>
         <div class="platform-structure-grid">
-          <div class="platform-structure-chart"><header><strong>实体分类占比</strong></header><div class="platform-donut-layout"><div class="platform-donut is-entity" :style="entityDonutStyle"><span><strong>{{ entityAssetOverview?.total ?? '--' }}</strong><em>{{ entityAssetOverview?.totalLabel ?? '实体总量' }}</em></span></div><div class="platform-structure-legend"><article v-for="item in entityStructure" :key="item.label"><span><i :style="{ background: item.tone }" />{{ item.label }}<em>{{ item.schema }}</em></span><strong>{{ item.count }}<em>{{ item.ratio }}%</em></strong></article></div></div></div>
-          <div class="platform-structure-chart"><header><strong>关系分类占比</strong></header><div class="platform-donut-layout"><div class="platform-donut is-relation" :style="relationDonutStyle"><span><strong>{{ relationAssetOverview?.total ?? '--' }}</strong><em>{{ relationAssetOverview?.totalLabel ?? '关系总量' }}</em></span></div><div class="platform-structure-legend"><article v-for="item in relationStructure" :key="item.label"><span><i :style="{ background: item.tone }" />{{ item.label }}<em>{{ item.schema }}</em></span><strong>{{ item.count }}<em>{{ item.ratio }}%</em></strong></article></div></div></div>
+          <div class="platform-structure-chart"><header><strong>实体标签构成</strong></header><div class="platform-donut-layout"><div class="platform-donut is-entity" :style="entityDonutStyle"><span><strong>{{ entityAssetOverview?.total ?? '--' }}</strong><em>{{ entityAssetOverview?.totalLabel ?? '实体总量' }}</em></span></div><div class="platform-structure-legend"><article v-for="item in entityStructure" :key="item.label"><span><i :style="{ background: item.tone }" /><a-tooltip position="top"><span class="platform-legend-label">{{ item.label }}</span><template #content><div class="platform-legend-members"><template v-if="item.members?.length"><div v-for="m in item.members" :key="m.name">{{ m.name }} · {{ m.count.toLocaleString() }}</div><div class="platform-legend-members-note">按标签计数，多标签顶点重复计入</div></template><div v-else>暂无标签数据</div></div></template></a-tooltip><em>{{ item.schema }}</em></span><strong>{{ item.count }}<em>{{ item.ratio }}%</em></strong></article></div></div></div>
+          <div class="platform-structure-chart"><header><strong>关系类型构成</strong></header><div class="platform-donut-layout"><div class="platform-donut is-relation" :style="relationDonutStyle"><span><strong>{{ relationAssetOverview?.total ?? '--' }}</strong><em>{{ relationAssetOverview?.totalLabel ?? '关系总量' }}</em></span></div><div class="platform-structure-legend"><article v-for="item in relationStructure" :key="item.label"><span><i :style="{ background: item.tone }" /><a-tooltip position="top"><span class="platform-legend-label">{{ item.label }}</span><template #content><div class="platform-legend-members"><template v-if="item.members?.length"><div v-for="m in item.members" :key="m.name">{{ m.name }} · {{ m.count.toLocaleString() }}</div><div class="platform-legend-members-note">按边类型计数</div></template><div v-else>暂无类型数据</div></div></template></a-tooltip><em>{{ item.schema }}</em></span><strong>{{ item.count }}<em>{{ item.ratio }}%</em></strong></article></div></div></div>
         </div>
       </section>
 
@@ -4712,4 +4712,11 @@ print(response.json())</pre>
 .platform-query :deep(.list-pagination){flex-wrap:wrap;height:auto;min-height:56px;gap:16px}
 .platform-query :deep(.arco-pagination-item-active){background:#e8f3ff;color:#165dff}
 .platform-query .platform-query-algo__labels :deep(.arco-select-view-focus){box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
+</style>
+
+<style>
+/* 实体/关系构成图例悬停浮窗（Arco tooltip 内容 teleport 到 body，scoped 样式够不到，须全局） */
+.platform-structure-legend .platform-legend-label{cursor:help}
+.platform-legend-members{min-width:150px;max-height:224px;overflow-y:auto;font-size:12px;line-height:1.9}
+.platform-legend-members-note{margin-top:2px;padding-top:5px;border-top:1px solid rgba(255,255,255,.25);opacity:.75;font-size:11px;line-height:1.5}
 </style>

@@ -40,9 +40,16 @@ export interface ManagementRisk {
   reviewTo: string
 }
 
+export interface StructureMember {
+  name: string
+  count: number
+}
+
 export interface StructureItem {
   label: string
   schema: string
+  /** 桶内全部非零成员（按计数降序），悬停中文标签的浮窗展示；降级演示数据无此字段 */
+  members?: StructureMember[]
   count: string
   ratio: number
   tone: string

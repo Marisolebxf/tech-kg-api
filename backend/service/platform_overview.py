@@ -17,6 +17,7 @@ from biz.schemas.platform_overview import (
     ManagementRisk,
     PlatformOverviewData,
     StructureItem,
+    StructureMember,
 )
 from infra.graph_db import get_trs_graph_client
 
@@ -514,6 +515,11 @@ def _build_structure(
         StructureItem(
             label=label,
             schema=_member_names(sorted(members[index], key=lambda m: (-m[1], m[0]))),
+            # 完整成员清单（含计数）随响应下发，供前端悬停中文标签时浮窗展示
+            members=[
+                StructureMember(name=name, count=count)
+                for name, count in sorted(members[index], key=lambda m: (-m[1], m[0]))
+            ],
             count=_format_count(buckets[index]),
             ratio=ratios[index],
             tone=tone,

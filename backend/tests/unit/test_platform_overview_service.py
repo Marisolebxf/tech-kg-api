@@ -140,6 +140,15 @@ def test_structure_schema_names_list_real_members() -> None:
     relation_segs = {item.label: item.schema_name for item in result.relation_structure}
     # 计数并列时按名字稳定排序：AUTHORED_BY 先于 PUBLISH，后者落 +1；OUTPUT_OF 零计数不列
     assert relation_segs["发表 / 引用 / 成果"] == "CITES / COAUTHOR_WITH / AUTHORED_BY +1"
+    # members 随响应下发完整清单（按计数降序，零计数不进），供前端悬停浮窗展示
+    entity_members = {item.label: item.members for item in result.entity_structure}
+    assert [(m.name, m.count) for m in entity_members["论文成果"]] == [
+        ("Paper", 50),
+        ("Report", 30),
+        ("Journal", 15),
+        ("Publication", 5),
+    ]
+    assert entity_members["专家 / 人才"] == []
 
 
 def test_overview_cache_is_isolated_per_space() -> None:

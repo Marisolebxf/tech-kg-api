@@ -136,7 +136,7 @@ describe('平台总览占比环形图随数据驱动', () => {
     )
     // 图例占比与 donut 分段同源：600/1000=60%、250/1000=25%、150/1000=15%
     const legendRatios = wrapper.findAll('.platform-structure-chart')
-      .filter((chart) => chart.text().includes('实体分类占比'))[0]
+      .filter((chart) => chart.text().includes('实体标签构成'))[0]
       .findAll('.platform-structure-legend article em')
       .map((em) => em.text())
     expect(legendRatios).toEqual(['Expert', '60%', 'Paper', '25%', 'Other', '15%'])

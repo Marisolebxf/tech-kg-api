@@ -635,7 +635,13 @@ async function loadOverviewCards(): Promise<void> {
     overviewJobsState.value = 'error'
   }
   try {
-    const data = await getProductionReviews({ statusGroup: 'pending', page: 1, pageSize: 5 })
+    // 人工审核卡片与队列页同口径：按当前图空间取待处理 top5（algoSpace 变化由下方 watch 重拉）
+    const data = await getProductionReviews({
+      graphSpace: algoSpace.value || undefined,
+      statusGroup: 'pending',
+      page: 1,
+      pageSize: 5,
+    })
     overviewReviews.value = data.items
     overviewReviewsTotal.value = data.total
     overviewReviewsState.value = data.items.length ? 'ready' : 'empty'

@@ -174,4 +174,23 @@ describe('总览任务卡与图谱构建页同空间口径', () => {
     await flushPromises()
     expect(listJobs).toHaveBeenCalledTimes(2)
   })
+
+  it('人工审核卡与队列页同口径：请求带当前图空间，切空间后带新空间重拉', async () => {
+    useAuthStore().profile = makeProfile(true)
+    const spaceStore = useGraphSpaceStore()
+    spaceStore.spaces = ['dev', 'gaoxing_test']
+    spaceStore.current = 'dev'
+
+    wrapper = mountOverview()
+    await flushPromises()
+    expect(getProductionReviews).toHaveBeenCalledWith(
+      expect.objectContaining({ graphSpace: 'dev', statusGroup: 'pending', pageSize: 5 }),
+    )
+
+    spaceStore.setCurrent('gaoxing_test')
+    await flushPromises()
+    expect(getProductionReviews).toHaveBeenLastCalledWith(
+      expect.objectContaining({ graphSpace: 'gaoxing_test' }),
+    )
+  })
 })

@@ -1,6 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import OperationsCenterView from '../OperationsCenterView.vue'
+import ListPagination from '../../../components/list-pagination.vue'
 
 const mocks = vi.hoisted(() => ({ getProductionReviews: vi.fn() }))
 vi.mock('../../../api/workflowOperations', () => ({
@@ -25,7 +26,7 @@ const wrappers: ReturnType<typeof mount>[] = []
 function render() {
   const wrapper = mount(OperationsCenterView, {
     props: { mode: 'review' },
-    global: { stubs: { ASelect: true, AInput: true, AModal: true, APagination: true, RouterLink: true } },
+    global: { stubs: { ASelect: true, AInput: true, AModal: true, RouterLink: true } },
   })
   wrappers.push(wrapper)
   return wrapper
@@ -88,7 +89,7 @@ describe('人工审核队列读取状态', () => {
     mocks.getProductionReviews.mockResolvedValueOnce({ items: [], total: 100 }).mockReturnValueOnce(first.promise)
     const wrapper = render()
     await flushPromises()
-    wrapper.findComponent({ name: 'APagination' }).vm.$emit('change', 3)
+    wrapper.findComponent(ListPagination).vm.$emit('change', 3)
     await flushPromises()
     wrapper.findComponent({ name: 'AInput' }).vm.$emit('update:modelValue', '待搜索')
     await wrapper.vm.$nextTick()

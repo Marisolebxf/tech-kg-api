@@ -5,6 +5,7 @@ import { IconSearch } from '@arco-design/web-vue/es/icon'
 
 import { deleteProductionReview, getExecution, getProductionReview, getProductionReviews, getTask, rerunExtractFailures, TRIGGER_SOURCE_LABEL, type ProcessingInstance, type ProductionReviewCase, type WorkflowExecution } from '../../api/workflowOperations'
 import { clampSearchKeyword, SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
+import ListPagination from '../../components/list-pagination.vue'
 import {
   extractCaseStatusBadge,
   type ReviewRecord,
@@ -51,8 +52,6 @@ const reviewRows = computed(() => reviewRecords.value)
  *  默认每页 20：表格区可视高度约 13~14 行，10 行填不满会在面板内留大片空白。 */
 const reviewPage = ref(1)
 const reviewPageSize = ref(20)
-const reviewPageSizeOptions = [10, 20, 50]
-const reviewTotalPages = computed(() => Math.max(1, Math.ceil(reviewTotal.value / reviewPageSize.value)))
 
 watch(() => route.query.keyword, (value) => { keyword.value = clampSearchKeyword(String(value || '')) })
 
@@ -478,19 +477,15 @@ onMounted(loadReviews)
         </tbody>
       </table></div>
 
-      <footer v-if="!reviewLoading && !reviewLoadError" class="review-pagination">
-        <span>共 {{ reviewTotal }} 条 · 第 {{ reviewPage }} / {{ reviewTotalPages }} 页</span>
-        <span class="review-page-size">每页
-          <a-select class="review-page-size-select" :model-value="reviewPageSize" :options="reviewPageSizeOptions" :scrollbar="false" @change="changeReviewPageSize" />
-        </span>
-        <a-pagination
-          :current="reviewPage"
-          :page-size="reviewPageSize"
-          :total="reviewTotal"
-          :show-jumper="reviewTotalPages > 7"
-          @change="changeReviewPage"
-        />
-      </footer>
+      <ListPagination
+        v-if="!reviewLoading && !reviewLoadError"
+        class="review-pagination"
+        :total="reviewTotal"
+        :page="reviewPage"
+        :page-size="reviewPageSize"
+        @change="changeReviewPage"
+        @change-size="changeReviewPageSize"
+      />
     </section>
 
     <a-modal
@@ -578,7 +573,7 @@ onMounted(loadReviews)
 .rerun-link{padding:0;font-size:12px;border:0;background:transparent}
 .review-severity{min-width:230px;max-width:300px;white-space:normal}.review-severity small{margin:0 0 6px}.review-severity span{display:block;color:#65738b;font-size:11px;line-height:17px}
 .review-mask{position:fixed;z-index:49;inset:0;border:0;background:rgba(16,36,76,.24)}.review-drawer{position:fixed;z-index:50;top:0;right:0;display:grid;grid-template-rows:auto minmax(0,1fr) auto;width:620px;height:100vh;background:#f8fbff;box-shadow:-18px 0 42px rgba(34,74,132,.22)}.review-drawer>header{display:flex;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.review-drawer header span{color:#165dff;font-size:11px}.review-drawer h2{margin:6px 0 3px;font-size:19px}.review-drawer header p{margin:0;color:#70809a;font-size:12px}.review-drawer header>button{width:30px;height:30px;border:0;border-radius:5px;background:#f0f4fa;font-size:20px;cursor:pointer}.review-body{overflow:auto;padding:16px}.review-body section,.review-compare article{padding:14px;border:1px solid #dce8f8;border-radius:7px;background:#fff}.review-body h3{margin:0 0 8px;font-size:14px}.review-body p,.review-body li{color:#61708a;font-size:12px;line-height:20px}.review-compare{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}.review-compare span{display:block;margin-bottom:9px;color:#70809a;font-size:11px}.review-compare strong{font-size:13px}.review-compare em{color:#d92d20;font-size:11px;font-style:normal}.review-compare input,.review-compare textarea{width:100%;padding:8px;border:1px solid #bdd0ea;border-radius:5px;font:inherit}.review-compare textarea{min-height:90px;margin-top:8px;resize:vertical}.review-success{padding:10px 12px;border:1px solid #a6f4c5;border-radius:6px;background:#ecfdf3!important;color:#067647!important}.review-drawer>footer{display:flex;justify-content:flex-end;gap:8px;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.review-drawer>footer button{height:34px;padding:0 13px;border:1px solid #bdd0ea;border-radius:6px;background:#fff;color:#40516d;cursor:pointer}.review-drawer>footer .primary{border-color:#165dff;background:#165dff;color:#fff}@media(max-width:720px){.review-drawer{width:94vw}.review-compare{grid-template-columns:1fr}}
-.ops-page{display:flex;box-sizing:border-box;min-height:0;overflow:hidden;padding-bottom:2px;flex-direction:column}.review-context{flex:0 0 auto}.ops-panel{display:flex;flex:1;min-height:0;flex-direction:column}.alert-tabs,.ops-filter,.review-pagination{flex:0 0 auto}.ops-review-table-scroll{flex:1;min-height:0;max-height:none;overflow:auto}.ops-filter.is-review{grid-template-columns:minmax(280px,1fr) 170px 170px auto}.ops-review-table-scroll table{min-width:1900px}.review-pagination{display:flex;align-items:center;gap:14px;padding:11px 14px;border-top:1px solid #e4ecf6;background:#fff;color:#71809a;font-size:11px}.review-pagination>span{white-space:nowrap}.review-pagination .review-page-size{display:flex;align-items:center;gap:6px;margin-left:auto;white-space:nowrap}.review-pagination :deep(.arco-select){width:76px}.review-pagination :deep(.arco-select-view){box-sizing:border-box;width:76px;height:28px;border:1px solid #d3deee;border-radius:4px;background:#fff}.review-empty{height:100px!important;color:#8290a7;text-align:center!important}.ops-review-table-scroll td code{color:#175cd3;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.ops-page{display:flex;box-sizing:border-box;min-height:0;overflow:hidden;padding-bottom:2px;flex-direction:column}.review-context{flex:0 0 auto}.ops-panel{display:flex;flex:1;min-height:0;flex-direction:column}.alert-tabs,.ops-filter,.review-pagination{flex:0 0 auto}.ops-review-table-scroll{flex:1;min-height:0;max-height:none;overflow:auto}.ops-filter.is-review{grid-template-columns:minmax(280px,1fr) 170px 170px auto}.ops-review-table-scroll table{min-width:1900px}.review-empty{height:100px!important;color:#8290a7;text-align:center!important}.ops-review-table-scroll td code{color:#175cd3;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .review-type-cell{min-width:170px}.review-type-cell>span{display:inline-flex;padding:3px 9px;border-radius:99px;background:#eaf2ff;color:#175cd3;font-size:11px}.review-type-cell>span.is-low-confidence{background:#fff3d8;color:#b54708}.review-type-cell>span.is-extraction{background:#fef3f2;color:#b42318}.review-type-cell>span.is-schema{background:#edf0ff;color:#444ce7}.review-type-cell>span.is-normalization{background:#ecfdf3;color:#067647}.review-type-cell>span.is-other{background:#f2f4f7;color:#475467}
 .ops-review-table-scroll table{min-width:1900px}.review-risk-explain{display:grid;flex:0 0 auto;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px}.review-risk-explain>div{display:grid;gap:3px;padding:11px 14px;border:1px solid #b9d2f4;border-radius:7px;background:#f7fbff}.review-risk-explain strong{color:#344861;font-size:11px}.review-risk-explain span{color:#6d7c93;font-size:9px;line-height:16px}.review-confidence-cell{min-width:190px;white-space:normal}.review-confidence-cell>b{display:inline-block;margin-right:7px;font-size:13px}.review-confidence-cell>small{display:inline;color:#718098}.review-confidence-cell>span{display:block;margin-top:4px;color:#78869b;font-size:9px;line-height:15px}@media(max-width:900px){.review-risk-explain{grid-template-columns:1fr}}
 .review-risk-explain{grid-template-columns:repeat(2,minmax(0,1fr))}.review-risk-explain>div:first-child{border-color:#f5b8b3;background:#fff5f4}.review-risk-explain>div:first-child strong{color:#d92d20}.review-risk-explain>div:nth-child(2){border-color:#f3d08a;background:#fffaf0}.review-risk-explain>div:nth-child(2) strong{color:#b54708}.review-type{min-width:150px}.review-confidence-cell{min-width:130px}.review-confidence-cell>em{display:block;width:max-content;margin-top:5px;padding:2px 7px;border-radius:9px;background:#fff3d8;color:#b54708;font-size:9px;font-style:normal}
@@ -677,18 +672,7 @@ onMounted(loadReviews)
 .review-source-cell strong{font-size:14px;line-height:22px;font-weight:400}
 .alert-actions{gap:4px}.alert-actions .link,.rerun-link{font-size:14px;line-height:22px;font-weight:400}
 .pick-col{box-sizing:border-box;width:52px;min-width:52px;padding-right:16px!important;padding-left:16px!important}
-/* 分页留在表格滚动区之外，窄屏换行后仍能访问翻页和跳页控件。 */
-.review-pagination{height:auto;min-height:56px;flex-wrap:wrap;gap:8px 16px;padding:8px 16px}
-.review-pagination :deep(.arco-pagination){max-width:100%;flex-wrap:wrap;row-gap:8px}
-.review-pagination :deep(.arco-pagination-list){display:flex;max-width:100%;flex-wrap:wrap;row-gap:8px;white-space:normal}
-.review-pagination :deep(.arco-pagination-list>.arco-pagination-item){flex-shrink:0}
-.review-pagination :deep(.arco-select-view),.review-pagination :deep(.arco-pagination-item){height:32px;min-height:32px}
-.review-pagination :deep(.arco-pagination-item){min-width:32px;font-size:14px;line-height:22px}
-.review-pagination :deep(.review-page-size-select.arco-select-view){display:inline-flex;box-sizing:border-box;align-items:center;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important}
-.review-pagination :deep(.review-page-size-select.arco-select-view:hover){border-color:#4080ff!important}.review-pagination :deep(.review-page-size-select.arco-select-view:focus-within),.review-pagination :deep(.review-page-size-select.arco-select-view-focus){border-color:#165dff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
-.review-pagination :deep(.review-page-size-select .arco-select-view-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
-.review-pagination :deep(.review-page-size-select .arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important;pointer-events:none!important}
-.review-pagination :deep(.review-page-size-select .arco-select-view-value){min-width:0;font-size:14px;line-height:22px;font-weight:400}
+/* 审核分页已迁移到共享 ListPagination 组件（样式随组件自带）；.review-pagination 仅保留 flex 布局占位。 */
 .ops-review-table-scroll .pick-col{vertical-align:middle;text-align:center}.ops-review-table-scroll .pick-col input[type="checkbox"]{display:block;width:14px;height:14px;margin:0 auto;vertical-align:middle;cursor:pointer}
 .rerun-batch-action:focus-visible{outline:0;box-shadow:0 0 0 2px rgba(22,93,255,.2)}
 .rerun-feedback{gap:8px;padding:8px 16px}.rerun-feedback-close{width:24px;height:24px}

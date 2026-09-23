@@ -56,6 +56,12 @@ def _ensure_space_access(actor: PlatformActor, space: str) -> None:
     if not SPACE_NAME_PATTERN.fullmatch(space or ""):
         raise GraphAlgorithmError("图空间名称不合法")
 
+    from service.business_access_control import ensure_space_access, rbac_enabled
+
+    business_rbac = rbac_enabled()
+    if business_rbac:
+        ensure_space_access(actor, space, "read")
+
     try:
         from infra.mysql import create_session
 
@@ -64,7 +70,8 @@ def _ensure_space_access(actor: PlatformActor, space: str) -> None:
             space_service = GraphSpaceService(session)
             spaces = _list_spaces_cached(space_service.client.list_spaces)
             space_allowed = (
-                actor.is_admin
+                business_rbac
+                or actor.is_admin
                 or space == default_graph_space()
                 or space_service.is_bound(actor.user_id, space)
             )
@@ -471,9 +478,18 @@ def _lookup_degree_counts(client: Any, label: str, endpoint: str) -> dict[str, i
     return counts
 
 
-def _degree_counts_for_label(client: Any, label: str) -> tuple[dict[str, int], dict[str, int]]:
+def _degree_counts_for_label(
+    client: Any, label: str, *, allow_index_writes: bool = True
+) -> tuple[dict[str, int], dict[str, int]]:
     """优先服务端聚合；代理连接失败时降级到可缩页的端点枚举。"""
     from infra.graph_db.exceptions import GraphConnectionError, GraphRequestError
+
+    def ensure_index() -> None:
+        if not allow_index_writes:
+            raise GraphAlgorithmError(
+                "关系索引尚未就绪，请开发维护人员创建或重建索引", status_code=403
+            )
+        _ensure_degree_edge_index(client, label)
 
     index_recovered = False
     while True:
@@ -483,7 +499,7 @@ def _degree_counts_for_label(client: Any, label: str) -> tuple[dict[str, int], d
         except GraphRequestError as exc:
             if not _is_missing_index_error(exc) or index_recovered:
                 raise
-            _ensure_degree_edge_index(client, label)
+            ensure_index()
             index_recovered = True
             continue
         except GraphConnectionError as exc:
@@ -503,7 +519,7 @@ def _degree_counts_for_label(client: Any, label: str) -> tuple[dict[str, int], d
             except GraphRequestError as page_exc:
                 if not _is_missing_index_error(page_exc) or index_recovered:
                     raise
-                _ensure_degree_edge_index(client, label)
+                ensure_index()
                 index_recovered = True
                 continue
 
@@ -516,7 +532,7 @@ def _degree_counts_for_label(client: Any, label: str) -> tuple[dict[str, int], d
             return out_counts, in_counts
         if index_recovered:
             return out_counts, in_counts
-        _ensure_degree_edge_index(client, label)
+        ensure_index()
         index_recovered = True
 
 
@@ -618,7 +634,9 @@ def _ensure_degree_edge_index(client: Any, label: str) -> None:
             time.sleep(_DEGREE_INDEX_POLL_SECONDS)
 
 
-def _degree_rows_via_ngql(space: str, labels: list[str]) -> tuple[list[dict[str, str]], bool]:
+def _degree_rows_via_ngql(
+    space: str, labels: list[str], *, allow_index_writes: bool = True
+) -> tuple[list[dict[str, str]], bool]:
     """出/入度聚合并合并为逐顶点行（总度降序，上限对齐图服务 10000 行截断）。
 
     逐类型通过拓尔思图服务按 src/dst 聚合，避免 CITES 等大关系集
@@ -638,7 +656,9 @@ def _degree_rows_via_ngql(space: str, labels: list[str]) -> tuple[list[dict[str,
     degrees: dict[str, dict[str, int]] = {}
 
     for label in labels:
-        out_counts, in_counts = _degree_counts_for_label(client, label)
+        out_counts, in_counts = _degree_counts_for_label(
+            client, label, allow_index_writes=allow_index_writes
+        )
         for vid, count in out_counts.items():
             degrees.setdefault(vid, {"out": 0, "in": 0})["out"] += count
         for vid, count in in_counts.items():
@@ -661,10 +681,14 @@ def _degree_rows_via_ngql(space: str, labels: list[str]) -> tuple[list[dict[str,
     return rows, truncated
 
 
-def _submit_degree_via_ngql(space: str, labels: list[str]) -> dict:
+def _submit_degree_via_ngql(
+    space: str, labels: list[str], *, allow_index_writes: bool = True
+) -> dict:
     """同步计算 Degree 并登记本地作业，返回 succeeded 快照（失败直接抛业务错误）。"""
     try:
-        rows, truncated = _degree_rows_via_ngql(space, labels)
+        rows, truncated = _degree_rows_via_ngql(
+            space, labels, allow_index_writes=allow_index_writes
+        )
     except GraphAlgorithmError:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -676,7 +700,9 @@ def _submit_degree_via_ngql(space: str, labels: list[str]) -> dict:
 def _run_degree_job(job: dict[str, Any]) -> None:
     """后台执行计算，成功和失败均更新同一个可轮询作业。"""
     try:
-        rows, truncated = _degree_rows_via_ngql(job["space"], job["labels"])
+        rows, truncated = _degree_rows_via_ngql(
+            job["space"], job["labels"], allow_index_writes=job.get("allow_index_writes", True)
+        )
         with _degree_jobs_lock:
             job.update(rows=rows, truncated=truncated, status="succeeded")
     except Exception as exc:  # noqa: BLE001
@@ -709,10 +735,14 @@ def submit_job(
     """
     _ensure_space_access(actor, space)
     if algorithm == "degreestatic":
+        from service.business_access_control import rbac_enabled
+
+        allow_index_writes = not rbac_enabled() or actor.can_develop
         if background_tasks is None:
-            return _submit_degree_via_ngql(space, labels)
+            return _submit_degree_via_ngql(space, labels, allow_index_writes=allow_index_writes)
         # HTTP 请求先返回 running，避免原生聚合阻塞提交及触发前端超时。
         job = _save_degree_job(space, labels, [], False, running=True)
+        job["allow_index_writes"] = allow_index_writes
         background_tasks.add_task(_run_degree_job, job)
         return _local_job_to_data(job)
 
@@ -734,7 +764,55 @@ def submit_job(
         )
     except Exception as exc:  # noqa: BLE001
         raise _map_error(exc) from exc
+    _register_remote_job(actor, space, job.job_id)
     return _job_to_data(job)
+
+
+def _register_remote_job(actor: PlatformActor, space: str, job_id: str) -> None:
+    from fastapi import HTTPException
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from db_model.business_algorithm_job import BusinessAlgorithmJob
+    from infra.mysql import session_scope
+    from service.business_access_control import rbac_enabled
+
+    if not rbac_enabled():
+        return
+    if not job_id or len(job_id) > 128:
+        raise HTTPException(503, "算法任务返回无效标识，无法登记空间归属")
+    try:
+        with session_scope() as session:
+            session.add(
+                BusinessAlgorithmJob(job_id=job_id, graph_space=space, created_by=actor.user_id)
+            )
+    except SQLAlchemyError as exc:
+        raise HTTPException(503, "算法任务已提交，但空间归属登记失败，请联系管理员") from exc
+
+
+def _ensure_remote_job_access(actor: PlatformActor, space: str, job_id: str) -> None:
+    from fastapi import HTTPException
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from db_model.business_algorithm_job import BusinessAlgorithmJob
+    from infra.mysql import session_scope
+    from service.business_access_control import ensure_space_access, rbac_enabled
+
+    if not rbac_enabled():
+        return
+    try:
+        with session_scope() as session:
+            row = session.get(BusinessAlgorithmJob, job_id)
+            if row is None:
+                # 历史任务未登记时仅管理员可访问；业务账号不猜测任务归属。
+                if actor.is_admin and not actor.business_only:
+                    return
+                raise HTTPException(403, "算法任务尚未登记空间归属")
+            actual_space = row.graph_space
+    except SQLAlchemyError as exc:
+        raise HTTPException(503, "无法校验算法任务空间归属") from exc
+    if actual_space != space:
+        raise HTTPException(403, "算法任务不属于请求的图空间")
+    ensure_space_access(actor, actual_space, "read")
 
 
 def get_job(actor: PlatformActor, space: str, job_id: str) -> dict:
@@ -745,6 +823,7 @@ def get_job(actor: PlatformActor, space: str, job_id: str) -> dict:
     local = _local_degree_job(space, job_id)
     if local is not None:
         return _local_job_to_data(local)
+    _ensure_remote_job_access(actor, space, job_id)
     try:
         job = get_space_algorithm_client(space).get_job(job_id)
     except Exception as exc:  # noqa: BLE001
@@ -768,6 +847,7 @@ def get_result(actor: PlatformActor, space: str, job_id: str) -> dict:
             "count": len(local["rows"]),
             "truncated": local["truncated"],
         }
+    _ensure_remote_job_access(actor, space, job_id)
     try:
         result = get_space_algorithm_client(space).get_result(job_id)
     except Exception as exc:  # noqa: BLE001
@@ -853,6 +933,7 @@ def engine_status(actor: PlatformActor, space: str) -> dict:
     """算法引擎（Spark 运行器）健康状态；探测失败一律降级为 DOWN，不向上抛。
     结果按 space 缓存 GRAPH_ALGO_INFO_CACHE_SECONDS（默认 60s）：500 并发下
     逐请求探测 runner/Nebula 会耗尽会话池。"""
+    _ensure_space_access(actor, space)
     return _single_flight_cache(
         f"engine:{space}", _ALGO_INFO_CACHE_SECONDS, lambda: _engine_status_uncached(actor, space)
     )
@@ -901,6 +982,7 @@ def metadata(actor: PlatformActor, space: str) -> dict:
     """边类型 + 引擎状态聚合；引擎探测失败仅降级，不阻塞边类型返回。
     结果按 space 缓存 GRAPH_ALGO_INFO_CACHE_SECONDS（默认 60s）；
     Schema 新建/删除关系（EDGE 类型变更）时会主动清缓存。"""
+    _ensure_space_access(actor, space)
     return _single_flight_cache(
         f"meta:{space}",
         _ALGO_INFO_CACHE_SECONDS,

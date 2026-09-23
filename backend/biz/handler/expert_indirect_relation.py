@@ -7,6 +7,7 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from application.expert_indirect_relation import ExpertIndirectRelationApplication
+from biz.dependencies.default_space_write import require_default_annotation_writer
 from biz.dependencies.internal_api import get_internal_api_auth_headers
 from biz.schema.expert_indirect_relation import (
     ExpertIndirectRelationRequest,
@@ -113,7 +114,7 @@ def list_indirect_relation_annotations(
     )
 
 
-@router.post("/annotations")
+@router.post("/annotations", dependencies=[Depends(require_default_annotation_writer)])
 def upsert_indirect_relation_annotation(
     body: IndirectRelationAnnotationRequest,
     session: Annotated[Session, Depends(get_session)],

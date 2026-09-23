@@ -105,6 +105,12 @@ def run_statement_cached_payload(actor: PlatformActor, space: str, statement: st
     其余等锁后直接读缓存；返回 ApiResponse 信封 JSON 字符串。
     非 read 语句不缓存，每次真实执行（写语句仅管理员，另行校验）。
     """
+    from service.business_access_control import ensure_space_access, rbac_enabled
+
+    if rbac_enabled():
+        kind = classify_statement(statement)
+        _ensure_scoped_metadata(statement)
+        ensure_space_access(actor, space, "write" if kind == "write" else "read")
     try:
         kind = classify_statement(statement)
     except GraphConsoleError:
@@ -149,6 +155,22 @@ class GraphConsoleError(Exception):
     def __init__(self, message: str, status_code: int = 400) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+def _ensure_scoped_metadata(statement: str) -> None:
+    normalized = (
+        re.sub(r"\s+", " ", _comment_pattern.sub("", statement)).strip().rstrip(";").upper()
+    )
+    if normalized.startswith("SHOW ") and normalized not in {
+        "SHOW TAGS",
+        "SHOW EDGES",
+        "SHOW STATS",
+        "SHOW TAG INDEXES",
+        "SHOW EDGE INDEXES",
+    }:
+        raise GraphConsoleError("业务控制台仅允许查看当前空间的元数据", status_code=403)
+    if re.match(r"^(DESC|DESCRIBE)\s+(SPACE|HOST|USER|ROLE)\b", normalized):
+        raise GraphConsoleError("业务控制台不提供全局元数据查询", status_code=403)
 
 
 def classify_statement(statement: str) -> str:
@@ -205,7 +227,13 @@ def run_statement(actor: PlatformActor, space: str, statement: str) -> dict:
     if not SPACE_NAME_PATTERN.fullmatch(space or ""):
         raise GraphConsoleError("图空间名称不合法")
     kind = classify_statement(statement)
-    if kind == "write" and not actor.is_admin:
+    from service.business_access_control import ensure_space_access, rbac_enabled
+
+    business_rbac = rbac_enabled()
+    if business_rbac:
+        _ensure_scoped_metadata(statement)
+        ensure_space_access(actor, space, "write" if kind == "write" else "read")
+    if kind == "write" and not (actor.can_develop if business_rbac else actor.is_admin):
         raise GraphConsoleError("仅平台管理员可以执行写语句", status_code=403)
 
     import logging
@@ -226,7 +254,8 @@ def run_statement(actor: PlatformActor, space: str, statement: str) -> dict:
             # Nebula 会耗尽会话（no extra session available，2026-09-19 用例 09）
             spaces = space_service._all_spaces()
             space_allowed = (
-                actor.is_admin
+                business_rbac
+                or actor.is_admin
                 or space == default_graph_space()
                 or space_service.is_bound(actor.user_id, space)
             )

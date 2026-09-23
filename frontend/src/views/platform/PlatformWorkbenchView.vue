@@ -275,7 +275,7 @@ const router = useRouter()
 // 平台总览对所有登录用户开放；跳往管理页的入口（查看任务/进入人工处理按钮、
 // 图谱构建与人工审核面板、资产抽屉的更新任务链接）对普通用户直接隐藏，仅管理员可见。
 const authStore = useAuthStore()
-const canEnterAdminPages = computed(() => authDisabled || authStore.isAdmin)
+const canEnterAdminPages = computed(() => !authStore.businessOnly && (authDisabled || authStore.canDevelop))
 
 const activeTab = ref<PlatformTab>(props.initialTab ?? 'overview')
 const activeServiceKey = ref(props.initialServiceKey ?? modules[0]?.key ?? '')

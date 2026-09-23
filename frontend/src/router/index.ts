@@ -137,7 +137,7 @@ router.beforeEach(async (to) => {
     }
     const requiredPermission = typeof to.meta.permission === 'string' ? to.meta.permission : ''
     // 平台总览对所有登录用户开放；卡片入口对普通用户只读（见 PlatformWorkbenchView）。
-    if (to.meta.admin === true && !profile.isAdmin) {
+    if (to.meta.admin === true && !profile.isAdmin && !(profile.businessRbacEnabled && profile.canDevelop)) {
       return { path: '/forbidden', query: { redirect: to.fullPath } }
     }
     if (

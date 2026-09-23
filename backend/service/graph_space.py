@@ -97,6 +97,10 @@ class GraphSpaceService:
 
         共享读取不落永久绑定，也不赋予创建空间或图写入权限。
         """
+        from service.business_access_control import rbac_enabled, space_items
+
+        if rbac_enabled():
+            return space_items(actor)
         bound_names = [item["name"] for item in self.bound_spaces(actor.user_id)]
         bound = set(bound_names)
         names = dict.fromkeys([default_graph_space(), *bound_names])
@@ -126,6 +130,10 @@ class GraphSpaceService:
 
     def list_spaces_for_actor(self, actor: PlatformActor) -> list[dict]:
         """配置页绑定入口：管理员看全量（需可选列表），普通用户按可工作空间收敛。"""
+        from service.business_access_control import rbac_enabled, space_items
+
+        if rbac_enabled():
+            return space_items(actor)
         if not actor.is_admin:
             return self.list_work_spaces_for_actor(actor)
         bound_names = [item["name"] for item in self.bound_spaces(actor.user_id)]
@@ -143,6 +151,7 @@ class GraphSpaceService:
             raise GraphSpaceError(f"图服务不可用，无法校验空间: {exc}") from exc
         if space_name not in existing:
             raise GraphSpaceError(f"图空间 {space_name} 不存在")
+        GraphSpaceService._all_spaces_cached_at = 0.0
         if not self.is_bound(actor.user_id, space_name):
             self._session.add(
                 UserGraphSpace(

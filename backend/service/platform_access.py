@@ -37,13 +37,41 @@ class PlatformActor:
     email: str
     is_admin: bool
     portal_is_admin: bool = False
+    business_id: str = ""
+    business_role: str = "user"
+    business_only: bool = False
+
+    @property
+    def can_develop(self) -> bool:
+        return not self.business_only and (
+            self.is_admin or bool(self.business_id and self.business_role == "developer")
+        )
+
+    @property
+    def role_code(self) -> str:
+        if self.business_only:
+            return "user"
+        return "admin" if self.is_admin else "developer" if self.can_develop else "user"
 
     @property
     def roles(self) -> list[str]:
-        return ["platform_user", ADMIN_ROLE] if self.is_admin else ["platform_user"]
+        if self.is_admin:
+            return ["platform_user", ADMIN_ROLE]
+        return ["platform_user", "platform_developer"] if self.can_develop else ["platform_user"]
 
     @property
     def permissions(self) -> list[str]:
+        from service.business_access_control import rbac_enabled
+
+        if rbac_enabled():
+            if self.business_only:
+                return ["business:read"]
+            values = ["analysis:read"]
+            if self.can_develop:
+                values.extend(["schema:manage", "workflow:manage", "graph:write", "review:manage"])
+            if self.is_admin:
+                values.extend(ADMIN_PERMISSIONS)
+            return list(dict.fromkeys(values))
         values = [*USER_PERMISSIONS]
         if self.is_admin:
             values.extend(ADMIN_PERMISSIONS)

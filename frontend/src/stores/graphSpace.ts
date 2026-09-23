@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { useAuthStore } from './auth'
 
 import { listGraphSpaces } from '../api/graphSearch'
 import { graphSpace as configuredDefault } from '../config'
@@ -49,12 +50,17 @@ export const useGraphSpaceStore = defineStore('graphSpace', {
         this.initialized = true
       } catch {
         this.loadError = true
+        if (useAuthStore().profile?.businessRbacEnabled) {
+          this.spaces = []
+          this.current = ''
+          persistSpace('')
+        }
       } finally {
         this.loading = false
       }
     },
     setCurrent(space: string): void {
-      if (!space || (this.spaces.length && !this.spaces.includes(space))) return
+      if (!space || ((useAuthStore().profile?.businessRbacEnabled || this.spaces.length) && !this.spaces.includes(space))) return
       this.current = space
       persistSpace(space)
     },
@@ -64,9 +70,9 @@ export const useGraphSpaceStore = defineStore('graphSpace', {
       const pick =
         [stored, configuredDefault].find((v) => v && this.spaces.includes(v)) ??
         this.spaces[0] ??
-        (stored || configuredDefault || 'dev')
+        (useAuthStore().profile?.businessRbacEnabled ? '' : stored || configuredDefault || 'dev')
       this.current = pick
-      if (pick) persistSpace(pick)
+      persistSpace(pick)
     },
   },
 })

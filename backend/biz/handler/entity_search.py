@@ -111,12 +111,16 @@ async def _load_browse_payload(
 
 async def prewarm_entity_browse() -> None:
     """Best-effort startup warm-up for the default entity-list first page."""
-    if os.getenv("ENTITY_BROWSE_PREWARM_ENABLED", "true").lower() not in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    } or not _browse_cache.enabled:
+    if (
+        os.getenv("ENTITY_BROWSE_PREWARM_ENABLED", "true").lower()
+        not in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        or not _browse_cache.enabled
+    ):
         return
     from infra.workflow_mysql import workflow_session_scope
 
@@ -192,6 +196,7 @@ def list_entity_types(
     space: str | None = Query(None, max_length=64, description="图空间"),
 ) -> ApiResponse:
     """索引内实体类型 + 数量（前端类型过滤下拉）。"""
+    _ensure_space_access(actor, space)
     return ApiResponse(data={"items": _application(session).types(space=space)})
 
 
@@ -202,6 +207,7 @@ def get_index_status(
     space: str | None = Query(None, max_length=64, description="图空间"),
 ) -> ApiResponse:
     """实体索引状态（是否已建、实体数、类型统计、更新时间、是否重建中）。"""
+    _ensure_space_access(actor, space)
     return ApiResponse(data=_application(session).status(space=space))
 
 
@@ -260,10 +266,14 @@ async def reindex_entities(
     payload: EntityReindexRequest | None = None,
 ) -> ApiResponse:
     """全量重建图空间实体 Milvus 索引（管理员）：图 → embedding + BM25 → kg_entity。"""
-    if not actor.is_admin:
+    from service.business_access_control import ensure_space_access, rbac_enabled
+
+    if not (actor.can_develop if rbac_enabled() else actor.is_admin):
         raise HTTPException(status_code=403, detail="仅平台管理员可以重建实体索引")
     app = _application(session)
     request = payload or EntityReindexRequest()
+    if rbac_enabled():
+        ensure_space_access(actor, request.space, "write")
     try:
         data = await asyncio.to_thread(
             app.reindex,

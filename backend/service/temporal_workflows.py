@@ -628,6 +628,7 @@ def _enqueue_entity_pending_item(
     if top:
         reason += f"，最高得分 {top[0]['score']:.2f}"
     manual_review_service.create_direct_case(
+        graph_space=space,
         task_id=task_id,
         execution_id=execution_id,
         step_id=step_id,
@@ -782,19 +783,43 @@ def _jsonable(value: Any) -> Any:
 
 
 @activity.defn
-async def load_schema_extract_plan(schema_id: str) -> dict[str, Any]:
+async def load_schema_extract_plan(schema_id: str | dict[str, Any]) -> dict[str, Any]:
     """读控制库组装抽取计划：kind/name/activeProps（目录属性全集）/sources/脚本（S3 下载到临时文件）。"""
     from sqlalchemy.orm import Session as OrmSession
 
+    from biz.dependencies.resources import ensure_owner_access
     from db_model.schema_management import GraphSchemaDefinition
     from infra.s3 import get_schema_s3_storage
     from infra.workflow_mysql import get_workflow_engine
+    from service.business_access_control import rbac_enabled
+    from service.workflow_jobs import authorize_background_execution
 
+    actor = None
+    context = schema_id if isinstance(schema_id, dict) else {"schemaId": schema_id}
+    if rbac_enabled():
+        try:
+            actor = authorize_background_execution(context)
+        except Exception as exc:
+            raise ApplicationError(
+                str(exc), type="BusinessAuthorizationDenied", non_retryable=True
+            ) from exc
+    schema_id = context["schemaId"]
     engine = get_workflow_engine()
     with OrmSession(engine) as session:
         definition = session.get(GraphSchemaDefinition, schema_id)
         if definition is None or definition.is_deleted:
             raise ValueError(f"Schema 不存在: {schema_id}")
+        graph_space = definition.graph_space
+        if actor is not None and not actor.is_admin:
+            from dao.mysql_datasource import MysqlDatasourceDAO
+            from infra.mysql import session_scope
+
+            with session_scope() as source_session:
+                for source in definition.sources:
+                    source_row = MysqlDatasourceDAO(source_session).get(source.datasource_id)
+                    if source_row is None:
+                        raise ApplicationError("来源配置不存在", non_retryable=True)
+                    ensure_owner_access(actor, source_row.owner or "")
         kind = definition.kind
         name = definition.name
         label = definition.label
@@ -868,9 +893,13 @@ async def load_schema_extract_plan(schema_id: str) -> dict[str, Any]:
         )
     except ValueError as exc:
         raise ValueError(f"Schema 脚本步声明非法: {exc}") from exc
+    from service.schema_extraction import extract_definition_id
+
     return {
+        "definitionId": extract_definition_id(schema_key, schema_id),
         "schemaId": schema_id,
         "schemaKey": schema_key,
+        "graphSpace": graph_space,
         "kind": kind,
         "name": name,
         "label": label,
@@ -1632,6 +1661,7 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
         elif outcome["decision"] == "gray":
             try:
                 manual_review_service.create_direct_case(
+                    graph_space=graph.get("space"),
                     task_id=task_id,
                     execution_id=execution_id,
                     step_id=request.get("stepId") or "align",
@@ -1775,6 +1805,7 @@ async def detect_extract_collisions(request: dict[str, Any]) -> dict[str, Any]:
         collisions += 1
         try:
             manual_review_service.create_direct_case(
+                graph_space=graph.get("space"),
                 task_id=task_id,
                 execution_id=execution_id,
                 step_id=request.get("stepId") or "align",
@@ -1843,6 +1874,7 @@ async def record_extract_failures(request: dict[str, Any]) -> dict[str, Any]:
         error = str(item.get("error") or "")[:1000]
         try:
             manual_review_service.create_direct_case(
+                graph_space=request.get("graphSpace"),
                 task_id=task_id,
                 execution_id=execution_id,
                 step_id="extract",
@@ -2268,13 +2300,22 @@ class SchemaExtractWorkflow:
         graph = {"space": graph_space} if graph_space else {}
         plan = await workflow.execute_activity(
             load_schema_extract_plan,
-            schema_id,
+            (
+                {**request, "schemaId": schema_id}
+                if workflow.patched("business-rbac-context-v1")
+                else schema_id
+            ),
             start_to_close_timeout=timedelta(seconds=120),
             retry_policy=ACTIVITY_RETRY_POLICY,
         )
+        if workflow.patched("business-rbac-context-v1") and not graph_space:
+            graph_space = plan.get("graphSpace")
+            graph = {"space": graph_space} if graph_space else {}
         timeout_seconds = max(int(plan.get("timeoutSeconds", 3600)), 60)
         kind = plan.get("kind", "entity")
-        definition_id = f"schema-extract-{plan['schemaKey']}"
+        definition_id = (
+            plan.get("definitionId") if workflow.patched("business-rbac-context-v1") else None
+        ) or f"schema-extract-{plan['schemaKey']}"
         # 步清单：@step 声明是唯一脚本形态（上传与计划组装双重校验），批内步序
         # 串行，每步一次 execute_transform 独立重试
         steps: list[dict[str, str]] = plan["steps"]
@@ -2808,6 +2849,7 @@ class SchemaExtractWorkflow:
                     {
                         "failures": inline_failures,
                         "failureRefs": failure_refs,
+                        "graphSpace": graph_space,
                         "cap": failure_cap,
                         "schemaId": schema_id,
                         "schemaKey": plan["schemaKey"],

@@ -41,6 +41,7 @@ import {
   type GraphSpaceItem,
 } from '../../api/graphSpace'
 import { currentUserIsAdmin } from '../../api/currentUser'
+import GraphSpaceSelector from '../../components/GraphSpaceSelector.vue'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
 import { useToast } from '../../composables/use-toast'
 import { SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
@@ -287,7 +288,7 @@ async function createSpace() {
     spaceDialogOpen.value = false
     newSpaceName.value = ''
     await loadGraphSpaces()
-    // 顶栏全局选择器同步出现新空间（创建即绑定）
+    // 页内图空间选择器同步出现新空间（创建即绑定）
     void graphSpaceStore.ensureLoaded(true)
   } catch (err) {
     showToast(`创建失败：${(err as Error).message}`, 'warning')
@@ -305,7 +306,7 @@ async function bindSpace() {
     showToast(`图数据空间“${name}”已绑定。`)
     bindTarget.value = ''
     await loadGraphSpaces()
-    // 绑定对所有用户生效：顶栏选择器立即出现该空间
+    // 绑定对所有用户生效：图空间选择器立即出现该空间
     void graphSpaceStore.ensureLoaded(true)
   } catch (err) {
     showToast(`绑定失败：${(err as Error).message}`, 'warning')
@@ -600,7 +601,7 @@ onMounted(() => {
       </aside>
 
       <main class="config-list">
-        <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilter" allow-clear placeholder="全部状态"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><a-input v-model="keyword" class="config-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识或地址" placeholder="搜索名称、标识或地址"><template #prefix><IconSearch /></template></a-input></nav><nav v-else class="bind-nav"><button class="primary" type="button" @click="spaceDialogOpen = true">＋ 新建图数据空间</button><a-select v-if="isAdmin && bindableSpaces.length" v-model="bindTarget" placeholder="绑定已有图数据空间" allow-clear><a-option v-for="space in bindableSpaces" :key="space.name" :value="space.name">{{ space.name }}</a-option></a-select><button v-if="isAdmin && bindableSpaces.length" type="button" :disabled="spaceWorking" @click="bindSpace">绑定</button></nav></header>
+        <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilter" allow-clear placeholder="全部状态"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><a-input v-model="keyword" class="config-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识或地址" placeholder="搜索名称、标识或地址"><template #prefix><IconSearch /></template></a-input></nav><nav v-else class="bind-nav"><button class="primary" type="button" @click="spaceDialogOpen = true">＋ 新建图数据空间</button><a-select v-if="isAdmin && bindableSpaces.length" v-model="bindTarget" placeholder="绑定已有图数据空间" allow-clear><a-option v-for="space in bindableSpaces" :key="space.name" :value="space.name">{{ space.name }}</a-option></a-select><button v-if="isAdmin && bindableSpaces.length" type="button" :disabled="spaceWorking" @click="bindSpace">绑定</button><!-- 全局图空间切换：从顶栏迁入，落在「绑定」右边（业务页仍跟随 store 自动切换） --><GraphSpaceSelector /></nav></header>
         <div v-if="isGraphSpaceCategory" class="table-wrap space-table">
           <table>
             <thead><tr><th>图数据空间</th><th>绑定状态</th><th>操作</th></tr></thead>

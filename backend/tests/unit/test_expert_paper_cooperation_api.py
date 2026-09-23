@@ -9,8 +9,12 @@ from service.expert_paper_cooperation_api import (
     _backfill_expert_org_from_mysql,
     _build_rules,
     _build_structured_result,
+    _context_semaphore,
     _fetch_paper_context,
+    _fetch_shared_paths,
+    _paper_citations,
     _relation_confidences,
+    _split_context_subgraph,
     _stable_team_note,
     _venue_level,
     _year_filters,
@@ -356,26 +360,209 @@ async def test_provenance_records_query_time_sources():
     assert graph_nodes["person_B"]["data"]["confidence"] == pytest.approx(0.75)
 
 
+class _ContextFakeApi:
+    """上下文拉取桩：分别记录合并调用与单类型调用，回放可配置的合并子图。"""
+
+    def __init__(self, merged: dict | None = None):
+        self.merged_calls: list[tuple[tuple[str, ...], str]] = []
+        self.subgraph_calls: list[tuple[str, str]] = []
+        self._merged = merged or {"nodes": [], "edges": []}
+
+    async def get_filtered_subgraph(self, node_id, *, edge_types, direction, space, limit=200):
+        self.merged_calls.append((tuple(edge_types), direction))
+        return self._merged
+
+    async def get_subgraph(self, node_id, *, edge_type, direction, space, limit=200):
+        self.subgraph_calls.append((edge_type, direction))
+        return {"nodes": [{"id": node_id}], "edges": []}
+
+
 @pytest.mark.asyncio
-async def test_paper_context_uses_dev_keyword_and_citation_edges():
-    class FakeContextGraphApi:
-        def __init__(self):
-            self.calls = []
+async def test_paper_context_merges_three_types_into_one_call():
+    """作者/期刊/关键词合并为一次 filtered-subgraph 调用（方向 both），不再逐类型查。"""
+    graph_api = _ContextFakeApi(
+        merged={
+            "nodes": [
+                {"id": "paper_1"},
+                {"id": "person_x", "properties": {"name_zh": "作者甲"}},
+                {"id": "kw_1", "properties": {"keyword": "知识图谱"}},
+            ],
+            "edges": [
+                {
+                    "id": "paper_1->person_x@0",
+                    "type": "AUTHORED_BY",
+                    "source": "paper_1",
+                    "target": "person_x",
+                    "properties": {},
+                },
+                {
+                    "id": "paper_1->kw_1@0",
+                    "type": "HAS_KEYWORD",
+                    "source": "paper_1",
+                    "target": "kw_1",
+                    "properties": {},
+                },
+            ],
+        }
+    )
 
-        async def get_subgraph(self, node_id, **kwargs):
-            self.calls.append((kwargs["edge_type"], kwargs["direction"]))
-            return {"nodes": [{"id": node_id}], "edges": []}
-
-    graph_api = FakeContextGraphApi()
-    await _fetch_paper_context(
+    context = await _fetch_paper_context(
         graph_api,
         {"id": "paper_1", "properties": {}},
         space="dev",
-        semaphore=asyncio.Semaphore(1),
+        semaphore=asyncio.Semaphore(4),
     )
 
-    assert ("HAS_KEYWORD", "out") in graph_api.calls
-    assert ("CITED_BY", "out") in graph_api.calls
+    # 一次合并调用覆盖三类上下文边；单类型调用只剩按需的 CITED_BY
+    assert graph_api.merged_calls == [(("AUTHORED_BY", "PUBLISHED_IN", "HAS_KEYWORD"), "both")]
+    assert graph_api.subgraph_calls == [("CITED_BY", "out")]  # 无预计算引用数 → 仍拉取
+    # 合并结果按类型拆回：authored 带出作者、keywords 带出关键词、published 空
+    assert [n["id"] for n in context["authored"]["nodes"]] == ["paper_1", "person_x"]
+    assert [n["id"] for n in context["keywords"]["nodes"]] == ["paper_1", "kw_1"]
+    assert context["published"]["nodes"] == [{"id": "paper_1"}]
+    assert context["keywords"]["edges"][0]["type"] == "HAS_KEYWORD"
+
+
+@pytest.mark.asyncio
+async def test_paper_context_skips_cited_subgraph_when_citation_precomputed():
+    """引用数有可信来源（citation_count / 作者边 citations）时不拉 CITED_BY，输出不变。"""
+
+    async def run(paper: dict) -> tuple[_ContextFakeApi, dict]:
+        graph_api = _ContextFakeApi()
+        context = await _fetch_paper_context(
+            graph_api, paper, space="dev", semaphore=asyncio.Semaphore(4)
+        )
+        return graph_api, context
+
+    # 1) Paper 节点自带 citation_count
+    graph_api, context = await run({"id": "paper_2", "properties": {"citation_count": 7}})
+    assert graph_api.subgraph_calls == []  # 只剩合并调用，CITED_BY 跳过
+    assert _paper_citations(context) == 7  # 引用数不受跳过影响
+
+    # 2) 节点无 citation_count，但作者边带 citations
+    graph_api, context = await run(
+        {"id": "paper_3", "properties": {}, "pathEdges": [{"properties": {"citations": 5}}]}
+    )
+    assert graph_api.subgraph_calls == []
+    assert _paper_citations(context) == 5
+
+    # 3) 两级都缺 → 仍拉 CITED_BY（走第三级回退）
+    graph_api, context = await run({"id": "paper_4", "properties": {}})
+    assert graph_api.subgraph_calls == [("CITED_BY", "out")]
+
+
+@pytest.mark.asyncio
+async def test_paper_context_slash_vid_keeps_per_type_calls():
+    """DOI 斜杠 VID 走不了 filtered-subgraph 单段路径，保持旧的逐类型调用。"""
+    graph_api = _ContextFakeApi()
+
+    context = await _fetch_paper_context(
+        graph_api,
+        {"id": "paper_ref_10.1111/jth.14768", "properties": {}},
+        space="dev",
+        semaphore=asyncio.Semaphore(4),
+    )
+
+    assert graph_api.merged_calls == []
+    assert graph_api.subgraph_calls == [
+        ("AUTHORED_BY", "out"),
+        ("PUBLISHED_IN", "out"),
+        ("HAS_KEYWORD", "out"),
+        ("CITED_BY", "out"),
+    ]
+    assert context["keywords"]["nodes"] == [{"id": "paper_ref_10.1111/jth.14768"}]
+
+
+def test_split_context_subgraph_filters_edges_by_original_direction():
+    """合并子图按「原单类型调用的方向」拆分：反向边不进上下文、节点顺序保留。"""
+    merged = {
+        "nodes": [
+            {"id": "p1"},
+            {"id": "s1", "properties": {"name_zh": "作者"}},
+            {"id": "j1", "properties": {"name_cn": "期刊"}},
+            {"id": "k1", "properties": {"keyword": "主题"}},
+        ],
+        "edges": [
+            # dev 口径：AUTHORED_BY 存储 Paper→Person，正方向（out）保留
+            {"id": "p1->s1@0", "type": "AUTHORED_BY", "source": "p1", "target": "s1"},
+            # 存储反向的 AUTHORED_BY（Person→Paper）：原 out 调用看不到，剔除
+            {"id": "s2->p1@0", "type": "AUTHORED_BY", "source": "s2", "target": "p1"},
+            {"id": "p1->j1@0", "type": "PUBLISHED_IN", "source": "p1", "target": "j1"},
+            {"id": "j1->p1@0", "type": "PUBLISHED_IN", "source": "j1", "target": "p1"},
+            {"id": "p1->k1@0", "type": "HAS_KEYWORD", "source": "p1", "target": "k1"},
+        ],
+    }
+
+    split = _split_context_subgraph(merged, "p1")
+
+    assert [n["id"] for n in split["authored"]["nodes"]] == ["p1", "s1"]
+    assert [e["id"] for e in split["authored"]["edges"]] == ["p1->s1@0"]
+    assert [n["id"] for n in split["published"]["nodes"]] == ["p1", "j1"]
+    assert [e["id"] for e in split["published"]["edges"]] == ["p1->j1@0"]
+    assert [n["id"] for n in split["keywords"]["nodes"]] == ["p1", "k1"]
+    # 反向边对端 s2/j1 不进任何上下文（与逐类型方向调用口径一致）
+    all_ids = {n["id"] for field in split.values() for n in field["nodes"]}
+    assert "s2" not in all_ids
+
+
+def test_context_semaphore_shared_within_loop_and_isolated_across_loops():
+    """信号量按事件循环共享：服务进程单循环下全局一个；跨循环不复用（避免
+    asyncio 原语绑定旧循环的 RuntimeError，测试每用例各建循环也能跑）。"""
+
+    async def acquire_and_release():
+        semaphore = _context_semaphore()
+        async with semaphore:
+            return semaphore
+
+    first = asyncio.run(acquire_and_release())
+    second = asyncio.run(acquire_and_release())
+    assert first is not second  # 各循环独立实例，跨循环复用会 RuntimeError
+
+    async def same_loop_twice():
+        assert _context_semaphore() is _context_semaphore()
+
+    asyncio.run(same_loop_twice())
+
+
+@pytest.mark.asyncio
+async def test_context_semaphore_caps_concurrency_across_callers(monkeypatch):
+    """并发上限对多个调用方共享：两批上下文同时拉取时在飞数仍不超过上限。"""
+    monkeypatch.setattr(expert_paper_cooperation_api, "_CONTEXT_CONCURRENCY", 3)
+    semaphore = _context_semaphore()
+    in_flight = 0
+    peak = 0
+
+    class _SlowApi:
+        async def get_filtered_subgraph(self, node_id, *, space, **_):
+            nonlocal in_flight, peak
+            in_flight += 1
+            peak = max(peak, in_flight)
+            await asyncio.sleep(0.01)
+            in_flight -= 1
+            return {"nodes": [{"id": node_id}], "edges": []}
+
+        async def get_subgraph(self, node_id, *, space, **_):
+            nonlocal in_flight, peak
+            in_flight += 1
+            peak = max(peak, in_flight)
+            await asyncio.sleep(0.01)
+            in_flight -= 1
+            return {"nodes": [{"id": node_id}], "edges": []}
+
+    papers = [{"id": f"paper_{i}", "properties": {"citation_count": 1}} for i in range(10)]
+    # 两批调用方（对应两个并发请求）共用同一信号量
+    await asyncio.gather(
+        *[
+            _fetch_paper_context(_SlowApi(), paper, space="dev", semaphore=semaphore)
+            for paper in papers
+        ],
+        *[
+            _fetch_paper_context(_SlowApi(), paper, space="dev", semaphore=semaphore)
+            for paper in papers
+        ],
+    )
+
+    assert peak <= 3  # 全局上限对两批调用方一起生效
 
 
 def test_affiliation_text_takes_first_nonempty_from_json_array():
@@ -469,3 +656,58 @@ async def test_structured_result_backfills_author_units_from_source_table(monkey
     assert result["authorUnits"] == ["甲单位", "中国石油大学(华东)新能源学院"]
     graph_nodes = {n["id"]: n for n in result["_graph"]["nodes"]}
     assert graph_nodes["person_B"]["subtitle"] == "中国石油大学(华东)新能源学院"
+
+
+class _PagedPathsApi:
+    """按 offset 返回预置页数的假 paths/search 客户端，记录全部请求体。"""
+
+    def __init__(self, full_pages: int, last_page_size: int, page_size: int = 200):
+        self.full_pages = full_pages
+        self.last_page_size = last_page_size
+        self.page_size = page_size
+        self.requests: list[dict] = []
+
+    async def search_paths(self, body: dict):
+        self.requests.append(body)
+        page_index = body["offset"] // body["limit"]
+        count = body["limit"] if page_index < self.full_pages else self.last_page_size
+        items = [{"nodes": [{"id": f"paper_{body['offset'] + i}"}]} for i in range(count)]
+        # countTotal=False 时服务端约定返回 -1（未统计）
+        total = 0 if body.get("countTotal", True) else -1
+        return {"items": items, "total": total}
+
+
+async def test_fetch_shared_paths_counts_total_only_on_first_page():
+    api = _PagedPathsApi(full_pages=1, last_page_size=50)
+
+    items = await _fetch_shared_paths(
+        api, ExpertPaperCooperationDemoRequest(expertAId="A", expertBId="B")
+    )
+
+    assert len(items) == 250  # 200 + 50：页不满即止
+    assert [r["offset"] for r in api.requests] == [0, 200]
+    assert api.requests[0]["countTotal"] is True
+    assert api.requests[1]["countTotal"] is False
+
+
+async def test_fetch_shared_paths_stops_on_empty_page():
+    api = _PagedPathsApi(full_pages=0, last_page_size=0)
+
+    items = await _fetch_shared_paths(
+        api, ExpertPaperCooperationDemoRequest(expertAId="A", expertBId="B")
+    )
+
+    assert items == []
+    assert len(api.requests) == 1
+
+
+async def test_fetch_shared_pages_capped_at_max_shared_papers():
+    api = _PagedPathsApi(full_pages=10, last_page_size=0)
+
+    items = await _fetch_shared_paths(
+        api, ExpertPaperCooperationDemoRequest(expertAId="A", expertBId="B")
+    )
+
+    # 每页 200 条、上限 1000：恰好 5 页封顶，不发第 6 页请求
+    assert len(api.requests) == 5
+    assert len(items) == 1000

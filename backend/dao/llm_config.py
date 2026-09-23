@@ -25,6 +25,10 @@ class LlmConfigDAO(BaseDAO[LlmConfig]):
                 .order_by(LlmConfig.updated_at.desc())
                 .limit(1)
             )
+            from service.business_access_control import rbac_enabled
+
+            if rbac_enabled():
+                stmt = stmt.where(~LlmConfig.owner.like("business:%"))
             return session.scalars(stmt).first()
         finally:
             if should_close:
@@ -35,6 +39,14 @@ class LlmConfigDAO(BaseDAO[LlmConfig]):
         session, should_close = self._get_session()
         try:
             conditions = [LlmConfig.is_default.is_(True), LlmConfig.id != exclude_id]
+            from service.business_access_control import rbac_enabled
+
+            if rbac_enabled() and owner is None:
+                target = session.get(LlmConfig, exclude_id)
+                if target is not None and target.owner.startswith("business:"):
+                    owner = target.owner
+                else:
+                    conditions.append(~LlmConfig.owner.like("business:%"))
             if owner is not None:
                 conditions.append(LlmConfig.owner == owner)
             stmt = update(LlmConfig).where(*conditions).values(is_default=False)

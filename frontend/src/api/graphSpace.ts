@@ -5,6 +5,11 @@ import { currentUserId } from './currentUser'
 const PREFIX = '/v1/graph-spaces'
 
 export interface GraphSpaceItem {
+  readAllowed?: boolean
+  writeAllowed?: boolean
+  reviewAllowed?: boolean
+  clientId?: string | null
+  isSharedProduction?: boolean
   name: string
   bound: boolean
   mine: boolean

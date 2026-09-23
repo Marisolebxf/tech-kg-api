@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends
 
 from application.relation_detail_annotation import RelationDetailAnnotationApplication
-from biz.dependencies.auth import require_platform_admin
+from biz.dependencies.default_space_write import require_default_space_writer
 from biz.schemas.common import ApiResponse
 from biz.schemas.relation_detail_annotation import RelationDetailAnnotationRequest
 
@@ -18,7 +18,7 @@ async def describe_relation_detail_annotation() -> dict[str, object]:
 
 @router.post(
     "/annotate",
-    dependencies=[Depends(require_platform_admin)],
+    dependencies=[Depends(require_default_space_writer)],
 )
 async def annotate_relation_detail(req: RelationDetailAnnotationRequest) -> ApiResponse:
     try:

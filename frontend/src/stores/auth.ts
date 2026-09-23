@@ -37,8 +37,10 @@ export const useAuthStore = defineStore("auth", {
     primaryRole: (state) =>
       state.profile?.isAdmin
         ? "全局管理员"
-        : state.profile?.roles[0]?.name || "普通用户",
-    isAdmin: (state) => Boolean(state.profile?.isAdmin),
+        : state.profile?.businessRbacEnabled && state.profile?.platformRole === "developer" ? "开发维护" : state.profile?.roles?.[0]?.name || "普通用户",
+    businessOnly: (state) => state.profile?.businessOnly === true,
+    canDevelop: (state) => !state.profile?.businessOnly && Boolean(state.profile?.isAdmin || (state.profile?.businessRbacEnabled && state.profile?.canDevelop)),
+    isAdmin: (state) => Boolean(state.profile?.isAdmin) && !state.profile?.businessOnly,
   },
   actions: {
     invalidate(): void {

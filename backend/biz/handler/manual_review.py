@@ -56,11 +56,26 @@ def _queue_cache_put(key: str, payload: str) -> None:
             _queue_payload_cache.pop(stale, None)
     _queue_payload_cache[key] = (time.monotonic() + _QUEUE_CACHE_SECONDS, payload)
 
+
 # 平台总览「人工审核」卡片对普通用户只读开放：仅队列查询；处理/认领等仍走管理端路由组。
 readonly_router = APIRouter(prefix="/manual-reviews", tags=["manual-review-readonly"])
 
+
 def _queue_cache_clear() -> None:
     _queue_payload_cache.clear()
+
+
+def _cache_scope(identity: ReviewIdentity, case_id: str | None = None) -> str:
+    try:
+        spaces = identity.review_spaces()
+        if spaces is not None and case_id is not None:
+            production_service.authorize_case(case_id, identity)
+        return json.dumps(
+            [identity.user_id, sorted(identity.roles), sorted(identity.domains), spaces],
+            ensure_ascii=False,
+        )
+    except Exception as exc:
+        _raise_production_error(exc)
 
 
 def _raise_production_error(exc: Exception) -> None:
@@ -110,16 +125,40 @@ async def production_queue(
     page: int = 1,
     page_size: int = Query(50, alias="pageSize"),
 ):
-    cache_key = "queue:" + json.dumps(
-        [queue, status, status_group, kind, risk, domain, template_id, assignee_id, category, keyword, updated_within, sort, page, page_size],
-        ensure_ascii=False,
+    cache_key = (
+        "queue:"
+        + _cache_scope(identity)
+        + json.dumps(
+            [
+                queue,
+                status,
+                status_group,
+                kind,
+                risk,
+                domain,
+                template_id,
+                assignee_id,
+                category,
+                keyword,
+                updated_within,
+                sort,
+                page,
+                page_size,
+            ],
+            ensure_ascii=False,
+        )
     )
     cached = _queue_cache_get(cache_key)
     if cached is not None:
         return Response(cached, media_type="application/json")
     try:
         payload = json.dumps(
-            {"code": 200, "success": True, "data": production_service.list_cases(locals(), identity), "msg": "success"},
+            {
+                "code": 200,
+                "success": True,
+                "data": production_service.list_cases(locals(), identity),
+                "msg": "success",
+            },
             ensure_ascii=False,
             default=str,
         )
@@ -134,13 +173,18 @@ readonly_router.get("/production/queue", response_model=ApiResponse)(production_
 
 @router.get("/production/{case_id}")
 async def production_detail(case_id: str, identity: ReviewIdentityDep) -> Response:
-    cache_key = f"case_detail:{case_id}"
+    cache_key = f"case_detail:{case_id}:" + _cache_scope(identity, case_id)
     cached = _queue_cache_get(cache_key)
     if cached is not None:
         return Response(cached, media_type="application/json")
     try:
         payload = json.dumps(
-            {"code": 200, "success": True, "data": production_service.get_case(case_id, identity), "msg": "success"},
+            {
+                "code": 200,
+                "success": True,
+                "data": production_service.get_case(case_id, identity),
+                "msg": "success",
+            },
             ensure_ascii=False,
             default=str,
         )
@@ -245,10 +289,18 @@ async def rerun_extract_failures(body: ExtractFailuresRerunRequest, identity: Re
     )
     _queue_cache_clear()
     try:
+        from service.business_access_control import rbac_enabled
+
+        authorized_case_ids = body.caseIds
+        if rbac_enabled():
+            authorized_case_ids = production_service.authorize_rerun(
+                identity, case_ids=body.caseIds, execution_id=body.executionId
+            )
         data = await rerun_failed_records(
-            case_ids=body.caseIds,
+            case_ids=authorized_case_ids,
             execution_id=body.executionId,
             batch_size=body.batchSize,
+            actor=identity.platform_actor,
         )
         return ApiResponse(data=data, msg="重跑已下发")
     except SchemaConflictError as exc:
@@ -280,13 +332,18 @@ async def delete_case(case_id: str, identity: ReviewIdentityDep):
 
 @router.get("/production/{case_id}/audit-logs")
 async def case_audit_logs(case_id: str, identity: ReviewIdentityDep) -> Response:
-    cache_key = f"case_audit_logs:{case_id}"
+    cache_key = f"case_audit_logs:{case_id}:" + _cache_scope(identity, case_id)
     cached = _queue_cache_get(cache_key)
     if cached is not None:
         return Response(cached, media_type="application/json")
     try:
         payload = json.dumps(
-            {"code": 200, "success": True, "data": {"items": production_service.logs(case_id, identity)}, "msg": "success"},
+            {
+                "code": 200,
+                "success": True,
+                "data": {"items": production_service.logs(case_id, identity)},
+                "msg": "success",
+            },
             ensure_ascii=False,
             default=str,
         )

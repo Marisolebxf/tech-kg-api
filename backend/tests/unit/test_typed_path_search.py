@@ -1,3 +1,5 @@
+import asyncio
+import time
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -115,3 +117,74 @@ def test_typed_path_api_rejects_unsafe_identifier() -> None:
 
     assert response.status_code == 422
     assert "String should match pattern" in response.text
+
+
+def test_typed_path_api_skips_count_when_disabled(monkeypatch) -> None:
+    class FakeGraphClient:
+        queries = []
+
+        def get_node(self, node_id):
+            return GraphNode(id=node_id, labels=["Person"], properties={})
+
+        def execute_read(self, query):
+            self.queries.append(query)
+            if "count(*) AS total" in query:
+                return SimpleNamespace(records=[{"total": 99}])
+            return SimpleNamespace(records=[])
+
+    monkeypatch.setattr(graph_search, "_get_client", lambda space=None: FakeGraphClient())
+    payload = _payload()
+    payload["countTotal"] = False
+
+    response = client.post(ENDPOINT, json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    # 未要求统计时不得执行全量 count 聚合，total 如实返回 -1（未统计）
+    assert not any("count(*) AS total" in query for query in FakeGraphClient.queries)
+    assert any("SKIP 0 LIMIT 20" in query for query in FakeGraphClient.queries)
+    assert body["data"]["total"] == -1
+
+
+async def test_typed_path_handler_does_not_block_event_loop(monkeypatch) -> None:
+    """三个同步图调用必须离开事件循环线程执行（to_thread），否则整个 worker 冻结。"""
+
+    class SlowGraphClient:
+        def get_node(self, node_id):
+            time.sleep(0.15)  # 模拟同步 httpx 网络等待
+            return GraphNode(id=node_id, labels=["Person"], properties={})
+
+        def execute_read(self, query):
+            time.sleep(0.15)
+            if "count(*) AS total" in query:
+                return SimpleNamespace(records=[{"total": 0}])
+            return SimpleNamespace(records=[])
+
+    monkeypatch.setattr(graph_search, "_get_client", lambda space=None: SlowGraphClient())
+    actor = SimpleNamespace(is_admin=True, user_id="tester")
+
+    ticks = 0
+
+    async def heartbeat() -> None:
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.02)
+            ticks += 1
+
+    heartbeat_task = asyncio.create_task(heartbeat())
+    try:
+        started = time.monotonic()
+        response = await graph_search.search_typed_paths(
+            graph_search.TypedPathSearchRequest(**_payload()),
+            actor,
+        )
+        elapsed = time.monotonic() - started
+    finally:
+        heartbeat_task.cancel()
+
+    assert response.success is True
+    # get_node + 数据查询 + count 查询各 sleep 0.15s，串行总耗时 >= 0.45s；
+    # 若同步调用留在事件循环线程上，心跳协程全程得不到调度（ticks≈0）。
+    assert elapsed >= 0.45
+    assert ticks >= 10, f"事件循环在图查询期间被阻塞：心跳仅跳动 {ticks} 次"

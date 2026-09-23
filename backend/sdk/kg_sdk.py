@@ -139,6 +139,19 @@ class SemanticToolkitClient:
         """返回服务当前公开的功能点目录。"""
         return self._request("GET", "/catalog")
 
+    def general_entities(
+        self,
+        document_title: str,
+        text: str,
+        **params: Any,
+    ) -> dict[str, Any]:
+        """通用实体识别：抽取 PERSON/LOCATION/ORGANIZATION/EVENT。"""
+        return self._request(
+            "POST",
+            "/ner/general/text",
+            {"document_title": document_title, "text": text, **params},
+        )
+
     def research_entities(
         self,
         document_title: str,
@@ -149,6 +162,92 @@ class SemanticToolkitClient:
         return self._request(
             "POST",
             "/ner/research/text",
+            {"document_title": document_title, "text": text, **params},
+        )
+
+    def domain_entities(
+        self,
+        document_title: str,
+        text: str,
+        *,
+        domain: str = "",
+        **params: Any,
+    ) -> dict[str, Any]:
+        """专业领域实体识别；未指定领域时由服务自动识别。"""
+        payload = {"document_title": document_title, "text": text, **params}
+        if domain:
+            payload["domain"] = domain
+        return self._request("POST", "/ner/domain/text", payload)
+
+    def classify_zh(
+        self,
+        document_title: str,
+        text: str,
+        **params: Any,
+    ) -> dict[str, Any]:
+        """中文科技文献自动分类。"""
+        return self._request(
+            "POST",
+            "/classify/clc/zh/text",
+            {"document_title": document_title, "text": text, **params},
+        )
+
+    def classify_en(
+        self,
+        document_title: str,
+        text: str,
+        **params: Any,
+    ) -> dict[str, Any]:
+        """英文科技文献自动分类。"""
+        return self._request(
+            "POST",
+            "/classify/clc/en/text",
+            {"document_title": document_title, "text": text, **params},
+        )
+
+    def classify_domain(
+        self,
+        document_title: str,
+        text: str,
+        *,
+        domain: str,
+        **params: Any,
+    ) -> dict[str, Any]:
+        """专业领域科技文献分类。"""
+        return self._request(
+            "POST",
+            "/classify/domain/text",
+            {
+                "document_title": document_title,
+                "text": text,
+                "domain": domain,
+                **params,
+            },
+        )
+
+    def keywords_zh(
+        self,
+        document_title: str,
+        text: str,
+        **params: Any,
+    ) -> dict[str, Any]:
+        """中文科技文献关键词识别。"""
+        return self._request(
+            "POST",
+            "/keywords/zh/text",
+            {"document_title": document_title, "text": text, **params},
+        )
+
+    def keywords_en(
+        self,
+        document_title: str,
+        text: str,
+        **params: Any,
+    ) -> dict[str, Any]:
+        """英文科技文献关键词识别。"""
+        return self._request(
+            "POST",
+            "/keywords/en/text",
             {"document_title": document_title, "text": text, **params},
         )
 
@@ -169,6 +268,45 @@ class SemanticToolkitClient:
             {"document_title": document_title, "text": text, **params},
         )
 
+    def moves_zh(
+        self,
+        document_title: str,
+        abstract: str,
+        **params: Any,
+    ) -> dict[str, Any]:
+        """中文摘要语步识别。"""
+        return self._request(
+            "POST",
+            "/move/abstract/zh/text",
+            {"document_title": document_title, "text": abstract, **params},
+        )
+
+    def moves_en(
+        self,
+        document_title: str,
+        abstract: str,
+        **params: Any,
+    ) -> dict[str, Any]:
+        """英文摘要语步识别。"""
+        return self._request(
+            "POST",
+            "/move/abstract/en/text",
+            {"document_title": document_title, "text": abstract, **params},
+        )
+
+    def fund_moves(
+        self,
+        project_name: str,
+        full_text: str,
+        **params: Any,
+    ) -> dict[str, Any]:
+        """基金申请书、进展报告或结题报告语步识别。"""
+        return self._request(
+            "POST",
+            "/move/fund/zh/text",
+            {"project_name": project_name, "text": full_text, **params},
+        )
+
     def citation_intent(
         self,
         document_title: str,
@@ -186,6 +324,79 @@ class SemanticToolkitClient:
         if reference_entries:
             payload["reference_entries"] = reference_entries
         return self._request("POST", "/citation-intent/text", payload)
+
+    def citation_sentiment(
+        self,
+        document_title: str,
+        full_text: str,
+        *,
+        reference_entries: str = "",
+        **params: Any,
+    ) -> dict[str, Any]:
+        """识别论文引用句的引用情感。"""
+        payload = {
+            "document_title": document_title,
+            "scientific_document_full_text": full_text,
+            **params,
+        }
+        if reference_entries:
+            payload["reference_entries"] = reference_entries
+        return self._request("POST", "/citation-sentiment/text", payload)
+
+    def relation_extract(self, record_id: str) -> dict[str, Any]:
+        """根据上游 NER 响应的 record_id 抽取实体关系。"""
+        if not record_id:
+            raise ValueError("relation_extract 需要非空 NER record_id")
+        return self._request(
+            "POST",
+            "/relation/from-ner-record",
+            {"upstream_ner_record_id": record_id},
+        )
+
+    def deep_cluster(
+        self,
+        documents: list[dict[str, Any]],
+        *,
+        dimension: str = "technology",
+        output_format: str = "JSON",
+        **params: Any,
+    ) -> dict[str, Any]:
+        """对至少四篇文献执行深度聚类。"""
+        if len(documents) < 4:
+            raise ValueError("deep_cluster 至少需要四篇文献")
+        metadata = [
+            {
+                "document_id": document["document_id"],
+                "title": document.get("title", ""),
+                "publication_date": document.get("publication_date", ""),
+            }
+            for document in documents
+        ]
+        return self._request(
+            "POST",
+            "/cluster/deep/texts",
+            {
+                "scientific_document_texts": documents,
+                "document_metadata": metadata,
+                "cluster_dimension": dimension,
+                "output_format": output_format,
+                **params,
+            },
+        )
+
+    def cluster_labels(
+        self,
+        phrase_sets: list[dict[str, Any]],
+        **params: Any,
+    ) -> dict[str, Any]:
+        """根据深度聚类结果生成统一主题标签。"""
+        if not phrase_sets:
+            raise ValueError("cluster_labels 需要非空 cluster_phrase_sets")
+        return self._request(
+            "POST",
+            "/cluster-labels/generate",
+            {"cluster_phrase_sets": phrase_sets, **params},
+        )
 
     def structured_review(
         self,
@@ -221,6 +432,11 @@ class SemanticToolkitClient:
         return list(data.get("entity_results") or data.get("entities") or [])
 
     @staticmethod
+    def data_of(response: dict[str, Any]) -> dict[str, Any]:
+        data = response.get("data") or {}
+        return dict(data) if isinstance(data, dict) else {"value": data}
+
+    @staticmethod
     def definitions_of(response: dict[str, Any]) -> list[dict[str, Any]]:
         return list((response.get("data") or {}).get("definitions") or [])
 
@@ -233,6 +449,40 @@ class SemanticToolkitClient:
             or []
         )
 
+    @staticmethod
+    def record_id_of(response: dict[str, Any]) -> str:
+        return str(
+            (response.get("meta") or {}).get("record_id")
+            or (response.get("data") or {}).get("record_id")
+            or ""
+        )
+
+    @staticmethod
+    def triples_of(response: dict[str, Any]) -> list[dict[str, Any]]:
+        data = response.get("data") or {}
+        return list(
+            data.get("relation_triples") or data.get("triples") or data.get("relations") or []
+        )
+
+    @staticmethod
+    def keywords_of(response: dict[str, Any]) -> list[dict[str, Any]]:
+        return list((response.get("data") or {}).get("keywords") or [])
+
+    @staticmethod
+    def classifications_of(response: dict[str, Any]) -> list[dict[str, Any]]:
+        data = response.get("data") or {}
+        return list(
+            data.get("classifications") or data.get("multilevel_classification_results") or []
+        )
+
+    @staticmethod
+    def clusters_of(response: dict[str, Any]) -> list[dict[str, Any]]:
+        return list((response.get("data") or {}).get("clusters") or [])
+
+    @staticmethod
+    def cluster_labels_of(response: dict[str, Any]) -> list[dict[str, Any]]:
+        return list((response.get("data") or {}).get("labels") or [])
+
 
 def get_semantic_client(
     base_url: str | None = None,
@@ -241,6 +491,15 @@ def get_semantic_client(
     timeout: float | None = None,
 ) -> SemanticToolkitClient | None:
     """从显式参数或环境变量构造语义计算客户端；未配置服务地址时返回 None。"""
+    raw_context = os.getenv("KG_SCRIPT_CTX", "")
+    if raw_context:
+        try:
+            sandbox = json.loads(raw_context).get("_sandbox") is True
+        except (ValueError, AttributeError):
+            sandbox = False
+        if sandbox:
+            context = current_context()
+            return context.semantic if context else None
     resolved_url = base_url or os.getenv("SEMANTIC_TOOLKIT_BASE_URL")
     if not resolved_url:
         return None
@@ -280,6 +539,12 @@ class Context:
     """
 
     def __init__(self, raw: dict[str, Any] | None) -> None:
+        if raw and raw.get("_sandbox") is True:
+            try:
+                from .sandbox_proxy import public_context
+            except ImportError:
+                from sandbox_proxy import public_context
+            raw = public_context(raw)
         self._raw: dict[str, Any] = raw or {}
         self._mysql: Any = _UNSET
         self._graph: Any = _UNSET
@@ -305,6 +570,8 @@ class Context:
     @property
     def mysql(self) -> Any:
         """:class:`infra.mysql.MySQLClient` 或 None（未选数据源）。"""
+        if self._raw.get("_sandbox") is True:
+            return self._sandbox_resource("mysql")
         if self._mysql is _UNSET:
             params = self._raw.get("mysql")
             if not params:
@@ -325,6 +592,8 @@ class Context:
     @property
     def graph(self) -> Any:
         """:class:`infra.graph_db.TRSGraphClient`（按所选图空间）或 None。"""
+        if self._raw.get("_sandbox") is True:
+            return self._sandbox_resource("graph")
         if self._graph is _UNSET:
             params = self._raw.get("graph")
             if not params:
@@ -347,6 +616,8 @@ class Context:
     @property
     def milvus(self) -> Any:
         """``pymilvus.MilvusClient``（按所选 Milvus 库）或 None。"""
+        if self._raw.get("_sandbox") is True:
+            return self._sandbox_resource("milvus")
         if self._milvus is _UNSET:
             params = self._raw.get("milvus")
             if not params:
@@ -367,6 +638,8 @@ class Context:
     @property
     def llm(self) -> Any:
         """:class:`infra.llm.LLMClient` 或 None（未选 LLM）。"""
+        if self._raw.get("_sandbox") is True:
+            return self._sandbox_resource("llm")
         if self._llm is _UNSET:
             params = self._raw.get("llm")
             if not params or not params.get("api_key"):
@@ -385,6 +658,8 @@ class Context:
     @property
     def embedding(self) -> Any:
         """:class:`infra.llm.EmbeddingClient` 或 None（未选 embedding）。"""
+        if self._raw.get("_sandbox") is True:
+            return self._sandbox_resource("embedding")
         if self._embedding is _UNSET:
             params = self._raw.get("embedding")
             if not params or not params.get("api_key"):
@@ -404,6 +679,8 @@ class Context:
     @property
     def semantic(self) -> SemanticToolkitClient | None:
         """语义计算工具客户端；支持 ctx.semantic 配置或环境变量。"""
+        if self._raw.get("_sandbox") is True:
+            return self._sandbox_resource("semantic")
         if self._semantic is _UNSET:
             params = self._raw.get("semantic") or {}
             self._semantic = get_semantic_client(
@@ -412,6 +689,18 @@ class Context:
                 timeout=float(params["timeout"]) if params.get("timeout") else None,
             )
         return self._semantic
+
+    def _sandbox_resource(self, resource: str) -> Any:
+        if not self._raw.get(resource):
+            return None
+        try:
+            from .sandbox_proxy import make_proxy
+        except ImportError:
+            from sandbox_proxy import make_proxy
+        attribute = "_" + resource
+        if getattr(self, attribute) is _UNSET:
+            setattr(self, attribute, make_proxy(resource, SemanticToolkitClient))
+        return getattr(self, attribute)
 
     def to_dict(self) -> dict[str, Any]:
         """返回原始 ctx dict（调试用）。"""

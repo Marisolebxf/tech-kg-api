@@ -31,7 +31,6 @@ import navServices from "../assets/icons/nav-services.svg";
 import navTools from "../assets/icons/nav-tools.svg";
 import { useAppStore } from "../stores/app";
 import { useAuthStore } from "../stores/auth";
-import GraphSpaceSelector from "../components/GraphSpaceSelector.vue";
 import logoKg from "../assets/images/logo-kg.png";
 
 const route = useRoute();
@@ -41,17 +40,18 @@ const appStore = useAppStore();
 const authStore = useAuthStore();
 const currentUser = computed(() => authStore.profile?.user);
 const userAvatar = computed(() => currentUser.value?.avatar || accountAvatar);
+const businessOnly = computed(() => authStore.businessOnly);
 const isAdminUser = computed(() =>
-  authDisabled || authStore.isAdmin,
+  !businessOnly.value && (authDisabled || authStore.canDevelop),
 );
 const userRoleName = computed(() =>
-  isAdminUser.value ? "管理员" : "普通用户",
+  (!businessOnly.value && (authDisabled || authStore.isAdmin)) ? "管理员" : isAdminUser.value ? "开发维护" : "普通用户",
 );
 const userDisplayName = computed(() =>
   currentUser.value?.nickname || currentUser.value?.username || userRoleName.value,
 );
 const userRoleDescription = computed(() =>
-  isAdminUser.value ? "系统管理与审核权限" : "知识图谱业务服务",
+  authStore.isAdmin ? "系统管理与审核权限" : isAdminUser.value ? "业务图空间开发与维护" : "知识图谱业务服务",
 );
 const pageTitle = computed(() => String(route.meta.title ?? "亿级知识图谱"));
 const routeError = ref("");
@@ -374,10 +374,11 @@ onBeforeUnmount(() => {
         </div>
 
         <nav class="app-nav" aria-label="平台功能导航">
-          <div v-if="!sidebarCollapsed" class="app-nav__group">
+          <div v-if="!sidebarCollapsed && !businessOnly" class="app-nav__group">
             <span>工作台</span>
           </div>
             <RouterLink
+              v-if="!businessOnly"
               class="app-nav__item app-nav__item--top app-nav__item--leaf"
               active-class="app-nav__item--active"
               to="/overview"
@@ -457,7 +458,7 @@ onBeforeUnmount(() => {
             <div v-if="!sidebarCollapsed" class="app-nav__group">
               <span>知识图谱构建服务</span>
             </div>
-            <div class="app-nav__query-group">
+            <div v-if="!businessOnly" class="app-nav__query-group">
               <button
                 class="app-nav__item app-nav__item--top app-nav__item--button"
                 :class="{
@@ -611,7 +612,6 @@ onBeforeUnmount(() => {
             >
               <img :src="iconBook" alt="" aria-hidden="true" />
             </a>
-            <GraphSpaceSelector />
             <div
               class="app-alert-entry"
               @mouseenter="alertPreviewOpen = !alertDrawerOpen"

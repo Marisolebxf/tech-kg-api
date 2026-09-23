@@ -81,7 +81,7 @@ onBeforeUnmount(() => window.removeEventListener("pageshow", resetSubmitting));
     <section class="login-intro" aria-label="平台介绍">
       <div class="login-brand">
         <img :src="logoKg" alt="" />
-        <span>亿级知识图谱平台</span>
+        <span>亿级科技知识图谱引擎</span>
       </div>
       <div class="login-intro__content">
         <p class="login-kicker">TECHNOLOGY KNOWLEDGE GRAPH</p>
@@ -311,14 +311,18 @@ onBeforeUnmount(() => window.removeEventListener("pageshow", resetSubmitting));
 
 @media (max-width: 900px) {
   .login-page {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
+    /* 窄屏两段各自按内容撑高、整体可滚，intro 不被网格压缩导致内容溢出
+       （对齐 main ae8679d 的登录页移动端滚动修复）。 */
+    grid-template-rows: max-content max-content;
+    align-content: start;
   }
   .login-intro {
-    min-height: 340px;
+    min-height: 0;
     padding: 28px;
   }
   .login-intro__content {
-    margin: 48px 0;
+    margin: 24px 0 0;
   }
   .login-intro h1 {
     font-size: 34px;

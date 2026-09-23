@@ -22,7 +22,10 @@ async def auth_client(monkeypatch):
     app.include_router(handler.router, prefix="/api/v1")
     application = SimpleNamespace(
         settings=SimpleNamespace(
-            enabled=True, session_cookie_name="techkg_session", portal_cookie_login_enabled=False
+            enabled=True,
+            session_cookie_name="techkg_session",
+            portal_cookie_login_enabled=False,
+            business_only_user_ids=(),
         ),
         resolve_bearer=AsyncMock(return_value=object()),
         get_session=AsyncMock(return_value=SimpleNamespace(token_source="oauth")),
@@ -145,3 +148,40 @@ def test_registered_route_has_machine_auth_without_global_user_guard():
     dependencies = calls(route.dependant)
     assert auth.require_project_relation_identity in dependencies
     assert require_authenticated_user not in dependencies
+
+
+async def test_business_user_cannot_bypass_default_space_authorization(auth_client, monkeypatch):
+    from fastapi import HTTPException
+
+    client, _, _ = auth_client
+    monkeypatch.setenv("BUSINESS_RBAC_ENABLED", "true")
+
+    def deny(*args):
+        raise HTTPException(403, "无权访问默认私有空间")
+
+    monkeypatch.setattr("service.business_access_control.ensure_space_access", deny)
+    response = await client.post(PATH, json={}, headers={"Authorization": "Bearer user-token"})
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize("shared", [False, True, None])
+async def test_machine_key_requires_explicit_shared_production(auth_client, monkeypatch, shared):
+    from contextlib import contextmanager
+
+    client, _, application = auth_client
+    monkeypatch.setenv("BUSINESS_RBAC_ENABLED", "true")
+
+    @contextmanager
+    def session():
+        yield SimpleNamespace(
+            get=lambda *args: (
+                None if shared is None else SimpleNamespace(is_shared_production=shared)
+            )
+        )
+
+    monkeypatch.setattr("infra.mysql.session_scope", session)
+    response = await client.post(
+        PATH, json={}, headers={"X-Client-Id": "partner-a", "X-API-Key": "test-key"}
+    )
+    assert response.status_code == (200 if shared else 403)
+    application.platform_actor.assert_not_called()

@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AuthProfile } from '../api/auth'
 import { useAuthStore } from '../stores/auth'
 import { useAppStore } from '../stores/app'
-import { useGraphSpaceStore } from '../stores/graphSpace'
 import AppLayout from './AppLayout.vue'
 
 const mocks = vi.hoisted(() => ({ authDisabled: false, graphVisualization: false }))
@@ -49,12 +48,13 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-async function renderLayout(isAdmin: boolean, path = '/expert-direct', collapsed = false) {
+async function renderLayout(isAdmin: boolean, path = '/expert-direct', collapsed = false, businessOnly = false) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const auth = useAuthStore()
   auth.profile = {
     isAdmin,
+    businessOnly,
     user: { id: 'viewer', username: 'viewer', nickname: '测试用户', avatar: '' },
   } as AuthProfile
   useAppStore().collapsed = collapsed
@@ -70,6 +70,16 @@ async function renderLayout(isAdmin: boolean, path = '/expert-direct', collapsed
 }
 
 describe('既有侧边栏按有效管理员身份显隐', () => {
+  it.each([false, true])('业务限定账号只保留九大模块，收起=%s', async (collapsed) => {
+    const { wrapper } = await renderLayout(true, '/expert-direct', collapsed, true)
+    const navigation = wrapper.get('.app-nav')
+    for (const path of ['/overview', ...queryPaths, ...managementPaths]) {
+      expect(navigation.find(`a[href="${path}"]`).exists()).toBe(false)
+    }
+    for (const path of sharedPaths) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(true)
+    expect(navigation.text()).not.toContain('工作台')
+  })
+
   it('普通用户可见工作台/平台总览与业务服务，管理菜单隐藏', async () => {
     const { wrapper } = await renderLayout(false)
     const navigation = wrapper.get('.app-nav')
@@ -111,13 +121,6 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
     mocks.authDisabled = true
     const { wrapper } = await renderLayout(false)
     expect(wrapper.find('.app-nav a[href="/schema"]').exists()).toBe(true)
-  })
-
-  it('顶栏渲染全局图空间选择器并加载空间列表', async () => {
-    const { wrapper } = await renderLayout(true, '/graph-query')
-    const selector = wrapper.get('.app-space-select')
-    expect(selector.text()).toContain('图空间')
-    expect(useGraphSpaceStore().current).toBe('dev2')
   })
 
   it('图谱可视化入口默认隐藏，开关开启后出现在图谱查询组', async () => {

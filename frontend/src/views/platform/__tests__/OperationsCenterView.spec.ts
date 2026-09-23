@@ -3,6 +3,7 @@ import { h } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import OperationsCenterView from '../OperationsCenterView.vue'
+import ListPagination from '../../../components/list-pagination.vue'
 
 const mocks = vi.hoisted(() => ({
   getProductionReviews: vi.fn(),
@@ -43,7 +44,7 @@ const renderReview = () => {
         AInput: { name: 'AInput', setup: () => () => null },
         // 弹窗 stub 直渲染默认插槽，让日志弹窗内容可被断言
         AModal: { name: 'AModal', setup: (_props: Record<string, unknown>, { slots }: { slots: { default?: () => unknown } }) => () => h('div', slots.default?.()) },
-        APagination: { name: 'APagination', setup: () => () => null },
+        // 分页已迁移到共享 ListPagination（真组件渲染，翻页直接对它 emit）
       },
       stubs: { RouterLink: true },
     },
@@ -368,7 +369,7 @@ describe('分页统计与页数收缩收敛（FUNC-00781）/ 处理实例 ID 纯
     expect(wrapper.get('.review-pagination > span').text()).toBe('共 41 条 · 第 1 / 3 页')
 
     // 翻至第 3 页
-    wrapper.findComponent({ name: 'APagination' }).vm.$emit('change', 3)
+    wrapper.findComponent(ListPagination).vm.$emit('change', 3)
     await flushPromises()
     expect(wrapper.get('.review-pagination > span').text()).toBe('共 41 条 · 第 3 / 3 页')
 
@@ -392,7 +393,7 @@ describe('分页统计与页数收缩收敛（FUNC-00781）/ 处理实例 ID 纯
     const wrapper = renderReview()
     await flushPromises()
 
-    wrapper.findComponent({ name: 'APagination' }).vm.$emit('change', 3)
+    wrapper.findComponent(ListPagination).vm.$emit('change', 3)
     await flushPromises()
 
     wrapper.findAllComponents({ name: 'ASelect' })[0].vm.$emit('update:modelValue', '待处理')

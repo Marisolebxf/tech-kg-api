@@ -280,7 +280,7 @@ const router = useRouter()
 // 平台总览对所有登录用户开放；跳往管理页的入口（查看任务/进入人工处理按钮、
 // 图谱构建与人工审核面板、资产抽屉的更新任务链接）对普通用户直接隐藏，仅管理员可见。
 const authStore = useAuthStore()
-const canEnterAdminPages = computed(() => authDisabled || authStore.isAdmin)
+const canEnterAdminPages = computed(() => !authStore.businessOnly && (authDisabled || authStore.canDevelop))
 const graphSpaceStore = useGraphSpaceStore()
 
 const activeTab = ref<PlatformTab>(props.initialTab ?? 'overview')
@@ -792,6 +792,55 @@ async function runWithLoading(message: string, action?: () => void) {
   isActionLoading.value = false
 }
 
+/** 常见报错的精简中文文案：英文错误换中文、后端长校验文案收敛为一句（按序取第一条命中）。 */
+const NGQL_ERROR_ZH_RULES: Array<{ test: RegExp; text: (match: RegExpMatchArray) => string }> = [
+  {
+    // 后端原文含全部允许清单与管理员说明，toast 只留开头类型 + 常用只读语句示例
+    test: /^不支持的语句开头/,
+    text: () => '不支持的语句开头；允许的只读语句：MATCH / LOOKUP / GO / SHOW 等',
+  },
+  {
+    test: /Unknown column [`'"](.*?)[`'"]\s*in schema/i,
+    text: ([, column]) => `属性「${column}」不存在，请检查属性名拼写`,
+  },
+  {
+    test: /[`'"](.*?)[`'"]\s*:\s*Unknown tag|TagNotFound:.*?TagName\s*[`'"](.*?)[`'"]/i,
+    text: (match) => `标签「${match[1] ?? match[2]}」不存在，可用 SHOW TAGS 查看全部标签`,
+  },
+  {
+    test: /SemanticError:\s*[`'"]?(.*?)[`'"]?\s+not found in space/i,
+    text: ([, edge]) => `边类型「${edge}」不存在，可用 SHOW EDGES 查看全部边类型`,
+  },
+  {
+    test: /Schema not exist\s*:?\s*[`'"]?(.*?)[`'"]?\s*$/i,
+    text: ([, schema]) => `标签或边类型「${schema}」不存在，请检查名称拼写`,
+  },
+  {
+    test: /SyntaxError:.*?near\s+[`'"](.*?)[`'"]/i,
+    text: ([, near]) => `语法错误：「${near.trim().slice(0, 20)}」附近有误，请检查语句写法`,
+  },
+  {
+    test: /No valid index|The index of the (?:tag|edge)/i,
+    text: () => '未找到可用索引，LOOKUP / FIND 语句需要标签或边类型已建立索引',
+  },
+]
+
+/** nGQL 报错短文案：剥掉「语句执行失败」/HTTP 传输前缀与换行，常见英文错误换中文，
+ *  其余超长截断（完整错误始终进控制台）。 */
+function conciseNgqlError(error: unknown): string {
+  const message = getErrorMessage(error, 'nGQL 执行失败')
+    .replace(/^语句执行失败[:：]\s*/, '')
+    .replace(/^(?:GET|POST|PUT|DELETE|PATCH)\s+\S+\s*->\s*\d+[:：]\s*/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!message) return 'nGQL 执行失败'
+  for (const rule of NGQL_ERROR_ZH_RULES) {
+    const match = message.match(rule.test)
+    if (match) return rule.text(match)
+  }
+  return message.length > 60 ? `${message.slice(0, 60)}…` : message
+}
+
 async function handleNgqlQuery(): Promise<void> {
   if (ngqlLoading.value) return
   const context = graphContextVersion
@@ -819,10 +868,9 @@ async function handleNgqlQuery(): Promise<void> {
     ngqlResult.value = result
   } catch (error) {
     if (context !== graphContextVersion) return
-    showToast(
-      getErrorMessage(error, 'nGQL 执行失败'),
-      'warning',
-    )
+    // 完整错误进控制台便于排查；右上角提示只保留单行短文案
+    console.error('[nGQL] 执行失败:', error)
+    showToast(conciseNgqlError(error), 'warning')
   } finally {
     if (context === graphContextVersion) ngqlLoading.value = false
   }
@@ -1707,7 +1755,7 @@ const pageMeta = computed(() => {
               <AEmpty :description="algoSubmitLoading ? '正在提交作业，请稍候…' : isAlgoJobRunning ? '算法运行中，完成后自动展示结果' : algoResult ? (algoSearch ? '没有匹配的结果，请调整搜索条件' : '算法执行成功，无返回记录') : algoJob?.status === 'failed' ? '算法执行失败，请查看上方失败原因' : '暂无数据，提交算法作业后在此查看结果'" />
             </div>
           </div>
-          <ListPagination v-if="algoTotal > 0" :total="algoTotal" :page="algoPage" :page-size="algoPageSize" :page-size-options="[20, 50, 100]" :show-jumper="false" @change="changeAlgoPage" @change-size="changeAlgoPageSize" />
+          <ListPagination v-if="algoTotal > 0" :total="algoTotal" :page="algoPage" :page-size="algoPageSize" @change="changeAlgoPage" @change-size="changeAlgoPageSize" />
         </div>
       </section>
 

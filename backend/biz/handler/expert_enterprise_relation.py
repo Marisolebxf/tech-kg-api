@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends
 
 from application.expert_enterprise_relation import ExpertEnterpriseRelationApplication
-from biz.dependencies.auth import require_platform_admin
+from biz.dependencies.default_space_write import require_default_space_writer
 from biz.schemas.common import ApiResponse
 from biz.schemas.expert_enterprise_relation import ExpertEnterpriseBuildRequest
 
@@ -18,7 +18,7 @@ async def describe_expert_enterprise_relation() -> dict[str, object]:
 
 @router.post(
     "/build",
-    dependencies=[Depends(require_platform_admin)],
+    dependencies=[Depends(require_default_space_writer)],
 )
 async def build_expert_enterprise_relation(req: ExpertEnterpriseBuildRequest) -> ApiResponse:
     try:

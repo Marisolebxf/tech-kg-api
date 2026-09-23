@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { useAuthStore } from './auth'
 
 import { listGraphSpaces } from '../api/graphSearch'
 import { graphSpace as configuredDefault } from '../config'
@@ -23,7 +24,8 @@ function persistSpace(space: string): void {
 }
 
 /**
- * 全局图空间上下文：右上角选择器的数据源，业务模块统一从这里取当前空间。
+ * 全局图空间上下文：图空间选择器（位于配置管理 · 图数据空间页）的数据源，
+ * 业务模块统一从这里取当前空间。
  * 空间列表来自 GET /v1/graph-search/spaces（所有用户=默认业务空间+本人绑定，
  * 绑定对所有用户生效，管理员经配置页修改绑定）；加载失败静默降级，
  * 当前值走 localStorage > 构建默认 > 'dev'。
@@ -49,12 +51,17 @@ export const useGraphSpaceStore = defineStore('graphSpace', {
         this.initialized = true
       } catch {
         this.loadError = true
+        if (useAuthStore().profile?.businessRbacEnabled) {
+          this.spaces = []
+          this.current = ''
+          persistSpace('')
+        }
       } finally {
         this.loading = false
       }
     },
     setCurrent(space: string): void {
-      if (!space || (this.spaces.length && !this.spaces.includes(space))) return
+      if (!space || ((useAuthStore().profile?.businessRbacEnabled || this.spaces.length) && !this.spaces.includes(space))) return
       this.current = space
       persistSpace(space)
     },
@@ -64,9 +71,9 @@ export const useGraphSpaceStore = defineStore('graphSpace', {
       const pick =
         [stored, configuredDefault].find((v) => v && this.spaces.includes(v)) ??
         this.spaces[0] ??
-        (stored || configuredDefault || 'dev')
+        (useAuthStore().profile?.businessRbacEnabled ? '' : stored || configuredDefault || 'dev')
       this.current = pick
-      if (pick) persistSpace(pick)
+      persistSpace(pick)
     },
   },
 })

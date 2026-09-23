@@ -366,6 +366,33 @@ class TestProjectRecord:
         rec = mappers.project_record("dwd_en_project", row, "B")[0]
         assert rec.properties["final_report_abstract"] == ""
 
+    def test_project_output_awards_json_passthrough(self):
+        # dwd_*_project_output.output_awards（JSON 文本串）原样规范化写入图属性，
+        # 两点合作成果「奖项/评价」从 Project 节点读取该字段。
+        row = {
+            "id": "PRJ5",
+            "title": "T",
+            "awards_count": 2,
+            "output_awards": '[{"year": 2020, "title": "示范奖"}, {"year": 2021, "title": "进步奖"}]',
+        }
+        rec = mappers.project_record("dwd_zh_project", row, "B")[0]
+        assert json.loads(rec.properties["output_awards"]) == [
+            {"year": 2020, "title": "示范奖"},
+            {"year": 2021, "title": "进步奖"},
+        ]
+
+    def test_project_output_awards_missing_is_empty_array(self):
+        # LEFT JOIN 无产出行 → output_awards 为 NULL → 写 "[]"，不缺列。
+        row = {"id": "PRJ6", "title": "T"}
+        rec = mappers.project_record("dwd_zh_project", row, "B")[0]
+        assert rec.properties["output_awards"] == "[]"
+
+    def test_project_output_awards_non_json_text_wrapped(self):
+        # 非 JSON 文本（历史脏数据）包成单元素数组，不整串丢弃。
+        row = {"id": "PRJ7", "title": "T", "output_awards": "国家科技进步二等奖"}
+        rec = mappers.project_record("dwd_zh_project", row, "B")[0]
+        assert json.loads(rec.properties["output_awards"]) == ["国家科技进步二等奖"]
+
 
 class TestMergeProtection:
     def test_preserves_existing_non_null(self):

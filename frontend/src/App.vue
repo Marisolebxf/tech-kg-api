@@ -9,7 +9,7 @@ import { usePortalIntegration } from './portal/usePortalIntegration'
 const route = useRoute()
 const useBlankLayout = computed(() => route.meta.layout === 'blank')
 const { isEmbedded, portalStatusText } = usePortalIntegration()
-const embeddedPageTitle = computed(() => String(route.meta.title ?? '亿级知识图谱平台'))
+const embeddedPageTitle = computed(() => String(route.meta.title ?? '亿级科技知识图谱引擎'))
 const showEmbeddedAuthState = computed(
   () => isEmbedded.value && route.name === 'login',
 )

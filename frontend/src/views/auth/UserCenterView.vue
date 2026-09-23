@@ -45,7 +45,7 @@ async function refreshProfile() {
         <div class="profile-card__heading"><strong>身份信息</strong><span>统一用户中心</span></div>
         <div class="identity-block">
           <img :src="avatar" alt="用户头像" />
-          <div><h2>{{ user.nickname || user.username }}</h2><p>@{{ user.username }}</p></div>
+          <div><h2>{{ user.nickname || user.username }}</h2></div>
           <b>{{ user.status === 0 ? '账号正常' : '账号停用' }}</b>
         </div>
         <dl>
@@ -115,7 +115,7 @@ async function refreshProfile() {
 .profile-card__heading span { color: #8492a6; font-size: 10px; }
 .identity-block { display: grid; grid-template-columns: 58px minmax(0,1fr) auto; align-items: center; gap: 13px; margin-top: 16px; }
 .identity-block img { width: 58px; height: 58px; border: 3px solid #e6f1ff; border-radius: 50%; object-fit: cover; }
-.identity-block h2 { margin: 0 0 4px; font-size: 18px; }.identity-block p { margin: 0; color: #7d8da5; font-size: 11px; }
+.identity-block h2 { margin: 0; font-size: 18px; }
 .identity-block > b { padding: 4px 8px; border-radius: 999px; background: #e8f8ef; color: #067647; font-size: 9px; }
 .profile-card dl { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; margin: 18px 0 0; }
 .profile-card dl div { padding: 9px 10px; border-radius: 6px; background: #f6f9fd; }.profile-card dt { color: #8a98aa; font-size: 9px; }.profile-card dd { margin: 4px 0 0; overflow: hidden; color: #344761; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }

@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal
 
@@ -23,7 +24,8 @@ from biz.handler import get_cache
 from biz.schemas.common import ApiResponse
 from infra.graph_db import TRSGraphClient, get_space_client, get_trs_graph_client
 from infra.graph_db.exceptions import GraphRequestError
-from infra.graph_db.models import GraphNode
+from infra.graph_db.models import GraphEdge, GraphNode
+from infra.graph_exec_budget import GraphExecOverloaded, graph_exec_slot
 from infra.mysql import create_session
 
 router = APIRouter(prefix="/graph-search", tags=["graph-search"])
@@ -33,6 +35,13 @@ logger = logging.getLogger(__name__)
 def _graph_query_error(operation: str) -> ApiResponse:
     logger.exception("图数据查询失败 operation=%s", operation)
     return ApiResponse(code=500, success=False, msg="图数据查询失败")
+
+
+def _graph_overloaded(exc: GraphExecOverloaded) -> ApiResponse:
+    """过载快速拒绝（业务码 429）：让调用方立刻看到"图查询过载"并重试，
+    而不是在无界排队里慢慢拖到上游超时（表现为网关 502）。"""
+    logger.warning("图执行层过载拒绝：%s", exc)
+    return ApiResponse(code=429, success=False, msg=str(exc))
 
 
 # Nebula 的 count 是全量扫描，单个边类型就要 2~4 秒，全库统计一遍近 50 秒，
@@ -134,6 +143,13 @@ class TypedPathSearchRequest(BaseModel):
     steps: list[TypedPathStep] = Field(..., min_length=1, max_length=4)
     limit: int = Field(default=100, ge=1, le=200)
     offset: int = Field(default=0, ge=0)
+    countTotal: bool = Field(
+        default=True,
+        description=(
+            "是否执行全量 count 聚合（无 LIMIT 的全路径枚举，是最重的查询）。"
+            "翻页调用方对后续页传 false 可省掉重复统计，此时返回 total=-1（未统计）。"
+        ),
+    )
     space: str | None = Field(
         default=None,
         min_length=1,
@@ -168,6 +184,11 @@ def _ensure_space_access(actor: Any, space: str | None) -> None:
 
     在端点 try 块之前调用，HTTPException 不会被 except Exception 吞成 500。
     """
+    from service.business_access_control import ensure_space_access, rbac_enabled
+
+    if rbac_enabled():
+        ensure_space_access(actor, space)
+        return
     if not space or actor.is_admin:
         return
     from service.graph_space import GraphSpaceService, default_graph_space
@@ -356,10 +377,13 @@ async def get_node(
     _ensure_space_access(actor, space)
     node_id = node_id.strip('"')
     try:
-        node = await asyncio.to_thread(_get_client(space).get_node, node_id)
+        async with graph_exec_slot():
+            node = await asyncio.to_thread(_get_client(space).get_node, node_id)
         if node is None:
             return ApiResponse(code=404, success=False, msg=f"节点不存在: {node_id}")
         return ApiResponse(data=_node_to_data(node).model_dump())
+    except GraphExecOverloaded as exc:
+        return _graph_overloaded(exc)
     except Exception:
         return _graph_query_error("get_node")
 
@@ -380,12 +404,16 @@ async def list_nodes(
         # 事件循环卡住，进程内并发（如全景图分层并发拉取）全部退化成串行。
         # nGQL 直查分页 + SHOW STATS 计数：REST /nodes/label 与 node-count 在
         # trs-graph 侧均为全量扫描，大标签（Paper 十万级）30s+ 超时（2026-09-21）。
-        nodes = await asyncio.to_thread(
-            client.paged_nodes_by_label, label, limit=limit, offset=offset
-        )
-        items = [_node_to_data(n).model_dump() for n in nodes]
-        total = await _node_count_cached(client, space, label)
+        # 整个分页+计数过程占用一个公共执行名额（含 _node_count_cached 的取数）。
+        async with graph_exec_slot():
+            nodes = await asyncio.to_thread(
+                client.paged_nodes_by_label, label, limit=limit, offset=offset
+            )
+            items = [_node_to_data(n).model_dump() for n in nodes]
+            total = await _node_count_cached(client, space, label)
         return ApiResponse(data=NodeListData(items=items, total=total).model_dump())
+    except GraphExecOverloaded as exc:
+        return _graph_overloaded(exc)
     except Exception:
         return _graph_query_error("list_nodes")
 
@@ -401,11 +429,14 @@ async def search_nodes(
     """按属性搜索节点（如 {"doi": "10.xxx"} 查论文）。"""
     _ensure_space_access(actor, space)
     try:
-        result = await asyncio.to_thread(
-            _get_client(space).find_nodes, [label], properties or {}, limit=limit
-        )
+        async with graph_exec_slot():
+            result = await asyncio.to_thread(
+                _get_client(space).find_nodes, [label], properties or {}, limit=limit
+            )
         items = [_node_to_data(n).model_dump() for n in result.items]
         return ApiResponse(data=NodeListData(items=items, total=len(items)).model_dump())
+    except GraphExecOverloaded as exc:
+        return _graph_overloaded(exc)
     except Exception:
         return _graph_query_error("search_nodes")
 
@@ -416,24 +447,31 @@ async def search_typed_paths(body: TypedPathSearchRequest, actor: CurrentActor) 
     _ensure_space_access(actor, body.space)
     try:
         client = _get_client(body.space)
-        source = client.get_node(body.sourceId)
+
+        # TRSGraphClient 底层是同步 httpx.Client，直接在 async handler 里调用会
+        # 冻结整个事件循环（论文合作经进程内 ASGI 回环翻页调用本端点，冻结期间
+        # 该 worker 上所有请求与并发任务全部退化为串行）。三步打包进一次
+        # to_thread：保序、单次线程跳转，与 list_nodes 等端点同口径。
+        def _run_query() -> tuple[GraphNode | None, list[dict[str, Any]], int]:
+            source = client.get_node(body.sourceId)
+            if source is None:
+                return None, [], 0
+            records = client.execute_read(_build_typed_path_query(body)).records
+            total = -1
+            if body.countTotal:
+                count_result = client.execute_read(_build_typed_path_query(body, count_only=True))
+                if count_result.records:
+                    total = int(count_result.records[0].get("total") or 0)
+            return source, records, total
+
+        async with graph_exec_slot():
+            source, records, total = await asyncio.to_thread(_run_query)
         if source is None:
             return ApiResponse(code=404, success=False, msg=f"节点不存在: {body.sourceId}")
 
         # get_node 已验证该 VID 可用。dev 空间的真实 Person VID 保留 person_* 前缀；
         # techkg 请求本身传入无前缀 Scholar VID，因此两种空间都直接保留请求 ID。
-        resolved = body
-
-        query_result = client.execute_read(_build_typed_path_query(resolved))
-        count_result = client.execute_read(_build_typed_path_query(resolved, count_only=True))
-        total = 0
-        if count_result.records:
-            total = int(count_result.records[0].get("total") or 0)
-
-        items = [
-            _typed_path_from_record(resolved, record, source.labels)
-            for record in query_result.records
-        ]
+        items = [_typed_path_from_record(body, record, source.labels) for record in records]
         data = TypedPathListData(
             items=items,
             total=total,
@@ -441,6 +479,8 @@ async def search_typed_paths(body: TypedPathSearchRequest, actor: CurrentActor) 
             offset=body.offset,
         )
         return ApiResponse(data=data.model_dump())
+    except GraphExecOverloaded as exc:
+        return _graph_overloaded(exc)
     except Exception:
         return _graph_query_error("search_typed_paths")
 
@@ -463,19 +503,22 @@ async def get_subgraph(
     _ensure_space_access(actor, space)
     node_id = node_id.strip('"')
     try:
-        subgraph = await asyncio.to_thread(
-            _collect_subgraph,
-            _get_client(space),
-            node_id,
-            depth,
-            limit,
-            offset,
-            edge_type,
-            direction,
-        )
+        async with graph_exec_slot():
+            subgraph = await asyncio.to_thread(
+                _collect_subgraph,
+                _get_client(space),
+                node_id,
+                depth,
+                limit,
+                offset,
+                edge_type,
+                direction,
+            )
         if subgraph is None:
             return ApiResponse(code=404, success=False, msg=f"节点不存在: {node_id}")
         return ApiResponse(data=SubgraphData(**subgraph).model_dump())
+    except GraphExecOverloaded as exc:
+        return _graph_overloaded(exc)
     except Exception:
         return _graph_query_error("get_subgraph")
 
@@ -512,6 +555,10 @@ def _collect_subgraph(
     frontier = [node_id]
     for _hop in range(depth):
         next_frontier: list[str] = []
+        # 本跳新邻居只记 VID，跳末一次批量取点：遍历只用 ID。旧实现每邻居
+        # 一次 get_node，一跳 200 个邻居就是 200 次 TRS 往返（会话池高频
+        # 借用 + 单请求数秒级串行时延）；批量后每跳 ceil(n/块) 次。
+        discovered: list[str] = []
         remaining = limit
         pending = len(frontier)
         for vid in frontier:
@@ -542,15 +589,17 @@ def _collect_subgraph(
                 remaining -= 1
                 neighbor_id = str(e.target_id if str(e.source_id) == vid else e.source_id)
                 if neighbor_id not in seen_vids:
-                    neighbor = client.get_node(neighbor_id)
-                    if neighbor is None:
-                        # 悬挂点邻居（边端点无 tag，FETCH/MATCH 不可见）：占位渲染。
-                        # 边已收集，端点必须出现在 nodes 里，否则画布上边指向幽灵节点。
-                        neighbor = GraphNode(id=neighbor_id, labels=[], properties={})
-                    n_data = _node_to_data(neighbor)
-                    nodes.append(n_data)
-                    seen_vids.add(n_data.id)
-                    next_frontier.append(n_data.id)
+                    seen_vids.add(neighbor_id)
+                    discovered.append(neighbor_id)
+        found = client.get_nodes_bulk(discovered) if discovered else {}
+        for vid in discovered:
+            neighbor = found.get(vid)
+            if neighbor is None:
+                # 悬挂点邻居（边端点无 tag，FETCH/MATCH 不可见）：占位渲染。
+                # 边已收集，端点必须出现在 nodes 里，否则画布上边指向幽灵节点。
+                neighbor = GraphNode(id=vid, labels=[], properties={})
+            nodes.append(_node_to_data(neighbor))
+            next_frontier.append(vid)
         frontier = next_frontier
 
     return {"nodes": nodes, "edges": edges}
@@ -576,20 +625,54 @@ async def get_filtered_subgraph(
     if not et_set:
         return ApiResponse(code=422, success=False, msg="edge_types 不能为空")
     try:
-        subgraph = await asyncio.to_thread(
-            _collect_filtered_subgraph,
-            _get_client(space),
-            node_id,
-            et_set,
-            depth,
-            limit,
-            direction,
-        )
+        async with graph_exec_slot():
+            subgraph = await asyncio.to_thread(
+                _collect_filtered_subgraph,
+                _get_client(space),
+                node_id,
+                et_set,
+                depth,
+                limit,
+                direction,
+            )
         if subgraph is None:
             return ApiResponse(code=404, success=False, msg=f"节点不存在: {node_id}")
         return ApiResponse(data=SubgraphData(**subgraph).model_dump())
+    except GraphExecOverloaded as exc:
+        return _graph_overloaded(exc)
     except Exception:
         return _graph_query_error("get_filtered_subgraph")
+
+
+def _pair_rows(
+    client: TRSGraphClient,
+    pair_edges: dict[tuple[str, str], list[GraphEdge]],
+    vid: str,
+    et: str,
+    *,
+    direction: str,
+    quota: int,
+    rest_fallback: bool,
+) -> Iterator[GraphEdge]:
+    """(源, 边类型) 的候选边流：批量行优先，批量不完整时惰性回退单源 REST。
+
+    批量页被行数上限截断（或批量语句失败）时，该源在该类型下的行可能被
+    同批超高度数源挤掉，配额未必填满——回退单源 REST 补一页（4 倍配额
+    过采样，与旧逐组合路径同一口径），保证「每类型每跳上限」可达。惰性：
+    消费方配额满足即停止拉取，REST 只在批量行不足以填满配额时才真正发出；
+    完整批量（行数 < 上限）里没有的组合就是真无边，不回源。
+    """
+    yield from pair_edges.get((vid, et), [])
+    if not rest_fallback:
+        return
+    try:
+        yield from client.get_node_edges(
+            vid, direction=direction, edge_type=et, limit=min(256, quota * 4)
+        )
+    except GraphRequestError:
+        # 该边类型在当前图空间不存在（trs traversal 400）等查询失败，
+        # 跳过该组合不阻断整个子图——与旧逐组合路径的取舍一致。
+        return
 
 
 def _collect_filtered_subgraph(
@@ -613,6 +696,52 @@ def _collect_filtered_subgraph(
 
     for _hop in range(depth):
         next_frontier: list[str] = []
+        # 本跳新邻居只记 VID，跳末一次批量取点（同 _collect_subgraph：旧实现
+        # 每邻居一次 get_node，重点企业关系 12 边类型 × 2 跳可达数百次往返）。
+        discovered: list[str] = []
+        # 邻接同样整跳批量：一条多源多类型 GO 覆盖全部 (源 × 边类型) 组合
+        # （旧实现逐组合 REST，12 类型 × 46 前沿 = 552 次往返）。配额核算
+        # 仍在下方逐源逐类型做，与旧实现的预算/均分/回流语义逐行等价，
+        # 批量只是换取数通道：被行上限截断或语句失败时按组合惰性回退 REST。
+        pair_edges: dict[tuple[str, str], list[GraphEdge]] = {}
+        rest_fallback = False
+        if frontier:
+            try:
+                pair_edges, truncated = client.get_edges_bulk(frontier, et_set, direction=direction)
+                rest_fallback = truncated
+            except GraphRequestError as exc:
+                # 批量语句失败（如临时语义/会话错误）不整体 500：置空批量并
+                # 放开单源回退，退化为旧逐组合 REST 路径。
+                logger.warning("批量邻接失败，本跳退回逐组合 REST: %s", exc)
+                pair_edges, rest_fallback = {}, True
+        # 批量行是裸 Nebula 结果，而 REST /traversal 会静默滤掉悬挂端点的边
+        # （2026-09-23 实测 person→悬挂org 的 AFFILIATED_WITH 被 trs 吞掉）。
+        # 先对本跳全部行端点做一次存在性批量取点，把悬挂端点的行在配额核算
+        # 前剔除——与旧 REST 可见口径逐字一致：否则边画向 nodes 里不存在的
+        # 端点（幽灵边），且悬挂行挤占配额挤掉真实边。REST 补查行已被 trs
+        # 过滤，无需处理。已收录/前沿节点必真实，不必重复取点。
+        row_nodes: dict[str, GraphNode] = {}
+        if pair_edges:
+            endpoints = [
+                vid
+                for vid in dict.fromkeys(
+                    str(v)
+                    for rows in pair_edges.values()
+                    for e in rows
+                    for v in (e.source_id, e.target_id)
+                )
+                if vid not in seen_vids
+            ]
+            row_nodes = client.get_nodes_bulk(endpoints) if endpoints else {}
+            real_vids = set(seen_vids) | set(row_nodes)
+            pair_edges = {
+                key: [
+                    e
+                    for e in rows
+                    if str(e.source_id) in real_vids and str(e.target_id) in real_vids
+                ]
+                for key, rows in pair_edges.items()
+            }
         # limit 是「每种边类型每跳上限」：逐跳逐类型重置预算，已收录过的边
         # 不占预算；不做全局截断（否则第一跳吃光预算，深跳一条边进不来）。
         # 配额按前沿节点均分（向上取整）——每个节点都能分到可展示的出边名额，
@@ -621,22 +750,22 @@ def _collect_filtered_subgraph(
         type_budgets = {et: limit for et in et_set}
         pending = len(frontier)
         for vid in frontier:
-            # 每种边类型单独查，避免无关边占 limit 名额
+            # 每种边类型单独核算配额，避免无关边占 limit 名额
             for et in et_set:
                 budget = type_budgets[et]
                 if budget <= 0 or pending <= 0:
                     continue
                 quota = min(budget, -(-budget // pending))
-                try:
-                    edge_list = client.get_node_edges(
-                        vid, direction=direction, edge_type=et, limit=min(256, quota * 4)
-                    )
-                except GraphRequestError:
-                    # 该边类型在当前图空间不存在（trs traversal 400）等查询失败，
-                    # 跳过该边类型不阻断整个子图——避免因部分边类型缺失而 500 丢失 seed。
-                    continue
                 collected = 0
-                for e in edge_list:
+                for e in _pair_rows(
+                    client,
+                    pair_edges,
+                    vid,
+                    et,
+                    direction=direction,
+                    quota=quota,
+                    rest_fallback=rest_fallback,
+                ):
                     if collected >= quota:
                         break
                     edge_data = _edge_to_data(e)
@@ -651,13 +780,24 @@ def _collect_filtered_subgraph(
                     type_budgets[et] -= 1
                     neighbor_id = str(e.target_id if str(e.source_id) == vid else e.source_id)
                     if neighbor_id not in seen_vids:
-                        neighbor = client.get_node(neighbor_id)
-                        if neighbor:
-                            n_data = _node_to_data(neighbor)
-                            nodes.append(n_data)
-                            seen_vids.add(n_data.id)
-                            next_frontier.append(n_data.id)
+                        seen_vids.add(neighbor_id)
+                        discovered.append(neighbor_id)
             pending -= 1
+        # 补点收尾：本跳新邻居优先复用批量行的存在性取点结果（row_nodes），
+        # REST 补查行发现的邻居（仅截断/回退路径存在）再补一次批量取点。
+        # 悬挂邻居不进 nodes/前沿——悬挂行已在上面按 REST 口径剔除，这里只
+        # 处理确实真实存在的邻居。
+        rest_discovered = [vid for vid in discovered if vid not in row_nodes]
+        found = {
+            **row_nodes,
+            **(client.get_nodes_bulk(rest_discovered) if rest_discovered else {}),
+        }
+        for vid in discovered:
+            neighbor = found.get(vid)
+            if neighbor is None:
+                continue
+            nodes.append(_node_to_data(neighbor))
+            next_frontier.append(vid)
         frontier = next_frontier
 
     return {"nodes": nodes, "edges": edges}
@@ -675,15 +815,18 @@ async def get_node_edges(
     """查某节点的所有边（不含邻居节点属性，轻量）。"""
     _ensure_space_access(actor, space)
     try:
-        edge_list = await asyncio.to_thread(
-            _get_client(space).get_node_edges,
-            node_id,
-            direction=direction,
-            edge_type=edge_type,
-            limit=limit,
-        )
+        async with graph_exec_slot():
+            edge_list = await asyncio.to_thread(
+                _get_client(space).get_node_edges,
+                node_id,
+                direction=direction,
+                edge_type=edge_type,
+                limit=limit,
+            )
         edges = [_edge_to_data(e).model_dump() for e in edge_list]
         return ApiResponse(data={"edges": edges, "total": len(edges)})
+    except GraphExecOverloaded as exc:
+        return _graph_overloaded(exc)
     except Exception:
         return _graph_query_error("get_node_edges")
 
@@ -700,11 +843,20 @@ async def get_neighbours(
     """查某节点的邻居节点（含属性）。"""
     _ensure_space_access(actor, space)
     try:
-        neighbours = _get_client(space).get_neighbours(
-            node_id, direction=direction, edge_type=edge_type, limit=limit
-        )
+        # 与其它端点同口径：同步客户端调用放线程执行（async handler 里直调会
+        # 卡住整个事件循环），并占用一个公共执行名额。
+        async with graph_exec_slot():
+            neighbours = await asyncio.to_thread(
+                _get_client(space).get_neighbours,
+                node_id,
+                direction=direction,
+                edge_type=edge_type,
+                limit=limit,
+            )
         nodes = [_node_to_data(n).model_dump() for n in neighbours]
         return ApiResponse(data={"nodes": nodes, "total": len(nodes)})
+    except GraphExecOverloaded as exc:
+        return _graph_overloaded(exc)
     except Exception:
         return _graph_query_error("get_neighbours")
 
@@ -720,12 +872,18 @@ async def shortest_path(
     """查两个节点之间的最短路径。"""
     _ensure_space_access(actor, space)
     try:
-        path = _get_client(space).shortest_path(source, target, max_depth=max_depth)
+        # 与其它端点同口径：同步客户端调用放线程执行，并占用一个公共执行名额。
+        async with graph_exec_slot():
+            path = await asyncio.to_thread(
+                _get_client(space).shortest_path, source, target, max_depth=max_depth
+            )
         if path is None:
             return ApiResponse(data=PathData(nodes=[], edges=[], found=False).model_dump())
         nodes = [_node_to_data(n).model_dump() for n in path.nodes]
         edges = [_edge_to_data(e).model_dump() for e in path.edges]
         return ApiResponse(data=PathData(nodes=nodes, edges=edges, found=True).model_dump())
+    except GraphExecOverloaded as exc:
+        return _graph_overloaded(exc)
     except Exception:
         return _graph_query_error("shortest_path")
 
@@ -744,6 +902,10 @@ async def list_spaces(actor: CurrentActor) -> ApiResponse:
         return ApiResponse(data={"spaces": [item["name"] for item in items]})
     except Exception:  # noqa: BLE001
         # 绑定库不可用时仅返回默认业务空间，不泄露其他空间列表。
+        from service.business_access_control import rbac_enabled
+
+        if rbac_enabled():
+            raise HTTPException(503, "无法读取授权图空间") from None
         from service.graph_space import default_graph_space
 
         return ApiResponse(data={"spaces": [default_graph_space()]})
@@ -770,6 +932,8 @@ async def get_stats(
     try:
         data = await _load_stats(space, refresh=refresh)
         payload = ApiResponse(data=data)
+    except GraphExecOverloaded as exc:
+        payload = _graph_overloaded(exc)
     except Exception:
         payload = _graph_query_error("get_stats")
     if refresh:
@@ -809,8 +973,10 @@ async def _load_stats(space: str | None, *, refresh: bool) -> dict[str, Any]:
             _refresh_stats_in_background(space)
             return cached[1]
         # 扫描和写缓存都放在线程里：即使调用方（如全景图的 3 秒超时）中途取消
-        # 请求，扫描结果也会落到缓存，下一个请求就能直接命中。
-        data = await asyncio.to_thread(_collect_stats_and_store, key, space)
+        # 请求，扫描结果也会落到缓存，下一个请求就能直接命中。扫描是全库 count，
+        # 也占一个公共执行名额（锁内先锁后名额，与后台刷新同序，无环）。
+        async with graph_exec_slot():
+            data = await asyncio.to_thread(_collect_stats_and_store, key, space)
         if data is not None:
             return data
         return _stats_cache[key][1] if key in _stats_cache else {"nodes": {}, "edges": {}}
@@ -827,7 +993,10 @@ def _refresh_stats_in_background(space: str | None) -> None:
         try:
             lock = _stats_locks.setdefault(key, asyncio.Lock())
             async with lock:
-                data = await asyncio.to_thread(_collect_stats, space)
+                # 同 _load_stats：先锁后名额，占满时等待（超时则本次放弃刷新，
+                # 保留旧缓存），不与前台查询抢队首。
+                async with graph_exec_slot():
+                    data = await asyncio.to_thread(_collect_stats, space)
                 _stats_cache[key] = (time.monotonic(), data)
         except Exception:  # noqa: BLE001 - 后台刷新失败保留旧缓存即可
             pass

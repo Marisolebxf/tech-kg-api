@@ -795,7 +795,9 @@ class PlatformOverviewService:
 
         fallback = self._get_fallback_overview()
         try:
-            stats = self._stats_provider.get_stats(space)
+            stats = (
+                self._stats_provider.get_stats(space) if space else self._stats_provider.get_stats()
+            )
         except Exception as exc:
             logger.warning("首页图资产统计读取失败，使用降级数据: %s", exc)
             result = fallback.model_copy(

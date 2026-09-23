@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 平台统一的列表分页条：共 N 条 · 第 x / y 页 + 每页条数 + 跳页。
 // 客户端/服务端分页通用——total 由调用方给出（客户端传源数组长度，服务端传接口 total）。
+// 跳页框（前往）恒显：不按总页数阈值隐藏，保证各页面右下角功能一致。
 import { computed } from 'vue'
 import { Pagination as APagination, Select as ASelect } from '@arco-design/web-vue'
 
@@ -14,11 +15,13 @@ const props = withDefaults(defineProps<{
   disabled?: boolean
   loading?: boolean
   showJumper?: boolean
+  compactPages?: boolean
 }>(), {
   pageSizeOptions: () => PAGE_SIZE_OPTIONS,
   disabled: false,
   loading: false,
   showJumper: true,
+  compactPages: false,
 })
 
 const emit = defineEmits<{ change: [page: number]; 'change-size': [size: number] }>()
@@ -37,7 +40,9 @@ function onSelectChange(value: unknown) {
 
 <template>
   <footer class="list-pagination" aria-label="列表分页">
-    <span>共 {{ total }} 条 · 第 {{ page }} / {{ totalPages }} 页</span>
+    <slot name="summary" :total-pages="totalPages">
+      <span>共 {{ total }} 条 · 第 {{ page }} / {{ totalPages }} 页</span>
+    </slot>
     <span class="list-pagination__size">每页
       <a-select
         class="list-pagination__size-select"
@@ -52,8 +57,10 @@ function onSelectChange(value: unknown) {
       :current="page"
       :page-size="pageSize"
       :total="total"
-      :show-jumper="showJumper && totalPages > 7"
+      :show-jumper="showJumper"
       :disabled="isDisabled"
+      :base-size="compactPages ? 5 : undefined"
+      :buffer-size="compactPages ? 1 : undefined"
       @change="(next: number) => emit('change', next)"
     />
   </footer>

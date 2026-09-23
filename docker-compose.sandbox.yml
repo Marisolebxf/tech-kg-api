@@ -1,0 +1,54 @@
+# Combine with one existing stack and sandbox/compose.{dev2,main,gray}.yml.
+# This file is opt-in; it does not replace the existing API/worker deployment.
+services:
+  script-runner:
+    build:
+      context: .
+      dockerfile: sandbox/Dockerfile.runner
+    image: techkg-script-runner:local
+    environment:
+      SCRIPT_RUNNER_TOKEN: ${SCRIPT_RUNNER_TOKEN:?Set a random token of at least 32 characters}
+      SCRIPT_SANDBOX_IMAGE: ${SCRIPT_SANDBOX_IMAGE:-techkg-script-sandbox:local}
+      SCRIPT_RUNNER_CONCURRENCY: ${SCRIPT_RUNNER_CONCURRENCY:-4}
+      SCRIPT_SANDBOX_MAX_SECONDS: ${SCRIPT_SANDBOX_MAX_SECONDS:-3600}
+      SCRIPT_SANDBOX_MEMORY_MB: ${SCRIPT_SANDBOX_MEMORY_MB:-256}
+      SCRIPT_SANDBOX_CPUS: ${SCRIPT_SANDBOX_CPUS:-1}
+      SCRIPT_SANDBOX_PIDS: ${SCRIPT_SANDBOX_PIDS:-32}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - script-runner-state:/var/lib/script-runner
+    networks:
+      - script-execution
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 512m
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; socket.create_connection(('127.0.0.1',8099),2).close()"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  script-sandbox-image:
+    profiles: ["sandbox-build"]
+    build:
+      context: .
+      dockerfile: sandbox/Dockerfile.runtime
+    image: ${SCRIPT_SANDBOX_IMAGE:-techkg-script-sandbox:local}
+    entrypoint: ["python", "-c", "print('Build-only sandbox image; executions are created by script-runner')"]
+    network_mode: none
+    read_only: true
+    user: "65532:65532"
+
+networks:
+  script-execution:
+    internal: true
+
+volumes:
+  script-runner-state:

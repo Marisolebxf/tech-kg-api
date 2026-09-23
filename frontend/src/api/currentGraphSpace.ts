@@ -1,7 +1,9 @@
-/** 当前全局图空间：从 graphSpace store 读取；store 未就绪时回退本地缓存/构建默认。 */
+/** 当前全局图空间：从 graphSpace store 读取；store 未就绪时回退构建默认。
+ * 持久化已按用户隔离（store 内处理），这里不再直接读 localStorage——
+ * 那会把别的账号（或旧版裸字符串）的选中值漏给当前用户。 */
 
 import { graphSpace as configuredDefault } from '../config'
-import { GRAPH_SPACE_STORAGE_KEY, useGraphSpaceStore } from '../stores/graphSpace'
+import { useGraphSpaceStore } from '../stores/graphSpace'
 
 export function currentGraphSpace(): string {
   try {
@@ -10,9 +12,5 @@ export function currentGraphSpace(): string {
   } catch {
     // pinia 未初始化（如单元测试），走回退
   }
-  try {
-    return localStorage.getItem(GRAPH_SPACE_STORAGE_KEY) || configuredDefault || 'dev'
-  } catch {
-    return configuredDefault || 'dev'
-  }
+  return configuredDefault || 'dev'
 }

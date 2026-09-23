@@ -37,6 +37,7 @@ from sqlalchemy import text
 
 from infra.graph_api_client import GraphAPIError, graph_api
 from infra.graph_db.config import TRSGraphSettings
+from infra.graph_exec_budget import loop_scoped_semaphore
 from infra.mysql import session_scope
 from service.base_module import KGModuleScaffoldService
 from service.confidence_scoring import edge_confidence
@@ -88,7 +89,13 @@ _FALLBACK_REASON_TEXT = {
 }
 
 # 补对端节点详情时的并发上限，避免 limit=100 时瞬间打满 trs-graph。
+# 按事件循环共享（进程级上限）：旧实现在每个请求里各建 Semaphore(5)，N 个
+# 并发冷请求可叠加 5N 个在飞 get_node——与论文合作旧版上下文子图同一问题。
 _PEER_FETCH_CONCURRENCY = 5
+
+
+def _peer_semaphore() -> asyncio.Semaphore:
+    return loop_scoped_semaphore("expert_direct_peer", _PEER_FETCH_CONCURRENCY)
 
 
 class ExpertDirectRelationService(KGModuleScaffoldService):
@@ -328,7 +335,8 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                 break
 
         # 对端节点相互独立，并发取详情；单个取不到就跳过，不影响其余关系。
-        semaphore = asyncio.Semaphore(_PEER_FETCH_CONCURRENCY)
+        # 信号量按事件循环共享，多个并发请求共用同一上限。
+        semaphore = _peer_semaphore()
 
         async def _resolve(peer_id: str) -> dict[str, Any] | None:
             async with semaphore:

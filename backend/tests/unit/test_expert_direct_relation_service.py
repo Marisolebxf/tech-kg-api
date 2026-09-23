@@ -337,3 +337,53 @@ async def test_query_reports_graph_api_error_on_timeout(monkeypatch) -> None:
     result = await ExpertDirectRelationService().query(expert_a_id="专家甲")
 
     assert result["source"]["reason"] == "graph_api_error"
+
+
+async def test_peer_fetch_semaphore_is_shared_across_requests(monkeypatch):
+    """对端详情并发上限按事件循环共享：并发请求叠加后峰值仍 ≤ 上限。
+
+    旧实现在每个请求里各建 Semaphore(5)，N 个并发冷请求会叠加 5N 个在飞
+    get_node；修复后两个并发请求一起受同一上限约束。
+    """
+    import asyncio
+
+    from service import expert_direct_relation
+
+    monkeypatch.setattr(expert_direct_relation, "_PEER_FETCH_CONCURRENCY", 2)
+    service = ExpertDirectRelationService()
+    monkeypatch.setattr(
+        ExpertDirectRelationService,
+        "_build_row",
+        lambda self, node_a, node_b, edge: {"peer": node_b["id"]},
+    )
+
+    class _PeerFakeClient:
+        def __init__(self):
+            self.in_flight = 0
+            self.peak = 0
+
+        async def get_node_edges(self, node_id, *, edge_type, limit):
+            return [
+                {
+                    "source": "person_A",
+                    "target": f"person_P{i}",
+                    "properties": {"co_paper_count": i},
+                }
+                for i in range(6)
+            ]
+
+        async def get_node(self, peer_id):
+            self.in_flight += 1
+            self.peak = max(self.peak, self.in_flight)
+            await asyncio.sleep(0.01)
+            self.in_flight -= 1
+            return {"id": peer_id, "properties": {"name_zh": peer_id}}
+
+    shared = _PeerFakeClient()
+    node_a = {"id": "person_A", "labels": ["Person"], "properties": {}}
+    await asyncio.gather(
+        service._collect_relations(shared, node_a, limit=6),
+        service._collect_relations(shared, node_a, limit=6),
+    )
+
+    assert shared.peak == 2  # 进程级上限对两个并发请求一起生效（旧实现会到 4）

@@ -59,6 +59,17 @@ _edge_types_cache: dict[str, tuple[float, list[str]]] = {}
 _SCHEMA_LIST_CACHE_TTL_SECONDS = float(os.getenv("TRS_GRAPH_SCHEMA_LIST_CACHE_SECONDS", "30"))
 _refresh_locks: dict[tuple[str, str], threading.Lock] = {}
 
+# 兜底执行预算（卡口2）：所有 REST 请求在发出前先取一个 trs 执行名额，
+# 覆盖不经 graph-search 公共执行层直连本客户端的调用方（校友/合作成果等
+# 同步业务、schema 管理、人工修正、ETL、控制台/图算法）。graph-search 侧
+# 的 async 预算（卡口1）排在前面，这里是最后一道：两层嵌套时外层无限等、
+# 内层限时（acquire timeout），内层必先超时放异常，不会互相死锁。
+# 注意与 console/algo 各自的外层信号量兼容：外层持有者最多把线程数压到
+# 本预算值，超出的等待者在超时后拿到 GraphRequestError（过载可见）。
+_TRS_EXEC_CONCURRENCY = max(1, int(os.getenv("TRS_EXEC_CONCURRENCY", "32")))
+_TRS_EXEC_WAIT_TIMEOUT = max(0.0, float(os.getenv("TRS_EXEC_WAIT_TIMEOUT", "5")))
+_trs_exec_slots = threading.BoundedSemaphore(_TRS_EXEC_CONCURRENCY)
+
 
 def _single_flight_cached(cache: dict, kind: str, space: str, ttl: float, fetch):
     """TTL 缓存 + 每键回源锁：过期瞬间只有一个线程回源，其余等它写回缓存。
@@ -104,6 +115,19 @@ def _vid_has_slash(node_id: Any) -> bool:
 def _ngql_quote(value: Any) -> str:
     """值转为 nGQL 双引号字符串字面量（转义反斜杠与双引号，防注入）。"""
     return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+# 批量 FETCH 单条语句的 VID 数上限：防语句过大（200 个 VID 约几 KB），
+# 超出分多条语句。子图补点的一跳新邻居（12 边类型 × limit 50 上界 ~600）最多 3 条。
+_BULK_FETCH_CHUNK = 200
+
+# 批量邻接 GO 的单语句行数上限：行按源连续返回，超上限即截断（调用方须
+# 对配额未满足的 (源, 类型) 回退单源 REST 补查）。4 千行含边属性约 1-2MB，
+# 与 /subgraph 端点自身的响应负载同量级。
+_EDGE_BULK_ROW_CAP = 4096
+
+# GO OVER 的边类型白名单：字母/下划线开头，防 nGQL 注入（与 REST edgeType 一致）。
+_EDGE_TYPE_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*", flags=re.ASCII)
 
 
 def _error_detail(resp: httpx.Response) -> str:
@@ -214,11 +238,28 @@ class TRSGraphClient:
     ) -> httpx.Response:
         if self._client is None:
             raise GraphConnectionError("Not connected — call connect() first")
+        # httpx 语义：request(timeout=None) 是"禁用超时"而非"沿用客户端默认"
+        # （默认值哨兵是 USE_CLIENT_DEFAULT）。不显式回退到 settings.timeout，
+        # 构造函数里配的默认超时会被 None 整体关掉，慢查询将无限占用线程/连接。
+        effective_timeout = timeout if timeout is not None else self._settings.timeout
+        # 兜底预算：等不到执行名额按过载拒绝（快速失败可见），timeout=0 即
+        # 非阻塞尝试（threading.Semaphore.acquire(timeout=0) 语义正好如此）。
+        if not _trs_exec_slots.acquire(timeout=_TRS_EXEC_WAIT_TIMEOUT):
+            raise GraphRequestError(
+                f"{method} {path} -> 图服务过载（等待执行名额超过 {_TRS_EXEC_WAIT_TIMEOUT}s）",
+                status_code=503,
+                body="",
+            )
         try:
-            resp = self._client.request(method, path, json=json, params=params, timeout=timeout)
-        except httpx.HTTPError as exc:
-            detail = f"{type(exc).__name__}: {exc}".rstrip(": ")
-            raise GraphConnectionError(f"Request failed: {method} {path} ({detail})") from exc
+            try:
+                resp = self._client.request(
+                    method, path, json=json, params=params, timeout=effective_timeout
+                )
+            except httpx.HTTPError as exc:
+                detail = f"{type(exc).__name__}: {exc}".rstrip(": ")
+                raise GraphConnectionError(f"Request failed: {method} {path} ({detail})") from exc
+        finally:
+            _trs_exec_slots.release()
         if resp.status_code == 404:
             raise GraphNotFoundError(f"{method} {path} -> 404")
         if not resp.is_success:
@@ -262,6 +303,106 @@ class TRSGraphClient:
         except GraphNotFoundError:
             return None
         return _trs_node_to_model(resp.json())
+
+    def get_nodes_bulk(self, node_ids: Sequence[Any]) -> dict[str, GraphNode]:
+        """按 VID 批量取节点：一条 FETCH PROP ON * 取整块，返回 vid → GraphNode。
+
+        子图遍历的新邻居补点用它替代逐个 get_node——一跳 N 个邻居从 N 次
+        TRS 往返降为 ceil(N/块大小) 次。查不到的 VID（悬挂点，边端点无 tag）
+        不在结果里，由调用方兜底占位，与单查 get_node 返回 None 等价。
+        含 ``/`` 的 VID 同样适用：FETCH 走查询端点，无 REST 单段路径限制。
+        """
+        unique_ids = [vid for vid in dict.fromkeys(str(v) for v in node_ids if v)]
+        found: dict[str, GraphNode] = {}
+        for start in range(0, len(unique_ids), _BULK_FETCH_CHUNK):
+            chunk = unique_ids[start : start + _BULK_FETCH_CHUNK]
+            quoted = ", ".join(_ngql_quote(vid) for vid in chunk)
+            result = self.execute_read(f"FETCH PROP ON * {quoted} YIELD vertex AS v")
+            for record in result.records or []:
+                vertex = record.get("v")
+                if isinstance(vertex, dict) and vertex.get("id") is not None:
+                    node = _trs_node_to_model(vertex)
+                    found[str(node.id)] = node
+        return found
+
+    def get_edges_bulk(
+        self,
+        node_ids: Sequence[Any],
+        edge_types: Sequence[str],
+        *,
+        direction: str = "both",
+        row_cap: int = _EDGE_BULK_ROW_CAP,
+    ) -> tuple[dict[tuple[str, str], list[GraphEdge]], bool]:
+        """多源多类型一跳邻接批量：至多两条 GO 覆盖 (源 × 边类型) 全组合。
+
+        返回 ((起点vid, 边类型) -> 边列表, 是否被 row_cap 截断)。子图逐跳邻接
+        用它替代逐组合 REST——12 边类型 × N 前沿节点从 12N 次往返降为每跳
+        1-2 次。方向口径与 REST /traversal 一致（存储真方向）：GO 的 ``$^``
+        恒为遍历起点（BIDIRECT/REVERSELY 下入边的 ``$^``=起点而非存储源，
+        2026-09-23 dev 空间实测），单条 BIDIRECT 无法还原存储方向，故 both
+        拆「正向 + REVERSELY」两条语句：正向行起点即存储源，REVERSELY 行
+        对端为存储源；边 id 统一 ``src->dst@rank``（REST 同款），同一条边
+        无论从哪端查询 id 一致，跨跳回边去重口径不破。
+        GO 的 ``| LIMIT`` 是全批行数上限且行按源连续返回，超高度数源可占满
+        行数上限把同批其他源挤掉（返回截断标志），调用方须对配额未满足的
+        组合回退单源 REST 补查，不能只吃批量结果。当前空间不存在的边类型
+        先按 schema 列表（TTL 缓存）滤除：GO OVER 不存在的类型整条语句
+        SemanticError，REST 逐类型查则是单类型 400 可跳过，过滤后两者等价。
+        注意批量行是裸 Nebula 结果：REST 会静默滤掉悬挂端点的边（实测
+        person→悬挂org 的 AFFILIATED_WITH 被吞），批量不做该过滤，由调用方
+        按端点存在性剔除。
+        """
+        roots = [str(v) for v in dict.fromkeys(str(v) for v in node_ids if v)]
+        if not roots:
+            return {}, False
+        existing = set(self.edge_types())
+        over = [
+            et
+            for et in dict.fromkeys(edge_types)
+            if _EDGE_TYPE_PATTERN.fullmatch(et or "") and et in existing
+        ]
+        if not over:
+            return {}, False
+        # 方向拆两条语句：正向（起点=存储源）与 REVERSELY（对端=存储源）
+        plans: list[tuple[str, bool]] = []
+        if direction in ("out", "both"):
+            plans.append(("", False))
+        if direction in ("in", "both"):
+            plans.append((" REVERSELY", True))
+        roots_part = ", ".join(_ngql_quote(v) for v in roots)
+        types_part = ", ".join(f"`{et}`" for et in over)
+        grouped: dict[tuple[str, str], list[GraphEdge]] = {}
+        truncated = False
+        for clause, reverse in plans:
+            statement = (
+                f"GO 1 STEP FROM {roots_part} OVER {types_part}{clause} "
+                "YIELD id($^) AS src, id($$) AS dst, type(edge) AS etype, "
+                "rank(edge) AS rk, properties(edge) AS props "
+                f"| LIMIT {int(row_cap)}"
+            )
+            result = self.execute_read(statement)
+            count = 0
+            for record in result.records or []:
+                root = record.get("src")  # $^ 恒为遍历起点
+                other = record.get("dst")  # $$ 对端
+                etype = record.get("etype")
+                if not root or not other or not etype:
+                    continue
+                rank = int(record.get("rk") or 0)
+                props = record.get("props")
+                edge_src, edge_dst = (other, root) if reverse else (root, other)
+                grouped.setdefault((str(root), str(etype)), []).append(
+                    GraphEdge(
+                        id=f"{edge_src}->{edge_dst}@{rank}",
+                        type=str(etype),
+                        source_id=edge_src,
+                        target_id=edge_dst,
+                        properties=props if isinstance(props, dict) else {},
+                    )
+                )
+                count += 1
+            truncated = truncated or count >= int(row_cap)
+        return grouped, truncated
 
     def get_nodes_by_label(
         self, label: str, *, limit: int = 100, offset: int = 0

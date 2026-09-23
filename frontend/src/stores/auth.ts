@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { currentSessionVersion, invalidateSessionVersion } from "../auth/sessionVersion";
+import { useGraphSpaceStore } from "./graphSpace";
 
 import {
   getCurrentProfile,
@@ -36,7 +37,7 @@ export const useAuthStore = defineStore("auth", {
       "未登录用户",
     primaryRole: (state) =>
       state.profile?.isAdmin
-        ? state.profile?.isDeveloper === true ? "开发人员" : "全局管理员"
+        ? "全局管理员"
         : state.profile?.businessRbacEnabled && state.profile?.platformRole === "developer" ? "开发维护" : state.profile?.roles?.[0]?.name || "普通用户",
     businessOnly: (state) => state.profile?.businessOnly === true,
     canDevelop: (state) => !state.profile?.businessOnly && Boolean(state.profile?.isAdmin || (state.profile?.businessRbacEnabled && state.profile?.canDevelop)),
@@ -49,6 +50,7 @@ export const useAuthStore = defineStore("auth", {
       this.profile = null;
       this.initialized = true;
       this.loading = false;
+      useGraphSpaceStore().reset();
     },
     async loadCurrentUser(force = false): Promise<AuthProfile | null> {
       if (this.loggingOut || this.skipSilentLogin) return null;
@@ -62,6 +64,7 @@ export const useAuthStore = defineStore("auth", {
           const profile = await getCurrentProfile();
           if (version !== currentSessionVersion()) return null;
           this.profile = profile;
+          useGraphSpaceStore().bindUser(String(profile.user?.id ?? ""));
           return profile;
         } catch (error) {
           if (version !== currentSessionVersion()) return null;
@@ -90,6 +93,7 @@ export const useAuthStore = defineStore("auth", {
       const profile = await refreshCurrentSession();
       if (version !== currentSessionVersion()) return null;
       this.profile = profile;
+      useGraphSpaceStore().bindUser(String(profile.user?.id ?? ""));
       this.initialized = true;
       return profile;
     },

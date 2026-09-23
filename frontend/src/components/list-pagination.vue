@@ -1,7 +1,6 @@
 <script setup lang="ts">
 // 平台统一的列表分页条：共 N 条 · 第 x / y 页 + 每页条数 + 跳页。
 // 客户端/服务端分页通用——total 由调用方给出（客户端传源数组长度，服务端传接口 total）。
-// 跳页框（前往）恒显：不按总页数阈值隐藏，保证各页面右下角功能一致。
 import { computed } from 'vue'
 import { Pagination as APagination, Select as ASelect } from '@arco-design/web-vue'
 
@@ -57,7 +56,7 @@ function onSelectChange(value: unknown) {
       :current="page"
       :page-size="pageSize"
       :total="total"
-      :show-jumper="showJumper"
+      :show-jumper="showJumper && totalPages > 7"
       :disabled="isDisabled"
       :base-size="compactPages ? 5 : undefined"
       :buffer-size="compactPages ? 1 : undefined"

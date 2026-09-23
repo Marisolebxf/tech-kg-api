@@ -6,7 +6,7 @@ import type { AuthProfile } from '../../../api/auth'
 import { getPlatformOverview } from '../../../api/platformOverview'
 import { useAuthStore } from '../../../stores/auth'
 import { useGraphSpaceStore } from '../../../stores/graphSpace'
-import { getProductionReviews, listJobs, type WorkflowJob } from '../../../api/workflowOperations'
+import { getProductionReviews, listJobs } from '../../../api/workflowOperations'
 import PlatformWorkbenchView from '../PlatformWorkbenchView.vue'
 
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }), RouterLink: { template: '<a><slot /></a>' } }))
@@ -23,7 +23,6 @@ vi.mock('../../../api/workflowOperations', () => ({
   getProductionReviews: vi.fn(),
   deriveJobUnifiedStatus: (job: { status?: string }) => job.status ?? '未运行',
   countJobUnifiedStatuses: () => ({ 未运行: 0, 运行中: 0, 已暂停: 0, 已完成: 0, 运行失败: 0 }),
-  jobGraphSpace: (job: { graphSpace?: string }, def: string, cur: string) => job.graphSpace || def || cur,
   JOB_STATUS_TONE: { 未运行: 'warn', 运行中: 'run', 已暂停: 'warn', 已完成: 'ok', 运行失败: 'err' },
 }))
 vi.mock('../../../api/platformOverview', () => ({ getPlatformOverview: vi.fn() }))
@@ -88,6 +87,25 @@ afterEach(() => {
 })
 
 describe('平台总览管理入口按角色隐藏', () => {
+  it('开发维护使用原面板，公共空间审核被拒后清除旧业务空间记录，迟到响应不能覆盖', async () => {
+    useAuthStore().profile = { ...makeProfile(false), businessRbacEnabled: true, canDevelop: true, platformRole: 'developer' }
+    const spaces = useGraphSpaceStore()
+    spaces.spaces = ['business', 'public']
+    spaces.setCurrent('business')
+    let finishOld!: (value: Awaited<ReturnType<typeof getProductionReviews>>) => void
+    vi.mocked(getProductionReviews).mockReturnValueOnce(new Promise(resolve => { finishOld = resolve }))
+      .mockRejectedValueOnce({ response: { status: 403 } })
+    wrapper = mountOverview()
+    await flushPromises()
+    expect(getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ graphSpace: 'business' }))
+    spaces.setCurrent('public')
+    await flushPromises()
+    expect(getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ graphSpace: 'public' }))
+    finishOld({ items: [{ id: 'old-private-case', objectName: '旧业务审核' }] as never, total: 1, page: 1, pageSize: 5 })
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('旧业务审核')
+    expect(useAuthStore().isAdmin).toBe(false)
+  })
   it('普通用户：隐藏查看任务/进入人工处理按钮与图谱构建/人工审核面板，且不发起 admin 接口请求', async () => {
     useAuthStore().profile = makeProfile(false)
     wrapper = mountOverview()
@@ -116,81 +134,5 @@ describe('平台总览管理入口按角色隐藏', () => {
     expect(text).toContain('人工审核')
     expect(listJobs).toHaveBeenCalled()
     expect(getProductionReviews).toHaveBeenCalled()
-  })
-})
-
-function jobFixture(id: string, overrides: Partial<WorkflowJob>): WorkflowJob {
-  return {
-    id,
-    name: `任务${id}`,
-    taskType: 'extract',
-    definitionIds: [`def-${id}`],
-    definitionId: `def-${id}`,
-    schedule: { kind: 'once' },
-    owner: 'tester',
-    status: '启用',
-    createdAt: '2026-09-19 09:00:00',
-    ...overrides,
-  } as WorkflowJob
-}
-
-describe('总览任务卡与图谱构建页同空间口径', () => {
-  it('只统计当前图空间：跨空间任务不进最近列表，历史无空间任务落默认空间', async () => {
-    useAuthStore().profile = makeProfile(true)
-    const spaceStore = useGraphSpaceStore()
-    spaceStore.spaces = ['dev', 'gaoxing_test']
-    spaceStore.current = 'dev'
-    vi.mocked(listJobs).mockResolvedValue({
-      items: [
-        jobFixture('j-dev', { graphSpace: 'dev', lastExecutionStatus: 'COMPLETED' }),
-        jobFixture('j-cross', { graphSpace: 'gaoxing_test', lastExecutionStatus: 'COMPLETED' }),
-        jobFixture('j-legacy', { graphSpace: undefined, lastExecutionStatus: 'FAILED' }),
-      ],
-      total: 3,
-    })
-
-    wrapper = mountOverview()
-    await flushPromises()
-
-    const text = wrapper.text()
-    expect(text).toContain('任务j-dev')
-    // 无 graphSpace 的历史任务落默认空间（空间列表首位 dev），仍可见
-    expect(text).toContain('任务j-legacy')
-    expect(text).not.toContain('任务j-cross')
-  })
-
-  it('切换全局图空间后任务卡随图资产一起重拉', async () => {
-    useAuthStore().profile = makeProfile(true)
-    const spaceStore = useGraphSpaceStore()
-    spaceStore.spaces = ['dev', 'gaoxing_test']
-    spaceStore.current = 'dev'
-    vi.mocked(listJobs).mockResolvedValue({ items: [], total: 0 })
-
-    wrapper = mountOverview()
-    await flushPromises()
-    expect(listJobs).toHaveBeenCalledTimes(1)
-
-    spaceStore.setCurrent('gaoxing_test')
-    await flushPromises()
-    expect(listJobs).toHaveBeenCalledTimes(2)
-  })
-
-  it('人工审核卡与队列页同口径：请求带当前图空间，切空间后带新空间重拉', async () => {
-    useAuthStore().profile = makeProfile(true)
-    const spaceStore = useGraphSpaceStore()
-    spaceStore.spaces = ['dev', 'gaoxing_test']
-    spaceStore.current = 'dev'
-
-    wrapper = mountOverview()
-    await flushPromises()
-    expect(getProductionReviews).toHaveBeenCalledWith(
-      expect.objectContaining({ graphSpace: 'dev', statusGroup: 'pending', pageSize: 5 }),
-    )
-
-    spaceStore.setCurrent('gaoxing_test')
-    await flushPromises()
-    expect(getProductionReviews).toHaveBeenLastCalledWith(
-      expect.objectContaining({ graphSpace: 'gaoxing_test' }),
-    )
   })
 })

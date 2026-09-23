@@ -2,7 +2,6 @@
 import {
   computed,
   onUnmounted,
-  reactive,
   ref,
   watch,
 } from 'vue'
@@ -19,14 +18,11 @@ import {
   type AssetOverviewKey,
   type PlatformOverviewData,
   type StructureItem,
-  type StructureMember,
 } from '../../api/platformOverview'
-import { pieSlices } from './pieSlices'
 import {
   countJobUnifiedStatuses,
   deriveJobUnifiedStatus,
   getProductionReviews,
-  jobGraphSpace,
   JOB_STATUS_TONE,
   listJobs,
   type ProductionReviewCase,
@@ -46,7 +42,6 @@ import QueryResultTable from './QueryResultTable.vue'
 import { IconInfoCircle } from '@arco-design/web-vue/es/icon'
 import { authDisabled } from '../../config'
 import { useAuthStore } from '../../stores/auth'
-import { useGraphSpaceStore } from '../../stores/graphSpace'
 import {
   fetchGraphAlgorithmEngine,
   fetchGraphAlgorithmMetadata,
@@ -281,7 +276,6 @@ const router = useRouter()
 // 图谱构建与人工审核面板、资产抽屉的更新任务链接）对普通用户直接隐藏，仅管理员可见。
 const authStore = useAuthStore()
 const canEnterAdminPages = computed(() => !authStore.businessOnly && (authDisabled || authStore.canDevelop))
-const graphSpaceStore = useGraphSpaceStore()
 
 const activeTab = ref<PlatformTab>(props.initialTab ?? 'overview')
 const activeServiceKey = ref(props.initialServiceKey ?? modules[0]?.key ?? '')
@@ -568,22 +562,10 @@ const assetChangeRows = ref<Record<AssetOverviewKey, AssetChangeRow[]>>({
   relation: [],
   property: [],
 })
-// 新增明细对象/来源列的悬浮浮窗只在文本确实被截断时出现（未截断不出框）：
-// mouseenter 时量 scrollWidth>clientWidth 才置位，mouseleave 复位
-const assetTipVisible = reactive(new Set<string>())
-function showAssetTipIfTruncated(key: string, event: MouseEvent) {
-  const el = event.currentTarget as HTMLElement | null
-  if (el && el.scrollWidth > el.clientWidth + 1) assetTipVisible.add(key)
-}
-function hideAssetTip(key: string) {
-  assetTipVisible.delete(key)
-}
 const entityStructure = ref<StructureItem[]>([])
 const relationStructure = ref<StructureItem[]>([])
 
-// 总览两卡片：直连任务/审核队列真实数据（不进 platform_overview 的 60s 缓存），各自容错。
-// 任务卡与图谱构建页同空间口径：默认只看当前图空间（历史无空间任务落默认空间），
-// 不带「全部空间」开关——与图资产/今日新增随全局图空间过滤的语义一致。
+// 总览两卡片：直连任务/审核队列真实数据（不进 platform_overview 的 60s 缓存），各自容错
 const overviewJobs = ref<WorkflowJob[]>([])
 const overviewJobsState = ref<'loading' | 'ready' | 'error'>('loading')
 const overviewJobsError = ref('')
@@ -592,14 +574,8 @@ const overviewReviewsTotal = ref(0)
 const overviewReviewsState = ref<'loading' | 'ready' | 'empty' | 'forbidden' | 'error'>('loading')
 const overviewReviewsError = ref('')
 
-const visibleOverviewJobs = computed(() =>
-  overviewJobs.value.filter(
-    (job) => jobGraphSpace(job, graphSpaceStore.spaces[0] ?? '', algoSpace.value) === algoSpace.value,
-  ),
-)
-
 const overviewJobStats = computed(() => {
-  const counts = countJobUnifiedStatuses(visibleOverviewJobs.value)
+  const counts = countJobUnifiedStatuses(overviewJobs.value)
   return [
     { label: '运行中', value: counts['运行中'], tone: JOB_STATUS_TONE['运行中'] },
     { label: '已完成', value: counts['已完成'], tone: JOB_STATUS_TONE['已完成'] },
@@ -609,7 +585,7 @@ const overviewJobStats = computed(() => {
 })
 
 const recentOverviewJobs = computed(() =>
-  [...visibleOverviewJobs.value]
+  [...overviewJobs.value]
     .sort((a, b) => String(b.lastRunAt || b.createdAt || '').localeCompare(String(a.lastRunAt || a.createdAt || '')))
     .slice(0, 5),
 )
@@ -621,31 +597,37 @@ function isForbiddenError(error: unknown): boolean {
   return /403|权限|无权/.test(getErrorMessage(error))
 }
 
+let overviewCardsRequest = 0
 async function loadOverviewCards(): Promise<void> {
+  const request = ++overviewCardsRequest
+  const space = algoSpace.value
+  const userId = authStore.profile?.user?.id
+  const isCurrent = () => request === overviewCardsRequest && space === algoSpace.value && userId === authStore.profile?.user?.id && canEnterAdminPages.value
+  overviewJobs.value = []
+  overviewReviews.value = []
+  overviewReviewsTotal.value = 0
   // 图谱构建/人工审核面板仅管理员可见：普通用户不发起这两个 admin 接口请求
   if (!canEnterAdminPages.value) return
   overviewJobsState.value = 'loading'
   overviewReviewsState.value = 'loading'
   try {
     const data = await listJobs()
+    if (!isCurrent()) return
     overviewJobs.value = data.items
     overviewJobsState.value = 'ready'
   } catch (error) {
+    if (!isCurrent()) return
     overviewJobsError.value = getErrorMessage(error)
     overviewJobsState.value = 'error'
   }
   try {
-    // 人工审核卡片与队列页同口径：按当前图空间取待处理 top5（algoSpace 变化由下方 watch 重拉）
-    const data = await getProductionReviews({
-      graphSpace: algoSpace.value || undefined,
-      statusGroup: 'pending',
-      page: 1,
-      pageSize: 5,
-    })
+    const data = await getProductionReviews({ graphSpace: space || undefined, statusGroup: 'pending', page: 1, pageSize: 5 })
+    if (!isCurrent()) return
     overviewReviews.value = data.items
     overviewReviewsTotal.value = data.total
     overviewReviewsState.value = data.items.length ? 'ready' : 'empty'
   } catch (error) {
+    if (!isCurrent()) return
     overviewReviewsError.value = getErrorMessage(error)
     overviewReviewsState.value = isForbiddenError(error) ? 'forbidden' : 'error'
   }
@@ -662,53 +644,6 @@ function reviewItemRoute(item: ProductionReviewCase): string | { path: string; q
 const activeAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === selectedAssetChange.value))
 const entityAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === 'entity'))
 const relationAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === 'relation'))
-
-// 构成图饼图分段由图例数据驱动（pieSlices 纯函数，随图例 tone+ratio 生成扇形 path）；
-// 图上只标百分比。饼图扇区全部保留悬浮（外移放大 + 浮窗）；右侧图例只有「其他」
-// 段（isOther）保留悬浮，其浮窗（扇区+图例）列成员 Schema 中文名清单。
-const entityPieSlices = computed(() => pieSlices(entityStructure.value))
-const relationPieSlices = computed(() => pieSlices(relationStructure.value))
-/** 「其他」段浮窗最多列出的成员数，超出折叠为「还有 N 类」 */
-const PIE_TIP_MEMBER_CAP = 10
-const pieHoverKey = ref('')
-// x/y 为视口坐标（clientX/clientY 偏移）：浮窗 Teleport 到 body 后 position:fixed 直接锚视口
-const pieTip = ref<{
-  chart: string
-  label: string
-  count: string
-  ratio: number
-  members: StructureMember[]
-  moreCount: number
-  x: number
-  y: number
-} | null>(null)
-function showPieTip(chart: string, slice: { item: StructureItem }, event: MouseEvent) {
-  pieHoverKey.value = `${chart}-${slice.item.label}`
-  // 成员清单只随「其他」段展示：前 4 单 Schema 段浮窗只列名称/数量/占比
-  const members = slice.item.isOther ? slice.item.members ?? [] : []
-  pieTip.value = {
-    chart,
-    label: slice.item.label,
-    count: slice.item.count,
-    ratio: slice.item.ratio,
-    members: members.slice(0, PIE_TIP_MEMBER_CAP),
-    moreCount: Math.max(0, members.length - PIE_TIP_MEMBER_CAP),
-    x: event.clientX + 12,
-    y: event.clientY - 8,
-  }
-}
-function movePieTip(event: MouseEvent) {
-  if (!pieTip.value) return
-  pieTip.value = {
-    ...pieTip.value,
-    x: event.clientX + 12,
-    y: event.clientY - 8,
-  }
-}
-function hidePieTip(chart: string) {
-  if (pieTip.value?.chart === chart) pieTip.value = null
-  pieHoverKey.value = ''
-}
 
 const sourceRows = [
   { object: '专家人才基础信息', table: 'expert_profile', domain: '人才域', schedule: '每日定时', frequency: '02:00', latest: '2026-07-13 02:04', status: '正常', task: 'DP-20260713-0150' },
@@ -1142,6 +1077,7 @@ watch(algoSpace, () => {
 
 onUnmounted(() => {
   graphContextVersion += 1
+  overviewCardsRequest += 1
   stopAlgoPoll()
 })
 
@@ -1169,20 +1105,18 @@ async function loadPlatformOverview(): Promise<void> {
 }
 
 
-// 总览数据只在 overview tab 可见时加载：/graph-query 等其他 tab 挂载时
-// 不渲染总览内容，提前拉取是纯浪费（listJobs 还会触发后端 Temporal 复核级联）。
-// 资产数据首次可见加载一次（后端自带 60s 缓存）；任务卡每次切回总览都刷新（状态可能已变）。
+// 总览数据只在 overview tab 首次可见时加载：/graph-query 等其他 tab 挂载时
+// 不渲染总览内容，提前拉取是纯浪费（listJobs 还会触发后端 Temporal 复核级联）
 const overviewDataLoaded = ref(false)
 watch(activeTab, (tab) => {
-  if (tab !== 'overview') return
-  if (!overviewDataLoaded.value) {
+  if (tab === 'overview' && !overviewDataLoaded.value) {
     overviewDataLoaded.value = true
     void loadPlatformOverview()
+    void loadOverviewCards()
   }
-  void loadOverviewCards()
 }, { immediate: true })
 
-// 全局图空间切换后重载已展示的总览（图资产/今日新增/任务卡均按空间隔离）
+// 全局图空间切换后重载已展示的总览（统计按空间隔离）
 watch(algoSpace, () => {
   if (overviewDataLoaded.value) {
     void loadPlatformOverview()
@@ -1239,7 +1173,7 @@ const pageMeta = computed(() => {
       <div class="platform-hero__main">
         <h1>{{ pageMeta.title }}</h1>
       </div>
-      <div class="platform-hero__actions"><span :title="overviewMeta.warnings.join('\n')"><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个执行运行中 · {{ overviewMeta.dataMode === 'live' ? '实时数据' : overviewMeta.dataMode === 'partial' ? '部分实时' : '降级数据' }}</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看任务</RouterLink><RouterLink v-if="canEnterAdminPages" to="/manual-review">进入人工处理</RouterLink></div>
+      <div class="platform-hero__actions"><span :title="overviewMeta.warnings.join('\n')"><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个批次待处理 · {{ overviewMeta.dataMode === 'live' ? '实时数据' : overviewMeta.dataMode === 'partial' ? '部分实时' : '降级数据' }}</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看任务</RouterLink><RouterLink v-if="canEnterAdminPages" to="/manual-review">进入人工处理</RouterLink></div>
     </header>
 
     <header v-else-if="activeTab !== 'query'" class="platform-page-head">
@@ -1259,15 +1193,9 @@ const pageMeta = computed(() => {
       <section class="kg-panel platform-structure-overview">
         <div class="kg-panel__header"><div><h2 class="kg-panel__title">当前图谱资产</h2></div><span>实体 {{ entityAssetOverview?.total ?? '--' }} · 关系 {{ relationAssetOverview?.total ?? '--' }} · 数据截至 {{ overviewMeta.updatedAt }}</span></div>
         <div class="platform-structure-grid">
-          <div class="platform-structure-chart"><header><strong>实体标签构成</strong></header><div class="platform-pie-layout"><div class="platform-pie-wrap"><svg class="platform-pie is-entity" viewBox="0 0 160 160" role="img" aria-label="实体标签构成饼图"><circle v-if="!entityPieSlices.length" cx="80" cy="80" r="64" fill="#e5edf8" /><g v-for="slice in entityPieSlices" :key="slice.item.label" class="platform-pie-slice" :class="{ 'is-other': slice.item.isOther }" :style="{ transform: pieHoverKey === `entity-${slice.item.label}` ? `translate(${slice.dx}px, ${slice.dy}px)` : undefined }" @mouseenter="showPieTip('entity', slice, $event)" @mousemove="movePieTip" @mouseleave="hidePieTip('entity')"><path :d="slice.path" :fill="slice.item.tone" /><text v-if="slice.showLabel" :x="slice.labelX" :y="slice.labelY">{{ slice.percent }}%</text></g></svg></div><div class="platform-structure-legend"><article v-for="item in entityStructure" :key="item.label"><span><i :style="{ background: item.tone }" /><a-tooltip v-if="item.isOther" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><span class="platform-legend-label">{{ item.label }}</span><template #content><div class="platform-legend-members"><template v-if="item.members?.length"><div v-for="m in item.members" :key="m.name">{{ m.name }} · {{ m.count.toLocaleString() }}</div></template><div v-else>暂无标签数据</div></div></template></a-tooltip><span v-else>{{ item.label }}</span></span><strong class="platform-legend-ratio">{{ item.ratio }}%</strong></article></div></div></div>
-          <div class="platform-structure-chart"><header><strong>关系类型构成</strong></header><div class="platform-pie-layout"><div class="platform-pie-wrap"><svg class="platform-pie is-relation" viewBox="0 0 160 160" role="img" aria-label="关系类型构成饼图"><circle v-if="!relationPieSlices.length" cx="80" cy="80" r="64" fill="#e5edf8" /><g v-for="slice in relationPieSlices" :key="slice.item.label" class="platform-pie-slice" :class="{ 'is-other': slice.item.isOther }" :style="{ transform: pieHoverKey === `relation-${slice.item.label}` ? `translate(${slice.dx}px, ${slice.dy}px)` : undefined }" @mouseenter="showPieTip('relation', slice, $event)" @mousemove="movePieTip" @mouseleave="hidePieTip('relation')"><path :d="slice.path" :fill="slice.item.tone" /><text v-if="slice.showLabel" :x="slice.labelX" :y="slice.labelY">{{ slice.percent }}%</text></g></svg></div><div class="platform-structure-legend"><article v-for="item in relationStructure" :key="item.label"><span><i :style="{ background: item.tone }" /><a-tooltip v-if="item.isOther" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><span class="platform-legend-label">{{ item.label }}</span><template #content><div class="platform-legend-members"><template v-if="item.members?.length"><div v-for="m in item.members" :key="m.name">{{ m.name }} · {{ m.count.toLocaleString() }}</div></template><div v-else>暂无类型数据</div></div></template></a-tooltip><span v-else>{{ item.label }}</span></span><strong class="platform-legend-ratio">{{ item.ratio }}%</strong></article></div></div></div>
+          <div class="platform-structure-chart"><header><strong>实体分类占比</strong></header><div class="platform-donut-layout"><div class="platform-donut is-entity"><span><strong>{{ entityAssetOverview?.total ?? '--' }}</strong><em>{{ entityAssetOverview?.totalLabel ?? '实体总量' }}</em></span></div><div class="platform-structure-legend"><article v-for="item in entityStructure" :key="item.schema"><span><i :style="{ background: item.tone }" />{{ item.label }}<em>{{ item.schema }}</em></span><strong>{{ item.count }}<em>{{ item.ratio }}%</em></strong></article></div></div></div>
+          <div class="platform-structure-chart"><header><strong>关系分类占比</strong></header><div class="platform-donut-layout"><div class="platform-donut is-relation"><span><strong>{{ relationAssetOverview?.total ?? '--' }}</strong><em>{{ relationAssetOverview?.totalLabel ?? '关系总量' }}</em></span></div><div class="platform-structure-legend"><article v-for="item in relationStructure" :key="item.schema"><span><i :style="{ background: item.tone }" />{{ item.label }}<em>{{ item.schema }}</em></span><strong>{{ item.count }}<em>{{ item.ratio }}%</em></strong></article></div></div></div>
         </div>
-        <!-- 饼图扇区浮窗必须 Teleport 到 body：所在 .kg-panel 带 backdrop-filter（自成层叠上下文）
-             且 overflow:hidden——不传送时浮窗溢出面板的部分会被裁剪，还会被 DOM 靠后的相邻面板
-             （图谱构建/人工审核卡）盖住；挂到 body 后 position:fixed 与图例 a-tooltip 同层最上。 -->
-        <Teleport to="body">
-          <div v-if="pieTip" class="platform-pie-tip" :style="{ left: pieTip.x + 'px', top: pieTip.y + 'px' }"><strong>{{ pieTip.label }}</strong><span>{{ pieTip.count }} · {{ pieTip.ratio }}%</span><div v-if="pieTip.members.length" class="platform-pie-tip-members"><div v-for="m in pieTip.members" :key="m.name">{{ m.name }} · {{ m.count.toLocaleString() }}</div><div v-if="pieTip.moreCount" class="platform-pie-tip-more">…还有 {{ pieTip.moreCount }} 类</div></div></div>
-        </Teleport>
       </section>
 
       <section v-if="canEnterAdminPages" class="platform-overview-main">
@@ -1764,7 +1692,7 @@ const pageMeta = computed(() => {
               <AEmpty :description="algoSubmitLoading ? '正在提交作业，请稍候…' : isAlgoJobRunning ? '算法运行中，完成后自动展示结果' : algoResult ? (algoSearch ? '没有匹配的结果，请调整搜索条件' : '算法执行成功，无返回记录') : algoJob?.status === 'failed' ? '算法执行失败，请查看上方失败原因' : '暂无数据，提交算法作业后在此查看结果'" />
             </div>
           </div>
-          <ListPagination v-if="algoTotal > 0" :total="algoTotal" :page="algoPage" :page-size="algoPageSize" @change="changeAlgoPage" @change-size="changeAlgoPageSize" />
+          <ListPagination v-if="algoTotal > 0" :total="algoTotal" :page="algoPage" :page-size="algoPageSize" :page-size-options="[20, 50, 100]" :show-jumper="false" @change="changeAlgoPage" @change-size="changeAlgoPageSize" />
         </div>
       </section>
 
@@ -1948,18 +1876,13 @@ print(response.json())</pre>
       </template>
     </main>
 
-    <!-- 今日新增抽屉/遮罩必须 Teleport 到 body：祖先 .app-stage 带 backdrop-filter，
-         会成为 fixed 后代的 containing block——不传送时 fixed 是相对 .app-stage（顶栏
-         之下）定位的，height:100vh 的底部整段被顶出视口，表尾与 footer 永久看不见。 -->
-    <Teleport to="body">
-      <button v-if="selectedAssetChange" class="asset-change-mask" type="button" aria-label="关闭新增数据详情" @click="selectedAssetChange = null" />
-      <aside aria-label="辅助区域 4" v-if="selectedAssetChange && activeAssetOverview" class="asset-change-drawer">
-        <header><div><span>今日图谱数据变化</span><h2>{{ activeAssetOverview.title }}新增明细</h2><p>{{ activeAssetOverview.addedLabel }} {{ activeAssetOverview.added }} · 数据更新至 {{ overviewMeta.updatedAt }}</p></div><button type="button" @click="selectedAssetChange = null">×</button></header>
-        <section class="asset-change-summary"><article><span>当前总量</span><strong>{{ activeAssetOverview.total }}</strong></article><article><span>{{ activeAssetOverview.addedLabel }}</span><strong>{{ activeAssetOverview.added }}</strong></article></section>
-        <div class="asset-change-table"><table aria-label="数据表"><thead><tr><th>数据类型</th><th>具体对象</th><th>变更内容</th><th>来源</th><th>识别时间</th></tr></thead><tbody><tr v-if="!assetChangeRows[selectedAssetChange].length"><td colspan="5">今日暂无写图记录</td></tr><tr v-for="(row, idx) in assetChangeRows[selectedAssetChange]" :key="`${row.object}-${row.time}`"><td>{{ row.type }}</td><td><a-tooltip :popup-visible="assetTipVisible.has(`obj-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`obj-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><span class="asset-change-object" @mouseenter="showAssetTipIfTruncated(`obj-${idx}`, $event)" @mouseleave="hideAssetTip(`obj-${idx}`)"><strong>{{ row.object }}</strong></span><template #content>{{ row.object }}</template></a-tooltip></td><td>{{ row.change }}</td><td><a-tooltip :popup-visible="assetTipVisible.has(`src-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`src-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><code class="asset-change-source" @mouseenter="showAssetTipIfTruncated(`src-${idx}`, $event)" @mouseleave="hideAssetTip(`src-${idx}`)">{{ row.source }}</code><template #content>{{ row.source }}</template></a-tooltip></td><td>{{ row.time }}</td></tr></tbody></table></div>
-        <footer><span>{{ assetChangeRows[selectedAssetChange].length }} 条变化</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看对应更新任务 →</RouterLink></footer>
-      </aside>
-    </Teleport>
+    <button v-if="selectedAssetChange" class="asset-change-mask" type="button" aria-label="关闭新增数据详情" @click="selectedAssetChange = null" />
+    <aside aria-label="辅助区域 4" v-if="selectedAssetChange && activeAssetOverview" class="asset-change-drawer">
+      <header><div><span>今日图谱数据变化</span><h2>{{ activeAssetOverview.title }}新增明细</h2><p>{{ activeAssetOverview.addedLabel }} {{ activeAssetOverview.added }} · 数据更新至 {{ overviewMeta.updatedAt }}</p></div><button type="button" @click="selectedAssetChange = null">×</button></header>
+      <section class="asset-change-summary"><article><span>当前总量</span><strong>{{ activeAssetOverview.total }}</strong></article><article><span>{{ activeAssetOverview.addedLabel }}</span><strong>{{ activeAssetOverview.added }}</strong></article></section>
+      <div class="asset-change-table"><table aria-label="数据表"><thead><tr><th>数据类型</th><th>具体对象</th><th>变更内容</th><th>来源</th><th>识别时间</th></tr></thead><tbody><tr v-for="row in assetChangeRows[selectedAssetChange]" :key="`${row.object}-${row.time}`"><td>{{ row.type }}</td><td><strong>{{ row.object }}</strong></td><td>{{ row.change }}</td><td><code>{{ row.source }}</code></td><td>{{ row.time }}</td></tr></tbody></table></div>
+      <footer><span>{{ assetChangeRows[selectedAssetChange].length }} 条变化</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看对应更新任务 →</RouterLink></footer>
+    </aside>
 
   </div>
 </template>
@@ -2307,28 +2230,21 @@ print(response.json())</pre>
 .platform-structure-chart header { display:flex;align-items:center;justify-content:space-between;margin-bottom:8px; }
 .platform-structure-chart header>strong { color:#253752;font-size:13px; }
 .platform-structure-chart header>a { color:#004ecc;font-size:11px;text-decoration:none; }
-.platform-pie-layout { display:grid;grid-template-columns:170px minmax(0,1fr);align-items:center;gap:20px;min-height:150px; }
-.platform-pie-wrap { position:relative;width:154px;height:154px; }
-.platform-pie { display:block;width:154px;height:154px; }
-/* 饼图悬浮放大互动：分段沿中角外移（transform 由模板按悬浮态内联绑定），白描边分隔 */
-.platform-pie-slice { transition:transform .18s ease;cursor:pointer; }
-.platform-pie-slice path { stroke:#fff;stroke-width:1.5; }
-.platform-pie-slice text { pointer-events:none;fill:#fff;font-size:11px;font-weight:600;text-anchor:middle;dominant-baseline:middle; }
-/* 扇区悬浮白底浮窗（分类名 + 数量 + 占比；图上静态只标百分比） */
-/* 浮窗随 Teleport 挂 body，fixed 锚视口；z-index 对齐 Arco 弹层（同图例 a-tooltip） */
-.platform-pie-tip { position:fixed;z-index:1050;display:grid;gap:2px;padding:6px 10px;border:1px solid #e5edf8;border-radius:6px;background:#fff;box-shadow:0 4px 14px rgba(16,38,76,.14);pointer-events:none;white-space:nowrap; }
-.platform-pie-tip strong { color:#10264c;font-size:11px; }
-.platform-pie-tip span { color:#52627a;font-size:10px; }
-.platform-pie-tip-members { display:grid;gap:1px;margin-top:4px;padding-top:4px;border-top:1px solid #e5edf8; }
-.platform-pie-tip-members div { color:#52627a;font-size:10px; }
-.platform-pie-tip-members .platform-pie-tip-more { color:#98a2b3; }
+.platform-donut-layout { display:grid;grid-template-columns:170px minmax(0,1fr);align-items:center;gap:20px;min-height:150px; }
+.platform-donut { position:relative;display:grid;place-items:center;width:154px;height:154px;border-radius:50%; }
+.platform-donut::after { position:absolute;inset:25px;border-radius:50%;background:#fff;box-shadow:0 0 0 1px #e5edf8;content:""; }
+.platform-donut.is-entity { background:conic-gradient(#2e90fa 0 34%,#7a5af8 34% 57%,#067647 57% 74%,#f79009 74% 85%,#59636f 85% 100%); }
+.platform-donut.is-relation { background:conic-gradient(#004ecc 0 32%,#2e90fa 32% 52%,#06aed4 52% 70%,#7a5af8 70% 84%,#59636f 84% 100%); }
+.platform-donut>span { position:relative;z-index:1;display:grid;gap:2px;text-align:center; }
+.platform-donut>span strong { color:#10264c;font-size:19px; }
+.platform-donut>span em { color:#52627a;font-size:10px;font-style:normal; }
 .platform-structure-legend article { display:grid;grid-template-columns:minmax(0,1fr) 160px;align-items:center;gap:14px;min-height:34px;border-bottom:1px solid #edf2f8; }
 .platform-structure-legend article:last-child { border-bottom:0; }
 .platform-structure-legend article>span { display:flex;align-items:center;gap:7px;min-width:0;overflow:hidden;color:#40516c;font-size:11px;white-space:nowrap; }
 .platform-structure-legend article>span>i { flex:0 0 auto;width:8px;height:8px;border-radius:50%; }
 .platform-structure-legend article em { overflow:hidden;color:#59636f;font-size:9px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }
-/* 图例右侧只展示百分比（数量在扇区悬浮浮窗里） */
-.platform-structure-legend article>strong { color:#40516c;font-size:12px;font-weight:600;text-align:right;white-space:nowrap; }
+.platform-structure-legend article>strong { display:grid;grid-template-columns:minmax(82px,1fr) 44px;align-items:center;gap:12px;color:#40516c;font-size:11px;text-align:right;white-space:nowrap; }
+.platform-structure-legend article>strong em { overflow:visible;text-overflow:clip; }
 
 .platform-table {
   width: 100%;
@@ -4532,9 +4448,8 @@ print(response.json())</pre>
   .platform-change-body { grid-template-columns:minmax(0,1fr); }
   .platform-change-body>aside { border-top:1px solid #e1eaf5;border-left:0; }
   .platform-hero__actions { display:none; }
-  .platform-pie-layout { grid-template-columns:150px minmax(0,1fr);gap:12px; }
-  .platform-pie-wrap { width:138px;height:138px; }
-  .platform-pie { width:138px;height:138px; }
+  .platform-donut-layout { grid-template-columns:150px minmax(0,1fr);gap:12px; }
+  .platform-donut { width:138px;height:138px; }
   .platform-review-notice {
     grid-template-columns: 34px minmax(0, 1fr);
   }
@@ -4645,7 +4560,7 @@ print(response.json())</pre>
 .asset-change-drawer{position:fixed;z-index:50;top:0;right:0;display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;width:min(820px,78vw);height:100vh;background:#f8fbff;box-shadow:-18px 0 42px rgba(34,74,132,.22)}
 .asset-change-drawer>header{display:flex;align-items:flex-start;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.asset-change-drawer>header span{color:#004ecc;font-size:11px}.asset-change-drawer h2{margin:6px 0 3px;font-size:20px}.asset-change-drawer header p{margin:0;color:#718098;font-size:12px}.asset-change-drawer header>button{width:31px;height:31px;border:0;border-radius:5px;background:#f0f4fa;color:#52647f;font-size:20px;cursor:pointer}
 .asset-change-summary{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:14px}.asset-change-summary article{display:grid;gap:5px;padding:14px;border:1px solid #c7dcfb;border-radius:7px;background:#fff}.asset-change-summary span{color:#718098;font-size:11px}.asset-change-summary strong{color:#004ecc;font-size:24px}.asset-change-summary article:last-child strong{color:#067647}
-.asset-change-table{min-height:0;overflow:auto;padding:0 14px 14px}.asset-change-table table{width:100%;border-collapse:collapse;border:1px solid #dce8f8;background:#fff;font-size:12px}.asset-change-table th,.asset-change-table td{height:48px;padding:10px 12px;border-bottom:1px solid #e3ebf6;text-align:left}.asset-change-table th{position:sticky;top:0;background:#f3f7fc;color:#62728a}.asset-change-table td{color:#344861}.asset-change-table code{color:#004ecc;font-family:inherit}.asset-change-table td .asset-change-object{display:inline-block;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}.asset-change-table td .asset-change-source{display:inline-block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
+.asset-change-table{min-height:0;overflow:auto;padding:0 14px 14px}.asset-change-table table{width:100%;border-collapse:collapse;border:1px solid #dce8f8;background:#fff;font-size:12px}.asset-change-table th,.asset-change-table td{height:48px;padding:10px 12px;border-bottom:1px solid #e3ebf6;text-align:left}.asset-change-table th{position:sticky;top:0;background:#f3f7fc;color:#62728a}.asset-change-table td{color:#344861}.asset-change-table code{color:#004ecc;font-family:inherit}
 .asset-change-drawer>footer{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.asset-change-drawer>footer span{color:#718098;font-size:11px}.asset-change-drawer>footer a{height:32px;padding:0 12px;border-radius:5px;background:#004ecc;color:#fff;font-size:11px;line-height:32px;text-decoration:none}
 @media(max-width:760px){.asset-change-drawer{width:94vw}.asset-change-table table{min-width:700px}}
 
@@ -4778,12 +4693,14 @@ print(response.json())</pre>
 .platform-query-algo__job-long-hint{color:#ad6800}
 .platform-query-algo__job-log summary{color:#4e5969;font-size:13px;line-height:20px;cursor:pointer}
 .platform-query-algo__job-log pre{max-height:160px;margin:8px 0 0;overflow:auto;padding:8px;border-radius:4px;background:#0d1117;color:#e6edf3;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
-/* 窄屏（此前该宽度区间对分布图无任何处理）：饼图与图例上下堆叠，避免固定列挤压 */
+/* 窄屏（此前该宽度区间对分布图无任何处理）：donut 与图例上下堆叠，避免固定列挤压 */
 @media(max-width:760px){
-  .platform-pie-layout{grid-template-columns:minmax(0,1fr);justify-items:center;gap:12px;min-height:0;padding-bottom:8px}
-  .platform-pie-wrap{width:120px;height:120px}
-  .platform-pie{width:120px;height:120px}
+  .platform-donut-layout{grid-template-columns:minmax(0,1fr);justify-items:center;gap:12px;min-height:0;padding-bottom:8px}
+  .platform-donut{width:120px;height:120px}
+  .platform-donut::after{inset:20px}
+  .platform-donut>span strong{font-size:15px}
   .platform-structure-legend{width:100%}
+  .platform-structure-legend article>strong{grid-template-columns:minmax(60px,1fr) 40px}
   .platform-jobs-list a{grid-template-columns:minmax(0,1fr) auto}
   .platform-jobs-list em{display:none}
   .platform-review-list a{grid-template-columns:minmax(0,1fr)}
@@ -4839,13 +4756,4 @@ print(response.json())</pre>
 .platform-query :deep(.list-pagination){flex-wrap:wrap;height:auto;min-height:56px;gap:16px}
 .platform-query :deep(.arco-pagination-item-active){background:#e8f3ff;color:#165dff}
 .platform-query .platform-query-algo__labels :deep(.arco-select-view-focus){box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
-</style>
-
-<style>
-/* 实体/关系构成图例悬停浮窗（Arco tooltip 内容 teleport 到 body，scoped 样式够不到，须全局）。
-   白底经 a-tooltip 的 background-color prop 生效（内容与箭头均内联覆盖默认深色），
-   这里补边框/阴影与深色文字（默认 @tooltip-color-text 是深底浅字，白底会看不清） */
-.platform-structure-legend .platform-legend-label{cursor:help}
-.platform-legend-tooltip{border:1px solid #e5e6eb;box-shadow:0 4px 10px rgba(31,35,41,.1)}
-.platform-legend-members{min-width:150px;max-height:224px;overflow-y:auto;font-size:12px;line-height:1.9;color:#1d2129}
 </style>

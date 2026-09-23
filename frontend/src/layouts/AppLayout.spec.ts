@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AuthProfile } from '../api/auth'
 import { useAuthStore } from '../stores/auth'
 import { useAppStore } from '../stores/app'
+import { useGraphSpaceStore } from '../stores/graphSpace'
 import AppLayout from './AppLayout.vue'
 
 const mocks = vi.hoisted(() => ({ authDisabled: false, graphVisualization: false }))
@@ -48,14 +49,13 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-async function renderLayout(isAdmin: boolean, path = '/expert-direct', collapsed = false, businessOnly = false, isDeveloper = false) {
+async function renderLayout(isAdmin: boolean, path = '/expert-direct', collapsed = false, businessOnly = false) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const auth = useAuthStore()
   auth.profile = {
     isAdmin,
     businessOnly,
-    isDeveloper,
     user: { id: 'viewer', username: 'viewer', nickname: '测试用户', avatar: '' },
   } as AuthProfile
   useAppStore().collapsed = collapsed
@@ -71,6 +71,16 @@ async function renderLayout(isAdmin: boolean, path = '/expert-direct', collapsed
 }
 
 describe('既有侧边栏按有效管理员身份显隐', () => {
+  it('业务开发维护保留管理菜单但不会显示管理员身份，选择器仍在原顶栏', async () => {
+    const { wrapper, auth } = await renderLayout(false)
+    auth.profile = { ...auth.profile!, businessRbacEnabled: true, platformRole: 'developer', canDevelop: true }
+    await nextTick()
+    for (const path of managementPaths) expect(wrapper.find(`.app-nav a[href="${path}"]`).exists()).toBe(true)
+    expect(auth.isAdmin).toBe(false)
+    expect(wrapper.get('.app-top-actions__user').text()).toContain('开发维护')
+    expect(wrapper.get('.app-top-actions__user').text()).not.toContain('管理员')
+    expect(wrapper.find('.app-top-actions .app-space-select').exists()).toBe(true)
+  })
   it.each([false, true])('业务限定账号只保留九大模块，收起=%s', async (collapsed) => {
     const { wrapper } = await renderLayout(true, '/expert-direct', collapsed, true)
     const navigation = wrapper.get('.app-nav')
@@ -124,6 +134,13 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
     expect(wrapper.find('.app-nav a[href="/schema"]').exists()).toBe(true)
   })
 
+  it('顶栏渲染全局图空间选择器并加载空间列表', async () => {
+    const { wrapper } = await renderLayout(true, '/graph-query')
+    const selector = wrapper.get('.app-space-select')
+    expect(selector.text()).toContain('图空间')
+    expect(useGraphSpaceStore().current).toBe('dev2')
+  })
+
   it('图谱可视化入口默认隐藏，开关开启后出现在图谱查询组', async () => {
     mocks.graphVisualization = false
     const hidden = await renderLayout(true, '/graph-query')
@@ -134,28 +151,5 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
     const link = shown.wrapper.find('.app-nav a[href="/graph-query/visualization"]')
     expect(link.exists()).toBe(true)
     expect(link.text()).toContain('图谱可视化')
-  })
-})
-
-describe('右上角身份标识按角色区分', () => {
-  it('开发维护账号（platform_developer）显示开发人员而非管理员，管理菜单同管理员全量可见', async () => {
-    const { wrapper } = await renderLayout(true, '/graph-query', false, false, true)
-    const chip = wrapper.get('.app-top-actions__user')
-    expect(chip.text()).toContain('开发人员')
-    expect(chip.text()).not.toContain('管理员')
-    expect(chip.attributes('aria-label')).toContain('开发人员')
-    for (const path of managementPaths) {
-      expect(wrapper.find(`.app-nav a[href="${path}"]`).exists()).toBe(true)
-    }
-  })
-
-  it('管理员与普通用户的标识不受影响', async () => {
-    const admin = await renderLayout(true, '/graph-query')
-    const adminChip = admin.wrapper.get('.app-top-actions__user')
-    expect(adminChip.text()).toContain('管理员')
-    expect(adminChip.text()).not.toContain('开发人员')
-
-    const regular = await renderLayout(false)
-    expect(regular.wrapper.get('.app-top-actions__user').text()).toContain('普通用户')
   })
 })

@@ -6,10 +6,8 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, Query
 
 from application.platform_overview import PlatformOverviewApplication
-# _ensure_space_access：与综合查询/实体列表共用的空间访问口径（私有函数复用，
-# 保证两处规则永远同源），勿在本文件内另写一份判断。
-from biz.handler.graph_search import _ensure_space_access
 from biz.dependencies.auth import CurrentActor
+from biz.handler.graph_search import _ensure_space_access
 from biz.schemas.platform_overview import (
     AssetOverviewKey,
     PlatformActivityData,
@@ -46,7 +44,14 @@ async def _get_overview(space: str | None = None, actor=None) -> PlatformOvervie
         # 默认空间+本人绑定。此前非 RBAC 模式不校验，换账号登录后前端带着上一用户
         # 选择的空间请求，总览会把无权空间的数据直接吐出来（2026-09-24 修复）。
         _ensure_space_access(actor, space)
-    return await asyncio.to_thread(application.get_overview, space)
+    result = await asyncio.to_thread(application.get_overview, space)
+    if rbac_enabled():
+        # Overview data is cached by space, shared across users. Never mutate
+        # that cached object or expose review entries on a read-only grant.
+        review_spaces = allowed_space_names(actor, action="review") if actor.can_develop else []
+        if space not in review_spaces:
+            result = result.model_copy(update={"management_risks": []})
+    return result
 
 
 @router.get("")

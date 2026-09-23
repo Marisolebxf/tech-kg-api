@@ -133,9 +133,9 @@ router.beforeEach(async (to) => {
       try {
         const spaceStore = useGraphSpaceStore()
         spaceStore.bindUser(String(profile.user?.id ?? ''))
-        await spaceStore.ensureLoaded()
+        await spaceStore.ensureLoaded(true)
       } catch {
-        // store 静默降级到构建默认空间
+        // 不以构建默认值代替服务端授权空间；加载失败保持空列表
       }
     }
     if (to.meta.public && !profile?.businessOnly) return true

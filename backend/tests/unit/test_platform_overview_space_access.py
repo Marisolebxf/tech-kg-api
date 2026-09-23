@@ -40,9 +40,7 @@ def console_backend(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("service.business_access_control.rbac_enabled", lambda: False)
     monkeypatch.setattr("service.graph_space.GraphSpaceService", FakeGraphSpaceService)
     monkeypatch.setattr("service.graph_space.default_graph_space", lambda: "dev")
-    monkeypatch.setattr(
-        "infra.mysql.create_session", lambda: SimpleNamespace(close=lambda: None)
-    )
+    monkeypatch.setattr("infra.mysql.create_session", lambda: SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(
         overview_handler,
         "application",
@@ -70,3 +68,43 @@ async def test_admin_exempt_and_none_space_falls_back(console_backend) -> None:
     assert console_backend["space"] == "any_space"
     await overview_handler._get_overview(None, _actor("101"))
     assert console_backend["space"] is None  # 缺省回落 env 默认空间
+
+
+@pytest.mark.parametrize(
+    "role,space,visible",
+    [
+        ("user", "private", False),
+        ("developer", "public", False),
+        ("developer", "private", True),
+        ("admin", "public", True),
+    ],
+)
+async def test_overview_review_entries_follow_review_scope_without_mutating_cache(
+    monkeypatch, role, space, visible
+):
+    from service.platform_overview import PlatformOverviewService
+
+    actor = PlatformActor(
+        user_id="actor",
+        username="actor",
+        display_name="actor",
+        email="",
+        is_admin=role == "admin",
+        business_id="business",
+        business_role=role,
+    )
+    cached = PlatformOverviewService()._get_fallback_overview()
+    original_risks = list(cached.management_risks)
+    monkeypatch.setattr(overview_handler, "rbac_enabled", lambda: True)
+    monkeypatch.setattr(overview_handler, "ensure_space_access", lambda *args: None)
+    monkeypatch.setattr(
+        overview_handler,
+        "allowed_space_names",
+        lambda actor, action="read": ["private", "public"] if actor.is_admin else ["private"],
+    )
+    monkeypatch.setattr(
+        overview_handler, "application", SimpleNamespace(get_overview=lambda space: cached)
+    )
+    result = await overview_handler._get_overview(space, actor)
+    assert bool(result.management_risks) is visible
+    assert cached.management_risks == original_risks

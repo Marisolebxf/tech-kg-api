@@ -1,7 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import OperationsCenterView from '../OperationsCenterView.vue'
-import ListPagination from '../../../components/list-pagination.vue'
 
 const mocks = vi.hoisted(() => ({ getProductionReviews: vi.fn() }))
 vi.mock('../../../api/workflowOperations', () => ({
@@ -11,8 +10,6 @@ vi.mock('../../../api/workflowOperations', () => ({
 }))
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }) }))
 vi.mock('@arco-design/web-vue/es/icon', () => ({ IconSearch: { template: '<span />' } }))
-// 队列页消费全局图空间 store（请求带 graphSpace、watch 切空间重拉）：此处只需静态当前空间
-vi.mock('../../../stores/graphSpace', () => ({ useGraphSpaceStore: () => ({ current: 'dev' }) }))
 
 function pending() {
   let resolve!: (value: { items: unknown[]; total: number }) => void
@@ -28,16 +25,12 @@ const wrappers: ReturnType<typeof mount>[] = []
 function render() {
   const wrapper = mount(OperationsCenterView, {
     props: { mode: 'review' },
-    global: { stubs: { ASelect: true, AInput: true, AModal: true, RouterLink: true } },
+    global: { stubs: { ASelect: true, AInput: true, AModal: true, APagination: true, RouterLink: true } },
   })
   wrappers.push(wrapper)
   return wrapper
 }
-beforeEach(() => {
-  mocks.getProductionReviews.mockReset()
-  // 清队列视图状态快照，保证每次挂载都从默认第 1 页/默认筛选加载
-  sessionStorage.removeItem('techkg.manual-review-queue.v1')
-})
+beforeEach(() => { mocks.getProductionReviews.mockReset() })
 afterEach(() => {
   wrappers.splice(0).forEach(wrapper => wrapper.unmount())
   vi.useRealTimers()
@@ -95,7 +88,7 @@ describe('人工审核队列读取状态', () => {
     mocks.getProductionReviews.mockResolvedValueOnce({ items: [], total: 100 }).mockReturnValueOnce(first.promise)
     const wrapper = render()
     await flushPromises()
-    wrapper.findComponent(ListPagination).vm.$emit('change', 3)
+    wrapper.findComponent({ name: 'APagination' }).vm.$emit('change', 3)
     await flushPromises()
     wrapper.findComponent({ name: 'AInput' }).vm.$emit('update:modelValue', '待搜索')
     await wrapper.vm.$nextTick()

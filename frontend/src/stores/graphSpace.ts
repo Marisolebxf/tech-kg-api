@@ -1,5 +1,4 @@
 import { defineStore } from 'pinia'
-import { useAuthStore } from './auth'
 
 import { listGraphSpaces } from '../api/graphSearch'
 import { graphSpace as configuredDefault } from '../config'
@@ -35,14 +34,9 @@ function persistSpace(userId: string, space: string): void {
   }
 }
 
-/**
- * 全局图空间上下文：图空间选择器（位于配置管理 · 图数据空间页）的数据源，
- * 业务模块统一从这里取当前空间。
- * 空间列表来自 GET /v1/graph-search/spaces（所有用户=默认业务空间+本人绑定，
- * 绑定对所有用户生效，管理员经配置页修改绑定）；加载失败静默降级，
- * 当前值走 本人持久化 > 构建默认 > 'dev'。路由守卫在页面挂载前 bindUser +
- * ensureLoaded，保证页面拿到的 current 一定是本人列表内的取值。
- */
+const pendingLoads = new WeakMap<object, { generation: number; promise: Promise<void> }>()
+
+/** 当前空间只能从服务端授权列表选择，持久化记录仅作为列表加载后的候选。 */
 export const useGraphSpaceStore = defineStore('graphSpace', {
   state: () => ({
     spaces: [] as string[],
@@ -51,51 +45,67 @@ export const useGraphSpaceStore = defineStore('graphSpace', {
     loading: false,
     loadError: false,
     initialized: false,
+    generation: 0,
   }),
   actions: {
     /** 路由守卫在身份就绪后调用：切换用户时丢弃上一账号的选中空间。 */
     bindUser(userId: string): void {
-      if (!userId || userId === this.userId) return
+      if (userId === this.userId) return
+      this.reset()
       this.userId = userId
-      this.current = readStoredSpace(userId)
-      if (!this.current) {
-        this.current = configuredDefault || 'dev'
-        persistSpace(userId, this.current)
-      }
+    },
+    reset(): void {
+      this.generation += 1
+      pendingLoads.delete(this)
+      this.userId = ''
+      this.spaces = []
+      this.current = ''
+      this.initialized = false
+      this.loading = false
+      this.loadError = false
     },
     async ensureLoaded(force = false): Promise<void> {
-      if ((this.initialized && !force) || this.loading) return
+      const pending = pendingLoads.get(this)
+      if (pending && !force) return pending.promise
+      if (this.initialized && !force) return
+      const generation = ++this.generation
+      const userId = this.userId
       this.loading = true
       this.loadError = false
-      try {
-        // http 拦截器已解包为 ApiResponse（运行时），axios 泛型声明与运行时不同，故做一次窄化断言
-        const payload = (await listGraphSpaces()) as unknown as { data?: { spaces?: string[] } }
-        this.spaces = payload.data?.spaces ?? []
-        this._normalizeCurrent()
-        this.initialized = true
-      } catch {
-        this.loadError = true
-        if (useAuthStore().profile?.businessRbacEnabled) {
+      const promise = (async () => {
+        try {
+          // http 拦截器已解包为 ApiResponse（运行时），axios 泛型声明与运行时不同，故做一次窄化断言
+          const payload = (await listGraphSpaces()) as unknown as { data?: { spaces?: string[] } }
+          if (this.generation !== generation || this.userId !== userId) return
+          this.spaces = payload.data?.spaces ?? []
+          this._normalizeCurrent()
+          this.initialized = true
+        } catch {
+          if (this.generation !== generation || this.userId !== userId) return
+          this.loadError = true
+          this.initialized = false
           this.spaces = []
           this.current = ''
-          persistSpace(this.userId, '')
+        } finally {
+          if (this.generation === generation) this.loading = false
+          if (pendingLoads.get(this)?.generation === generation) pendingLoads.delete(this)
         }
-      } finally {
-        this.loading = false
-      }
+      })()
+      pendingLoads.set(this, { generation, promise })
+      return promise
     },
     setCurrent(space: string): void {
-      if (!space || ((useAuthStore().profile?.businessRbacEnabled || this.spaces.length) && !this.spaces.includes(space))) return
+      if (!space || !this.spaces.includes(space)) return
       this.current = space
       persistSpace(this.userId, space)
     },
-    /** 列表到位后归一当前值：本人持久化 > 构建默认 > 列表第一个 > 'dev'。 */
+    /** 列表到位后归一当前值：本人持久化 > 构建默认 > 列表第一个；空集保持空值。 */
     _normalizeCurrent(): void {
       const stored = readStoredSpace(this.userId)
       const pick =
         [stored, configuredDefault].find((v) => v && this.spaces.includes(v)) ??
         this.spaces[0] ??
-        (useAuthStore().profile?.businessRbacEnabled ? '' : stored || configuredDefault || 'dev')
+        ''
       this.current = pick
       persistSpace(this.userId, pick)
     },

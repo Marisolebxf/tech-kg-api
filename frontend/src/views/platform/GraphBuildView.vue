@@ -8,7 +8,6 @@ import {
   deriveJobUnifiedStatus,
   getExecution,
   getTask,
-  jobGraphSpace,
   JOB_STATUS_TONE,
   listJobs,
   triggerJob,
@@ -71,7 +70,7 @@ const showAllSpaces = ref(
 
 /** 任务归属空间：payload 未带 graphSpace 的历史任务落当时的默认业务空间（空间列表首位恒为默认）。 */
 function jobSpace(job: WorkflowJob): string {
-  return jobGraphSpace(job, graphSpaceStore.spaces[0] ?? '', graphSpaceStore.current)
+  return job.graphSpace || graphSpaceStore.spaces[0] || graphSpaceStore.current
 }
 
 /** extract/chain 可新建；single/upload 为历史键（D2 停止新建），存量行仍需中文展示 */

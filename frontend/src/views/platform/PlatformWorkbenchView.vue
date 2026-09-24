@@ -569,7 +569,7 @@ const assetChangeRows = ref<Record<AssetOverviewKey, AssetChangeRow[]>>({
 })
 // 今日新增数值合计（Σwritten，与资产卡徽标同源）：抽屉明细行受单执行
 // 上限截断，行数 < 合计时页脚标注「共 N 条 · 展示前 n 条」
-const assetChangeTotals = ref<Record<AssetOverviewKey, number>>({})
+const assetChangeTotals = ref<Partial<Record<AssetOverviewKey, number>>>({})
 function assetChangeFooterText(key: AssetOverviewKey | null): string {
   if (!key) return ''
   const shown = assetChangeRows.value[key].length

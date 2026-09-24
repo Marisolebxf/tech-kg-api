@@ -65,7 +65,7 @@ export interface PlatformOverviewData {
   assetChangeRows: Record<AssetOverviewKey, AssetChangeRow[]>
   /** 今日新增真实计数（Σwritten，与资产卡徽标同源）；明细行受单执行上限截断，
    *  行数 < 合计时用它展示「共 N 条 · 展示前 n 条」 */
-  assetChangeTotals?: Record<AssetOverviewKey, number>
+  assetChangeTotals?: Partial<Record<AssetOverviewKey, number>>
   latestChanges: LatestChange[]
   managementRisks: ManagementRisk[]
   entityStructure: StructureItem[]

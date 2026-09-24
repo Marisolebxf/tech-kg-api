@@ -123,7 +123,7 @@ class ExtractExecutionInfo:
     schema_key: str
     schema_label: str
     completed_at: str  # YYYY-MM-DD HH:MM:SS
-    window_lo: str  # 反查时间窗下界：源表水位最早值，缺省当日 00:00:00
+    window_lo: str  # 反查时间窗下界：源表读取起点水位最早值，缺省当日 00:00:00
     fallback_rows: list[AssetChangeRow] = field(default_factory=list)
 
 
@@ -235,7 +235,10 @@ def parse_execution_records(
             )
             target_rows.append((completed_at, row))
             exec_rows.append(row)
-            watermark = str(source.get("watermark") or "")
+            # 反查窗口下界优先用开跑前的起点水位（startWatermark）：watermark 是
+            # 跑完后的终值，取 min 后窗口会缩成最后一批同秒，写图时间落在窗口内的
+            # 顶点/边查不全；旧执行没有 startWatermark 时退回 watermark
+            watermark = str(source.get("startWatermark") or source.get("watermark") or "")
             if watermark:
                 watermarks.append(watermark)
         descriptor = ExtractExecutionInfo(
@@ -243,7 +246,7 @@ def parse_execution_records(
             schema_key=schema_key,
             schema_label=schema_label or display_label,
             completed_at=completed_at,
-            # 源表水位（读取快照时刻）必然早于写图时刻，作反查窗下界；缺省当日零点
+            # 源表水位（读取起点）必然早于写图时刻，作反查窗下界；缺省当日零点
             window_lo=min(watermarks) if watermarks else f"{completed_at[:10]} 00:00:00",
             fallback_rows=exec_rows,
         )
@@ -313,6 +316,9 @@ class WorkflowControlTodayChangesProvider:
 # 通常个位~百级；超限截断，行数语义见抽屉 footer）
 _OBJECT_ROW_CAP = 50
 _ENDPOINT_CAP = 40
+# 抽屉最终展示上限（实体/关系各自去重后）：当日多执行合计行数超限时统一截到
+# 同一上限，两个抽屉的「展示前 n 条」保持一致，且按识别时间倒序取最新
+_DISPLAY_ROW_CAP = 50
 # 顶点「对象名」取值候选：公共字段 name 优先，历史 ETL tag 无字面 name 时按
 # 域定制键回退（Person=name_cn、Keyword=keyword、Paper=title_zh…）
 _NAME_PROP_CANDIDATES = (
@@ -323,6 +329,7 @@ _NAME_PROP_CANDIDATES = (
     "keyword",
     "title_zh",
     "title_en",
+    "title",  # Project 无 name/title_zh，展示名就是 title
 )
 
 
@@ -354,19 +361,33 @@ def _flatten_vertex_props(vertex: Any) -> dict[str, Any]:
 
 
 def _graph_time_prop(client: Any, kind: str, name: str, cache: dict[tuple[str, str], str | None]) -> str | None:
-    """tag/边类型上可用的写入时间属性：update_time 优先，其次 create_time。"""
+    """tag/边类型上可进时间窗 LOOKUP 的写入时间属性（仅 string 型列）。
+
+    候选优先序：update_time → create_time → source_update_time（溯源列兜底，
+    专利的 update_time/create_time 建成 datetime 型——datetime 列上字符串
+    边界比较会 Column type error，datetime("...") 字面量又索引失效查空，
+    只有 string 型列能吃 ``>= "下界" AND <= "上界"`` 的字符串比较）。
+    DESCRIBE 未返回 Type 时按 string 兜底（与旧按名匹配行为一致）。
+    """
     cache_key = (kind, name)
     if cache_key in cache:
         return cache[cache_key]
     try:
         statement = f"DESC TAG `{name}`" if kind == "entity" else f"DESC EDGE `{name}`"
-        fields = {
-            rec.get("Field")
+        types = {
+            str(rec.get("Field")): str(rec.get("Type") or "string").lower()
             for rec in client.execute_query(statement, timeout=_SWEEP_QUERY_TIMEOUT_SECONDS).records
         }
     except Exception:
-        fields = set()
-    prop = "update_time" if "update_time" in fields else ("create_time" if "create_time" in fields else None)
+        types = {}
+    prop = next(
+        (
+            candidate
+            for candidate in ("update_time", "create_time", "source_update_time")
+            if types.get(candidate, "").startswith(("string", "fixed_string"))
+        ),
+        None,
+    )
     cache[cache_key] = prop
     return prop
 
@@ -407,7 +428,8 @@ def _entity_object_rows(
         if space and is_no_index_error(exc):
             mark_no_index(space, "lookup", f"{tag}.{time_prop}")
         return None, []
-    # 数据类型列 = 单个 Schema 的目录中文名（与图谱资产构成图同口径），查不到用原名
+    # 数据类型/变更内容列都用单个 Schema 的目录中文名（与图谱资产构成图同口径），
+    # 查不到目录名时退原 tag 名
     type_label = schema_labels.get(tag) or tag
     fallback_source = execution.fallback_rows[0].source if execution.fallback_rows else "-"
     rows: list[AssetChangeRow] = []
@@ -419,7 +441,7 @@ def _entity_object_rows(
             AssetChangeRow(
                 type=type_label,
                 object=_vertex_display_name(props, vid),
-                change=f"新增 {tag}",
+                change=f"新增 {type_label}",
                 source=str(props.get("source_table") or fallback_source),
                 time=_time_hhmmss(props.get(time_prop), execution.completed_at[11:19]),
             )
@@ -527,7 +549,8 @@ def _relation_object_rows(
             if vid not in endpoint_vids:
                 endpoint_vids.append(vid)
     names = _endpoint_names(client, endpoint_vids)
-    # 数据类型列 = 单个 Schema 的目录中文名（与图谱资产构成图同口径），查不到用原名
+    # 数据类型/变更内容列都用单个 Schema 的目录中文名（与图谱资产构成图同口径），
+    # 查不到目录名时退原边类型名
     type_label = schema_labels.get(edge_type) or edge_type
     fallback_source = execution.fallback_rows[0].source if execution.fallback_rows else "-"
     fallback_time = execution.completed_at[11:19]
@@ -537,7 +560,7 @@ def _relation_object_rows(
             AssetChangeRow(
                 type=type_label,
                 object=f"{names.get(src, src)} → {names.get(dst, dst)}",
-                change=f"新增 {edge_type}",
+                change=f"新增 {type_label}",
                 source=str(edge_props.get("source_table") or fallback_source),
                 time=_time_hhmmss(edge_props.get(time_prop), fallback_time) if time_prop else fallback_time,
             )
@@ -681,7 +704,33 @@ def enrich_today_rows_with_graph(
                 close()
             except Exception:  # noqa: BLE001
                 logger.exception("关闭今日新增反查图客户端失败")
+    # 同一对象常被当日多次执行触碰（重跑/补写），明细按 (类型, 对象) 去重；
+    # 执行按完成时间降序遍历，先到的行即最新一次写入的口径。随后按识别时间
+    # 倒序并截到统一展示上限——实体/关系两抽屉的「展示前 n」一致且为最新行
+    entity_rows = _cap_display_rows(_dedupe_rows(entity_rows))
+    relation_rows = _cap_display_rows(_dedupe_rows(relation_rows))
     return replace(snapshot, entity_rows=entity_rows, relation_rows=relation_rows)
+
+
+def _dedupe_rows(rows: list[AssetChangeRow]) -> list[AssetChangeRow]:
+    """同一 (类型, 对象) 只保留第一行（去重保序）。"""
+    seen: set[tuple[str, str]] = set()
+    unique: list[AssetChangeRow] = []
+    for row in rows:
+        key = (row.type, row.object)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(row)
+    return unique
+
+
+def _cap_display_rows(
+    rows: list[AssetChangeRow], cap: int = _DISPLAY_ROW_CAP
+) -> list[AssetChangeRow]:
+    """明细统一按识别时间倒序，超上限截到 cap 行（同秒稳定保序）。"""
+    ordered = sorted(rows, key=lambda row: row.time, reverse=True)
+    return ordered[:cap]
 
 
 def _ratios(values: list[int]) -> list[int]:
@@ -877,6 +926,7 @@ class PlatformOverviewService:
                 change_rows = dict(fallback.asset_change_rows)
                 change_rows["entity"] = changes.entity_rows
                 change_rows["relation"] = changes.relation_rows
+                change_totals = {"entity": changes.entity_added, "relation": changes.relation_added}
                 today_source = "workflow-control-live"
                 extra_warnings: list[str] = []
             else:
@@ -886,6 +936,7 @@ class PlatformOverviewService:
                 change_rows = dict(fallback.asset_change_rows)
                 change_rows["entity"] = []
                 change_rows["relation"] = []
+                change_totals = {"entity": 0, "relation": 0}
                 today_source = "demo-fallback"
                 extra_warnings = ["今日新增暂时不可读：工作流控制库不可用。"]
             # 资产卡中心 = 真实体数（去重口径）：实体总量用 Space/vertices、
@@ -929,6 +980,7 @@ class PlatformOverviewService:
                     "updated_at": datetime.now().strftime("%H:%M"),
                     "asset_overview_groups": groups,
                     "asset_change_rows": change_rows,
+                    "asset_change_totals": change_totals,
                     "entity_structure": _build_structure(
                         stats.nodes, entity=True, labels=_schema_labels_by_name(space, "entity")
                     ),

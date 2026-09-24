@@ -1,6 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
-import { appBase, authDisabled, graphVisualizationEnabled } from '../config'
+import { appBase, graphVisualizationEnabled } from '../config'
 
 import { useAuthStore } from '../stores/auth'
 import { useGraphSpaceStore } from '../stores/graphSpace'
@@ -115,15 +115,12 @@ router.beforeEach(async (to) => {
     return { path: '/graph-query' }
   }
 
-  if (authDisabled) {
-    return to.name === 'login' ? { path: '/overview' } : true
-  }
-
   if (to.name === 'login') return true
 
   const authStore = useAuthStore()
   try {
-    // 每次导航重新读取有效身份，及时反映门户或本系统的授权、撤权。
+    // 每次导航由后端确认身份；前端部署开关不能跳过鉴权或自行赋予管理员。
+    // 免登录开发环境同样使用后端明确允许的开发身份。
     const profile = await authStore.loadCurrentUser(true)
     if (profile) {
       // 身份就绪后先绑定图空间上下文并拉取本人空间列表（换账号时丢弃上一用户

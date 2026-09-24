@@ -1138,6 +1138,17 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
             cursor = ((wm_row or {}).get("checkpoint") or {}).get("pkCursor") or ""
         binds = {"cursor": str(cursor), "n": batch_size}
 
+    # 首批（请求未带水位且非链式续批）回传本次读取的「起点水位」：控制库水位只在
+    # 活动内解析，workflow 侧不可见；watermark 是跑完全部批次后的终值，今日新增
+    # 的时间窗下界需要开跑前的值，否则窗口缩成最后一批同秒的行
+    start_watermark = (
+        binds.get("wm")
+        if cursor_kind in ("offset", "watermark")
+        and request.get("watermark") is None
+        and not request.get("chained")
+        else None
+    )
+
     sqls: list[tuple[str, dict[str, Any]]] = []
     if cursor_kind == "ids":
         for chunk in _chunked([str(i) for i in record_ids], 500):
@@ -1263,6 +1274,7 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
             "effectiveBatchSize": effective_batch,
             # offset 模式回传本批生效的增量水位（时间列过滤起点），reader 链式透传
             **({"watermark": binds.get("wm")} if cursor_kind == "offset" else {}),
+            **({"startWatermark": start_watermark} if start_watermark else {}),
         }
     return {
         "rows": rows,
@@ -1272,6 +1284,7 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
         "effectiveBatchSize": effective_batch,
         # offset 模式回传本批生效的增量水位（时间列过滤起点），reader 链式透传
         **({"watermark": binds.get("wm")} if cursor_kind == "offset" else {}),
+        **({"startWatermark": start_watermark} if start_watermark else {}),
     }
 
 
@@ -2526,6 +2539,8 @@ class SchemaExtractWorkflow:
                 idx = 0
                 final: dict[str, Any] = {}
                 final_wm: str | None = None
+                # 首批回传的读取起点水位（活动内由控制库解析），空批也要带上
+                start_wm: str | None = None
                 while True:
                     batch = await workflow.execute_activity(
                         read_source_batch,
@@ -2533,6 +2548,8 @@ class SchemaExtractWorkflow:
                         start_to_close_timeout=timedelta(seconds=600),
                         retry_policy=ACTIVITY_RETRY_POLICY,
                     )
+                    if idx == 0:
+                        start_wm = batch.get("startWatermark")
                     # 批结果双形状：S3 中转（chunks 元数据 + totalRows）或内联 rows
                     # （在飞旧 run 重放 / 未开 flag）。分支只看已记录进历史的形状。
                     if "chunks" in batch:
@@ -2563,8 +2580,13 @@ class SchemaExtractWorkflow:
                     if total_rows < effective:
                         break
                 if plain_table:
-                    return {"batches": idx, "watermark": final_wm, "pkCursor": None}
-                return {"batches": idx, **final}
+                    return {
+                        "batches": idx,
+                        "watermark": final_wm,
+                        "pkCursor": None,
+                        "startWatermark": start_wm,
+                    }
+                return {"batches": idx, **final, "startWatermark": start_wm}
 
             # 分步聚合计数（多步脚本或 chain 模式；stepId → position/records/written/failed）
             # step_times：各转换步首末批时间（耗时列展示；暂停时长计入不剔除）
@@ -2892,6 +2914,9 @@ class SchemaExtractWorkflow:
                 "failed": source_failed,
                 "failures": source_failures,
                 "watermark": read_summary.get("watermark"),
+                # 开跑前的读取起点水位：watermark 是跑完后的终值，今日新增
+                # 反查图内对象的窗口下界优先用它，避免窗口退化成最后一批同秒
+                "startWatermark": read_summary.get("startWatermark"),
                 "pkCursor": read_summary.get("pkCursor"),
                 **(
                     {

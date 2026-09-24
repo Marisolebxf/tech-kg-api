@@ -128,10 +128,24 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
     expect(wrapper.find('.app-nav a[href="/graph-build"]').exists()).toBe(false)
   })
 
-  it('显式免登录开发模式保留原有管理菜单', async () => {
+  it('前端误关闭认证时不能把普通用户提升为管理员', async () => {
     mocks.authDisabled = true
     const { wrapper } = await renderLayout(false)
+    for (const path of managementPaths) expect(wrapper.find(`.app-nav a[href="${path}"]`).exists()).toBe(false)
+    expect(wrapper.get('.app-top-actions__user').text()).toContain('普通用户')
+  })
+
+  it('前端误关闭认证时开发维护仍显示开发维护', async () => {
+    mocks.authDisabled = true
+    const { wrapper, auth } = await renderLayout(false)
+    auth.profile = { ...auth.profile!, businessRbacEnabled: true, platformRole: 'developer', canDevelop: true }
+    await nextTick()
+    expect(wrapper.get('.app-top-actions__user').text()).toContain('开发维护')
+    expect(wrapper.get('.app-top-actions__user').text()).not.toContain('管理员')
     expect(wrapper.find('.app-nav a[href="/schema"]').exists()).toBe(true)
+    auth.invalidate()
+    await nextTick()
+    expect(wrapper.find('.app-nav a[href="/schema"]').exists()).toBe(false)
   })
 
   it('顶栏渲染全局图空间选择器并加载空间列表', async () => {

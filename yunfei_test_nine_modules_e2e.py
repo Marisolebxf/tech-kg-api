@@ -17,6 +17,7 @@ IndustryNode 的 node_id），保证测的是「还原空间里真实存在的�
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.request
 
@@ -67,12 +68,15 @@ def sample_ids():
             print(f"  取样失败（{ngql[:50]}…）: {str(exc)[:80]}")
             return ""
 
-    ids["paper_pair"] = first(
-        "MATCH (a:Person)-[:AUTHORED_BY]->(p:Paper)<-[:AUTHORED_BY]-(b:Person) "
-        "WHERE id(a) < id(b) RETURN id(a) AS a, id(b) AS b LIMIT 1", "a")
-    ids["paper_pair_b"] = first(
-        "MATCH (a:Person)-[:AUTHORED_BY]->(p:Paper)<-[:AUTHORED_BY]-(b:Person) "
-        "WHERE id(a) < id(b) RETURN id(a) AS a, id(b) AS b LIMIT 1", "b")
+    # 共著对从 COAUTHOR_WITH 取（15 万条真实边）：AUTHORED_BY 的 2-hop 模式
+    # 在还原空间匹配为空（边端点经消歧落在 Person/Paper 之外的概率高），
+    # 模块 3/6 要的是「两位专家」本身，COAUTHOR_WITH 端点即满足
+    pair = graph_query(
+        "MATCH (a:Person)-[:COAUTHOR_WITH]->(b:Person) "
+        "WHERE id(a) < id(b) RETURN id(a) AS a, id(b) AS b LIMIT 1") or []
+    rec = pair[0] if pair and isinstance(pair[0], dict) else {}
+    ids["paper_pair"] = str(rec.get("a") or "")
+    ids["paper_pair_b"] = str(rec.get("b") or "")
     ids["any_person"] = ids["paper_pair"] or first(
         "MATCH (v:Person) RETURN id(v) AS vid LIMIT 1", "vid")
     ids["org"] = first("MATCH (v:Organization) RETURN id(v) AS vid LIMIT 1", "vid")
@@ -129,7 +133,7 @@ def main():
     # 6 论文合作
     check("6 论文合作", "/kg-construction/expert-paper-cooperation-relations/structured-result",
           "POST", {"expertAId": a, "expertBId": b,
-                   "startTime": "2000-01-01", "endTime": "2026-12-31"})
+                   "startTime": "2000-01-01", "endTime": time.strftime("%Y-%m-%d")})
     # 7 企业关系（EMPLOYED_BY 描述 + 构建查询走 options 联动，这里打 build）
     check("7 企业关系-描述", "/kg-construction/expert-enterprise-relations")
     # 8 产业链事件

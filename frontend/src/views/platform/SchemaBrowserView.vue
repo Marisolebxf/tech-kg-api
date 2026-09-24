@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { IconSearch } from '@arco-design/web-vue/es/icon'
 import hljs from 'highlight.js/lib/core'
 import python from 'highlight.js/lib/languages/python'
@@ -83,6 +83,25 @@ type CreateForm = {
 }
 
 const currentUserId = getCurrentUserId()
+
+const scrollTimers = new Map<HTMLElement, ReturnType<typeof setTimeout>>()
+
+function handleScroll(event: Event): void {
+  const target = event.currentTarget
+  if (!(target instanceof HTMLElement)) return
+  target.classList.add('schema-scroll--active')
+  const timer = scrollTimers.get(target)
+  if (timer) clearTimeout(timer)
+  scrollTimers.set(target, setTimeout(() => {
+    target.classList.remove('schema-scroll--active')
+    scrollTimers.delete(target)
+  }, 700))
+}
+
+onBeforeUnmount(() => {
+  scrollTimers.forEach((timer) => clearTimeout(timer))
+  scrollTimers.clear()
+})
 
 const activeTab = ref('标准实体')
 // Schema 管理按图空间维度隔离：列表/拓扑/新建统一跟随平台总览页的全局图空间选择器
@@ -1107,7 +1126,7 @@ function descCell(text: string): string {
 </script>
 
 <template>
-  <main class="schema-page">
+  <main class="schema-page" @scroll.passive="handleScroll">
     <section
       class="schema-shell schema-topology-shell"
       :class="{ 'schema-topology-shell--collapsed': !topologyExpanded }"
@@ -1157,9 +1176,9 @@ function descCell(text: string): string {
       </nav>
       <div class="schema-shell schema-table-shell">
 
-      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table class="schema-entity-table"><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>说明</th><th>属性</th><th>操作</th></tr></thead><tbody><template v-for="row in entities" :key="row.id"><tr><td><b>{{ row.label }}</b></td><td><a-tooltip v-if="row.name.length > 10" :content="row.name" position="top"><code>{{ schemaNameCell(row.name) }}</code></a-tooltip><code v-else>{{ row.name }}</code></td><td class="schema-desc-cell"><a-tooltip v-if="(row.description || '').length > DESC_CELL_LIMIT" :content="row.description" position="top"><span class="schema-desc-text">{{ descCell(row.description || '') }}</span></a-tooltip><template v-else>{{ row.description }}</template></td><td class="schema-props-cell"><SchemaPropertyCell :schema="row.schema" /></td><td class="schema-actions"><div class="schema-actions__inner"><button v-if="row.schema.canManageProperties" type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }}</button><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本（更新后还需重跑）`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name] && !scriptByRow[row.name].stale && scriptByRow[row.name].needsRun" class="script-badge script-badge--rerun" :title="scriptByRow[row.name].lastRunAt ? '脚本更新后尚未重新运行：最新脚本尚未应用到图数据，请到「来源表」触发抽取或回填历史数据（重跑完成前持续提示）' : '脚本上传后尚未运行过抽取：请到「来源表」触发抽取或回填历史数据，将脚本应用到图数据（运行前持续提示）'">{{ scriptByRow[row.name].lastRunAt ? '待重跑' : '未运行' }}</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护属性（新增 / 删除）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护属性' : '只有创建者或管理员可维护属性')" @click="openPropertyModal(row.schema)">属性管理</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema（需先删除引用它的全部关系；实体的图数据将一并删除）' : (row.schema.isSystem ? '系统内置，不可删除' : '只有创建者或管理员可删除')" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr></template></tbody></table></div>
+      <div v-if="activeTab === '标准实体'" class="schema-table-wrap" @scroll.passive="handleScroll"><table class="schema-entity-table"><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>说明</th><th>属性</th><th>脚本状态</th><th>操作</th></tr></thead><tbody><template v-for="row in entities" :key="row.id"><tr><td><b>{{ row.label }}</b></td><td><a-tooltip v-if="row.name.length > 10" :content="row.name" position="top"><code>{{ schemaNameCell(row.name) }}</code></a-tooltip><code v-else>{{ row.name }}</code></td><td class="schema-desc-cell"><a-tooltip v-if="(row.description || '').length > DESC_CELL_LIMIT" :content="row.description" position="top"><span class="schema-desc-text">{{ descCell(row.description || '') }}</span></a-tooltip><template v-else>{{ row.description }}</template></td><td class="schema-props-cell"><SchemaPropertyCell :schema="row.schema" /></td><td class="schema-script-status"><div class="schema-script-status__items"><span v-if="!scriptByRow[row.name]" class="schema-script-status__empty">未上传</span><span v-else-if="!scriptByRow[row.name].stale && !scriptByRow[row.name].needsRun && scriptByRow[row.name].lastRunStatus !== 'failed'" class="schema-script-status__ready">已上传</span><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本（更新后还需重跑）`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name] && !scriptByRow[row.name].stale && scriptByRow[row.name].needsRun" class="script-badge script-badge--rerun" :title="scriptByRow[row.name].lastRunAt ? '脚本更新后尚未重新运行：最新脚本尚未应用到图数据，请到「来源表」触发抽取或回填历史数据（重跑完成前持续提示）' : '脚本上传后尚未运行过抽取：请到「来源表」触发抽取或回填历史数据，将脚本应用到图数据（运行前持续提示）'">{{ scriptByRow[row.name].lastRunAt ? '待重跑' : '未运行' }}</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span></div></td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? (scriptByRow[row.name] ? '更换脚本' : '上传脚本') : '无权维护脚本'" @click="openUploadModal(row.id, row.name)">更换脚本</button><button type="button" class="schema-action-link" :disabled="!scriptByRow[row.name]" :title="scriptByRow[row.name] ? '查看脚本' : '尚未上传脚本'" @click="openViewModal(row.id, row.name)">查看脚本</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护属性（新增 / 删除）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护属性' : '只有创建者或管理员可维护属性')" @click="openPropertyModal(row.schema)">属性管理</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema（需先删除引用它的全部关系；实体的图数据将一并删除）' : (row.schema.isSystem ? '系统内置，不可删除' : '只有创建者或管理员可删除')" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr></template></tbody></table></div>
 
-      <div v-else class="schema-table-wrap"><table class="schema-relation-table"><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>说明</th><th>属性</th><th>操作</th></tr></thead><tbody><template v-for="row in relations" :key="row.id"><tr><td><a-tooltip v-if="row.label.length > 10" :content="row.label" position="top"><b>{{ schemaNameCell(row.label) }}</b></a-tooltip><b v-else>{{ row.label }}</b></td><td><a-tooltip v-if="row.name.length > 10" :content="row.name" position="top"><code>{{ schemaNameCell(row.name) }}</code></a-tooltip><code v-else>{{ row.name }}</code></td><td><a-tooltip v-if="row.source.length > 5" :content="row.source" position="top"><span>{{ endpointNameCell(row.source) }}</span></a-tooltip><template v-else>{{ row.source }}</template></td><td><a-tooltip v-if="row.target.length > 5" :content="row.target" position="top"><span>{{ endpointNameCell(row.target) }}</span></a-tooltip><template v-else>{{ row.target }}</template></td><td class="schema-desc-cell"><a-tooltip v-if="(row.basis || '').length > DESC_CELL_LIMIT" :content="row.basis" position="top"><span class="schema-desc-text">{{ descCell(row.basis || '') }}</span></a-tooltip><template v-else>{{ row.basis }}</template></td><td class="schema-props-cell"><SchemaPropertyCell :schema="row.schema" /></td><td class="schema-actions"><div class="schema-actions__inner"><button v-if="row.schema.canManageProperties" type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }}</button><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本（更新后还需重跑）`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name] && !scriptByRow[row.name].stale && scriptByRow[row.name].needsRun" class="script-badge script-badge--rerun" :title="scriptByRow[row.name].lastRunAt ? '脚本更新后尚未重新运行：最新脚本尚未应用到图数据，请到「来源表」触发抽取或回填历史数据（重跑完成前持续提示）' : '脚本上传后尚未运行过抽取：请到「来源表」触发抽取或回填历史数据，将脚本应用到图数据（运行前持续提示）'">{{ scriptByRow[row.name].lastRunAt ? '待重跑' : '未运行' }}</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护属性（新增 / 删除）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护属性' : '只有创建者或管理员可维护属性')" @click="openPropertyModal(row.schema)">属性管理</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : '系统内置，不可删除'" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr></template></tbody></table></div>
+      <div v-else class="schema-table-wrap" @scroll.passive="handleScroll"><table class="schema-relation-table"><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>说明</th><th>属性</th><th>脚本状态</th><th>操作</th></tr></thead><tbody><template v-for="row in relations" :key="row.id"><tr><td><a-tooltip v-if="row.label.length > 10" :content="row.label" position="top"><b>{{ schemaNameCell(row.label) }}</b></a-tooltip><b v-else>{{ row.label }}</b></td><td><a-tooltip v-if="row.name.length > 10" :content="row.name" position="top"><code>{{ schemaNameCell(row.name) }}</code></a-tooltip><code v-else>{{ row.name }}</code></td><td><a-tooltip v-if="row.source.length > 5" :content="row.source" position="top"><span>{{ endpointNameCell(row.source) }}</span></a-tooltip><template v-else>{{ row.source }}</template></td><td><a-tooltip v-if="row.target.length > 5" :content="row.target" position="top"><span>{{ endpointNameCell(row.target) }}</span></a-tooltip><template v-else>{{ row.target }}</template></td><td class="schema-desc-cell"><a-tooltip v-if="(row.basis || '').length > DESC_CELL_LIMIT" :content="row.basis" position="top"><span class="schema-desc-text">{{ descCell(row.basis || '') }}</span></a-tooltip><template v-else>{{ row.basis }}</template></td><td class="schema-props-cell"><SchemaPropertyCell :schema="row.schema" /></td><td class="schema-script-status"><div class="schema-script-status__items"><span v-if="!scriptByRow[row.name]" class="schema-script-status__empty">未上传</span><span v-else-if="!scriptByRow[row.name].stale && !scriptByRow[row.name].needsRun && scriptByRow[row.name].lastRunStatus !== 'failed'" class="schema-script-status__ready">已上传</span><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本（更新后还需重跑）`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name] && !scriptByRow[row.name].stale && scriptByRow[row.name].needsRun" class="script-badge script-badge--rerun" :title="scriptByRow[row.name].lastRunAt ? '脚本更新后尚未重新运行：最新脚本尚未应用到图数据，请到「来源表」触发抽取或回填历史数据（重跑完成前持续提示）' : '脚本上传后尚未运行过抽取：请到「来源表」触发抽取或回填历史数据，将脚本应用到图数据（运行前持续提示）'">{{ scriptByRow[row.name].lastRunAt ? '待重跑' : '未运行' }}</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span></div></td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? (scriptByRow[row.name] ? '更换脚本' : '上传脚本') : '无权维护脚本'" @click="openUploadModal(row.id, row.name)">更换脚本</button><button type="button" class="schema-action-link" :disabled="!scriptByRow[row.name]" :title="scriptByRow[row.name] ? '查看脚本' : '尚未上传脚本'" @click="openViewModal(row.id, row.name)">查看脚本</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护属性（新增 / 删除）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护属性' : '只有创建者或管理员可维护属性')" @click="openPropertyModal(row.schema)">属性管理</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : '系统内置，不可删除'" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr></template></tbody></table></div>
 
       <!-- 列表分页（服务端分页，两个页签共用每页条数、各自记住页码）；
            紧凑页码（最多 5 个页码按钮 + 尾页折叠），跳页框随组件恒显 -->
@@ -1503,17 +1522,19 @@ function descCell(text: string): string {
 .schema-table-wrap table{table-layout:fixed}
 /* 按字段内容分配列宽，预留完整操作区；属性列的两列预览可在单元格内截断。 */
 .schema-entity-table th:nth-child(1){width:10%}
-.schema-entity-table th:nth-child(2){width:14%}
-.schema-entity-table th:nth-child(3){width:14%}
-.schema-entity-table th:nth-child(4){width:34%}
-.schema-entity-table th:nth-child(5){width:28%}
+.schema-entity-table th:nth-child(2){width:13%}
+.schema-entity-table th:nth-child(3){width:13%}
+.schema-entity-table th:nth-child(4){width:32%}
+.schema-entity-table th:nth-child(5){width:8%}
+.schema-entity-table th:nth-child(6){width:24%}
 .schema-relation-table th:nth-child(1){width:8%}
-.schema-relation-table th:nth-child(2){width:12%}
-.schema-relation-table th:nth-child(3){width:8%}
-.schema-relation-table th:nth-child(4){width:8%}
-.schema-relation-table th:nth-child(5){width:13%}
-.schema-relation-table th:nth-child(6){width:26%}
-.schema-relation-table th:nth-child(7){width:25%}
+.schema-relation-table th:nth-child(2){width:11%}
+.schema-relation-table th:nth-child(3){width:7%}
+.schema-relation-table th:nth-child(4){width:7%}
+.schema-relation-table th:nth-child(5){width:11%}
+.schema-relation-table th:nth-child(6){width:27%}
+.schema-relation-table th:nth-child(7){width:7%}
+.schema-relation-table th:nth-child(8){width:22%}
 .schema-desc-cell{word-break:break-word}
 .schema-table-wrap td code{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom}.schema-table-wrap th,.schema-table-wrap td,.trace-layout td{padding:11px 13px;border-bottom:1px solid #e5edf8;text-align:left;line-height:17px;vertical-align:top}.schema-table-wrap th{position:sticky;z-index:2;top:0;background:#f1f6fc;color:#5e6f88;white-space:nowrap}.schema-table-wrap td{color:#344763}.schema-table-wrap code,.trace-layout code{padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;white-space:nowrap}.core,.support,.evidence,.auto,.review{display:inline-flex;padding:2px 7px;border-radius:999px;background:#e9f8ef;color:#067647;font-size:9px;white-space:nowrap}.support{background:#f0f2f5;color:#5e6b7e}.evidence{background:#f0edff;color:#6941c6}.auto{white-space:normal}.review{background:#fff3df;color:#b54708;white-space:normal}.arrow{margin:0 5px;color:#8ba2c2}.candidate-layout{display:grid;flex:1;min-height:0;grid-template-columns:minmax(0,1fr) 245px}.candidate-layout>.schema-table-wrap{grid-column:1}.candidate-note{grid-column:1/-1;padding:10px 13px;border-bottom:1px solid #dce8f8;background:#f3f8ff}.candidate-note strong{font-size:12px}.candidate-note p{margin:3px 0 0;color:#657690;font-size:10px}.mention-fields{grid-column:2;grid-row:2;padding:13px;border-left:1px solid #e0e9f5;background:#fafcff}.mention-fields strong{display:block;margin-bottom:10px;font-size:12px}.mention-fields span{display:inline-flex;margin:0 5px 6px 0;padding:3px 6px;border-radius:4px;background:#edf4ff;color:#315b95;font:9px ui-monospace,SFMono-Regular,Menlo,monospace}.trace-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:12px;background:#f8fbff}.trace-layout section{overflow:hidden;border:1px solid #d5e3f5;border-radius:7px;background:#fff}.trace-layout header{display:flex;align-items:flex-start;justify-content:space-between;padding:13px;border-bottom:1px solid #e3ebf6}.trace-layout h2{margin:0;font-size:13px}.trace-layout p{margin:3px 0 0;color:#7b899e;font-size:10px}.trace-layout header>span{color:#165dff;font-size:10px}.trace-layout table{display:block;max-height:390px;overflow:auto}.trace-layout tbody,.trace-layout tr{display:table;width:100%;table-layout:fixed}.trace-layout td:first-child{width:160px}@media(max-width:1250px){.schema-flow{grid-template-columns:repeat(4,1fr)}.schema-flow b{display:none}}@media(max-width:900px){.trace-layout{grid-template-columns:1fr}.candidate-layout{display:block}.mention-fields{border-top:1px solid #e0e9f5;border-left:0}}
 
@@ -1595,6 +1616,12 @@ function descCell(text: string): string {
 .schema-actions{white-space:normal}
 .schema-actions__inner{display:flex;align-items:center;gap:8px;flex-wrap:nowrap;white-space:nowrap}
 .schema-actions__inner>*{flex:0 0 auto}
+.schema-script-status__items{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.schema-script-status__empty{color:#86909c}
+.schema-script-status__ready{color:#4e5969}
+/* 表头同时固定在顶部和右侧；数据行只固定右侧，避免横向滚动遮挡操作。 */
+.schema-table-wrap table th:last-child{position:sticky;right:0;z-index:4;background:#f7f8fa;box-shadow:-1px 0 #e5e6eb}
+.schema-table-wrap table td:last-child{position:sticky;right:0;z-index:3;background:#fff;box-shadow:-1px 0 #e5e6eb}
 .schema-action-link{border:0;background:transparent;color:#165dff;font-size:11px;line-height:17px;padding:0;cursor:pointer}
 .schema-action-link:hover{text-decoration:underline}
 .schema-action-link:disabled{color:#a9b4c6;cursor:not-allowed;text-decoration:none}
@@ -1844,18 +1871,25 @@ function descCell(text: string): string {
 .schema-topology-canvas{height:260px;overflow:hidden;border-top:1px solid #e5e6eb;background: #fff;}
 .schema-topology-canvas__empty{display:grid;place-items:center;height:100%;color:#86909c;font-size:12px}
 
-/* 与人工审核页相同：表格在剩余高度内滚动，横向滚动条始终位于分页上方。 */
-.schema-page{overflow:hidden}
+/* 页面空间不足时，拓扑与列表可一起滚动；表格仍独立滚动以保持分页和横向滚动条可达。 */
+.schema-page{overflow-x:hidden;overflow-y:auto;scrollbar-gutter:stable}
 .schema-topology-shell{flex:0 0 auto}
-.schema-catalog{flex:1;min-height:0}
+.schema-catalog{flex:1;min-height:320px}
 .schema-table-shell{flex:1;min-height:0}
 .schema-table-wrap{flex:1;min-height:0;overflow:auto;scrollbar-gutter:stable}
-.schema-entity-table{min-width:1450px}
-.schema-relation-table{min-width:1650px}
+/* 滚动条平时透明，鼠标进入区域或滚动后短暂显现。 */
+.schema-page,.schema-table-wrap{scrollbar-width:thin;scrollbar-color:transparent transparent}
+.schema-page:hover,.schema-page.schema-scroll--active,.schema-table-wrap:hover,.schema-table-wrap.schema-scroll--active{scrollbar-color:rgba(78,89,105,.55) transparent}
+.schema-page::-webkit-scrollbar,.schema-table-wrap::-webkit-scrollbar{width:8px;height:8px}
+.schema-page::-webkit-scrollbar-track,.schema-table-wrap::-webkit-scrollbar-track{background:transparent}
+.schema-page::-webkit-scrollbar-thumb,.schema-table-wrap::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background-color:transparent;background-clip:padding-box}
+.schema-page:hover::-webkit-scrollbar-thumb,.schema-page.schema-scroll--active::-webkit-scrollbar-thumb,.schema-table-wrap:hover::-webkit-scrollbar-thumb,.schema-table-wrap.schema-scroll--active::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
+.schema-page::-webkit-scrollbar-thumb:hover,.schema-table-wrap::-webkit-scrollbar-thumb:hover{background-color:rgba(78,89,105,.8)}
+.schema-entity-table{min-width:1600px}
+.schema-relation-table{min-width:1750px}
 .schema-table-shell > .list-pagination{flex:0 0 auto}
 @media(max-height:600px){
-  .schema-page{overflow-y:auto}
-  .schema-catalog,.schema-table-shell{flex:0 0 auto}
+  .schema-catalog,.schema-table-shell{flex:0 0 auto;min-height:0}
   .schema-table-wrap{flex:0 0 auto;min-height:160px;max-height:50vh}
 }
 

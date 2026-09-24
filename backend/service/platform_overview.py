@@ -333,6 +333,9 @@ class WorkflowControlTodayChangesProvider:
 # 通常个位~百级；超限截断，行数语义见抽屉 footer）
 _OBJECT_ROW_CAP = 50
 _ENDPOINT_CAP = 40
+# 抽屉最终展示上限（实体/关系各自去重后）：当日多执行合计行数超限时统一截到
+# 同一上限，两个抽屉的「展示前 n 条」保持一致，且按识别时间倒序取最新
+_DISPLAY_ROW_CAP = 50
 # 顶点「对象名」取值候选：公共字段 name 优先，历史 ETL tag 无字面 name 时按
 # 域定制键回退（Person=name_cn、Keyword=keyword、Paper=title_zh…）
 _NAME_PROP_CANDIDATES = (
@@ -699,9 +702,10 @@ def enrich_today_rows_with_graph(
             except Exception:  # noqa: BLE001
                 logger.exception("关闭今日新增反查图客户端失败")
     # 同一对象常被当日多次执行触碰（重跑/补写），明细按 (类型, 对象) 去重；
-    # 执行按完成时间降序遍历，先到的行即最新一次写入的口径
-    entity_rows = _dedupe_rows(entity_rows)
-    relation_rows = _dedupe_rows(relation_rows)
+    # 执行按完成时间降序遍历，先到的行即最新一次写入的口径。随后按识别时间
+    # 倒序并截到统一展示上限——实体/关系两抽屉的「展示前 n」一致且为最新行
+    entity_rows = _cap_display_rows(_dedupe_rows(entity_rows))
+    relation_rows = _cap_display_rows(_dedupe_rows(relation_rows))
     return replace(snapshot, entity_rows=entity_rows, relation_rows=relation_rows)
 
 
@@ -716,6 +720,14 @@ def _dedupe_rows(rows: list[AssetChangeRow]) -> list[AssetChangeRow]:
         seen.add(key)
         unique.append(row)
     return unique
+
+
+def _cap_display_rows(
+    rows: list[AssetChangeRow], cap: int = _DISPLAY_ROW_CAP
+) -> list[AssetChangeRow]:
+    """明细统一按识别时间倒序，超上限截到 cap 行（同秒稳定保序）。"""
+    ordered = sorted(rows, key=lambda row: row.time, reverse=True)
+    return ordered[:cap]
 
 
 def _ratios(values: list[int]) -> list[int]:

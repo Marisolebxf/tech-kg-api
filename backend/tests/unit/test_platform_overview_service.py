@@ -902,6 +902,31 @@ def test_dedupe_rows_keeps_first_occurrence() -> None:
     assert [(r.object, r.time) for r in deduped] == [("熔丝元件", "20:01:00"), ("旋转电机", "20:01:01")]
 
 
+def test_cap_display_rows_sorts_newest_first_and_truncates() -> None:
+    """明细统一展示上限：无论多少个执行凑出行，最终按识别时间倒序、超限截到
+    同一 cap——实体/关系两抽屉的「展示前 n 条」保持一致且为最新行。"""
+    from service.platform_overview import AssetChangeRow, _cap_display_rows
+
+    def row(obj: str, time: str) -> AssetChangeRow:
+        return AssetChangeRow(type="专利", object=obj, change="新增 专利", source="-", time=time)
+
+    rows = [
+        row("熔丝元件", "20:01:00"),
+        row("旋转电机", "20:03:00"),
+        row("散热基板", "20:02:00"),
+    ]
+    # 少于上限：全部保留，但统一按时间倒序（最新在上）
+    assert [r.object for r in _cap_display_rows(rows, cap=5)] == [
+        "旋转电机",
+        "散热基板",
+        "熔丝元件",
+    ]
+    # 超上限：截到 cap 行，取的是时间最新的那些；同秒稳定保序
+    assert [r.object for r in _cap_display_rows(rows, cap=2)] == ["旋转电机", "散热基板"]
+    tied = [row("对象B", "20:03:00"), row("对象A", "20:03:00"), row("对象C", "20:02:00")]
+    assert [r.object for r in _cap_display_rows(tied, cap=2)] == ["对象B", "对象A"]
+
+
 def test_enrich_today_rows_falls_back_to_aggregate_when_graph_unavailable() -> None:
     snapshot = parse_execution_records(
         [_execution_record(written=5, completed_at="2026-09-22 10:30:00")],

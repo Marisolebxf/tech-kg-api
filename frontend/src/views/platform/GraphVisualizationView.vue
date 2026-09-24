@@ -668,7 +668,7 @@ onUnmounted(() => {
     <section class="graphviz-panel graphviz-form" aria-label="图谱查询参数">
       <div class="graphviz-panel__header">
         <h2 class="graphviz-panel__title">图谱可视化查询</h2>
-        <span class="graphviz-space-hint">图空间跟随右上角全局选择器：{{ space || '默认' }}</span>
+        <span class="graphviz-space-hint">图空间跟随平台总览页的全局选择器：{{ space || '默认' }}</span>
       </div>
       <div class="graphviz-form__body">
         <div class="graphviz-form__grid">

@@ -61,7 +61,10 @@ async function renderLayout(isAdmin: boolean, path = '/expert-direct', collapsed
   useAppStore().collapsed = collapsed
   const router = createRouter({
     history: createMemoryHistory(),
-    routes: [{ path: '/:pathMatch(.*)*', component: { template: '<div />' } }],
+    routes: [
+      // 装置用兜底路由承接所有路径；meta.title 让面包屑渲染真实总览标题
+      { path: '/:pathMatch(.*)*', component: { template: '<div />' }, meta: { title: '平台总览' } },
+    ],
   })
   await router.push(path)
   const wrapper = mount(AppLayout, { global: { plugins: [pinia, router] } })
@@ -71,7 +74,7 @@ async function renderLayout(isAdmin: boolean, path = '/expert-direct', collapsed
 }
 
 describe('既有侧边栏按有效管理员身份显隐', () => {
-  it('业务开发维护保留管理菜单但不会显示管理员身份，选择器仍在原顶栏', async () => {
+  it('业务开发维护保留管理菜单但不会显示管理员身份，业务页不渲染图空间选择器', async () => {
     const { wrapper, auth } = await renderLayout(false)
     auth.profile = { ...auth.profile!, businessRbacEnabled: true, platformRole: 'developer', canDevelop: true }
     await nextTick()
@@ -79,7 +82,8 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
     expect(auth.isAdmin).toBe(false)
     expect(wrapper.get('.app-top-actions__user').text()).toContain('开发维护')
     expect(wrapper.get('.app-top-actions__user').text()).not.toContain('管理员')
-    expect(wrapper.find('.app-top-actions .app-space-select').exists()).toBe(true)
+    // 图空间选择器仅平台总览页（面包屑行）渲染，业务页与顶栏均不出现
+    expect(wrapper.find('.app-space-select').exists()).toBe(false)
   })
   it.each([false, true])('业务限定账号只保留九大模块，收起=%s', async (collapsed) => {
     const { wrapper } = await renderLayout(true, '/expert-direct', collapsed, true)
@@ -148,11 +152,24 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
     expect(wrapper.find('.app-nav a[href="/schema"]').exists()).toBe(false)
   })
 
-  it('顶栏渲染全局图空间选择器并加载空间列表', async () => {
+  it('非总览页不渲染图空间选择器，空间上下文由路由守卫加载', async () => {
     const { wrapper } = await renderLayout(true, '/graph-query')
-    const selector = wrapper.get('.app-space-select')
+    expect(wrapper.find('.app-space-select').exists()).toBe(false)
+    // 空间列表/当前值不再依赖顶栏选择器挂载：路由守卫在身份就绪后 ensureLoaded
+    expect(useGraphSpaceStore().initialized).toBe(false)
+  })
+
+  it('平台总览页在面包屑行右侧渲染全局图空间选择器并加载空间列表', async () => {
+    const { wrapper } = await renderLayout(true, '/overview')
+    const selector = wrapper.get('.app-breadcrumb .app-space-select')
     expect(selector.text()).toContain('图空间')
-    expect(useGraphSpaceStore().current).toBe('dev2')
+    // 选择器挂载即拉列表并归一当前值（构建默认 dev2）
+    const store = useGraphSpaceStore()
+    await flushPromises()
+    expect(store.initialized).toBe(true)
+    expect(store.current).toBe('dev2')
+    // 面包屑标题与选择器同行：选择器是面包屑行最后一个子元素
+    expect(wrapper.get('.app-breadcrumb').text()).toContain('平台总览')
   })
 
   it('图谱可视化入口默认隐藏，开关开启后出现在图谱查询组', async () => {

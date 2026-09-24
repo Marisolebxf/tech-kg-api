@@ -55,6 +55,8 @@ const userRoleDescription = computed(() =>
   isAdminUser.value ? "系统管理与审核权限" : "知识图谱业务服务",
 );
 const pageTitle = computed(() => String(route.meta.title ?? "亿级知识图谱"));
+// 全局图空间选择器只挂在平台总览页（所有角色都可见该页），与面包屑标题同行靠右
+const isOverviewPage = computed(() => route.path === "/overview");
 const routeError = ref("");
 const serviceNavCollapsed = ref(false);
 // 图谱查询折叠组（综合查询 / 实体列表 / 图谱可视化）
@@ -613,7 +615,6 @@ onBeforeUnmount(() => {
             >
               <img :src="iconBook" alt="" aria-hidden="true" />
             </a>
-            <GraphSpaceSelector />
             <div
               class="app-alert-entry"
               @mouseenter="alertPreviewOpen = !alertDrawerOpen"
@@ -745,7 +746,11 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <section class="app-stage">
-          <div class="app-breadcrumb" aria-label="当前位置">
+          <div
+            class="app-breadcrumb"
+            :class="{ 'app-breadcrumb--with-select': isOverviewPage }"
+            aria-label="当前位置"
+          >
             <template
               v-for="(item, index) in breadcrumbItems"
               :key="`${item.label}-${index}`"
@@ -766,6 +771,7 @@ onBeforeUnmount(() => {
                 {{ item.label }}
               </span>
             </template>
+            <GraphSpaceSelector v-if="isOverviewPage" />
           </div>
           <section class="app-workspace" :aria-label="pageTitle">
             <div v-if="routeError" class="route-error">
@@ -2146,7 +2152,8 @@ onBeforeUnmount(() => {
   position: relative;
   display: grid;
   margin-right: var(--space-16);
-  grid-template-rows: 22px minmax(0, 1fr);
+  /* 首行随面包屑内容自适应：平台总览页右侧挂图空间选择器时撑到 32px，其余页 22px */
+  grid-template-rows: minmax(22px, auto) minmax(0, 1fr);
   gap: 16px;
   height: calc(100% - var(--header-height));
   padding: 16px 15px 16px 16px;
@@ -2179,6 +2186,16 @@ onBeforeUnmount(() => {
   min-width: 0;
   height: 22px;
   color: var(--gkx-text-secondary);
+}
+
+/* 平台总览页：面包屑标题行右侧挂全局图空间选择器（a-select 默认 32px 高） */
+.app-breadcrumb--with-select {
+  width: 100%;
+  height: 32px;
+}
+
+.app-breadcrumb--with-select > .app-space-select {
+  margin-left: auto;
 }
 
 .app-breadcrumb__separator {

@@ -294,7 +294,7 @@ const processingReason = ref('')
 const processingStartDate = ref('2026-07-12')
 const processingEndDate = ref('2026-07-13')
 const isActionLoading = ref(false)
-// 查询统一跟随顶栏全局图空间。
+// 查询统一跟随平台总览页的全局图空间。
 let graphContextVersion = 0
 
 /** 查询模式：nGQL 直查 | 图算法。 */
@@ -880,7 +880,7 @@ async function handleNgqlQuery(): Promise<void> {
   resetNgqlPage()
 
   try {
-    // 图空间跟随右上角全局选择器（后端按 X-Graph-Space 路由）
+    // 图空间跟随平台总览页的全局选择器（后端按 X-Graph-Space 路由）
     const result = await runNgql(space, statement)
     if (context !== graphContextVersion) return
     ngqlResult.value = result

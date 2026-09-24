@@ -61,13 +61,17 @@ const REVIEW_TIME_PARAMS: Record<string, string | undefined> = { '全部': undef
 const reviewTimeSort = ref<'default' | 'desc' | 'asc'>(pickSnapshotOption(queueSnapshot?.sort, ['default', 'desc', 'asc'] as const, 'default'))
 const reviewTotal = ref(0)
 /** 队列行 = manual-review-data 的 ReviewRecord + 重跑/删除/跳转所需的原始字段。 */
-type ReviewRow = ReviewRecord & { templateId?: string; rawStatus?: string; jobId?: string }
+type ReviewRow = ReviewRecord & { templateId?: string; rawStatus?: string; jobId?: string; canOperate?: boolean }
 
-/** 可重跑/可删除：与后端 rerun 门控同口径（未处理）。不可操作时按钮置灰禁用而非隐藏（保持操作列布局稳定）。 */
-const isRerunnable = (row: ReviewRow) => row.rawStatus === 'OPEN' || row.rawStatus === 'RERUN_FAILED'
+/** 可重跑/可删除：与后端 rerun 门控同口径（未处理）；查看档只读行（canOperate=false，
+ *  如开发维护看共享生产空间）同样不可操作，后端对操作档仍强校验 403。
+ *  不可操作时按钮置灰禁用而非隐藏（保持操作列布局稳定）。 */
+const isRerunnable = (row: ReviewRow) =>
+  (row.rawStatus === 'OPEN' || row.rawStatus === 'RERUN_FAILED') && row.canOperate !== false
 
 /** 置灰按钮的悬停说明：按记录状态给出不可操作的原因。 */
 function rerunDisabledReason(row: ReviewRow): string {
+  if (row.canOperate === false) return '共享生产空间：仅可查看，操作需管理员或本业务开发维护人员'
   if (row.rawStatus === 'RERUNNING') return '重跑中：等待本次重跑完成后再操作'
   return '已处理：仅「待处理 / 重跑失败」的记录可重跑或删除'
 }
@@ -85,6 +89,11 @@ let reviewRequestId = 0
 let reviewDisposed = false
 
 const reviewRows = computed(() => reviewRecords.value)
+
+/** 当前队列整页只读（查看档，如开发维护切到共享生产空间）：顶部提示条。 */
+const reviewReadOnly = computed(
+  () => reviewRows.value.length > 0 && reviewRows.value.every((row) => row.canOperate === false),
+)
 
 /** 分页状态：服务端分页，翻页/改页大小都会重新拉取当前筛选下的数据。
  *  分页条为共享 ListPagination（共 N 条/每页/跳页样式随组件自带），默认每页 20；
@@ -350,7 +359,7 @@ async function loadReviews() {
       return loadReviews()
     }
     reviewRecords.value = response.items.map((row: ProductionReviewCase) => ({
-      id: row.id, templateId: row.templateId, rawStatus: row.status, jobId: row.jobId || '', batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待处理', status: extractCaseStatusBadge(row.status), updatedAt: fmtReviewTime(row.updatedAt), sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,
+      id: row.id, templateId: row.templateId, rawStatus: row.status, jobId: row.jobId || '', canOperate: row.canOperate !== false, batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待处理', status: extractCaseStatusBadge(row.status), updatedAt: fmtReviewTime(row.updatedAt), sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,
     }))
     reviewLoadError.value = ''
   } catch (error) {
@@ -394,8 +403,9 @@ watch([reviewStatusFilter, reviewKindFilter, reviewTimeFilter], () => {
   void loadReviews()
 })
 
-/** 图空间切换：待审核队列跟随当前空间重新拉取（换的是整份数据，页码归 1；空间是全局态，不进 sessionStorage 快照，
- *  与其他业务页「切空间即重查」同口径）；同时清掉旧空间的批量操作对象与弹窗/日志抽屉，防止跨空间误操作。 */
+/** 图空间切换（总览页全局选择器，本页不设控件）：待审核队列跟随当前空间重新拉取
+ *  （换的是整份数据，页码归 1；空间是全局态，不进 sessionStorage 快照，与其他业务页
+ *  「切空间即重查」同口径）；同时清掉旧空间的批量操作对象与弹窗/日志抽屉，防止跨空间误操作。 */
 watch(() => graphSpaceStore.current, () => {
   if (props.mode !== 'review') return
   reviewPage.value = 1
@@ -447,6 +457,11 @@ onMounted(loadReviews)
           <a-input v-model="keyword" class="review-search-input review-filter-search" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索处理实例 ID、对象或来源记录" placeholder="搜索处理实例 ID、对象或来源记录"><template #prefix><IconSearch /></template></a-input>
         </div>
       </div>
+    </div>
+
+    <!-- 查看档只读提示（开发维护切到共享生产空间）：整页不可操作 -->
+    <div v-if="reviewReadOnly" class="review-readonly-bar" role="note">
+      当前图空间为共享生产空间：人工审核仅可查看，操作需管理员或本业务开发维护人员执行。
     </div>
 
     <!-- 批量重跑：单独一行右对齐（不挤在筛选栏里） -->
@@ -732,6 +747,8 @@ onMounted(loadReviews)
 .rerun-feedback.is-error{border-color:#f5b8b3;background:#fef3f2;color:#b42318}
 .rerun-feedback.is-warning{border-color:#fec84b;background:#fffaeb;color:#b54708}
 .rerun-feedback-close{margin-left:auto;width:22px;height:22px;border:0;border-radius:4px;background:transparent;color:inherit;font-size:14px;cursor:pointer}
+/* 查看档只读提示条（共享生产空间）：与 rerun-feedback.is-warning 同色系 */
+.review-readonly-bar{flex:0 0 auto;padding:9px 16px;border:1px solid #fec84b;border-radius:6px;background:#fffaeb;color:#b54708;font-size:12px;line-height:20px;margin-bottom:10px}
 .rerun-confirm-text{margin:0;color:#4e5969;font-size:13px;line-height:22px}
 .review-status.is-重跑中,.review-status.is-执行中{color:#175cd3}
 .review-status.is-重跑失败,.review-status.is-失败{color:#b42318}

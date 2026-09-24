@@ -111,9 +111,22 @@ class ManualReviewService:
         identity.ensure_space(review_case.graph_space)
         require_domain_access(identity, review_case.domain)
 
+    def require_case_view(self, identity, review_case):
+        """查看档：detail/logs 等读路径用；操作路径仍走 require_case_access。"""
+        identity.ensure_space_view(review_case.graph_space)
+        require_domain_access(identity, review_case.domain)
+
     def authorize_case(self, case_id, identity):
         with self.sf() as s:
             self.require_case_access(identity, self.need(s, case_id))
+
+    def authorize_case_view(self, case_id, identity):
+        with self.sf() as s:
+            self.require_case_view(identity, self.need(s, case_id))
+
+    def _can_operate(self, identity, review_case) -> bool:
+        spaces = identity.review_spaces()
+        return spaces is None or review_case.graph_space in spaces
 
     def authorize_rerun(self, identity, *, case_ids=None, execution_id=None):
         """Authorize the complete selected set, then freeze IDs for the rerun service."""
@@ -164,9 +177,12 @@ class ManualReviewService:
         page = max(int(f.get("page") or 1), 1)
         size = min(max(int(f.get("page_size") or 50), 1), 200)
         q = []
-        review_spaces = a.review_spaces()
-        if review_spaces is not None:
-            q.append(ReviewCase.graph_space.in_(review_spaces))
+        # 可见范围=查看档（开发维护额外可见共享生产空间，只读）；
+        # 操作范围=操作档，逐行以 canOperate 下发供前端禁用按钮（后端写口仍强校验）
+        view_spaces = a.review_view_spaces()
+        operate_spaces = a.review_spaces()
+        if view_spaces is not None:
+            q.append(ReviewCase.graph_space.in_(view_spaces))
         # 图空间过滤（队列页跟随全局空间选择）：显式传入时只看该空间，不传=跨空间全量；
         # 与上面 RBAC 授权空间集合是 AND 相交——请求未授权空间自然得到空列表
         if f.get("graph_space"):
@@ -252,7 +268,7 @@ class ManualReviewService:
                 [(load(x.input_snapshot) or {}).get("executionId") for x in rows]
             )
             return {
-                "items": [self.case_dict(x, job_map) for x in rows],
+                "items": [self.case_dict(x, job_map, operate_spaces=operate_spaces) for x in rows],
                 "total": total,
                 "page": page,
                 "pageSize": size,
@@ -261,8 +277,11 @@ class ManualReviewService:
     def get_case(self, i, a):
         with self.sf() as s:
             c = self.need(s, i)
-            self.require_case_access(a, c)
-            return self.detail(s, c)
+            self.require_case_view(a, c)
+            d = self.detail(s, c)
+            # 只读查看档（如开发维护看共享空间）：detail 默认可操作，按操作档覆写
+            d["canOperate"] = self._can_operate(a, c)
+            return d
 
     def claim(self, i, v, a):
         t = now()
@@ -1360,7 +1379,8 @@ class ManualReviewService:
     def logs(self, i, a):
         with self.sf() as s:
             c = self.need(s, i)
-            self.require_case_access(a, c)
+            # 审计日志是读路径：查看档（共享空间只读可见）
+            self.require_case_view(a, c)
             return [
                 {
                     "eventType": x.event_type,
@@ -1392,7 +1412,9 @@ class ManualReviewService:
         }:
             raise ReviewValidationError("附件类型不允许")
         safe = os.path.basename(file_name).replace("\\", "_")
-        self.get_case(i, a)
+        # 附件上传是写路径：走操作档校验，不能借道 get_case（那是查看档，共享空间放行）
+        with self.sf() as s:
+            self.require_case_access(a, self.need(s, i))
         eid = f"EVD-{uuid4().hex[:16].upper()}"
         key = f"{i}/{eid}/{safe}"
         st = self.storage()
@@ -1524,12 +1546,15 @@ class ManualReviewService:
             )
         )
 
-    def case_dict(self, c, job_map: dict[str, str] | None = None):
+    def case_dict(self, c, job_map: dict[str, str] | None = None, operate_spaces=None):
         input_data = load(c.input_snapshot) or {}
         execution_id = input_data.get("executionId")
         return {
             "id": c.id,
             "graphSpace": c.graph_space,
+            # 操作档可见性：None=不设限（非 RBAC/管理员路径或刚通过操作校验）；
+            # 列表传入操作档集合，共享空间（查看档可见）为 False，前端据此禁用操作
+            "canOperate": operate_spaces is None or c.graph_space in operate_spaces,
             "sourceTaskId": c.source_task_id,
             "batchId": c.batch_id,
             # 图谱构建任务：产生该 case 的 job（job-xxx，前端「来源记录」跳 /graph-build/jobs）。

@@ -3031,7 +3031,11 @@ class SchemaExtractWorkflow:
         else:
             do_index = request.get("buildIndex")
             if do_index is None:
-                do_index = kind == "entity"
+                # 共享图库内存受限时可不随环重建：全空间重建 pass 自身也可能把
+                # 宿主顶过高水位（重建被取消后线程仍后台读图，与下一环写图叠加
+                # 越线整链 FAILED）。索引本就允许降级，跳过时用管理端点
+                # POST /entity-search/reindex 在全部抽取结束后统一全量重建。
+                do_index = kind == "entity" and os.getenv("SCHEMA_EXTRACT_BUILD_INDEX", "1") != "0"
             if do_index and kind == "entity":
                 # 索引是后置增强（embedding/Milvus 依赖外部服务），失败降级不拖垮抽取
                 try:

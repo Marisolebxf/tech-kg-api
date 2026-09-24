@@ -49,6 +49,11 @@ describe('ListPagination', () => {
     expect(w.findComponent(Pagination).props('showJumper')).toBe(false)
   })
 
+  it('跳页框恒显：总页数 ≤7 时默认仍透传 showJumper=true（kgetl 曾按页数阈值隐藏，已回退）', () => {
+    const w = mountPager({ total: 30, pageSize: 20 })
+    expect(w.findComponent(Pagination).props('showJumper')).toBe(true)
+  })
+
   it('compactPages 透传折叠参数（base=5/buffer=1，页码按钮最多 5 个且含尾页）', () => {
     const w = mountPager({ total: 200, pageSize: 20, page: 5, compactPages: true })
     expect(w.findComponent(Pagination).props('baseSize')).toBe(5)

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { IconSearch } from '@arco-design/web-vue/es/icon'
 import hljs from 'highlight.js/lib/core'
 import python from 'highlight.js/lib/languages/python'
@@ -83,21 +83,6 @@ type CreateForm = {
 }
 
 const currentUserId = getCurrentUserId()
-
-const pageScrolling = ref(false)
-let pageScrollTimer: ReturnType<typeof setTimeout> | undefined
-
-function handlePageScroll(): void {
-  pageScrolling.value = true
-  if (pageScrollTimer) clearTimeout(pageScrollTimer)
-  pageScrollTimer = setTimeout(() => {
-    pageScrolling.value = false
-  }, 700)
-}
-
-onBeforeUnmount(() => {
-  if (pageScrollTimer) clearTimeout(pageScrollTimer)
-})
 
 const activeTab = ref('标准实体')
 // Schema 管理按图空间维度隔离：列表/拓扑/新建统一跟随右上角全局图空间选择器
@@ -1122,11 +1107,7 @@ function descCell(text: string): string {
 </script>
 
 <template>
-  <main
-    class="schema-page"
-    :class="{ 'schema-page--scrolling': pageScrolling }"
-    @scroll.passive="handlePageScroll"
-  >
+  <main class="schema-page">
     <section
       class="schema-shell schema-topology-shell"
       :class="{ 'schema-topology-shell--collapsed': !topologyExpanded }"
@@ -1520,20 +1501,19 @@ function descCell(text: string): string {
 .schema-page{display:flex;height:100%;min-height:0;overflow:hidden;padding-bottom:2px;color:#142443;flex-direction:column}.schema-flow{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));margin-bottom:12px;padding:12px;border:1px solid #c5d9f6;border-radius:8px;background:#fff}.schema-flow>div{position:relative;display:flex;align-items:center;gap:7px;min-width:0;padding:4px 15px 4px 5px}.schema-flow i{display:grid;flex:0 0 auto;place-items:center;width:23px;height:23px;border-radius:50%;background:#eaf2ff;color:#165dff;font-size:10px;font-style:normal}.schema-flow span{color:#40536f;font-size:10px;line-height:15px}.schema-flow b{position:absolute;right:2px;color:#9bb5d9}.schema-shell{display:flex;flex:1;min-height:0;overflow:hidden;border:1px solid #bcd4f7;border-radius:9px;background:#fff;box-shadow:0 10px 24px rgba(48,105,194,.08);flex-direction:column}.schema-tabs{display:flex;flex:0 0 auto;overflow:auto;padding:0 12px;border-bottom:1px solid #dce8f8}.schema-tabs button{padding:12px 15px;border:0;border-bottom:2px solid transparent;background:transparent;color:#566985;white-space:nowrap;cursor:pointer}.schema-tabs button.active{border-color:#165dff;color:#165dff;font-weight:600}.schema-toolbar{display:flex;flex:0 0 auto;align-items:center;justify-content:space-between;gap:14px;padding:10px 13px;border-bottom:1px solid #e3ebf6;background:#f8fbff}.schema-toolbar>div{display:flex;align-items:center;gap:10px}.schema-toolbar strong{font-size:13px}.schema-toolbar>div span{color:#7b8ba3;font-size:10px}.schema-toolbar label{display:flex;align-items:center;gap:6px;width:270px;padding:0 9px;border:1px solid #c7d8ef;border-radius:5px;background:#fff}.schema-toolbar input{width:100%;height:30px;border:0;outline:0;font-size:11px}.schema-table-wrap{flex:1;min-height:0;max-height:none;overflow:auto}
 .schema-table-wrap table,.trace-layout table{width:100%;border-collapse:collapse;font-size:11px}
 .schema-table-wrap table{table-layout:fixed}
-/* 列宽向属性列倾斜：说明列只显示 10 字符截断（tooltip 看全文），
-   属性列加宽到 3 个胶囊 + 「+N」能在单行平铺。 */
+/* 按字段内容分配列宽，预留完整操作区；属性列的两列预览可在单元格内截断。 */
 .schema-entity-table th:nth-child(1){width:10%}
-.schema-entity-table th:nth-child(2){width:16%}
+.schema-entity-table th:nth-child(2){width:14%}
 .schema-entity-table th:nth-child(3){width:14%}
-.schema-entity-table th:nth-child(4){width:40%}
-.schema-entity-table th:nth-child(5){width:20%}
-.schema-relation-table th:nth-child(1){width:9%}
-.schema-relation-table th:nth-child(2){width:13%}
+.schema-entity-table th:nth-child(4){width:34%}
+.schema-entity-table th:nth-child(5){width:28%}
+.schema-relation-table th:nth-child(1){width:8%}
+.schema-relation-table th:nth-child(2){width:12%}
 .schema-relation-table th:nth-child(3){width:8%}
 .schema-relation-table th:nth-child(4){width:8%}
-.schema-relation-table th:nth-child(5){width:12%}
-.schema-relation-table th:nth-child(6){width:30%}
-.schema-relation-table th:nth-child(7){width:20%}
+.schema-relation-table th:nth-child(5){width:13%}
+.schema-relation-table th:nth-child(6){width:26%}
+.schema-relation-table th:nth-child(7){width:25%}
 .schema-desc-cell{word-break:break-word}
 .schema-table-wrap td code{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom}.schema-table-wrap th,.schema-table-wrap td,.trace-layout td{padding:11px 13px;border-bottom:1px solid #e5edf8;text-align:left;line-height:17px;vertical-align:top}.schema-table-wrap th{position:sticky;z-index:2;top:0;background:#f1f6fc;color:#5e6f88;white-space:nowrap}.schema-table-wrap td{color:#344763}.schema-table-wrap code,.trace-layout code{padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;white-space:nowrap}.core,.support,.evidence,.auto,.review{display:inline-flex;padding:2px 7px;border-radius:999px;background:#e9f8ef;color:#067647;font-size:9px;white-space:nowrap}.support{background:#f0f2f5;color:#5e6b7e}.evidence{background:#f0edff;color:#6941c6}.auto{white-space:normal}.review{background:#fff3df;color:#b54708;white-space:normal}.arrow{margin:0 5px;color:#8ba2c2}.candidate-layout{display:grid;flex:1;min-height:0;grid-template-columns:minmax(0,1fr) 245px}.candidate-layout>.schema-table-wrap{grid-column:1}.candidate-note{grid-column:1/-1;padding:10px 13px;border-bottom:1px solid #dce8f8;background:#f3f8ff}.candidate-note strong{font-size:12px}.candidate-note p{margin:3px 0 0;color:#657690;font-size:10px}.mention-fields{grid-column:2;grid-row:2;padding:13px;border-left:1px solid #e0e9f5;background:#fafcff}.mention-fields strong{display:block;margin-bottom:10px;font-size:12px}.mention-fields span{display:inline-flex;margin:0 5px 6px 0;padding:3px 6px;border-radius:4px;background:#edf4ff;color:#315b95;font:9px ui-monospace,SFMono-Regular,Menlo,monospace}.trace-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:12px;background:#f8fbff}.trace-layout section{overflow:hidden;border:1px solid #d5e3f5;border-radius:7px;background:#fff}.trace-layout header{display:flex;align-items:flex-start;justify-content:space-between;padding:13px;border-bottom:1px solid #e3ebf6}.trace-layout h2{margin:0;font-size:13px}.trace-layout p{margin:3px 0 0;color:#7b899e;font-size:10px}.trace-layout header>span{color:#165dff;font-size:10px}.trace-layout table{display:block;max-height:390px;overflow:auto}.trace-layout tbody,.trace-layout tr{display:table;width:100%;table-layout:fixed}.trace-layout td:first-child{width:160px}@media(max-width:1250px){.schema-flow{grid-template-columns:repeat(4,1fr)}.schema-flow b{display:none}}@media(max-width:900px){.trace-layout{grid-template-columns:1fr}.candidate-layout{display:block}.mention-fields{border-top:1px solid #e0e9f5;border-left:0}}
 
@@ -1864,20 +1844,20 @@ function descCell(text: string): string {
 .schema-topology-canvas{height:260px;overflow:hidden;border-top:1px solid #e5e6eb;background: #fff;}
 .schema-topology-canvas__empty{display:grid;place-items:center;height:100%;color:#86909c;font-size:12px}
 
-/* 拓扑总览与 Schema 列表共用整页滚动；默认隐藏滚动条，交互时再显示。 */
-.schema-page{overflow-x:hidden;overflow-y:auto;scrollbar-color:transparent transparent;scrollbar-gutter:stable;scrollbar-width:thin}
-.schema-page:hover,.schema-page--scrolling{scrollbar-color:rgba(78,89,105,.55) transparent}
-.schema-page::-webkit-scrollbar{width:8px}
-.schema-page::-webkit-scrollbar-track{background:transparent}
-.schema-page::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background-color:transparent;background-clip:padding-box}
-.schema-page:hover::-webkit-scrollbar-thumb,.schema-page--scrolling::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
-.schema-page::-webkit-scrollbar-thumb:hover{background-color:rgba(78,89,105,.8)}
-
-/* 取消两个内容区对视口高度的均分，让内容撑开后由整页容器滚动。 */
+/* 与人工审核页相同：表格在剩余高度内滚动，横向滚动条始终位于分页上方。 */
+.schema-page{overflow:hidden}
 .schema-topology-shell{flex:0 0 auto}
-.schema-table-wrap{flex:0 0 auto;overflow-x:auto;overflow-y:visible}
-.schema-entity-table{min-width:1800px}
-.schema-relation-table{min-width:2000px}
+.schema-catalog{flex:1;min-height:0}
+.schema-table-shell{flex:1;min-height:0}
+.schema-table-wrap{flex:1;min-height:0;overflow:auto;scrollbar-gutter:stable}
+.schema-entity-table{min-width:1450px}
+.schema-relation-table{min-width:1650px}
+.schema-table-shell > .list-pagination{flex:0 0 auto}
+@media(max-height:600px){
+  .schema-page{overflow-y:auto}
+  .schema-catalog,.schema-table-shell{flex:0 0 auto}
+  .schema-table-wrap{flex:0 0 auto;min-height:160px;max-height:50vh}
+}
 
 /* Schema 管理页统一排版规范。 */
 .schema-page,.schema-page :deep(*),.schema-modal,.schema-modal :deep(*){font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;letter-spacing:0}
@@ -1901,8 +1881,7 @@ function descCell(text: string): string {
 .schema-flow li i,.trace-card>header i{font-size:12px;line-height:20px}
 
 /* Schema 类型切换沿用科技专家同事关系页的摘要/实体分段按钮，并置于表格边框之外。 */
-.schema-catalog{display:flex;flex:0 0 auto;min-height:0;flex-direction:column;gap:12px}
-.schema-table-shell{flex:0 0 auto;min-height:0}
+.schema-catalog{display:flex;flex-direction:column;gap:12px}
 .schema-tabs{min-height:40px;padding:0;border-bottom:0;background:transparent;overflow:visible}
 .schema-tabs__items{box-sizing:border-box;height:40px;padding:4px;border-radius:4px;background:#f2f3f5;align-self:auto;overflow:visible}
 .schema-tabs__items button{display:inline-flex;box-sizing:border-box;align-items:center;justify-content:center;width:88px;height:32px;padding:5px 16px;border:0;border-radius:4px;background:transparent;color:#4e5969;text-align:center}

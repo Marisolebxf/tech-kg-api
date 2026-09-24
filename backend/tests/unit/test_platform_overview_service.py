@@ -1,9 +1,9 @@
 from service.platform_overview import (
+    DayChangesSnapshot,
     GraphStatsSnapshot,
     PlatformOverviewService,
-    TodayChangesSnapshot,
     TRSGraphStatsProvider,
-    enrich_today_rows_with_graph,
+    enrich_day_rows_with_graph,
     parse_execution_records,
 )
 
@@ -42,19 +42,19 @@ class FailingStatsProvider:
 
 
 class FakeChangesProvider:
-    """控制库今日增量替身：固定返回可断言的写图计数与明细行。"""
+    """控制库统计日（昨日）增量替身：固定返回可断言的写图计数与明细行。"""
 
-    def __init__(self, snapshot: TodayChangesSnapshot | None = None) -> None:
-        self.snapshot = snapshot or TodayChangesSnapshot()
+    def __init__(self, snapshot: DayChangesSnapshot | None = None) -> None:
+        self.snapshot = snapshot or DayChangesSnapshot()
         self.spaces: list[str | None] = []
 
-    def get_today_changes(self, space: str | None = None) -> TodayChangesSnapshot:
+    def get_day_changes(self, space: str | None = None) -> DayChangesSnapshot:
         self.spaces.append(space)
         return self.snapshot
 
 
 class FailingChangesProvider:
-    def get_today_changes(self, space: str | None = None) -> TodayChangesSnapshot:
+    def get_day_changes(self, space: str | None = None) -> DayChangesSnapshot:
         raise RuntimeError("control db unavailable")
 
 
@@ -328,8 +328,8 @@ def test_stats_provider_rest_fallback_when_cache_missing() -> None:
     assert snapshot.edges == {"PUBLISH": 5}
 
 
-def test_overview_uses_control_plane_today_changes() -> None:
-    """今日新增/运行中执行数来自工作流控制库，明细行替换演示数据。"""
+def test_overview_uses_control_plane_day_changes() -> None:
+    """昨日新增/运行中执行数来自工作流控制库，明细行替换演示数据。"""
     from biz.schemas.platform_overview import AssetChangeRow
 
     entity_rows = [
@@ -342,7 +342,7 @@ def test_overview_uses_control_plane_today_changes() -> None:
         )
     ]
     changes = FakeChangesProvider(
-        TodayChangesSnapshot(
+        DayChangesSnapshot(
             entity_added=61,
             relation_added=7,
             running_count=3,
@@ -358,10 +358,10 @@ def test_overview_uses_control_plane_today_changes() -> None:
     assert changes.spaces == ["dev2"]
     entity = result.asset_overview_groups[0]
     assert entity.added == "+61"
-    assert entity.added_label == "今日新增"
+    assert entity.added_label == "昨日新增"
     assert result.asset_overview_groups[1].added == "+7"
     assert result.pending_batch_count == 3
-    assert result.data_sources["todayChanges"] == "workflow-control-live"
+    assert result.data_sources["dayChanges"] == "workflow-control-live"
     assert result.asset_change_rows["entity"] == entity_rows
     assert result.asset_change_rows["relation"] == []
     # 数值合计与徽标同源（Σwritten），与明细行数解耦：抽屉用它展示
@@ -378,17 +378,42 @@ def test_overview_uses_control_plane_today_changes() -> None:
     assert result.asset_change_rows["property"]
 
 
-def test_overview_shows_placeholder_when_no_today_changes() -> None:
-    """控制库可读但当日写图为 0：显示 -- 而非 +0，数据源仍标记真实。"""
+def test_day_changes_provider_caches_closed_window_until_day_rolls() -> None:
+    """昨日是闭合窗口：同统计日同空间只冷算一次（秒级图反查每 worker 每天
+    最多付一次），跨日翻页后重算并整体作废旧统计日缓存。"""
+    from service.platform_overview import DayChangesSnapshot, WorkflowControlDayChangesProvider
+
+    days = ["2026-09-23", "2026-09-23", "2026-09-23", "2026-09-24"]
+    loads: list[tuple[str, str | None]] = []
+
+    class _FrozenProvider(WorkflowControlDayChangesProvider):
+        def _current_day(self) -> str:
+            return days.pop(0)
+
+        def _load(self, day: str, space: str | None) -> DayChangesSnapshot:
+            loads.append((day, space))
+            return DayChangesSnapshot(entity_added=len(loads))
+
+    provider = _FrozenProvider()
+    first = provider.get_day_changes("dev2")
+    assert provider.get_day_changes("dev2") is first  # 同日同空间命中缓存，不重算
+    provider.get_day_changes("techkg")  # 同日另一空间各自冷算
+    assert loads == [("2026-09-23", "dev2"), ("2026-09-23", "techkg")]
+    provider.get_day_changes("dev2")  # 翻日后旧缓存作废、重新冷算
+    assert loads[-1] == ("2026-09-24", "dev2")
+
+
+def test_overview_shows_placeholder_when_no_day_changes() -> None:
+    """控制库可读但统计日写图为 0：显示 -- 而非 +0，数据源仍标记真实。"""
     result = PlatformOverviewService(
         stats_provider=FakeStatsProvider(), changes_provider=FakeChangesProvider()
     ).get_overview()
 
     assert result.asset_overview_groups[0].added == "--"
-    assert result.asset_overview_groups[0].added_label == "今日新增"
+    assert result.asset_overview_groups[0].added_label == "昨日新增"
     assert result.asset_overview_groups[1].added == "--"
-    assert result.asset_overview_groups[1].added_label == "今日新增"
-    assert result.data_sources["todayChanges"] == "workflow-control-live"
+    assert result.asset_overview_groups[1].added_label == "昨日新增"
+    assert result.data_sources["dayChanges"] == "workflow-control-live"
 
 
 def test_overview_tolerates_control_plane_failure() -> None:
@@ -398,12 +423,12 @@ def test_overview_tolerates_control_plane_failure() -> None:
     ).get_overview()
 
     assert result.asset_overview_groups[0].added == "--"
-    assert result.asset_overview_groups[0].added_label == "今日新增"
+    assert result.asset_overview_groups[0].added_label == "昨日新增"
     assert result.asset_overview_groups[1].added == "--"
     assert result.asset_change_rows["entity"] == []
     assert result.asset_change_rows["relation"] == []
     assert result.pending_batch_count == 0
-    assert result.data_sources["todayChanges"] == "demo-fallback"
+    assert result.data_sources["dayChanges"] == "demo-fallback"
     assert any("控制库不可用" in warning for warning in result.warnings)
 
 
@@ -438,7 +463,7 @@ def _execution_record(
     return json.dumps(record, ensure_ascii=False)
 
 
-def test_parse_execution_records_aggregates_today_by_kind_and_space() -> None:
+def test_parse_execution_records_aggregates_day_by_kind_and_space() -> None:
     snapshot = parse_execution_records(
         [
             _execution_record(written=5, completed_at="2026-09-22 10:30:00"),
@@ -448,7 +473,7 @@ def test_parse_execution_records_aggregates_today_by_kind_and_space() -> None:
                 trigger="RERUN",
                 completed_at="2026-09-22 11:00:00",
             ),
-            # 昨日完成：不计入今日
+            # 前一日完成：不计入统计日
             _execution_record(written=99, completed_at="2026-09-21 23:59:59"),
             # 其他空间：不计入
             _execution_record(payload_space="other_space"),
@@ -460,7 +485,7 @@ def test_parse_execution_records_aggregates_today_by_kind_and_space() -> None:
             "not-a-json",
             "[]",
         ],
-        today="2026-09-22",
+        day="2026-09-22",
         target_space="dev2",
         default_space="dev2",
     )
@@ -474,7 +499,7 @@ def test_parse_execution_records_aggregates_today_by_kind_and_space() -> None:
     assert row.object == "审测挂件 · 5 条"
     assert row.change == "新增 review-widget-64d0d5"
     assert row.source == "techkg_e2e_liz.review_widgets"
-    assert row.time == "10:30:00"
+    assert row.time == "09-22 10:30:00"  # 识别时间带月日（跨天歧义）
     assert len(snapshot.relation_rows) == 1
     assert snapshot.relation_rows[0].source == "techkg_e2e_liz.review_widgets"
 
@@ -484,7 +509,7 @@ def test_parse_execution_records_space_key_variants_and_default_bucket() -> None
     assert (
         parse_execution_records(
             [_execution_record(payload_space_key="graphSpace")],
-            today="2026-09-22",
+            day="2026-09-22",
             target_space="dev2",
             default_space="dev2",
         ).entity_added
@@ -494,7 +519,7 @@ def test_parse_execution_records_space_key_variants_and_default_bucket() -> None
     assert (
         parse_execution_records(
             [_execution_record(payload_space=None)],
-            today="2026-09-22",
+            day="2026-09-22",
             target_space="dev2",
             default_space="dev2",
         ).entity_added
@@ -503,7 +528,7 @@ def test_parse_execution_records_space_key_variants_and_default_bucket() -> None
     assert (
         parse_execution_records(
             [_execution_record(payload_space=None)],
-            today="2026-09-22",
+            day="2026-09-22",
             target_space="gaoxing_test",
             default_space="dev2",
         ).entity_added
@@ -517,12 +542,12 @@ def test_parse_execution_records_sorts_rows_by_completion_desc() -> None:
             _execution_record(written=1, completed_at="2026-09-22 09:00:00"),
             _execution_record(written=2, completed_at="2026-09-22 18:00:00"),
         ],
-        today="2026-09-22",
+        day="2026-09-22",
         target_space="dev2",
         default_space="dev2",
     )
 
-    assert [row.time for row in snapshot.entity_rows] == ["18:00:00", "09:00:00"]
+    assert [row.time for row in snapshot.entity_rows] == ["09-22 18:00:00", "09-22 09:00:00"]
 
 
 def test_parse_execution_records_splits_rows_by_source() -> None:
@@ -539,7 +564,7 @@ def test_parse_execution_records_splits_rows_by_source() -> None:
                 ],
             )
         ],
-        today="2026-09-22",
+        day="2026-09-22",
         target_space="dev2",
         default_space="dev2",
     )
@@ -551,7 +576,7 @@ def test_parse_execution_records_splits_rows_by_source() -> None:
     ]
     # 变更内容与识别时间在同一执行的各行保持一致
     assert {row.change for row in snapshot.entity_rows} == {"新增 review-widget-64d0d5"}
-    assert {row.time for row in snapshot.entity_rows} == {"10:30:00"}
+    assert {row.time for row in snapshot.entity_rows} == {"09-22 10:30:00"}
 
 
 def test_parse_execution_records_change_falls_back_without_schema_key() -> None:
@@ -570,7 +595,7 @@ def test_parse_execution_records_change_falls_back_without_schema_key() -> None:
                 sources=[{"table": "techkg_e2e_liz.t2", "written": 1}],
             ),
         ],
-        today="2026-09-22",
+        day="2026-09-22",
         target_space="dev2",
         default_space="dev2",
     )
@@ -630,7 +655,7 @@ def test_parse_execution_records_collects_graph_lookup_descriptors() -> None:
                 completed_at="2026-09-23 03:45:52",
             ),
         ],
-        today="2026-09-23",
+        day="2026-09-23",
         target_space="dev2",
         default_space="dev2",
     )
@@ -647,8 +672,8 @@ def test_parse_execution_records_collects_graph_lookup_descriptors() -> None:
     assert relation_exec.window_lo == "2026-09-23 00:00:00"  # 无水位退当日零点
 
 
-def test_enrich_today_rows_lists_graph_objects_per_vertex() -> None:
-    """今日新增明细改逐对象行：实体=Schema 目录中文名+name+source_table，关系=两端实体名。"""
+def test_enrich_day_rows_lists_graph_objects_per_vertex() -> None:
+    """昨日新增明细改逐对象行：实体=Schema 目录中文名+name+source_table，关系=两端实体名。"""
     snapshot = parse_execution_records(
         [
             _execution_record(
@@ -677,7 +702,7 @@ def test_enrich_today_rows_lists_graph_objects_per_vertex() -> None:
                 ],
             ),
         ],
-        today="2026-09-23",
+        day="2026-09-23",
         target_space="dev2",
         default_space="dev2",
     )
@@ -741,7 +766,8 @@ def test_enrich_today_rows_lists_graph_objects_per_vertex() -> None:
                 ],
             ),
             (
-                'FETCH PROP ON * "rwxT-0923-01"',
+                # 端点名批量反查：一次 FETCH 带全部 vid（此前逐 vid 一次）
+                "FETCH PROP ON *",
                 [
                     {
                         "v": {
@@ -749,37 +775,27 @@ def test_enrich_today_rows_lists_graph_objects_per_vertex() -> None:
                             "labels": ["ReviewWidget"],
                             "properties": {"name": "总览造数-实体01"},
                         }
-                    }
-                ],
-            ),
-            (
-                'FETCH PROP ON * "rwxT-0923-02"',
-                [
+                    },
                     {
                         "v": {
                             "id": "rwxT-0923-02",
                             "labels": ["ReviewWidget"],
                             "properties": {"name": "总览造数-实体02"},
                         }
-                    }
-                ],
-            ),
-            (
-                'FETCH PROP ON * "rwxT-0923-03"',
-                [
+                    },
                     {
                         "v": {
                             "id": "rwxT-0923-03",
                             "labels": ["ReviewWidget"],
                             "properties": {"name": "总览造数-实体03"},
                         }
-                    }
+                    },
                 ],
             ),
         ],
     )
 
-    result = enrich_today_rows_with_graph(
+    result = enrich_day_rows_with_graph(
         snapshot,
         "dev2",
         connect_client=lambda space: client,
@@ -797,7 +813,7 @@ def test_enrich_today_rows_lists_graph_objects_per_vertex() -> None:
         ("审测挂件", "总览造数-实体02", "新增 审测挂件"),
     ]
     assert result.entity_rows[0].source == "techkg_e2e_liz.review_widgets"
-    assert result.entity_rows[0].time == "03:00:35"
+    assert result.entity_rows[0].time == "09-23 03:00:35"
     # 关系行：边类型无索引 LOOKUP 失败 → GO FROM 当日实体 vid 兜底，无序对去重后 2 条
     assert [(row.type, row.object) for row in result.relation_rows] == [
         ("审测关联", "总览造数-实体01 → 总览造数-实体02"),
@@ -805,10 +821,13 @@ def test_enrich_today_rows_lists_graph_objects_per_vertex() -> None:
     ]
     assert result.relation_rows[0].change == "新增 审测关联"
     assert result.relation_rows[0].source == "techkg_e2e_liz.review_widgets"
-    assert result.relation_rows[0].time == "03:44:48"
+    assert result.relation_rows[0].time == "09-23 03:44:48"
     # 徽标计数不变（仍按执行 written 聚合，与明细行数解耦）
     assert result.entity_added == 3
     assert result.relation_added == 3
+    # 端点名只发一次批量 FETCH（合并此前逐 vid 的串行调用）
+    fetch_calls = [q for q in client.queries if q.startswith("FETCH PROP ON *")]
+    assert len(fetch_calls) == 1
     assert client.closed is True
 
 
@@ -833,7 +852,7 @@ def test_graph_time_prop_skips_datetime_columns() -> None:
                 ],
             )
         ],
-        today="2026-09-24",
+        day="2026-09-24",
         target_space="dev2",
         default_space="dev2",
     )
@@ -863,7 +882,7 @@ def test_graph_time_prop_skips_datetime_columns() -> None:
         ]
     )
 
-    result = enrich_today_rows_with_graph(
+    result = enrich_day_rows_with_graph(
         snapshot,
         "dev2",
         connect_client=lambda space: client,
@@ -877,7 +896,7 @@ def test_graph_time_prop_skips_datetime_columns() -> None:
     assert "`Patent`.`update_time`" not in lookup  # datetime 型 update_time 被跳过
     row = result.entity_rows[0]
     assert (row.type, row.object, row.change) == ("专利", "一种数据处理方法", "新增 专利")
-    assert row.time == "02:05:30"  # 逐对象写入时间取自 source_update_time
+    assert row.time == "09-24 02:05:30"  # 逐对象写入时间取自 source_update_time
 
 
 def test_vertex_display_name_falls_back_to_title() -> None:
@@ -930,7 +949,7 @@ def test_cap_display_rows_sorts_newest_first_and_truncates() -> None:
 def test_enrich_today_rows_falls_back_to_aggregate_when_graph_unavailable() -> None:
     snapshot = parse_execution_records(
         [_execution_record(written=5, completed_at="2026-09-22 10:30:00")],
-        today="2026-09-22",
+        day="2026-09-22",
         target_space="dev2",
         default_space="dev2",
     )
@@ -938,7 +957,7 @@ def test_enrich_today_rows_falls_back_to_aggregate_when_graph_unavailable() -> N
     def _boom(space: str | None):
         raise RuntimeError("graph down")
 
-    result = enrich_today_rows_with_graph(
+    result = enrich_day_rows_with_graph(
         snapshot,
         "dev2",
         connect_client=_boom,
@@ -952,7 +971,7 @@ def test_enrich_today_rows_falls_back_to_aggregate_when_graph_unavailable() -> N
 def test_enrich_today_rows_falls_back_when_tag_has_no_index() -> None:
     snapshot = parse_execution_records(
         [_execution_record(written=5, completed_at="2026-09-22 10:30:00")],
-        today="2026-09-22",
+        day="2026-09-22",
         target_space="dev2",
         default_space="dev2",
     )
@@ -966,7 +985,7 @@ def test_enrich_today_rows_falls_back_when_tag_has_no_index() -> None:
         ]
     )
 
-    result = enrich_today_rows_with_graph(
+    result = enrich_day_rows_with_graph(
         snapshot,
         "dev2",
         connect_client=lambda space: client,

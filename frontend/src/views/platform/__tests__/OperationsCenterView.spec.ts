@@ -1,10 +1,9 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { h } from 'vue'
-import { createPinia, setActivePinia } from 'pinia'
-import { useGraphSpaceStore } from '../../../stores/graphSpace'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import OperationsCenterView from '../OperationsCenterView.vue'
+import ListPagination from '../../../components/list-pagination.vue'
 
 const mocks = vi.hoisted(() => ({
   getProductionReviews: vi.fn(),
@@ -22,6 +21,17 @@ vi.mock('vue-router', () => ({ useRoute: () => ({ query: routeState.query }) }))
 vi.mock('@arco-design/web-vue/es/icon', () => ({
   IconSearch: { name: 'IconSearch', setup: () => () => null },
 }))
+// 全局图空间 store：reactive 包装（Vue 对同一 target 缓存同一代理），
+// 用例经 graphSpaceMock.state 改 current 才能触发组件的切空间重拉 watch
+const graphSpaceMock = vi.hoisted(() => {
+  const raw = { current: 'dev' }
+  return { raw, state: null as { current: string } | null }
+})
+vi.mock('../../../stores/graphSpace', async () => {
+  const { reactive } = await import('vue')
+  graphSpaceMock.state = reactive(graphSpaceMock.raw)
+  return { useGraphSpaceStore: () => graphSpaceMock.state }
+})
 
 /** C 类队列行：OPEN/RERUN_FAILED 可勾选，RERUNNING/RESOLVED 不可。 */
 const caseRow = (id: string, status: string) => ({
@@ -45,7 +55,7 @@ const renderReview = () => {
         AInput: { name: 'AInput', setup: () => () => null },
         // 弹窗 stub 直渲染默认插槽，让日志弹窗内容可被断言
         AModal: { name: 'AModal', setup: (_props: Record<string, unknown>, { slots }: { slots: { default?: () => unknown } }) => () => h('div', slots.default?.()) },
-        APagination: { name: 'APagination', setup: () => () => null },
+        // 分页已迁移到共享 ListPagination（真组件渲染，翻页直接对它 emit）
       },
       stubs: { RouterLink: true },
     },
@@ -67,11 +77,11 @@ const rowCheckboxes = (wrapper: ReturnType<typeof mount>) =>
 const batchButton = (wrapper: ReturnType<typeof mount>) => wrapper.get('.rerun-batch-action')
 
 beforeEach(() => {
-  setActivePinia(createPinia())
-  const spaceStore = useGraphSpaceStore()
-  spaceStore.spaces = ['business', 'public']
-  spaceStore.setCurrent('business')
+  // 清队列视图状态快照，避免上一用例写入的页码/筛选串扰本用例的默认加载断言
+  sessionStorage.removeItem('techkg.manual-review-queue.v1')
   routeState.query = {}
+  // 图空间复位默认 dev（经 raw 写：组件未挂载，无需触发响应式）
+  graphSpaceMock.raw.current = 'dev'
   mocks.getProductionReviews.mockReset().mockResolvedValue({ items: C_ROWS, total: 4, page: 1, pageSize: 10 })
   mocks.rerunExtractFailures.mockReset().mockResolvedValue({ executions: [], cases: 2 })
   mocks.getProductionReview.mockReset()
@@ -86,13 +96,15 @@ afterEach(() => {
 
 describe('审核队列 C 类（抽取失败重跑）', () => {
   it('沿用顶栏空间过滤审核队列，公共空间403不会保留旧记录或勾选', async () => {
+    // 初始空间 business(挂载前写 raw 即可);原 kgetl 版经真 pinia store 设置,本文件 stores/graphSpace 已被 vi.mock
+    graphSpaceMock.raw.current = 'business'
     const wrapper = renderReview()
     await flushPromises()
     await switchToCategoryC(wrapper)
     await rowCheckboxes(wrapper)[0].setValue(true)
     expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ graphSpace: 'business' }))
     mocks.getProductionReviews.mockRejectedValueOnce(new Error('无权查看公共审核'))
-    useGraphSpaceStore().setCurrent('public')
+    graphSpaceMock.state!.current = 'public'
     await flushPromises()
     expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ graphSpace: 'public' }))
     expect(wrapper.text()).not.toContain('对象MR-1')
@@ -157,6 +169,31 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     expect(wrapper.find('.review-toolbar-actions .rerun-batch-action').exists()).toBe(false)
     expect(wrapper.find('.rerun-batch-row .rerun-batch-action').exists()).toBe(true)
     expect(wrapper.find('thead .pick-col').exists()).toBe(true)
+  })
+
+  it('不可重跑行（重跑中/已完成）的重跑、删除按钮置灰禁用而非隐藏', async () => {
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+
+    // C_ROWS：MR-1 OPEN、MR-2 RERUN_FAILED 可操作；MR-3 RERUNNING、MR-4 RESOLVED 置灰
+    const rows = wrapper.findAll('tbody tr')
+    const openRow = rows[0].findAll('.review-action-btn')
+    expect(openRow).toHaveLength(3)
+    expect(openRow[1].attributes('disabled')).toBeUndefined()
+    expect(openRow[2].attributes('disabled')).toBeUndefined()
+
+    const rerunningRow = rows[2].findAll('.review-action-btn')
+    expect(rerunningRow).toHaveLength(3)
+    expect(rerunningRow[1].attributes('disabled')).toBeDefined()
+    expect(rerunningRow[2].attributes('disabled')).toBeDefined()
+    expect(rerunningRow[1].attributes('title')).toBe('重跑中：等待本次重跑完成后再操作')
+
+    const resolvedRow = rows[3].findAll('.review-action-btn')
+    expect(resolvedRow).toHaveLength(3)
+    expect(resolvedRow[1].attributes('disabled')).toBeDefined()
+    expect(resolvedRow[2].attributes('disabled')).toBeDefined()
+    expect(resolvedRow[2].attributes('title')).toBe('已处理：仅「待处理 / 重跑失败」的记录可重跑或删除')
   })
 
   it('表头全选只勾选当前页可重跑行（OPEN/RERUN_FAILED），批量重跑按钮随之点亮', async () => {
@@ -299,7 +336,7 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     await flushPromises()
     await switchToCategoryC(wrapper)
     // 操作列第一个按钮是「日志」
-    await wrapper.findAll('tbody .rerun-link')[0].trigger('click')
+    await wrapper.findAll('tbody .review-action-btn')[0].trigger('click')
     await flushPromises()
 
     // 重跑执行优先展示，且不拉旧的审计日志
@@ -362,7 +399,7 @@ describe('分页统计与页数收缩收敛（FUNC-00781）/ 处理实例 ID 纯
     expect(wrapper.get('.review-pagination > span').text()).toBe('共 41 条 · 第 1 / 3 页')
 
     // 翻至第 3 页
-    wrapper.findComponent({ name: 'APagination' }).vm.$emit('change', 3)
+    wrapper.findComponent(ListPagination).vm.$emit('change', 3)
     await flushPromises()
     expect(wrapper.get('.review-pagination > span').text()).toBe('共 41 条 · 第 3 / 3 页')
 
@@ -386,7 +423,7 @@ describe('分页统计与页数收缩收敛（FUNC-00781）/ 处理实例 ID 纯
     const wrapper = renderReview()
     await flushPromises()
 
-    wrapper.findComponent({ name: 'APagination' }).vm.$emit('change', 3)
+    wrapper.findComponent(ListPagination).vm.$emit('change', 3)
     await flushPromises()
 
     wrapper.findAllComponents({ name: 'ASelect' })[0].vm.$emit('update:modelValue', '待处理')
@@ -396,6 +433,38 @@ describe('分页统计与页数收缩收敛（FUNC-00781）/ 处理实例 ID 纯
     // 61 条 = 4 页，第 3 页仍有效：筛选后停在原页
     expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ page: 3, statusGroup: 'pending' }))
     expect(wrapper.get('.review-pagination > span').text()).toBe('共 61 条 · 第 3 / 4 页')
+  })
+
+  it('跳详情返回后恢复页码/页大小/分类/筛选（sessionStorage 快照），不回第 1 页', async () => {
+    // 模拟上一会话留下的队列状态：C 类第 3 页、每页 50、待处理 + 实体 + 近7天 + 新→旧 + 关键字
+    sessionStorage.setItem('techkg.manual-review-queue.v1', JSON.stringify({
+      category: 'C', page: 3, pageSize: 50, status: '待处理', kind: '实体',
+      time: '近7天', sort: 'desc', keyword: '论文',
+    }))
+    mocks.getProductionReviews.mockResolvedValue({ items: C_ROWS, total: 120, page: 3, pageSize: 50 })
+
+    const wrapper = renderReview()
+    await flushPromises()
+
+    // 重挂载后首次加载即按快照状态请求，且 C 类 Tab 高亮
+    expect(mocks.getProductionReviews).toHaveBeenCalledWith(expect.objectContaining({
+      category: 'C', page: 3, pageSize: 50, statusGroup: 'pending', kind: 'entity',
+      updatedWithin: '7d', sort: 'updated_desc', keyword: '论文',
+    }))
+    expect(wrapper.get('.review-pagination > span').text()).toBe('共 120 条 · 第 3 / 3 页')
+    expect(wrapper.findAll('.review-tabs nav button')[1].classes()).toContain('active')
+  })
+
+  it('深链 query 优先于快照：?category=A 覆盖快照分类，A 类下快照的「重跑中」收敛回「全部」', async () => {
+    routeState.query = { category: 'A' }
+    sessionStorage.setItem('techkg.manual-review-queue.v1', JSON.stringify({ category: 'C', page: 5, status: '重跑中' }))
+
+    renderReview()
+    await flushPromises()
+
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({
+      category: 'A', templateId: 'T_LINK', statusGroup: undefined, status: undefined,
+    }))
   })
 
   it('处理实例 ID 为纯文本（中性色 code，非链接），title 悬停提供全称', async () => {
@@ -409,5 +478,32 @@ describe('分页统计与页数收缩收敛（FUNC-00781）/ 处理实例 ID 纯
     expect(code.text()).toBe('MR-1')
     expect(idCell.find('router-link-stub').exists()).toBe(false)
     expect(idCell.find('a').exists()).toBe(false)
+  })
+})
+
+describe('队列跟随图空间切换', () => {
+  it('请求带当前空间；切空间后按新空间重拉且页码归 1（空间是全局态，不进快照）', async () => {
+    // 60 条 = 每页 20 共 3 页，允许翻到第 3 页后再切空间
+    mocks.getProductionReviews.mockImplementation(
+      async (params: { page?: number }) => ({ items: C_ROWS, total: 60, page: params?.page ?? 1, pageSize: 20 }),
+    )
+    const wrapper = renderReview()
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
+      expect.objectContaining({ graphSpace: 'dev' }),
+    )
+
+    wrapper.findComponent(ListPagination).vm.$emit('change', 3)
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
+      expect.objectContaining({ graphSpace: 'dev', page: 3 }),
+    )
+
+    // 切到 dev2：整份数据更换，页码归 1 并带新空间参数
+    graphSpaceMock.state!.current = 'dev2'
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
+      expect.objectContaining({ graphSpace: 'dev2', page: 1 }),
+    )
   })
 })

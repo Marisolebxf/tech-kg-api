@@ -19,9 +19,11 @@ const { toasts, dismissToast } = useToast()
 
 <style scoped>
 .kg-toast-stack {
+  /* 提示顶部居中展示（业界惯例，同 Ant Design / Element Message）：多条向下堆叠 */
   position: fixed;
   top: 20px;
-  right: 20px;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 10000;
   display: grid;
   gap: 10px;

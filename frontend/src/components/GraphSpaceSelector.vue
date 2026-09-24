@@ -23,14 +23,18 @@ onMounted(() => {
 // 换号后空间可见集变化：重拉列表并归一当前值（越权访问另有后端 403 防线）
 watch(
   () => [authStore.profile?.user?.id, authStore.profile?.businessId, authStore.profile?.platformRole, authStore.profile?.businessRbacEnabled].join('|'),
-  () => void graphSpaceStore.ensureLoaded(true),
+  () => {
+    if (!authStore.profile) return
+    graphSpaceStore.bindUser(String(authStore.profile.user?.id ?? ''))
+    void graphSpaceStore.ensureLoaded(true)
+  },
 )
 </script>
 
 <template>
   <div
     class="app-space-select"
-    :title="graphSpaceStore.loadError ? `图空间列表加载失败，请重试` : '切换当前工作图空间'"
+    :title="graphSpaceStore.loadError ? `图空间列表加载失败，当前使用默认空间 ${graphSpaceStore.current}` : '切换当前工作图空间'"
   >
     <span class="app-space-select__label">图空间</span>
     <a-select

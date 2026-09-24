@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useAuthStore } from '../../stores/auth'
-import BusinessAccessManagement from '../../components/BusinessAccessManagement.vue'
 import { IconSearch } from '@arco-design/web-vue/es/icon'
 import ListPagination from '../../components/list-pagination.vue'
 import { useClientPagination } from '../../composables/use-client-pagination'
@@ -43,7 +42,6 @@ import {
   type GraphSpaceItem,
 } from '../../api/graphSpace'
 import { currentUserIsAdmin } from '../../api/currentUser'
-import GraphSpaceSelector from '../../components/GraphSpaceSelector.vue'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
 import { useToast } from '../../composables/use-toast'
 import { SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
@@ -95,14 +93,12 @@ type ConfigItem = {
 const { showToast } = useToast()
 const graphSpaceStore = useGraphSpaceStore()
 
-const authStore = useAuthStore()
-const businessRbacEnabled = computed(() => authStore.profile?.businessRbacEnabled === true)
-const categories = computed(() => [
+const categories = [
   { key: '语言模型', label: '语言模型', icon: 'AI', hint: 'LLM 语言模型配置' },
   { key: '向量模型', label: '向量模型', icon: 'EM', hint: 'embedding 向量模型配置' },
   { key: 'MySQL 数据源', label: 'MySQL 数据源', icon: 'MY', hint: 'MySQL 关系库连接' },
-  { key: '图数据空间', label: businessRbacEnabled.value ? '业务与图空间' : '图数据空间', icon: 'GS', hint: businessRbacEnabled.value ? '业务成员与空间申请管理' : '我的图空间绑定' },
-])
+  { key: '图数据空间', label: '图数据空间', icon: 'GS', hint: '我的图空间绑定' },
+]
 
 // 响应式跟随 auth store（profile 异步加载，一次性赋值会把 admin 恒判 false——
 // 免登录部署下绑定入口/新建空间入口不渲染）
@@ -283,6 +279,10 @@ async function loadGraphSpaces() {
 }
 
 async function createSpace() {
+  if (!isAdmin.value) {
+    showToast('请线下向管理员申请创建图空间。', 'warning')
+    return
+  }
   if (spaceNameError.value) return
   const name = newSpaceName.value.trim()
   spaceWorking.value = true
@@ -292,7 +292,7 @@ async function createSpace() {
     spaceDialogOpen.value = false
     newSpaceName.value = ''
     await loadGraphSpaces()
-    // 页内图空间选择器同步出现新空间（创建即绑定）
+    // 顶栏全局选择器同步出现新空间（创建即绑定）
     void graphSpaceStore.ensureLoaded(true)
   } catch (err) {
     showToast(`创建失败：${(err as Error).message}`, 'warning')
@@ -302,6 +302,7 @@ async function createSpace() {
 }
 
 async function bindSpace() {
+  if (!canChangeLegacyBinding()) return
   const name = bindTarget.value
   if (!name) return
   spaceWorking.value = true
@@ -310,7 +311,7 @@ async function bindSpace() {
     showToast(`图数据空间“${name}”已绑定。`)
     bindTarget.value = ''
     await loadGraphSpaces()
-    // 绑定对所有用户生效：图空间选择器立即出现该空间
+    // 绑定对所有用户生效：顶栏选择器立即出现该空间
     void graphSpaceStore.ensureLoaded(true)
   } catch (err) {
     showToast(`绑定失败：${(err as Error).message}`, 'warning')
@@ -319,7 +320,16 @@ async function bindSpace() {
   }
 }
 
+function canChangeLegacyBinding(): boolean {
+  if (!isAdmin.value || useAuthStore().profile?.businessRbacEnabled) {
+    showToast('图空间业务归属由管理员通过 SQL 配置。', 'warning')
+    return false
+  }
+  return true
+}
+
 async function unbindSpace(name: string) {
+  if (!canChangeLegacyBinding()) return
   if (!window.confirm(`确认解除与图数据空间“${name}”的绑定？仅解除绑定，不会删除图数据空间数据。`)) return
   try {
     await unbindGraphSpace(name)
@@ -604,8 +614,8 @@ onMounted(() => {
         </button>
       </aside>
 
-      <BusinessAccessManagement v-if="businessRbacEnabled && isGraphSpaceCategory" class="config-list" /><main v-else class="config-list">
-        <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilter" allow-clear placeholder="全部状态"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><a-input v-model="keyword" class="config-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识或地址" placeholder="搜索名称、标识或地址"><template #prefix><IconSearch /></template></a-input></nav><nav v-else class="bind-nav"><button class="primary" type="button" @click="spaceDialogOpen = true">＋ 新建图数据空间</button><a-select v-if="isAdmin && bindableSpaces.length" v-model="bindTarget" placeholder="绑定已有图数据空间" allow-clear><a-option v-for="space in bindableSpaces" :key="space.name" :value="space.name">{{ space.name }}</a-option></a-select><button v-if="isAdmin && bindableSpaces.length" type="button" :disabled="spaceWorking" @click="bindSpace">绑定</button><!-- 全局图空间切换：从顶栏迁入，落在「绑定」右边（业务页仍跟随 store 自动切换）；RBAC 模式整页换成业务管理面板，选择器挂在该面板头部 --><GraphSpaceSelector /></nav></header>
+      <main class="config-list">
+        <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilter" allow-clear placeholder="全部状态"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><a-input v-model="keyword" class="config-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识或地址" placeholder="搜索名称、标识或地址"><template #prefix><IconSearch /></template></a-input></nav><nav v-else class="bind-nav"><button class="primary" type="button" @click="spaceDialogOpen = true">＋ 新建图数据空间</button><a-select v-if="isAdmin && bindableSpaces.length" v-model="bindTarget" placeholder="绑定已有图数据空间" allow-clear><a-option v-for="space in bindableSpaces" :key="space.name" :value="space.name">{{ space.name }}</a-option></a-select><button v-if="isAdmin && bindableSpaces.length" type="button" :disabled="spaceWorking" @click="bindSpace">绑定</button></nav></header>
         <div v-if="isGraphSpaceCategory" class="table-wrap space-table">
           <table>
             <thead><tr><th>图数据空间</th><th>绑定状态</th><th>操作</th></tr></thead>

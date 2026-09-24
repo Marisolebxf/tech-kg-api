@@ -8,7 +8,6 @@ from biz.dependencies.auth import (
 )
 from biz.handler.admin_member import router as admin_member_router
 from biz.handler.auth import router as auth_router
-from biz.handler.business_access import router as business_access_router
 from biz.handler.common_capability import router as common_capability_router
 from biz.handler.correction import router as correction_router
 from biz.handler.embedding_config import router as embedding_config_router
@@ -160,6 +159,3 @@ def register_routers(app: FastAPI) -> None:
         app.include_router(router, prefix=API_V1_PREFIX, dependencies=maintainer_dependencies)
     for router in (admin_member_router, graph_space_router):
         app.include_router(router, prefix=API_V1_PREFIX, dependencies=admin_dependencies)
-    app.include_router(
-        business_access_router, prefix=API_V1_PREFIX, dependencies=protected_dependencies
-    )

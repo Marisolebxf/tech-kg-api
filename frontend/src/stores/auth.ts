@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { currentSessionVersion, invalidateSessionVersion } from "../auth/sessionVersion";
+import { useGraphSpaceStore } from "./graphSpace";
 
 import {
   getCurrentProfile,
@@ -49,6 +50,7 @@ export const useAuthStore = defineStore("auth", {
       this.profile = null;
       this.initialized = true;
       this.loading = false;
+      useGraphSpaceStore().reset();
     },
     async loadCurrentUser(force = false): Promise<AuthProfile | null> {
       if (this.loggingOut || this.skipSilentLogin) return null;
@@ -62,6 +64,7 @@ export const useAuthStore = defineStore("auth", {
           const profile = await getCurrentProfile();
           if (version !== currentSessionVersion()) return null;
           this.profile = profile;
+          useGraphSpaceStore().bindUser(String(profile.user?.id ?? ""));
           return profile;
         } catch (error) {
           if (version !== currentSessionVersion()) return null;
@@ -90,6 +93,7 @@ export const useAuthStore = defineStore("auth", {
       const profile = await refreshCurrentSession();
       if (version !== currentSessionVersion()) return null;
       this.profile = profile;
+      useGraphSpaceStore().bindUser(String(profile.user?.id ?? ""));
       this.initialized = true;
       return profile;
     },

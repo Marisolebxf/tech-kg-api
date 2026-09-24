@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from application.platform_overview import PlatformOverviewApplication
 from biz.dependencies.auth import CurrentActor
+from biz.handler.graph_search import _ensure_space_access
 from biz.schemas.platform_overview import (
     AssetOverviewKey,
     PlatformActivityData,
@@ -38,7 +39,19 @@ async def _get_overview(space: str | None = None, actor=None) -> PlatformOvervie
                 raise HTTPException(status_code=403, detail="尚未分配可访问图空间")
             space = spaces[0]
         ensure_space_access(actor, space)
-    return await asyncio.to_thread(application.get_overview, space)
+    else:
+        # 与实体列表（graph_search._ensure_space_access）同一口径：非管理员仅可读
+        # 默认空间+本人绑定。此前非 RBAC 模式不校验，换账号登录后前端带着上一用户
+        # 选择的空间请求，总览会把无权空间的数据直接吐出来（2026-09-24 修复）。
+        _ensure_space_access(actor, space)
+    result = await asyncio.to_thread(application.get_overview, space)
+    if rbac_enabled():
+        # Overview data is cached by space, shared across users. Never mutate
+        # that cached object or expose review entries on a read-only grant.
+        review_spaces = allowed_space_names(actor, action="review") if actor.can_develop else []
+        if space not in review_spaces:
+            result = result.model_copy(update={"management_risks": []})
+    return result
 
 
 @router.get("")

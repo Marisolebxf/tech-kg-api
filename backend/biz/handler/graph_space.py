@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from biz.dependencies.auth import CurrentActor
+from biz.dependencies.auth import CurrentActor, CurrentAdmin
 from biz.schemas.common import ApiResponse
 from infra.mysql import get_session
 from service.graph_space import GraphSpaceError, GraphSpaceService
@@ -34,7 +34,7 @@ def _require_legacy_binding() -> None:
     from service.business_access_control import rbac_enabled
 
     if rbac_enabled():
-        raise HTTPException(409, "请在业务与图空间管理中审批创建或设置业务归属")
+        raise HTTPException(409, "图空间归属由管理员通过业务绑定 SQL 配置")
 
 
 def _to_response(exc: GraphSpaceError) -> HTTPException:
@@ -55,21 +55,20 @@ readonly_router.get("", response_model=ApiResponse)(list_graph_spaces)
 @router.post("", response_model=ApiResponse)
 def create_graph_space(
     payload: GraphSpaceCreateRequest,
-    actor: CurrentActor,
+    actor: CurrentAdmin,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
-    _require_legacy_binding()
     try:
         data = _service(session).create_space(actor, payload.name)
     except GraphSpaceError as exc:
         raise _to_response(exc) from exc
-    return ApiResponse(data=data, msg="图空间已创建并绑定")
+    return ApiResponse(data=data, msg="图空间已创建，业务归属请由管理员核实配置")
 
 
 @router.post("/{space_name}/bind", response_model=ApiResponse)
 def bind_graph_space(
     space_name: str,
-    actor: CurrentActor,
+    actor: CurrentAdmin,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
     _require_legacy_binding()
@@ -83,7 +82,7 @@ def bind_graph_space(
 @router.delete("/{space_name}", response_model=ApiResponse)
 def unbind_graph_space(
     space_name: str,
-    actor: CurrentActor,
+    actor: CurrentAdmin,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
     _require_legacy_binding()

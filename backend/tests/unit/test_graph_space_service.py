@@ -8,6 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from db_model.base import Base
+from db_model.business_access import BusinessClient, BusinessGraphSpace
 from db_model.platform_governance import GraphSpaceVectorDatabase, UserGraphSpace
 from service.graph_space import (
     GraphSpaceError,
@@ -82,7 +83,13 @@ def session_factory():
         connect_args={"check_same_thread": False},
     )
     Base.metadata.create_all(
-        engine, tables=[UserGraphSpace.__table__, GraphSpaceVectorDatabase.__table__]
+        engine,
+        tables=[
+            UserGraphSpace.__table__,
+            GraphSpaceVectorDatabase.__table__,
+            BusinessClient.__table__,
+            BusinessGraphSpace.__table__,
+        ],
     )
     factory = sessionmaker(bind=engine, expire_on_commit=False, future=True)
     yield factory
@@ -115,7 +122,7 @@ def test_create_space_creates_and_binds(session_factory) -> None:
     milvus = FakeMilvusClient()
     service = _service(session_factory, client, milvus)
 
-    result = service.create_space(_actor(USER_A), "u1_test")
+    result = service.create_space(_actor(USER_A, is_admin=True), "u1_test")
 
     assert result == {
         "name": "u1_test",
@@ -139,7 +146,7 @@ def test_create_space_defaults_to_single_replica(session_factory, monkeypatch) -
     monkeypatch.delenv("GRAPH_SPACE_REPLICA_FACTOR", raising=False)
     client = FakeGraphClient(spaces=["dev2"])
     service = _service(session_factory, client, FakeMilvusClient())
-    service.create_space(_actor(USER_A), "u1_replica_default")
+    service.create_space(_actor(USER_A, is_admin=True), "u1_replica_default")
     stmt = next(s for s in client.statements if "CREATE SPACE" in s)
     assert "replica_factor = 1" in stmt
 
@@ -148,7 +155,7 @@ def test_create_space_replica_env_override(session_factory, monkeypatch) -> None
     monkeypatch.setenv("GRAPH_SPACE_REPLICA_FACTOR", "3")
     client = FakeGraphClient(spaces=["dev2"])
     service = _service(session_factory, client, FakeMilvusClient())
-    service.create_space(_actor(USER_A), "u1_replica_env")
+    service.create_space(_actor(USER_A, is_admin=True), "u1_replica_env")
     stmt = next(s for s in client.statements if "CREATE SPACE" in s)
     assert "replica_factor = 3" in stmt
 
@@ -163,7 +170,7 @@ def test_create_space_host_not_enough_hint(session_factory, monkeypatch) -> None
 
     service = _service(session_factory, NoHostClient(spaces=["dev2"]), FakeMilvusClient())
     with pytest.raises(GraphSpaceError) as exc_info:
-        service.create_space(_actor(USER_A), "u1_no_host")
+        service.create_space(_actor(USER_A, is_admin=True), "u1_no_host")
     assert "GRAPH_SPACE_REPLICA_FACTOR" in str(exc_info.value)
 
 
@@ -171,13 +178,13 @@ def test_create_space_rejects_invalid_name(session_factory) -> None:
     service = _service(session_factory, FakeGraphClient())
     for bad in ("", "1abc", "a-b", "a b", "drop;x", "A" * 65):
         with pytest.raises(GraphSpaceError):
-            service.create_space(_actor(USER_A), bad)
+            service.create_space(_actor(USER_A, is_admin=True), bad)
 
 
 def test_create_space_duplicate_rejected(session_factory) -> None:
     service = _service(session_factory, FakeGraphClient(spaces=["dev2"]))
     with pytest.raises(GraphSpaceError, match="已存在"):
-        service.create_space(_actor(USER_A), "dev2")
+        service.create_space(_actor(USER_A, is_admin=True), "dev2")
 
 
 def test_bind_requires_existing_space(session_factory) -> None:
@@ -306,7 +313,7 @@ def test_create_space_survives_milvus_outage(session_factory) -> None:
     milvus = FakeMilvusClient(fail_on_connect=RuntimeError("connect refused"))
     service = _service(session_factory, client, milvus)
 
-    result = service.create_space(_actor(USER_A), "u1_outage")
+    result = service.create_space(_actor(USER_A, is_admin=True), "u1_outage")
 
     # 图空间创建/绑定不受向量侧失败影响
     assert "u1_outage" in client.spaces
@@ -348,7 +355,7 @@ def test_backfill_retries_failed_rows(session_factory) -> None:
     outage = _service(
         session_factory, client, FakeMilvusClient(fail_on_connect=RuntimeError("down"))
     )
-    outage.create_space(_actor(USER_A), "u1_retry")
+    outage.create_space(_actor(USER_A, is_admin=True), "u1_retry")
     outage.bind(_actor(USER_B), "dev2")
     assert _mapping_row(session_factory, "u1_retry").status == "failed"
     assert _mapping_row(session_factory, "dev2").status == "failed"
@@ -366,3 +373,37 @@ def test_backfill_retries_failed_rows(session_factory) -> None:
         "ensured": 0,
         "failed": 0,
     }
+
+
+def test_unconfirmed_creation_does_not_report_success_or_bind(session_factory, monkeypatch):
+    milvus = FakeMilvusClient()
+    service = _service(session_factory, FakeGraphClient(), milvus)
+    monkeypatch.setattr(service, "_wait_for_space", lambda _name: False)
+
+    with pytest.raises(GraphSpaceError, match="创建请求已提交"):
+        service.create_space(_actor(USER_A, is_admin=True), "still_propagating")
+    assert not service.is_bound(USER_A, "still_propagating")
+    assert milvus.created == []
+
+
+def test_rbac_backfill_retries_without_personal_bindings(session_factory, monkeypatch):
+    monkeypatch.setenv("BUSINESS_RBAC_ENABLED", "true")
+    service = _service(
+        session_factory,
+        FakeGraphClient(),
+        FakeMilvusClient(fail_on_connect=RuntimeError("down")),
+    )
+    service.create_space(_actor(USER_A, is_admin=True), "new_business_space")
+    assert not service.is_bound(USER_A, "new_business_space")
+    with session_factory() as session:
+        session.add(BusinessGraphSpace(space_name="public_space", is_shared_production=True))
+        session.commit()
+    milvus = FakeMilvusClient()
+
+    assert backfill_vector_databases(session_factory(), milvus_client=milvus) == {
+        "bound": 2,
+        "pending": 2,
+        "ensured": 2,
+        "failed": 0,
+    }
+    assert set(milvus.created) == {"new_business_space", "public_space"}

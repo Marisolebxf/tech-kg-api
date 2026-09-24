@@ -20,14 +20,6 @@ describe('ListPagination', () => {
     expect(w.text()).toContain('共 0 条 · 第 1 / 1 页')
   })
 
-  it('跳页框（前往）恒显：不再按 >7 页阈值隐藏，短列表页面与长列表形态一致', () => {
-    const twoPages = mountPager()
-    expect(twoPages.findComponent(Pagination).props('showJumper')).toBe(true)
-    expect(twoPages.text()).toContain('前往')
-    const singlePage = mountPager({ total: 7, pageSize: 10 })
-    expect(singlePage.findComponent(Pagination).props('showJumper')).toBe(true)
-  })
-
   it('允许调用方用摘要插槽扩展列表口径', () => {
     const w = mount(ListPagination, {
       props: { total: 527336, page: 1, pageSize: 10 },

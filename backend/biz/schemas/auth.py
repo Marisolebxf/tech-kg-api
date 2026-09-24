@@ -117,6 +117,8 @@ class AuthProfile(CamelCaseModel):
     )
     is_admin: bool = False
     portal_is_admin: bool = False
+    # 当前有效业务开发维护身份，不代表平台管理员
+    is_developer: bool = False
     business_only: bool = False
     business_rbac_enabled: bool = False
     business_id: str = ""

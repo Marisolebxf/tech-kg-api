@@ -364,6 +364,16 @@ def test_overview_uses_control_plane_today_changes() -> None:
     assert result.data_sources["todayChanges"] == "workflow-control-live"
     assert result.asset_change_rows["entity"] == entity_rows
     assert result.asset_change_rows["relation"] == []
+    # 数值合计与徽标同源（Σwritten），与明细行数解耦：抽屉用它展示
+    # 「共 N 条 · 展示前 n 条」，行数受单执行 50 条上限截断
+    assert result.asset_change_totals == {"entity": 61, "relation": 7}
+    # 经响应模型真实序列化（驼峰别名字段已声明，不是 model_copy 透传的裸属性）
+    import json
+
+    serialized = json.loads(result.model_dump_json(by_alias=True))
+    assert serialized["assetChangeTotals"] == {"entity": 61, "relation": 7}
+    assert len(result.asset_change_rows["entity"]) == 1
+    assert len(result.asset_change_rows["relation"]) == 0
     # 属性值卡片仍为占位演示行（前端不展示该分组）
     assert result.asset_change_rows["property"]
 
@@ -607,7 +617,8 @@ def test_parse_execution_records_collects_graph_lookup_descriptors() -> None:
                     {
                         "table": "techkg_e2e_liz.review_widgets",
                         "written": 3,
-                        "watermark": "2026-09-23 03:00:24",
+                        "watermark": "2026-09-23 03:41:50",
+                        "startWatermark": "2026-09-23 03:00:24",
                     }
                 ],
             ),
@@ -626,7 +637,8 @@ def test_parse_execution_records_collects_graph_lookup_descriptors() -> None:
 
     entity_exec = snapshot.entity_executions[0]
     assert entity_exec.schema_key == "review-widget-64d0d5"
-    assert entity_exec.window_lo == "2026-09-23 03:00:24"  # 源表水位作反查窗下界
+    # 反查窗下界优先取开跑前起点水位（startWatermark），而非跑完后的 watermark 终值
+    assert entity_exec.window_lo == "2026-09-23 03:00:24"
     assert entity_exec.completed_at == "2026-09-23 03:41:54"
     assert [row.object for row in entity_exec.fallback_rows] == ["审测挂件 · 3 条"]
 
@@ -677,7 +689,11 @@ def test_enrich_today_rows_lists_graph_objects_per_vertex() -> None:
         [
             (
                 "DESC TAG `ReviewWidget`",
-                [{"Field": "name"}, {"Field": "source_table"}, {"Field": "update_time"}],
+                [
+                    {"Field": "name", "Type": "string"},
+                    {"Field": "source_table", "Type": "string"},
+                    {"Field": "update_time", "Type": "string"},
+                ],
             ),
             (
                 "LOOKUP ON `ReviewWidget`",
@@ -688,7 +704,10 @@ def test_enrich_today_rows_lists_graph_objects_per_vertex() -> None:
             ),
             (
                 "DESC EDGE `REVIEW_LINKED`",
-                [{"Field": "source_table"}, {"Field": "update_time"}],
+                [
+                    {"Field": "source_table", "Type": "string"},
+                    {"Field": "update_time", "Type": "string"},
+                ],
             ),
             ("LOOKUP ON `REVIEW_LINKED`", RuntimeError("There is no index to use at runtime")),
             (
@@ -774,8 +793,8 @@ def test_enrich_today_rows_lists_graph_objects_per_vertex() -> None:
     # 实体行：数据类型=单个 Schema 的目录中文名（与构成图同口径）、对象=name 公共
     # 字段、来源=source_table 公共字段、时间=逐对象写入时间（非执行完成时刻）
     assert [(row.type, row.object, row.change) for row in result.entity_rows] == [
-        ("审测挂件", "总览造数-实体01", "新增 ReviewWidget"),
-        ("审测挂件", "总览造数-实体02", "新增 ReviewWidget"),
+        ("审测挂件", "总览造数-实体01", "新增 审测挂件"),
+        ("审测挂件", "总览造数-实体02", "新增 审测挂件"),
     ]
     assert result.entity_rows[0].source == "techkg_e2e_liz.review_widgets"
     assert result.entity_rows[0].time == "03:00:35"
@@ -784,13 +803,128 @@ def test_enrich_today_rows_lists_graph_objects_per_vertex() -> None:
         ("审测关联", "总览造数-实体01 → 总览造数-实体02"),
         ("审测关联", "总览造数-实体02 → 总览造数-实体03"),
     ]
-    assert result.relation_rows[0].change == "新增 REVIEW_LINKED"
+    assert result.relation_rows[0].change == "新增 审测关联"
     assert result.relation_rows[0].source == "techkg_e2e_liz.review_widgets"
     assert result.relation_rows[0].time == "03:44:48"
     # 徽标计数不变（仍按执行 written 聚合，与明细行数解耦）
     assert result.entity_added == 3
     assert result.relation_added == 3
     assert client.closed is True
+
+
+def test_graph_time_prop_skips_datetime_columns() -> None:
+    """专利路径：update_time/create_time 是 datetime 型列（字符串边界比较会
+    Column type error，datetime("...") 字面量又索引失效查空），反查时间属性
+    跳过它们退到 string 型 source_update_time，时间窗 LOOKUP 语句也用它。"""
+    snapshot = parse_execution_records(
+        [
+            _execution_record(
+                schema_key="patent-2f0c",
+                schema_label="专利",
+                written=1,
+                completed_at="2026-09-24 02:10:00",
+                sources=[
+                    {
+                        "table": "gkx_element.patent",
+                        "written": 1,
+                        "watermark": "2026-09-24 02:09:58",
+                        "startWatermark": "2026-09-24 02:00:01",
+                    }
+                ],
+            )
+        ],
+        today="2026-09-24",
+        target_space="dev2",
+        default_space="dev2",
+    )
+    client = _ScriptedGraphClient(
+        [
+            (
+                "DESC TAG `Patent`",
+                [
+                    {"Field": "name", "Type": "string"},
+                    {"Field": "update_time", "Type": "datetime"},
+                    {"Field": "create_time", "Type": "datetime"},
+                    {"Field": "source_update_time", "Type": "string"},
+                ],
+            ),
+            (
+                "LOOKUP ON `Patent`",
+                [
+                    {
+                        "vid": "patent_CN-A",
+                        "props": {
+                            "name": "一种数据处理方法",
+                            "source_update_time": "2026-09-24 02:05:30",
+                        },
+                    }
+                ],
+            ),
+        ]
+    )
+
+    result = enrich_today_rows_with_graph(
+        snapshot,
+        "dev2",
+        connect_client=lambda space: client,
+        schema_names={"patent-2f0c": "Patent"},
+        schema_labels={"Patent": "专利"},
+    )
+
+    # 时间窗 LOOKUP 用 string 型 source_update_time（datetime 列不进 WHERE）
+    lookup = next(q for q in client.queries if q.startswith("LOOKUP ON `Patent`"))
+    assert '`Patent`.`source_update_time` >= "2026-09-24 02:00:01"' in lookup
+    assert "`Patent`.`update_time`" not in lookup  # datetime 型 update_time 被跳过
+    row = result.entity_rows[0]
+    assert (row.type, row.object, row.change) == ("专利", "一种数据处理方法", "新增 专利")
+    assert row.time == "02:05:30"  # 逐对象写入时间取自 source_update_time
+
+
+def test_vertex_display_name_falls_back_to_title() -> None:
+    """Project 无 name/title_zh，展示名退 title；候选序内更靠前的键优先。"""
+    from service.platform_overview import _vertex_display_name
+
+    assert _vertex_display_name({"title": "面向城域网的全光交换方法"}, "proj-1") == "面向城域网的全光交换方法"
+    assert _vertex_display_name({"title_zh": "中文题名", "title": "兜底"}, "p-2") == "中文题名"
+    assert _vertex_display_name({}, "vid-x") == "vid-x"
+
+
+def test_dedupe_rows_keeps_first_occurrence() -> None:
+    """当日多次执行触碰同一对象（重跑/补写），明细按 (类型, 对象) 去重保序。"""
+    from service.platform_overview import AssetChangeRow, _dedupe_rows
+
+    def row(obj: str, time: str) -> AssetChangeRow:
+        return AssetChangeRow(type="专利", object=obj, change="新增 专利", source="-", time=time)
+
+    rows = [row("熔丝元件", "20:01:00"), row("旋转电机", "20:01:01"), row("熔丝元件", "20:05:00")]
+    deduped = _dedupe_rows(rows)
+    # 第一行（最新执行的口径）保留，后到的同对象行丢弃，顺序不变
+    assert [(r.object, r.time) for r in deduped] == [("熔丝元件", "20:01:00"), ("旋转电机", "20:01:01")]
+
+
+def test_cap_display_rows_sorts_newest_first_and_truncates() -> None:
+    """明细统一展示上限：无论多少个执行凑出行，最终按识别时间倒序、超限截到
+    同一 cap——实体/关系两抽屉的「展示前 n 条」保持一致且为最新行。"""
+    from service.platform_overview import AssetChangeRow, _cap_display_rows
+
+    def row(obj: str, time: str) -> AssetChangeRow:
+        return AssetChangeRow(type="专利", object=obj, change="新增 专利", source="-", time=time)
+
+    rows = [
+        row("熔丝元件", "20:01:00"),
+        row("旋转电机", "20:03:00"),
+        row("散热基板", "20:02:00"),
+    ]
+    # 少于上限：全部保留，但统一按时间倒序（最新在上）
+    assert [r.object for r in _cap_display_rows(rows, cap=5)] == [
+        "旋转电机",
+        "散热基板",
+        "熔丝元件",
+    ]
+    # 超上限：截到 cap 行，取的是时间最新的那些；同秒稳定保序
+    assert [r.object for r in _cap_display_rows(rows, cap=2)] == ["旋转电机", "散热基板"]
+    tied = [row("对象B", "20:03:00"), row("对象A", "20:03:00"), row("对象C", "20:02:00")]
+    assert [r.object for r in _cap_display_rows(tied, cap=2)] == ["对象B", "对象A"]
 
 
 def test_enrich_today_rows_falls_back_to_aggregate_when_graph_unavailable() -> None:
@@ -824,7 +958,10 @@ def test_enrich_today_rows_falls_back_when_tag_has_no_index() -> None:
     )
     client = _ScriptedGraphClient(
         [
-            ("DESC TAG `ReviewWidget`", [{"Field": "name"}, {"Field": "update_time"}]),
+            (
+                "DESC TAG `ReviewWidget`",
+                [{"Field": "name", "Type": "string"}, {"Field": "update_time", "Type": "string"}],
+            ),
             ("LOOKUP ON `ReviewWidget`", RuntimeError("There is no index to use at runtime")),
         ]
     )

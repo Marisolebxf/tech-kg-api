@@ -7,6 +7,7 @@ import {
   dropGraphTag,
   graphCount,
   graphWrite,
+  gotoRoute,
   mysql,
   selectArcoScrolled,
   switchGraphSpace,
@@ -14,7 +15,7 @@ import {
 } from './helpers'
 
 // M. 图空间维度横切：一切图相关操作可选图空间（schema 展示/创建/关系/查询/抽取写入）；
-// 空间统一由右上角全局选择器切换，业务页联动重载
+// 空间统一由平台总览页的全局选择器切换，业务页联动重载
 test.describe.serial('M. 图空间横切', () => {
   const SPACE_B = 'e2e_verify_space'
 
@@ -52,11 +53,14 @@ test.describe.serial('M. 图空间横切', () => {
   })
 
   test('M1 Schema 管理页：全局图空间切换与按空间过滤', async ({ page, request }) => {
+    // 全局空间默认 dev2（免登录模式无用户维度不落盘、选择器仅平台总览页渲染，
+    // 以页面实际请求的 graphSpace 参数核对）
+    const dev2Load = page.waitForRequest(
+      (r) => r.url().includes('/schema-management/schemas') && /[?&]graphSpace=dev2(&|$)/.test(r.url()),
+    )
     await page.goto('/schema')
     await page.waitForLoadState('networkidle')
-
-    // 顶栏全局图空间选择器存在（默认 dev2）
-    await expect(page.locator('.app-space-select')).toBeVisible()
+    await dev2Load
 
     // 切到 e2e_verify_space（空）→ 空态而非报错
     await switchGraphSpace(page, SPACE_B)
@@ -289,7 +293,7 @@ test.describe.serial('M. 图空间横切', () => {
     await page.waitForLoadState('networkidle')
     await page.getByRole('button', { name: '图数据空间', exact: false }).first().click()
 
-    // 绑定 e2e_verify_space（admin 区顶部 .bind-nav select + 绑定按钮）
+    // 绑定 e2e_verify_space（admin 区 .bind-nav 内「绑定已有图数据空间」select + 绑定按钮）
     await page.locator('.bind-nav .arco-select-view-single').click()
     await page.locator('li.arco-select-option:visible', { hasText: SPACE_B }).first().click()
     await page.locator('.bind-nav button', { hasText: '绑定' }).click()
@@ -300,19 +304,22 @@ test.describe.serial('M. 图空间横切', () => {
       },
       { label: 'API bound=true' },
     )
-    // 绑定对所有用户生效：配置页改动会刷新顶栏选择器，SPACE_B 立即出现在可选列表
-    await page.locator('.app-space-select .arco-select-view-single').click()
+    // 绑定对所有用户生效：store ensureLoaded 强刷后，平台总览页的全局图空间
+    // 选择器可选列表立即出现 SPACE_B
+    await gotoRoute(page, '/overview')
+    await page.locator('.app-breadcrumb .app-space-select .arco-select-view-single').click()
     await expect(page.locator('li.arco-select-option:visible', { hasText: SPACE_B }).first()).toBeVisible({
       timeout: 15_000,
     })
     await page.keyboard.press('Escape')
 
-    // 解绑（confirm 文案核对后接受）
-    page.once('dialog', (d) => {
-      expect(d.message()).toContain('确认解除与图数据空间')
-      void d.accept()
-    })
-    await page.locator('tbody tr', { hasText: SPACE_B }).getByRole('button', { name: '解除绑定' }).click()
+    // 解绑：配置页图数据空间列表已无「解除绑定」操作列（绑定关系由管理员维护），
+    // 走 API 解除后断言 bound=false，继续覆盖选择器列表同步移除
+    await gotoRoute(page, '/configurations')
+    await page.waitForLoadState('networkidle')
+    await page.getByRole('button', { name: '图数据空间', exact: false }).first().click()
+    await expect(page.getByRole('button', { name: '解除绑定' })).toHaveCount(0)
+    await apiMust(request, 'DELETE', `/graph-spaces/${SPACE_B}`, undefined, '解除绑定')
     await waitFor(
       async () => {
         const spaces = await apiMust<any>(request, 'GET', '/graph-spaces', undefined, '图空间列表')
@@ -321,7 +328,8 @@ test.describe.serial('M. 图空间横切', () => {
       { label: 'API bound=false' },
     )
     // 选择器列表同步移除该空间（后续 N 组如需切换会在自己的 beforeAll 重新绑定）
-    await page.locator('.app-space-select .arco-select-view-single').click()
+    await gotoRoute(page, '/overview')
+    await page.locator('.app-breadcrumb .app-space-select .arco-select-view-single').click()
     await expect(page.locator('li.arco-select-option:visible', { hasText: SPACE_B })).toHaveCount(0)
   })
 })

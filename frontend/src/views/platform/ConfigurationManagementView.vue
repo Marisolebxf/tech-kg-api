@@ -38,7 +38,6 @@ import {
   bindGraphSpace,
   createGraphSpace,
   listGraphSpaceItems,
-  unbindGraphSpace,
   type GraphSpaceItem,
 } from '../../api/graphSpace'
 import { currentUserIsAdmin } from '../../api/currentUser'
@@ -292,7 +291,7 @@ async function createSpace() {
     spaceDialogOpen.value = false
     newSpaceName.value = ''
     await loadGraphSpaces()
-    // 顶栏全局选择器同步出现新空间（创建即绑定）
+    // 平台总览页的全局图空间选择器同步出现新空间（创建即绑定）
     void graphSpaceStore.ensureLoaded(true)
   } catch (err) {
     showToast(`创建失败：${(err as Error).message}`, 'warning')
@@ -311,7 +310,7 @@ async function bindSpace() {
     showToast(`图数据空间“${name}”已绑定。`)
     bindTarget.value = ''
     await loadGraphSpaces()
-    // 绑定对所有用户生效：顶栏选择器立即出现该空间
+    // 绑定对所有用户生效：平台总览页全局图空间选择器立即出现该空间
     void graphSpaceStore.ensureLoaded(true)
   } catch (err) {
     showToast(`绑定失败：${(err as Error).message}`, 'warning')
@@ -326,20 +325,6 @@ function canChangeLegacyBinding(): boolean {
     return false
   }
   return true
-}
-
-async function unbindSpace(name: string) {
-  if (!canChangeLegacyBinding()) return
-  if (!window.confirm(`确认解除与图数据空间“${name}”的绑定？仅解除绑定，不会删除图数据空间数据。`)) return
-  try {
-    await unbindGraphSpace(name)
-    showToast(`已解除与“${name}”的绑定（图数据空间数据保留）。`)
-    await loadGraphSpaces()
-    // 选择器列表移除该空间；若当前全局空间正是它，store 归一会回退默认空间
-    void graphSpaceStore.ensureLoaded(true)
-  } catch (err) {
-    showToast(`解除绑定失败：${(err as Error).message}`, 'warning')
-  }
 }
 
 /** 打开管理抽屉：编辑副本隔离列表项。直接绑列表项（共享引用）会把未保存的输入
@@ -618,17 +603,16 @@ onMounted(() => {
         <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilter" allow-clear placeholder="全部状态"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><a-input v-model="keyword" class="config-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识或地址" placeholder="搜索名称、标识或地址"><template #prefix><IconSearch /></template></a-input></nav><nav v-else class="bind-nav"><button class="primary" type="button" @click="spaceDialogOpen = true">＋ 新建图数据空间</button><a-select v-if="isAdmin && bindableSpaces.length" v-model="bindTarget" placeholder="绑定已有图数据空间" allow-clear><a-option v-for="space in bindableSpaces" :key="space.name" :value="space.name">{{ space.name }}</a-option></a-select><button v-if="isAdmin && bindableSpaces.length" type="button" :disabled="spaceWorking" @click="bindSpace">绑定</button></nav></header>
         <div v-if="isGraphSpaceCategory" class="table-wrap space-table">
           <table>
-            <thead><tr><th>图数据空间</th><th>绑定状态</th><th>操作</th></tr></thead>
+            <thead><tr><th>图数据空间</th><th>绑定状态</th></tr></thead>
             <tbody>
               <tr v-for="space in mySpaces" :key="space.name">
                 <td><div class="config-name"><i>GS</i><span><strong>{{ space.name }}</strong><small>NebulaGraph 图空间</small></span></div></td>
                 <td><span class="status is-正常"><i />已绑定</span></td>
-                <td><button class="link" type="button" @click="unbindSpace(space.name)">解除绑定</button></td>
               </tr>
-              <tr v-if="!mySpaces.length"><td class="empty" colspan="3">还没有绑定的图数据空间，点击右上角“新建图数据空间”创建一个</td></tr>
+              <tr v-if="!mySpaces.length"><td class="empty" colspan="2">还没有绑定的图数据空间，点击右上角“新建图数据空间”创建一个</td></tr>
             </tbody>
           </table>
-          <p class="space-hint">新建图数据空间会真实执行 CREATE SPACE（创建后有秒级传播延迟）；解除绑定只取消关联，不会删除图数据空间数据。</p>
+          <p class="space-hint">新建图数据空间会真实执行 CREATE SPACE（创建后有秒级传播延迟）；解除绑定请找管理员处理。</p>
         </div>
         <div v-else class="table-wrap">
           <table>

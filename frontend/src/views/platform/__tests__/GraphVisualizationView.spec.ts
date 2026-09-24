@@ -206,7 +206,7 @@ describe('GraphVisualizationView', () => {
   it('挂载按全局图空间加载统计，未查询时给空态提示', async () => {
     await flushPromises()
     expect(getGraphStats).toHaveBeenCalledWith('space-a')
-    expect(wrapper.text()).toContain('图空间跟随右上角全局选择器：space-a')
+    expect(wrapper.text()).toContain('图空间跟随平台总览页的全局选择器：space-a')
     expect(wrapper.get('.graphviz-canvas__empty').text()).toContain('暂无图谱数据')
     // 类型下拉来自 stats 的标签/边类型计数
     expect(wrapper.text()).toContain('专家（12）')

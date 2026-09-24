@@ -85,7 +85,7 @@ type CreateForm = {
 const currentUserId = getCurrentUserId()
 
 const activeTab = ref('标准实体')
-// Schema 管理按图空间维度隔离：列表/拓扑/新建统一跟随右上角全局图空间选择器
+// Schema 管理按图空间维度隔离：列表/拓扑/新建统一跟随平台总览页的全局图空间选择器
 const graphSpaceStore = useGraphSpaceStore()
 const activeSpace = computed(() => currentGraphSpace())
 const keyword = ref('')

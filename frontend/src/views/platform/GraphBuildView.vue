@@ -56,7 +56,7 @@ const filterTaskTypeSelect = computed({
   },
 })
 
-/** 「全部空间」开关持久化：默认关闭=任务列表跟随顶栏当前全局图空间 */
+/** 「全部空间」开关持久化：默认关闭=任务列表跟随平台总览页全局选择器的当前图空间 */
 const SHOW_ALL_SPACES_KEY = 'tech-kg-graph-build-all-spaces'
 const showAllSpaces = ref(
   (() => {
@@ -330,7 +330,7 @@ onMounted(() => {
             <a-option value="upload">上传脚本</a-option>
           </a-select>
           <a-input id="graph-build-filter-name" v-model="filterName" class="gb-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="按名称搜索" placeholder="按名称搜索"><template #prefix><IconSearch /></template></a-input>
-          <a-checkbox v-model="showAllSpaces" class="gb-space-toggle" title="默认仅显示当前图空间（顶栏全局选择器）的任务">全部空间</a-checkbox>
+          <a-checkbox v-model="showAllSpaces" class="gb-space-toggle" title="默认仅显示当前图空间（平台总览页全局选择器）的任务">全部空间</a-checkbox>
         </div>
       </header>
       <div class="gb-jobs-panel">

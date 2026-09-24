@@ -39,6 +39,21 @@ class ReviewIdentity:
             raise ReviewForbiddenError("当前账号无人工审核权限")
         return sorted(allowed_space_names(actor, action="review"))
 
+    def review_view_spaces(self) -> list[str] | None:
+        """查看档空间：队列/详情/日志的可见范围。
+
+        开发维护额外可见共享生产空间的人工审核（只读）；操作类端点仍走
+        review_spaces（ensure_space），共享空间仅业务空间外不可操作。
+        """
+        from service.business_access_control import allowed_space_names, rbac_enabled
+
+        if not rbac_enabled():
+            return None
+        actor = self.platform_actor
+        if actor is None or actor.business_only or not actor.can_develop:
+            raise ReviewForbiddenError("当前账号无人工审核权限")
+        return sorted(allowed_space_names(actor, action="review_view"))
+
     def ensure_space(self, space: str | None) -> None:
         from service.business_access_control import ensure_space_access, rbac_enabled
 
@@ -49,9 +64,28 @@ class ReviewIdentity:
         actor = self.platform_actor
         if actor is None or actor.business_only or not actor.can_develop:
             raise ReviewForbiddenError("当前账号无人工审核权限")
-        if actor.is_admin and space not in self.review_spaces():
-            raise ReviewForbiddenError("审核记录归属图空间不存在，请先核实历史归属")
+        if actor.is_admin:
+            spaces = self.review_spaces()
+            if spaces is not None and space not in spaces:
+                raise ReviewForbiddenError("审核记录归属图空间不存在，请先核实历史归属")
         ensure_space_access(actor, space, action="review")
+
+    def ensure_space_view(self, space: str | None) -> None:
+        """只读查看档校验：detail/logs 等读接口用，共享空间放行。"""
+        from service.business_access_control import ensure_space_access, rbac_enabled
+
+        if not rbac_enabled():
+            return
+        if not space:
+            raise ReviewForbiddenError("审核记录未明确归属图空间，请管理员核实历史归属")
+        actor = self.platform_actor
+        if actor is None or actor.business_only or not actor.can_develop:
+            raise ReviewForbiddenError("当前账号无人工审核权限")
+        if actor.is_admin:
+            spaces = self.review_view_spaces()
+            if spaces is not None and space not in spaces:
+                raise ReviewForbiddenError("审核记录归属图空间不存在，请先核实历史归属")
+        ensure_space_access(actor, space, action="review_view")
 
     def has_any(self, *roles: str) -> bool:
         return bool(self.roles.intersection(roles))

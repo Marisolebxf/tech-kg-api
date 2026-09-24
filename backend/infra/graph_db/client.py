@@ -59,6 +59,35 @@ _edge_types_cache: dict[str, tuple[float, list[str]]] = {}
 _SCHEMA_LIST_CACHE_TTL_SECONDS = float(os.getenv("TRS_GRAPH_SCHEMA_LIST_CACHE_SECONDS", "30"))
 _refresh_locks: dict[tuple[str, str], threading.Lock] = {}
 
+# 无索引负缓存（0924）：-1005 "There is no index to use" 是确定性错误——tag/边
+# 没建索引，同一语句重发必然再失败，而共享图服务还会对每条失败语句自动重试
+# 4 次放大负载（总览今日新增反查/实体列表逐标签计数都在制造这类风暴）。
+# 记住近期确认无索引的 (space, kind, name)，TTL 内直接短路；索引补建后最多
+# TTL 秒恢复直查。dict 原子性同 result_cache 约定，不加锁。
+_NO_INDEX_CACHE_TTL_SECONDS = float(os.getenv("TRS_GRAPH_NO_INDEX_CACHE_SECONDS", "600"))
+_no_index_cache: dict[tuple[str, str, str], float] = {}
+
+
+def mark_no_index(space: str, kind: str, name: str) -> None:
+    """登记一个近期确认无可用索引的查询对象（LOOKUP tag/边、MATCH 标签）。"""
+    _no_index_cache[(space, kind, name)] = time.monotonic() + _NO_INDEX_CACHE_TTL_SECONDS
+
+
+def is_known_no_index(space: str, kind: str, name: str) -> bool:
+    until = _no_index_cache.get((space, kind, name))
+    if until is None:
+        return False
+    if until < time.monotonic():
+        _no_index_cache.pop((space, kind, name), None)
+        return False
+    return True
+
+
+def is_no_index_error(exc: BaseException) -> bool:
+    """是否 -1005 无索引类错误（消息含 "no index"，大小写不敏感）。"""
+    return "no index" in str(exc).lower()
+
+
 # 兜底执行预算（卡口2）：所有 REST 请求在发出前先取一个 trs 执行名额，
 # 覆盖不经 graph-search 公共执行层直连本客户端的调用方（校友/合作成果等
 # 同步业务、schema 管理、人工修正、ETL、控制台/图算法）。graph-search 侧
@@ -459,6 +488,11 @@ class TRSGraphClient:
             )
         return nodes
 
+    @property
+    def space(self) -> str:
+        """客户端绑定的图空间（临时空间 client 的调用方需要它做缓存键）。"""
+        return self._settings.space
+
     def label_count(self, label: str) -> int:
         """标签节点数：优先 SHOW STATS（毫秒级）；标签不在统计中，或空间从未
         跑过 SUBMIT JOB STATS（SHOW STATS 直接 400 "no any stats info"）时回退
@@ -468,7 +502,11 @@ class TRSGraphClient:
 
         容量型失败（会话池打满 / 连接错误）直接上抛：此时逐标签 nGQL count
         只会再抢会话、把池越占越死（冷启动预热实测打出几十秒 COUNT 风暴），
-        让调用方显式降级（各处均有 TTL 缓存或空值兜底）。"""
+        让调用方显式降级（各处均有 TTL 缓存或空值兜底）。
+
+        MATCH 直查要求标签有索引；近期已确认无索引的（-1005 负缓存命中）
+        不再重发注定失败的语句（图服务侧每条还会自动重试放大），直接按
+        同类错误上抛走调用方降级。"""
         try:
             counts = self.stats_tag_counts()
         except GraphConnectionError:
@@ -485,7 +523,17 @@ class TRSGraphClient:
             counts = {}
         if label in counts:
             return counts[label]
-        return self._ngql_label_count(label)
+        space = self._settings.space
+        if is_known_no_index(space, "label_count", label):
+            raise GraphRequestError(
+                f"标签 `{label}` 近期确认无可用索引（负缓存命中）", status_code=400
+            )
+        try:
+            return self._ngql_label_count(label)
+        except GraphRequestError as exc:
+            if is_no_index_error(exc):
+                mark_no_index(space, "label_count", label)
+            raise
 
     def _ngql_label_count(self, label: str) -> int:
         """nGQL 标签计数：``MATCH (v:`Label`) RETURN count(v)``（标签过滤亚秒级）。"""
@@ -880,11 +928,19 @@ class TRSGraphClient:
             )
         return GraphQueryResult(records=data.get("records", []), summary=summary)
 
-    def execute_query(self, query: str, params: dict[str, Any] | None = None) -> GraphQueryResult:
+    def execute_query(
+        self,
+        query: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> GraphQueryResult:
+        """单调用可覆盖读超时（秒），语义同 execute_read——反查/统计类调用
+        失败有降级路径，不需要陪共享图服务等满默认 30s。"""
         body: dict[str, Any] = {"query": self._scoped_query(query)}
         if params:
             body["params"] = params
-        resp = self._request("POST", "/api/v1/query", json=body)
+        resp = self._request("POST", "/api/v1/query", json=body, timeout=timeout)
         data = resp.json()
         return self._query_result(data, "/api/v1/query", expected_space=self._settings.space)
 

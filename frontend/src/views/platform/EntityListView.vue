@@ -26,7 +26,7 @@ const PROPERTY_CHIP_LIMIT = 4
 const keyword = ref('')
 const appliedKeyword = ref('')
 const entityType = ref('')
-// 图空间跟随右上角全局选择器（本页不再有空间筛选控件）
+// 图空间跟随平台总览页的全局选择器（本页不再有空间筛选控件）
 const space = computed(() => currentGraphSpace())
 const graphSpaceStore = useGraphSpaceStore()
 const pageSize = ref(10)

@@ -9,7 +9,7 @@ test.describe('B. 图谱查询', () => {
     await page.waitForLoadState('networkidle')
     await page.getByRole('button', { name: 'nGQL 模式' }).click()
 
-    // nGQL 面板内已无图空间控件：执行空间跟随顶栏全局选择器
+    // nGQL 面板内已无图空间控件：执行空间跟随平台总览页的全局选择器
     await expect(page.locator('.platform-ngql-input__space-field')).toHaveCount(0)
     await switchGraphSpace(page, 'dev2')
 

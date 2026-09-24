@@ -353,6 +353,69 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
   })
 })
 
+describe('查看档只读（开发维护 × 共享生产空间）', () => {
+  it('canOperate=false 的行不可勾选/重跑/删除，整页出现只读提示条', async () => {
+    mocks.getProductionReviews.mockReset().mockResolvedValue({
+      items: [
+        { ...caseRow('MR-RO1', 'OPEN'), canOperate: false },
+        { ...caseRow('MR-RO2', 'RERUN_FAILED'), canOperate: false },
+      ],
+      total: 2, page: 1, pageSize: 10,
+    })
+
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+
+    // 整页只读：提示条出现
+    expect(wrapper.get('.review-readonly-bar').text()).toContain('共享生产空间')
+    // 行勾选全部禁用；表头全选也点不亮批量按钮
+    const boxes = rowCheckboxes(wrapper)
+    expect(boxes).toHaveLength(2)
+    for (const box of boxes) {
+      expect((box.element as HTMLInputElement).disabled).toBe(true)
+    }
+    const header = headerCheckbox(wrapper)
+    ;(header.element as HTMLInputElement).checked = true
+    await header.trigger('change')
+    expect(batchButton(wrapper).attributes()).toHaveProperty('disabled')
+    // 操作列三键保留但置灰（不隐藏，布局稳定），悬停说明指向共享空间只读
+    const firstRowButtons = wrapper.findAll('tbody tr')[0].findAll('.review-action-btn')
+    expect(firstRowButtons.map((button) => button.text())).toEqual(['日志', '重跑', '删除'])
+    expect(firstRowButtons[0].attributes().disabled).toBeUndefined()
+    expect(firstRowButtons[1].attributes()).toHaveProperty('disabled')
+    expect(firstRowButtons[1].attributes('title')).toBe('共享生产空间：仅可查看，操作需管理员或本业务开发维护人员')
+    expect(firstRowButtons[2].attributes()).toHaveProperty('disabled')
+  })
+
+  it('canOperate 混合页（不传空间过滤的跨空间全量）不整页只读：只读行无重跑按钮，可操作行保留', async () => {
+    mocks.getProductionReviews.mockReset().mockResolvedValue({
+      items: [
+        caseRow('MR-MIX1', 'OPEN'),
+        { ...caseRow('MR-MIX2', 'OPEN'), canOperate: false },
+      ],
+      total: 2, page: 1, pageSize: 10,
+    })
+
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+
+    expect(wrapper.find('.review-readonly-bar').exists()).toBe(false)
+    const rows = wrapper.findAll('tbody tr')
+    expect(rows[0].findAll('.review-action-btn').map((button) => button.text())).toEqual(['日志', '重跑', '删除'])
+    expect(rows[0].findAll('.review-action-btn')[1].attributes().disabled).toBeUndefined()
+    // 只读行三键保留、重跑/删除置灰（title 指向共享空间只读）
+    expect(rows[1].findAll('.review-action-btn').map((button) => button.text())).toEqual(['日志', '重跑', '删除'])
+    expect(rows[1].findAll('.review-action-btn')[1].attributes()).toHaveProperty('disabled')
+    expect(rows[1].findAll('.review-action-btn')[1].attributes('title')).toBe('共享生产空间：仅可查看，操作需管理员或本业务开发维护人员')
+    // 混合页只读行勾选禁用、可操作行正常
+    const boxes = rowCheckboxes(wrapper)
+    expect((boxes[0].element as HTMLInputElement).disabled).toBe(false)
+    expect((boxes[1].element as HTMLInputElement).disabled).toBe(true)
+  })
+})
+
 describe('来源记录跳图谱构建任务详情', () => {
   it('统一 job 维度：有 jobId 跳 /graph-build/jobs；无 jobId 不再回落执行详情，显示占位符', async () => {
     mocks.getProductionReviews.mockReset().mockResolvedValue({

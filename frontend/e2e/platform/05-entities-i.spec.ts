@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { api, apiMust, switchGraphSpace, waitFor } from './helpers'
 
-// I. 实体列表 /graph-query/entities（图空间跟随顶栏全局选择器，本页无空间控件）
+// I. 实体列表 /graph-query/entities（图空间跟随平台总览页的全局选择器，本页无空间控件）
 test.describe('I. 实体列表', () => {
   test.beforeAll(async ({ request }) => {
     // 选择器列表已收敛为「默认+本人绑定」：I1 要切的 dev 先绑定（bind 幂等）
@@ -9,11 +9,14 @@ test.describe('I. 实体列表', () => {
   })
 
   test('I1 浏览模式 + 类型/空间/分页', async ({ page, request }) => {
+    // 全局空间默认 dev2（免登录模式无用户维度不落盘、选择器仅平台总览页渲染，
+    // 以页面实际请求的 space 参数核对）
+    const dev2Types = page.waitForRequest(
+      (r) => r.url().includes('/entity-search/types') && /[?&]space=dev2(&|$)/.test(r.url()),
+    )
     await page.goto('/graph-query/entities')
     await page.waitForLoadState('networkidle')
-
-    // 全局选择器默认 dev2（归一链 localStorage > 构建默认 > 列表第一）
-    await expect(page.locator('.app-space-select .arco-select-view-value')).toHaveText('dev2')
+    await dev2Types
 
     // API 对照：类型下拉计数（响应为 {items: [{name, count}]}）
     const typesData = await apiMust<any>(request, 'GET', '/entity-search/types?space=dev2', undefined, '实体类型')
@@ -46,7 +49,6 @@ test.describe('I. 实体列表', () => {
     )
     await switchGraphSpace(page, 'dev')
     await devTypes
-    await expect(page.locator('.app-space-select .arco-select-view-value')).toHaveText('dev')
     expect(rows).toBeTruthy()
   })
 
@@ -165,6 +167,5 @@ test.describe('I. 实体列表', () => {
     )
     await switchGraphSpace(page, 'dev2')
     await dev2Reload
-    await expect(page.locator('.app-space-select .arco-select-view-value')).toHaveText('dev2')
   })
 })

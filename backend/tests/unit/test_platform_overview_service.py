@@ -1,3 +1,7 @@
+import time
+
+import pytest
+
 from service.platform_overview import (
     DayChangesSnapshot,
     GraphStatsSnapshot,
@@ -6,6 +10,16 @@ from service.platform_overview import (
     enrich_day_rows_with_graph,
     parse_execution_records,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_no_index_cache():
+    # 无索引负缓存是模块级 TTL 状态：enrich 用例会登记 (dev2, lookup, tag.prop)，
+    # 不清理会串到后续用例——「二次反查跳过 LOOKUP」与「LOOKUP 必发」的断言互相打架。
+    client_mod = __import__("infra.graph_db.client", fromlist=["_no_index_cache"])
+    client_mod._no_index_cache.clear()
+    yield
+    client_mod._no_index_cache.clear()
 
 
 class FakeStatsProvider:
@@ -651,8 +665,10 @@ class _ScriptedGraphClient:
         self._scripts = scripts
         self.queries: list[str] = []
         self.closed = False
+        # 反查负缓存按 (space, kind, name) 键控，替身声明与用例一致的空间
+        self.space = "dev2"
 
-    def execute_query(self, statement: str) -> _GraphResult:
+    def execute_query(self, statement: str, timeout: float | None = None) -> _GraphResult:
         self.queries.append(statement)
         for fragment, response in self._scripts:
             if fragment in statement:
@@ -1028,3 +1044,65 @@ def test_enrich_today_rows_falls_back_when_tag_has_no_index() -> None:
     # tag 无索引（LOOKUP 400）：退回聚合行
     assert [row.object for row in result.entity_rows] == ["审测挂件 · 5 条"]
     assert client.closed is True
+
+
+def test_enrich_today_rows_skips_repeat_lookup_after_no_index_error() -> None:
+    """同 tag 多次执行反查：首次 LOOKUP -1005 登记负缓存后，后续执行不再重发
+    注定失败的语句（共享图服务侧每条失败语句还会自动重试 4 次放大负载）。"""
+    snapshot = parse_execution_records(
+        [
+            _execution_record(written=2, completed_at="2026-09-23 03:41:54"),
+            _execution_record(written=3, completed_at="2026-09-23 04:10:00"),
+        ],
+        today="2026-09-23",
+        target_space="dev2",
+        default_space="dev2",
+    )
+    client = _ScriptedGraphClient(
+        [
+            ("DESC TAG `ReviewWidget`", [{"Field": "name"}, {"Field": "update_time"}]),
+            ("LOOKUP ON `ReviewWidget`", RuntimeError("There is no index to use at runtime")),
+        ]
+    )
+
+    result = enrich_today_rows_with_graph(
+        snapshot,
+        "dev2",
+        connect_client=lambda space: client,
+        schema_names={"review-widget-64d0d5": "ReviewWidget"},
+        schema_labels={},
+    )
+
+    lookup_count = sum(1 for q in client.queries if q.startswith("LOOKUP ON `ReviewWidget`"))
+    assert lookup_count == 1  # 第二次执行命中负缓存，不发任何图查询
+    assert [row.object for row in result.entity_rows] == [
+        "审测挂件 · 3 条",  # 明细按完成时刻倒序，04:10 在前
+        "审测挂件 · 2 条",
+    ]
+
+
+def test_overview_serves_stale_value_and_refreshes_in_background() -> None:
+    """缓存过期先回旧值、后台线程刷新（stale-while-revalidate）：共享图服务
+    拥塞窗口里页面秒回旧值，绝不把 30s 级排队超时暴露给用户。"""
+    provider = FakeStatsProvider()
+    service = PlatformOverviewService(
+        stats_provider=provider, changes_provider=FakeChangesProvider()
+    )
+    first = service.get_overview("dev2")
+    assert provider.calls == 1
+
+    # 把缓存条目拨成过期（模拟 TTL 到期后的下一次进页）
+    _, data = service._cached["dev2"]
+    service._cached["dev2"] = (time.monotonic() - 1, data)
+
+    started = time.perf_counter()
+    again = service.get_overview("dev2")
+    assert again is first  # 旧值立即返回，不等图查询
+    assert time.perf_counter() - started < 1.0
+
+    for _ in range(100):  # 等后台线程写回新值
+        if service._cached["dev2"][1] is not first:
+            break
+        time.sleep(0.02)
+    assert provider.calls == 2
+    assert service.get_overview("dev2") is not first  # 新值已入缓存

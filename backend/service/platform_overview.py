@@ -166,11 +166,19 @@ class DayChangesSnapshot:
 class DayChangesProvider(Protocol):
     def get_day_changes(self, space: str | None = None) -> DayChangesSnapshot: ...
 
+    def running_count(self, space: str | None = None) -> int: ...
+
 
 def _execution_space(record: dict[str, Any]) -> str:
     """执行记录的目标图空间：调度下发记 ``graph_space``、手动/重跑记 ``graphSpace``。"""
     payload = record.get("payload") or {}
     return str(payload.get("graph_space") or payload.get("graphSpace") or "")
+
+
+def _space_matches(record: dict[str, Any], target_space: str, default_space: str) -> bool:
+    """执行归属当前空间：显式空间相等，或旧执行未记空间且当前即默认空间。"""
+    space = _execution_space(record)
+    return space == target_space or (not space and target_space == default_space)
 
 
 def _written_of(output: dict[str, Any]) -> int:
@@ -205,8 +213,7 @@ def parse_execution_records(
             continue
         if not isinstance(record, dict):
             continue
-        space = _execution_space(record)
-        if space != target_space and not (not space and target_space == default_space):
+        if not _space_matches(record, target_space, default_space):
             continue
         status = str(record.get("status") or "")
         if status == "RUNNING":
@@ -321,6 +328,37 @@ class WorkflowControlDayChangesProvider:
             self._cached = {}
         self._cached[space] = snapshot
         return snapshot
+
+    def running_count(self, space: str | None = None) -> int:
+        """当前 RUNNING 执行数（实时短查）：日快照缓存到当天结束，「N 个执行
+        运行中」不能随快照冻结一整天；外层 60s 结果缓存内每次装配最多实查一次。"""
+        from sqlalchemy import text
+
+        from infra.graph_db.config import TRSGraphSettings
+        from infra.workflow_mysql import get_workflow_engine
+
+        target_space = space or TRSGraphSettings.from_env().space
+        default_space = TRSGraphSettings.from_env().space
+        now = datetime.now().astimezone()
+        since = (now - timedelta(days=self._LOOKBACK_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
+        engine = get_workflow_engine()
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    "SELECT payload FROM workflow_executions "
+                    "WHERE status = 'RUNNING' AND started_at >= :since"
+                ),
+                {"since": since},
+            ).fetchall()
+        count = 0
+        for row in rows:
+            try:
+                record = json.loads(row[0])
+            except (TypeError, ValueError):
+                continue
+            if isinstance(record, dict) and _space_matches(record, target_space, default_space):
+                count += 1
+        return count
 
     def _load(self, day: str, space: str | None) -> DayChangesSnapshot:
         from sqlalchemy import text
@@ -937,6 +975,11 @@ class PlatformOverviewService:
                 change_totals = {"entity": 0, "relation": 0}
                 day_source = "demo-fallback"
                 extra_warnings = ["昨日新增暂时不可读：工作流控制库不可用。"]
+            # 运行中执行数实时短查（不随日快照冻结一整天）；控制库不可读回退快照值
+            try:
+                running_live = self._changes_provider.running_count(space)
+            except Exception:
+                running_live = changes.running_count if changes is not None else 0
             # 资产卡中心 = 真实体数（去重口径）：实体总量用 Space/vertices、
             # 关系总量用 Space/edges。构成图分段按 Schema(tag/边类型)计数、
             # 无法去重（需逐 vid 查标签），多标签顶点（如同一机构 vid 同挂
@@ -974,7 +1017,7 @@ class PlatformOverviewService:
             result = fallback.model_copy(
                 update={
                     "platform_status": "图数据库连接正常",
-                    "pending_batch_count": changes.running_count if changes else 0,
+                    "pending_batch_count": running_live,
                     "updated_at": datetime.now().strftime("%H:%M"),
                     "asset_overview_groups": groups,
                     "asset_change_rows": change_rows,

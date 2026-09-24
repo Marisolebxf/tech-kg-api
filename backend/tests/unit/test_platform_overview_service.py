@@ -52,9 +52,15 @@ class FakeChangesProvider:
         self.spaces.append(space)
         return self.snapshot
 
+    def running_count(self, space: str | None = None) -> int:
+        return self.snapshot.running_count
+
 
 class FailingChangesProvider:
     def get_day_changes(self, space: str | None = None) -> DayChangesSnapshot:
+        raise RuntimeError("control db unavailable")
+
+    def running_count(self, space: str | None = None) -> int:
         raise RuntimeError("control db unavailable")
 
 
@@ -376,6 +382,33 @@ def test_overview_uses_control_plane_day_changes() -> None:
     assert len(result.asset_change_rows["relation"]) == 0
     # 属性值卡片仍为占位演示行（前端不展示该分组）
     assert result.asset_change_rows["property"]
+
+
+def test_overview_running_count_is_live_not_frozen_in_day_snapshot() -> None:
+    """「N 个执行运行中」实时短查：日快照缓存一整天，快照里的 running_count
+    不能把运行数冻住——面板以装配时的实时计数为准；控制库不可读回退快照值。"""
+
+    class _LiveRunningProvider(FakeChangesProvider):
+        def running_count(self, space: str | None = None) -> int:
+            return 5
+
+    result = PlatformOverviewService(
+        stats_provider=FakeStatsProvider(),
+        changes_provider=_LiveRunningProvider(DayChangesSnapshot(entity_added=2, running_count=3)),
+    ).get_overview("dev2")
+    # 实时计数 5 覆盖快照冻结值 3
+    assert result.pending_batch_count == 5
+
+    class _BrokenRunningProvider(FakeChangesProvider):
+        def running_count(self, space: str | None = None) -> int:
+            raise RuntimeError("control db down")
+
+    fallback = PlatformOverviewService(
+        stats_provider=FakeStatsProvider(),
+        changes_provider=_BrokenRunningProvider(DayChangesSnapshot(running_count=3)),
+    ).get_overview("dev2")
+    # 实时短查失败：回退快照值，不显示 0 假象
+    assert fallback.pending_batch_count == 3
 
 
 def test_day_changes_provider_caches_closed_window_until_day_rolls() -> None:

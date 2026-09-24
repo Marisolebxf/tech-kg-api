@@ -1,0 +1,11 @@
+services:
+  temporal-worker-dev2:
+    environment:
+      SCRIPT_RUNNER_URL: http://script-runner:8099
+      SCRIPT_RUNNER_TOKEN: ${SCRIPT_RUNNER_TOKEN:?Set a random token of at least 32 characters}
+    networks:
+      - app
+      - script-execution
+    depends_on:
+      script-runner:
+        condition: service_healthy

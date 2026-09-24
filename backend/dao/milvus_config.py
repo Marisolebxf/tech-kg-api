@@ -24,6 +24,10 @@ class MilvusConfigDAO(BaseDAO[MilvusConfig]):
                 .order_by(MilvusConfig.updated_at.desc())
                 .limit(1)
             )
+            from service.business_access_control import rbac_enabled
+
+            if rbac_enabled():
+                stmt = stmt.where(~MilvusConfig.owner.like("business:%"))
             return session.scalars(stmt).first()
         finally:
             if should_close:
@@ -34,6 +38,14 @@ class MilvusConfigDAO(BaseDAO[MilvusConfig]):
         session, should_close = self._get_session()
         try:
             conditions = [MilvusConfig.is_default.is_(True), MilvusConfig.id != exclude_id]
+            from service.business_access_control import rbac_enabled
+
+            if rbac_enabled() and owner is None:
+                target = session.get(MilvusConfig, exclude_id)
+                if target is not None and target.owner.startswith("business:"):
+                    owner = target.owner
+                else:
+                    conditions.append(~MilvusConfig.owner.like("business:%"))
             if owner is not None:
                 conditions.append(MilvusConfig.owner == owner)
             stmt = update(MilvusConfig).where(*conditions).values(is_default=False)

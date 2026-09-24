@@ -152,6 +152,8 @@ export interface ProductionReviewCase {
   executionId?: string
   /** 图谱构建任务（job-xxx，「来源记录」跳 /graph-build/jobs 用）；后端快照/执行关联解析。 */
   jobId?: string
+  /** 建案时绑定的图空间（产生该 case 的抽取任务所在空间；队列按其过滤）。 */
+  graphSpace?: string
   errorType: string; category: string; templateId: string; domain: string; phase: string; riskLevel: 'P0'|'P1'|'P2'; scope: string
   status: ProductionReviewStatus; assigneeId?: string; assigneeName?: string; version: number; slaClaimAt: string; slaResolveAt: string
   diagnosis: string; sourceTable?: string; sourceRecordId?: string; createdAt: string; updatedAt: string
@@ -376,6 +378,16 @@ export function countJobUnifiedStatuses(
   const counts: Record<JobUnifiedStatus, number> = { 未运行: 0, 运行中: 0, 已暂停: 0, 已完成: 0, 运行失败: 0 }
   for (const job of jobs) counts[deriveJobUnifiedStatus(job)] += 1
   return counts
+}
+
+/** 任务归属空间（列表页/总览卡共用同一口径）：payload 未带 graphSpace 的历史任务
+ *  落默认业务空间（空间列表首位恒为默认）。 */
+export function jobGraphSpace(
+  job: Pick<WorkflowJob, 'graphSpace'>,
+  defaultSpace: string,
+  current: string,
+): string {
+  return job.graphSpace || defaultSpace || current
 }
 
 export const createJob = (input: JobCreateInput) =>

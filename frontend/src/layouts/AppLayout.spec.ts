@@ -49,12 +49,13 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-async function renderLayout(isAdmin: boolean, path = '/expert-direct', collapsed = false) {
+async function renderLayout(isAdmin: boolean, path = '/expert-direct', collapsed = false, businessOnly = false) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const auth = useAuthStore()
   auth.profile = {
     isAdmin,
+    businessOnly,
     user: { id: 'viewer', username: 'viewer', nickname: '测试用户', avatar: '' },
   } as AuthProfile
   useAppStore().collapsed = collapsed
@@ -70,6 +71,26 @@ async function renderLayout(isAdmin: boolean, path = '/expert-direct', collapsed
 }
 
 describe('既有侧边栏按有效管理员身份显隐', () => {
+  it('业务开发维护保留管理菜单但不会显示管理员身份，选择器仍在原顶栏', async () => {
+    const { wrapper, auth } = await renderLayout(false)
+    auth.profile = { ...auth.profile!, businessRbacEnabled: true, platformRole: 'developer', canDevelop: true }
+    await nextTick()
+    for (const path of managementPaths) expect(wrapper.find(`.app-nav a[href="${path}"]`).exists()).toBe(true)
+    expect(auth.isAdmin).toBe(false)
+    expect(wrapper.get('.app-top-actions__user').text()).toContain('开发维护')
+    expect(wrapper.get('.app-top-actions__user').text()).not.toContain('管理员')
+    expect(wrapper.find('.app-top-actions .app-space-select').exists()).toBe(true)
+  })
+  it.each([false, true])('业务限定账号只保留九大模块，收起=%s', async (collapsed) => {
+    const { wrapper } = await renderLayout(true, '/expert-direct', collapsed, true)
+    const navigation = wrapper.get('.app-nav')
+    for (const path of ['/overview', ...queryPaths, ...managementPaths]) {
+      expect(navigation.find(`a[href="${path}"]`).exists()).toBe(false)
+    }
+    for (const path of sharedPaths) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(true)
+    expect(navigation.text()).not.toContain('工作台')
+  })
+
   it('普通用户可见工作台/平台总览与业务服务，管理菜单隐藏', async () => {
     const { wrapper } = await renderLayout(false)
     const navigation = wrapper.get('.app-nav')
@@ -107,10 +128,24 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
     expect(wrapper.find('.app-nav a[href="/graph-build"]').exists()).toBe(false)
   })
 
-  it('显式免登录开发模式保留原有管理菜单', async () => {
+  it('前端误关闭认证时不能把普通用户提升为管理员', async () => {
     mocks.authDisabled = true
     const { wrapper } = await renderLayout(false)
+    for (const path of managementPaths) expect(wrapper.find(`.app-nav a[href="${path}"]`).exists()).toBe(false)
+    expect(wrapper.get('.app-top-actions__user').text()).toContain('普通用户')
+  })
+
+  it('前端误关闭认证时开发维护仍显示开发维护', async () => {
+    mocks.authDisabled = true
+    const { wrapper, auth } = await renderLayout(false)
+    auth.profile = { ...auth.profile!, businessRbacEnabled: true, platformRole: 'developer', canDevelop: true }
+    await nextTick()
+    expect(wrapper.get('.app-top-actions__user').text()).toContain('开发维护')
+    expect(wrapper.get('.app-top-actions__user').text()).not.toContain('管理员')
     expect(wrapper.find('.app-nav a[href="/schema"]').exists()).toBe(true)
+    auth.invalidate()
+    await nextTick()
+    expect(wrapper.find('.app-nav a[href="/schema"]').exists()).toBe(false)
   })
 
   it('顶栏渲染全局图空间选择器并加载空间列表', async () => {

@@ -39,6 +39,7 @@ DOMAIN_ORDER = [
     "llm_config",
     "platform_datasource",
     "platform_governance",
+    "indirect_relation_annotation",
 ]
 
 DDL_DIR = Path(__file__).resolve().parent.parent / "schemas" / "ddl"

@@ -56,12 +56,23 @@ class ManagementRisk(CamelCaseModel):
     review_to: str
 
 
+class StructureMember(CamelCaseModel):
+    """分段成员（图内真实标签/边类型）及其计数，供前端悬停浮窗展示。"""
+
+    name: str
+    count: int
+
+
 class StructureItem(CamelCaseModel):
     label: str
     schema_name: str = Field(alias="schema")
+    # 全部非零成员（按计数降序，展示名=Schema 目录中文名）；降级演示数据无成员给空表
+    members: list[StructureMember] = []
     count: str
     ratio: int
     tone: str
+    # 「其他实体/其他关系」聚合段：前端只对它开悬浮（浮窗列成员 Schema 清单）
+    is_other: bool = False
 
 
 class PlatformOverviewData(CamelCaseModel):
@@ -70,10 +81,17 @@ class PlatformOverviewData(CamelCaseModel):
     updated_at: str
     asset_overview_groups: list[AssetOverviewGroup]
     asset_change_rows: dict[AssetOverviewKey, list[AssetChangeRow]]
+    # 今日新增真实计数（Σwritten，与资产卡徽标同源）：抽屉明细行有单执行
+    # 50 条上限，行数 ≠ 徽标数时前端用它展示「共 N 条 · 展示前 n 条」
+    asset_change_totals: dict[AssetOverviewKey, int] = Field(default_factory=dict)
     latest_changes: list[LatestChange]
     management_risks: list[ManagementRisk]
     entity_structure: list[StructureItem]
     relation_structure: list[StructureItem]
+    # 环形图中心数 = 各分段之和（Σ标签/Σ边类型计数），与分段自洽；资产卡
+    # total 仍是去重口径，两口径并存。默认值 = 降级演示分段各自的合计。
+    entity_structure_total: str = "1.27 亿"
+    relation_structure_total: str = "6.42 亿"
     data_mode: Literal["live", "partial", "mock"] = "mock"
     data_sources: dict[str, str] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)

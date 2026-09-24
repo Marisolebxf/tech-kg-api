@@ -650,6 +650,16 @@ body {
 }
 
 @media (max-width: 768px) {
+  /* 窄屏标题/操作/表单三行堆叠，标题列不再被操作按钮挤成竖排
+     （对齐 main 2444066 对通用 .service-console 的同款修复）。 */
+  .app-workspace .service-console {
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-areas:
+      "service-title"
+      "service-actions"
+      "service-fields";
+  }
+
   .app-workspace .service-console--alumni,
   .app-workspace .service-console--cooperation {
     grid-template-columns: minmax(0, 1fr) !important;
@@ -1110,7 +1120,7 @@ body {
 
   .app-workspace .business-service .business-service__main {
     flex: none;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)) !important;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)) !important;
     height: auto !important;
     min-height: 0 !important;
     overflow: visible !important;
@@ -1766,7 +1776,7 @@ body {
 
   .app-workspace .business-service .business-service__main {
     flex: none !important;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)) !important;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)) !important;
     height: auto !important;
     min-height: 0 !important;
     overflow: visible !important;

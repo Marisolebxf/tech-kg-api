@@ -37,6 +37,8 @@ from typing import Any, Literal
 
 import httpx
 
+from service.business_access import business_graph_app
+
 logger = logging.getLogger(__name__)
 
 _API_PREFIX = "/api/v1/graph-search"
@@ -124,7 +126,15 @@ class GraphAPIClient:
                     status_code=payload.get("code"),
                 )
             return payload.get("data")
-        # 兜底：非 ApiResponse（例如 describe 端点直接返回 dict）
+        # 错误状态的非 ApiResponse 响应（如网关/鉴权 401 的 {"detail": ...}）不是
+        # 图数据，必须按服务故障抛出——原样透传会让上游 .get("items", []) 拿到
+        # 空列表，把「鉴权失败/网关故障」伪装成「未命中」（全景图曾因此整页空）。
+        if response.status_code >= 400:
+            raise GraphAPIError(
+                f"graph api returned error status {response.status_code}: {payload!r}",
+                status_code=response.status_code,
+            )
+        # 兜底：非 ApiResponse 的成功响应（例如 describe 端点直接返回 dict）
         return payload
 
     # ------------- 图查询原子能力 -------------
@@ -297,6 +307,7 @@ async def graph_api(
     *,
     base_url: str = "https://kg-internal",
     auth_headers: Mapping[str, str] | None = None,
+    timeout_seconds: float | None = None,
 ) -> Any:
     """构造一个绑定当前 FastAPI 应用（ASGI transport）的 :class:`GraphAPIClient`。
 
@@ -304,16 +315,25 @@ async def graph_api(
     ``ASGITransport`` 直达 FastAPI 路由。外层 ``asyncio.timeout`` 用于兜住底层
     图服务/Milvus 卡住的情况，避免请求长期悬挂。
 
+    ``timeout_seconds`` 覆盖默认总预算（``_DEFAULT_TIMEOUT_SECONDS``）；组装阶段
+    多（如产业链全景图多层搜索+子图合并）的调用方可调大，避免瞬时慢查询把
+    整次组装超时打断。
+
     ``auth_headers`` 是调用方（handler 从 ``get_internal_api_auth_headers`` 取得的）
     凭证头；graph-search 路由受鉴权保护，进程内回环调用不带凭证会被 401 拦截。
     """
     app = _load_app()
-    transport = httpx.ASGITransport(app=app)
+    # 九大业务名单账号（PLATFORM_BUSINESS_ONLY_USER_IDS）的自调用会被
+    # enforce_business_access 拦成 403——这里统一包 business_graph_app 打内部
+    # 标记，放行的仍仅限 _INTERNAL_GRAPH_ROUTES 白名单内的图查询路由。
+    transport = httpx.ASGITransport(app=business_graph_app(app))
     async with httpx.AsyncClient(
         transport=transport,
         base_url=base_url,
         timeout=None,
         headers=dict(auth_headers) if auth_headers else None,
     ) as http_client:
-        async with asyncio.timeout(_DEFAULT_TIMEOUT_SECONDS):
+        async with asyncio.timeout(
+            _DEFAULT_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+        ):
             yield GraphAPIClient(http_client)

@@ -99,3 +99,32 @@ async def test_query_and_business_routers_remain_available_to_ordinary_user(app,
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(f"/api/v1/probe/{router_name}")
         assert response.status_code == 200
+
+
+@pytest.mark.parametrize("router_name", ADMIN_ROUTERS)
+async def test_business_developer_only_opens_maintenance_routers(app, monkeypatch, router_name):
+    monkeypatch.setenv("BUSINESS_RBAC_ENABLED", "true")
+    app.dependency_overrides[require_platform_actor] = lambda: PlatformActor(
+        "developer", "developer", "developer", "", False, business_id="a", business_role="developer"
+    )
+    expected = 403 if router_name in {"admin_member_router", "graph_space_router"} else 200
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(f"/api/v1/probe/{router_name}")
+        assert response.status_code == expected
+
+
+async def test_online_business_configuration_and_approval_routes_are_not_registered(app):
+    app.dependency_overrides[require_platform_actor] = lambda: PlatformActor(
+        "admin", "admin", "admin", "", True
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        for method, path in (
+            ("GET", "/state"),
+            ("PUT", "/businesses/a"),
+            ("PUT", "/members/user"),
+            ("PUT", "/spaces/a"),
+            ("POST", "/requests"),
+            ("POST", "/requests/id/decision"),
+        ):
+            response = await client.request(method, "/api/v1/business-access" + path, json={})
+            assert response.status_code == 404

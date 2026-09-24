@@ -58,6 +58,35 @@ beforeEach(async () => {
 })
 
 describe('角色控制与默认入口', () => {
+  it.each(restrictedPaths)('业务开发维护可以访问 %s', async (path) => {
+    mocks.loadCurrentUser.mockResolvedValue({ businessRbacEnabled: true, canDevelop: true, isAdmin: false, permissions: [] })
+    await router.push(path)
+    expect(router.currentRoute.value.path).toBe(path)
+  })
+  it('旧模式不因 canDevelop 字段意外放开管理页面', async () => {
+    mocks.loadCurrentUser.mockResolvedValue({ businessRbacEnabled: false, canDevelop: true, isAdmin: false, permissions: [] })
+    await router.push('/configurations')
+    expect(router.currentRoute.value.path).toBe('/forbidden')
+  })
+  it('公司测试限制优先于业务开发维护角色', async () => {
+    mocks.loadCurrentUser.mockResolvedValue({ businessOnly: true, businessRbacEnabled: true, canDevelop: true, isAdmin: false, permissions: ['*'] })
+    await router.push('/configurations')
+    expect(router.currentRoute.value.path).toBe('/expert-direct')
+  })
+  it.each(['/overview', '/', '/graph-query', '/graph-query/entities', '/demo/t-direct', ...restrictedPaths])('业务限定账号无法访问 %s', async (path) => {
+    mocks.loadCurrentUser.mockResolvedValue({ businessOnly: true, isAdmin: true, permissions: ['*'] })
+    await router.push(`${path}?embedded=1#entry`)
+    expect(router.currentRoute.value.path).toBe('/expert-direct')
+    expect(router.currentRoute.value.query.embedded).toBe('1')
+    expect(router.currentRoute.value.hash).toBe('#entry')
+  })
+
+  it.each([...sharedPaths, '/user-center', '/account-security', '/operation-logs'])('业务限定账号仍可访问 %s', async (path) => {
+    mocks.loadCurrentUser.mockResolvedValue({ businessOnly: true, isAdmin: false, permissions: [] })
+    await router.push(path)
+    expect(router.currentRoute.value.path).toBe(path)
+  })
+
   it.each(restrictedPaths)('普通用户直接访问 %s 被拒绝', async (path) => {
     await router.push(path)
     expect(router.currentRoute.value.path).toBe('/forbidden')
@@ -115,11 +144,36 @@ describe('角色控制与默认入口', () => {
     expect(router.currentRoute.value.query).toEqual({ embedded: '1', portalState: 'session-expired' })
   })
 
-  it('显式免登录开发模式保留管理页访问', async () => {
+  it('后端明确允许的免登录开发身份保留管理页访问', async () => {
     mocks.authDisabled = true
+    mocks.loadCurrentUser.mockResolvedValue({ authEnabled: false, isAdmin: true, permissions: [] })
     await router.push('/schema')
     expect(router.currentRoute.value.path).toBe('/schema')
-    expect(mocks.loadCurrentUser).not.toHaveBeenCalled()
+    expect(mocks.loadCurrentUser).toHaveBeenCalledWith(true)
+  })
+
+  it.each(restrictedPaths)('前端误关闭认证也不能放行普通用户访问 %s', async (path) => {
+    mocks.authDisabled = true
+    await router.push(path)
+    expect(router.currentRoute.value.path).toBe('/forbidden')
+    expect(mocks.loadCurrentUser).toHaveBeenCalledWith(true)
+  })
+
+  it('前端误关闭认证不跳过未登录和业务限定检查', async () => {
+    mocks.authDisabled = true
+    mocks.loadCurrentUser.mockResolvedValue(null)
+    await router.push('/overview')
+    expect(router.currentRoute.value.path).toBe('/login')
+    mocks.loadCurrentUser.mockResolvedValue({ businessOnly: true, isAdmin: true, permissions: ['*'] })
+    await router.push('/schema')
+    expect(router.currentRoute.value.path).toBe('/expert-direct')
+  })
+
+  it('前端误关闭认证但身份服务异常时不得进入管理页', async () => {
+    mocks.authDisabled = true
+    mocks.loadCurrentUser.mockRejectedValue(new Error('identity unavailable'))
+    await router.push('/manual-review')
+    expect(router.currentRoute.value.path).toBe('/login')
   })
 })
 

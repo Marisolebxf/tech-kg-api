@@ -16,6 +16,8 @@ from infra.mysql import session_scope
 logger = logging.getLogger(__name__)
 
 ADMIN_ROLE = "platform_admin"
+# 历史标记仅用于盘点/迁移，不授予权限；开发维护来自业务成员记录。
+DEVELOPER_ROLE = "platform_developer"
 # 仅供成员列表展示的最近一次门户身份；绝不作为接口授权或本地管理员依据。
 PORTAL_ROLE_SNAPSHOT = "portal_admin_snapshot"
 USER_PERMISSIONS = ("analysis:read", "correction:submit")
@@ -37,13 +39,45 @@ class PlatformActor:
     email: str
     is_admin: bool
     portal_is_admin: bool = False
+    business_id: str = ""
+    business_role: str = "user"
+    business_only: bool = False
+
+    @property
+    def can_develop(self) -> bool:
+        return not self.business_only and (
+            self.is_admin or bool(self.business_id and self.business_role == "developer")
+        )
+
+    @property
+    def is_developer(self) -> bool:
+        return self.can_develop and not self.is_admin
+
+    @property
+    def role_code(self) -> str:
+        if self.business_only:
+            return "user"
+        return "admin" if self.is_admin else "developer" if self.can_develop else "user"
 
     @property
     def roles(self) -> list[str]:
-        return ["platform_user", ADMIN_ROLE] if self.is_admin else ["platform_user"]
+        if self.is_admin:
+            return ["platform_user", ADMIN_ROLE]
+        return ["platform_user", "platform_developer"] if self.can_develop else ["platform_user"]
 
     @property
     def permissions(self) -> list[str]:
+        from service.business_access_control import rbac_enabled
+
+        if rbac_enabled():
+            if self.business_only:
+                return ["business:read"]
+            values = ["analysis:read"]
+            if self.can_develop:
+                values.extend(["schema:manage", "workflow:manage", "graph:write", "review:manage"])
+            if self.is_admin:
+                values.extend(ADMIN_PERMISSIONS)
+            return list(dict.fromkeys(values))
         values = [*USER_PERMISSIONS]
         if self.is_admin:
             values.extend(ADMIN_PERMISSIONS)
@@ -86,14 +120,17 @@ def actor_from_profile(
                 _DEV_ACTOR_UPSERTED.add(user_id)
             if auth_enabled:
                 _sync_portal_role_snapshot(session, user_id, portal_admin)
-                role_id = session.scalar(
-                    select(PlatformUserRole.id).where(
-                        PlatformUserRole.user_id == user_id,
-                        PlatformUserRole.role_code == ADMIN_ROLE,
+                # 历史 platform_developer 不再参与权限判定。
+                role_codes = set(
+                    session.scalars(
+                        select(PlatformUserRole.role_code).where(
+                            PlatformUserRole.user_id == user_id,
+                            PlatformUserRole.role_code == ADMIN_ROLE,
+                        )
                     )
                 )
-                database_admin = role_id is not None
-                if bootstrap_first_admin and role_id is None and not portal_admin:
+                database_admin = ADMIN_ROLE in role_codes
+                if bootstrap_first_admin and not database_admin and not portal_admin:
                     first_admin_exists = bool(initial_admin_ids) or (
                         session.scalar(
                             select(PlatformUserRole.id)

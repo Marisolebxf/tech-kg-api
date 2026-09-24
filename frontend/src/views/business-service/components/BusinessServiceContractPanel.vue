@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ServiceModule } from "../service-modules";
-import iconSelectArrow from "../../../assets/icons/icon-select-arrow.svg";
+import ElSelect, { ElOption } from "element-plus/es/components/select/index";
+import "element-plus/es/components/select/style/css";
 
 defineProps<{
   moduleInfo: ServiceModule;
@@ -18,23 +19,21 @@ defineEmits<{
     <div class="developer-view__meta">
       <label>
         <span>子功能名称：</span>
-        <select aria-label="选择或输入内容"
-          class="select-with-icon"
-          :value="moduleInfo.key"
-          @change="
-            $emit('selectModule', ($event.target as HTMLSelectElement).value)
-          "
+        <ElSelect
+          aria-label="子功能名称"
+          class="developer-module-select"
+          popper-class="developer-module-options"
+          :model-value="moduleInfo.key"
+          :fit-input-width="true"
+          @update:model-value="$emit('selectModule', $event)"
         >
-          <option v-for="item in modules" :key="item.key" :value="item.key">
-            {{ item.title }}查询接口
-          </option>
-        </select>
-        <img
-          class="select-icon"
-          :src="iconSelectArrow"
-          alt=""
-          aria-hidden="true"
-        />
+          <ElOption
+            v-for="item in modules"
+            :key="item.key"
+            :value="item.key"
+            :label="`${item.title}查询接口`"
+          />
+        </ElSelect>
       </label>
       <label>
         <span>接口路径：</span>
@@ -146,8 +145,7 @@ defineEmits<{
   min-width: 0;
 }
 
-.developer-view__meta input,
-.developer-view__meta select {
+.developer-view__meta label > input {
   box-sizing: border-box;
   width: 100%;
   height: 32px;
@@ -161,28 +159,34 @@ defineEmits<{
   line-height: 30px;
 }
 
-.developer-view__meta input[readonly] {
+.developer-view__meta label > input[readonly] {
   padding-right: var(--space-12);
 }
 
-.developer-view__meta select {
-  line-height: normal;
+.developer-module-select {
+  width: 100%;
+  min-width: 0;
 }
 
-.select-with-icon {
-  appearance: none;
-  -webkit-appearance: none;
-  background-image: none;
+.developer-module-select :deep(.el-select__wrapper) {
+  min-height: 32px;
 }
 
-.select-icon {
-  position: absolute;
-  top: 50%;
-  right: 10px;
-  width: 14px;
-  height: 14px;
-  transform: translateY(-50%);
-  pointer-events: none;
+.developer-module-select :deep(.el-select__selected-item) {
+  color: var(--text-primary);
+}
+
+:global(.developer-module-options) {
+  max-width: calc(100vw - 24px);
+}
+
+:global(.developer-module-options .el-select-dropdown__item) {
+  height: auto;
+  min-height: 34px;
+  padding-block: 6px;
+  line-height: 22px;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .developer-view__cards {
@@ -277,6 +281,7 @@ defineEmits<{
   font-size: 14px;
   line-height: 20px;
   vertical-align: top;
+  white-space: normal;
   overflow-wrap: anywhere;
 }
 
@@ -526,12 +531,6 @@ defineEmits<{
   .developer-view__meta label > span {
     line-height: 20px;
     white-space: nowrap;
-  }
-
-  .select-icon {
-    top: auto;
-    bottom: 9px;
-    transform: none;
   }
 
   .developer-view__meta > span {

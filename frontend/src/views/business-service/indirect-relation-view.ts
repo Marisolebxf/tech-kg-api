@@ -232,10 +232,6 @@ export function buildIndirectRelationGraph(
 }
 
 export function indirectSummaryRows(result: ExpertIndirectRelationResult) {
-  const relationTypes =
-    Object.entries(result.relationTypeCount)
-      .map(([type, count]) => `${type} ${count} 条`)
-      .join("、") || "暂无符合阈值的间接关系";
   const directNames =
     result.directNodes
       .slice(0, 5)
@@ -262,10 +258,8 @@ export function indirectSummaryRows(result: ExpertIndirectRelationResult) {
       "间接关联节点",
       `${indirectNames}（共 ${result.indirectNodeCount} 个）`,
     ] as const,
-    ["间接关系类型", relationTypes] as const,
     ["代表传递路径", representative] as const,
     ["其他代表路径", secondary] as const,
-    ["路径数量", `${result.pathCount} 条`] as const,
     [
       "关联强度",
       `最高 ${result.maxStrength.toFixed(2)}｜平均 ${result.averageStrength.toFixed(2)}｜阈值 ${result.minStrength.toFixed(2)}`,

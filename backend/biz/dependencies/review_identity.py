@@ -5,10 +5,16 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+from typing import Annotated
 from uuid import uuid4
 
-from fastapi import HTTPException, Request
+from fastapi import Depends, HTTPException, Request, Response
 
+from biz.dependencies.auth import (
+    AuthApplicationDependency,
+    BearerDependency,
+    require_authenticated_user,
+)
 from service.manual_review_domain import ReviewIdentity
 
 
@@ -16,8 +22,39 @@ def _header_env(name: str, default: str) -> str:
     return os.getenv(name, default)
 
 
-def get_review_identity(request: Request) -> ReviewIdentity:
+async def _review_platform_actor(
+    request: Request,
+    response: Response,
+    application: AuthApplicationDependency,
+    bearer: BearerDependency,
+):
+    from service.business_access_control import rbac_enabled
+
+    if not rbac_enabled():
+        return None
+    context = await require_authenticated_user(request, response, application, bearer)
+    return application.platform_actor(context)
+
+
+def get_review_identity(
+    request: Request,
+    actor: Annotated[object, Depends(_review_platform_actor)] = None,
+) -> ReviewIdentity:
     """Read canonical or environment-configured gateway headers and verify their HMAC."""
+    from service.business_access_control import rbac_enabled
+
+    if rbac_enabled():
+        if actor is None or actor.business_only or not actor.can_develop:
+            raise HTTPException(status_code=403, detail="当前账号无人工审核权限")
+        return ReviewIdentity(
+            actor.user_id,
+            actor.display_name or actor.username or actor.user_id,
+            frozenset({"review_admin"} if actor.is_admin else {"reviewer"}),
+            frozenset({"*"}),
+            actor.business_id,
+            request.headers.get("X-Request-Id") or uuid4().hex,
+            platform_actor=actor,
+        )
 
     def value(env_name: str, default: str) -> str:
         return request.headers.get(os.getenv(env_name, default), "")

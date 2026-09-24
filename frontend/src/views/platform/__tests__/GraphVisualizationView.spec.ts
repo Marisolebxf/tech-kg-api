@@ -128,6 +128,7 @@ beforeEach(() => {
   const pinia = createPinia()
   setActivePinia(pinia)
   store = useGraphSpaceStore()
+  store.spaces = ['space-a', 'space-b', 'space-c']
   store.setCurrent('space-a')
   vi.mocked(getGraphStats).mockResolvedValue(
     apiOk({ nodes: { 专家: 12, 论文: 8 }, edges: { 撰写: 20, 任职: 6 } }),
@@ -146,6 +147,7 @@ function mountView() {
   const pinia = createPinia()
   setActivePinia(pinia)
   store = useGraphSpaceStore()
+  store.spaces = ['space-a', 'space-b', 'space-c']
   store.setCurrent('space-a')
   wrapper = mount(GraphVisualizationView, {
     global: {

@@ -23,7 +23,10 @@ from biz.schemas.schema_management import (
     SchemaPropertyInput,
     SchemaSourcesReplace,
 )
+from dao.schema_management import SchemaManagementDAO
 from infra.workflow_mysql import get_workflow_session
+from service.business_access_control import allowed_space_names, ensure_space_access, rbac_enabled
+from service.schema_ddl import default_graph_space
 from service.schema_management import (
     SchemaConflictError,
     SchemaDdlError,
@@ -36,6 +39,33 @@ from service.schema_management import (
 )
 
 router = APIRouter(prefix="/schema-management", tags=["schema-management"])
+
+
+def _scoped_space(actor, space):
+    if not rbac_enabled():
+        return space
+    if not space:
+        spaces = allowed_space_names(actor)
+        if not spaces:
+            raise HTTPException(status_code=403, detail="尚未分配可访问图空间")
+        space = spaces[0]
+    ensure_space_access(actor, space)
+    return space
+
+
+def _schema_access(actor, session, schema_id, action="read", target_space=None):
+    if not rbac_enabled():
+        return
+    row = SchemaManagementDAO(session).get(schema_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Schema 不存在")
+    ensure_space_access(actor, row.graph_space, action)
+    if target_space and target_space != row.graph_space:
+        raise HTTPException(status_code=403, detail="目标空间必须与 Schema 所属空间一致")
+
+
+def _can_manage(actor):
+    return actor.is_admin or (rbac_enabled() and actor.can_develop)
 
 
 def _application(session: Session) -> SchemaManagementApplication:
@@ -66,10 +96,14 @@ def _raise_domain_error(exc: SchemaManagementError) -> None:
 
 @router.get("/overview")
 def get_schema_overview(
+    actor: CurrentActor,
     session: Annotated[Session, Depends(get_workflow_session)],
     graph_space: Annotated[str | None, Query(alias="graphSpace", max_length=64)] = None,
 ) -> Response:
-    return Response(_application(session).overview_payload(graph_space), media_type="application/json")
+    graph_space = _scoped_space(actor, graph_space)
+    return Response(
+        _application(session).overview_payload(graph_space), media_type="application/json"
+    )
 
 
 @router.get("/schemas")
@@ -86,6 +120,7 @@ def list_schemas(
     # 高频列表接口：直接返回预构建 JSON（绕开 pydantic 响应校验的 GIL 瓶颈），
     # 响应体与 ApiResponse 信封逐字段一致。用户隔离只影响 canDelete/
     # canManageProperties 两个展示位，服务端各写接口仍强制校验归属。
+    graph_space = _scoped_space(actor, graph_space)
     payload = _application(session).list_schemas_payload(
         kind=kind,
         keyword=keyword.strip() if keyword else None,
@@ -93,7 +128,7 @@ def list_schemas(
         page_size=page_size,
         user_id=actor.user_id,
         include_details=include_details,
-        is_platform_admin=actor.is_admin,
+        is_platform_admin=_can_manage(actor),
         graph_space=graph_space,
     )
     return Response(payload, media_type="application/json")
@@ -105,10 +140,11 @@ def get_schema_topology(
     session: Annotated[Session, Depends(get_workflow_session)],
     graph_space: Annotated[str | None, Query(alias="graphSpace", max_length=64)] = None,
 ) -> Response:
+    graph_space = _scoped_space(actor, graph_space)
     return Response(
         _application(session).topology_payload(
             actor.user_id,
-            is_platform_admin=actor.is_admin,
+            is_platform_admin=_can_manage(actor),
             graph_space=graph_space,
         ),
         media_type="application/json",
@@ -121,12 +157,13 @@ def get_schema_detail(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_workflow_session)],
 ) -> Response:
+    _schema_access(actor, session, schema_id, "read")
     try:
         return Response(
             _application(session).get_schema_payload(
                 schema_id,
                 actor.user_id,
-                is_platform_admin=actor.is_admin,
+                is_platform_admin=_can_manage(actor),
             ),
             media_type="application/json",
         )
@@ -140,6 +177,8 @@ def create_entity_schema(
     session: Annotated[Session, Depends(get_workflow_session)],
     payload: EntitySchemaCreate,
 ) -> ApiResponse:
+    if rbac_enabled():
+        ensure_space_access(actor, payload.graph_space or default_graph_space(), "write")
     try:
         data = _application(session).create_entity(
             payload=payload.model_dump(),
@@ -156,6 +195,13 @@ def create_relation_schema(
     session: Annotated[Session, Depends(get_workflow_session)],
     payload: RelationSchemaCreate,
 ) -> ApiResponse:
+    if rbac_enabled():
+        ensure_space_access(actor, payload.graph_space or default_graph_space(), "write")
+        for endpoint in (payload.source_schema_id, payload.target_schema_id):
+            if endpoint:
+                _schema_access(
+                    actor, session, endpoint, "read", payload.graph_space or default_graph_space()
+                )
     try:
         data = _application(session).create_relation(
             payload=payload.model_dump(),
@@ -173,12 +219,13 @@ def get_schema_delete_impact(
     session: Annotated[Session, Depends(get_workflow_session)],
 ) -> ApiResponse:
     """删除影响预览：实体返回仍引用它的关系清单（前端删除确认弹窗展示）。"""
+    _schema_access(actor, session, schema_id, "read")
     try:
         return ApiResponse(
             data=_application(session).delete_impact(
                 schema_id,
                 actor.user_id,
-                is_platform_admin=actor.is_admin,
+                is_platform_admin=_can_manage(actor),
             )
         )
     except SchemaManagementError as exc:
@@ -191,11 +238,12 @@ def delete_schema(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_workflow_session)],
 ) -> ApiResponse:
+    _schema_access(actor, session, schema_id, "write")
     try:
         data = _application(session).delete_schema(
             schema_id,
             actor.user_id,
-            is_platform_admin=actor.is_admin,
+            is_platform_admin=_can_manage(actor),
         )
         return ApiResponse(data=data, msg="Schema 删除成功")
     except SchemaManagementError as exc:
@@ -210,12 +258,13 @@ def add_schema_property(
     payload: SchemaPropertyInput,
 ) -> ApiResponse:
     """新增属性：目录插入 + 图 ALTER ADD；DDL 失败回滚目录行（目录与图保持一致）。"""
+    _schema_access(actor, session, schema_id, "write")
     try:
         data = _application(session).add_property(
             schema_id=schema_id,
             payload=payload.model_dump(),
             user_id=actor.user_id,
-            is_platform_admin=actor.is_admin,
+            is_platform_admin=_can_manage(actor),
         )
         return ApiResponse(data=data, msg="属性新增成功")
     except SchemaManagementError as exc:
@@ -234,12 +283,13 @@ def delete_schema_property(
     required 属性与运行中抽取任务硬拦（409）；identity/关系表达式引用只随
     ``warnings`` 警告。列不存在时跳过 DDL 只删目录行。
     """
+    _schema_access(actor, session, schema_id, "write")
     try:
         data = _application(session).delete_property(
             schema_id=schema_id,
             property_name=property_name,
             user_id=actor.user_id,
-            is_platform_admin=actor.is_admin,
+            is_platform_admin=_can_manage(actor),
         )
         return ApiResponse(data=data, msg="属性已删除")
     except SchemaManagementError as exc:
@@ -254,12 +304,18 @@ def replace_schema_sources(
     payload: SchemaSourcesReplace,
 ) -> ApiResponse:
     """全量替换来源表绑定（实体/关系可绑多张表，每表独立水位）。"""
+    _schema_access(actor, session, schema_id, "write")
+    if rbac_enabled():
+        from biz.handler.workflow_system import _validate_resource_selectors
+
+        for source in payload.sources:
+            _validate_resource_selectors(actor, {"mysql_datasource_id": source.datasource_id})
     try:
         data = _application(session).replace_sources(
             schema_id=schema_id,
             sources=[item.model_dump() for item in payload.sources],
             user_id=actor.user_id,
-            is_platform_admin=actor.is_admin,
+            is_platform_admin=_can_manage(actor),
         )
         return ApiResponse(data=data, msg="来源表绑定已保存")
     except SchemaManagementError as exc:
@@ -277,13 +333,17 @@ async def trigger_schema_extraction(
 
     要求已上传脚本且已绑定 ≥1 来源表，否则 409。执行记录可在任务中心查看。
     """
+    _schema_access(actor, session, schema_id, "write", payload.graph_space if payload else None)
+    if rbac_enabled() and payload and payload.graph_space:
+        ensure_space_access(actor, payload.graph_space, "write")
     try:
         data = await _application(session).trigger_extraction(
             schema_id=schema_id,
             user_id=actor.user_id,
-            is_platform_admin=actor.is_admin,
+            is_platform_admin=_can_manage(actor),
             graph_space=payload.graph_space if payload else None,
             batch_size=payload.batch_size if payload else None,
+            actor=actor,
         )
         return ApiResponse(data=data, msg="抽取已触发")
     except SchemaManagementError as exc:
@@ -302,14 +362,18 @@ async def backfill_schema_history(
     前置同触发抽取（已上传脚本 + ≥1 来源绑定）。脚本落后于 Schema 时回填可能
     无效，未带 ``force`` 返回 409，前端强确认后带 force 重发。
     """
+    _schema_access(actor, session, schema_id, "write", payload.graph_space if payload else None)
+    if rbac_enabled() and payload and payload.graph_space:
+        ensure_space_access(actor, payload.graph_space, "write")
     try:
         data = await _application(session).backfill(
             schema_id=schema_id,
             user_id=actor.user_id,
-            is_platform_admin=actor.is_admin,
+            is_platform_admin=_can_manage(actor),
             force=payload.force if payload else False,
             graph_space=payload.graph_space if payload else None,
             batch_size=payload.batch_size if payload else None,
+            actor=actor,
         )
         return ApiResponse(data=data, msg="历史数据回填已触发")
     except SchemaManagementError as exc:
@@ -323,11 +387,12 @@ def replace_schema_script(
     session: Annotated[Session, Depends(get_workflow_session)],
     script: Annotated[UploadFile, File(...)],
 ) -> ApiResponse:
+    _schema_access(actor, session, schema_id, "write")
     try:
         data = _application(session).replace_script(
             schema_id=schema_id,
             user_id=actor.user_id,
-            is_platform_admin=actor.is_admin,
+            is_platform_admin=_can_manage(actor),
             filename=script.filename or "",
             content_type=script.content_type,
             script_data=_read_script(script),
@@ -356,6 +421,7 @@ async def verify_and_save_script(
     流前失败（schema 不存在 / 无权限）→ HTTP 4xx；流中失败 → ``type=error`` 事件。
     整个校验/保存流程在单一专用线程中驱动，使用独立 Session，避免跨线程会话。
     """
+    _schema_access(actor, session, schema_id, "write")
     app = _application(session)
     script_data = await script.read(max_script_bytes() + 1)
 
@@ -367,7 +433,7 @@ async def verify_and_save_script(
             for event in app.verify_and_save_script(
                 schema_id=schema_id,
                 user_id=actor.user_id,
-                is_platform_admin=actor.is_admin,
+                is_platform_admin=_can_manage(actor),
                 filename=script.filename or "",
                 content_type=script.content_type,
                 script_data=script_data,
@@ -431,9 +497,11 @@ async def verify_and_save_script(
 
 @router.get("/schemas/{schema_id}/script/content")
 def get_schema_script_content(
+    actor: CurrentActor,
     schema_id: str,
     session: Annotated[Session, Depends(get_workflow_session)],
 ) -> Response:
+    _schema_access(actor, session, schema_id, "read")
     try:
         return Response(
             _application(session).get_script_content_payload(schema_id),
@@ -445,9 +513,11 @@ def get_schema_script_content(
 
 @router.get("/schemas/{schema_id}/script")
 def download_schema_script(
+    actor: CurrentActor,
     schema_id: str,
     session: Annotated[Session, Depends(get_workflow_session)],
 ) -> StreamingResponse:
+    _schema_access(actor, session, schema_id, "read")
     try:
         script, body = _application(session).get_script(schema_id)
     except SchemaManagementError as exc:

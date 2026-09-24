@@ -25,10 +25,15 @@ from biz.schemas.workflow_operations import (
     WorkflowExecuteRequest,
     WorkflowScheduleRequest,
 )
+from service.business_access_control import ensure_space_access, rbac_enabled
 from service.job_events import hub as job_event_hub
 from service.platform_access import PlatformActor
 from service.temporal_runtime import temporal_runtime
-from service.workflow_jobs import WorkflowJobError
+from service.workflow_jobs import (
+    WorkflowJobError,
+    authorize_workflow_resource,
+    workflow_resource_visible,
+)
 
 SCHEDULE_NOT_FOUND = "Schedule 不存在"
 WORKFLOW_DEFINITION_NOT_FOUND = "工作流定义不存在"
@@ -45,6 +50,8 @@ _jobs_payload_cache: dict[str, tuple[float, str]] = {}
 
 
 def _jobs_cache_get(key: str) -> str | None:
+    if rbac_enabled():
+        return None
     entry = _jobs_payload_cache.get(key)
     if entry and entry[0] > time.monotonic():
         return entry[1]
@@ -76,8 +83,19 @@ async def workflow_health() -> ApiResponse:
 @router.get("/definitions")
 async def list_definitions(
     request: Request,
+    actor: CurrentActor,
     category: str | None = Query(default=None, pattern="^(entity|relation|graph|custom)$"),
 ) -> Response:
+    if rbac_enabled():
+        items = [
+            item
+            for item in service.repo.list_definitions(category=category)
+            if workflow_resource_visible(actor, item)
+        ]
+        return Response(
+            ApiResponse(data={"items": items, "total": len(items)}).model_dump_json(),
+            media_type="application/json",
+        )
     cached = get_cache.try_get("workflow:definitions", request)
     if cached is not None:
         return cached
@@ -90,7 +108,11 @@ async def list_definitions(
 
 
 @router.post("/definitions")
-async def create_definition(request: WorkflowDefinitionRequest) -> ApiResponse:
+async def create_definition(request: WorkflowDefinitionRequest, actor: CurrentActor) -> ApiResponse:
+    if rbac_enabled() and not actor.is_admin:
+        raise HTTPException(
+            status_code=403, detail="全局工作流定义仅管理员可维护，请通过 Schema 创建构建任务"
+        )
     result = ApiResponse(
         data=service.create_definition(request.model_dump()), msg="自定义工作流定义已保存"
     )
@@ -103,10 +125,11 @@ async def create_definition(request: WorkflowDefinitionRequest) -> ApiResponse:
     response_model=ApiResponse,
     responses={404: {"description": "请求的资源不存在"}},
 )
-async def get_definition(definition_id: str) -> ApiResponse:
+async def get_definition(definition_id: str, actor: CurrentActor) -> ApiResponse:
     definition = service.repo.get_definition(definition_id)
     if definition is None:
         raise HTTPException(status_code=404, detail=WORKFLOW_DEFINITION_NOT_FOUND)
+    authorize_workflow_resource(actor, definition)
     return ApiResponse(data=definition)
 
 
@@ -116,6 +139,8 @@ def _validate_resource_selectors(actor: PlatformActor, selectors: dict) -> None:
     selectors 为 snake_case 键的字典（llm_config_id / embedding_config_id /
     mysql_datasource_id / milvus_config_id / graph_space 等）。
     """
+    if rbac_enabled() and not actor.can_develop and not actor.is_admin:
+        raise HTTPException(status_code=403, detail="当前角色无权维护构建任务")
     if actor.is_admin:
         return
     from dao.embedding_config import EmbeddingConfigDAO
@@ -137,12 +162,19 @@ def _validate_resource_selectors(actor: PlatformActor, selectors: dict) -> None:
             if not config_id:
                 continue
             row = dao.get(config_id)
+            if rbac_enabled() and row is not None:
+                from biz.dependencies.resources import ensure_owner_access
+
+                ensure_owner_access(actor, getattr(row, "owner", "") or "")
+                continue
             if row is None or (getattr(row, "owner", "") or "") != actor.user_id:
                 raise HTTPException(
                     status_code=403, detail=f"无权使用配置 {config_id}（仅能选择自己的配置）"
                 )
         graph_space = selectors.get("graph_space")
-        if graph_space:
+        if graph_space and rbac_enabled():
+            ensure_space_access(actor, graph_space, "write")
+        elif graph_space:
             if not GraphSpaceService(session).is_bound(actor.user_id, graph_space):
                 raise HTTPException(
                     status_code=403, detail=f"图空间 {graph_space} 未绑定到当前用户"
@@ -185,6 +217,14 @@ async def execute_definition(
     if definition is None:
         raise HTTPException(status_code=404, detail=WORKFLOW_DEFINITION_NOT_FOUND)
     payload = _merge_selectors_into_payload(dict(request.payload), request)
+    if rbac_enabled():
+        authorize_workflow_resource(actor, definition, "write")
+        authorize_workflow_resource(actor, payload, "write")
+        _validate_resource_selectors(actor, payload)
+        payload["actorUserId"] = actor.user_id
+        from service.workflow_jobs import _job_business
+
+        payload["clientId"] = _job_business(actor, payload)
     try:
         execution = await service.execute_definition(
             definition, payload, request.workflow_id, persist_task=True
@@ -196,6 +236,7 @@ async def execute_definition(
 
 @router.get("/executions")
 async def list_executions(
+    actor: CurrentActor,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     definition_id: Annotated[str | None, Query(alias="definitionId")] = None,
     schedule_id: Annotated[str | None, Query(alias="scheduleId")] = None,
@@ -213,6 +254,9 @@ async def list_executions(
         schedule_id=schedule_id,
         trigger_source=trigger_source,
     )
+    if rbac_enabled():
+        data["items"] = [item for item in data["items"] if workflow_resource_visible(actor, item)]
+        data["total"] = len(data["items"])
     payload = json.dumps(
         {"code": 200, "success": True, "data": data, "msg": "success"},
         ensure_ascii=False,
@@ -223,14 +267,20 @@ async def list_executions(
 
 
 @router.get("/executions/{execution_id}", responses={404: {"description": "请求的资源不存在"}})
-async def get_execution(execution_id: str) -> Response:
+async def get_execution(execution_id: str, actor: CurrentActor) -> Response:
     cache_key = f"execution:{execution_id}"
     cached = _jobs_cache_get(cache_key)
     if cached is not None:
         return Response(cached, media_type="application/json")
+    if rbac_enabled():
+        existing = service.repo.get_execution(execution_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="工作流执行记录不存在")
+        authorize_workflow_resource(actor, existing)
     execution = await service.get_execution(execution_id)
     if execution is None:
         raise HTTPException(status_code=404, detail="工作流执行记录不存在")
+    authorize_workflow_resource(actor, execution)
     payload = json.dumps(
         {"code": 200, "success": True, "data": execution, "msg": "success"},
         ensure_ascii=False,
@@ -241,8 +291,10 @@ async def get_execution(execution_id: str) -> Response:
 
 
 @router.get("/schedules")
-async def list_schedules() -> ApiResponse:
+async def list_schedules(actor: CurrentActor) -> ApiResponse:
     items = service.repo.list_schedules()
+    if rbac_enabled():
+        items = [item for item in items if workflow_resource_visible(actor, item)]
     return ApiResponse(data={"items": items, "total": len(items)})
 
 
@@ -260,7 +312,18 @@ async def create_schedule(
         raise HTTPException(status_code=404, detail=WORKFLOW_DEFINITION_NOT_FOUND)
     schedule = {**request.model_dump(), "definitionId": definition_id}
     payload = _merge_selectors_into_payload(dict(request.payload), request)
+    if rbac_enabled():
+        authorize_workflow_resource(actor, definition, "write")
+        authorize_workflow_resource(actor, payload, "write")
+        _validate_resource_selectors(actor, payload)
+        payload["actorUserId"] = actor.user_id
+        from service.workflow_jobs import _job_business
+
+        payload["clientId"] = _job_business(actor, payload)
     schedule["payload"] = payload
+    from service.workflow_jobs import authorize_background_execution
+
+    authorize_background_execution(payload)
     try:
         schedule = await temporal_runtime.create_schedule(definition, schedule)
     except Exception:
@@ -273,10 +336,13 @@ async def create_schedule(
 
 
 @router.put("/schedules/{schedule_id}/state", responses={404: {"description": "请求的资源不存在"}})
-async def update_schedule_state(schedule_id: str, request: ScheduleStateRequest) -> ApiResponse:
+async def update_schedule_state(
+    schedule_id: str, request: ScheduleStateRequest, actor: CurrentActor
+) -> ApiResponse:
     schedule = service.repo.get_schedule(schedule_id)
     if schedule is None:
         raise HTTPException(status_code=404, detail=SCHEDULE_NOT_FOUND)
+    authorize_workflow_resource(actor, service.repo.get_schedule(schedule_id), "write")
     try:
         await temporal_runtime.pause_schedule(schedule_id, paused=not request.active)
         schedule["dispatchStatus"] = "TEMPORAL_UPDATED"
@@ -293,9 +359,10 @@ async def update_schedule_state(schedule_id: str, request: ScheduleStateRequest)
 @router.post(
     "/schedules/{schedule_id}/trigger", responses={404: {"description": "请求的资源不存在"}}
 )
-async def trigger_schedule(schedule_id: str) -> ApiResponse:
+async def trigger_schedule(schedule_id: str, actor: CurrentActor) -> ApiResponse:
     if service.repo.get_schedule(schedule_id) is None:
         raise HTTPException(status_code=404, detail=SCHEDULE_NOT_FOUND)
+    authorize_workflow_resource(actor, service.repo.get_schedule(schedule_id), "write")
     try:
         await temporal_runtime.trigger_schedule(schedule_id)
         return ApiResponse(
@@ -313,9 +380,10 @@ async def trigger_schedule(schedule_id: str) -> ApiResponse:
 
 
 @router.delete("/schedules/{schedule_id}", responses={404: {"description": "请求的资源不存在"}})
-async def delete_schedule(schedule_id: str) -> ApiResponse:
+async def delete_schedule(schedule_id: str, actor: CurrentActor) -> ApiResponse:
     if service.repo.get_schedule(schedule_id) is None:
         raise HTTPException(status_code=404, detail=SCHEDULE_NOT_FOUND)
+    authorize_workflow_resource(actor, service.repo.get_schedule(schedule_id), "write")
     try:
         await temporal_runtime.delete_schedule(schedule_id)
     except Exception:
@@ -371,7 +439,7 @@ _SSE_HEARTBEAT_SECONDS = 15.0
 
 
 @router.get("/jobs/events")
-async def stream_job_events() -> StreamingResponse:
+async def stream_job_events(actor: CurrentActor) -> StreamingResponse:
     """任务/执行变更推送（SSE）：控制面表变化即下发 jobs-changed 事件。
 
     鉴权沿用路由组依赖（cookie 会话同源自动携带，EventSource 无法自定义头）。
@@ -388,6 +456,8 @@ async def stream_job_events() -> StreamingResponse:
                 except TimeoutError:
                     yield ": keep-alive\n\n"
                     continue
+                if rbac_enabled() and not actor.is_admin:
+                    event = {}  # Invalidation only; never publish other businesses resource IDs.
                 data = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
                 yield f"event: jobs-changed\ndata: {data}\n\n"
         finally:

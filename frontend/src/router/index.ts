@@ -1,8 +1,9 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
-import { appBase, authDisabled, graphVisualizationEnabled } from '../config'
+import { appBase, graphVisualizationEnabled } from '../config'
 
 import { useAuthStore } from '../stores/auth'
+import { useGraphSpaceStore } from '../stores/graphSpace'
 import { installSessionRecovery, loginRedirect, notifySessionExpired } from './sessionRecovery'
 import BusinessServiceView from '../views/business-service/BusinessServiceView.vue'
 import LoginView from '../views/auth/LoginView.vue'
@@ -114,23 +115,40 @@ router.beforeEach(async (to) => {
     return { path: '/graph-query' }
   }
 
-  if (authDisabled) {
-    return to.name === 'login' ? { path: '/overview' } : true
-  }
-
-  if (to.meta.public) return true
+  if (to.name === 'login') return true
 
   const authStore = useAuthStore()
   try {
-    // 每次导航重新读取有效身份，及时反映门户或本系统的授权、撤权。
+    // 每次导航由后端确认身份；前端部署开关不能跳过鉴权或自行赋予管理员。
+    // 免登录开发环境同样使用后端明确允许的开发身份。
     const profile = await authStore.loadCurrentUser(true)
+    if (profile) {
+      // 身份就绪后先绑定图空间上下文并拉取本人空间列表（换账号时丢弃上一用户
+      // 的选中空间），页面挂载后拿到的 current 必在本人列表内——否则总览等
+      // 页面会带着上一用户的空间发请求（无权空间串数据/403）。空间上下文的
+      // 任何异常都不允许影响路由（外层 catch 会误判为登录失效）。
+      try {
+        const spaceStore = useGraphSpaceStore()
+        spaceStore.bindUser(String(profile.user?.id ?? ''))
+        await spaceStore.ensureLoaded(true)
+      } catch {
+        // 不以构建默认值代替服务端授权空间；加载失败保持空列表
+      }
+    }
+    if (to.meta.public && !profile?.businessOnly) return true
     if (!profile) {
       if (!authStore.skipSilentLogin) notifySessionExpired('登录状态已失效或已超时，请重新登录')
       return loginRedirect(to.fullPath, '登录状态已失效或已超时，请重新登录')
     }
+    if (profile.businessOnly && ![
+      ...serviceRoutes.map((route) => route.path),
+      '/user-center', '/account-security', '/operation-logs',
+    ].includes(to.path)) {
+      return { path: '/expert-direct', query: to.query, hash: to.hash }
+    }
     const requiredPermission = typeof to.meta.permission === 'string' ? to.meta.permission : ''
     // 平台总览对所有登录用户开放；卡片入口对普通用户只读（见 PlatformWorkbenchView）。
-    if (to.meta.admin === true && !profile.isAdmin) {
+    if (to.meta.admin === true && !profile.isAdmin && !(profile.businessRbacEnabled && profile.canDevelop)) {
       return { path: '/forbidden', query: { redirect: to.fullPath } }
     }
     if (
@@ -142,6 +160,7 @@ router.beforeEach(async (to) => {
     }
     return true
   } catch {
+    if (to.meta.public) return true
     return loginRedirect(to.fullPath, '登录服务暂时不可用，请稍后重试')
   }
 })

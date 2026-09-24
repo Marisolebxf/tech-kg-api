@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { appBase, authDisabled, graphVisualizationEnabled } from "../config";
+import { appBase, graphVisualizationEnabled } from "../config";
 import { IconHistory } from "@arco-design/web-vue/es/icon";
 import {
   computed,
@@ -41,11 +41,12 @@ const appStore = useAppStore();
 const authStore = useAuthStore();
 const currentUser = computed(() => authStore.profile?.user);
 const userAvatar = computed(() => currentUser.value?.avatar || accountAvatar);
+const businessOnly = computed(() => authStore.businessOnly);
 const isAdminUser = computed(() =>
-  authDisabled || authStore.isAdmin,
+  !businessOnly.value && authStore.canDevelop,
 );
 const userRoleName = computed(() =>
-  isAdminUser.value ? "管理员" : "普通用户",
+  authStore.isAdmin ? "管理员" : isAdminUser.value ? "开发维护" : "普通用户",
 );
 const userDisplayName = computed(() =>
   currentUser.value?.nickname || currentUser.value?.username || userRoleName.value,
@@ -374,10 +375,11 @@ onBeforeUnmount(() => {
         </div>
 
         <nav class="app-nav" aria-label="平台功能导航">
-          <div v-if="!sidebarCollapsed" class="app-nav__group">
+          <div v-if="!sidebarCollapsed && !businessOnly" class="app-nav__group">
             <span>工作台</span>
           </div>
             <RouterLink
+              v-if="!businessOnly"
               class="app-nav__item app-nav__item--top app-nav__item--leaf"
               active-class="app-nav__item--active"
               to="/overview"
@@ -457,7 +459,7 @@ onBeforeUnmount(() => {
             <div v-if="!sidebarCollapsed" class="app-nav__group">
               <span>知识图谱构建服务</span>
             </div>
-            <div class="app-nav__query-group">
+            <div v-if="!businessOnly" class="app-nav__query-group">
               <button
                 class="app-nav__item app-nav__item--top app-nav__item--button"
                 :class="{

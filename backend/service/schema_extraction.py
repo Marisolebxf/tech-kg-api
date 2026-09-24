@@ -16,6 +16,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from service.business_access_control import rbac_enabled
 from service.schema_management import (
     SchemaConflictError,
     SchemaManagementService,
@@ -30,20 +31,24 @@ DEFAULT_BATCH_SIZE = 500
 MAX_BATCH_SIZE = 5000
 
 
-def extract_watermark_definition_ids(schema_key: str) -> list[str]:
+def extract_watermark_definition_ids(schema_key: str, schema_id: str | None = None) -> list[str]:
     """该 schema 抽取水位的 definition_id 候选（回填清水位用）。
 
     抽取工作流按 ``schema-extract-{schema_key}``（原始 key）推水位，而执行记录
     落库用的是 sanitized 变体（``extract_definition_id``）——两个都清，兜住
     schema_key 含大写/特殊字符时的错位。
     """
+    if rbac_enabled() and schema_id:
+        return [extract_definition_id(schema_key, schema_id)]
     return sorted({f"schema-extract-{schema_key}", extract_definition_id(schema_key)})
 
 
-def extract_definition_id(schema_key: str) -> str:
+def extract_definition_id(schema_key: str, schema_id: str | None = None) -> str:
     """平台喂数抽取的合成 definition id（execution/task 行引用它）。"""
     from service.schema_management import _workflow_definition_id
 
+    if rbac_enabled() and schema_id:
+        return f"schema-extract-{schema_id}"
     return f"schema-extract-{_workflow_definition_id(schema_key).removeprefix('schema-')}"
 
 
@@ -63,7 +68,18 @@ def build_extract_definition(definition: Any) -> dict[str, Any]:
         schema_key = definition.schema_key
         label = definition.label
     return {
-        "id": extract_definition_id(schema_key),
+        "id": extract_definition_id(
+            schema_key,
+            definition.get("id")
+            if isinstance(definition, dict)
+            else getattr(definition, "id", None),
+        ),
+        "schemaId": definition.get("id")
+        if isinstance(definition, dict)
+        else getattr(definition, "id", None),
+        "graphSpace": definition.get("graph_space")
+        if isinstance(definition, dict)
+        else getattr(definition, "graph_space", None),
         "workflowType": EXTRACT_WORKFLOW_TYPE,
         "name": f"{label} 平台喂数抽取",
         "category": "extract",
@@ -90,6 +106,8 @@ def persist_extract_definition(definition: dict[str, Any]) -> dict[str, Any]:
     merged = {
         **existing,
         "name": definition["name"],
+        "schemaId": definition.get("schemaId"),
+        "graphSpace": definition.get("graphSpace"),
         "workflowType": definition["workflowType"],
         "category": "extract",
         "sourceKind": "extract",
@@ -124,6 +142,7 @@ def build_extract_chain_definition(
     return {
         "id": definition_id,
         "workflowType": CHAIN_WORKFLOW_TYPE,
+        "schemaIds": [info["id"] for info in infos],
         "name": name[:120],
         "category": "extract",
         "sourceKind": "extract",
@@ -144,11 +163,14 @@ def persist_extract_chain_definition(definition: dict[str, Any]) -> dict[str, An
     merged = {
         **existing,
         "name": definition["name"],
+        "schemaId": definition.get("schemaId"),
+        "graphSpace": definition.get("graphSpace"),
         "workflowType": definition["workflowType"],
         "category": "extract",
         "sourceKind": "extract",
         "active": True,
         "steps": definition["steps"],
+        "schemaIds": definition.get("schemaIds", []),
         "timeoutSeconds": definition["timeoutSeconds"],
     }
     repository.save_definition(merged)
@@ -289,6 +311,7 @@ class SchemaExtractionService:
         is_platform_admin: bool = False,
         graph_space: str | None = None,
         batch_size: int | None = None,
+        actor=None,
     ) -> dict[str, Any]:
         """触发平台喂数抽取。要求已上传脚本且 ≥1 来源表绑定，否则 409。"""
         self._schema_service.assert_mutable(
@@ -304,6 +327,7 @@ class SchemaExtractionService:
 
         payload = {
             "schemaId": schema_id,
+            "actorUserId": user_id,
             # 空间优先级：显式传参 > Schema 目录登记的归属空间 > env 默认
             "graphSpace": graph_space
             or info.get("graph_space")
@@ -311,6 +335,12 @@ class SchemaExtractionService:
             "batchSize": min(max(int(batch_size or DEFAULT_BATCH_SIZE), 1), MAX_BATCH_SIZE),
             "triggerSource": "MANUAL",
         }
+        if rbac_enabled():
+            from service.workflow_jobs import _job_business
+
+            if actor is None:
+                raise SchemaConflictError("抽取缺少已验证的平台身份")
+            payload["clientId"] = _job_business(actor, payload)
         definition = persist_extract_definition(build_extract_definition(info))
         execution = await workflow_operations_service.execute_definition(
             definition, payload, persist_task=True
@@ -337,6 +367,7 @@ class SchemaExtractionService:
         force: bool = False,
         graph_space: str | None = None,
         batch_size: int | None = None,
+        actor=None,
     ) -> dict[str, Any]:
         """回填历史数据：清空该 Schema 全部来源水位后全量重跑抽取。
 
@@ -361,13 +392,26 @@ class SchemaExtractionService:
 
         from service.script_watermark import clear_watermarks
 
-        cleared = clear_watermarks(extract_watermark_definition_ids(info["schema_key"]))
+        if rbac_enabled():
+            from service.workflow_jobs import _job_business, authorize_background_execution
+
+            if actor is None:
+                raise SchemaConflictError("回填缺少已验证的平台身份")
+            context = {
+                "schemaId": schema_id,
+                "graphSpace": graph_space or info.get("graph_space"),
+                "actorUserId": user_id,
+            }
+            context["clientId"] = _job_business(actor, context)
+            authorize_background_execution(context)
+        cleared = clear_watermarks(extract_watermark_definition_ids(info["schema_key"], schema_id))
         result = await self.trigger_extraction(
             schema_id=schema_id,
             user_id=user_id,
             is_platform_admin=is_platform_admin,
             graph_space=graph_space,
             batch_size=batch_size,
+            actor=actor,
         )
         return {
             **result,
@@ -381,6 +425,7 @@ async def rerun_failed_records(
     case_ids: list[str] | None = None,
     execution_id: str | None = None,
     batch_size: int | None = None,
+    actor=None,
 ) -> dict[str, Any]:
     """按审核 case 重跑失败记录（单条/批量勾选共用）。
 
@@ -394,6 +439,9 @@ async def rerun_failed_records(
     from service.manual_review_production import manual_review_service
     from service.workflow_operations import workflow_operations_service
     from service.workflow_repository import repository
+
+    if rbac_enabled() and actor is None:
+        raise SchemaConflictError("重跑缺少已验证的执行身份")
 
     cases = manual_review_service.list_extract_fail_cases(
         case_ids=case_ids, execution_id=execution_id
@@ -426,6 +474,11 @@ async def rerun_failed_records(
                 }
             )
             continue
+        if rbac_enabled() and any(
+            not case.get("graphSpace") or case["graphSpace"] != info.get("graph_space")
+            for case in group
+        ):
+            raise SchemaConflictError("审核记录与 Schema 当前图空间不一致，不能重跑")
         definition = persist_extract_definition(build_extract_definition(info))
         record_ids_by_source: dict[str, list[str]] = {}
         for case in group:
@@ -452,9 +505,14 @@ async def rerun_failed_records(
         )
         orig_payload = (original or {}).get("payload") or {}
         graph_space = (
-            orig_payload.get("graphSpace") or orig_payload.get("graph_space")
-            or info.get("graph_space")  # 原执行未带图空间时回落 schema 自身空间，避免误写环境默认空间
+            orig_payload.get("graphSpace")
+            or orig_payload.get("graph_space")
+            or info.get(
+                "graph_space"
+            )  # 原执行未带图空间时回落 schema 自身空间，避免误写环境默认空间
         ) or os.getenv("TRS_GRAPH_SPACE", "techkg")
+        if rbac_enabled() and graph_space != info.get("graph_space"):
+            raise SchemaConflictError("原执行目标空间与审核记录归属不一致，不能重跑")
         job_id = (original or {}).get("jobId") or group[0].get("jobId")
 
         payload: dict[str, Any] = {
@@ -467,6 +525,11 @@ async def rerun_failed_records(
             "triggerSource": "RERUN",
             "buildIndex": False,  # 重跑只补写少量记录，不重建全量索引
         }
+        if rbac_enabled():
+            payload["actorUserId"] = actor.user_id
+            from service.workflow_jobs import _job_business
+
+            payload["clientId"] = _job_business(actor, payload)
         if job_id:
             payload["jobId"] = job_id
 
@@ -492,8 +555,7 @@ async def rerun_failed_records(
     if not executions:
         # 全部组都被跳过（批量勾选跨栈/已删 schema 的 case 时）：聚合各组的跳过原因
         detail = "；".join(
-            f"{s['schemaKey'] or s['schemaId']}({s['cases']}条): {s['reason']}"
-            for s in skipped
+            f"{s['schemaKey'] or s['schemaId']}({s['cases']}条): {s['reason']}" for s in skipped
         )
         raise SchemaConflictError(f"所选失败记录均无法重跑——{detail}")
     return {"executions": executions, "cases": total_cases, "skipped": skipped}

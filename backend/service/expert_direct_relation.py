@@ -1,4 +1,4 @@
-"""科技专家/人才直接关系——通过 FastAPI 图查询 API 实现（不直连 DAO/MySQL）。
+"""科技专家/人才直接关系——通过 FastAPI 图查询 API 实现（MySQL 仅作代表成果回退）。
 
 数据流：
 1. ``expertAId`` 必填。按 VID / scholar_id / 姓名定位专家A；查不到 → 空结果。
@@ -8,6 +8,14 @@
    ``COAUTHOR_WITH`` 边；找不到 → 空结果。找到则据此组装唯一一条关系。
 4. 机构过滤 & 时间过滤：在服务层按 ``institution`` 关键字、``relation_time`` 过滤该条关系。
 5. 图数据/详情：按业务格式组装 items + graph + provenance。
+6. 代表成果：优先图上 AUTHORED_BY 共同论文；真实专家常无 AUTHORED_BY 边
+   （跨域兜底 ETL 默认关闭），此时回退 MySQL 两级：先 ``dwd_scholar_paper_relation``
+   自连接（标题按 paper_id / related_paper_id 两个号段从 ``dwd_scholar_papers`` /
+   ``dwd_zh_paper`` / ``dwd_en_paper`` 核实）；仍无标题时按姓名反查
+   ``dwd_scholar_papers.authors``（真实行 id 未灌、只能按姓名关联）——单对查询
+   用双方姓名联查 SQL，列表模式（仅指定 A）按锚点姓名一次扫描建论文池（进程内
+   缓存），逐行在内存按对端姓名过滤，避免每行一次全表扫描。两级均仅保留
+   查得到标题的行。
 
 查询结果一律来自图库；未命中或图服务异常时返回空结果并在 ``source.reason`` 标明原因，
 不返回内置示例数据。
@@ -25,19 +33,35 @@ import time
 from collections.abc import Mapping
 from typing import Any
 
+from sqlalchemy import text
+
 from infra.graph_api_client import GraphAPIError, graph_api
 from infra.graph_db.config import TRSGraphSettings
+from infra.graph_exec_budget import loop_scoped_semaphore
+from infra.mysql import session_scope
 from service.base_module import KGModuleScaffoldService
+from service.confidence_scoring import edge_confidence
+from service.provenance_recorder import record_node_source
 
 # 60s 进程内结果缓存：同参数请求复用，避免高并发打爆 graph-search/trs-graph。
 _RESULT_CACHE_TTL = float(os.getenv("RESULT_CACHE_TTL", "60"))
 _result_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _result_cache_lock = threading.Lock()
 
+# 锚点论文池的进程内缓存：列表模式一次 dwd_scholar_papers 全表扫描（约 2.5s）
+# 的结果供 TTL 内各查询复用，避免换过滤条件就重扫。
+_PAPER_POOL_CACHE_TTL = 300.0
+_PAPER_POOL_CACHE_MAX = 16
+_PAPER_POOL_LIMIT = 2000
+_paper_pool_cache: dict[tuple[str, ...], tuple[float, list[dict[str, Any]]]] = {}
+_paper_pool_cache_lock = threading.Lock()
+
 
 def clear_caches() -> None:
     """清空进程内缓存（测试隔离用）。"""
     _result_cache.clear()
+    with _paper_pool_cache_lock:
+        _paper_pool_cache.clear()
 
 
 logger = logging.getLogger(__name__)
@@ -65,7 +89,13 @@ _FALLBACK_REASON_TEXT = {
 }
 
 # 补对端节点详情时的并发上限，避免 limit=100 时瞬间打满 trs-graph。
+# 按事件循环共享（进程级上限）：旧实现在每个请求里各建 Semaphore(5)，N 个
+# 并发冷请求可叠加 5N 个在飞 get_node——与论文合作旧版上下文子图同一问题。
 _PEER_FETCH_CONCURRENCY = 5
+
+
+def _peer_semaphore() -> asyncio.Semaphore:
+    return loop_scoped_semaphore("expert_direct_peer", _PEER_FETCH_CONCURRENCY)
 
 
 class ExpertDirectRelationService(KGModuleScaffoldService):
@@ -153,9 +183,14 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                             else:
                                 rows = [row]
                 if rows:
-                    await self._attach_representative_achievements(client, rows)
+                    await self._attach_representative_achievements(client, rows, anchor_node=node_a)
         except GraphAPIError as exc:
             logger.warning("graph API unavailable: %s", exc)
+            fallback_reason = "graph_api_error"
+        except TimeoutError:
+            # graph_api 总预算耗尽：与 GraphAPIError 同口径如实降级为图服务
+            # 故障，不落进 unexpected_error 误导排障。
+            logger.warning("graph API timeout while querying expert direct relations")
             fallback_reason = "graph_api_error"
         except Exception:  # noqa: BLE001 - 图服务异常一律降级
             logger.exception("unexpected error while querying graph API")
@@ -300,7 +335,8 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                 break
 
         # 对端节点相互独立，并发取详情；单个取不到就跳过，不影响其余关系。
-        semaphore = asyncio.Semaphore(_PEER_FETCH_CONCURRENCY)
+        # 信号量按事件循环共享，多个并发请求共用同一上限。
+        semaphore = _peer_semaphore()
 
         async def _resolve(peer_id: str) -> dict[str, Any] | None:
             async with semaphore:
@@ -318,11 +354,19 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         return rows
 
     async def _attach_representative_achievements(
-        self, client: Any, rows: list[dict[str, Any]]
+        self,
+        client: Any,
+        rows: list[dict[str, Any]],
+        anchor_node: dict[str, Any] | None = None,
     ) -> None:
         paper_ids: dict[str, set[str]] = {}
         titles: dict[str, str] = {}
         edge_type = "AUTHORED" if TRSGraphSettings.from_env().space == "techkg" else "AUTHORED_BY"
+        single_pair = len(rows) == 1
+        # 列表模式的锚点论文池（懒加载）：一次全表扫描服务全部行。
+        pool: list[dict[str, Any]] | None = None
+        anchor_vid = str((anchor_node or {}).get("id") or "")
+        peer_name_forms: dict[str, tuple[str, ...]] = {}
         for row in rows:
             try:
                 for person_id in (row["expert_a_id"], row["expert_b_id"]):
@@ -365,11 +409,115 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                         achievements.append({"id": paper_id, "title": titles[paper_id]})
                     if len(achievements) == 3:
                         break
+                if not achievements:
+                    # 真实专家常无 AUTHORED_BY 边（跨域兜底 ETL 默认关闭且 Paper
+                    # 顶点缺失）：回退 MySQL。单对查询（A+B 都指定）用双方姓名
+                    # 联查 SQL；列表模式先走关系表自连接的索引查询，仍无标题
+                    # 再按锚点姓名一次扫描建论文池（进程内缓存），逐行在内存
+                    # 按对端姓名过滤——避免每行一次约 2.5s 的全表扫描。
+                    a_names: tuple[str, ...] = ()
+                    b_names: tuple[str, ...] = ()
+                    if single_pair:
+                        a_names, b_names = await self._person_name_forms(
+                            client, row["expert_a_id"], row["expert_b_id"]
+                        )
+                    achievements = await asyncio.to_thread(
+                        self._shared_paper_titles_from_mysql,
+                        row["expert_a_id"],
+                        row["expert_b_id"],
+                        a_names,
+                        b_names,
+                        single_pair,
+                    )
+                    if not achievements and not single_pair and anchor_vid:
+                        if pool is None:
+                            pool = await asyncio.to_thread(
+                                _anchor_paper_pool, _node_name_forms(anchor_node or {})
+                            )
+                        peer_vid = (
+                            row["expert_b_id"]
+                            if row["expert_a_id"] == anchor_vid
+                            else row["expert_a_id"]
+                        )
+                        if peer_vid not in peer_name_forms:
+                            peer_name_forms[peer_vid] = await self._one_person_name_forms(
+                                client, peer_vid
+                            )
+                        achievements = _pool_shared_titles(pool, peer_name_forms[peer_vid])
                 row["representative_achievements"] = achievements
             except GraphAPIError:
                 logger.warning(
                     "Could not retrieve representative papers for %s", row["relation_key"]
                 )
+
+    @staticmethod
+    async def _person_name_forms(
+        client: Any, a_vid: str, b_vid: str
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """取两位专家的中英文姓名（姓名反查回退的匹配素材）。"""
+        return (
+            await ExpertDirectRelationService._one_person_name_forms(client, a_vid),
+            await ExpertDirectRelationService._one_person_name_forms(client, b_vid),
+        )
+
+    @staticmethod
+    async def _one_person_name_forms(client: Any, vid: str) -> tuple[str, ...]:
+        """取一位专家的中英文姓名（姓名反查回退的匹配素材）。"""
+        try:
+            node = await client.get_node(vid)
+        except GraphAPIError:
+            node = None
+        return _node_name_forms(node or {})
+
+    @staticmethod
+    def _shared_paper_titles_from_mysql(
+        a_vid: str,
+        b_vid: str,
+        a_names: tuple[str, ...] = (),
+        b_names: tuple[str, ...] = (),
+        allow_name_match: bool = False,
+    ) -> list[dict[str, str]]:
+        """MySQL 回退：共同论文标题（仅保留标题可核实的行，按被引降序取 3 条）。
+
+        两级：先 ``dwd_scholar_paper_relation`` 自连接（paper_id / related_paper_id
+        双号段核实标题，索引查询）；仍无标题且 ``allow_name_match`` 时，按双方
+        姓名同时出现在 ``dwd_scholar_papers.authors``（逗号分隔作者姓名，真实行
+        无 id 无法按 paper_id 关联）反查，按发表时间降序取 3 条。
+        """
+        a_scholar = a_vid.removeprefix("person_")
+        b_scholar = b_vid.removeprefix("person_")
+        if not a_scholar or not b_scholar or a_scholar == b_scholar:
+            return []
+        sql = text(
+            "SELECT r.paper_id, COALESCE(NULLIF(p.zh_name, ''), NULLIF(p.en_name, ''), "
+            "NULLIF(zh.zh_name, ''), NULLIF(zh.en_name, ''), "
+            "NULLIF(en.zh_name, ''), NULLIF(en.en_name, '')) AS title "
+            "FROM dwd_scholar_paper_relation r "
+            "JOIN dwd_scholar_paper_relation r2 "
+            "ON r2.paper_id = r.paper_id AND r2.scholar_id = :b "
+            "LEFT JOIN dwd_scholar_papers p ON p.id = r.paper_id "
+            "LEFT JOIN dwd_zh_paper zh ON zh.id = r.related_paper_id "
+            "LEFT JOIN dwd_en_paper en ON en.id = r.related_paper_id "
+            "WHERE r.scholar_id = :a "
+            "ORDER BY GREATEST(COALESCE(r.citations, 0), COALESCE(r2.citations, 0)) DESC, r.paper_id "
+            "LIMIT 3"
+        )
+        try:
+            with session_scope() as session:
+                rows = session.execute(sql, {"a": a_scholar, "b": b_scholar}).mappings().all()
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "representative achievements mysql fallback failed: %s x %s", a_vid, b_vid
+            )
+            return []
+        achievements = [
+            {"id": f"paper_{row['paper_id']}", "title": str(row["title"])}
+            for row in rows
+            if row["title"]
+        ]
+        if achievements or not allow_name_match:
+            return achievements
+        return _shared_paper_titles_by_author_names(a_names, b_names)
 
     async def _find_person(self, client: Any, keyword: str) -> dict[str, Any] | None:
         """按 VID / scholar_id / 姓名定位一个 Person 节点。
@@ -450,7 +598,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
 
     @staticmethod
     def _person_source(node: dict[str, Any]) -> dict[str, str]:
-        """抽取节点上真实的入库溯源元数据（source_system / ingest_batch 等）。"""
+        """查到即记：抽取节点上的入库溯源元数据；无血缘时记录图库查询来源。"""
         props = node.get("properties") or {}
         source: dict[str, str] = {}
         for key in (
@@ -464,6 +612,12 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             value = str(props.get(key) or "").strip()
             if value:
                 source[key] = value
+        if "source_table" not in source:
+            # 节点未携带入图血缘：如实记录本次查询来源（图空间 + 识别属性），
+            # 不再默认断言 dwd_scholar。
+            recorded = record_node_source(props, node.get("labels") or ("Person",))
+            source["source_table"] = recorded["sourceTable"]
+            source["source_field"] = recorded["sourceField"]
         return source
 
     @staticmethod
@@ -642,7 +796,12 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             )
 
         evidences: list[dict[str, Any]] = []
-        for row in rows[:8]:
+        # 已输出的实体证据 vid：单专家模式（expertBId 为空）下每条关系行都
+        # 重复携带核心专家（expert_a），同一专家的实体卡只保留第一次。
+        seen_entity_vids: set[str] = set()
+        # 覆盖全部关系行（数量已由查询 limit 封顶），保证前端点击任意
+        # 关系边/节点都能按 graphVid 筛中证据。
+        for row in rows:
             src_a = row.get("expert_a_source") or {}
             src_b = row.get("expert_b_source") or {}
             has_meta = bool(src_a or src_b)
@@ -667,9 +826,10 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                     "technicalTable": f"{system}.dwd_scholar" if system else "Person",
                     "recordId": record_id,
                     "fieldIdentifier": "scholar_id / name_zh",
-                    # 溯源三要素：MySQL 源表名 / MySQL 英文字段名 / 图空间 VID
-                    "sourceTable": src.get("source_table") or _SCHOLAR_SOURCE_TABLE,
-                    "sourceField": _SCHOLAR_SOURCE_FIELD,
+                    # 溯源三要素：MySQL 源表名 / MySQL 英文字段名 / 图空间 VID。
+                    # source_table 已由 _person_source 保证非空（无血缘时为图库来源标记）。
+                    "sourceTable": src.get("source_table") or "—",
+                    "sourceField": src.get("source_field") or _SCHOLAR_SOURCE_FIELD,
                     "graphVid": str(_row.get(f"expert_{side}_id") or ""),
                     "summary": (
                         f"机构：{_row.get(f'expert_{side}_org') or '—'}；"
@@ -679,8 +839,13 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                 }
 
             if has_meta:
-                evidences.append(_side_evidence("a", row, src_a))
-                evidences.append(_side_evidence("b", row, src_b))
+                for side, src in (("a", src_a), ("b", src_b)):
+                    side_vid = str(row.get(f"expert_{side}_id") or "")
+                    if side_vid:
+                        if side_vid in seen_entity_vids:
+                            continue
+                        seen_entity_vids.add(side_vid)
+                    evidences.append(_side_evidence(side, row, src))
                 evidences.append(
                     {
                         "title": (
@@ -724,6 +889,77 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                         ),
                     }
                 )
+
+        # 机构虚拟节点/从属边（查到即记）：机构名取自专家节点的 scholar_org
+        # 属性，溯源归因到宿主专家的来源，保证画布上每个节点/边都有证据可命中。
+        institution_hosts: dict[str, dict[str, Any]] = {}
+        institution_edges: dict[tuple[str, str], dict[str, Any]] = {}
+        for row in rows:
+            for side in ("a", "b"):
+                org = str(row.get(f"expert_{side}_org") or "").strip()
+                expert_id = str(row.get(f"expert_{side}_id") or "")
+                if not org or not expert_id:
+                    continue
+                expert_name = str(row.get(f"expert_{side}_name") or expert_id)
+                src = row.get(f"expert_{side}_source") or {}
+                institution_id = f"institution:{org}"
+                host = institution_hosts.setdefault(
+                    institution_id,
+                    {
+                        "org": org,
+                        "table": str(src.get("source_table") or "—"),
+                        "hosts": [],
+                    },
+                )
+                host_label = f"{expert_name}（{expert_id}）"
+                if host_label not in host["hosts"]:
+                    host["hosts"].append(host_label)
+                institution_edges.setdefault(
+                    (expert_id, institution_id),
+                    {
+                        "expert_id": expert_id,
+                        "expert_name": expert_name,
+                        "org": org,
+                        "table": str(src.get("source_table") or "—"),
+                    },
+                )
+        for institution_id, host in institution_hosts.items():
+            evidences.append(
+                {
+                    "title": f"任职机构 · {host['org']}",
+                    "businessTable": "专家任职机构",
+                    "technicalTable": "Person.scholar_org 属性",
+                    "recordId": institution_id,
+                    "fieldIdentifier": "scholar_org",
+                    # 溯源三要素：机构名的来源是宿主专家的 scholar_org 字段
+                    "sourceTable": host["table"],
+                    "sourceField": "scholar_org",
+                    "graphVid": institution_id,
+                    "summary": (
+                        f"机构名取自专家 {'、'.join(host['hosts'])} 的 "
+                        "scholar_org 属性（查询路径：get_node 专家 VID）"
+                    ),
+                }
+            )
+        for (_, institution_id), edge in institution_edges.items():
+            evidences.append(
+                {
+                    "title": f"机构从属 · {edge['expert_name']} — {edge['org']}",
+                    "businessTable": "专家任职机构",
+                    "technicalTable": "Person.scholar_org 属性",
+                    "recordId": institution_id,
+                    "fieldIdentifier": "scholar_org",
+                    "sourceTable": edge["table"],
+                    "sourceField": "scholar_org",
+                    # 复合 vid（"专家VID -> institution:机构名"），前端点击
+                    # 机构从属边时按两端同时命中筛中这条证据。
+                    "graphVid": f"{edge['expert_id']} -> {institution_id}",
+                    "summary": (
+                        f"机构从属边由专家 {edge['expert_name']} 的 scholar_org "
+                        "属性派生（非图库实体边）"
+                    ),
+                }
+            )
 
         return {
             "sourceDatabase": source_database,
@@ -835,7 +1071,15 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                         "data": {},
                     }
                 )
-                add_edge(expert["expertId"], institution_id, "关联机构", {})
+                # 机构从属边是专家 organization 属性直读派生（非图库真实边），
+                # 置信度取边类型兜底规则（同校友模块合成边口径），避免前端显示"暂无"。
+                membership_confidence = edge_confidence(None, "")
+                add_edge(
+                    expert["expertId"],
+                    institution_id,
+                    "关联机构",
+                    {"strength": round(membership_confidence["confidence"] * 100)},
+                )
 
         return {"nodes": nodes, "edges": edges}
 
@@ -896,3 +1140,125 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         if evidence_kind == "project":
             return "共同项目"
         return "共同论文"
+
+
+def _matchable_names(names: tuple[str, ...]) -> list[str]:
+    """过滤可用的姓名匹配素材：非空、长度 >= 2、不是节点 VID 兜底串。"""
+    return [name for name in names if len(name) >= 2 and not name.startswith("person_")]
+
+
+def _shared_paper_titles_by_author_names(
+    a_names: tuple[str, ...], b_names: tuple[str, ...]
+) -> list[dict[str, str]]:
+    """按双方姓名反查 ``dwd_scholar_papers.authors``（约 25 万行 LIKE 扫描）。
+
+    该表真实行的 id 未灌入（无法按 paper_id 关联），但 authors 存逗号分隔的
+    作者姓名——双方中/英文名任一形态同时命中的行即共同论文。中文姓名按子串
+    匹配可能撞上更长的姓名，靠双方同时命中 + 仅单对查询兜底；标题取
+    zh_name/en_name，按发表时间降序取 3 条。
+    """
+    usable_a = _matchable_names(a_names)
+    usable_b = _matchable_names(b_names)
+    if not usable_a or not usable_b:
+        return []
+    where_a = " OR ".join(f"authors LIKE :a{i}" for i in range(len(usable_a)))
+    where_b = " OR ".join(f"authors LIKE :b{i}" for i in range(len(usable_b)))
+    params = {f"a{i}": f"%{name}%" for i, name in enumerate(usable_a)}
+    params.update({f"b{i}": f"%{name}%" for i, name in enumerate(usable_b)})
+    sql = text(
+        "SELECT doi, COALESCE(NULLIF(zh_name, ''), NULLIF(en_name, '')) AS title "
+        "FROM dwd_scholar_papers "
+        f"WHERE ({where_a}) AND ({where_b}) "
+        "ORDER BY cover_date_start DESC LIMIT 3"
+    )
+    try:
+        with session_scope() as session:
+            rows = session.execute(sql, params).mappings().all()
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "representative achievements author-name fallback failed: %s x %s",
+            usable_a[0],
+            usable_b[0],
+        )
+        return []
+    return [
+        {"id": str(row["doi"] or row["title"]), "title": str(row["title"])}
+        for row in rows
+        if row["title"]
+    ]
+
+
+def _node_name_forms(node: Mapping[str, Any]) -> tuple[str, ...]:
+    """从节点属性提取中英文姓名（姓名反查回退的匹配素材）。"""
+    props = node.get("properties") or {}
+    return tuple(
+        str(props[key]).strip()
+        for key in ("name_zh", "name_en")
+        if str(props.get(key) or "").strip()
+    )
+
+
+def _anchor_paper_pool(anchor_names: tuple[str, ...]) -> list[dict[str, Any]]:
+    """锚点专家的论文池：authors 含其任一姓名形态，按发表时间降序取前若干条。
+
+    列表模式逐对反查要扫 ``dwd_scholar_papers`` 全表（约 2.5s/行），改为按锚点
+    姓名一次扫描建池（进程内缓存），再在内存里按对端姓名过滤。池只保留最新
+    ``_PAPER_POOL_LIMIT`` 条，代表成果本就取最新在前，截断只影响更老的合著。
+    """
+    usable = _matchable_names(anchor_names)
+    if not usable:
+        return []
+    key = tuple(sorted(usable))
+    with _paper_pool_cache_lock:
+        entry = _paper_pool_cache.get(key)
+    if entry and entry[0] > time.monotonic():
+        return entry[1]
+    where = " OR ".join(f"authors LIKE :n{i}" for i in range(len(usable)))
+    params = {f"n{i}": f"%{name}%" for i, name in enumerate(usable)}
+    sql = text(
+        "SELECT doi, COALESCE(NULLIF(zh_name, ''), NULLIF(en_name, '')) AS title, authors "
+        "FROM dwd_scholar_papers "
+        f"WHERE ({where}) "
+        "ORDER BY cover_date_start DESC LIMIT :pool_limit"
+    )
+    try:
+        with session_scope() as session:
+            rows = (
+                session.execute(sql, {**params, "pool_limit": _PAPER_POOL_LIMIT}).mappings().all()
+            )
+    except Exception:  # noqa: BLE001
+        logger.warning("representative achievements anchor paper pool failed: %s", usable[0])
+        return []
+    pool = [
+        {
+            "id": str(row["doi"] or row["title"]),
+            "title": str(row["title"]),
+            "authors_lc": str(row["authors"] or "").lower(),
+        }
+        for row in rows
+        if row["title"]
+    ]
+    with _paper_pool_cache_lock:
+        _paper_pool_cache[key] = (time.monotonic() + _PAPER_POOL_CACHE_TTL, pool)
+        while len(_paper_pool_cache) > _PAPER_POOL_CACHE_MAX:
+            _paper_pool_cache.pop(next(iter(_paper_pool_cache)))
+    return pool
+
+
+def _pool_shared_titles(
+    pool: list[dict[str, Any]], peer_names: tuple[str, ...]
+) -> list[dict[str, str]]:
+    """从锚点论文池里筛对端也署名的论文（池已按时间降序，取前 3 条）。
+
+    与 SQL 联查口径一致：对端中/英文名任一形态命中 authors（大小写不敏感）。
+    """
+    names = [name.lower() for name in _matchable_names(peer_names)]
+    if not names:
+        return []
+    achievements: list[dict[str, str]] = []
+    for paper in pool:
+        if any(name in paper["authors_lc"] for name in names):
+            achievements.append({"id": paper["id"], "title": paper["title"]})
+            if len(achievements) == 3:
+                break
+    return achievements

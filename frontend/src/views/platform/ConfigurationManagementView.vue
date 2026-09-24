@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useAuthStore } from '../../stores/auth'
 import { IconSearch } from '@arco-design/web-vue/es/icon'
 import ListPagination from '../../components/list-pagination.vue'
 import { useClientPagination } from '../../composables/use-client-pagination'
@@ -278,6 +279,10 @@ async function loadGraphSpaces() {
 }
 
 async function createSpace() {
+  if (!isAdmin.value) {
+    showToast('请线下向管理员申请创建图空间。', 'warning')
+    return
+  }
   if (spaceNameError.value) return
   const name = newSpaceName.value.trim()
   spaceWorking.value = true
@@ -297,6 +302,7 @@ async function createSpace() {
 }
 
 async function bindSpace() {
+  if (!canChangeLegacyBinding()) return
   const name = bindTarget.value
   if (!name) return
   spaceWorking.value = true
@@ -314,7 +320,16 @@ async function bindSpace() {
   }
 }
 
+function canChangeLegacyBinding(): boolean {
+  if (!isAdmin.value || useAuthStore().profile?.businessRbacEnabled) {
+    showToast('图空间业务归属由管理员通过 SQL 配置。', 'warning')
+    return false
+  }
+  return true
+}
+
 async function unbindSpace(name: string) {
+  if (!canChangeLegacyBinding()) return
   if (!window.confirm(`确认解除与图数据空间“${name}”的绑定？仅解除绑定，不会删除图数据空间数据。`)) return
   try {
     await unbindGraphSpace(name)

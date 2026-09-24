@@ -50,7 +50,12 @@ export interface DirectRelationItem {
   coPaperCount: number;
   relationStrength: number;
   reasonTags: string[];
-  representativeAchievements?: Array<{ id: string; title: string }>;
+  /** 成果类型码（paper/patent/project）；后端暂只回论文、无该字段。 */
+  representativeAchievements?: Array<{
+    id: string;
+    title: string;
+    type?: string;
+  }>;
   relationSummary: string;
   lastUpdatedAt: string | null;
   detailRows: Array<Array<string | number | string[]>>;

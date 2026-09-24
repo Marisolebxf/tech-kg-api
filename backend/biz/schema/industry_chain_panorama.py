@@ -13,12 +13,19 @@ INDUSTRY_PATTERN = re.compile(r"[\w\u4e00-\u9fff·.\-()（）、，,/\s]+")
 ANCHOR_ID_PATTERN = re.compile(r"[\w\u4e00-\u9fff·.\-]+")
 # 关系类型（Nebula 边类型）：大写字母、数字和下划线
 RELATION_TYPE_PATTERN = re.compile(r"[A-Za-z]\w*")
+# 关系筛选中文文案 → 边类型码（与前端下拉 PANORAMA_RELATION_TYPES 同口径）：
+# 接口容错，直接传中文文案（如下拉折叠标签「产业链归属+论文合作」）时自动转码。
+RELATION_TYPE_LABELS: dict[str, str] = {
+    "产业链归属": "BELONGS_TO_NODE",
+    "论文合作": "COAUTHOR_WITH",
+    "机构任职": "AFFILIATED_WITH",
+}
 
 
 class IndustryChainPanoramaQueryRequest(BaseModel):
     """产业链全景图查询请求。
 
-    - ``industry``：产业关键词，用于过滤/匹配核心节点；空则整体全景。
+    - ``industry``：产业关键词（必填），用于过滤/匹配核心节点。
     - ``anchorId``：可选，指定核心节点 VID（如 ``person_xxx``、``paper_xxx``）从此扩展子图。
     - ``depth``：从核心节点向外扩展的跳数（1-3）。
     - ``topK``：每类关键实体（专家/机构/论文）返回条数。
@@ -38,9 +45,12 @@ class IndustryChainPanoramaQueryRequest(BaseModel):
         },
     )
 
-    industry: str | None = Field(
-        default=None,
-        description=f"产业关键词，如 人工智能 / 集成电路，最多 {MAX_TEXT_LENGTH} 个字符。",
+    industry: str = Field(
+        min_length=1,
+        max_length=MAX_TEXT_LENGTH,
+        description=(
+            f"产业关键词（必填），如 人工智能 / 集成电路，最多 {MAX_TEXT_LENGTH} 个字符。"
+        ),
     )
     anchorId: str | None = Field(
         default=None,
@@ -80,7 +90,7 @@ class IndustryChainPanoramaQueryRequest(BaseModel):
     def normalize_relation_types(cls, value: Any) -> list[str] | None:
         if value is None or value == "":
             return None
-        # 兼容前端用逗号拼接传参
+        # 兼容前端用逗号拼接传参；"+" 拼接（下拉折叠标签「产业链归属+论文合作」）同样拆开
         items = value.split(",") if isinstance(value, str) else value
         if not isinstance(items, list):
             raise ValueError("关系筛选必须是边类型数组")
@@ -88,15 +98,18 @@ class IndustryChainPanoramaQueryRequest(BaseModel):
         for item in items:
             if not isinstance(item, str):
                 raise ValueError("关系筛选必须是边类型数组")
-            name = item.strip().upper()
-            if not name:
-                continue
-            if len(name) > MAX_TEXT_LENGTH:
-                raise ValueError(f"关系类型长度不能超过 {MAX_TEXT_LENGTH} 个字符")
-            if not RELATION_TYPE_PATTERN.fullmatch(name):
-                raise ValueError("关系类型只能包含字母、数字和下划线")
-            if name not in normalized:
-                normalized.append(name)
+            for part in re.split(r"[,+]", item):
+                token = part.strip()
+                # 中文文案直转边类型码，其余按英文码规整
+                name = RELATION_TYPE_LABELS.get(token, token).upper()
+                if not name:
+                    continue
+                if len(name) > MAX_TEXT_LENGTH:
+                    raise ValueError(f"关系类型长度不能超过 {MAX_TEXT_LENGTH} 个字符")
+                if not RELATION_TYPE_PATTERN.fullmatch(name):
+                    raise ValueError("关系类型只能包含字母、数字和下划线")
+                if name not in normalized:
+                    normalized.append(name)
         if not normalized:
             return None
         if len(normalized) > MAX_RELATION_TYPES:
@@ -105,14 +118,14 @@ class IndustryChainPanoramaQueryRequest(BaseModel):
 
     @field_validator("industry", mode="before")
     @classmethod
-    def normalize_industry(cls, value: str | None) -> str | None:
+    def normalize_industry(cls, value: Any) -> str:
         if value is None:
-            return None
+            raise ValueError("产业关键词不能为空")
         if not isinstance(value, str):
             raise ValueError("产业关键词必须是字符串")
         value = value.strip()
         if not value:
-            return None
+            raise ValueError("产业关键词不能为空")
         if len(value) > MAX_TEXT_LENGTH:
             raise ValueError(f"产业关键词长度不能超过 {MAX_TEXT_LENGTH} 个字符")
         if not INDUSTRY_PATTERN.fullmatch(value):
@@ -180,6 +193,8 @@ class PanoramaGraphEdge(BaseModel):
 
 class PanoramaSummary(BaseModel):
     industry: str | None
+    # 图库中的产业链名称（如 集成电路 / 低空经济），供摘要「产业链名称」统计展示。
+    industryChains: list[str] = Field(default_factory=list)
     totalNodes: int
     totalEdges: int
     nodesByLabel: dict[str, int]

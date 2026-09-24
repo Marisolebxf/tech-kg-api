@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import threading
 import time
 import uuid
 from collections.abc import Sequence
@@ -49,6 +51,49 @@ _TAG_IDENTIFIER = re.compile(r"^[A-Za-z0-9_]{1,128}$")
 # SHOW STATS 快照缓存：{space: (monotonic 时间, {"tags", "edges", "total_nodes", "total_edges"})}
 _stats_snapshot_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _STATS_CACHE_TTL_SECONDS = 300.0
+# TAG/EDGE 类型列表缓存：{space: (monotonic 时间, [名称])}。响应缓存过期瞬间全并发回源
+# 会打爆 trs-graph 会话池（用例17c 实测 250×`no extra session available`→502），故与
+# 图算法侧 _single_flight_cache 同款：TTL + 每键回源锁（双检）。
+_labels_cache: dict[str, tuple[float, list[str]]] = {}
+_edge_types_cache: dict[str, tuple[float, list[str]]] = {}
+_SCHEMA_LIST_CACHE_TTL_SECONDS = float(os.getenv("TRS_GRAPH_SCHEMA_LIST_CACHE_SECONDS", "30"))
+_refresh_locks: dict[tuple[str, str], threading.Lock] = {}
+
+# 兜底执行预算（卡口2）：所有 REST 请求在发出前先取一个 trs 执行名额，
+# 覆盖不经 graph-search 公共执行层直连本客户端的调用方（校友/合作成果等
+# 同步业务、schema 管理、人工修正、ETL、控制台/图算法）。graph-search 侧
+# 的 async 预算（卡口1）排在前面，这里是最后一道：两层嵌套时外层无限等、
+# 内层限时（acquire timeout），内层必先超时放异常，不会互相死锁。
+# 注意与 console/algo 各自的外层信号量兼容：外层持有者最多把线程数压到
+# 本预算值，超出的等待者在超时后拿到 GraphRequestError（过载可见）。
+_TRS_EXEC_CONCURRENCY = max(1, int(os.getenv("TRS_EXEC_CONCURRENCY", "32")))
+_TRS_EXEC_WAIT_TIMEOUT = max(0.0, float(os.getenv("TRS_EXEC_WAIT_TIMEOUT", "5")))
+_trs_exec_slots = threading.BoundedSemaphore(_TRS_EXEC_CONCURRENCY)
+
+
+def _single_flight_cached(cache: dict, kind: str, space: str, ttl: float, fetch):
+    """TTL 缓存 + 每键回源锁：过期瞬间只有一个线程回源，其余等它写回缓存。
+
+    回源失败时回退过期旧值：共享图服务会话池被瞬时打满（`no extra session
+    available`→502）不应打断读路径——schema 列表/统计快照本就允许滞后。"""
+    cached = cache.get(space)
+    if cached and time.monotonic() - cached[0] < ttl:
+        return cached[1]
+    lock = _refresh_locks.setdefault((kind, space), threading.Lock())
+    with lock:
+        cached = cache.get(space)  # 双检：等锁期间可能已被先到线程刷新
+        if cached and time.monotonic() - cached[0] < ttl:
+            return cached[1]
+        try:
+            value = fetch()
+        except Exception:  # noqa: BLE001
+            if cached:
+                logger.warning("%s 回源失败，沿用过期缓存 space=%s", kind, space, exc_info=True)
+                return cached[1]
+            raise
+        cache[space] = (time.monotonic(), value)
+        return value
+
 
 # The trs-graph-service only treats these property keys as the Nebula vertex id
 # (see NodeService.extractVid / NgqlBuilder.extractOrGenerateVid). When none of
@@ -70,6 +115,19 @@ def _vid_has_slash(node_id: Any) -> bool:
 def _ngql_quote(value: Any) -> str:
     """值转为 nGQL 双引号字符串字面量（转义反斜杠与双引号，防注入）。"""
     return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+# 批量 FETCH 单条语句的 VID 数上限：防语句过大（200 个 VID 约几 KB），
+# 超出分多条语句。子图补点的一跳新邻居（12 边类型 × limit 50 上界 ~600）最多 3 条。
+_BULK_FETCH_CHUNK = 200
+
+# 批量邻接 GO 的单语句行数上限：行按源连续返回，超上限即截断（调用方须
+# 对配额未满足的 (源, 类型) 回退单源 REST 补查）。4 千行含边属性约 1-2MB，
+# 与 /subgraph 端点自身的响应负载同量级。
+_EDGE_BULK_ROW_CAP = 4096
+
+# GO OVER 的边类型白名单：字母/下划线开头，防 nGQL 注入（与 REST edgeType 一致）。
+_EDGE_TYPE_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*", flags=re.ASCII)
 
 
 def _error_detail(resp: httpx.Response) -> str:
@@ -176,13 +234,32 @@ class TRSGraphClient:
         *,
         json: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
+        timeout: float | None = None,
     ) -> httpx.Response:
         if self._client is None:
             raise GraphConnectionError("Not connected — call connect() first")
+        # httpx 语义：request(timeout=None) 是"禁用超时"而非"沿用客户端默认"
+        # （默认值哨兵是 USE_CLIENT_DEFAULT）。不显式回退到 settings.timeout，
+        # 构造函数里配的默认超时会被 None 整体关掉，慢查询将无限占用线程/连接。
+        effective_timeout = timeout if timeout is not None else self._settings.timeout
+        # 兜底预算：等不到执行名额按过载拒绝（快速失败可见），timeout=0 即
+        # 非阻塞尝试（threading.Semaphore.acquire(timeout=0) 语义正好如此）。
+        if not _trs_exec_slots.acquire(timeout=_TRS_EXEC_WAIT_TIMEOUT):
+            raise GraphRequestError(
+                f"{method} {path} -> 图服务过载（等待执行名额超过 {_TRS_EXEC_WAIT_TIMEOUT}s）",
+                status_code=503,
+                body="",
+            )
         try:
-            resp = self._client.request(method, path, json=json, params=params)
-        except httpx.HTTPError as exc:
-            raise GraphConnectionError(f"Request failed: {method} {path}") from exc
+            try:
+                resp = self._client.request(
+                    method, path, json=json, params=params, timeout=effective_timeout
+                )
+            except httpx.HTTPError as exc:
+                detail = f"{type(exc).__name__}: {exc}".rstrip(": ")
+                raise GraphConnectionError(f"Request failed: {method} {path} ({detail})") from exc
+        finally:
+            _trs_exec_slots.release()
         if resp.status_code == 404:
             raise GraphNotFoundError(f"{method} {path} -> 404")
         if not resp.is_success:
@@ -226,6 +303,106 @@ class TRSGraphClient:
         except GraphNotFoundError:
             return None
         return _trs_node_to_model(resp.json())
+
+    def get_nodes_bulk(self, node_ids: Sequence[Any]) -> dict[str, GraphNode]:
+        """按 VID 批量取节点：一条 FETCH PROP ON * 取整块，返回 vid → GraphNode。
+
+        子图遍历的新邻居补点用它替代逐个 get_node——一跳 N 个邻居从 N 次
+        TRS 往返降为 ceil(N/块大小) 次。查不到的 VID（悬挂点，边端点无 tag）
+        不在结果里，由调用方兜底占位，与单查 get_node 返回 None 等价。
+        含 ``/`` 的 VID 同样适用：FETCH 走查询端点，无 REST 单段路径限制。
+        """
+        unique_ids = [vid for vid in dict.fromkeys(str(v) for v in node_ids if v)]
+        found: dict[str, GraphNode] = {}
+        for start in range(0, len(unique_ids), _BULK_FETCH_CHUNK):
+            chunk = unique_ids[start : start + _BULK_FETCH_CHUNK]
+            quoted = ", ".join(_ngql_quote(vid) for vid in chunk)
+            result = self.execute_read(f"FETCH PROP ON * {quoted} YIELD vertex AS v")
+            for record in result.records or []:
+                vertex = record.get("v")
+                if isinstance(vertex, dict) and vertex.get("id") is not None:
+                    node = _trs_node_to_model(vertex)
+                    found[str(node.id)] = node
+        return found
+
+    def get_edges_bulk(
+        self,
+        node_ids: Sequence[Any],
+        edge_types: Sequence[str],
+        *,
+        direction: str = "both",
+        row_cap: int = _EDGE_BULK_ROW_CAP,
+    ) -> tuple[dict[tuple[str, str], list[GraphEdge]], bool]:
+        """多源多类型一跳邻接批量：至多两条 GO 覆盖 (源 × 边类型) 全组合。
+
+        返回 ((起点vid, 边类型) -> 边列表, 是否被 row_cap 截断)。子图逐跳邻接
+        用它替代逐组合 REST——12 边类型 × N 前沿节点从 12N 次往返降为每跳
+        1-2 次。方向口径与 REST /traversal 一致（存储真方向）：GO 的 ``$^``
+        恒为遍历起点（BIDIRECT/REVERSELY 下入边的 ``$^``=起点而非存储源，
+        2026-09-23 dev 空间实测），单条 BIDIRECT 无法还原存储方向，故 both
+        拆「正向 + REVERSELY」两条语句：正向行起点即存储源，REVERSELY 行
+        对端为存储源；边 id 统一 ``src->dst@rank``（REST 同款），同一条边
+        无论从哪端查询 id 一致，跨跳回边去重口径不破。
+        GO 的 ``| LIMIT`` 是全批行数上限且行按源连续返回，超高度数源可占满
+        行数上限把同批其他源挤掉（返回截断标志），调用方须对配额未满足的
+        组合回退单源 REST 补查，不能只吃批量结果。当前空间不存在的边类型
+        先按 schema 列表（TTL 缓存）滤除：GO OVER 不存在的类型整条语句
+        SemanticError，REST 逐类型查则是单类型 400 可跳过，过滤后两者等价。
+        注意批量行是裸 Nebula 结果：REST 会静默滤掉悬挂端点的边（实测
+        person→悬挂org 的 AFFILIATED_WITH 被吞），批量不做该过滤，由调用方
+        按端点存在性剔除。
+        """
+        roots = [str(v) for v in dict.fromkeys(str(v) for v in node_ids if v)]
+        if not roots:
+            return {}, False
+        existing = set(self.edge_types())
+        over = [
+            et
+            for et in dict.fromkeys(edge_types)
+            if _EDGE_TYPE_PATTERN.fullmatch(et or "") and et in existing
+        ]
+        if not over:
+            return {}, False
+        # 方向拆两条语句：正向（起点=存储源）与 REVERSELY（对端=存储源）
+        plans: list[tuple[str, bool]] = []
+        if direction in ("out", "both"):
+            plans.append(("", False))
+        if direction in ("in", "both"):
+            plans.append((" REVERSELY", True))
+        roots_part = ", ".join(_ngql_quote(v) for v in roots)
+        types_part = ", ".join(f"`{et}`" for et in over)
+        grouped: dict[tuple[str, str], list[GraphEdge]] = {}
+        truncated = False
+        for clause, reverse in plans:
+            statement = (
+                f"GO 1 STEP FROM {roots_part} OVER {types_part}{clause} "
+                "YIELD id($^) AS src, id($$) AS dst, type(edge) AS etype, "
+                "rank(edge) AS rk, properties(edge) AS props "
+                f"| LIMIT {int(row_cap)}"
+            )
+            result = self.execute_read(statement)
+            count = 0
+            for record in result.records or []:
+                root = record.get("src")  # $^ 恒为遍历起点
+                other = record.get("dst")  # $$ 对端
+                etype = record.get("etype")
+                if not root or not other or not etype:
+                    continue
+                rank = int(record.get("rk") or 0)
+                props = record.get("props")
+                edge_src, edge_dst = (other, root) if reverse else (root, other)
+                grouped.setdefault((str(root), str(etype)), []).append(
+                    GraphEdge(
+                        id=f"{edge_src}->{edge_dst}@{rank}",
+                        type=str(etype),
+                        source_id=edge_src,
+                        target_id=edge_dst,
+                        properties=props if isinstance(props, dict) else {},
+                    )
+                )
+                count += 1
+            truncated = truncated or count >= int(row_cap)
+        return grouped, truncated
 
     def get_nodes_by_label(
         self, label: str, *, limit: int = 100, offset: int = 0
@@ -287,10 +464,18 @@ class TRSGraphClient:
         跑过 SUBMIT JOB STATS（SHOW STATS 直接 400 "no any stats info"）时回退
         nGQL 标签 count 直查（走标签索引，亚秒级）。不用 REST /schema/stats/
         node-count 兜底——其在 trs-graph 侧全表扫描，11 顶点空间实测 31s+，
-        大标签必超时。"""
+        大标签必超时。
+
+        容量型失败（会话池打满 / 连接错误）直接上抛：此时逐标签 nGQL count
+        只会再抢会话、把池越占越死（冷启动预热实测打出几十秒 COUNT 风暴），
+        让调用方显式降级（各处均有 TTL 缓存或空值兜底）。"""
         try:
             counts = self.stats_tag_counts()
-        except (GraphRequestError, GraphConnectionError) as exc:
+        except GraphConnectionError:
+            raise
+        except GraphRequestError as exc:
+            if "no extra session" in str(exc):
+                raise
             logger.warning(
                 "SHOW STATS 不可用（space=%s label=%s），回退 nGQL 标签计数: %s",
                 self._settings.space,
@@ -318,11 +503,21 @@ class TRSGraphClient:
         Nebula 统计只在 SUBMIT JOB STATS 后刷新，本就允许轻微滞后，用它换掉
         逐标签/边类型全表 count（Paper 实测 45s+ 超时）。缓存模块级共享：
         即使 SHOW STATS 此刻报错（如 stats 任务卡死），300s 内成功过的快照
-        仍可读——平台总览等消费方的回退路径据此兜底。
+        仍可读——平台总览等消费方的回退路径据此兜底。过期瞬间单飞回源，
+        避免并发 SHOW STATS 挤占会话池。
         """
         cached = _stats_snapshot_cache.get(self._settings.space)
         if cached and time.monotonic() - cached[0] < _STATS_CACHE_TTL_SECONDS:
             return cached[1]
+        return _single_flight_cached(
+            _stats_snapshot_cache,
+            "stats",
+            self._settings.space,
+            _STATS_CACHE_TTL_SECONDS,
+            self._fetch_stats_snapshot,
+        )
+
+    def _fetch_stats_snapshot(self) -> dict[str, Any]:
         result = self.execute_read("SHOW STATS;")
         tags: dict[str, int] = {}
         edges: dict[str, int] = {}
@@ -349,7 +544,6 @@ class TRSGraphClient:
             "total_nodes": vertices or sum(tags.values()),
             "total_edges": edge_total or sum(edges.values()),
         }
-        _stats_snapshot_cache[self._settings.space] = (time.monotonic(), snapshot)
         return snapshot
 
     def stats_tag_counts(self) -> dict[str, int]:
@@ -694,11 +888,19 @@ class TRSGraphClient:
         data = resp.json()
         return self._query_result(data, "/api/v1/query", expected_space=self._settings.space)
 
-    def execute_read(self, query: str, params: dict[str, Any] | None = None) -> GraphQueryResult:
+    def execute_read(
+        self,
+        query: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> GraphQueryResult:
+        """单调用可覆盖读超时（秒）。全空间 MATCH 聚合在共享图库缓存变冷时可超
+        默认 30s（索引重建/邻租户负载后实测），重分析类调用按需放宽。"""
         body: dict[str, Any] = {"query": self._scoped_query(query)}
         if params:
             body["params"] = params
-        resp = self._request("POST", "/api/v1/query/read", json=body)
+        resp = self._request("POST", "/api/v1/query/read", json=body, timeout=timeout)
         data = resp.json()
         return self._query_result(data, "/api/v1/query/read", expected_space=self._settings.space)
 
@@ -841,6 +1043,21 @@ class TRSGraphClient:
         return resp.json().get("count", 0)
 
     def labels(self) -> list[str]:
+        """空间 TAG 列表。短 TTL 单飞缓存：实体浏览等高频路径每次响应缓存未命中
+        都会调它做类型校验，无缓存时过期瞬间的全并发回源会打爆 trs-graph 会话池
+        （用例17c 实测）。SHOW TAGS 结果稳定，30s 滞后可接受（DDL 本就有传播延迟）。
+        """
+        return list(
+            _single_flight_cached(
+                _labels_cache,
+                "labels",
+                self._settings.space,
+                _SCHEMA_LIST_CACHE_TTL_SECONDS,
+                self._fetch_labels,
+            )
+        )
+
+    def _fetch_labels(self) -> list[str]:
         resp = self._request("GET", "/api/v1/schema/labels")
         data = resp.json()
         items = data if isinstance(data, list) else data.get("items", [])
@@ -853,6 +1070,18 @@ class TRSGraphClient:
         return result
 
     def edge_types(self) -> list[str]:
+        """空间 EDGE 类型列表（labels 同款短 TTL 单飞缓存）。"""
+        return list(
+            _single_flight_cached(
+                _edge_types_cache,
+                "edge_types",
+                self._settings.space,
+                _SCHEMA_LIST_CACHE_TTL_SECONDS,
+                self._fetch_edge_types,
+            )
+        )
+
+    def _fetch_edge_types(self) -> list[str]:
         resp = self._request("GET", "/api/v1/schema/edge-types")
         data = resp.json()
         items = data if isinstance(data, list) else data.get("items", [])

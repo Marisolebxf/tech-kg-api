@@ -57,15 +57,11 @@ _PREWARM_CASES: list[tuple[str, dict]] = [
     ("/api/v1/kg-service/industry-node-top-events", {"chain_node_id": "IC0007007", "top_n": 10}),
     (
         PANORAMA_QUERY_PATH,
-        {"dataSource": "all", "industry": "", "depth": 2, "topK": 5},
+        {"industry": "人工智能", "depth": 2, "topK": 5},
     ),
     (
         PANORAMA_QUERY_PATH,
-        {"dataSource": "all", "industry": "人工智能", "depth": 2, "topK": 5},
-    ),
-    (
-        PANORAMA_QUERY_PATH,
-        {"dataSource": "all", "industry": "集成电路", "depth": 1, "topK": 3},
+        {"industry": "集成电路", "depth": 1, "topK": 3},
     ),
 ]
 

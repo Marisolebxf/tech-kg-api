@@ -79,9 +79,14 @@ class WorkflowOperationsService:
     def __init__(self, repo: WorkflowRepository = repository) -> None:
         self.repo = repo
 
-    def task_overview(self) -> dict[str, Any]:
+    def task_overview(self, actor=None) -> dict[str, Any]:
         tasks = self.repo.list_tasks({})
         batches = self.repo.list_batches()
+        if actor is not None:
+            from service.workflow_jobs import workflow_resource_visible
+
+            tasks = [item for item in tasks if workflow_resource_visible(actor, item)]
+            batches = [item for item in batches if workflow_resource_visible(actor, item)]
         latest_batch = batches[0] if batches else None
         latest_tasks = [
             item for item in tasks if not latest_batch or item["batchId"] == latest_batch["id"]
@@ -90,7 +95,11 @@ class WorkflowOperationsService:
             status: sum(item["taskStatus"] == status for item in latest_tasks)
             for status in ("执行中", "执行出错", PENDING_MANUAL_REVIEW, "执行完成")
         }
-        changes = self.repo.list_source_updates(None, None, None)
+        changes = (
+            self.repo.list_source_updates(None, None, None)
+            if actor is None or actor.is_admin
+            else []
+        )
         return {
             "summary": [
                 {
@@ -114,11 +123,18 @@ class WorkflowOperationsService:
                 "updated": sum(c["change"] == "修改" for c in changes),
                 "deleted": sum(c["change"] == "删除" for c in changes),
             },
-            "updatePolicy": self.repo.get_setting("update_policy"),
+            "updatePolicy": self.repo.get_setting("update_policy")
+            if actor is None or actor.is_admin
+            else {},
         }
 
     def list_tasks(self, **filters: Any) -> dict[str, Any]:
+        actor = filters.pop("actor", None)
         items = self.repo.list_tasks(filters)
+        if actor is not None:
+            from service.workflow_jobs import workflow_resource_visible
+
+            items = [item for item in items if workflow_resource_visible(actor, item)]
         page = max(int(filters.get("page") or 1), 1)
         page_size = min(max(int(filters.get("page_size") or 50), 1), 200)
         start = (page - 1) * page_size
@@ -240,6 +256,9 @@ class WorkflowOperationsService:
         workflow_id: str | None = None,
         persist_task: bool = False,
     ) -> dict[str, Any]:
+        from service.workflow_jobs import authorize_background_execution
+
+        authorize_background_execution(payload)
         try:
             dispatch = await temporal_runtime.start(definition, payload, workflow_id)
         except Exception as exc:
@@ -388,7 +407,7 @@ class WorkflowOperationsService:
         task["logs"] = (task.get("logs") or []) + [log_msg, *data_lines]
         self.repo.save_task(task)
 
-    async def trigger_extract_all(self, request: dict[str, Any]) -> dict[str, Any]:
+    async def trigger_extract_all(self, request: dict[str, Any], actor=None) -> dict[str, Any]:
         """立即触发数据抽取：遍历已上传脚本且绑定来源的 schema，逐个启动 kg.schema.extract。
 
         原 kg.graph.build 域 stub 总工作流已随 D3 删除——executions 即唯一真相，
@@ -404,9 +423,18 @@ class WorkflowOperationsService:
             )
             payload: dict[str, Any] = {
                 "schemaId": info["id"],
+                "graphSpace": info.get("graph_space"),
+                "actorUserId": request.get("actorUserId"),
+                "clientId": request.get("clientId"),
                 "triggerSource": "MANUAL",
                 "reason": request.get("reason") or "task-center 立即触发",
             }
+            if actor is not None:
+                from service.business_access_control import rbac_enabled
+                from service.workflow_jobs import _job_business
+
+                if rbac_enabled():
+                    payload["clientId"] = _job_business(actor, payload)
             if request.get("since"):
                 payload["since"] = request["since"]
             try:
@@ -417,7 +445,7 @@ class WorkflowOperationsService:
                 skipped.append({"schemaId": info["id"], "error": str(exc)})
         return {"executions": executions, "skipped": skipped}
 
-    async def save_update_policy(self, request: dict[str, Any]) -> dict[str, Any]:
+    async def save_update_policy(self, request: dict[str, Any], actor=None) -> dict[str, Any]:
         cron_map = {
             "每天": "0 {hour} * * *",
             "每12小时": "0 */12 * * *",
@@ -458,8 +486,25 @@ class WorkflowOperationsService:
                 "cron": cron,
                 "timezone": policy["timezone"],
                 "active": policy["enabled"],
-                "payload": {"schemaId": info["id"], "reason": "自动更新策略"},
+                "payload": {
+                    "schemaId": info["id"],
+                    "graphSpace": info.get("graph_space"),
+                    "actorUserId": request.get("actorUserId"),
+                    "clientId": request.get("clientId"),
+                    "reason": "自动更新策略",
+                },
             }
+            from service.workflow_jobs import authorize_background_execution
+
+            if actor is not None:
+                from service.business_access_control import rbac_enabled
+                from service.workflow_jobs import _job_business
+
+                if rbac_enabled():
+                    schedule_record["payload"]["clientId"] = _job_business(
+                        actor, schedule_record["payload"]
+                    )
+            authorize_background_execution(schedule_record["payload"])
             try:
                 schedule_record = await temporal_runtime.create_schedule(
                     definition, schedule_record

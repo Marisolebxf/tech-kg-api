@@ -20,6 +20,15 @@ MAX_EXPERT_ID_LENGTH = 64
 AchievementType = Literal["paper", "patent", "project"]
 MAX_LIMIT_PER_TYPE = 50
 
+# 中文类型文案容错（与产业链全景图 RELATION_TYPE_LABELS 同款约定）：
+# 测试用例/前端展示常用中文标签，「全部」表示不筛选（None）。
+ACHIEVEMENT_TYPE_LABELS: dict[str, str | None] = {
+    "全部": None,
+    "论文": "paper",
+    "专利": "patent",
+    "项目": "project",
+}
+
 
 class CooperationAchievementQueryRequest(BaseModel):
     sourceExpertId: str = Field(
@@ -61,6 +70,29 @@ class CooperationAchievementQueryRequest(BaseModel):
         # 只做长度/异常字符检查,类型与范围仍交给 strict int 约束
         check_text(str(value).strip(), label="每类成果上限")
         return value
+
+    @field_validator("achievementTypes", mode="before")
+    @classmethod
+    def tolerate_chinese_achievement_types(cls, value: object) -> object:
+        """中文类型文案容错：「全部/论文/专利/项目」映射为英文码，否则原样放行
+        （未识别值仍由 Literal 校验按 422 拒绝）。「全部」= 不筛选（None），
+        与其他项混填时以「全部」为准。"""
+        if not isinstance(value, list):
+            return value
+        mapped: list[object] = []
+        saw_all = False
+        for item in value:
+            if isinstance(item, str) and item.strip() in ACHIEVEMENT_TYPE_LABELS:
+                en = ACHIEVEMENT_TYPE_LABELS[item.strip()]
+                if en is None:
+                    saw_all = True
+                else:
+                    mapped.append(en)
+                continue
+            mapped.append(item)
+        if saw_all:
+            return None
+        return mapped or value
 
     @field_validator("timeRangeStart", "timeRangeEnd")
     @classmethod

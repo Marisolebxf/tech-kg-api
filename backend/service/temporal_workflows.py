@@ -888,6 +888,8 @@ async def load_schema_extract_plan(schema_id: str | dict[str, Any]) -> dict[str,
         index_timeout_seconds = max(
             60, int(os.getenv("SCHEMA_EXTRACT_INDEX_TIMEOUT_SECONDS", "1800"))
         )
+        # 随环索引重建开关（env 只能在 activity 读，经 plan 传给 workflow）
+        build_index_enabled = os.getenv("SCHEMA_EXTRACT_BUILD_INDEX", "1") != "0"
     if bucket is None or object_key is None:
         raise ValueError(f"Schema 未上传脚本: {schema_id}")
     if not sources:
@@ -957,6 +959,7 @@ async def load_schema_extract_plan(schema_id: str | dict[str, Any]) -> dict[str,
         "maxInflight": max_inflight,
         "failureCaseCap": failure_case_cap,
         "indexTimeoutSeconds": index_timeout_seconds,
+        "buildIndexEnabled": build_index_enabled,
     }
 
 
@@ -3031,11 +3034,13 @@ class SchemaExtractWorkflow:
         else:
             do_index = request.get("buildIndex")
             if do_index is None:
-                # 共享图库内存受限时可不随环重建：全空间重建 pass 自身也可能把
-                # 宿主顶过高水位（重建被取消后线程仍后台读图，与下一环写图叠加
-                # 越线整链 FAILED）。索引本就允许降级，跳过时用管理端点
-                # POST /entity-search/reindex 在全部抽取结束后统一全量重建。
-                do_index = kind == "entity" and os.getenv("SCHEMA_EXTRACT_BUILD_INDEX", "1") != "0"
+                # 共享图库内存受限时可不随环重建（SCHEMA_EXTRACT_BUILD_INDEX=0，
+                # env 在 load_schema_extract_plan activity 内读、经 plan 传入）：
+                # 全空间重建 pass 自身也可能把宿主顶过高水位，且被上限取消的
+                # 线程仍后台读图，与下一环写图叠加越线整链 FAILED。索引本就允许
+                # 降级，跳过时用管理端点 POST /entity-search/reindex 在全部抽取
+                # 结束后统一全量重建。
+                do_index = kind == "entity" and plan.get("buildIndexEnabled", True)
             if do_index and kind == "entity":
                 # 索引是后置增强（embedding/Milvus 依赖外部服务），失败降级不拖垮抽取
                 try:

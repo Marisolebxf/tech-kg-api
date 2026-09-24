@@ -81,6 +81,9 @@ class PlatformOverviewData(CamelCaseModel):
     updated_at: str
     asset_overview_groups: list[AssetOverviewGroup]
     asset_change_rows: dict[AssetOverviewKey, list[AssetChangeRow]]
+    # 今日新增真实计数（Σwritten，与资产卡徽标同源）：抽屉明细行有单执行
+    # 50 条上限，行数 ≠ 徽标数时前端用它展示「共 N 条 · 展示前 n 条」
+    asset_change_totals: dict[AssetOverviewKey, int] = Field(default_factory=dict)
     latest_changes: list[LatestChange]
     management_risks: list[ManagementRisk]
     entity_structure: list[StructureItem]

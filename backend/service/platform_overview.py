@@ -876,6 +876,7 @@ class PlatformOverviewService:
                 change_rows = dict(fallback.asset_change_rows)
                 change_rows["entity"] = changes.entity_rows
                 change_rows["relation"] = changes.relation_rows
+                change_totals = {"entity": changes.entity_added, "relation": changes.relation_added}
                 today_source = "workflow-control-live"
                 extra_warnings: list[str] = []
             else:
@@ -885,6 +886,7 @@ class PlatformOverviewService:
                 change_rows = dict(fallback.asset_change_rows)
                 change_rows["entity"] = []
                 change_rows["relation"] = []
+                change_totals = {"entity": 0, "relation": 0}
                 today_source = "demo-fallback"
                 extra_warnings = ["今日新增暂时不可读：工作流控制库不可用。"]
             # 资产卡中心 = 真实体数（去重口径）：实体总量用 Space/vertices、
@@ -928,6 +930,7 @@ class PlatformOverviewService:
                     "updated_at": datetime.now().strftime("%H:%M"),
                     "asset_overview_groups": groups,
                     "asset_change_rows": change_rows,
+                    "asset_change_totals": change_totals,
                     "entity_structure": _build_structure(
                         stats.nodes, entity=True, labels=_schema_labels_by_name(space, "entity")
                     ),

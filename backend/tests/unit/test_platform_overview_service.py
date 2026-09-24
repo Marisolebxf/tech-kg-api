@@ -364,6 +364,16 @@ def test_overview_uses_control_plane_today_changes() -> None:
     assert result.data_sources["todayChanges"] == "workflow-control-live"
     assert result.asset_change_rows["entity"] == entity_rows
     assert result.asset_change_rows["relation"] == []
+    # 数值合计与徽标同源（Σwritten），与明细行数解耦：抽屉用它展示
+    # 「共 N 条 · 展示前 n 条」，行数受单执行 50 条上限截断
+    assert result.asset_change_totals == {"entity": 61, "relation": 7}
+    # 经响应模型真实序列化（驼峰别名字段已声明，不是 model_copy 透传的裸属性）
+    import json
+
+    serialized = json.loads(result.model_dump_json(by_alias=True))
+    assert serialized["assetChangeTotals"] == {"entity": 61, "relation": 7}
+    assert len(result.asset_change_rows["entity"]) == 1
+    assert len(result.asset_change_rows["relation"]) == 0
     # 属性值卡片仍为占位演示行（前端不展示该分组）
     assert result.asset_change_rows["property"]
 

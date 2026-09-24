@@ -1477,6 +1477,84 @@ async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
         _cleanup_sidecar(sidecar_path)
 
 
+def ngql_typed_fallback(col_type: str, nullable: bool) -> str:
+    """空/不可解析值在类型化列上的兜底字面量（NOT NULL 列不能写 NULL）。"""
+    if nullable:
+        return "NULL"
+    if col_type.startswith("int"):
+        return "0"
+    if col_type.startswith(("double", "float")):
+        return "0.0"
+    if col_type.startswith("datetime"):
+        return 'datetime("1970-01-01 00:00:00")'
+    if col_type.startswith("date"):
+        return 'date("1970-01-01")'
+    if col_type.startswith("bool"):
+        return "false"
+    return '""'
+
+
+def ngql_datetime_literal(value: Any, *, date_only: bool = False) -> str | None:
+    """识别常见日期/时间文本 → date("…")/datetime("…") 字面量；不匹配回 None。"""
+    m = re.match(
+        r"^(\d{4})-(\d{1,2})-(\d{1,2})"
+        r"(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?",
+        str(value).strip(),
+    )
+    if not m:
+        return None
+    date_part = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    if date_only:
+        return f'date("{date_part}")'
+    if m.group(4) is None:
+        time_part = "00:00:00"
+    else:
+        time_part = f"{int(m.group(4)):02d}:{m.group(5)}:{int(m.group(6) or 0):02d}"
+    return f'datetime("{date_part} {time_part}")'
+
+
+def ngql_value_for_column(value: Any, col_type: str, nullable: bool) -> str:
+    """按列类型把脚本输出的值格式化为 nGQL 字面量（双向类型适配）。
+
+    - string 列一律转字符串（数字字面量写 string 列会被 Nebula 拒绝）；
+    - int/double 列保持数字字面量，字符串数字按数解析；
+    - date/datetime 列发 date("…")/datetime("…")（裸字符串会被拒）；
+    - bool 列发 true/false；
+    - 空/不可解析值按可空性回退 NULL 或类型化零值。
+    """
+    if col_type.startswith(("int", "double", "float")):
+        if isinstance(value, bool):
+            return "1" if value else "0"
+        if isinstance(value, (int, float)):
+            return str(int(value) if col_type.startswith("int") else float(value))
+        text_val = str(value).strip()
+        if text_val:
+            try:
+                return str(int(float(text_val)) if col_type.startswith("int") else float(text_val))
+            except ValueError:
+                pass
+        return ngql_typed_fallback(col_type, nullable)
+    if col_type.startswith("datetime"):
+        literal = ngql_datetime_literal(value)
+        return literal if literal else ngql_typed_fallback(col_type, nullable)
+    if col_type.startswith("date"):
+        literal = ngql_datetime_literal(value, date_only=True)
+        return literal if literal else ngql_typed_fallback(col_type, nullable)
+    if col_type.startswith("bool"):
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        text_val = str(value).strip().lower()
+        if text_val in ("true", "1", "yes"):
+            return "true"
+        if text_val in ("false", "0", "no", ""):
+            return "false"
+        return ngql_typed_fallback(col_type, nullable)
+    if value is None:
+        return "NULL" if nullable else '""'
+    # string 列：bool/数字一律转字符串（裸 true/false/42 写 string 列同样会被拒）
+    return json.dumps(str(value), ensure_ascii=False)
+
+
 @activity.defn
 async def write_records(request: dict[str, Any]) -> dict[str, Any]:
     """把转换结果写图：实体 nGQL INSERT VERTEX / 关系 merge_edge。
@@ -1525,10 +1603,11 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
         client.connect()
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # 列类型感知序列化：注册 schema 的业务列大量声明 string，而脚本输出的
-        # 数值（计数/金额）是 int/float——数字字面量写 string 列会被 Nebula 拒绝
-        # （"data type does not meet the requirements"）。DESCRIBE 一次拿列类型，
-        # string 列一律转字符串，int/double 列保持数字字面量。
+        # 列类型感知序列化：脚本输出的值类型与注册 schema 声明的列类型并不总一致
+        # （计数值是 int/float 而列可能声明 string；时间列常收到 "" 或 ISO 文本，
+        # 而 DDL 是 datetime/int64——裸字面量与列类型不匹配都会被 Nebula 以
+        # "data type does not meet the requirements" 拒绝）。DESCRIBE 一次拿列类型，
+        # ngql_value_typed 按列类型双向适配。
         column_types: dict[str, str] = {}
         not_null_cols: set[str] = set()
         try:
@@ -1545,15 +1624,7 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
 
         def ngql_value_typed(value: Any, col: str | None) -> str:
             col_type = column_types.get(col or "", "") if col else ""
-            if value is None:
-                return "NULL"
-            if isinstance(value, bool):
-                return "true" if value else "false"
-            if isinstance(value, (int, float)) and not col_type.startswith("string"):
-                return str(value)
-            if isinstance(value, (int, float)):
-                return json.dumps(str(value), ensure_ascii=False)
-            return json.dumps(str(value), ensure_ascii=False)
+            return ngql_value_for_column(value, col_type, nullable=(col or "") not in not_null_cols)
 
         def filtered(props: dict[str, Any] | None) -> dict[str, Any]:
             if not props:

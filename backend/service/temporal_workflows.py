@@ -1630,9 +1630,12 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
             return ngql_value_for_column(value, col_type, nullable=(col or "") not in not_null_cols)
 
         def filtered(props: dict[str, Any] | None) -> dict[str, Any]:
-            if not props:
+            # 实体空属性按旧语义跳过（由调用方 continue）；关系纯连接边（脚本
+            # 无任何属性输出）不能空列清单 INSERT——EDGE DDL 的审计列是平台
+            # 注入的 NOT NULL，缺列会被 Nebula 拒绝，必须走注入/回填
+            if not props and kind == "entity":
                 return {}
-            merged = dict(props)
+            merged = dict(props) if props else {}
             # Schema 注入的 NOT NULL 溯源列缺省时补默认值（脚本只管业务字段；
             # 其余溯源列可空，不强填以免类型不匹配）
             for key, default in (
@@ -1646,9 +1649,11 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                 return merged
             result = {key: value for key, value in merged.items() if key in active_props}
             # 脚本没输出的 NOT NULL 列补类型适配的空值——缺列整条 INSERT 会被
-            # Nebula 拒绝（"not null field doesn't have a default value"）
+            # Nebula 拒绝（"not null field doesn't have a default value"）。
+            # not_null_cols 来自 DESCRIBE（图库 DDL 真值），不要求在 activeProps
+            # 内——目录与 DDL 错位时以 DDL 为准补列
             for col in not_null_cols:
-                if col in active_props and col not in result:
+                if col not in result:
                     default = "" if column_types.get(col, "string").startswith("string") else "0"
                     result[col] = default
             return result

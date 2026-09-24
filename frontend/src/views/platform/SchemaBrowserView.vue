@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { IconSearch } from '@arco-design/web-vue/es/icon'
 import hljs from 'highlight.js/lib/core'
 import python from 'highlight.js/lib/languages/python'
@@ -60,6 +60,7 @@ import {
   type PropertyRow,
 } from './schema-browser/propertyRows'
 import SourceBindings from './schema-browser/sourceBindings.vue'
+import SchemaPropertyCell from './schema-browser/SchemaPropertyCell.vue'
 import {
   emptySourceBindingRow,
   toSourcePayload,
@@ -82,6 +83,42 @@ type CreateForm = {
 }
 
 const currentUserId = getCurrentUserId()
+
+const pageScrolling = ref(false)
+let pageScrollTimer: ReturnType<typeof setTimeout> | undefined
+
+function handlePageScroll(): void {
+  pageScrolling.value = true
+  if (pageScrollTimer) clearTimeout(pageScrollTimer)
+  pageScrollTimer = setTimeout(() => {
+    pageScrolling.value = false
+  }, 700)
+}
+
+const actionScrollTimers = new Map<HTMLElement, ReturnType<typeof setTimeout>>()
+
+function handleActionScroll(event: Event): void {
+  const target = event.currentTarget
+  if (!(target instanceof HTMLElement)) return
+
+  target.classList.add('schema-actions__inner--scrolling')
+  const activeTimer = actionScrollTimers.get(target)
+  if (activeTimer) clearTimeout(activeTimer)
+
+  actionScrollTimers.set(target, setTimeout(() => {
+    target.classList.remove('schema-actions__inner--scrolling')
+    actionScrollTimers.delete(target)
+  }, 700))
+}
+
+onBeforeUnmount(() => {
+  if (pageScrollTimer) clearTimeout(pageScrollTimer)
+  actionScrollTimers.forEach((timer, target) => {
+    clearTimeout(timer)
+    target.classList.remove('schema-actions__inner--scrolling')
+  })
+  actionScrollTimers.clear()
+})
 
 const activeTab = ref('标准实体')
 // Schema 管理按图空间维度隔离：列表/拓扑/新建统一跟随右上角全局图空间选择器
@@ -1079,8 +1116,6 @@ onMounted(async () => {
   }
 })
 
-// 列表属性 chip 展示（前 3 个 + 溢出 +N 展开全部明细）
-const PROPERTY_CHIP_LIMIT = 3
 
 // 名称列截断展示（实体 Schema 名称 / 关系中文名 / 关系英文名）：
 // 超过 10 字符截断加省略号，悬停经 tooltip 卡片查看全称
@@ -1098,37 +1133,21 @@ function endpointNameCell(name: string): string {
 }
 
 // 说明列截断：超过 10 字符截断显示，悬停经 tooltip 查看全文（实体/关系两个子页面共用）。
-// 上限压到 10 是为给属性列腾宽——3 个属性胶囊 + 「+N」须平铺在一行不折行。
+// 上限压到 10 是为属性列保留更充足的展示空间。
 const DESC_CELL_LIMIT = 10
 
 function descCell(text: string): string {
   return text.length > DESC_CELL_LIMIT ? `${text.slice(0, DESC_CELL_LIMIT)}…` : text
 }
 
-/** 展开的属性明细行（点击「+N」展开的实体/关系行 ID 集合，两个子页面共用）。 */
-const expandedPropertyRows = ref<Set<string>>(new Set())
-
-function propertyChips(schema: SchemaDefinition): string[] {
-  return schema.properties.slice(0, PROPERTY_CHIP_LIMIT).map((p) => `${p.name}:${p.dataType}`)
-}
-
-function propertyOverflow(schema: SchemaDefinition): number {
-  return Math.max(schema.properties.length - PROPERTY_CHIP_LIMIT, 0)
-}
-
-function togglePropertyDetail(schemaId: string): void {
-  const next = new Set(expandedPropertyRows.value)
-  if (next.has(schemaId)) {
-    next.delete(schemaId)
-  } else {
-    next.add(schemaId)
-  }
-  expandedPropertyRows.value = next
-}
 </script>
 
 <template>
-  <main class="schema-page">
+  <main
+    class="schema-page"
+    :class="{ 'schema-page--scrolling': pageScrolling }"
+    @scroll.passive="handlePageScroll"
+  >
     <section
       class="schema-shell schema-topology-shell"
       :class="{ 'schema-topology-shell--collapsed': !topologyExpanded }"
@@ -1178,9 +1197,9 @@ function togglePropertyDetail(schemaId: string): void {
       </nav>
       <div class="schema-shell schema-table-shell">
 
-      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table class="schema-entity-table"><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>说明</th><th>属性</th><th>操作</th></tr></thead><tbody><template v-for="row in entities" :key="row.id"><tr><td><b>{{ row.label }}</b></td><td><a-tooltip v-if="row.name.length > 10" :content="row.name" position="top"><code>{{ schemaNameCell(row.name) }}</code></a-tooltip><code v-else>{{ row.name }}</code></td><td class="schema-desc-cell"><a-tooltip v-if="(row.description || '').length > DESC_CELL_LIMIT" :content="row.description" position="top"><span class="schema-desc-text">{{ descCell(row.description || '') }}</span></a-tooltip><template v-else>{{ row.description }}</template></td><td class="schema-props-cell"><div class="prop-chips"><span v-for="chip in propertyChips(row.schema)" :key="chip" class="prop-chip" :title="chip">{{ chip }}</span><button v-if="propertyOverflow(row.schema)" type="button" class="prop-chip prop-chip--more" title="展开属性明细" @click="togglePropertyDetail(row.id)">+{{ propertyOverflow(row.schema) }}</button></div></td><td class="schema-actions"><div class="schema-actions__inner"><button v-if="row.schema.canManageProperties" type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本（更新后还需重跑）`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name] && !scriptByRow[row.name].stale && scriptByRow[row.name].needsRun" class="script-badge script-badge--rerun" :title="scriptByRow[row.name].lastRunAt ? '脚本更新后尚未重新运行：最新脚本尚未应用到图数据，请到「来源表」触发抽取或回填历史数据（重跑完成前持续提示）' : '脚本上传后尚未运行过抽取：请到「来源表」触发抽取或回填历史数据，将脚本应用到图数据（运行前持续提示）'">{{ scriptByRow[row.name].lastRunAt ? '待重跑' : '未运行' }}</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护属性（新增 / 删除）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护属性' : '只有创建者或管理员可维护属性')" @click="openPropertyModal(row.schema)">属性管理</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema（需先删除引用它的全部关系；实体的图数据将一并删除）' : (row.schema.isSystem ? '系统内置，不可删除' : '只有创建者或管理员可删除')" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr><tr v-if="expandedPropertyRows.has(row.id)" class="schema-prop-detail-row"><td :colspan="5"><div class="prop-detail"><span v-for="p in row.schema.properties" :key="p.name" class="prop-detail__item"><code>{{ p.name }}</code><em>{{ p.dataType }}</em><b v-if="p.required">必填</b><b v-if="p.locked" class="prop-detail__locked">🔒 公共</b></span></div></td></tr></template></tbody></table></div>
+      <div v-if="activeTab === '标准实体'" class="schema-table-wrap"><table class="schema-entity-table"><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>说明</th><th>属性</th><th>操作</th></tr></thead><tbody><template v-for="row in entities" :key="row.id"><tr><td><b>{{ row.label }}</b></td><td><a-tooltip v-if="row.name.length > 10" :content="row.name" position="top"><code>{{ schemaNameCell(row.name) }}</code></a-tooltip><code v-else>{{ row.name }}</code></td><td class="schema-desc-cell"><a-tooltip v-if="(row.description || '').length > DESC_CELL_LIMIT" :content="row.description" position="top"><span class="schema-desc-text">{{ descCell(row.description || '') }}</span></a-tooltip><template v-else>{{ row.description }}</template></td><td class="schema-props-cell"><SchemaPropertyCell :schema="row.schema" /></td><td class="schema-actions"><div class="schema-actions__inner" @scroll.passive="handleActionScroll"><button v-if="row.schema.canManageProperties" type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }}</button><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本（更新后还需重跑）`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name] && !scriptByRow[row.name].stale && scriptByRow[row.name].needsRun" class="script-badge script-badge--rerun" :title="scriptByRow[row.name].lastRunAt ? '脚本更新后尚未重新运行：最新脚本尚未应用到图数据，请到「来源表」触发抽取或回填历史数据（重跑完成前持续提示）' : '脚本上传后尚未运行过抽取：请到「来源表」触发抽取或回填历史数据，将脚本应用到图数据（运行前持续提示）'">{{ scriptByRow[row.name].lastRunAt ? '待重跑' : '未运行' }}</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护属性（新增 / 删除）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护属性' : '只有创建者或管理员可维护属性')" @click="openPropertyModal(row.schema)">属性管理</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema（需先删除引用它的全部关系；实体的图数据将一并删除）' : (row.schema.isSystem ? '系统内置，不可删除' : '只有创建者或管理员可删除')" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr></template></tbody></table></div>
 
-      <div v-else class="schema-table-wrap"><table class="schema-relation-table"><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>说明</th><th>属性</th><th>操作</th></tr></thead><tbody><template v-for="row in relations" :key="row.id"><tr><td><a-tooltip v-if="row.label.length > 10" :content="row.label" position="top"><b>{{ schemaNameCell(row.label) }}</b></a-tooltip><b v-else>{{ row.label }}</b></td><td><a-tooltip v-if="row.name.length > 10" :content="row.name" position="top"><code>{{ schemaNameCell(row.name) }}</code></a-tooltip><code v-else>{{ row.name }}</code></td><td><a-tooltip v-if="row.source.length > 5" :content="row.source" position="top"><span>{{ endpointNameCell(row.source) }}</span></a-tooltip><template v-else>{{ row.source }}</template></td><td><a-tooltip v-if="row.target.length > 5" :content="row.target" position="top"><span>{{ endpointNameCell(row.target) }}</span></a-tooltip><template v-else>{{ row.target }}</template></td><td class="schema-desc-cell"><a-tooltip v-if="(row.basis || '').length > DESC_CELL_LIMIT" :content="row.basis" position="top"><span class="schema-desc-text">{{ descCell(row.basis || '') }}</span></a-tooltip><template v-else>{{ row.basis }}</template></td><td class="schema-props-cell"><div class="prop-chips"><span v-for="chip in propertyChips(row.schema)" :key="chip" class="prop-chip" :title="chip">{{ chip }}</span><button v-if="propertyOverflow(row.schema)" type="button" class="prop-chip prop-chip--more" title="展开属性明细" @click="togglePropertyDetail(row.id)">+{{ propertyOverflow(row.schema) }}</button></div></td><td class="schema-actions"><div class="schema-actions__inner"><button v-if="row.schema.canManageProperties" type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }} →</button><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本（更新后还需重跑）`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name] && !scriptByRow[row.name].stale && scriptByRow[row.name].needsRun" class="script-badge script-badge--rerun" :title="scriptByRow[row.name].lastRunAt ? '脚本更新后尚未重新运行：最新脚本尚未应用到图数据，请到「来源表」触发抽取或回填历史数据（重跑完成前持续提示）' : '脚本上传后尚未运行过抽取：请到「来源表」触发抽取或回填历史数据，将脚本应用到图数据（运行前持续提示）'">{{ scriptByRow[row.name].lastRunAt ? '待重跑' : '未运行' }}</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护属性（新增 / 删除）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护属性' : '只有创建者或管理员可维护属性')" @click="openPropertyModal(row.schema)">属性管理</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : '系统内置，不可删除'" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr><tr v-if="expandedPropertyRows.has(row.id)" class="schema-prop-detail-row"><td :colspan="7"><div class="prop-detail"><span v-for="p in row.schema.properties" :key="p.name" class="prop-detail__item"><code>{{ p.name }}</code><em>{{ p.dataType }}</em><b v-if="p.required">必填</b><b v-if="p.locked" class="prop-detail__locked">🔒 公共</b></span></div></td></tr></template></tbody></table></div>
+      <div v-else class="schema-table-wrap"><table class="schema-relation-table"><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>说明</th><th>属性</th><th>操作</th></tr></thead><tbody><template v-for="row in relations" :key="row.id"><tr><td><a-tooltip v-if="row.label.length > 10" :content="row.label" position="top"><b>{{ schemaNameCell(row.label) }}</b></a-tooltip><b v-else>{{ row.label }}</b></td><td><a-tooltip v-if="row.name.length > 10" :content="row.name" position="top"><code>{{ schemaNameCell(row.name) }}</code></a-tooltip><code v-else>{{ row.name }}</code></td><td><a-tooltip v-if="row.source.length > 5" :content="row.source" position="top"><span>{{ endpointNameCell(row.source) }}</span></a-tooltip><template v-else>{{ row.source }}</template></td><td><a-tooltip v-if="row.target.length > 5" :content="row.target" position="top"><span>{{ endpointNameCell(row.target) }}</span></a-tooltip><template v-else>{{ row.target }}</template></td><td class="schema-desc-cell"><a-tooltip v-if="(row.basis || '').length > DESC_CELL_LIMIT" :content="row.basis" position="top"><span class="schema-desc-text">{{ descCell(row.basis || '') }}</span></a-tooltip><template v-else>{{ row.basis }}</template></td><td class="schema-props-cell"><SchemaPropertyCell :schema="row.schema" /></td><td class="schema-actions"><div class="schema-actions__inner" @scroll.passive="handleActionScroll"><button v-if="row.schema.canManageProperties" type="button" class="schema-action-link" :title="scriptByRow[row.name] ? '更换脚本' : '上传脚本'" @click="openUploadModal(row.id, row.name)">{{ scriptByRow[row.name] ? '更换脚本' : '上传脚本' }}</button><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本（更新后还需重跑）`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name] && !scriptByRow[row.name].stale && scriptByRow[row.name].needsRun" class="script-badge script-badge--rerun" :title="scriptByRow[row.name].lastRunAt ? '脚本更新后尚未重新运行：最新脚本尚未应用到图数据，请到「来源表」触发抽取或回填历史数据（重跑完成前持续提示）' : '脚本上传后尚未运行过抽取：请到「来源表」触发抽取或回填历史数据，将脚本应用到图数据（运行前持续提示）'">{{ scriptByRow[row.name].lastRunAt ? '待重跑' : '未运行' }}</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span><button v-if="scriptByRow[row.name]" type="button" class="schema-action-link" @click="openViewModal(row.id, row.name)">查看脚本 →</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护属性（新增 / 删除）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护属性' : '只有创建者或管理员可维护属性')" @click="openPropertyModal(row.schema)">属性管理</button><button type="button" class="schema-action-link schema-action-link--danger" :title="row.schema.canDelete ? '删除该 Schema' : '系统内置，不可删除'" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</button></div></td></tr></template></tbody></table></div>
 
       <!-- 列表分页（服务端分页，两个页签共用每页条数、各自记住页码）；
            紧凑页码（最多 5 个页码按钮 + 尾页折叠），跳页框随组件恒显 -->
@@ -1614,27 +1633,21 @@ function togglePropertyDetail(schemaId: string): void {
 .create-props :deep(.arco-form-item-content){display:block}
 .schema-toolbar .primary{height:32px;padding:0 14px;border:0;border-radius:6px;background:#165dff;color:#fff;font-size:13px;cursor:pointer}
 .schema-toolbar .primary:hover{background:#0e4ed8}
-.schema-actions{white-space:normal}
-.schema-actions__inner{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.schema-actions{min-width:0;overflow:hidden;white-space:normal}
+.schema-actions__inner{display:flex;box-sizing:border-box;width:100%;min-width:0;max-width:100%;align-items:center;gap:8px;overflow-x:auto;overflow-y:hidden;flex-wrap:nowrap;white-space:nowrap;overscroll-behavior-inline:contain;scrollbar-color:transparent transparent;scrollbar-width:thin}
+.schema-actions__inner>*{flex:0 0 auto}
+.schema-actions__inner:hover,.schema-actions__inner--scrolling{scrollbar-color:rgba(78,89,105,.55) transparent}
+.schema-actions__inner::-webkit-scrollbar{height:6px}
+.schema-actions__inner::-webkit-scrollbar-track{background:transparent}
+.schema-actions__inner::-webkit-scrollbar-thumb{border:1px solid transparent;border-radius:999px;background-color:transparent;background-clip:padding-box}
+.schema-actions__inner:hover::-webkit-scrollbar-thumb,.schema-actions__inner--scrolling::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
+.schema-actions__inner::-webkit-scrollbar-thumb:hover{background-color:rgba(78,89,105,.8)}
 .schema-action-link{border:0;background:transparent;color:#165dff;font-size:11px;line-height:17px;padding:0;cursor:pointer}
 .schema-action-link:hover{text-decoration:underline}
 .schema-action-link:disabled{color:#a9b4c6;cursor:not-allowed;text-decoration:none}
-.schema-action-link--danger{color:#e5484d;padding-left:10px}
+.schema-action-link--danger{color:#e5484d}
 .schema-action-link--danger:hover:not(:disabled){color:#b42318}
-/* 属性胶囊单行平铺不折行：3 个胶囊 + 「+N」一行放完；窄屏放不下时
-   胶囊各自收缩省略（悬停 :title 看全名），不再换行堆叠。 */
-.schema-props-cell{min-width:0}
-.prop-chips{display:flex;flex-wrap:nowrap;gap:4px;min-width:0}
-.prop-chip{display:inline-flex;flex:0 1 auto;min-width:0;max-width:160px;overflow:hidden;padding:1px 8px;border:1px solid #d6e2f5;border-radius:999px;background:#f4f8ff;color:#3a5686;font-size:11px;line-height:18px;text-overflow:ellipsis;white-space:nowrap}
-.prop-chip--more{border-color:#bcd4f7;background:#eaf2ff;color:#165dff;cursor:pointer}
-.prop-chip--more:hover{background:#dcebff}
-.schema-prop-detail-row>td{padding:8px 16px;background:#f9fbff}
-.prop-detail{display:flex;flex-wrap:wrap;gap:8px 18px}
-.prop-detail__item{display:inline-flex;align-items:center;gap:6px;color:#4e5969;font-size:12px;line-height:20px;white-space:nowrap}
-.prop-detail__item code{padding:1px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:11px}
-.prop-detail__item em{color:#86909c;font-size:11px;font-style:normal;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-.prop-detail__item b{padding:0 6px;border-radius:999px;background:#f2f3f5;color:#4e5969;font-size:10px;font-weight:400}
-.prop-detail__locked{background:#fff7e8;color:#b54708}
+.schema-props-cell{min-width:0;padding-top:8px!important;padding-bottom:8px!important}
 .schema-modal{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;padding:24px}
 .schema-modal__mask{position:fixed;inset:0;border:0;background:rgba(16,38,76,0.42);backdrop-filter:blur(2px);cursor:pointer}
 .schema-modal__panel{position:relative;z-index:1;width:min(520px,100%);overflow:hidden;border-radius:8px;background:#fff;box-shadow:0 24px 70px rgba(28,58,107,0.3)}
@@ -1878,6 +1891,19 @@ function togglePropertyDetail(schemaId: string): void {
 .schema-topology-canvas{height:260px;overflow:hidden;border-top:1px solid #e5e6eb;background: #fff;}
 .schema-topology-canvas__empty{display:grid;place-items:center;height:100%;color:#86909c;font-size:12px}
 
+/* 拓扑总览与 Schema 列表共用整页滚动；默认隐藏滚动条，交互时再显示。 */
+.schema-page{overflow-x:hidden;overflow-y:auto;scrollbar-color:transparent transparent;scrollbar-gutter:stable;scrollbar-width:thin}
+.schema-page:hover,.schema-page--scrolling{scrollbar-color:rgba(78,89,105,.55) transparent}
+.schema-page::-webkit-scrollbar{width:8px}
+.schema-page::-webkit-scrollbar-track{background:transparent}
+.schema-page::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background-color:transparent;background-clip:padding-box}
+.schema-page:hover::-webkit-scrollbar-thumb,.schema-page--scrolling::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
+.schema-page::-webkit-scrollbar-thumb:hover{background-color:rgba(78,89,105,.8)}
+
+/* 取消两个内容区对视口高度的均分，让内容撑开后由整页容器滚动。 */
+.schema-topology-shell{flex:0 0 auto}
+.schema-table-wrap{flex:0 0 auto}
+
 /* Schema 管理页统一排版规范。 */
 .schema-page,.schema-page :deep(*),.schema-modal,.schema-modal :deep(*){font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;letter-spacing:0}
 .schema-page,.schema-modal{font-size:14px;line-height:22px;font-weight:400}
@@ -1890,7 +1916,7 @@ function togglePropertyDetail(schemaId: string): void {
 .schema-table-wrap th,.property-table__row--head{font-size:14px;line-height:22px;font-weight:500}
 .schema-table-wrap td b{font-weight:400}
 .legend-item,.schema-topology-canvas__empty,.schema-flow span,.schema-flow>header span,.candidate-note p,.mention-fields span,.trace-card p,.trace-card dd,.trace-card code,.trace-card>header b,.trace-layout header>span,.trace-layout>aside strong,.trace-layout>aside span{font-size:12px;line-height:20px;font-weight:400}
-.prop-chip,.prop-detail__item,.prop-detail__item code,.prop-detail__item em,.prop-detail__item b,.script-badge{font-size:12px;line-height:20px;font-weight:400}
+.script-badge{font-size:12px;line-height:20px;font-weight:400}
 .schema-delete-text,.property-table__row,.property-table__name code,.property-table__lock,.property-table__type,.property-table__locked-note,.property-add-form__name,.property-add-form__len,.property-add-form__type :deep(.arco-select-view),.property-add-form__required,.property-add-form .primary,.upload-idle p,.upload-idle .primary,.upload-working__text strong,.upload-result strong,.view-loading,.view-error{font-size:14px;line-height:22px;font-weight:400}
 .schema-delete-note,.property-section__head span,.upload-stage,.upload-message,.upload-result span,.upload-result__msg,.upload-result__issues,.script-pre code,.create-ddl__pre,.create-ddl__confirm,.create-sources__hint,.sources-note{font-size:12px;line-height:20px;font-weight:400}
 .schema-modal__body label,.schema-modal__body input,.schema-modal__body textarea,.schema-modal__panel footer button,.create-field,.create-text-input,.create-field textarea,.create-field select,.create-props__head,.create-props__add,.prop-name,.prop-type,.prop-len,.prop-required{font-size:14px;line-height:22px;font-weight:400}
@@ -1900,8 +1926,8 @@ function togglePropertyDetail(schemaId: string): void {
 .schema-flow li i,.trace-card>header i{font-size:12px;line-height:20px}
 
 /* Schema 类型切换沿用科技专家同事关系页的摘要/实体分段按钮，并置于表格边框之外。 */
-.schema-catalog{display:flex;flex:1;min-height:0;flex-direction:column;gap:12px}
-.schema-table-shell{flex:1;min-height:0}
+.schema-catalog{display:flex;flex:0 0 auto;min-height:0;flex-direction:column;gap:12px}
+.schema-table-shell{flex:0 0 auto;min-height:0}
 .schema-tabs{min-height:40px;padding:0;border-bottom:0;background:transparent;overflow:visible}
 .schema-tabs__items{box-sizing:border-box;height:40px;padding:4px;border-radius:4px;background:#f2f3f5;align-self:auto;overflow:visible}
 .schema-tabs__items button{display:inline-flex;box-sizing:border-box;align-items:center;justify-content:center;width:88px;height:32px;padding:5px 16px;border:0;border-radius:4px;background:transparent;color:#4e5969;text-align:center}

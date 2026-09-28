@@ -6,6 +6,7 @@ import { Form, FormItem } from '@arco-design/web-vue'
 
 import {
   deleteSchema,
+  getSchemaDeleteImpact,
   getSchemaOverview,
   listSchemasPaged,
   type SchemaDefinition,
@@ -320,8 +321,9 @@ describe('Schema 属性与脚本弹窗样式', () => {
     const view = mountView()
     await flushPromises()
 
-    const manageButton = view.findAll('button.schema-action-link').find((button) => button.text() === '属性管理')
-    await manageButton!.trigger('click')
+    const actions = view.get('.schema-actions')
+    await actions.get('.schema-action-more').trigger('click')
+    await actions.findAll('.test-dropdown-menu button').find((button) => button.text() === '属性管理')!.trigger('click')
 
     const header = view.get('.property-table__row--head')
     expect(header.text()).toContain('属性类别')
@@ -346,6 +348,29 @@ describe('Schema 属性与脚本弹窗样式', () => {
     expect(dropzone.text()).toContain('添加脚本文件')
     expect(dropzone.text()).toContain('仅支持 .py 文件')
     expect(dropzone.attributes('role')).toBe('button')
+    expect(dropzone.find('button').exists()).toBe(false)
+  })
+
+  it('Schema 删除弹窗展示警示摘要和删除影响区域', async () => {
+    const schema = schemaFixture({ canDelete: true, label: '部件', graphSpace: 'dev2' })
+    vi.mocked(listSchemasPaged).mockResolvedValue({ items: [schema], total: 1, page: 1, pageSize: 10 })
+    vi.mocked(getSchemaDeleteImpact).mockResolvedValue({
+      id: schema.id, kind: 'entity', kindLabel: '实体', graphSpace: 'dev2', name: schema.name,
+      label: schema.label, isSystem: false, canDelete: true, referencingRelations: [],
+    })
+    const view = mountView()
+    await flushPromises()
+
+    const actions = view.get('.schema-actions')
+    await actions.get('.schema-action-more').trigger('click')
+    await actions.findAll('.test-dropdown-menu button').find((button) => button.text() === '删除')!.trigger('click')
+    await flushPromises()
+
+    const modal = view.get('.schema-delete-modal')
+    expect(modal.get('.schema-delete-summary').text()).toContain('确认删除“部件”吗')
+    expect(modal.get('.schema-delete-summary__icon').find('svg').exists()).toBe(true)
+    expect(modal.get('.schema-delete-impact--danger').text()).toContain('删除影响')
+    expect(modal.get('.schema-delete-impact--danger').text()).toContain('dev2')
   })
 })
 

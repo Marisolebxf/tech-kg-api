@@ -67,13 +67,13 @@ const hiddenProperties = computed(() =>
 </template>
 
 <style scoped>
-.schema-properties{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
-.schema-properties__chip{display:flex;align-items:center;gap:4px;min-width:0;padding:4px 8px;border:1px solid #e5e6eb;border-radius:4px;background:#f7f8fa;font-size:12px;line-height:20px;white-space:nowrap}
+.schema-properties{display:flex;align-items:center;gap:8px;flex-wrap:wrap;--schema-property-fill:#f2f3f5}
+.schema-properties__chip{display:inline-flex;flex:0 1 auto;align-items:center;gap:4px;max-width:100%;min-width:0;padding:4px 8px;border:0;border-radius:4px;background:var(--schema-property-fill);font-size:12px;line-height:20px;white-space:nowrap}
 .schema-properties__chip b{flex:0 1 auto;min-width:0;overflow:hidden;color:#4e5969;font-weight:500;text-overflow:ellipsis}
 .schema-properties__chip b::after{content:":"}
 .schema-properties__chip em{flex:1;min-width:0;overflow:hidden;color:#1d2129;font-style:normal;text-overflow:ellipsis}
-.schema-properties__more{justify-self:start;padding:4px 8px;border:1px solid #bcd4f7;border-radius:4px;background:#eaf2ff;color:#165dff;font-size:12px;line-height:20px;cursor:pointer}
-.schema-properties__more:hover{background:#dcebff}
+.schema-properties__more{flex:0 0 auto;padding:4px 8px;border:0;border-radius:4px;background:var(--schema-property-fill);color:#165dff;font-size:12px;line-height:20px;cursor:pointer}
+.schema-properties__more:hover{background:#e5e6eb}
 .schema-properties__more:focus-visible{outline:0;box-shadow:0 0 0 2px rgba(22,93,255,.2)}
 .schema-properties__empty{color:#c9cdd4;font-size:12px}
 </style>

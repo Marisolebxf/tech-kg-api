@@ -1622,6 +1622,8 @@ function descCell(text: string): string {
 /* 表头同时固定在顶部和右侧；数据行只固定右侧，避免横向滚动遮挡操作。 */
 .schema-table-wrap table th:last-child{position:sticky;right:0;z-index:4;background:#f7f8fa;box-shadow:-1px 0 #e5e6eb}
 .schema-table-wrap table td:last-child{position:sticky;right:0;z-index:3;background:#fff;box-shadow:-1px 0 #e5e6eb}
+/* 复用 nGQL 结果表固定列的视觉提示：在操作列左侧增加向内容区渐隐的阴影。 */
+.schema-table-wrap table :is(th,td):last-child::before{position:absolute;top:0;bottom:-1px;left:0;width:12px;content:"";pointer-events:none;transform:translateX(-100%);box-shadow:inset -10px 0 8px -8px rgba(78,89,105,.28)}
 .schema-action-link{border:0;background:transparent;color:#165dff;font-size:11px;line-height:17px;padding:0;cursor:pointer}
 .schema-action-link:hover{text-decoration:underline}
 .schema-action-link:disabled{color:#a9b4c6;cursor:not-allowed;text-decoration:none}
@@ -1933,8 +1935,8 @@ function descCell(text: string): string {
 .schema-property-popover{box-sizing:border-box;width:440px;max-width:calc(100vw - 48px);padding:12px 16px!important}
 .schema-property-popover__content{max-height:240px;overflow:auto}
 .schema-property-popover__title{margin:0 0 8px;color:#1d2129;font-size:13px;line-height:20px;font-weight:500}
-.schema-property-popover__grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
-.schema-property-popover__item{display:flex;box-sizing:border-box;align-items:center;min-width:0;gap:4px;padding:4px 8px;border:1px solid #e5e6eb;border-radius:4px;background:#f7f8fa;color:#1d2129;font-size:12px;line-height:20px;white-space:nowrap}
+.schema-property-popover__grid{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.schema-property-popover__item{display:inline-flex;box-sizing:border-box;flex:0 1 auto;align-items:center;max-width:100%;min-width:0;gap:4px;padding:4px 8px;border:0;border-radius:4px;background:#f2f3f5;color:#1d2129;font-size:12px;line-height:20px;white-space:nowrap}
 .schema-property-popover__item b{flex:0 1 auto;min-width:0;overflow:hidden;color:#4e5969;font-weight:500;text-overflow:ellipsis}
 .schema-property-popover__item b::after{content:":"}
 .schema-property-popover__item em{flex:1;min-width:0;overflow:hidden;color:#1d2129;font-style:normal;text-overflow:ellipsis}

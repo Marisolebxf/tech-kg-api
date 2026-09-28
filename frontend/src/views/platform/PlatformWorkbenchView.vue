@@ -2116,6 +2116,8 @@ print(response.json())</pre>
   display: flex;
   flex-direction: column;
   gap: 14px;
+  /* 外层 app-workspace 已提供 16px 底部间距，避免总览再次叠加。 */
+  padding-bottom: 0;
 }
 
 .platform-overview > * {

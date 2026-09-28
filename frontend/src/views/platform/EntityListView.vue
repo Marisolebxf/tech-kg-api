@@ -308,10 +308,14 @@ watch(
 .entity-table-wrap table{width:100%;border-collapse:collapse;font-size:14px;line-height:22px}
 .entity-table-wrap th{position:sticky;top:0;z-index:1;background:#f7f8fa;color:#1d2129;font-weight:500;text-align:left}
 .entity-table-wrap th,.entity-table-wrap td{padding:10px 16px;border-bottom:1px solid #f2f3f5;vertical-align:middle}
-.entity-table-wrap td code{padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:12px;word-break:normal;overflow-wrap:anywhere}
+.entity-table-wrap td{color:#344763}
+/* 名称列对齐 Schema 页：td b 压回常规字重（Schema 页 DESIGN_RULES 同款），避免加粗显黑显大 */
+.entity-table-wrap td b{font-weight:400}
+/* ID 列与其他列字号统一 14px（此前 13px 显小）；不加蓝色背景块，长 ID 允许换行 */
+.entity-table-wrap td code{color:inherit;font-family:inherit;font-size:14px;line-height:22px;font-weight:400;word-break:normal;overflow-wrap:anywhere}
 .entity-table-wrap td:first-child{min-width:160px}
 .entity-table-wrap td:nth-child(2){min-width:240px}
-.entity-type-chip{display:inline-flex;padding:1px 10px;border-radius:999px;background:#eef5ff;color:#165dff;font-size:12px;line-height:18px;white-space:nowrap}
+.entity-type-chip{display:inline-flex;padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:12px;line-height:18px;white-space:nowrap}
 .entity-props-cell{width:440px;min-width:360px;max-width:480px}
 .entity-props{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .entity-props__chip{display:flex;align-items:center;gap:4px;min-width:0;padding:4px 8px;border:1px solid #e5e6eb;border-radius:4px;background:#f7f8fa;font-size:12px;line-height:20px;white-space:nowrap}

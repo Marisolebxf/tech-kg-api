@@ -48,14 +48,6 @@ const paginationTotal = computed(() => {
 const totalPages = computed(() => {
   return Math.max(Math.ceil(paginationTotal.value / pageSize.value), 1)
 })
-const modeLabel = computed(() => {
-  const mode = result.value?.mode
-  if (mode === 'browse') return '浏览（图直查）'
-  if (mode === 'graph-exact') return '精确匹配'
-  if (mode === 'hybrid') return '混合（语义+关键词）'
-  if (mode === 'dense') return '语义'
-  return '关键词'
-})
 
 async function loadIndexInfo() {
   try {
@@ -291,7 +283,7 @@ watch(
         >
           <template #summary>
             <span class="entity-pagination__info">
-              <template v-if="isBrowseMode && result?.total != null">共 {{ result.total }} 个实体 · </template>第 {{ page }} / {{ totalPages }} 页 · 检索模式：{{ modeLabel }}
+              <template v-if="isBrowseMode && result?.total != null">共 {{ result.total }} 个实体 · </template>第 {{ page }} / {{ totalPages }} 页
             </span>
           </template>
         </ListPagination>

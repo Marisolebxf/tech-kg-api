@@ -464,3 +464,50 @@ class TestProjectRelationModules:
             project_has_keyword_relation,
         ):
             assert callable(module.transform)
+
+    def test_funded_by_splits_multivalue_institution(self, tmp_path):
+        from script.project_entity_matcher import ProjectEntityMatcher
+        from script.project_ingest_report import ProjectIngestReport
+        from script.relation_extractors_one_relation.funded_by_relation import (
+            make_funded_by_mapper,
+        )
+
+        matcher = ProjectEntityMatcher()
+        matcher.organization.add("清华大学", "org_1")
+        matcher.organization.add("科技部", "org_2")
+        matcher.organization_ids.update({"org_1": "1", "org_2": "2"})
+        report = ProjectIngestReport(tmp_path, ingest_batch="BATCH_TEST", dry_run=False)
+        mapper = make_funded_by_mapper(matcher, report)
+
+        records = mapper(
+            "dwd_en_project",
+            {"id": "p9", "funded_institution": "清华大学；科技部", "funded_amount": "5"},
+            "BATCH_TEST",
+        )
+
+        assert [(r.edge_type, r.target_vid) for r in records] == [
+            ("FUNDED_BY", "org_1"),
+            ("FUNDED_BY", "org_2"),
+        ]
+        assert report.stats["edges_FUNDED_BY"] == 2
+        assert "organization_not_found" not in report.stats
+
+    def test_leads_splits_multivalue_host(self, tmp_path):
+        from script.project_entity_matcher import ProjectEntityMatcher
+        from script.project_ingest_report import ProjectIngestReport
+        from script.relation_extractors_one_relation.leads_relation import make_leads_mapper
+
+        matcher = ProjectEntityMatcher()
+        matcher.person.add("张伟", "person_1")
+        matcher.person.add("李四", "person_2")
+        report = ProjectIngestReport(tmp_path, ingest_batch="BATCH_TEST", dry_run=False)
+        mapper = make_leads_mapper(matcher, report)
+
+        records = mapper("dwd_en_project", {"id": "p9", "project_host": "张伟，李四"}, "BATCH_TEST")
+
+        assert [(r.edge_type, r.target_vid) for r in records] == [
+            ("LEADS", "person_1"),
+            ("LEADS", "person_2"),
+        ]
+        assert report.stats["edges_LEADS"] == 2
+        assert "person_not_found" not in report.stats

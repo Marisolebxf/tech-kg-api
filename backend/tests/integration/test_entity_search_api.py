@@ -235,6 +235,31 @@ async def test_browse_default_view(entity_search_api) -> None:
 
 
 @pytest.mark.asyncio
+async def test_browse_deep_offset_accepted(entity_search_api) -> None:
+    """跳页框直跳深页：offset 超过旧 10 万上限不再 422，越界页自然返回空。"""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/v1/entity-search/entities", params={"limit": 10, "offset": 176_610}
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["mode"] == "browse"
+        assert data["total"] == 1
+        assert data["items"] == []
+
+
+@pytest.mark.asyncio
+async def test_search_deep_offset_passes_validation(entity_search_api) -> None:
+    """搜索深分页：offset 超过旧 400 上限不再是校验 422（未建索引走业务 400）。"""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/entity-search/search", json={"keyword": "张三", "offset": 5_000}
+        )
+        assert response.status_code == 400
+        assert "尚未构建实体索引" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_browse_uses_shared_cache_after_l1_is_cleared(entity_search_api) -> None:
     _, _, monkeypatch = entity_search_api
     graph = FakeGraph()

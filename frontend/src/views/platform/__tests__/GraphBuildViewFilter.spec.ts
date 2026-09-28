@@ -138,4 +138,24 @@ describe('图谱构建任务筛选「未选择」伪选项（00843/00847）', ()
     await statusSelect.setValue('')
     expect(rowCount()).toBe(1)
   })
+
+  it('ABNORMAL 独立成「运行异常」桶：有专属状态卡，不被「运行失败」筛选命中', async () => {
+    // 抽取完成但含行级失败记录 = 异常，只有完全跑崩（FAILED）才是运行失败
+    wrapper.unmount()
+    mocks.listJobs.mockResolvedValue({
+      items: [
+        jobFixture('j9', { lastExecutionStatus: 'ABNORMAL' }),
+        jobFixture('j10', { lastExecutionStatus: 'FAILED' }),
+      ],
+      total: 2,
+    })
+    mountView()
+    await flushPromises()
+    expect(wrapper.find('.gb-summary').text()).toContain('运行异常')
+    const statusSelect = wrapper.find('#graph-build-filter-status')
+    await statusSelect.setValue('运行失败')
+    expect(rowCount()).toBe(1) // 只有真跑崩的 j10
+    await statusSelect.setValue('运行异常')
+    expect(rowCount()).toBe(1) // j9
+  })
 })

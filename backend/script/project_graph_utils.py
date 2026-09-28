@@ -84,6 +84,24 @@ def parse_list(raw: Any) -> list[str]:
     return [normalize_name(text)]
 
 
+_HAN_RE = re.compile(r"[\u4e00-\u9fff]")
+
+
+def parse_name_list(raw: Any) -> list[str]:
+    """人名/机构名单值解析：含汉字的串按分隔符拆，纯西文串不拆。
+
+    西文里逗号/分号常是名字内部（"BO， Zhang"、"University of California;Riverside"），
+    拆开会生成残名候选，图上恰有同名 Person/Organization 时会写出错边；
+    汉语多值（"张三，李四"）则必须拆。纯西文多值宁可整串 not_found 进复核目录。
+    """
+    if isinstance(raw, list):
+        return parse_list(raw)
+    text = str(raw or "").strip()
+    if text and not _HAN_RE.search(text):
+        return [normalize_name(text)] if normalize_name(text) else []
+    return parse_list(raw)
+
+
 def parse_json_objects(raw: Any) -> list[dict[str, Any]]:
     if raw is None:
         return []

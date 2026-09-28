@@ -1206,13 +1206,17 @@ class EntitySearchService:
         output_fields = ["vid", "entity_id", "name", "entity_type", "properties"]
         if dense_vector is None and not sparse_vector:
             raise EntitySearchError("关键词无法编码（embedding 与 BM25 均不可用）")
+        # HNSW 要求 ef >= k：深分页取数 fetch（limit+offset，上限 500）超过写死的
+        # ef=128 时 Milvus 直接报错（ef(128) should be larger than k(500)）——按取数
+        # 规模同步放大 ef，2048 封顶防误参拖垮查询
+        ef = max(128, min(limit * 2, 2048))
 
         if dense_vector is not None and sparse_vector:
             requests = [
                 AnnSearchRequest(
                     data=[dense_vector],
                     anns_field="dense_vector",
-                    param={"metric_type": "COSINE", "params": {"ef": 128}},
+                    param={"metric_type": "COSINE", "params": {"ef": ef}},
                     limit=limit,
                     expr=expr,
                 ),
@@ -1236,7 +1240,7 @@ class EntitySearchService:
                 collection_name=COLLECTION_NAME,
                 data=[dense_vector],
                 anns_field="dense_vector",
-                search_params={"metric_type": "COSINE", "params": {"ef": 128}},
+                search_params={"metric_type": "COSINE", "params": {"ef": ef}},
                 filter=expr or "",
                 limit=limit,
                 output_fields=output_fields,

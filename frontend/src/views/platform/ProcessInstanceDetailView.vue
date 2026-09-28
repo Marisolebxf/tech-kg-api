@@ -714,7 +714,7 @@ onMounted(async () => {
 
         <div v-else-if="activeTab === 'logs'" class="log-content">
           <template v-if="processingInstance">
-            <section class="issue-list"><h3>{{ isExecutionInterrupted ? '执行异常' : '结果验收' }}</h3><article><span>{{ processingInstance.reviewType || '未关联人工审核' }}</span><strong :class="{ safe: !needsTaskReview }">{{ isExecutionInterrupted ? '已中断' : needsTaskReview ? '待确认' : '已通过' }}</strong><em>执行状态：{{ taskStatus }} · 结果状态：{{ resultStatus }}</em></article></section>
+            <section class="issue-list" :class="{ safe: !needsTaskReview }"><h3>{{ isExecutionInterrupted ? '执行异常' : '结果验收' }}</h3><article><span>{{ processingInstance.reviewType || '未关联人工审核' }}</span><strong :class="{ safe: !needsTaskReview }">{{ isExecutionInterrupted ? '已中断' : needsTaskReview ? '待确认' : '已通过' }}</strong><em>执行状态：{{ taskStatus }} · 结果状态：{{ resultStatus }}</em></article></section>
             <div class="log-block">
               <p v-if="processingInstance.workflowId" class="log-meta">workflow <code>{{ processingInstance.workflowId }}</code><template v-if="processingInstance.runId"> · run <code>{{ processingInstance.runId }}</code></template></p>
               <pre v-if="taskLogLines.length">{{ taskLogLines.join('\n') }}</pre>
@@ -728,7 +728,7 @@ onMounted(async () => {
           <template v-if="processingInstance">
             <section class="lineage-compare">
               <header><div><h3>来源与执行依据</h3><p>Schema 来源绑定、抽取脚本与任务真实参数；行级原始值不落库，不做编造展示</p></div><span>{{ lineageSourceRows.length }} 条依据</span></header>
-              <table><thead><tr><th>对象</th><th>关键字段</th><th>当前值</th><th>用途</th></tr></thead><tbody><tr v-for="row in lineageSourceRows" :key="`${row.table}-${row.field}`"><td><code>{{ row.table }}</code></td><td><code>{{ row.field }}</code></td><td class="raw-value">{{ row.raw }}</td><td>{{ row.basis }}</td></tr></tbody></table>
+              <table><thead><tr><th>对象</th><th>关键字段</th><th>当前值</th><th>用途</th></tr></thead><tbody><tr v-for="row in lineageSourceRows" :key="`${row.table}-${row.field}`"><td><code>{{ row.table }}</code></td><td><code>{{ row.field }}</code></td><td class="raw-value"><a-tooltip v-if="row.raw.length > 48" :content="row.raw" position="top"><span class="raw-value-text">{{ row.raw }}</span></a-tooltip><span v-else class="raw-value-text">{{ row.raw }}</span></td><td>{{ row.basis }}</td></tr></tbody></table>
             </section>
             <section v-if="lineageResultRows.length" class="lineage-compare">
               <header><div><h3>本次执行来源结果</h3><p>工作流回写的真实分批统计与水位推进（游标在来源全部批次成功后一次性推进）</p></div><span>{{ lineageResultRows.length }} 个来源</span></header>
@@ -828,4 +828,15 @@ onMounted(async () => {
 .trigger-chip{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;background:#f2f3f5;color:#4e5969}
 .trigger-chip[data-kind='SCHEDULE']{background:#e8ffea;color:#00b42a}
 .trigger-chip[data-kind='RERUN']{background:#fff3e8;color:#f77234}
+/* 外层工作区已有 16px 内边距，详情页不再叠加额外底部留白。 */
+.task-detail-page{box-sizing:border-box;padding-bottom:0}
+/* 验收通过与执行结果使用一致的绿色状态底，不再强调卡片边框。 */
+.issue-list.safe{border:0;background:#f6fef9}
+/* 溯源字段保留等宽文本，不使用灰色标签底；长当前值单行省略并由 Tooltip 展开。 */
+.lineage-compare table{table-layout:fixed}
+.lineage-compare code{padding:0;background:transparent}
+.lineage-compare .raw-value{max-width:0;overflow:hidden;white-space:nowrap}
+.raw-value-text{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 处理链路仅用浅色背景区分节点，箭头继续表达流向。 */
+.lineage span{border:0}
 </style>

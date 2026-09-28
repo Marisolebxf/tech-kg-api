@@ -741,7 +741,7 @@ onBeforeUnmount(() => {
           <AppBreadcrumb :class="{ 'app-breadcrumb--with-select': isOverviewPage }">
             <GraphSpaceSelector v-if="isOverviewPage" />
           </AppBreadcrumb>
-          <section class="app-workspace" :aria-label="pageTitle">
+          <section class="app-workspace" :class="{ 'is-manual-review-detail': route.name === 'manual-review-detail' }" :aria-label="pageTitle">
             <div v-if="routeError" class="route-error">
               <strong>页面渲染异常</strong>
               <span>{{ routeError }}</span>
@@ -2168,6 +2168,11 @@ onBeforeUnmount(() => {
 
 .app-workspace::-webkit-scrollbar {
   display: none;
+}
+
+/* 人工审核详情由内部卡片承载底边框，仅保留外层舞台的 16px 底部间距。 */
+.app-workspace.is-manual-review-detail {
+  padding-bottom: 0;
 }
 
 

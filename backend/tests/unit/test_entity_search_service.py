@@ -1141,6 +1141,38 @@ def test_search_hybrid_with_type_filter(state_session, monkeypatch: pytest.Monke
     assert result["graphSpace"] == "dev2"
 
 
+def test_hybrid_search_scales_ef_with_fetch_limit() -> None:
+    """深分页 fetch 超过 128 时 ef 必须同步放大（HNSW 要求 ef >= k，否则 Milvus 报错）。"""
+
+    class CapturingMilvus:
+        def __init__(self) -> None:
+            self.requests: list = []
+
+        def hybrid_search(self, *, reqs, **kwargs):
+            self.requests = list(reqs)
+            return [[]]
+
+    milvus = CapturingMilvus()
+    EntitySearchService._hybrid_search(
+        milvus,
+        dense_vector=[0.1, 0.2],
+        sparse_vector={1: 0.5},
+        expr=None,
+        limit=500,
+    )
+    dense = next(req for req in milvus.requests if req.anns_field == "dense_vector")
+    assert dense.param["params"]["ef"] >= 500
+    assert dense.limit == 500
+
+    # 浅分页保持 128 基线，不为小查询放大搜索开销
+    milvus.requests = []
+    EntitySearchService._hybrid_search(
+        milvus, dense_vector=[0.1, 0.2], sparse_vector={1: 0.5}, expr=None, limit=50
+    )
+    dense = next(req for req in milvus.requests if req.anns_field == "dense_vector")
+    assert dense.param["params"]["ef"] == 128
+
+
 def test_search_finds_scalar_property_keyword(
     state_session, monkeypatch: pytest.MonkeyPatch
 ) -> None:

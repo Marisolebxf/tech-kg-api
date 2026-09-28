@@ -276,6 +276,49 @@ describe('Schema 管理输入框达上限提示', () => {
   })
 })
 
+describe('Schema 属性与脚本弹窗样式', () => {
+  it('属性类别独立成列，公共属性删除按钮置灰并使用线性锁图标', async () => {
+    vi.mocked(listSchemasPaged).mockResolvedValue({
+      items: [schemaFixture({
+        properties: [
+          { name: 'id', dataType: 'string', required: true, rule: '', category: 'required', locked: true },
+          { name: 'score', dataType: 'double', required: false, rule: '', category: 'core', locked: false },
+        ],
+      })],
+      total: 1, page: 1, pageSize: 10,
+    })
+    const view = mountView()
+    await flushPromises()
+
+    const manageButton = view.findAll('button.schema-action-link').find((button) => button.text() === '属性管理')
+    await manageButton!.trigger('click')
+
+    const header = view.get('.property-table__row--head')
+    expect(header.text()).toContain('属性类别')
+    const rows = view.findAll('.property-table__row:not(.property-table__row--head)')
+    expect(rows[0].text()).toContain('公共属性')
+    expect(rows[0].get('.property-table__lock').element.tagName.toLowerCase()).toBe('svg')
+    expect(rows[0].get('button').attributes('disabled')).toBeDefined()
+    expect(rows[0].get('button').text()).toBe('删除')
+    expect(rows[1].text()).toContain('自定义属性')
+    expect(rows[1].get('button').attributes('disabled')).toBeUndefined()
+  })
+
+  it('上传脚本入口展示虚线添加文件区域和格式提示', async () => {
+    vi.mocked(listSchemasPaged).mockResolvedValue({ items: [schemaFixture()], total: 1, page: 1, pageSize: 10 })
+    const view = mountView()
+    await flushPromises()
+
+    const uploadButton = view.findAll('button.schema-action-link').find((button) => button.text() === '更换脚本')
+    await uploadButton!.trigger('click')
+
+    const dropzone = view.get('.upload-dropzone')
+    expect(dropzone.text()).toContain('添加脚本文件')
+    expect(dropzone.text()).toContain('仅支持 .py 文件')
+    expect(dropzone.attributes('role')).toBe('button')
+  })
+})
+
 describe('Schema 列表说明列截断显示与删除脏行兜底', () => {
   it('实体/关系说明超 10 字符截断、起点/终点超 5 字符截断（悬停看全文），短文本原样展示', async () => {
     vi.mocked(listSchemasPaged).mockResolvedValue({

@@ -20,6 +20,7 @@ const routeState = vi.hoisted(() => ({ query: {} as Record<string, string> }))
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: routeState.query }) }))
 vi.mock('@arco-design/web-vue/es/icon', () => ({
   IconSearch: { name: 'IconSearch', setup: () => () => null },
+  IconRefresh: { name: 'IconRefresh', setup: () => () => null },
 }))
 // 全局图空间 store：reactive 包装（Vue 对同一 target 缓存同一代理），
 // 用例经 graphSpaceMock.state 改 current 才能触发组件的切空间重拉 watch
@@ -165,9 +166,9 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
 
     await switchToCategoryC(wrapper)
     expect(wrapper.find('.rerun-batch-action').exists()).toBe(true)
-    // 批量重跑按钮单独一行右对齐，不挤在筛选栏里
-    expect(wrapper.find('.review-toolbar-actions .rerun-batch-action').exists()).toBe(false)
-    expect(wrapper.find('.rerun-batch-row .rerun-batch-action').exists()).toBe(true)
+    // 批量重跑按钮在筛选行最左侧（与筛选项同行），不再单独成行
+    expect(wrapper.find('.review-toolbar-actions .rerun-batch-action').exists()).toBe(true)
+    expect(wrapper.find('.rerun-batch-row').exists()).toBe(false)
     expect(wrapper.find('thead .pick-col').exists()).toBe(true)
   })
 

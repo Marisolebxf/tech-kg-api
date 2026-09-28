@@ -43,7 +43,7 @@ import {
   Textarea as ATextarea,
 } from '@arco-design/web-vue'
 import QueryResultTable from './QueryResultTable.vue'
-import { IconInfoCircle } from '@arco-design/web-vue/es/icon'
+import { IconInfoCircle, IconRefresh } from '@arco-design/web-vue/es/icon'
 import { useAuthStore } from '../../stores/auth'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
 import {
@@ -1709,7 +1709,7 @@ const pageMeta = computed(() => {
               <span v-if="algoJob.finishedAt">完成 {{ formatAlgoTime(algoJob.finishedAt) }}</span>
               <span v-if="algoJob.status !== 'running' && algoJobElapsedText">耗时 {{ algoJobElapsedText }}</span>
               <span v-if="algoJob.driverState">Spark Driver：{{ algoJob.driverState }}</span>
-              <button class="kg-button kg-button--text" type="button" @click="refreshAlgoJob">刷新状态</button>
+              <button class="kg-button kg-button--text" type="button" @click="refreshAlgoJob"><IconRefresh class="refresh-icon" />刷新状态</button>
             </div>
             <div v-if="algoJob.status === 'running'" class="platform-query-algo__job-running" role="status">
               <i class="platform-query-algo__job-spinner" aria-hidden="true"></i>

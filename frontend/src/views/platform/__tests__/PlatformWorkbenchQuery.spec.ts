@@ -28,7 +28,7 @@ vi.mock('../../../api/graphAlgorithm', () => ({
   submitAlgorithmJob: vi.fn(),
 }))
 vi.mock('../../../composables/use-toast', () => ({ useToast: () => ({ showToast }) }))
-vi.mock('@arco-design/web-vue/es/icon', () => ({ IconInfoCircle: { template: '<i />' } }))
+vi.mock('@arco-design/web-vue/es/icon', () => ({ IconInfoCircle: { template: '<i />' }, IconRefresh: { template: '<i />' } }))
 
 // Preserve v-model and user selection without depending on Arco's popup layout.
 const SelectStub = defineComponent({

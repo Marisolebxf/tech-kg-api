@@ -1025,11 +1025,14 @@ function pickUploadFile() {
   uploadFileInput.value?.click()
 }
 
-async function onUploadFileChosen(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file) return
-  input.value = ''
+async function handleUploadFile(file: File) {
+  if (!file.name.toLowerCase().endsWith('.py')) {
+    uploadFileName.value = file.name
+    uploadState.value = 'error'
+    uploadMessage.value = '仅支持上传 .py 格式的脚本文件'
+    uploadIssues.value = []
+    return
+  }
   uploadFileName.value = file.name
   uploadState.value = 'working'
   uploadStage.value = 'starting'
@@ -1061,6 +1064,20 @@ async function onUploadFileChosen(event: Event) {
     uploadMessage.value = schemaErrorMessage(error)
     uploadIssues.value = []
   }
+}
+
+async function onUploadFileChosen(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  input.value = ''
+  await handleUploadFile(file)
+}
+
+async function onUploadFileDropped(event: DragEvent) {
+  const file = event.dataTransfer?.files?.[0]
+  if (!file) return
+  await handleUploadFile(file)
 }
 
 function closeUploadModal() {
@@ -1340,28 +1357,31 @@ function descCell(text: string): string {
               <div class="property-section__head"><strong>现有属性</strong><span>{{ propertyTarget?.properties.length || 0 }} 个</span></div>
               <div class="property-table">
                 <div class="property-table__row property-table__row--head">
-                  <span>属性名</span><span>类型</span><span>必填</span><span>操作</span>
+                  <span>属性名</span><span>类型</span><span>必填</span><span>属性类别</span><span>操作</span>
                 </div>
                 <div v-for="p in propertyTarget?.properties || []" :key="p.name" class="property-table__row" :class="{ 'property-table__row--locked': p.locked }">
-                  <span class="property-table__name"><code>{{ p.name }}</code><b v-if="p.locked" class="property-table__lock" title="公共必选属性，不可删除">🔒</b></span>
+                  <span class="property-table__name">
+                    <code>{{ p.name }}</code>
+                    <svg v-if="p.locked" class="property-table__lock" viewBox="0 0 24 24" aria-label="锁定" role="img" title="公共必选属性，不可删除">
+                      <path d="M7 10V7a5 5 0 0 1 10 0v3M6 10h12a2 2 0 0 1 2 2v8H4v-8a2 2 0 0 1 2-2Zm6 4v3" />
+                    </svg>
+                  </span>
                   <span class="property-table__type">{{ p.dataType }}</span>
                   <span>{{ p.required ? '是' : '否' }}</span>
-                  <span>
-                    <button v-if="!p.locked" type="button" class="schema-action-link schema-action-link--danger" @click="requestDeleteProperty(p)">删除</button>
-                    <span v-else class="property-table__locked-note">公共属性</span>
-                  </span>
+                  <span :class="p.locked ? 'property-table__category property-table__category--common' : 'property-table__category'">{{ p.locked ? '公共属性' : '自定义属性' }}</span>
+                  <span><button type="button" class="schema-action-link schema-action-link--danger" :disabled="p.locked" :title="p.locked ? '公共属性不可删除' : '删除属性'" @click="!p.locked && requestDeleteProperty(p)">删除</button></span>
                 </div>
               </div>
             </div>
             <div class="property-section">
               <div class="property-section__head"><strong>新增属性</strong><span>新增后在图库执行 ALTER ADD（可空列）</span></div>
               <div class="property-add-form">
-                <input aria-label="属性名（字母/数字/下划线）" v-model="propertyForm.name" :maxlength="PROP_NAME_RULE.max" placeholder="属性名（字母/数字/下划线）" class="property-add-form__name" :class="{ 'is-at-limit': atLimit(propertyForm.name, PROP_NAME_RULE.max) }" />
+                <a-input v-model="propertyForm.name" :max-length="PROP_NAME_RULE.max" aria-label="属性名（字母/数字/下划线）" placeholder="属性名（字母/数字/下划线）" class="property-add-form__name" :class="{ 'is-at-limit': atLimit(propertyForm.name, PROP_NAME_RULE.max) }" />
                 <a-select v-model="propertyForm.dataType" class="property-add-form__type" popup-container=".property-modal" :scrollbar="false">
                   <a-option v-for="t in PROPERTY_TYPES" :key="t" :value="t">{{ t }}</a-option>
                 </a-select>
                 <input aria-label="1~1024" v-if="propertyForm.dataType === 'fixed_string'" :value="propertyForm.length" type="text" inputmode="numeric" :maxlength="FIXED_STRING_MAX_INPUT_CHARS" class="property-add-form__len" :class="{ 'property-add-form__len--invalid': propertyLengthInvalid }" :title="propertyLengthError || undefined" placeholder="1~1024" @input="onPropertyLengthInput" />
-                <label class="property-add-form__required"><input aria-label="required" v-model="propertyForm.required" type="checkbox" />必填</label>
+                <a-checkbox v-model="propertyForm.required" class="property-add-form__required">必填</a-checkbox>
                 <button type="button" class="primary" :disabled="propertySaving" @click="submitAddProperty">{{ propertySaving ? '新增中...' : '＋ 新增属性' }}</button>
               </div>
               <p v-if="propertyForm.dataType === 'fixed_string'" class="prop-length-live" :class="{ 'prop-length-live--invalid': propertyLengthInvalid }">长度：当前 {{ propertyForm.length || '—' }}，可定义 {{ FIXED_STRING_MIN }}~{{ FIXED_STRING_MAX }}</p>
@@ -1458,8 +1478,14 @@ function descCell(text: string): string {
           <header><h2>上传脚本 · {{ uploadTargetName }}</h2><button type="button" @click="closeUploadModal">×</button></header>
           <div class="schema-modal__body">
             <div v-if="uploadState === 'idle'" class="upload-idle">
-              <p>选择 .py 脚本文件，上传后将通过 LLM 进行安全校验，校验通过才会保存。支持多步脚本：<code>from kg_sdk import step</code> 后在顶层函数上标注 <code>@step</code>（顺序 = 函数出现顺序，平台按序执行、逐步重试；也兼容顶层 STEPS 清单声明）。</p>
-              <button type="button" class="primary" @click="pickUploadFile">选择 .py 文件</button>
+              <div class="upload-dropzone" role="button" tabindex="0" @click="pickUploadFile" @keydown.enter.prevent="pickUploadFile" @keydown.space.prevent="pickUploadFile" @dragover.prevent @drop.prevent="onUploadFileDropped">
+                <span class="upload-dropzone__icon" aria-hidden="true">＋</span>
+                <strong>添加脚本文件</strong>
+                <span>点击选择或将文件拖拽到此处</span>
+                <small>仅支持 .py 文件，上传后将通过 LLM 安全校验，校验通过才会保存</small>
+                <button type="button" class="primary" tabindex="-1" @click.stop="pickUploadFile">选择 .py 文件</button>
+              </div>
+              <p class="upload-idle__hint">支持多步脚本：<code>from kg_sdk import step</code> 后在顶层函数上标注 <code>@step</code>（顺序 = 函数出现顺序，平台按序执行、逐步重试；也兼容顶层 STEPS 清单声明）。</p>
             </div>
             <div v-else-if="uploadState === 'working'" class="upload-working">
               <div class="spinner" aria-label="校验中"></div>
@@ -1672,31 +1698,42 @@ function descCell(text: string): string {
 .property-section__head strong{font-size:13px;color:#1d2129}
 .property-section__head span{font-size:11px;color:#86909c}
 .property-table{display:flex;flex-direction:column;border:1px solid #e5e6eb;border-radius:6px;overflow:hidden}
-.property-table__row{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(90px,1fr) 60px 90px;gap:8px;align-items:center;padding:7px 12px;border-bottom:1px solid #f2f3f5;font-size:12px;color:#4e5969}
+.property-table__row{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(90px,1fr) 52px 82px 64px;gap:8px;align-items:center;padding:7px 12px;border-bottom:1px solid #f2f3f5;font-size:12px;color:#4e5969}
 .property-table__row:last-child{border-bottom:0}
 .property-table__row--head{background:#f7f8fa;font-size:11px;color:#86909c}
 .property-table__row--locked{background:#fffbf4}
 .property-table__name{display:flex;align-items:center;gap:6px;min-width:0}
 .property-table__name code{overflow:hidden;padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:11px;text-overflow:ellipsis;white-space:nowrap}
-.property-table__lock{font-size:11px;font-weight:400}
+.property-table__lock{flex:0 0 auto;width:16px;height:16px;fill:none;stroke:#4e5969;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 .property-table__type{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;color:#86909c}
-.property-table__locked-note{font-size:11px;color:#b54708}
+.property-table__category{color:#86909c;white-space:nowrap}
+.property-table__category--common{color:#4e5969}
 .property-add-form{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(110px,1fr) auto auto;gap:8px;align-items:center}
-.property-add-form__name,.property-add-form__len{height:32px;padding:0 10px;border:1px solid #c9cdd4;border-radius:4px;font-size:13px;color:#1d2129;background:#fff}
-.property-add-form__name{box-sizing:border-box;width:100%}
+.property-add-form__len{height:32px;padding:0 10px;border:1px solid #c9cdd4;border-radius:4px;font-size:13px;color:#1d2129;background:#fff}
+.property-add-form__name{box-sizing:border-box;width:100%;height:32px}
+.property-add-form__name.arco-input-wrapper{border:1px solid #e5e6eb;border-radius:4px;background:#fff;box-shadow:none}
+.property-add-form__name.arco-input-wrapper:hover{border-color:#c9cdd4}
+.property-add-form__name.arco-input-focus{border-color:#165dff;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
 .property-add-form__len{width:72px;grid-column:3}
 .property-add-form__type{min-width:0}
 .property-add-form__type :deep(.arco-select-view){box-sizing:border-box;width:100%;height:32px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;font-size:13px;line-height:22px}
-.property-add-form__required{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#4e5969;white-space:nowrap}
-.property-add-form__required input{margin:0}
+.property-add-form__required{display:inline-flex;align-items:center;font-size:12px;color:#4e5969;white-space:nowrap}
+.property-add-form__required :deep(.arco-checkbox-icon){width:16px;height:16px;border-radius:3px}
 .property-add-form .primary{height:32px;padding:0 14px;border:0;border-radius:4px;background:#165dff;color:#fff;font-size:13px;cursor:pointer;white-space:nowrap}
 .property-add-form .primary:hover{background:#0e4ed8}
 .property-add-form .primary:disabled{opacity:.6;cursor:not-allowed}
 
 /* 上传脚本弹窗 */
 .script-upload-modal .schema-modal__body{min-height:140px}
-.upload-idle{display:flex;flex-direction:column;gap:14px;align-items:center;padding:14px 0;text-align:center}
+.upload-idle{display:flex;flex-direction:column;gap:12px;align-items:stretch;padding:2px 0;text-align:center}
 .upload-idle p{margin:0;color:#4e5969;font-size:13px;line-height:20px}
+.upload-dropzone{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;min-height:190px;padding:24px;border:1px dashed #a9b4c6;border-radius:8px;background:#fafcff;cursor:pointer;transition:border-color .15s ease,background .15s ease}
+.upload-dropzone:hover,.upload-dropzone:focus-visible{border-color:#165dff;background:#f2f7ff;outline:0}
+.upload-dropzone__icon{display:grid;place-items:center;width:36px;height:36px;border-radius:50%;background:#e8f3ff;color:#165dff;font-size:24px;line-height:1}
+.upload-dropzone strong{color:#1d2129;font-size:14px;line-height:22px;font-weight:500}
+.upload-dropzone>span:not(.upload-dropzone__icon){color:#4e5969;font-size:13px;line-height:20px}
+.upload-dropzone small{color:#86909c;font-size:12px;line-height:20px}
+.upload-idle__hint{padding:0 8px;color:#86909c!important;font-size:12px!important;line-height:20px!important;text-align:left}
 .upload-idle .primary{height:34px;padding:0 18px;border:0;border-radius:6px;background:#165dff;color:#fff;font-size:13px;cursor:pointer}
 .upload-working{display:flex;align-items:center;gap:16px;padding:10px 4px}
 .spinner{flex:0 0 auto;width:28px;height:28px;border:3px solid #e3ebf6;border-top-color:#165dff;border-radius:50%;animation:spin 0.9s linear infinite}
@@ -1913,7 +1950,7 @@ function descCell(text: string): string {
 .schema-table-wrap td b{font-weight:400}
 .legend-item,.schema-topology-canvas__empty,.schema-flow span,.schema-flow>header span,.candidate-note p,.mention-fields span,.trace-card p,.trace-card dd,.trace-card code,.trace-card>header b,.trace-layout header>span,.trace-layout>aside strong,.trace-layout>aside span{font-size:12px;line-height:20px;font-weight:400}
 .script-badge{font-size:12px;line-height:20px;font-weight:400}
-.schema-delete-text,.property-table__row,.property-table__name code,.property-table__lock,.property-table__type,.property-table__locked-note,.property-add-form__name,.property-add-form__len,.property-add-form__type :deep(.arco-select-view),.property-add-form__required,.property-add-form .primary,.upload-idle p,.upload-idle .primary,.upload-working__text strong,.upload-result strong,.view-loading,.view-error{font-size:14px;line-height:22px;font-weight:400}
+.schema-delete-text,.property-table__row,.property-table__name code,.property-table__type,.property-table__category,.property-add-form__name,.property-add-form__len,.property-add-form__type :deep(.arco-select-view),.property-add-form__required,.property-add-form .primary,.upload-idle p,.upload-idle .primary,.upload-working__text strong,.upload-result strong,.view-loading,.view-error{font-size:14px;line-height:22px;font-weight:400}
 .schema-delete-note,.property-section__head span,.upload-stage,.upload-message,.upload-result span,.upload-result__msg,.upload-result__issues,.script-pre code,.create-ddl__pre,.create-ddl__confirm,.create-sources__hint,.sources-note{font-size:12px;line-height:20px;font-weight:400}
 .schema-modal__body label,.schema-modal__body input,.schema-modal__body textarea,.schema-modal__panel footer button,.create-field,.create-text-input,.create-field textarea,.create-field select,.create-props__head,.create-props__add,.prop-name,.prop-type,.prop-len,.prop-required{font-size:14px;line-height:22px;font-weight:400}
 .schema-version-message{font-size:12px;line-height:20px;font-weight:400}

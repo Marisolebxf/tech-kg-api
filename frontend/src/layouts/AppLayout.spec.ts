@@ -117,6 +117,17 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
     for (const path of ['/overview', ...queryPaths, ...managementPaths, ...sharedPaths]) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(true)
   })
 
+  it.each([
+    ['/graph-build/jobs/job-1', '/graph-build', '/manual-review'],
+    ['/manual-review/task/instance-1', '/manual-review', '/graph-build'],
+  ])('详情页 %s 保持父级导航 %s 的选中状态', async (path, activePath, inactivePath) => {
+    const { wrapper } = await renderLayout(true, path)
+    const navigation = wrapper.get('.app-nav')
+
+    expect(navigation.get(`a[href="${activePath}"]`).classes()).toContain('app-nav__item--active')
+    expect(navigation.get(`a[href="${inactivePath}"]`).classes()).not.toContain('app-nav__item--active')
+  })
+
   it('侧边栏收起后普通用户不能通过图标或飞出菜单进入管理页', async () => {
     const { wrapper } = await renderLayout(false, '/expert-direct', true)
     const navigation = wrapper.get('.app-nav')

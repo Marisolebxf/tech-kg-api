@@ -59,6 +59,9 @@ const userRoleDescription = computed(() =>
 const pageTitle = computed(() => String(route.meta.title ?? "亿级知识图谱"));
 // 全局图空间选择器只挂在平台总览页（所有角色都可见该页），与面包屑标题同行靠右
 const isOverviewPage = computed(() => route.path === "/overview");
+function isNavSectionActive(basePath: string) {
+  return route.path === basePath || route.path.startsWith(`${basePath}/`);
+}
 const routeError = ref("");
 const serviceNavCollapsed = ref(false);
 // 图谱查询折叠组（综合查询 / 实体列表 / 图谱可视化）
@@ -401,6 +404,7 @@ onBeforeUnmount(() => {
             </RouterLink>
             <RouterLink
               class="app-nav__item app-nav__item--top app-nav__item--leaf"
+              :class="{ 'app-nav__item--active': isNavSectionActive('/graph-build') }"
               active-class="app-nav__item--active"
               to="/graph-build"
               :title="sidebarCollapsed ? '图谱构建' : undefined"
@@ -414,6 +418,7 @@ onBeforeUnmount(() => {
             </RouterLink>
             <RouterLink
               class="app-nav__item app-nav__item--top app-nav__item--leaf"
+              :class="{ 'app-nav__item--active': isNavSectionActive('/manual-review') }"
               active-class="app-nav__item--active"
               to="/manual-review"
               :title="sidebarCollapsed ? '人工审核' : undefined"

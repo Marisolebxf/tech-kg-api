@@ -1,14 +1,25 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onErrorCaptured, ref } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
 
 import KgToast from './components/kg-toast.vue'
+import GraphSpaceSelector from './components/GraphSpaceSelector.vue'
 import AppLayout from './layouts/AppLayout.vue'
 import { usePortalIntegration } from './portal/usePortalIntegration'
 
 const route = useRoute()
 const useBlankLayout = computed(() => route.meta.layout === 'blank')
 const { isEmbedded, portalStatusText } = usePortalIntegration()
+// 嵌入门户时不渲染 AppLayout，图空间选择器改挂嵌入态标题行右侧（口径同 AppLayout 面包屑行）
+const isOverviewPage = computed(() => route.path === '/overview')
+// 嵌入态没有 AppLayout 的 onErrorCaptured 兜底：视图渲染错误会直通全局 errorHandler
+// 把门户里的整页炸成「页面启动异常」。这里补同款路由级错误边界。
+const routeError = ref('')
+
+onErrorCaptured((error) => {
+  routeError.value = error instanceof Error ? error.message : String(error)
+  return false
+})
 const embeddedPageTitle = computed(() => String(route.meta.title ?? '亿级科技知识图谱引擎'))
 const showEmbeddedAuthState = computed(
   () => isEmbedded.value && route.name === 'login',
@@ -31,12 +42,22 @@ const showEmbeddedAuthState = computed(
       :class="{ 'is-overview-page': route.path === '/overview' }"
     >
       <section class="portal-embedded-stage">
-        <div class="portal-embedded-page-title">{{ embeddedPageTitle }}</div>
+        <div
+          class="portal-embedded-title-row"
+          :class="{ 'portal-embedded-title-row--with-select': isOverviewPage }"
+        >
+          <div class="portal-embedded-page-title">{{ embeddedPageTitle }}</div>
+          <GraphSpaceSelector v-if="isOverviewPage" />
+        </div>
         <section
           class="app-workspace portal-embedded-workspace"
           :aria-label="embeddedPageTitle"
         >
-          <RouterView />
+          <div v-if="routeError" class="route-error">
+            <strong>页面渲染异常</strong>
+            <span>{{ routeError }}</span>
+          </div>
+          <RouterView v-else />
         </section>
       </section>
     </main>
@@ -87,7 +108,8 @@ const showEmbeddedAuthState = computed(
   box-sizing: border-box;
   position: relative;
   display: grid;
-  grid-template-rows: 22px minmax(0, 1fr);
+  /* 首行随标题行内容自适应：平台总览页右侧挂图空间选择器时撑到 32px，其余页 22px */
+  grid-template-rows: minmax(22px, auto) minmax(0, 1fr);
   gap: 16px;
   width: 100%;
   height: 100%;
@@ -100,6 +122,24 @@ const showEmbeddedAuthState = computed(
   backdrop-filter: blur(8px);
   overflow: hidden;
   scrollbar-gutter: auto;
+}
+
+.portal-embedded-title-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  height: 22px;
+}
+
+/* 平台总览页：标题行右侧挂图空间选择器（a-select 默认 32px 高），与 AppLayout 面包屑行同款 */
+.portal-embedded-title-row--with-select {
+  width: 100%;
+  height: 32px;
+}
+
+.portal-embedded-title-row--with-select > .app-space-select {
+  margin-left: auto;
 }
 
 .portal-embedded-stage::after {
@@ -124,6 +164,27 @@ const showEmbeddedAuthState = computed(
 
 .portal-embedded-workspace::-webkit-scrollbar {
   display: none;
+}
+
+.route-error {
+  display: grid;
+  align-content: center;
+  gap: 10px;
+  height: 100%;
+  padding: 32px;
+  color: #b42318;
+  background: #fff7f6;
+  border: 1px solid #fecdca;
+  border-radius: var(--radius-md);
+}
+
+.route-error strong {
+  font-size: 18px;
+}
+
+.route-error span {
+  color: #912018;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 767px) {

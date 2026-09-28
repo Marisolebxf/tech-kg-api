@@ -1319,24 +1319,40 @@ function descCell(text: string): string {
         <aside class="schema-modal__panel schema-delete-panel">
           <header><h2>删除 Schema</h2><button type="button" @click="deleteModalOpen = false">×</button></header>
           <div class="schema-modal__body">
-            <p class="schema-delete-text">确认删除 <b>{{ deleteTarget?.label || deleteTarget?.name }}</b>（<code>{{ deleteTarget?.name }}</code>）？</p>
+            <div class="schema-delete-summary">
+              <span class="schema-delete-summary__icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M12 3 2.8 19a1.4 1.4 0 0 0 1.2 2h16a1.4 1.4 0 0 0 1.2-2L12 3Zm0 6v5m0 3.5v.1" /></svg>
+              </span>
+              <div>
+                <h3>确认删除“{{ deleteTarget?.label || deleteTarget?.name }}”吗？</h3>
+                <p>Schema 名称：<code>{{ deleteTarget?.name }}</code>。删除后无法恢复，请谨慎操作。</p>
+              </div>
+            </div>
             <template v-if="deleteTarget?.kind === 'entity'">
-              <div v-if="deleteImpactLoading" class="schema-delete-note">正在检查该实体的关系引用...</div>
+              <div v-if="deleteImpactLoading" class="schema-delete-checking"><span class="spinner"></span>正在检查该实体的关系引用...</div>
               <template v-else-if="blockingRelations.length">
-                <p class="schema-delete-block-title">该实体仍被 {{ blockingRelations.length }} 个关系引用，删除前需先在「关系」页签删除这些关系：</p>
-                <ul class="schema-delete-rel-list">
-                  <li v-for="rel in blockingRelations" :key="rel.id">
-                    <code>{{ rel.name }}</code><span>{{ rel.label }}</span>
-                  </li>
-                </ul>
-                <p class="schema-delete-note">关系未删除完之前，无法删除该实体。</p>
+                <div class="schema-delete-impact schema-delete-impact--blocked">
+                  <strong>暂时无法删除</strong>
+                  <p>该实体仍被 {{ blockingRelations.length }} 个关系引用，请先在“关系”页签删除以下关系：</p>
+                  <ul class="schema-delete-rel-list">
+                    <li v-for="rel in blockingRelations" :key="rel.id">
+                      <code>{{ rel.name }}</code><span>{{ rel.label }}</span>
+                    </li>
+                  </ul>
+                </div>
               </template>
               <template v-else>
-                <p class="schema-delete-warn"><b class="danger-text">该实体的相关关系已全部删除。确认删除实体后，图数据空间 {{ deleteTarget.graphSpace || activeSpace }} 中该类型的全部实体点将被一并删除，不可恢复。</b></p>
+                <div class="schema-delete-impact schema-delete-impact--danger">
+                  <strong>删除影响</strong>
+                  <p>该实体的相关关系已全部删除。继续操作将永久删除图空间 <b>{{ deleteTarget.graphSpace || activeSpace }}</b> 中该类型的全部实体点。</p>
+                </div>
               </template>
             </template>
             <template v-else>
-              <p class="schema-delete-warn"><b class="danger-text">确认删除后，图数据空间 {{ deleteTarget?.graphSpace || activeSpace }} 中该类型的全部关系边将被一并删除，不可恢复。</b></p>
+              <div class="schema-delete-impact schema-delete-impact--danger">
+                <strong>删除影响</strong>
+                <p>继续操作将永久删除图空间 <b>{{ deleteTarget?.graphSpace || activeSpace }}</b> 中该类型的全部关系边。</p>
+              </div>
             </template>
           </div>
           <footer>
@@ -1483,7 +1499,6 @@ function descCell(text: string): string {
                 <strong>添加脚本文件</strong>
                 <span>点击选择或将文件拖拽到此处</span>
                 <small>仅支持 .py 文件，上传后将通过 LLM 安全校验，校验通过才会保存</small>
-                <button type="button" class="primary" tabindex="-1" @click.stop="pickUploadFile">选择 .py 文件</button>
               </div>
               <p class="upload-idle__hint">支持多步脚本：<code>from kg_sdk import step</code> 后在顶层函数上标注 <code>@step</code>（顺序 = 函数出现顺序，平台按序执行、逐步重试；也兼容顶层 STEPS 清单声明）。</p>
             </div>
@@ -1680,12 +1695,22 @@ function descCell(text: string): string {
 .schema-modal__panel footer button:disabled{opacity:.6;cursor:not-allowed}
 
 /* 删除确认弹窗 */
-.schema-delete-panel{max-width:440px}
-.schema-delete-text{margin:0;font-size:13px;line-height:22px;color:#1d2129}
+.schema-delete-panel{max-width:480px}
+.schema-delete-summary{display:flex;align-items:flex-start;gap:12px}
+.schema-delete-summary__icon{display:grid;flex:0 0 auto;place-items:center;width:40px;height:40px;border-radius:50%;background:#fff1f0;color:#e5484d}
+.schema-delete-summary__icon svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.schema-delete-summary h3{margin:0;color:#1d2129;font-size:16px;line-height:24px;font-weight:600}
+.schema-delete-summary p{margin:4px 0 0;color:#86909c;font-size:13px;line-height:20px}
+.schema-delete-summary code{padding:1px 5px;border-radius:3px;background:#f2f3f5;color:#4e5969}
+.schema-delete-checking{display:flex;align-items:center;gap:8px;margin-left:52px;color:#86909c;font-size:12px;line-height:20px}
+.schema-delete-checking .spinner{width:16px;height:16px;border-width:2px}
+.schema-delete-impact{margin-left:52px;padding:12px 14px;border:1px solid;border-radius:6px}
+.schema-delete-impact strong{display:block;margin-bottom:4px;font-size:13px;line-height:20px;font-weight:500}
+.schema-delete-impact p{margin:0;font-size:12px;line-height:20px}
+.schema-delete-impact--danger{border-color:#ffccc7;background:#fff2f0;color:#b42318}
+.schema-delete-impact--blocked{border-color:#ffe4ba;background:#fff7e8;color:#b54708}
 .schema-delete-note{margin:0;font-size:11px;line-height:18px;color:#86909c}
-.schema-delete-warn{margin:0;padding:8px 12px;border:1px solid #f6b9b4;border-radius:6px;background:#fff3f3;font-size:12px;line-height:20px;color:#b42318}
-.schema-delete-block-title{margin:0;font-size:12px;line-height:20px;color:#b54708}
-.schema-delete-rel-list{margin:0;padding:8px 12px;max-height:180px;overflow:auto;border:1px solid #fde3c8;border-radius:6px;background:#fffbf4;list-style:none}
+.schema-delete-rel-list{margin:8px 0 0;padding:6px 10px;max-height:160px;overflow:auto;border:1px solid rgba(181,71,8,.16);border-radius:4px;background:rgba(255,255,255,.72);list-style:none}
 .schema-delete-rel-list li{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px;line-height:20px;color:#4e5969}
 .schema-delete-rel-list li+li{border-top:1px dashed #f5e5d3}
 .schema-delete-rel-list code{padding:1px 6px;border-radius:4px;background:#edf4ff;color:#165dff}
@@ -1720,11 +1745,14 @@ function descCell(text: string): string {
 .property-add-form__name.arco-input-wrapper{border:1px solid #e5e6eb;border-radius:4px;background:#fff;box-shadow:none}
 .property-add-form__name.arco-input-wrapper:hover{border-color:#c9cdd4}
 .property-add-form__name.arco-input-focus{border-color:#165dff;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
+.property-add-form__name :deep(.arco-input){box-sizing:border-box;height:30px!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;line-height:30px!important}
 .property-add-form__len{width:72px;grid-column:3}
 .property-add-form__type{min-width:0}
 .property-add-form__type :deep(.arco-select-view){box-sizing:border-box;width:100%;height:32px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;font-size:13px;line-height:22px}
-.property-add-form__required{display:inline-flex;align-items:center;font-size:12px;color:#4e5969;white-space:nowrap}
+.schema-modal__body .property-add-form__required{display:inline-flex;box-sizing:border-box;flex-direction:row;align-items:center;justify-content:center;gap:0;height:32px;padding:0 10px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#4e5969;font-size:12px;white-space:nowrap;cursor:pointer}
+.schema-modal__body .property-add-form__required:hover{border-color:#c9cdd4;background:#f7f8fa}
 .property-add-form__required :deep(.arco-checkbox-icon){width:16px;height:16px;border-radius:3px}
+.property-add-form__required :deep(.arco-checkbox-label){margin-left:6px;line-height:22px}
 .property-add-form .primary{height:32px;padding:0 14px;border:0;border-radius:4px;background:#165dff;color:#fff;font-size:13px;cursor:pointer;white-space:nowrap}
 .property-add-form .primary:hover{background:#0e4ed8}
 .property-add-form .primary:disabled{opacity:.6;cursor:not-allowed}

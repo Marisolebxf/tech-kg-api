@@ -168,7 +168,9 @@ async def browse_entities(
     space: str | None = Query(None, max_length=64, description="图空间，缺省当前空间"),
     entityType: str | None = Query(None, max_length=64, description="实体类型过滤"),
     limit: int = Query(10, ge=1, le=100, description="每页条数"),
-    offset: int = Query(0, ge=0, le=100000),
+    # 跳页框直跳深页：图空间实体量已达十万级（yunfei_test 17.6 万），旧 10 万上限
+    # 会让末尾页区间直接 422；放大为千万级护栏，越界页由图侧自然返回空。
+    offset: int = Query(0, ge=0, le=10_000_000),
 ) -> ApiResponse:
     """浏览实体（关键词为空的默认视图）：图空间直查分页，页内按 vid 排序。"""
     _ensure_space_access(actor, space)

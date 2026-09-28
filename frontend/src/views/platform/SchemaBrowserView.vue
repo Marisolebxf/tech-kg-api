@@ -1752,7 +1752,12 @@ function descCell(text: string): string {
 .create-sources__head{display:grid;align-items:center;grid-template-columns:minmax(0,1fr) auto;column-gap:8px;row-gap:8px;font-size:12px;color:#4e5969}
 .create-sources__head>span:first-child,.create-ddl__label{color:#4e5969;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
 .create-sources__hint{grid-column:1/-1;color:#86909c;font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
-.sources-panel{width:min(760px,100%)}
+/* 来源表弹窗加宽：绑定行五列有 720px 像素下限，760px 宽时整块横向拖动；
+   880px 刚好完整展示行内选项且无多余留白，内容区加高到 72vh 多看几行绑定。
+   双类名提高优先级：压过后方可读性规范化块的 .schema-modal__panel{min(560px)} 统一宽度。
+   footer 纵向居中由规范化块的通用 .schema-modal__panel footer{align-items:center} 提供 */
+.schema-modal__panel.sources-panel{width:min(880px,96vw)}
+.sources-panel .schema-modal__body{max-height:72vh}
 .sources-note{margin:0;font-size:12px;line-height:20px;color:#86909c}
 .schema-create-body>.create-field,.schema-create-body>.create-props,.create-row>.create-field{margin-bottom:0;gap:0}.schema-create-body>.create-props{gap:0}.create-ddl{margin-top:0;gap:8px}.create-ddl__confirm{margin:0}
 
@@ -1828,7 +1833,7 @@ function descCell(text: string): string {
 .prop-locked-type{grid-column:2;align-self:center;color:#86909c;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 .prop-locked-required{display:inline-flex;box-sizing:border-box;grid-column:3;align-items:center;justify-self:start;height:28px;padding:0 8px;border-radius:4px;background:#f2f3f5;color:#4e5969;font-size:14px;line-height:22px;white-space:nowrap}
 .prop-locked-required__state{display:inline-flex;align-items:center;margin-left:8px;padding-left:8px;border-left:1px solid #c9cdd4;color:#86909c;font-size:12px;line-height:20px}
-.schema-modal__panel footer{height:64px;box-sizing:border-box;gap:16px;padding:0 24px}.schema-create-panel footer{align-items:center;padding:16px 24px}.schema-modal__panel footer button{height:32px;padding:0 16px;font-size:14px;line-height:22px}
+.schema-modal__panel footer{height:64px;box-sizing:border-box;gap:16px;padding:0 24px;align-items:center}.schema-create-panel footer{padding:16px 24px}.schema-modal__panel footer button{height:32px;padding:0 16px;font-size:14px;line-height:22px}
 :is(.schema-llm-select){box-sizing:border-box;width:100%;min-width:0}
 :is(.schema-llm-select) :deep(.arco-select-view){box-sizing:border-box;width:100%;height:32px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;font-size:14px;line-height:22px}
 :is(.schema-llm-select) :deep(.arco-select-view-input){height:100%!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important}

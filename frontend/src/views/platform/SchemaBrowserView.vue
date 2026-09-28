@@ -1732,7 +1732,7 @@ function descCell(text: string): string {
 .property-table__row{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(90px,1fr) 52px 82px 64px;gap:8px;align-items:center;padding:7px 12px;border-bottom:1px solid #f2f3f5;font-size:12px;color:#4e5969}
 .property-table__row:last-child{border-bottom:0}
 .property-table__row--head{background:#f7f8fa;font-size:11px;color:#86909c}
-.property-table__row--locked{background:#fffbf4}
+.property-table__row--locked{background:#fff}
 .property-table__name{display:flex;align-items:center;gap:6px;min-width:0}
 .property-table__name code{overflow:hidden;padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:11px;text-overflow:ellipsis;white-space:nowrap}
 .property-table__lock{flex:0 0 auto;width:16px;height:16px;fill:none;stroke:#4e5969;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}

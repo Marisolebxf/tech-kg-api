@@ -680,6 +680,7 @@ onMounted(async () => {
       </div>
       <ListPagination
         v-if="execTotal > 0"
+        class="execution-pagination"
         :total="execTotal"
         :page="execPage"
         :page-size="execPageSize"
@@ -777,11 +778,11 @@ onMounted(async () => {
           <template v-if="processingInstance">
             <section class="lineage-compare">
               <header><div><h3>来源与执行依据</h3><p>Schema 来源绑定、抽取脚本与任务真实参数；行级原始值不落库，不做编造展示</p></div><span>{{ lineageSourceRows.length }} 条依据</span></header>
-              <table><thead><tr><th>对象</th><th>关键字段</th><th>当前值</th><th>用途</th></tr></thead><tbody><tr v-for="row in lineageSourceRows" :key="`${row.table}-${row.field}`"><td><code>{{ row.table }}</code></td><td><code>{{ row.field }}</code></td><td class="raw-value"><a-tooltip v-if="row.raw.length > 48" :content="row.raw" position="top"><span class="raw-value-text">{{ row.raw }}</span></a-tooltip><span v-else class="raw-value-text">{{ row.raw }}</span></td><td>{{ row.basis }}</td></tr></tbody></table>
+              <table><thead><tr><th>对象</th><th>关键字段</th><th>当前值</th><th>用途</th></tr></thead><tbody><tr v-for="row in lineageSourceRows" :key="`${row.table}-${row.field}`"><td><code>{{ row.table }}</code></td><td><code>{{ row.field }}</code></td><td class="raw-value"><a-tooltip position="top" content-class="lineage-value-tooltip"><span class="raw-value-text">{{ row.raw }}</span><template #content><div class="lineage-tooltip-content">{{ row.raw }}</div></template></a-tooltip></td><td>{{ row.basis }}</td></tr></tbody></table>
             </section>
             <section v-if="lineageResultRows.length" class="lineage-compare">
               <header><div><h3>本次执行来源结果</h3><p>工作流回写的真实分批统计与水位推进（游标在来源全部批次成功后一次性推进）</p></div><span>{{ lineageResultRows.length }} 个来源</span></header>
-              <table><thead><tr><th>来源表</th><th>批次</th><th>读取行</th><th>写入行</th><th>失败行</th><th>推进水位 / 游标</th></tr></thead><tbody><tr v-for="row in lineageResultRows" :key="row.table"><td><code>{{ row.table }}</code></td><td>{{ row.batches }}</td><td>{{ row.rows }}</td><td>{{ row.written }}</td><td :class="{ danger: Number(row.failed) > 0 }">{{ row.failed }}</td><td class="raw-value">{{ row.cursor }}</td></tr></tbody></table>
+              <table class="lineage-result-table"><colgroup><col class="lineage-result-source" /><col class="lineage-result-count" span="4" /><col class="lineage-result-cursor" /></colgroup><thead><tr><th>来源表</th><th>批次</th><th>读取行</th><th>写入行</th><th>失败行</th><th>推进水位 / 游标</th></tr></thead><tbody><tr v-for="row in lineageResultRows" :key="row.table"><td><code>{{ row.table }}</code></td><td>{{ row.batches }}</td><td>{{ row.rows }}</td><td>{{ row.written }}</td><td :class="{ danger: Number(row.failed) > 0 }">{{ row.failed }}</td><td class="raw-value cursor-value"><a-tooltip position="top" content-class="lineage-value-tooltip"><span class="raw-value-text">{{ row.cursor }}</span><template #content><div class="lineage-tooltip-content">{{ row.cursor }}</div></template></a-tooltip></td></tr></tbody></table>
             </section>
             <section><h3>处理链路</h3><div class="lineage"><span>{{ lineageChainSource }}<small>{{ schemaDetail?.label || schemaDetail?.key || 'Schema 未关联或已删除' }}</small></span><b>→</b><span>{{ schemaDetail?.script?.filename || processingInstance.objectName || '转换脚本' }}<small>脚本转换（只输出 JSON）</small></span><b>→</b><span>写入图空间<small>{{ lineageGraphSpace }} · nGQL INSERT</small></span><template v-if="isExecutionInterrupted"><b>→</b><span>下游未执行<small>游标停在上一轮</small></span></template><template v-else><b>→</b><span>{{ selectedExecution ? executionStatusLabel(selectedExecution.status) : taskStatus }}<small>{{ lineageResultSummary }}</small></span></template></div></section>
           </template>
@@ -889,6 +890,8 @@ onMounted(async () => {
 .exec-status-cell.ok{color:#067647}
 .exec-status-cell.warn{color:#b54708}
 .exec-status-cell.err{color:#b42318}
+/* 分页器贴合执行历史卡片左右边缘，控件到下边框保留 16px。 */
+.job-executions-panel :deep(.execution-pagination){margin:0 -18px -14px;padding:12px 18px 16px}
 /* 外层工作区已有 16px 内边距，详情页不再叠加额外底部留白。 */
 .task-detail-page{box-sizing:border-box;padding-bottom:0}
 /* 验收通过与执行结果使用一致的绿色状态底，不再强调卡片边框。 */
@@ -898,5 +901,13 @@ onMounted(async () => {
 .lineage-compare code{padding:0;background:transparent}
 .lineage-compare .raw-value{max-width:0;overflow:hidden;white-space:nowrap}
 .raw-value-text{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 当前值统一支持完整值浮窗；长 SQL 限高后在浮窗内部滚动，避免超出视口。 */
+:global(.lineage-value-tooltip){box-sizing:border-box;max-width:min(420px,calc(100vw - 32px))!important;padding:8px 6px 8px 12px!important}
+.lineage-tooltip-content{max-height:min(260px,50vh);padding-right:6px;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;white-space:pre-wrap;word-break:break-word}
+/* 给水位/游标预留更宽列，常规日期可完整显示；超长游标仍可悬停查看。 */
+.lineage-result-table .lineage-result-source{width:24%}
+.lineage-result-table .lineage-result-count{width:11%}
+.lineage-result-table .lineage-result-cursor{width:32%}
+.lineage-result-table .cursor-value{white-space:nowrap}
 /* 处理链路仅用浅色背景区分节点，箭头继续表达流向。 */
 .lineage span{border:0}</style>

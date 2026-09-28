@@ -352,7 +352,6 @@ const handleDecide = (accepted: boolean) => {
 <template>
   <div class="direct-demo">
     <header class="dd-head">
-      <RouterLink to="/manual-review" class="dd-back">← 返回处理队列</RouterLink>
       <h1>人工审核 · 候选入库决策</h1>
       <div class="dd-meta">
         <code>{{ currentCase.id }}</code>
@@ -488,12 +487,6 @@ const handleDecide = (accepted: boolean) => {
   margin-bottom: 20px;
   padding-bottom: 16px;
   border-bottom: 1px solid #e4ecf6;
-}
-
-.dd-back {
-  color: #165dff;
-  font-size: 12px;
-  text-decoration: none;
 }
 
 .dd-head h1 {

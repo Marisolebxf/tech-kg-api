@@ -159,7 +159,8 @@ test.describe.serial('F. 批次抽取管道', () => {
     await completedRow.getByRole('button', { name: '日志' }).click()
     await page.locator(`.case-log-modal a[href*="${rerunExecId}"]`).click()
     await page.waitForURL(/processing-instance\//, { timeout: 15_000 })
-    await expect(page.getByText('← 返回图谱构建')).toBeVisible({ timeout: 30_000 })
+    // 返回链接已由统一面包屑承担：执行详情页当前页为「任务实例详情」
+    await expect(page.locator('.app-breadcrumb')).toContainText('任务实例详情', { timeout: 30_000 })
     const rerunDetail = await apiMust<any>(request, 'GET', `/workflow-system/executions/${rerunExecId}`, undefined, '重跑执行详情')
     expect(rerunDetail.triggerSource).toBe('RERUN')
   })

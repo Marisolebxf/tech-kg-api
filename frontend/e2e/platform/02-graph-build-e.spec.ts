@@ -539,7 +539,8 @@ test.describe.serial('E. 任务中心', () => {
     expect(exec.ok).toBe(true)
     await page.goto(`/processing-instance/${execId}`)
     await page.waitForLoadState('networkidle')
-    await expect(page.getByText('← 返回图谱构建')).toBeVisible({ timeout: 30_000 })
+    // 返回链接已由统一面包屑承担：执行详情页当前页为「任务实例详情」
+    await expect(page.locator('.app-breadcrumb')).toContainText('任务实例详情', { timeout: 30_000 })
   })
 
   test('E8 任务详情页：配置 + 触发方式 chips + IO（过渡断言）', async ({ page, request }) => {

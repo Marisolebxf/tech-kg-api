@@ -84,13 +84,16 @@ function showDetails(row: Record<string, unknown>): void {
         <AButton type="text" size="small" @click="showDetails(record.__raw)">详情</AButton>
       </template>
     </ATable>
-    <AModal v-model:visible="detailsOpen" title="记录详情" :footer="false" :width="640" :unmount-on-close="true">
+    <AModal v-model:visible="detailsOpen" modal-class="query-record-modal" title="记录详情" title-align="start" :width="640" :unmount-on-close="true">
       <dl class="query-record-details">
         <div v-for="column in columns" :key="column">
           <dt>{{ labels[column] ?? column }}</dt>
           <dd><pre>{{ formatCell(selectedRow?.[column]) }}</pre></dd>
         </div>
       </dl>
+      <template #footer>
+        <button type="button" class="query-record-cancel" @click="detailsOpen = false">取消</button>
+      </template>
     </AModal>
   </div>
 </template>
@@ -105,10 +108,18 @@ function showDetails(row: Record<string, unknown>): void {
 .query-result-table :deep(.arco-table-tr:hover .arco-table-td){background:var(--color-fill-1)}
 .query-result-table :deep(.query-cell-number){font-variant-numeric:tabular-nums;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
 .query-result-table :deep(.arco-table-cell){box-sizing:border-box;height:39px;white-space:nowrap;padding:0 16px!important}
-.query-record-details{margin:0;max-height:65vh;overflow:auto}
-.query-record-details>div{display:grid;grid-template-columns:140px minmax(0,1fr);gap:16px;padding:12px 0;border-bottom:1px solid var(--color-border-2)}
+.query-record-details{margin:0;max-height:65vh;overflow:auto;text-align:left}
+.query-record-details>div{display:grid;grid-template-columns:140px minmax(0,1fr);gap:16px;padding:12px 0}
 .query-record-details dt{color:var(--color-text-3);overflow-wrap:anywhere}
 .query-record-details dd{margin:0;min-width:0}
 .query-record-details pre{margin:0;color:var(--color-text-1);font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
 @media(max-width:600px){.query-record-details>div{grid-template-columns:1fr;gap:8px}}
+</style>
+<style>
+.query-record-modal{border-radius:8px}
+.query-record-modal .arco-modal-header{box-sizing:border-box;height:56px;padding:0 24px}
+.query-record-modal .arco-modal-title{justify-content:flex-start;text-align:left;font-size:16px;line-height:24px;font-weight:600}
+.query-record-modal .arco-modal-body{padding:24px}
+.query-record-modal .arco-modal-footer{box-sizing:border-box;min-height:64px;padding:16px 24px;border-top:1px solid #e5e6eb}
+.query-record-modal .query-record-cancel{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;cursor:pointer}
 </style>

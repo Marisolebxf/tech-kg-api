@@ -321,7 +321,7 @@ async function submit() {
         </label>
 
         <div class="job-field-group">
-          <div class="job-row">
+          <div class="job-row job-mode-row">
             <div class="job-field">
               <span>执行模式</span>
               <a-radio-group v-model="executeMode" aria-label="执行模式">
@@ -329,31 +329,31 @@ async function submit() {
                 <a-radio value="recurring">周期性</a-radio>
               </a-radio-group>
             </div>
-            <template v-if="executeMode === 'recurring'">
-              <div class="job-field">
-                <span>频率</span>
-                <a-select v-model="frequency" class="job-select" aria-label="频率" :options="['每天', '每12小时', '每6小时', '每周']" />
-              </div>
-              <div v-if="frequency === '每周'" class="job-field">
-                <span>星期</span>
-                <a-select v-model="weekday" class="job-select" aria-label="星期">
-                  <a-option :value="1">周一</a-option>
-                  <a-option :value="2">周二</a-option>
-                  <a-option :value="3">周三</a-option>
-                  <a-option :value="4">周四</a-option>
-                  <a-option :value="5">周五</a-option>
-                  <a-option :value="6">周六</a-option>
-                  <a-option :value="0">周日</a-option>
-                </a-select>
-              </div>
-              <label class="job-field">
-                <span>首次执行时间</span>
-                <input aria-label="executionTime" v-model="executionTime" type="time" />
-              </label>
-            </template>
-            <div v-else class="job-field checkbox-field">
-              <a-checkbox v-model="runNow" aria-label="创建后立即执行">创建后立即执行</a-checkbox>
+          </div>
+          <div v-if="executeMode === 'recurring'" class="job-row">
+            <div class="job-field">
+              <span>频率</span>
+              <a-select v-model="frequency" class="job-select" aria-label="频率" :options="['每天', '每12小时', '每6小时', '每周']" />
             </div>
+            <div v-if="frequency === '每周'" class="job-field">
+              <span>星期</span>
+              <a-select v-model="weekday" class="job-select" aria-label="星期">
+                <a-option :value="1">周一</a-option>
+                <a-option :value="2">周二</a-option>
+                <a-option :value="3">周三</a-option>
+                <a-option :value="4">周四</a-option>
+                <a-option :value="5">周五</a-option>
+                <a-option :value="6">周六</a-option>
+                <a-option :value="0">周日</a-option>
+              </a-select>
+            </div>
+            <label class="job-field">
+              <span>首次执行时间</span>
+              <input aria-label="executionTime" v-model="executionTime" type="time" />
+            </label>
+          </div>
+          <div v-else class="job-field checkbox-field job-mode-option">
+            <a-checkbox v-model="runNow" aria-label="创建后立即执行">创建后立即执行</a-checkbox>
           </div>
           <p v-if="executeMode === 'recurring'" class="schedule-preview">
             执行计划：<strong>{{ schedulePreview }}</strong><span class="cron-hint">（首次执行时间即第一次触发，之后按频率顺延）</span>
@@ -393,6 +393,8 @@ async function submit() {
 :deep(.job-select.arco-select-view .arco-select-view-value),:deep(.job-select.arco-select-view .arco-select-view-placeholder){min-width:0;overflow:hidden;background:transparent!important;font-size:14px;line-height:22px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
 .job-field.checkbox-field{justify-content:flex-end}
 .job-field-group{display:flex;min-width:0;gap:16px;flex-direction:column}
+.job-mode-row{grid-template-columns:minmax(0,1fr)}
+.job-field.checkbox-field.job-mode-option{justify-content:flex-start}
 .job-launch-dialog>footer{display:flex;box-sizing:border-box;flex:0 0 64px;height:64px;align-items:center;justify-content:flex-end;gap:16px;padding:16px 24px;border-top:1px solid #e3ebf6;background:#fff}
 .job-launch-dialog footer button{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:14px;font-weight:400;cursor:pointer}
 .job-launch-dialog footer .primary{border-color:#004ecc;background:#004ecc;color:#fff}

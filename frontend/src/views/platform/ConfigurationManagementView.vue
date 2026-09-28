@@ -795,7 +795,7 @@ onMounted(() => {
    底部留缝），几何随外层布局漂移。Teleport 后 fixed 直接相对视口钉满全高 */
 .detail-drawer{display:flex;flex-direction:column;top:0;bottom:0;height:auto;overflow:hidden}
 .detail-drawer>header{flex:0 0 auto;box-sizing:border-box}
-.detail-drawer-body{flex:1 1 0;min-height:0;overflow-y:auto;padding-bottom:32px;box-sizing:border-box}
+.detail-drawer-body{flex:1 1 0;min-height:0;overflow-y:auto;padding-bottom:16px;box-sizing:border-box}
 .detail-drawer-body .detail-form{padding-bottom:0}
 .detail-drawer>footer{flex:0 0 auto;margin-top:0}
 /* 新建弹窗：限高 + 表单区内部滚动（原来 overflow:hidden 直接裁掉超高表单） */

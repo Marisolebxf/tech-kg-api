@@ -884,6 +884,7 @@ onMounted(async () => {
 .exec-table tbody tr.active{background:#fff}
 .exec-table code{font-size:11px;color:#165dff}
 .trigger-chip{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;background:#f2f3f5;color:#4e5969}
+.trigger-chip[data-kind='MANUAL']{background:transparent}
 .trigger-chip[data-kind='SCHEDULE']{background:#e8ffea;color:#00b42a}
 .trigger-chip[data-kind='RERUN']{background:#fff3e8;color:#f77234}
 .exec-status-cell{font-weight:500}
@@ -910,4 +911,11 @@ onMounted(async () => {
 .lineage-result-table .lineage-result-cursor{width:32%}
 .lineage-result-table .cursor-value{white-space:nowrap}
 /* 处理链路仅用浅色背景区分节点，箭头继续表达流向。 */
-.lineage span{border:0}</style>
+.lineage span{border:0}
+/* 节点结果利用完整内容宽度，两列展示且指标值统一左对齐。 */
+.overview-content>.metric-card{grid-column:1/-1}
+.metric-card dl{grid-template-columns:repeat(2,minmax(0,1fr));column-gap:32px}
+.metric-card dl div{display:grid;grid-template-columns:120px minmax(0,1fr);justify-content:start}
+.metric-card dd{text-align:left}
+@media(max-width:900px){.metric-card dl{grid-template-columns:1fr}}
+</style>

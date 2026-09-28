@@ -354,7 +354,7 @@ describe('Schema 属性与脚本弹窗样式', () => {
     expect(dropzone.find('button').exists()).toBe(false)
   })
 
-  it('Schema 删除弹窗展示警示摘要和删除影响区域', async () => {
+  it('Schema 删除弹窗展示警示摘要和无边框影响提示', async () => {
     const schema = schemaFixture({ canDelete: true, label: '部件', graphSpace: 'dev2' })
     vi.mocked(listSchemasPaged).mockResolvedValue({ items: [schema], total: 1, page: 1, pageSize: 10 })
     vi.mocked(getSchemaDeleteImpact).mockResolvedValue({
@@ -372,7 +372,7 @@ describe('Schema 属性与脚本弹窗样式', () => {
     const modal = view.get('.schema-delete-modal')
     expect(modal.get('.schema-delete-summary').text()).toContain('确认删除“部件”吗')
     expect(modal.get('.schema-delete-summary__icon').find('svg').exists()).toBe(true)
-    expect(modal.get('.schema-delete-impact--danger').text()).toContain('删除影响')
+    expect(modal.get('.schema-delete-impact--danger').text()).not.toContain('删除影响')
     expect(modal.get('.schema-delete-impact--danger').text()).toContain('dev2')
   })
 })

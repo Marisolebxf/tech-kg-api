@@ -442,14 +442,6 @@ onMounted(loadReviews)
       </nav>
       <div class="review-toolbar-actions">
         <div class="ops-filter is-review review-filter-row">
-          <button
-            v-if="reviewCategory === 'C'"
-            class="rerun-batch-action review-filter-batch"
-            type="button"
-            :disabled="!rerunSelection.size || rerunSubmitting"
-            :title="!rerunSelection.size ? '先勾选列表左侧的失败记录（仅「待处理 / 重跑失败」可勾选），勾选后按钮点亮' : undefined"
-            @click="rerunSelected()"
-          >{{ rerunSubmitting ? '下发中…' : `批量重跑（${rerunSelection.size}）` }}</button>
           <div class="review-filter-field">
             <span class="review-filter-label">状态</span>
             <a-select v-model="reviewStatusFilter" class="review-filter-select" :options="reviewStatusOptions" />
@@ -583,15 +575,16 @@ onMounted(loadReviews)
         @change-size="changeReviewPageSize"
       >
         <template #summary="{ totalPages }">
-          <!-- 勾选后表格左下角出现重跑确认（与右侧分页信息同条） -->
-          <span v-if="reviewCategory === 'C' && rerunSelection.size" class="rerun-confirm-bar">
-            已选 {{ rerunSelection.size }} 条失败记录
+          <!-- 批量重跑唯一入口固定在表格左下角（与右侧分页信息同条）：未勾选置灰，勾选后点亮变色并带出已选数 -->
+          <span v-if="reviewCategory === 'C'" class="rerun-confirm-bar">
+            <template v-if="rerunSelection.size">已选 {{ rerunSelection.size }} 条失败记录</template>
             <button
               class="rerun-batch-action"
               type="button"
-              :disabled="rerunSubmitting"
+              :disabled="!rerunSelection.size || rerunSubmitting"
+              :title="!rerunSelection.size ? '先勾选列表左侧的失败记录（仅「待处理 / 重跑失败」可勾选），勾选后按钮点亮' : undefined"
               @click="rerunSelected()"
-            >{{ rerunSubmitting ? '下发中…' : '确认重跑' }}</button>
+            >{{ rerunSubmitting ? '下发中…' : `批量重跑（${rerunSelection.size}）` }}</button>
           </span>
           <span class="review-page-summary">共 {{ reviewTotal }} 条 · 第 {{ reviewPage }} / {{ totalPages }} 页</span>
         </template>
@@ -750,15 +743,14 @@ onMounted(loadReviews)
 .ops-review-table-scroll td{color:#344763;font-size:14px;line-height:22px;font-weight:400;vertical-align:middle}
 .ops-review-table-scroll td>b,.ops-review-table-scroll td>strong{font-weight:400}
 /* 抽取失败重跑：批量重跑按钮 / 重跑反馈条 / 状态徽标扩展 */
-/* 批量重跑按钮：筛选行最左侧；勾选后表格左下角出现重跑确认条（与右侧分页信息同条） */
-.review-filter-batch{flex:0 0 auto}
+/* 批量重跑按钮：唯一入口固定在分页条左下角；未勾选中性灰置灰，勾选后点亮为蓝（变色反馈） */
 .rerun-confirm-bar{display:inline-flex;align-items:center;gap:8px;flex:0 0 auto;color:#4e5969;font-size:13px;line-height:22px;white-space:nowrap}
 .rerun-confirm-bar .rerun-batch-action{height:28px;padding:0 12px;font-size:13px;line-height:20px}
 .review-pagination .review-page-summary{margin-left:auto;white-space:nowrap}
 .rerun-batch-action{height:32px;padding:0 16px;border:1px solid #165dff;border-radius:4px;background:#165dff;color:#fff;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
 .rerun-batch-action:hover:not(:disabled){border-color:#4080ff;background:#4080ff}
 .rerun-batch-action:active:not(:disabled){border-color:#0e42d2;background:#0e42d2}
-.rerun-batch-action:disabled{border-color:#94bfff;background:#94bfff;color:#fff;cursor:not-allowed}
+.rerun-batch-action:disabled{border-color:#e5e6eb;background:#f7f8fa;color:#c9cdd4;cursor:not-allowed}
 .rerun-feedback{flex:0 0 auto;display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid #a6f4c5;background:#ecfdf3;color:#067647;font-size:12px;line-height:20px}
 .rerun-feedback.is-error{border-color:#f5b8b3;background:#fef3f2;color:#b42318}
 .rerun-feedback.is-warning{border-color:#fec84b;background:#fffaeb;color:#b54708}
@@ -790,10 +782,11 @@ onMounted(loadReviews)
 .rerun-batch-action:focus-visible{outline:0;box-shadow:0 0 0 2px rgba(22,93,255,.2)}
 .rerun-feedback{gap:8px;padding:8px 16px}.rerun-feedback-close{width:24px;height:24px}
 .rerun-confirm-text{font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
-/* 操作列撤销旧的右侧固定列实现；static 只作用 td——表头单元格要保留全局 th 的吸顶 */
-.ops-review-table-scroll td.review-action-col{position:static;box-sizing:border-box;width:auto;min-width:0;box-shadow:none;white-space:nowrap}
-/* 按钮组在列内水平居中（A 类单按钮不再贴左），表头同步居中 */
-.ops-review-table-scroll th.review-action-col{text-align:center}
+/* 操作列与 Schema 管理表对齐：右侧固定列（表头同时吸顶，z 高于数据行），横向滚动时操作不被遮挡 */
+.ops-review-table-scroll th.review-action-col{position:sticky;top:0;right:0;z-index:4;background:#f7f8fa;box-shadow:-1px 0 #e5e6eb;text-align:center}
+.ops-review-table-scroll td.review-action-col{position:sticky;right:0;z-index:3;box-sizing:border-box;background:#fff;box-shadow:-1px 0 #e5e6eb;white-space:nowrap}
+/* 固定列左侧向内容区渐隐的阴影（与 Schema 管理表同视觉提示） */
+.ops-review-table-scroll :is(th,td).review-action-col::before{position:absolute;top:0;bottom:-1px;left:0;width:12px;content:"";pointer-events:none;transform:translateX(-100%);box-shadow:inset -10px 0 8px -8px rgba(78,89,105,.28)}
 .review-action-col .alert-actions{display:flex;width:100%;min-width:0;align-items:center;justify-content:center;gap:8px}
 .ops-review-table-scroll th,.ops-review-table-scroll td{box-sizing:border-box;padding-right:16px;padding-left:16px}
 /* 固定列合计 1076px，最小表宽为对象列保留 268px；勾选列额外占 52px。 */
@@ -825,11 +818,12 @@ onMounted(loadReviews)
 .review-kind-badge.is-实体{background:#eaf2ff;color:#175cd3}
 .review-kind-badge.is-关系{background:#fff3d8;color:#b54708}
 /* 操作列按钮化：查看记录（A 类）/ 日志、重跑、删除（C 类）统一为描边按钮，删除红色警示 */
-.review-action-btn{display:inline-flex;box-sizing:border-box;height:28px;min-width:0;align-items:center;justify-content:center;padding:0 10px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#1d2129;font-size:13px;line-height:26px;white-space:nowrap;text-decoration:none;cursor:pointer}
-.review-action-btn:hover{border-color:#165dff;color:#165dff}
-.review-action-btn.is-danger{border-color:#f6c1be;color:#b42318}
-.review-action-btn.is-danger:hover{border-color:#b42318;color:#b42318}
-.review-action-btn:disabled,.review-action-btn:disabled:hover{border-color:#e5e6eb;background:#f7f8fa;color:#c9cdd4;cursor:not-allowed}
+/* 操作按钮与 Schema 管理表同款：无边框纯文字链接；删除红、其余蓝、禁用灰 */
+.review-action-btn{height:auto;padding:0;border:0;background:transparent;color:#165dff;font-size:14px;line-height:22px;font-weight:400;white-space:nowrap;text-decoration:none;cursor:pointer}
+.review-action-btn:hover:not(:disabled){color:#4080ff;text-decoration:none}
+.review-action-btn:disabled{color:#a9b4c6;cursor:not-allowed;text-decoration:none}
+.review-action-btn.is-danger{color:#e5484d}
+.review-action-btn.is-danger:hover:not(:disabled){color:#b42318}
 .ops-review-table-scroll .pick-col input[type="checkbox"]:disabled{opacity:.35;cursor:not-allowed}
 /* 日志弹窗内容（弹体外壳样式在全局块） */
 .case-log-sec{margin:0 0 16px}

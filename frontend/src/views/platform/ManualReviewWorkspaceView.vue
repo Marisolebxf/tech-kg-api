@@ -319,10 +319,6 @@ const isPrimaryDisabled = computed(() => {
   return !isEditable.value || !preferredProductionAction.value
 })
 
-const backPath = computed(() => (
-  isHistory.value ? '/manual-review?tab=history' : `/manual-review?batch=${record.value?.batch ?? ''}`
-))
-
 const handleAction = async (action: ReviewAction | { id: string; label: string; kind: string; rerun?: boolean }) => {
   const reviewRecord = record.value
   if (!reviewRecord || !isEditable.value) return
@@ -405,7 +401,6 @@ const runPrimary = () => {
   <div v-if="record && isSupported" class="rw">
     <header class="rw-head">
       <div class="rw-head__main">
-        <RouterLink :to="backPath">← 返回处理队列</RouterLink>
         <h1>{{ directTitle }}</h1>
         <p>
           <code>{{ record.id }}</code>
@@ -643,7 +638,6 @@ const runPrimary = () => {
   </div>
   <div v-else class="rw-empty">
     <h1>未找到处理实例</h1>
-    <RouterLink to="/manual-review">返回人工处理</RouterLink>
   </div>
 </template>
 
@@ -664,12 +658,6 @@ const runPrimary = () => {
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 10px;
-}
-
-.rw-head a {
-  color: #165dff;
-  font-size: 12px;
-  text-decoration: none;
 }
 
 .rw-head h1 {
@@ -1206,10 +1194,6 @@ const runPrimary = () => {
 .rw-empty {
   padding: 48px;
   text-align: center;
-}
-
-.rw-empty a {
-  color: #165dff;
 }
 
 @media (max-width: 960px) {

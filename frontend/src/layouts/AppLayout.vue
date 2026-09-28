@@ -32,6 +32,8 @@ import navTools from "../assets/icons/nav-tools.svg";
 import { useAppStore } from "../stores/app";
 import { useAuthStore } from "../stores/auth";
 import GraphSpaceSelector from "../components/GraphSpaceSelector.vue";
+import AppBreadcrumb from "../components/AppBreadcrumb.vue";
+import { businessServiceGroupTitle as businessServiceTitle } from "../composables/use-breadcrumb";
 import logoKg from "../assets/images/logo-kg.png";
 
 const route = useRoute();
@@ -105,7 +107,6 @@ const mobileNavOpen = ref(false);
 const sidebarCollapsed = computed(() => appStore.collapsed && !isMobile.value);
 const assistantPosition = ref({ x: 0, y: 0 });
 const assistantViewport = ref({ width: 1440, height: 900 });
-const businessServiceTitle = "科技专家/人才知识推理构建服务";
 const alertItems = ref<
   Array<{
     id: string;
@@ -173,21 +174,6 @@ const showServiceNavItems = computed(
 const isBusinessServiceRoute = computed(() =>
   serviceNavItems.some((item) => item.to === route.path),
 );
-const currentServiceNavItem = computed(() =>
-  serviceNavItems.find((item) => item.to === route.path),
-);
-const breadcrumbItems = computed(() => {
-  if (route.query.breadcrumb === "business-service")
-    return [
-      { label: businessServiceTitle },
-    ];
-  if (currentServiceNavItem.value)
-    return [
-      { label: businessServiceTitle, to: "/business-service" },
-      { label: currentServiceNavItem.value.fullLabel },
-    ];
-  return [{ label: pageTitle.value }];
-});
 
 function navIconStyle(icon: string) {
   return { "--nav-icon": `url("${icon}")` };
@@ -751,33 +737,10 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <section class="app-stage">
-          <div
-            class="app-breadcrumb"
-            :class="{ 'app-breadcrumb--with-select': isOverviewPage }"
-            aria-label="当前位置"
-          >
-            <template
-              v-for="(item, index) in breadcrumbItems"
-              :key="`${item.label}-${index}`"
-            >
-              <span
-                v-if="index > 0"
-                class="app-breadcrumb__separator"
-                aria-hidden="true"
-                >/</span
-              >
-              <RouterLink
-                v-if="item.to"
-                class="app-breadcrumb__history"
-                :to="item.to"
-                >{{ item.label }}</RouterLink
-              >
-              <span v-else class="app-breadcrumb__current" aria-current="page">
-                {{ item.label }}
-              </span>
-            </template>
+          <!-- 面包屑统一走 AppBreadcrumb（Arco 规范：首项图标回首页、/ 分隔、末项当前页） -->
+          <AppBreadcrumb :class="{ 'app-breadcrumb--with-select': isOverviewPage }">
             <GraphSpaceSelector v-if="isOverviewPage" />
-          </div>
+          </AppBreadcrumb>
           <section class="app-workspace" :aria-label="pageTitle">
             <div v-if="routeError" class="route-error">
               <strong>页面渲染异常</strong>
@@ -2182,18 +2145,8 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
-.app-breadcrumb {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  width: fit-content;
-  max-width: 100%;
-  min-width: 0;
-  height: 22px;
-  color: var(--gkx-text-secondary);
-}
-
-/* 平台总览页：面包屑标题行右侧挂全局图空间选择器（a-select 默认 32px 高） */
+/* 面包屑本体（图标/分隔/链接/当前页样式）在 AppBreadcrumb 组件内；
+   这里只保留平台总览页挂图空间选择器的行布局口径 */
 .app-breadcrumb--with-select {
   width: 100%;
   height: 32px;
@@ -2201,37 +2154,6 @@ onBeforeUnmount(() => {
 
 .app-breadcrumb--with-select > .app-space-select {
   margin-left: auto;
-}
-
-.app-breadcrumb__separator {
-  flex: 0 0 auto;
-  margin: 0;
-  color: #59636f;
-  font-size: 12px;
-  line-height: 12px;
-  text-align: center;
-}
-
-.app-breadcrumb__history {
-  text-decoration: none;
-  flex: 0 0 auto;
-  color: #59636f;
-  font-size: 12px;
-  line-height: 20px;
-  white-space: nowrap;
-}
-
-.app-breadcrumb__history:hover {
-  color: var(--gkx-primary);
-}
-
-.app-breadcrumb__current {
-  flex: 0 0 auto;
-  color: #59636f;
-  font-size: 12px;
-  line-height: 20px;
-  font-weight: 400;
-  white-space: nowrap;
 }
 
 .app-workspace {

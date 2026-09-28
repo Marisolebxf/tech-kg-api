@@ -153,21 +153,24 @@ afterEach(() => {
 })
 
 describe('Schema 管理输入框达上限提示', () => {
-  it('操作列常显三项，更多菜单保留其余操作及权限状态', async () => {
+  it('操作 >3 个时只平铺前两个，第三个起收进「···」更多菜单（含权限状态）', async () => {
     vi.mocked(listSchemasPaged).mockResolvedValue({ items: [schemaFixture()], total: 1, page: 1, pageSize: 10 })
     const view = mountView()
     await flushPromises()
 
     const actions = view.get('.schema-actions')
-    expect(actions.findAll('.schema-action-link').map((button) => button.text())).toEqual(['更换脚本', '查看脚本', '来源表', '···'])
+    expect(actions.findAll('.schema-action-link').map((button) => button.text())).toEqual(['更换脚本', '查看脚本', '···'])
     expect(actions.find('.test-dropdown-menu').exists()).toBe(false)
     await actions.get('.schema-action-more').trigger('click')
     const options = actions.findAll('.test-dropdown-menu button')
-    expect(options.map((button) => button.text())).toEqual(['属性管理', '删除'])
+    expect(options.map((button) => button.text())).toEqual(['来源表', '属性管理', '删除'])
     expect(options[0].classes()).toContain('schema-action-menu-item')
-    expect(options[1].classes()).toContain('schema-action-menu-item--danger')
+    expect(options[1].classes()).toContain('schema-action-menu-item')
+    expect(options[2].classes()).toContain('schema-action-menu-item--danger')
+    // fixture：canManageProperties=true、canDelete=false → 来源表/属性管理可用，删除置灰
     expect(options[0].attributes('disabled')).toBeUndefined()
-    expect(options[1].attributes('disabled')).toBeDefined()
+    expect(options[1].attributes('disabled')).toBeUndefined()
+    expect(options[2].attributes('disabled')).toBeDefined()
 
     await view.get('.schema-topology-toggle').trigger('click')
     await flushPromises()

@@ -282,6 +282,61 @@ function openJobDetail(job: WorkflowJob) {
   void router.push({ name: 'job-detail', params: { jobId: job.id } })
 }
 
+/** 任务行操作项（有序）：执行/重新执行、暂停/恢复、查看详情、删除。
+ *  运行中不可删：置灰而非隐藏（悬停说明原因），与其余操作列同口径。 */
+type JobAction = { key: string; label: string; danger?: boolean; disabled?: boolean; title?: string; run: () => void }
+
+function jobActions(job: WorkflowJob): JobAction[] {
+  const status = deriveJobUnifiedStatus(job)
+  const actions: JobAction[] = []
+  if (['未运行', '运行失败'].includes(status)) {
+    actions.push({
+      key: 'trigger',
+      label: status === '运行失败' ? '重新执行' : '执行',
+      disabled: triggeringJobId.value === job.id,
+      title: triggeringJobId.value === job.id ? '正在下发执行…' : undefined,
+      run: () => void onTrigger(job),
+    })
+  }
+  if (status !== '已暂停' && job.status !== '暂停' && (status === '运行中' || job.schedule.kind === 'cron')) {
+    actions.push({
+      key: 'pause',
+      label: pausingJobIds.value[job.id] ? '暂停中…' : '暂停',
+      disabled: Boolean(pausingJobIds.value[job.id]),
+      run: () => void onToggleState(job),
+    })
+  } else if (job.status === '暂停' || status === '已暂停') {
+    actions.push({
+      key: 'resume',
+      label: resumingJobIds.value[job.id] ? '恢复中…' : '恢复',
+      disabled: Boolean(resumingJobIds.value[job.id]),
+      run: () => void onToggleState(job),
+    })
+  }
+  actions.push({ key: 'detail', label: '查看详情', run: () => openJobDetail(job) })
+  actions.push({
+    key: 'delete',
+    label: '删除',
+    danger: true,
+    disabled: status === '运行中',
+    title: status === '运行中' ? '运行中：等待本次任务完成后再删除' : undefined,
+    run: () => void onDelete(job),
+  })
+  return actions
+}
+
+/** 平铺操作（与 Schema 管理表对齐）：≤3 个全部平铺；>3 个时只平铺前两个，第三个位置换成「···」。 */
+function flatJobActions(job: WorkflowJob): JobAction[] {
+  const actions = jobActions(job)
+  return actions.length <= 3 ? actions : actions.slice(0, 2)
+}
+
+/** 「···」菜单收纳的剩余操作（>3 个时的第 3 个起）。 */
+function overflowJobActions(job: WorkflowJob): JobAction[] {
+  const actions = jobActions(job)
+  return actions.length > 3 ? actions.slice(2) : []
+}
+
 function executionStatusClass(status: string): string {
   const s = status.toUpperCase()
   if (s === 'COMPLETED') return 'ok'
@@ -393,27 +448,32 @@ onMounted(() => {
                 <small v-if="job.lastRunAt" class="gb-last-run">{{ job.lastRunAt }}</small>
               </td>
               <td class="gb-job-actions">
+                <!-- 与 Schema 管理表对齐：≤3 个操作全部平铺；>3 个时平铺前两个，第三个位置换成「···」 -->
                 <div class="gb-job-actions__inner">
-                  <button v-if="['未运行', '运行失败'].includes(deriveJobUnifiedStatus(job))" type="button" class="primary" :disabled="triggeringJobId === job.id" @click="onTrigger(job)">{{ deriveJobUnifiedStatus(job) === '运行失败' ? '重新执行' : '执行' }}</button>
                   <button
-                    v-if="deriveJobUnifiedStatus(job) !== '已暂停' && job.status !== '暂停' && (deriveJobUnifiedStatus(job) === '运行中' || job.schedule.kind === 'cron')"
+                    v-for="action in flatJobActions(job)"
+                    :key="action.key"
                     type="button"
-                    :disabled="Boolean(pausingJobIds[job.id])"
-                    @click="onToggleState(job)"
-                  >
-                    {{ pausingJobIds[job.id] ? '暂停中…' : '暂停' }}
-                  </button>
-                  <button
-                    v-else-if="job.status === '暂停' || deriveJobUnifiedStatus(job) === '已暂停'"
-                    type="button"
-                    class="primary"
-                    :disabled="Boolean(resumingJobIds[job.id])"
-                    @click="onToggleState(job)"
-                  >
-                    {{ resumingJobIds[job.id] ? '恢复中…' : '恢复' }}
-                  </button>
-                  <button type="button" @click="openJobDetail(job)">查看详情</button>
-                  <button v-if="deriveJobUnifiedStatus(job) !== '运行中'" type="button" class="danger" @click="onDelete(job)">删除</button>
+                    class="gb-action-link"
+                    :class="{ 'is-danger': action.danger }"
+                    :disabled="action.disabled"
+                    :title="action.title"
+                    @click="action.run()"
+                  >{{ action.label }}</button>
+                  <a-dropdown v-if="overflowJobActions(job).length" trigger="click" position="bl">
+                    <button type="button" class="gb-action-link gb-action-more" :aria-label="`${job.name}更多操作`" title="更多操作">···</button>
+                    <template #content>
+                      <a-doption
+                        v-for="action in overflowJobActions(job)"
+                        :key="action.key"
+                        class="gb-action-menu-item"
+                        :class="{ 'gb-action-menu-item--danger': action.danger }"
+                        :disabled="action.disabled"
+                        :title="action.title"
+                        @click="action.run()"
+                      >{{ action.label }}</a-doption>
+                    </template>
+                  </a-dropdown>
                 </div>
               </td>
             </tr>
@@ -471,10 +531,19 @@ onMounted(() => {
 .gb-last-run{display:block;color:#8191aa;font-size:12px;line-height:20px;font-weight:400}
 .gb-job-actions{white-space:nowrap}
 .gb-job-actions__inner{display:flex;align-items:center;gap:8px}
-.gb-job-actions button{height:26px;padding:0 10px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
-.gb-job-actions button.primary{border-color:#165dff;background:#165dff;color:#fff}
-.gb-job-actions button.danger{border-color:#f6b9b4;color:#b42318}
-.gb-job-actions button:disabled{opacity:.45;cursor:not-allowed}
+/* 操作按钮与 Schema 管理表同款：无边框纯文字链接；删除红、其余蓝、禁用灰 */
+.gb-action-link{height:auto;padding:0;border:0;background:transparent;color:#165dff;font-size:14px;line-height:22px;font-weight:400;cursor:pointer;text-decoration:none}
+.gb-action-link:hover:not(:disabled){color:#4080ff;text-decoration:none}
+.gb-action-link:disabled{color:#a9b4c6;cursor:not-allowed;text-decoration:none}
+.gb-action-link.is-danger{color:#e5484d}
+.gb-action-link.is-danger:hover:not(:disabled){color:#b42318}
+.gb-action-more{min-width:24px;font-size:18px;line-height:22px;text-align:center}
+/* 操作列与 Schema 管理表对齐：右侧固定列（表头同时吸顶，z 高于数据行），横向滚动时操作不被遮挡 */
+.gb-task-table thead th:last-child{position:sticky;right:0;z-index:4;background:#f7f8fa;box-shadow:-1px 0 #e5e6eb}
+.gb-task-table td.gb-job-actions{position:sticky;right:0;z-index:3;background:#fff;box-shadow:-1px 0 #e5e6eb}
+.gb-task-table tbody tr:hover td.gb-job-actions{background:#f4f8ff}
+/* 固定列左侧向内容区渐隐的阴影（与 Schema 管理表同视觉提示） */
+.gb-task-table :is(thead th:last-child,td.gb-job-actions)::before{position:absolute;top:0;bottom:-1px;left:0;width:12px;content:"";pointer-events:none;transform:translateX(-100%);box-shadow:inset -10px 0 8px -8px rgba(78,89,105,.28)}
 .empty{padding:40px 14px;text-align:center;color:#8290a7;font-size:12px;line-height:20px;font-weight:400}
 .muted{color:#8191aa;font-size:12px;line-height:20px;font-weight:400}
 span.ok,span.err,span.warn,span.run{display:inline-flex;align-items:center;gap:6px;font-size:14px;line-height:22px;border-radius:0;background:transparent;padding:0;white-space:nowrap}
@@ -509,4 +578,10 @@ span.run{color:#175cd3}
 .app-workspace .gb-filters .gb-filter-select input.arco-select-view-input{box-sizing:border-box;width:100%;height:30px!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
 .app-workspace .gb-filters .gb-filter-select .arco-select-view-input-hidden{position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important}.app-workspace .gb-filters .gb-filter-select .arco-select-view-value{min-width:0;overflow:hidden;font-size:14px;line-height:22px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
 .app-workspace .gb-filters .gb-filter-select :is(.arco-select-view-input,.arco-select-view-value){background:transparent!important}
+/* 任务操作列「···」更多菜单（teleport 到 body，需全局控制；菜单项口径对齐 Schema 管理表） */
+.gb-action-menu-item.arco-dropdown-option{color:#165dff;font-size:14px;line-height:22px;font-weight:400;text-decoration:none}
+.gb-action-menu-item.arco-dropdown-option:hover{color:#4080ff;text-decoration:none}
+.gb-action-menu-item--danger.arco-dropdown-option:not(.arco-dropdown-option-disabled){color:#f53f3f}
+.gb-action-menu-item--danger.arco-dropdown-option:not(.arco-dropdown-option-disabled):hover{color:#b42318}
+.gb-action-menu-item.arco-dropdown-option-disabled{color:#a9b4c6}
 </style>

@@ -132,6 +132,15 @@ html.portal-embedded .kg-page {
   background: transparent;
 }
 
+/* 刷新按钮前的双箭头刷新图标（arco IconRefresh）统一对齐 */
+.refresh-icon {
+  width: 1em;
+  height: 1em;
+  margin-right: 4px;
+  vertical-align: -0.125em;
+  flex: 0 0 auto;
+}
+
 .kg-graph-canvas {
   background:
     linear-gradient(#edf3ff 1px, transparent 1px),

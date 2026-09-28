@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { IconInfoCircle, IconSearch } from '@arco-design/web-vue/es/icon'
+import { IconInfoCircle, IconRefresh, IconSearch } from '@arco-design/web-vue/es/icon'
 import {
   countJobUnifiedStatuses,
   deleteJob,
@@ -56,17 +56,38 @@ const filterTaskTypeSelect = computed({
   },
 })
 
-/** 「全部空间」开关持久化：默认关闭=任务列表跟随平台总览页全局选择器的当前图空间 */
-const SHOW_ALL_SPACES_KEY = 'tech-kg-graph-build-all-spaces'
-const showAllSpaces = ref(
-  (() => {
-    try {
-      return localStorage.getItem(SHOW_ALL_SPACES_KEY) === '1'
-    } catch {
-      return false
-    }
-  })(),
-)
+/** 图空间筛选持久化：'__all__'=全部空间；具体空间名=钉住该空间；空=跟随总览页全局选择器。
+ *  由旧版「全部空间」开关迁移：开着的一律视为选了全部空间。 */
+const SPACE_SCOPE_KEY = 'tech-kg-graph-build-space-scope'
+const OLD_ALL_SPACES_KEY = 'tech-kg-graph-build-all-spaces'
+const ALL_SPACES = '__all__'
+
+function readStoredSpaceScope(): string {
+  try {
+    const stored = localStorage.getItem(SPACE_SCOPE_KEY)
+    if (stored === ALL_SPACES) return ALL_SPACES
+    if (stored) return stored
+    if (localStorage.getItem(OLD_ALL_SPACES_KEY) === '1') return ALL_SPACES
+  } catch {
+    // localStorage 不可用（隐私模式等）：仅内存态生效
+  }
+  return ''
+}
+
+const spaceScope = ref(readStoredSpaceScope())
+const spaceScopeSelect = computed({
+  get: () => spaceScope.value || graphSpaceStore.current || graphSpaceStore.spaces[0],
+  set: (value: string | undefined) => {
+    spaceScope.value = value ?? ''
+  },
+})
+watch(spaceScope, (value) => {
+  try {
+    localStorage.setItem(SPACE_SCOPE_KEY, value)
+  } catch {
+    // localStorage 不可用（隐私模式等）：仅内存态生效
+  }
+})
 
 /** 任务归属空间：payload 未带 graphSpace 的历史任务落当时的默认业务空间（空间列表首位恒为默认）。 */
 function jobSpace(job: WorkflowJob): string {
@@ -83,9 +104,9 @@ const TASK_TYPE_LABELS: Record<string, string> = {
 
 const filteredJobs = computed(() => {
   const name = filterName.value.trim().toLowerCase()
-  const space = graphSpaceStore.current
+  const space = spaceScope.value || graphSpaceStore.current
   return jobs.value.filter((job) => {
-    if (!showAllSpaces.value && jobSpace(job) !== space) return false
+    if (space !== ALL_SPACES && jobSpace(job) !== space) return false
     if (name && !job.name.toLowerCase().includes(name)) return false
     if (filterStatus.value && deriveJobUnifiedStatus(job) !== filterStatus.value) return false
     if (filterTaskType.value && job.taskType !== filterTaskType.value) return false
@@ -114,14 +135,7 @@ const {
   changePage: changeJobPage,
   changePageSize: changeJobPageSize,
 } = useClientPagination(filteredJobs, 10)
-watch([filterName, filterStatus, filterTaskType, showAllSpaces, () => graphSpaceStore.current], resetJobPage)
-watch(showAllSpaces, (value) => {
-  try {
-    localStorage.setItem(SHOW_ALL_SPACES_KEY, value ? '1' : '0')
-  } catch {
-    // localStorage 不可用（隐私模式等）：仅内存态生效
-  }
-})
+watch([filterName, filterStatus, filterTaskType, spaceScope, () => graphSpaceStore.current], resetJobPage)
 
 async function loadData(silent = false) {
   // silent：轮询刷新用，不转 loading、失败不弹 toast（避免每几秒闪一次）
@@ -291,7 +305,7 @@ onMounted(() => {
   <main class="graph-build-page">
     <div class="gb-actions">
       <button type="button" class="primary" @click="openCreate">＋ 新建任务</button>
-      <button type="button" :disabled="loading" @click="loadData()">{{ loading ? '刷新中…' : '刷新' }}</button>
+      <button type="button" :disabled="loading" @click="loadData()"><IconRefresh class="refresh-icon" />{{ loading ? '刷新中…' : '刷新' }}</button>
     </div>
 
     <section class="gb-summary">
@@ -314,6 +328,16 @@ onMounted(() => {
       <header class="gb-jobs-toolbar">
         <strong class="gb-section-title">任务列表</strong>
         <div class="gb-filters">
+          <a-select
+            v-model="spaceScopeSelect"
+            class="gb-filter-select"
+            placeholder="图空间"
+            allow-clear
+            title="按图空间筛选任务（清空即跟随总览页全局选择器的当前空间）"
+          >
+            <a-option :value="ALL_SPACES">全部空间</a-option>
+            <a-option v-for="space in graphSpaceStore.spaces" :key="space" :value="space">{{ space }}</a-option>
+          </a-select>
           <a-select id="graph-build-filter-status" v-model="filterStatusSelect" class="gb-filter-select" placeholder="状态" allow-clear>
             <a-option value="">未选择</a-option>
             <a-option value="未运行">未运行</a-option>
@@ -330,7 +354,6 @@ onMounted(() => {
             <a-option value="upload">上传脚本</a-option>
           </a-select>
           <a-input id="graph-build-filter-name" v-model="filterName" class="gb-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="按名称搜索" placeholder="按名称搜索"><template #prefix><IconSearch /></template></a-input>
-          <a-checkbox v-model="showAllSpaces" class="gb-space-toggle" title="默认仅显示当前图空间（平台总览页全局选择器）的任务">全部空间</a-checkbox>
         </div>
       </header>
       <div class="gb-jobs-panel">
@@ -358,7 +381,7 @@ onMounted(() => {
                 <span v-else :class="JOB_STATUS_TONE[deriveJobUnifiedStatus(job)]">{{ deriveJobUnifiedStatus(job) }}</span>
               </td>
               <td>
-                <code v-if="job.lastExecutionId">{{ job.lastExecutionId }}</code>
+                <span v-if="job.lastExecutionId">{{ job.lastExecutionId }}</span>
                 <span v-else class="muted">—</span>
               </td>
               <td>
@@ -427,13 +450,13 @@ onMounted(() => {
 .gb-summary strong{color:#1d2129;font-size:28px;line-height:32px;font-weight:600;letter-spacing:0}
 .gb-summary__label,.gb-summary__task-stats{display:flex;align-items:center;min-width:0}.gb-summary__label{gap:8px}.gb-summary__hint{display:inline-flex;align-items:center;justify-content:center;flex:0 0 24px;width:24px;height:24px;padding:0;border:0;border-radius:4px;background:transparent;color:#86909c;cursor:help}.gb-summary__hint:hover,.gb-summary__hint:focus-visible{background:#f2f3f5;color:#165dff}.gb-summary__hint svg{width:16px;height:16px}
 .gb-jobs-section{display:flex;flex:1;min-height:0;flex-direction:column;gap:16px}
-.gb-jobs-toolbar{display:flex;flex-wrap:wrap;flex:0 0 auto;align-items:center;justify-content:space-between;gap:16px;min-height:32px;box-sizing:border-box;color:#1d2129}
+.gb-jobs-toolbar{display:flex;flex-direction:column;flex:0 0 auto;align-items:stretch;gap:12px;box-sizing:border-box;color:#1d2129}
 .gb-section-title{position:relative;padding-left:11px;font-size:16px;line-height:24px;font-weight:600}
 .gb-section-title::before{position:absolute;top:5px;left:0;width:3px;height:14px;border-radius:1px;background:#165dff;content:""}
 .gb-jobs-panel{display:flex;flex:1;min-height:0;overflow:hidden;border:1px solid #e5e6eb;border-radius:6px;background:#fff;box-shadow:none;flex-direction:column}
-.gb-filters{display:flex;flex:1 1 480px;min-width:0;flex-wrap:wrap;align-items:center;gap:8px;font-weight:400}
-/* 全部空间开关：跟随筛选条尺寸合同，不换行不被压缩 */
-.gb-filters .gb-space-toggle{flex:0 0 auto;margin:0;font-size:14px;line-height:22px;font-weight:400;white-space:nowrap;color:#4e5969;cursor:pointer}
+/* 四个筛选控件同一行（图空间/状态/类型定宽 160px，搜索定宽 280px），间距与人工审核筛选行同口径 */
+.gb-filters{display:flex;flex:0 0 auto;min-width:0;flex-wrap:wrap;align-items:center;gap:16px;font-weight:400}
+/* 图空间下拉：跟随筛选条尺寸合同，不换行不被压缩 */
 .gb-task-table{flex:1;min-height:0;overflow:auto;padding:0}
 /* 与 Schema 管理表一致：由内容语义自动分配列宽，空间不足时由表格容器承接横向滚动。 */
 .gb-task-table table{width:100%;margin:0;border-collapse:collapse;font-size:14px;line-height:22px}
@@ -471,15 +494,16 @@ span.run{color:#175cd3}
 
 </style>
 <style>
-.app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-wrapper{box-sizing:border-box;width:280px;min-width:0;max-width:100%;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:1 1 240px}
+.app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-wrapper{box-sizing:border-box;width:280px;min-width:0;max-width:100%;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:0 1 280px}
 .app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-wrapper:hover{border-color:#4080ff!important;background:#fff!important}
 .app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-wrapper:focus-within,.app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
 .app-workspace .gb-filters #graph-build-filter-name .arco-input-prefix{padding-right:8px;color:#4e5969}.app-workspace .gb-filters #graph-build-filter-name.arco-input-focus .arco-input-prefix{color:#165dff}.app-workspace .gb-filters #graph-build-filter-name .arco-input-prefix svg{width:16px;height:16px;font-size:16px}
 .app-workspace .gb-filters #graph-build-filter-name input.arco-input{box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
-.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type).gb-filter-select.arco-select-view{display:inline-flex;box-sizing:border-box;align-items:center;width:160px;min-width:0;max-width:100%;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:1 1 140px}
-.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type).gb-filter-select.arco-select-view:hover{border-color:#4080ff!important;background:#fff!important}
-.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type).gb-filter-select.arco-select-view:focus-within,.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type).gb-filter-select.arco-select-view-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
-.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type) input.arco-select-view-input{box-sizing:border-box;width:100%;height:30px!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
-.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type) .arco-select-view-input-hidden{position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important}.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type) .arco-select-view-value{min-width:0;overflow:hidden;font-size:14px;line-height:22px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
-.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type) :is(.arco-select-view-input,.arco-select-view-value){background:transparent!important}
+/* 筛选下拉统一按类命中（状态/类型/图空间同一边框与尺寸合同），不再绑死控件 id */
+.app-workspace .gb-filters .gb-filter-select.arco-select-view{display:inline-flex;box-sizing:border-box;align-items:center;width:160px;min-width:0;max-width:100%;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:0 0 160px}
+.app-workspace .gb-filters .gb-filter-select.arco-select-view:hover{border-color:#4080ff!important;background:#fff!important}
+.app-workspace .gb-filters .gb-filter-select.arco-select-view:focus-within,.app-workspace .gb-filters .gb-filter-select.arco-select-view-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
+.app-workspace .gb-filters .gb-filter-select input.arco-select-view-input{box-sizing:border-box;width:100%;height:30px!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
+.app-workspace .gb-filters .gb-filter-select .arco-select-view-input-hidden{position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important}.app-workspace .gb-filters .gb-filter-select .arco-select-view-value{min-width:0;overflow:hidden;font-size:14px;line-height:22px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
+.app-workspace .gb-filters .gb-filter-select :is(.arco-select-view-input,.arco-select-view-value){background:transparent!important}
 </style>

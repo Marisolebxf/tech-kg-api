@@ -1182,13 +1182,13 @@ function descCell(text: string): string {
           <button v-for="tab in tabs" :key="tab" type="button" :class="{ active: activeTab === tab }" @click="switchTab(tab)">{{ tab }}</button>
         </div>
         <div class="schema-toolbar__actions">
+          <button class="primary" type="button" @click="openCreate">＋ 增加</button>
           <span class="limit-field">
             <a-input v-model="keyword" class="schema-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" :aria-label="`搜索${activeTab}`" :placeholder="`搜索${activeTab}`" @input="onKeywordInput">
               <template #prefix><IconSearch /></template>
             </a-input>
             <span v-if="atLimit(keyword, SEARCH_KEYWORD_MAX_LENGTH)" class="limit-field__hint">已达 {{ SEARCH_KEYWORD_MAX_LENGTH }} 字上限，无法继续输入</span>
           </span>
-          <button class="primary" type="button" @click="openCreate">＋ 增加</button>
         </div>
       </nav>
       <div class="schema-shell schema-table-shell">
@@ -1636,7 +1636,7 @@ function descCell(text: string): string {
 
 .schema-toolbar__actions{display:flex;min-width:0;flex-wrap:wrap;align-items:center;gap:10px}
 .schema-toolbar__actions>.primary{flex-shrink:0;white-space:nowrap}
-.schema-tabs>.schema-toolbar__actions{min-width:0;margin-left:auto}
+.schema-tabs>.schema-toolbar__actions{min-width:0;width:100%;justify-content:flex-start}
 .prop-len--invalid,.property-add-form__len--invalid{border-color:#e5484d!important;background:#fff3f3!important}
 /* 长度达上限：与校验失败同款红边高亮（可见文案见 .limit-field-note / .limit-field__hint） */
 .is-at-limit{border-color:#e5484d!important;background:#fff3f3!important}
@@ -1860,7 +1860,7 @@ function descCell(text: string): string {
 /* DESIGN_RULES: Schema management page contract. */
 .schema-page{padding:0;color:#1d2129}
 .schema-shell{border-color:#e5e6eb;border-radius:6px;box-shadow:none}
-.schema-tabs{display:flex;min-height:48px;padding:8px 16px;align-items:center;justify-content:space-between;gap:16px}.schema-tabs__items{display:flex;align-self:stretch;overflow:auto}.schema-tabs button{height:32px;padding:0 16px;font-size:14px;line-height:22px;font-weight:400}.schema-tabs button.active{font-weight:500}
+.schema-tabs{display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;gap:12px}.schema-tabs__items{display:flex;align-self:stretch;overflow:auto}.schema-tabs button{height:32px;padding:0 16px;font-size:14px;line-height:22px;font-weight:400}.schema-tabs button.active{font-weight:500}
 .schema-toolbar{min-height:48px;gap:16px;padding:8px 16px;background:#fff}.schema-toolbar>div,.schema-toolbar__actions{gap:16px}
 .schema-toolbar strong{font-size:16px;line-height:24px;font-weight:600}.schema-toolbar>div span{font-size:12px;line-height:20px}
 .schema-toolbar label{gap:8px;width:280px;height:32px;padding:0 12px;border-color:#e5e6eb;border-radius:4px}.schema-toolbar input{height:30px;padding:0!important;font-size:14px;line-height:22px}
@@ -1938,7 +1938,7 @@ function descCell(text: string): string {
 .schema-create-panel .create-ddl__label{color:#4e5969;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}.schema-create-panel .create-ddl__confirm{font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
 .schema-create-panel .create-ddl__pre{font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
 .schema-create-panel footer button{font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
-@media(max-width:900px){.schema-tabs{align-items:stretch;flex-direction:column}.schema-tabs__items{min-height:36px}.schema-toolbar__actions{justify-content:flex-end}.create-row{grid-template-columns:1fr}.create-field--full{grid-column:auto}}
+@media(max-width:900px){.schema-tabs{align-items:stretch;flex-direction:column}.schema-tabs__items{min-height:36px}.schema-toolbar__actions{justify-content:flex-start}.create-row{grid-template-columns:1fr}.create-field--full{grid-column:auto}}
 .schema-create-body>.create-field,.create-row>.create-field{margin-bottom:0;gap:0}.schema-create-body>.create-props{margin-bottom:0}.create-ddl{margin-top:0;gap:8px}.create-ddl__confirm{margin:0}
 /* Schema 拓扑总览 */
 .schema-topology-shell{margin-bottom:16px;padding-bottom:0}

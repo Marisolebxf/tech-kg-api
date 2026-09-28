@@ -34,7 +34,7 @@ vi.mock('../../../api/workflowOperations', () => ({
 }))
 vi.mock('../../../api/platformOverview', () => ({ getPlatformOverview: vi.fn() }))
 vi.mock('../../../composables/use-toast', () => ({ useToast: () => ({ showToast: vi.fn() }) }))
-vi.mock('@arco-design/web-vue/es/icon', () => ({ IconInfoCircle: { template: '<i />' } }))
+vi.mock('@arco-design/web-vue/es/icon', () => ({ IconInfoCircle: { template: '<i />' }, IconRefresh: { template: '<i />' } }))
 
 function makeProfile(isAdmin: boolean): AuthProfile {
   return {

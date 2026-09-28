@@ -328,6 +328,16 @@ onMounted(() => {
       <header class="gb-jobs-toolbar">
         <strong class="gb-section-title">任务列表</strong>
         <div class="gb-filters">
+          <a-select
+            v-model="spaceScopeSelect"
+            class="gb-filter-select"
+            placeholder="图空间"
+            allow-clear
+            title="按图空间筛选任务（清空即跟随总览页全局选择器的当前空间）"
+          >
+            <a-option :value="ALL_SPACES">全部空间</a-option>
+            <a-option v-for="space in graphSpaceStore.spaces" :key="space" :value="space">{{ space }}</a-option>
+          </a-select>
           <a-select id="graph-build-filter-status" v-model="filterStatusSelect" class="gb-filter-select" placeholder="状态" allow-clear>
             <a-option value="">未选择</a-option>
             <a-option value="未运行">未运行</a-option>
@@ -344,16 +354,6 @@ onMounted(() => {
             <a-option value="upload">上传脚本</a-option>
           </a-select>
           <a-input id="graph-build-filter-name" v-model="filterName" class="gb-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="按名称搜索" placeholder="按名称搜索"><template #prefix><IconSearch /></template></a-input>
-          <a-select
-            v-model="spaceScopeSelect"
-            class="gb-filter-select"
-            placeholder="图空间"
-            allow-clear
-            title="按图空间筛选任务（清空即跟随总览页全局选择器的当前空间）"
-          >
-            <a-option :value="ALL_SPACES">全部空间</a-option>
-            <a-option v-for="space in graphSpaceStore.spaces" :key="space" :value="space">{{ space }}</a-option>
-          </a-select>
         </div>
       </header>
       <div class="gb-jobs-panel">
@@ -454,7 +454,8 @@ onMounted(() => {
 .gb-section-title{position:relative;padding-left:11px;font-size:16px;line-height:24px;font-weight:600}
 .gb-section-title::before{position:absolute;top:5px;left:0;width:3px;height:14px;border-radius:1px;background:#165dff;content:""}
 .gb-jobs-panel{display:flex;flex:1;min-height:0;overflow:hidden;border:1px solid #e5e6eb;border-radius:6px;background:#fff;box-shadow:none;flex-direction:column}
-.gb-filters{display:flex;flex:0 0 auto;min-width:0;flex-wrap:wrap;align-items:center;gap:8px;font-weight:400}
+/* 四个筛选控件同一行（图空间/状态/类型定宽 160px，搜索定宽 280px），间距与人工审核筛选行同口径 */
+.gb-filters{display:flex;flex:0 0 auto;min-width:0;flex-wrap:wrap;align-items:center;gap:16px;font-weight:400}
 /* 图空间下拉：跟随筛选条尺寸合同，不换行不被压缩 */
 .gb-task-table{flex:1;min-height:0;overflow:auto;padding:0}
 /* 与 Schema 管理表一致：由内容语义自动分配列宽，空间不足时由表格容器承接横向滚动。 */
@@ -493,15 +494,16 @@ span.run{color:#175cd3}
 
 </style>
 <style>
-.app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-wrapper{box-sizing:border-box;width:280px;min-width:0;max-width:100%;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:1 1 240px}
+.app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-wrapper{box-sizing:border-box;width:280px;min-width:0;max-width:100%;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:0 1 280px}
 .app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-wrapper:hover{border-color:#4080ff!important;background:#fff!important}
 .app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-wrapper:focus-within,.app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
 .app-workspace .gb-filters #graph-build-filter-name .arco-input-prefix{padding-right:8px;color:#4e5969}.app-workspace .gb-filters #graph-build-filter-name.arco-input-focus .arco-input-prefix{color:#165dff}.app-workspace .gb-filters #graph-build-filter-name .arco-input-prefix svg{width:16px;height:16px;font-size:16px}
 .app-workspace .gb-filters #graph-build-filter-name input.arco-input{box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
-.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type).gb-filter-select.arco-select-view{display:inline-flex;box-sizing:border-box;align-items:center;width:160px;min-width:0;max-width:100%;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:1 1 140px}
-.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type).gb-filter-select.arco-select-view:hover{border-color:#4080ff!important;background:#fff!important}
-.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type).gb-filter-select.arco-select-view:focus-within,.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type).gb-filter-select.arco-select-view-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
-.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type) input.arco-select-view-input{box-sizing:border-box;width:100%;height:30px!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
-.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type) .arco-select-view-input-hidden{position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important}.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type) .arco-select-view-value{min-width:0;overflow:hidden;font-size:14px;line-height:22px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
-.app-workspace .gb-filters :is(#graph-build-filter-status,#graph-build-filter-type) :is(.arco-select-view-input,.arco-select-view-value){background:transparent!important}
+/* 筛选下拉统一按类命中（状态/类型/图空间同一边框与尺寸合同），不再绑死控件 id */
+.app-workspace .gb-filters .gb-filter-select.arco-select-view{display:inline-flex;box-sizing:border-box;align-items:center;width:160px;min-width:0;max-width:100%;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:0 0 160px}
+.app-workspace .gb-filters .gb-filter-select.arco-select-view:hover{border-color:#4080ff!important;background:#fff!important}
+.app-workspace .gb-filters .gb-filter-select.arco-select-view:focus-within,.app-workspace .gb-filters .gb-filter-select.arco-select-view-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
+.app-workspace .gb-filters .gb-filter-select input.arco-select-view-input{box-sizing:border-box;width:100%;height:30px!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
+.app-workspace .gb-filters .gb-filter-select .arco-select-view-input-hidden{position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important}.app-workspace .gb-filters .gb-filter-select .arco-select-view-value{min-width:0;overflow:hidden;font-size:14px;line-height:22px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
+.app-workspace .gb-filters .gb-filter-select :is(.arco-select-view-input,.arco-select-view-value){background:transparent!important}
 </style>

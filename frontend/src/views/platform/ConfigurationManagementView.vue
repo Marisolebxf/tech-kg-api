@@ -737,8 +737,8 @@ onMounted(() => {
 .configuration-page{padding:0;color:#1d2129}.page-header{align-items:center;margin-bottom:16px}.page-header>div{display:none}.page-header button{height:32px;margin-right:auto;margin-left:0;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
 .config-workbench{grid-template-columns:240px minmax(0,1fr);gap:0;border:0;border-radius:0;background:transparent}.category-nav{border:0;border-right:1px solid #e5e6eb;background:transparent}.config-list{overflow:hidden;border:0;border-radius:0;background:#fff}
 .category-nav>header{display:flex;align-items:center;gap:0;padding:8px 16px;border-bottom:0}.category-nav>header strong{position:relative;padding-left:11px;font-size:16px;line-height:24px}.category-nav>header strong::before{position:absolute;top:5px;left:0;width:3px;height:14px;border-radius:1px;background:#165dff;content:""}
-.category-nav>button{box-sizing:border-box;grid-template-columns:20px minmax(0,1fr) auto;align-items:center;gap:8px;width:calc(100% - 16px);height:56px;min-height:56px;margin-right:8px;margin-left:8px;padding:4px 16px;border:1px solid transparent;border-radius:4px;font-size:14px;line-height:22px;text-align:left}.category-nav>header+button{margin-top:4px}.category-nav>button+button{margin-top:4px}.category-nav>button.active{border-color:transparent;background:#e8f3ff;box-shadow:none;color:#165dff;font-weight:500}
-.category-nav>button>i{width:20px;height:20px;border-radius:4px;font-size:12px}.category-nav>button>span{display:flex;min-width:0;align-items:center;justify-content:flex-start}.category-nav>button strong{display:block;overflow:hidden;font-size:14px;line-height:22px;text-align:left;text-overflow:ellipsis;white-space:nowrap}.category-nav>button em{padding:0;border-radius:0;background:transparent;font-size:12px;line-height:20px}
+.category-nav>button{box-sizing:border-box;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;width:calc(100% - 16px);height:56px;min-height:56px;margin-right:8px;margin-left:8px;padding:4px 16px;border:1px solid transparent;border-radius:4px;font-size:14px;line-height:22px;text-align:left}.category-nav>header+button{margin-top:4px}.category-nav>button+button{margin-top:4px}.category-nav>button.active{border-color:transparent;background:#e8f3ff;box-shadow:none;color:#165dff;font-weight:500}
+.category-nav>button>span{display:flex;min-width:0;align-items:center;justify-content:flex-start}.category-nav>button strong{display:block;overflow:hidden;font-size:14px;line-height:22px;text-align:left;text-overflow:ellipsis;white-space:nowrap}.category-nav>button em{padding:0;border-radius:0;background:transparent;font-size:12px;line-height:20px}
 .config-list>header{min-height:56px;box-sizing:border-box;justify-content:flex-end;gap:16px;padding:8px 16px}.config-list nav{gap:16px}.config-list-actions{width:100%}.config-list-actions .config-search-input{margin-left:auto}
 .config-list input,.config-list select{height:32px;padding:0 12px;border-color:#e5e6eb;border-radius:4px;font-size:14px;line-height:22px}
 .table-wrap table{font-size:14px;line-height:22px}.table-wrap th,.table-wrap td{height:40px;padding:0 16px;border-bottom:1px solid #e5e6eb}.table-wrap th{background:#f7f8fa;color:#1d2129;font-weight:500}.config-name{min-width:0;gap:8px}.config-name strong,.type-name,.link{font-size:14px;line-height:22px}.config-name small,.updated,.table-wrap code{font-size:12px;line-height:20px}
@@ -770,7 +770,8 @@ onMounted(() => {
 .config-list nav :deep(.arco-select-view-input){height:100%!important;min-height:0!important;padding:0!important;border:0!important;background:transparent!important;box-shadow:none!important}
 .config-list nav :deep(.arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;pointer-events:none!important}
 .config-list nav :deep(.arco-select-view-value){min-width:0;line-height:30px}
-@media(max-width:1024px){.config-workbench{grid-template-columns:84px minmax(0,1fr)}.category-nav>header span,.category-nav>button span,.category-nav>button em{display:none}.category-nav>button{grid-template-columns:20px;width:52px;height:40px;min-height:40px;margin-right:auto;margin-left:auto;justify-content:center;padding:0}}
+/* 窄侧栏（≤1024px）：图标已移除，改为只显示分类名（计数隐藏，超长省略） */
+@media(max-width:1024px){.config-workbench{grid-template-columns:84px minmax(0,1fr)}.category-nav>header span,.category-nav>button em{display:none}.category-nav>button{grid-template-columns:minmax(0,1fr);height:40px;min-height:40px;justify-content:center;padding:0 8px}.category-nav>button strong{text-align:center}}
 .dialog-form :deep(.arco-form-item){margin-bottom:0}.dialog-form :deep(.arco-form-item-layout-vertical>.arco-form-item-label-col){margin-bottom:8px}
 .dialog-form .default-config-checkbox{display:inline-flex!important;flex-direction:row!important;align-items:center!important;justify-content:flex-start;gap:0!important;white-space:nowrap}
 .config-create-form input:not([type="checkbox"]){box-sizing:border-box;width:100%;height:32px;padding:0 12px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#1d2129;font-family:inherit;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0;outline:none;box-shadow:none;transition:border-color .1s ease,box-shadow .1s ease}
@@ -829,7 +830,7 @@ onMounted(() => {
 .category-nav>header strong,.detail-drawer h2,.create-dialog h2{font-size:16px;line-height:24px;font-weight:600}
 .category-nav>button,.category-nav>button strong,.config-list nav button,.config-list nav :deep(.arco-select-view-value),.config-search-input :deep(.arco-input){font-size:14px;line-height:22px;font-weight:400}
 .category-nav>button.active{font-weight:500}
-.category-nav>button>i{font-size:12px;line-height:20px;font-weight:600}.category-nav>button em{font-size:12px;line-height:20px;font-weight:400}
+.category-nav>button em{font-size:12px;line-height:20px;font-weight:400}
 .config-name>span{min-width:160px;gap:4px}.config-name strong,.type-name,.table-wrap td,.row-actions .link{font-size:14px;line-height:22px;font-weight:400}.config-name small,.updated,.table-wrap code{font-size:12px;line-height:20px;font-weight:400}.table-wrap code{max-width:none;margin-top:4px;overflow:visible;font-family:inherit;text-overflow:clip;white-space:nowrap}
 .row-actions{gap:8px}.default-tag{margin-left:8px;padding:0 4px;font-size:12px;line-height:20px;font-weight:500}
 .config-list nav :deep(.arco-select-view-value){line-height:22px}
@@ -879,7 +880,7 @@ onMounted(() => {
   }
 
   .category-nav > button {
-    grid-template-columns: 20px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     width: auto;
     margin: 0;
     padding: 0 8px;

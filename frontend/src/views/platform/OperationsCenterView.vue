@@ -447,6 +447,7 @@ onMounted(loadReviews)
             class="rerun-batch-action review-filter-batch"
             type="button"
             :disabled="!rerunSelection.size || rerunSubmitting"
+            :title="!rerunSelection.size ? '先勾选列表左侧的失败记录（仅「待处理 / 重跑失败」可勾选），勾选后按钮点亮' : undefined"
             @click="rerunSelected()"
           >{{ rerunSubmitting ? '下发中…' : `批量重跑（${rerunSelection.size}）` }}</button>
           <div class="review-filter-field">
@@ -499,6 +500,7 @@ onMounted(loadReviews)
           <tr>
             <th v-if="reviewCategory === 'C'" class="pick-col"><input aria-label="checkbox-input"
               type="checkbox"
+              title="全选当前页可重跑的失败记录（仅「待处理 / 重跑失败」状态可勾选）"
               :checked="rerunAllChecked"
               :indeterminate="rerunSomeChecked"
               @change="toggleRerunPickAll"
@@ -517,6 +519,7 @@ onMounted(loadReviews)
             <td v-if="reviewCategory === 'C'" class="pick-col"><input aria-label="checkbox-input"
               type="checkbox"
               :disabled="!isRerunnable(row)"
+              :title="!isRerunnable(row) ? rerunDisabledReason(row) : undefined"
               :checked="rerunSelection.has(row.id)"
               @change="((event?: Event) => toggleRerunPick(row.id, Boolean((event?.target as HTMLInputElement)?.checked)))"
             /></td>

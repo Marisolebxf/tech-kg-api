@@ -30,7 +30,7 @@ function isNumeric(column: string): boolean {
     || (props.rows.length > 0 && props.rows.every((row) => typeof row[column] === 'number' || row[column] == null))
 }
 const tableColumns = computed<TableColumnData[]>(() => [
-  { title: '序号', dataIndex: '__index', width: 76, fixed: 'left', align: 'center' },
+  { title: '序号', dataIndex: '__index', width: 76, align: 'center' },
   ...props.columns.map((column, index): TableColumnData => ({
     title: props.labels[column] ?? column,
     dataIndex: `cell_${index}`,

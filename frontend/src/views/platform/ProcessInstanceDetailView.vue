@@ -377,6 +377,16 @@ const {
 } = useClientPagination(jobExecutions, 10)
 const selectedExecutionId = ref('')
 const selectedExecution = ref<WorkflowExecution | null>(null)
+/** 选中执行标记为失败的原因（如「抽取完成，含 N 条失败记录（已转人工审核）」）。
+ *  此前只存在执行记录里、页面上无显眼出口——任务列表看到失败，进详情却只见
+ *  全绿流程卡，看不出为何失败。 */
+const executionFailureNotice = computed(() => {
+  const execution = selectedExecution.value as
+    | { status?: string; message?: string; output?: { failures?: { count?: number } } }
+    | null
+  if (!execution || execution.status !== 'FAILED' || !execution.message) return null
+  return { message: execution.message, count: Number(execution.output?.failures?.count ?? 0) }
+})
 /** F6：embedding/Milvus 等外部服务故障导致索引构建降级时，执行详情必须显式提醒（不能只埋在输出 JSON 里）。 */
 const indexDegrade = computed(() => {
   const output = (selectedExecution.value as { output?: { index?: { degraded?: boolean; error?: string } } } | null)?.output
@@ -658,6 +668,12 @@ onMounted(async () => {
       <em>该告警针对选中的执行 {{ selectedExecutionId || '最新一次' }}（后续成功执行可能已重建索引）；请检查 embedding 服务可用性后，重新执行该任务——执行末尾会全量重建该图空间的实体索引。</em>
     </div>
 
+    <div v-if="executionFailureNotice" class="exec-failure-alert" role="alert" aria-label="执行失败原因说明">
+      <strong>⚠ 本次执行标记为失败：{{ executionFailureNotice.message }}</strong>
+      <span v-if="executionFailureNotice.count > 0">逐行失败记录已转人工审核：到「人工审核」的处理中心可查看并勾选重跑；左下流程卡片的「N 异常」是对应环节的失败行数——环节本身执行成功，失败的是单条数据转换。</span>
+      <span v-else>左下流程卡片展示各环节执行状态；在「执行历史」中点选其他执行可查看当时的过程。</span>
+    </div>
+
     <section class="detail-workspace">
       <aside class="process-sidebar">
         <header><div><h2>{{ visiblePhase }}流程</h2></div><span>{{ visibleSteps.filter(step => step.status === '成功').length }}/{{ visibleSteps.length }}</span></header>
@@ -769,6 +785,10 @@ onMounted(async () => {
 .index-degrade-alert strong{font-size:13px}
 .index-degrade-alert code{padding:2px 6px;border-radius:4px;background:#fde8e8;word-break:break-all}
 .index-degrade-alert em{color:#a8655c;font-style:normal;font-size:11px}
+/* 执行失败原因说明条：与索引降级告警同风格（区别：面向任务级 FAILED 的解释） */
+.exec-failure-alert{display:flex;flex-direction:column;gap:4px;margin:0 0 12px;padding:10px 14px;border:1px solid #f0a6a6;border-left:4px solid #d92d20;border-radius:6px;background:#fef3f2;color:#912018;font-size:12px}
+.exec-failure-alert strong{font-size:13px}
+.exec-failure-alert span{color:#a8655c;font-size:11px;line-height:18px}
 /* 真实输入输出（脚本上报 JSON）：跨两列，输入/输出分块，超长 JSON 内部滚动 */
 .io-content h3 span{padding:2px 6px;border-radius:4px;background:#eef4ff;color:#165dff;font-size:8px;font-weight:500}
 .io-empty{margin:0;padding:15px;border-top:1px solid #eef2f7;color:#8290a7;font-size:10px;line-height:18px}

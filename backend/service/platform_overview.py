@@ -202,7 +202,8 @@ def parse_execution_records(
         if status == "RUNNING":
             running += 1
             continue
-        if status != "COMPLETED":
+        if status not in ("COMPLETED", "ABNORMAL"):
+            # ABNORMAL = 抽取完成但含行级失败记录：图已写入，昨日新增必须计入
             continue
         completed_at = str(record.get("completedAt") or "")
         if completed_at[:10] != day:
@@ -358,7 +359,7 @@ class WorkflowControlDayChangesProvider:
             result = connection.execute(
                 text(
                     "SELECT payload FROM workflow_executions "
-                    "WHERE status IN ('COMPLETED', 'RUNNING') AND started_at >= :since"
+                    "WHERE status IN ('COMPLETED', 'ABNORMAL', 'RUNNING') AND started_at >= :since"
                 ),
                 {"since": since},
             )

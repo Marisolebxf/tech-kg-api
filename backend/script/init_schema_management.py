@@ -119,8 +119,23 @@ def _ensure_incremental_columns(engine: Engine) -> None:
                     )
 
 
+def _seed_graph_space(session: Session) -> str:
+    """系统目录的播种空间：已有系统行所在空间（幂等，不随 env 变化重复播种）。
+
+    全新库按部署默认空间（与 GraphSchemaDefinition.graph_space 列默认一致）。
+    多图空间目录允许不同空间同名 Schema——用户 Schema 与系统 Schema 同名但
+    不同空间是合法状态，不应挡住启动（目录唯一键本就是 (name, graph_space)）。
+    """
+    existing = session.execute(
+        select(GraphSchemaDefinition.graph_space)
+        .where(GraphSchemaDefinition.is_system.is_(True))
+        .limit(1)
+    ).scalar_one_or_none()
+    return existing or os.getenv("TRS_GRAPH_SPACE", "techkg")
+
+
 def _find_definition(
-    session: Session, *, schema_key: str, name: str
+    session: Session, *, schema_key: str, name: str, graph_space: str
 ) -> GraphSchemaDefinition | None:
     statement = (
         select(GraphSchemaDefinition)
@@ -128,7 +143,8 @@ def _find_definition(
             or_(
                 GraphSchemaDefinition.schema_key == schema_key,
                 GraphSchemaDefinition.name == name,
-            )
+            ),
+            GraphSchemaDefinition.graph_space == graph_space,
         )
         .options(
             selectinload(GraphSchemaDefinition.properties),
@@ -181,7 +197,7 @@ def _entity_properties(name: str, identity_key: str) -> tuple[list[tuple[str, st
     return properties, attribute_key, attribute_source
 
 
-def _upsert_entities(session: Session) -> tuple[dict[str, str], int]:
+def _upsert_entities(session: Session, *, graph_space: str) -> tuple[dict[str, str], int]:
     entity_ids: dict[str, str] = {}
     inserted = 0
     for display_order, (
@@ -193,9 +209,13 @@ def _upsert_entities(session: Session) -> tuple[dict[str, str], int]:
         description,
     ) in enumerate(ENTITY_SPECS):
         schema_key = _schema_key(name)
-        definition = _find_definition(session, schema_key=schema_key, name=name)
+        definition = _find_definition(
+            session, schema_key=schema_key, name=name, graph_space=graph_space
+        )
         if definition is None:
-            definition = GraphSchemaDefinition(id=_system_id("entity", name))
+            definition = GraphSchemaDefinition(
+                id=_system_id("entity", name), graph_space=graph_space
+            )
             session.add(definition)
             inserted += 1
         elif not definition.is_system:
@@ -238,13 +258,18 @@ def _upsert_relations(
     entity_ids: dict[str, str],
     specs: list[tuple[str, str, str, str, str]],
     category: str,
+    graph_space: str,
 ) -> int:
     inserted = 0
     for display_order, (name, label, source, target, basis) in enumerate(specs):
         schema_key = _schema_key(name)
-        definition = _find_definition(session, schema_key=schema_key, name=name)
+        definition = _find_definition(
+            session, schema_key=schema_key, name=name, graph_space=graph_space
+        )
         if definition is None:
-            definition = GraphSchemaDefinition(id=_system_id("relation", name))
+            definition = GraphSchemaDefinition(
+                id=_system_id("relation", name), graph_space=graph_space
+            )
             session.add(definition)
             inserted += 1
         elif not definition.is_system:
@@ -285,18 +310,21 @@ def initialize_schema_management(engine: Engine | None = None) -> int:
     _ensure_incremental_columns(engine)
 
     with Session(engine) as session:
-        entity_ids, inserted = _upsert_entities(session)
+        graph_space = _seed_graph_space(session)
+        entity_ids, inserted = _upsert_entities(session, graph_space=graph_space)
         inserted += _upsert_relations(
             session,
             entity_ids=entity_ids,
             specs=FACT_RELATION_SPECS,
             category="fact",
+            graph_space=graph_space,
         )
         inserted += _upsert_relations(
             session,
             entity_ids=entity_ids,
             specs=INFERRED_RELATION_SPECS,
             category="inferred",
+            graph_space=graph_space,
         )
         session.commit()
     return inserted

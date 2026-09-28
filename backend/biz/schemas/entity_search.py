@@ -12,7 +12,9 @@ class EntitySearchRequest(BaseModel):
     space: str | None = Field(default=None, max_length=64, description="图空间，缺省当前空间")
     entityType: str | None = Field(default=None, max_length=64, description="实体类型过滤")
     limit: int = Field(default=10, ge=1, le=100)
-    offset: int = Field(default=0, ge=0, le=400)
+    # 跳页框深分页：检索侧重取上限被 min(limit+offset, 500) 截断，越界页自然为空，
+    # 请求层不再用小上限卡死页码（与 browse 接口同口径的千万级护栏）
+    offset: int = Field(default=0, ge=0, le=10_000_000)
 
 
 class EntityReindexRequest(BaseModel):

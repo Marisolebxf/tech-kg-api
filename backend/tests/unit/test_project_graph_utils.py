@@ -11,6 +11,7 @@ from script.project_graph_utils import (
     org_vid,
     parse_json_objects,
     parse_list,
+    parse_name_list,
     person_vid,
     project_confidence,
     project_vid,
@@ -41,6 +42,20 @@ def test_parse_list_chinese_separators():
     assert parse_list("张三") == ["张三"]
     assert parse_list("，") == []
     assert parse_list("张三，") == ["张三"]
+
+
+def test_parse_name_list_han_vs_western():
+    # 人名/机构名单值解析：含汉字才按分隔符拆，纯西文串（姓， 名 / 机构名内部
+    # 分号）不拆，避免拆出残名候选后匹配出错边。
+    assert parse_name_list("张三，李四") == ["张三", "李四"]
+    assert parse_name_list("清华大学；北京大学") == ["清华大学", "北京大学"]
+    assert parse_name_list("BO， Zhang") == ["BO， Zhang"]
+    assert parse_name_list("University of California;Riverside") == [
+        "University of California;Riverside"
+    ]
+    assert parse_name_list("TAKASHI， Ito") == ["TAKASHI， Ito"]
+    assert parse_name_list(None) == []
+    assert parse_name_list("") == []
 
 
 def test_vids_stable():

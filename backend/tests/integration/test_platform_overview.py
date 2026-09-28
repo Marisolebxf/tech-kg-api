@@ -6,9 +6,9 @@ from biz.handler.platform_overview import application
 from biz.handler.platform_overview import router as platform_overview_router
 from biz.schemas.platform_overview import AssetChangeRow
 from service.platform_overview import (
+    DayChangesSnapshot,
     GraphStatsSnapshot,
     PlatformOverviewService,
-    TodayChangesSnapshot,
 )
 
 
@@ -28,8 +28,8 @@ class _IntegrationStatsProvider:
 class _IntegrationChangesProvider:
     """控制库今日增量替身：避免集成测试依赖真实 techkg_control 数据。"""
 
-    def get_today_changes(self, space: str | None = None) -> TodayChangesSnapshot:
-        return TodayChangesSnapshot(
+    def __init__(self) -> None:
+        self._snapshot = DayChangesSnapshot(
             entity_added=5,
             relation_added=2,
             running_count=1,
@@ -44,6 +44,12 @@ class _IntegrationChangesProvider:
             ],
             relation_rows=[],
         )
+
+    def get_day_changes(self, space: str | None = None) -> DayChangesSnapshot:
+        return self._snapshot
+
+    def running_count(self, space: str | None = None) -> int:
+        return self._snapshot.running_count
 
 
 @pytest.fixture
@@ -80,9 +86,9 @@ async def test_platform_overview_returns_frontend_contract(
         "relation",
         "property",
     ]
-    # 今日新增来自工作流控制库替身：数值与明细行均为真实口径的返回形状
+    # 昨日新增来自工作流控制库替身：数值与明细行均为真实口径的返回形状
     assert data["assetOverviewGroups"][0]["added"] == "+5"
-    assert data["assetOverviewGroups"][0]["addedLabel"] == "今日新增"
+    assert data["assetOverviewGroups"][0]["addedLabel"] == "昨日新增"
     assert data["assetOverviewGroups"][1]["added"] == "+2"
     assert len(data["assetChangeRows"]["entity"]) == 1
     assert data["assetChangeRows"]["entity"][0]["change"] == "新增 review-widget-64d0d5"
@@ -93,7 +99,7 @@ async def test_platform_overview_returns_frontend_contract(
     assert sum(item["ratio"] for item in data["relationStructure"]) == 100
     assert data["dataMode"] == "partial"
     assert data["dataSources"]["graphAssets"] == "trsgraph-live"
-    assert data["dataSources"]["todayChanges"] == "workflow-control-live"
+    assert data["dataSources"]["dayChanges"] == "workflow-control-live"
 
 
 async def test_platform_overview_atomic_endpoints_are_registered(

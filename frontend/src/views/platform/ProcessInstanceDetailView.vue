@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { deriveJobUnifiedStatus, getExecution, getJob, getTask, listExecutions, retryTask, TRIGGER_SOURCE_LABEL, type AccessReport, type PipelineActivityInfo, type PipelineStepInfo, type ProcessingInstance, type UpdateBatch, type WorkflowExecution, type WorkflowJob } from '../../api/workflowOperations'
+import { deriveJobUnifiedStatus, executionStatusLabel, getExecution, getJob, getTask, listExecutions, retryTask, TRIGGER_SOURCE_LABEL, type AccessReport, type PipelineActivityInfo, type PipelineStepInfo, type ProcessingInstance, type UpdateBatch, type WorkflowExecution, type WorkflowJob } from '../../api/workflowOperations'
 import { getSchemaDetail, type SchemaDefinition } from '../../api/schemaManagement'
 import { currentUserId } from '../../api/currentUser'
 import { accessChips } from '../../utils/accessReport'
@@ -11,8 +11,16 @@ import { useClientPagination } from '../../composables/use-client-pagination'
 const triggerLabel = (e: WorkflowExecution) => TRIGGER_SOURCE_LABEL[e.triggerSource ?? 'MANUAL'] ?? '手动触发'
 const failureCount = (e: WorkflowExecution) =>
   ((e as { output?: { failures?: { count?: number } } }).output?.failures?.count) ?? '—'
+/** 执行历史状态色：完成绿 / 异常橙 / 失败红 / 其余默认。 */
+const executionStatusTone = (status?: string | null) => {
+  const s = (status || '').toUpperCase()
+  if (s === 'COMPLETED') return 'ok'
+  if (s === 'ABNORMAL') return 'warn'
+  if (['FAILED', 'CANCELED', 'TERMINATED', 'TIMED_OUT'].includes(s)) return 'err'
+  return ''
+}
 
-type StepStatus = '成功' | '运行中' | '需人工处理' | '待执行'
+type StepStatus = '成功' | '异常' | '运行中' | '需人工处理' | '待执行'
 type RiskLevel = '低风险' | '中风险' | '高风险'
 type DetailTab = 'overview' | 'io' | 'logs' | 'lineage'
 type Step = {
@@ -53,7 +61,7 @@ const processingInstance = ref<ProcessingInstance>()
 const fallbackBatch: UpdateBatch = { id: '-', name: '任务详情', updateDate: '-', dataWindow: '-', source: '-', trigger: '-', input: 0, entities: 0, relations: 0, completed: 0, abnormal: 0, progress: 0, status: '处理中', startedAt: '-', completedAt: '-' }
 const batch = computed(() => processingInstance.value?.batch ?? fallbackBatch)
 const isConstructionTask = computed(() => processingInstance.value?.stage === '图谱构建' || String(route.params.area) === 'construction')
-const needsTaskReview = computed(() => ['执行出错', '等待人工审核'].includes(processingInstance.value?.taskStatus ?? ''))
+const needsTaskReview = computed(() => ['执行出错', '执行异常', '等待人工审核'].includes(processingInstance.value?.taskStatus ?? ''))
 const activeTab = ref<DetailTab>('overview')
 const isPipelineTask = computed(() => ['kg.custom.steps', 'kg.custom.chain', 'kg.schema.extract.chain'].includes(processingInstance.value?.workflowType ?? ''))
 /** 多脚本串行任务：流程里每个 step 是一个 Schema 抽取（旧版为一个脚本），点击在按钮下方展开其 activity steps。 */
@@ -96,6 +104,8 @@ const steps = computed<Step[]>(() => {
   if (processingInstance.value?.steps?.length) {
     return processingInstance.value.steps.map((step) => ({
       ...step,
+      // 口径：环节跑完但含失败行 = 「异常」（黄色感叹号），不是成功也不是失败
+      status: step.status === '成功' && step.abnormal !== '0' && step.abnormal !== '-' ? '异常' as StepStatus : step.status,
       risk: step.risk ?? (step.status === '需人工处理' ? '高风险' : step.phase === '图谱构建' ? '中风险' : '低风险'),
       engine: step.engine ?? (step.phase === '图谱构建' ? 'Temporal KG Worker' : 'Temporal Data Worker'),
     }))
@@ -122,6 +132,21 @@ function mapPipelineStatus(s: PipelineStepInfo['status']): StepStatus {
   }
 }
 
+/** Temporal 步骤状态 → 展示状态：COMPLETED 且含失败行 = 「异常」（完成但不是干净成功）。 */
+function pipelineDisplayStatus(info: { status: PipelineStepInfo['status']; failed?: number }): StepStatus {
+  const mapped = mapPipelineStatus(info.status)
+  if (mapped === '成功' && typeof info.failed === 'number' && info.failed > 0) return '异常'
+  return mapped
+}
+
+/** 步骤卡图标：成功绿勾 / 异常黄感叹号 / 失败红叉 / 其余灰点。 */
+function stepStatusIcon(status: StepStatus): string {
+  if (status === '成功') return '✓'
+  if (status === '异常') return '!'
+  if (status === '需人工处理') return '✗'
+  return '·'
+}
+
 function buildPipelineSteps(): Step[] {
   const state = processingInstance.value?.pipeline
   if (!state?.steps) return [] as Step[]
@@ -130,8 +155,8 @@ function buildPipelineSteps(): Step[] {
     id,
     phase: '图谱构建' as const,
     name: info.name || id,
-    status: mapPipelineStatus(info.status),
-    risk: (info.status === 'FAILED' ? '高风险' : '低风险') as RiskLevel,
+    status: pipelineDisplayStatus(info),
+    risk: (info.status === 'FAILED' ? '高风险' : typeof info.failed === 'number' && info.failed > 0 ? '中风险' : '低风险') as RiskLevel,
     count: typeof info.records === 'number'
       ? `${info.records} 行 / 写图 ${info.written ?? 0} 条`
       : info.activities
@@ -207,8 +232,8 @@ function buildActivityStep(scriptId: string, activityId: string): Step | null {
     id: `${scriptId}::${activityId}`,
     phase: '图谱构建',
     name: `${scriptName} · ${entry.info.name || activityId}`,
-    status: mapPipelineStatus(entry.info.status),
-    risk: (entry.info.status === 'FAILED' ? '高风险' : '低风险') as RiskLevel,
+    status: pipelineDisplayStatus(entry.info),
+    risk: (entry.info.status === 'FAILED' ? '高风险' : typeof entry.info.failed === 'number' && entry.info.failed > 0 ? '中风险' : '低风险') as RiskLevel,
     count: typeof entry.info.records === 'number'
       ? `${entry.info.records} 行 / 写图 ${entry.info.written ?? 0} 条`
       : entry.info.attempt ? `attempt=${entry.info.attempt}` : '-',
@@ -237,13 +262,14 @@ function buildExtractStep(instance: ProcessingInstance): Step {
   const failed = Number(output.failures?.count ?? sources.reduce((sum, item) => sum + Number(item.failed ?? 0), 0))
   const errored = instance.taskStatus === '执行出错'
   const pending = instance.taskStatus === '等待人工审核'
+  const abnormalTask = instance.taskStatus === '执行异常'
   const lastCursor = [...sources].reverse().find((item) => item.watermark || item.pkCursor)
   const cursorText = lastCursor?.watermark || (lastCursor?.pkCursor ? `pk > ${lastCursor.pkCursor}` : '')
   return {
     id: 'extract',
     phase: '图谱构建',
     name: instance.objectName || '平台喂数抽取',
-    status: instance.taskStatus === '执行中' ? '运行中' : errored || pending ? '需人工处理' : '成功',
+    status: instance.taskStatus === '执行中' ? '运行中' : errored || pending ? '需人工处理' : abnormalTask || failed > 0 ? '异常' : '成功',
     risk: (errored ? '高风险' : failed > 0 ? '中风险' : '低风险') as RiskLevel,
     count: rows ? `${rows} 行 · 写入 ${written}` : '-',
     abnormal: errored ? '1' : String(failed || 0),
@@ -377,6 +403,23 @@ const {
 } = useClientPagination(jobExecutions, 10)
 const selectedExecutionId = ref('')
 const selectedExecution = ref<WorkflowExecution | null>(null)
+/** 选中执行被标记的原因（如「抽取完成，含 N 条失败记录（已转人工审核）」）。
+ *  ABNORMAL=抽取完成但含行级失败（橙色「异常」）；FAILED=执行真跑崩（红色「失败」）。
+ *  此前只存在执行记录里、页面上无显眼出口——任务列表看到失败/异常，进详情却只见
+ *  全绿流程卡，看不出为何。 */
+const executionFailureNotice = computed(() => {
+  const execution = selectedExecution.value as
+    | { status?: string; message?: string; output?: { failures?: { count?: number } } }
+    | null
+  if (!execution || !execution.message) return null
+  const status = (execution.status || '').toUpperCase()
+  if (status !== 'FAILED' && status !== 'ABNORMAL') return null
+  return {
+    abnormal: status === 'ABNORMAL',
+    message: execution.message,
+    count: Number(execution.output?.failures?.count ?? 0),
+  }
+})
 /** F6：embedding/Milvus 等外部服务故障导致索引构建降级时，执行详情必须显式提醒（不能只埋在输出 JSON 里）。 */
 const indexDegrade = computed(() => {
   const output = (selectedExecution.value as { output?: { index?: { degraded?: boolean; error?: string } } } | null)?.output
@@ -513,7 +556,7 @@ async function loadLatestExecution() {
       selectedExecution.value = execution ?? null
       jobExecutions.value = execution ? [execution] : []
       selectedExecutionId.value = execution?.id ?? ''
-      latestExecutionMessage.value = [execution?.status, execution?.message].filter(Boolean).join(' · ')
+      latestExecutionMessage.value = [executionStatusLabel(execution?.status), execution?.message].filter(Boolean).join(' · ')
       return
     }
   } catch {
@@ -531,7 +574,7 @@ async function selectExecution(executionId: string) {
   try {
     const execution = await getExecution(executionId)
     selectedExecution.value = execution ?? null
-    latestExecutionMessage.value = [execution?.status, execution?.message].filter(Boolean).join(' · ')
+    latestExecutionMessage.value = [executionStatusLabel(execution?.status), execution?.message].filter(Boolean).join(' · ')
     // job / 周期任务视图：用最新 execution 的任务填充流程详情
     if ((jobId.value || scheduleId.value) && execution?.taskId) {
       try {
@@ -628,7 +671,7 @@ onMounted(async () => {
             >
               <td><code>{{ e.id }}</code></td>
               <td><span class="trigger-chip" :data-kind="e.triggerSource || 'MANUAL'">{{ triggerLabel(e) }}</span></td>
-              <td>{{ e.status }}</td>
+              <td><span class="exec-status-cell" :class="executionStatusTone(e.status)">{{ executionStatusLabel(e.status) }}</span></td>
               <td>{{ e.startedAt }}</td>
               <td>{{ failureCount(e) }}</td>
             </tr>
@@ -658,6 +701,12 @@ onMounted(async () => {
       <em>该告警针对选中的执行 {{ selectedExecutionId || '最新一次' }}（后续成功执行可能已重建索引）；请检查 embedding 服务可用性后，重新执行该任务——执行末尾会全量重建该图空间的实体索引。</em>
     </div>
 
+    <div v-if="executionFailureNotice" class="exec-failure-alert" :class="{ 'is-abnormal': executionFailureNotice.abnormal }" role="alert" aria-label="执行标记原因说明">
+      <strong>{{ executionFailureNotice.abnormal ? '⚠ 本次执行标记为异常：' : '⚠ 本次执行标记为失败：' }}{{ executionFailureNotice.message }}</strong>
+      <span v-if="executionFailureNotice.count > 0">逐行失败记录已转人工审核：到「人工审核」的处理中心可查看并勾选重跑；左下流程卡片的黄色感叹号与「N 异常」是对应环节的失败行数——环节本身执行成功，失败的是单条数据转换。</span>
+      <span v-else>左下流程卡片展示各环节执行状态；在「执行历史」中点选其他执行可查看当时的过程。</span>
+    </div>
+
     <section class="detail-workspace">
       <aside class="process-sidebar">
         <header><div><h2>{{ visiblePhase }}流程</h2></div><span>{{ visibleSteps.filter(step => step.status === '成功').length }}/{{ visibleSteps.length }}</span></header>
@@ -666,13 +715,13 @@ onMounted(async () => {
           <div v-else class="phase-title"><strong>{{ visiblePhase }}</strong></div>
           <template v-for="step in visibleSteps" :key="step.id">
             <button type="button" :class="['process-step', `is-${step.status}`, `is-${step.risk}`, { active: selectedStepId === step.id, 'has-review': step.abnormal !== '0' && step.abnormal !== '-', 'is-script': isChainTask, 'is-expanded': isChainTask && expandedScriptId === step.id }]" @click="selectStep(step.id)">
-              <i>{{ step.status === '成功' ? '✓' : step.status === '需人工处理' ? '!' : '·' }}</i>
+              <i>{{ stepStatusIcon(step.status) }}</i>
               <span><strong>{{ step.name }}<b v-if="step.id === 'llm'">AI</b><b v-if="step.risk === '高风险'" class="risk">重点</b></strong><em>{{ step.count }}<template v-if="step.abnormal !== '0' && step.abnormal !== '-'"> · {{ step.abnormal }} 异常</template></em></span>
               <small>{{ step.status }}</small>
             </button>
             <template v-if="isChainTask && expandedScriptId === step.id">
-              <button v-for="act in chainActivities(step.id)" :key="`${step.id}::${act.id}`" type="button" :class="['process-substep', `is-${mapPipelineStatus(act.info.status)}`, { active: selectedActivityId === act.id && selectedStepId === step.id }]" @click="selectActivity(step.id, act.id)">
-                <i>{{ mapPipelineStatus(act.info.status) === '成功' ? '✓' : mapPipelineStatus(act.info.status) === '需人工处理' ? '!' : '·' }}</i>
+              <button v-for="act in chainActivities(step.id)" :key="`${step.id}::${act.id}`" type="button" :class="['process-substep', `is-${pipelineDisplayStatus(act.info)}`, { active: selectedActivityId === act.id && selectedStepId === step.id }]" @click="selectActivity(step.id, act.id)">
+                <i>{{ stepStatusIcon(pipelineDisplayStatus(act.info)) }}</i>
                 <span><strong>{{ act.info.name || act.id }}</strong><em>{{ act.info.error ? '执行失败' : typeof act.info.records === 'number' ? `${act.info.records} 行 · 写图 ${act.info.written ?? 0} 条` : act.info.output !== undefined && act.info.output !== null ? '已上报输出 JSON' : '无输出记录' }}<template v-if="act.info.attempt"> · attempt={{ act.info.attempt }}</template></em></span>
                 <small>{{ mapPipelineStatus(act.info.status) }}</small>
               </button>
@@ -734,7 +783,7 @@ onMounted(async () => {
               <header><div><h3>本次执行来源结果</h3><p>工作流回写的真实分批统计与水位推进（游标在来源全部批次成功后一次性推进）</p></div><span>{{ lineageResultRows.length }} 个来源</span></header>
               <table><thead><tr><th>来源表</th><th>批次</th><th>读取行</th><th>写入行</th><th>失败行</th><th>推进水位 / 游标</th></tr></thead><tbody><tr v-for="row in lineageResultRows" :key="row.table"><td><code>{{ row.table }}</code></td><td>{{ row.batches }}</td><td>{{ row.rows }}</td><td>{{ row.written }}</td><td :class="{ danger: Number(row.failed) > 0 }">{{ row.failed }}</td><td class="raw-value">{{ row.cursor }}</td></tr></tbody></table>
             </section>
-            <section><h3>处理链路</h3><div class="lineage"><span>{{ lineageChainSource }}<small>{{ schemaDetail?.label || schemaDetail?.key || 'Schema 未关联或已删除' }}</small></span><b>→</b><span>{{ schemaDetail?.script?.filename || processingInstance.objectName || '转换脚本' }}<small>脚本转换（只输出 JSON）</small></span><b>→</b><span>写入图空间<small>{{ lineageGraphSpace }} · nGQL INSERT</small></span><template v-if="isExecutionInterrupted"><b>→</b><span>下游未执行<small>游标停在上一轮</small></span></template><template v-else><b>→</b><span>{{ selectedExecution?.status || taskStatus }}<small>{{ lineageResultSummary }}</small></span></template></div></section>
+            <section><h3>处理链路</h3><div class="lineage"><span>{{ lineageChainSource }}<small>{{ schemaDetail?.label || schemaDetail?.key || 'Schema 未关联或已删除' }}</small></span><b>→</b><span>{{ schemaDetail?.script?.filename || processingInstance.objectName || '转换脚本' }}<small>脚本转换（只输出 JSON）</small></span><b>→</b><span>写入图空间<small>{{ lineageGraphSpace }} · nGQL INSERT</small></span><template v-if="isExecutionInterrupted"><b>→</b><span>下游未执行<small>游标停在上一轮</small></span></template><template v-else><b>→</b><span>{{ selectedExecution ? executionStatusLabel(selectedExecution.status) : taskStatus }}<small>{{ lineageResultSummary }}</small></span></template></div></section>
           </template>
           <p v-else class="process-empty" style="margin:0">暂无溯源数据：任务尚未执行，或本次执行未产生任务记录{{ latestExecutionMessage ? `（最近执行：${latestExecutionMessage}）` : '' }}。</p>
         </div>
@@ -744,8 +793,9 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.task-detail-page{height:100%;overflow:auto;padding:0 0 18px;color:#17233b}.detail-head{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:12px}.detail-head>div>span{margin-left:10px;color:#8793a8;font-size:10px}.detail-head h1{margin:7px 0 3px;font-size:22px}.detail-head p{margin:0;color:#66758f;font-size:11px}.detail-actions{display:flex;gap:8px}.detail-actions button{height:34px;padding:0 14px;border:1px solid #bdd0ea;border-radius:6px;background:#fff;color:#40516d;cursor:pointer}.detail-actions .primary{border-color:#d92d20;background:#d92d20;color:#fff}.action-message{margin:0 0 12px;padding:9px 12px;border:1px solid #b2ccff;border-radius:6px;background:#f0f5ff;color:#344f7a;font-size:11px}.attention-banner{display:flex;align-items:center;gap:12px;margin-bottom:12px;padding:11px 14px;border:1px solid #f6c7c2;border-radius:8px;background:#fff7f6}.attention-banner>i{display:grid;place-items:center;flex:0 0 28px;width:28px;height:28px;border-radius:50%;background:#d92d20;color:#fff;font-style:normal;font-weight:700}.attention-banner>div{flex:1}.attention-banner strong{color:#912018;font-size:12px}.attention-banner p{margin:3px 0 0;color:#77504c;font-size:10px}.attention-banner a{padding:8px 11px;border-radius:5px;background:#d92d20;color:#fff;font-size:10px;text-decoration:none}.summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:12px}.summary-grid article{display:grid;gap:5px;padding:13px 14px;border:1px solid #c9dcf7;border-radius:8px;background:#fff}.summary-grid span{color:#6b7890;font-size:10px}.summary-grid strong{font-size:19px}.summary-grid strong.version{font-size:13px}.summary-grid em{overflow:hidden;color:#8793a8;font-size:9px;font-style:normal;text-overflow:ellipsis;white-space:nowrap}.danger{color:#d92d20}.warning{color:#b54708}.detail-workspace{display:grid;grid-template-columns:340px minmax(0,1fr);min-height:560px;overflow:hidden;border:1px solid #bed4f3;border-radius:9px;background:#fff}.process-sidebar{border-right:1px solid #dce8f8;background:#f8fbff}.process-sidebar>header{display:flex;align-items:center;justify-content:space-between;padding:13px 14px;border-bottom:1px solid #dce8f8;background:#fff}.process-sidebar h2{margin:0;font-size:14px}.process-sidebar header p{margin:3px 0 0;color:#7b899e;font-size:9px}.process-sidebar header>span{padding:4px 8px;border-radius:999px;background:#eaf2ff;color:#165dff;font-size:10px}.phase-group{padding:10px}.phase-title{display:flex;align-items:center;justify-content:space-between;padding:4px 3px 8px}.phase-title strong{font-size:11px}.phase-title em{color:#8290a7;font-size:9px;font-style:normal}.process-step{display:grid;grid-template-columns:22px minmax(0,1fr) auto;align-items:center;gap:8px;width:100%;min-height:48px;margin-bottom:5px;padding:7px 8px;border:1px solid transparent;border-radius:6px;background:transparent;color:#34435c;text-align:left;cursor:pointer}.process-step:hover,.process-step.active{border-color:#8eb8f7;background:#fff;box-shadow:0 3px 10px rgba(39,89,164,.08)}.process-step>i{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:#12b76a;color:#fff;font-size:10px;font-style:normal}.process-step>span{display:grid;gap:3px}.process-step span strong{display:flex;align-items:center;gap:5px;font-size:11px}.process-step span em{color:#7c899d;font-size:9px;font-style:normal}.process-step span b{padding:1px 5px;border-radius:3px;background:#7f56d9;color:#fff;font-size:8px}.process-step span b.risk{background:#f79009}.process-step>small{color:#667085;font-size:8px}.process-step.is-高风险{min-height:58px;border-left:3px solid #f79009;background:#fffaf0}.process-step.is-需人工处理{border-color:#f7c6c2;background:#fff7f6}.process-step.is-需人工处理>i{background:#d92d20}.process-step.is-需人工处理>small{color:#b42318}.process-step.is-待执行{opacity:.62}.process-step.is-待执行>i{background:#98a2b3}.step-detail{min-width:0}.step-head{display:flex;align-items:flex-start;justify-content:space-between;gap:15px;padding:14px 16px;border-bottom:1px solid #dce8f8;background:#fbfdff}.step-head h2{display:flex;align-items:center;gap:8px;margin:4px 0;font-size:18px}.step-head h2 b{padding:3px 7px;border-radius:4px;background:#7f56d9;color:#fff;font-size:9px}.step-head p{margin:0;color:#718099;font-size:10px}.step-head>a{padding:8px 11px;border-radius:5px;background:#d92d20;color:#fff;font-size:10px;text-decoration:none}.detail-tabs{display:flex;padding:0 14px;border-bottom:1px solid #dce8f8}.detail-tabs button{height:40px;padding:0 14px;border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;box-shadow:none;color:#66758f;font-size:10px;cursor:pointer}.detail-tabs button.active{border-bottom-color:#165dff;color:#165dff;font-weight:600}.overview-content{display:grid;grid-template-columns:minmax(220px,.75fr) minmax(320px,1.25fr);gap:12px;padding:14px}.overview-content>section{border:1px solid #dce8f8;border-radius:7px;background:#fff}.overview-content h3,.io-content h3,.trace-content h3,.issue-list h3{margin:0;padding:11px 13px;border-bottom:1px solid #e4ecf6;font-size:12px}.overview-content>.metric-card{border:0;border-radius:0}.metric-card h3{padding:0 3px 7px;border-bottom:0}.metric-card dl,.ai-card dl{display:grid;grid-template-columns:1fr 1fr;margin:0;padding:7px 12px}.metric-card dl{grid-template-columns:1fr;padding:0}.metric-card dl div,.ai-card dl div{display:flex;justify-content:space-between;gap:10px;padding:7px 3px;border-bottom:1px solid #eef2f7;font-size:10px}.metric-card dl div{border-bottom:0}.metric-card dt,.ai-card dt{color:#718099}.metric-card dd,.ai-card dd{margin:0;text-align:right}.ai-card{border-color:#cbbaf7!important;background:#fcfaff!important}.ai-card>header{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #e4dcfa}.ai-card header>div{display:flex;align-items:center;gap:8px}.ai-card header b{display:grid;place-items:center;width:27px;height:27px;border-radius:6px;background:#7f56d9;color:#fff;font-size:10px}.ai-card header span{display:grid}.ai-card header strong{font-size:11px}.ai-card header em{color:#766b91;font-size:8px;font-style:normal}.ai-card header>i{padding:3px 7px;border-radius:999px;background:#fff0d5;color:#b54708;font-size:8px;font-style:normal}.overview-content>.result-card{grid-column:1/-1;padding-bottom:10px;border:0}.result-card.alert{background:#fff8f7}.result-card.success{background:#f6fef9}.result-card p,.result-card li{color:#596981;font-size:10px;line-height:18px}.result-card p{margin:10px 13px}.io-content{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:14px}.io-content>section,.trace-content>section{overflow:hidden;border:1px solid #dce8f8;border-radius:7px}.io-content pre,.log-content>pre,.log-block pre{min-height:250px;margin:0;padding:15px;overflow:auto;background:#17233b;color:#d9e7ff;font:10px/18px Consolas,monospace;white-space:pre-wrap}.sample-text,.candidate-result{margin:13px;padding:14px;border-radius:6px;background:#f5f8fc}.sample-text span,.candidate-result span{color:#728099;font-size:9px}.sample-text p{font-size:11px;line-height:20px}.candidate-result strong{display:block;margin:10px 0;font-size:12px}.candidate-result p{color:#68778e;font-size:10px}.candidate-result p b{color:#b54708}.log-content{display:grid;grid-template-columns:230px minmax(0,1fr);gap:12px;padding:14px}.issue-list{overflow:hidden;border:1px solid #f4c7c3;border-radius:7px;background:#fff8f7}.issue-list article{display:grid;gap:7px;padding:14px}.issue-list span,.issue-list em{color:#77504c;font-size:9px;font-style:normal}.issue-list strong{color:#b42318;font-size:24px}.trace-content{display:grid;gap:12px;padding:14px}.lineage{display:flex;align-items:center;justify-content:center;gap:9px;padding:22px;overflow:auto}.lineage span{min-width:115px;padding:12px;border:1px solid #bdd7ff;border-radius:6px;background:#f6faff;font-size:9px;text-align:center}.lineage b{color:#165dff}.trace-content table{width:100%;border-collapse:collapse;font-size:10px}.trace-content th,.trace-content td{padding:10px 13px;border-bottom:1px solid #e4ecf6;text-align:left}.trace-content th{width:140px;color:#65738b}@media(max-width:1200px){.summary-grid{grid-template-columns:repeat(3,1fr)}.detail-workspace{grid-template-columns:300px minmax(0,1fr)}.overview-content{grid-template-columns:1fr}.result-card{grid-column:auto}}@media(max-width:900px){.summary-grid{grid-template-columns:repeat(2,1fr)}.detail-workspace{grid-template-columns:1fr}.process-sidebar{border-right:0;border-bottom:1px solid #dce8f8}.io-content,.log-content{grid-template-columns:1fr}}.process-step.has-review:not(.is-需人工处理){border-color:#f4d39b;background:#fffbf2}.process-step.has-review:not(.is-需人工处理)>small{color:#b54708}
-.success-text{color:#067647}.prompt-card,.quality-strategy{grid-column:1/-1;overflow:hidden}.prompt-card h3,.quality-strategy h3{display:flex;align-items:center;justify-content:space-between}.prompt-card h3 span{padding:2px 6px;border-radius:4px;background:#eee8ff;color:#6941c6;font-size:8px;font-weight:500}.prompt-card pre,.quality-strategy>pre{margin:0;padding:13px 15px;background:#201a32;color:#eee9ff;font:10px/18px Consolas,monospace;white-space:pre-wrap}.quality-strategy table{width:100%;border-collapse:collapse;font-size:9px}.quality-strategy th,.quality-strategy td{padding:9px 11px;border-bottom:1px solid #e5ecf5;text-align:left;vertical-align:top}.quality-strategy th{background:#f5f8fc;color:#66758f}.quality-strategy td span.ai{display:inline-flex;padding:2px 5px;border-radius:4px;background:#eee8ff;color:#6941c6}.quality-ai-note{display:flex;align-items:center;gap:9px;margin:10px;padding:10px;border:1px solid #d9ccfa;border-radius:6px;background:#fbfaff}.quality-ai-note>b{display:grid;place-items:center;width:26px;height:26px;border-radius:5px;background:#7f56d9;color:#fff;font-size:9px}.quality-ai-note span{display:grid;gap:2px}.quality-ai-note strong{font-size:10px}.quality-ai-note em{color:#766b91;font-size:8px;font-style:normal}.issue-list strong.safe{color:#067647}.lineage span small{display:block;margin-top:4px;color:#7d899b;font-size:8px}
+.task-detail-page{height:100%;overflow:auto;padding:0 0 18px;color:#17233b}.detail-head{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:12px}.detail-head>div>span{margin-left:10px;color:#8793a8;font-size:10px}.detail-head h1{margin:7px 0 3px;font-size:22px}.detail-head p{margin:0;color:#66758f;font-size:11px}.detail-actions{display:flex;gap:8px}.detail-actions button{height:34px;padding:0 14px;border:1px solid #bdd0ea;border-radius:6px;background:#fff;color:#40516d;cursor:pointer}.detail-actions .primary{border-color:#d92d20;background:#d92d20;color:#fff}.action-message{margin:0 0 12px;padding:9px 12px;border:1px solid #b2ccff;border-radius:6px;background:#f0f5ff;color:#344f7a;font-size:11px}.attention-banner{display:flex;align-items:center;gap:12px;margin-bottom:12px;padding:11px 14px;border:1px solid #f6c7c2;border-radius:8px;background:#fff7f6}.attention-banner>i{display:grid;place-items:center;flex:0 0 28px;width:28px;height:28px;border-radius:50%;background:#d92d20;color:#fff;font-style:normal;font-weight:700}.attention-banner>div{flex:1}.attention-banner strong{color:#912018;font-size:12px}.attention-banner p{margin:3px 0 0;color:#77504c;font-size:10px}.attention-banner a{padding:8px 11px;border-radius:5px;background:#d92d20;color:#fff;font-size:10px;text-decoration:none}.summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:12px}.summary-grid article{display:grid;gap:5px;padding:13px 14px;border:1px solid #c9dcf7;border-radius:8px;background:#fff}.summary-grid span{color:#6b7890;font-size:10px}.summary-grid strong{font-size:19px}.summary-grid strong.version{font-size:13px}.summary-grid em{overflow:hidden;color:#8793a8;font-size:9px;font-style:normal;text-overflow:ellipsis;white-space:nowrap}.danger{color:#d92d20}.warning{color:#b54708}.detail-workspace{display:grid;grid-template-columns:340px minmax(0,1fr);min-height:560px;overflow:hidden;border:1px solid #bed4f3;border-radius:9px;background:#fff}.process-sidebar{border-right:1px solid #dce8f8;background:#f8fbff}.process-sidebar>header{display:flex;align-items:center;justify-content:space-between;padding:13px 14px;border-bottom:1px solid #dce8f8;background:#fff}.process-sidebar h2{margin:0;font-size:14px}.process-sidebar header p{margin:3px 0 0;color:#7b899e;font-size:9px}.process-sidebar header>span{padding:4px 8px;border-radius:999px;background:#eaf2ff;color:#165dff;font-size:10px}.phase-group{padding:10px}.phase-title{display:flex;align-items:center;justify-content:space-between;padding:4px 3px 8px}.phase-title strong{font-size:11px}.phase-title em{color:#8290a7;font-size:9px;font-style:normal}.process-step{display:grid;grid-template-columns:22px minmax(0,1fr) auto;align-items:center;gap:8px;width:100%;min-height:48px;margin-bottom:5px;padding:7px 8px;border:1px solid transparent;border-radius:6px;background:transparent;color:#34435c;text-align:left;cursor:pointer}.process-step:hover,.process-step.active{border-color:#8eb8f7;background:#fff;box-shadow:0 3px 10px rgba(39,89,164,.08)}.process-step>i{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:#12b76a;color:#fff;font-size:10px;font-style:normal}.process-step>span{display:grid;gap:3px}.process-step span strong{display:flex;align-items:center;gap:5px;font-size:11px}.process-step span em{color:#7c899d;font-size:9px;font-style:normal}.process-step span b{padding:1px 5px;border-radius:3px;background:#7f56d9;color:#fff;font-size:8px}.process-step span b.risk{background:#f79009}.process-step>small{color:#667085;font-size:8px}.process-step.is-高风险{min-height:58px;border-left:3px solid #f79009;background:#fffaf0}.process-step.is-需人工处理{border-color:#f7c6c2;background:#fff7f6}.process-step.is-需人工处理>i{background:#d92d20}.process-step.is-需人工处理>small{color:#b42318}
+/* 异常（完成但含失败行）：黄感叹号气泡 + 橙色描边 */
+.process-step.is-异常{border-color:#f4d39b;background:#fffbf2}.process-step.is-异常>i{background:#f79009}.process-step.is-异常>small{color:#b54708}.process-step.is-待执行{opacity:.62}.process-step.is-待执行>i{background:#98a2b3}.step-detail{min-width:0}.step-head{display:flex;align-items:flex-start;justify-content:space-between;gap:15px;padding:14px 16px;border-bottom:1px solid #dce8f8;background:#fbfdff}.step-head h2{display:flex;align-items:center;gap:8px;margin:4px 0;font-size:18px}.step-head h2 b{padding:3px 7px;border-radius:4px;background:#7f56d9;color:#fff;font-size:9px}.step-head p{margin:0;color:#718099;font-size:10px}.step-head>a{padding:8px 11px;border-radius:5px;background:#d92d20;color:#fff;font-size:10px;text-decoration:none}.detail-tabs{display:flex;padding:0 14px;border-bottom:1px solid #dce8f8}.detail-tabs button{height:40px;padding:0 14px;border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;box-shadow:none;color:#66758f;font-size:10px;cursor:pointer}.detail-tabs button.active{border-bottom-color:#165dff;color:#165dff;font-weight:600}.overview-content{display:grid;grid-template-columns:minmax(220px,.75fr) minmax(320px,1.25fr);gap:12px;padding:14px}.overview-content>section{border:1px solid #dce8f8;border-radius:7px;background:#fff}.overview-content h3,.io-content h3,.trace-content h3,.issue-list h3{margin:0;padding:11px 13px;border-bottom:1px solid #e4ecf6;font-size:12px}.overview-content>.metric-card{border:0;border-radius:0}.metric-card h3{padding:0 3px 7px;border-bottom:0}.metric-card dl,.ai-card dl{display:grid;grid-template-columns:1fr 1fr;margin:0;padding:7px 12px}.metric-card dl{grid-template-columns:1fr;padding:0}.metric-card dl div,.ai-card dl div{display:flex;justify-content:space-between;gap:10px;padding:7px 3px;border-bottom:1px solid #eef2f7;font-size:10px}.metric-card dl div{border-bottom:0}.metric-card dt,.ai-card dt{color:#718099}.metric-card dd,.ai-card dd{margin:0;text-align:right}.ai-card{border-color:#cbbaf7!important;background:#fcfaff!important}.ai-card>header{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #e4dcfa}.ai-card header>div{display:flex;align-items:center;gap:8px}.ai-card header b{display:grid;place-items:center;width:27px;height:27px;border-radius:6px;background:#7f56d9;color:#fff;font-size:10px}.ai-card header span{display:grid}.ai-card header strong{font-size:11px}.ai-card header em{color:#766b91;font-size:8px;font-style:normal}.ai-card header>i{padding:3px 7px;border-radius:999px;background:#fff0d5;color:#b54708;font-size:8px;font-style:normal}.overview-content>.result-card{grid-column:1/-1;padding-bottom:10px;border:0}.result-card.alert{background:#fff8f7}.result-card.success{background:#f6fef9}.result-card p,.result-card li{color:#596981;font-size:10px;line-height:18px}.result-card p{margin:10px 13px}.io-content{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:14px}.io-content>section,.trace-content>section{overflow:hidden;border:1px solid #dce8f8;border-radius:7px}.io-content pre,.log-content>pre,.log-block pre{min-height:250px;margin:0;padding:15px;overflow:auto;background:#17233b;color:#d9e7ff;font:10px/18px Consolas,monospace;white-space:pre-wrap}.sample-text,.candidate-result{margin:13px;padding:14px;border-radius:6px;background:#f5f8fc}.sample-text span,.candidate-result span{color:#728099;font-size:9px}.sample-text p{font-size:11px;line-height:20px}.candidate-result strong{display:block;margin:10px 0;font-size:12px}.candidate-result p{color:#68778e;font-size:10px}.candidate-result p b{color:#b54708}.log-content{display:grid;grid-template-columns:230px minmax(0,1fr);gap:12px;padding:14px}.issue-list{overflow:hidden;border:1px solid #f4c7c3;border-radius:7px;background:#fff8f7}.issue-list article{display:grid;gap:7px;padding:14px}.issue-list span,.issue-list em{color:#77504c;font-size:9px;font-style:normal}.issue-list strong{color:#b42318;font-size:24px}.trace-content{display:grid;gap:12px;padding:14px}.lineage{display:flex;align-items:center;justify-content:center;gap:9px;padding:22px;overflow:auto}.lineage span{min-width:115px;padding:12px;border:1px solid #bdd7ff;border-radius:6px;background:#f6faff;font-size:9px;text-align:center}.lineage b{color:#165dff}.trace-content table{width:100%;border-collapse:collapse;font-size:10px}.trace-content th,.trace-content td{padding:10px 13px;border-bottom:1px solid #e4ecf6;text-align:left}.trace-content th{width:140px;color:#65738b}@media(max-width:1200px){.summary-grid{grid-template-columns:repeat(3,1fr)}.detail-workspace{grid-template-columns:300px minmax(0,1fr)}.overview-content{grid-template-columns:1fr}.result-card{grid-column:auto}}@media(max-width:900px){.summary-grid{grid-template-columns:repeat(2,1fr)}.detail-workspace{grid-template-columns:1fr}.process-sidebar{border-right:0;border-bottom:1px solid #dce8f8}.io-content,.log-content{grid-template-columns:1fr}}.process-step.has-review:not(.is-需人工处理){border-color:#f4d39b;background:#fffbf2}.process-step.has-review:not(.is-需人工处理)>small{color:#b54708}.success-text{color:#067647}.prompt-card,.quality-strategy{grid-column:1/-1;overflow:hidden}.prompt-card h3,.quality-strategy h3{display:flex;align-items:center;justify-content:space-between}.prompt-card h3 span{padding:2px 6px;border-radius:4px;background:#eee8ff;color:#6941c6;font-size:8px;font-weight:500}.prompt-card pre,.quality-strategy>pre{margin:0;padding:13px 15px;background:#201a32;color:#eee9ff;font:10px/18px Consolas,monospace;white-space:pre-wrap}.quality-strategy table{width:100%;border-collapse:collapse;font-size:9px}.quality-strategy th,.quality-strategy td{padding:9px 11px;border-bottom:1px solid #e5ecf5;text-align:left;vertical-align:top}.quality-strategy th{background:#f5f8fc;color:#66758f}.quality-strategy td span.ai{display:inline-flex;padding:2px 5px;border-radius:4px;background:#eee8ff;color:#6941c6}.quality-ai-note{display:flex;align-items:center;gap:9px;margin:10px;padding:10px;border:1px solid #d9ccfa;border-radius:6px;background:#fbfaff}.quality-ai-note>b{display:grid;place-items:center;width:26px;height:26px;border-radius:5px;background:#7f56d9;color:#fff;font-size:9px}.quality-ai-note span{display:grid;gap:2px}.quality-ai-note strong{font-size:10px}.quality-ai-note em{color:#766b91;font-size:8px;font-style:normal}.issue-list strong.safe{color:#067647}.lineage span small{display:block;margin-top:4px;color:#7d899b;font-size:8px}
 .lineage-compare>header{display:flex;align-items:center;justify-content:space-between;padding:11px 13px;border-bottom:1px solid #e4ecf6;background:#fbfdff}.lineage-compare>header h3{padding:0;border:0}.lineage-compare>header p{margin:3px 0 0;color:#7a879a;font-size:9px}.lineage-compare>header>span{padding:3px 7px;border-radius:999px;background:#eaf2ff;color:#165dff;font-size:9px}.lineage-compare code{padding:2px 5px;border-radius:4px;background:#f1f5fa;color:#344f73;font:9px Consolas,monospace}.lineage-compare .raw-value{max-width:360px;color:#354760;line-height:17px;white-space:normal}
 
 .access-card{grid-column:1/-1;overflow:hidden;border:1px solid #cfe0d8;border-radius:7px;background:#f7fdf9}
@@ -768,6 +818,12 @@ onMounted(async () => {
 .index-degrade-alert strong{font-size:13px}
 .index-degrade-alert code{padding:0;background:transparent;word-break:break-all}
 .index-degrade-alert em{color:#a8655c;font-style:normal;font-size:11px}
+/* 执行标记原因说明条：FAILED 红 / ABNORMAL（抽取完成含失败行）橙 */
+.exec-failure-alert{display:flex;flex-direction:column;gap:4px;margin:0 0 12px;padding:10px 14px;border:1px solid #f0a6a6;border-left:4px solid #d92d20;border-radius:6px;background:#fef3f2;color:#912018;font-size:12px}
+.exec-failure-alert strong{font-size:13px}
+.exec-failure-alert span{color:#a8655c;font-size:11px;line-height:18px}
+.exec-failure-alert.is-abnormal{border-color:#f5d68a;border-left-color:#f79009;background:#fffaeb;color:#b54708}
+.exec-failure-alert.is-abnormal span{color:#a06a22}
 /* 真实输入输出（脚本上报 JSON）：跨两列，输入/输出分块，超长 JSON 内部滚动 */
 .io-content h3 span{padding:2px 6px;border-radius:4px;background:#eef4ff;color:#165dff;font-size:8px;font-weight:500}
 .io-empty{margin:0;padding:15px;border-top:1px solid #eef2f7;color:#8290a7;font-size:10px;line-height:18px}
@@ -799,6 +855,8 @@ onMounted(async () => {
 .process-substep>i{display:grid;place-items:center;width:17px;height:17px;border-radius:50%;background:#12b76a;color:#fff;font-size:9px;font-style:normal}
 .process-substep.is-需人工处理{border-left-color:#f4a9a2;background:#fff6f5}
 .process-substep.is-需人工处理>i{background:#d92d20}
+.process-substep.is-异常{border-left-color:#f4d39b;background:#fffbf2}
+.process-substep.is-异常>i{background:#f79009}
 .process-substep.is-待执行{opacity:.62}
 .process-substep.is-待执行>i{background:#98a2b3}
 .process-substep>span{display:grid;gap:2px;min-width:0}
@@ -827,6 +885,10 @@ onMounted(async () => {
 .trigger-chip{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;background:#f2f3f5;color:#4e5969}
 .trigger-chip[data-kind='SCHEDULE']{background:#e8ffea;color:#00b42a}
 .trigger-chip[data-kind='RERUN']{background:#fff3e8;color:#f77234}
+.exec-status-cell{font-weight:500}
+.exec-status-cell.ok{color:#067647}
+.exec-status-cell.warn{color:#b54708}
+.exec-status-cell.err{color:#b42318}
 /* 外层工作区已有 16px 内边距，详情页不再叠加额外底部留白。 */
 .task-detail-page{box-sizing:border-box;padding-bottom:0}
 /* 验收通过与执行结果使用一致的绿色状态底，不再强调卡片边框。 */
@@ -837,5 +899,4 @@ onMounted(async () => {
 .lineage-compare .raw-value{max-width:0;overflow:hidden;white-space:nowrap}
 .raw-value-text{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* 处理链路仅用浅色背景区分节点，箭头继续表达流向。 */
-.lineage span{border:0}
-</style>
+.lineage span{border:0}</style>

@@ -93,7 +93,7 @@ class WorkflowOperationsService:
         ]
         counts = {
             status: sum(item["taskStatus"] == status for item in latest_tasks)
-            for status in ("执行中", "执行出错", PENDING_MANUAL_REVIEW, "执行完成")
+            for status in ("执行中", "执行出错", "执行异常", PENDING_MANUAL_REVIEW, "执行完成")
         }
         changes = (
             self.repo.list_source_updates(None, None, None)
@@ -109,6 +109,7 @@ class WorkflowOperationsService:
                 },
                 {"label": "执行完成", "value": str(counts["执行完成"]), "hint": ""},
                 {"label": "执行出错", "value": str(counts["执行出错"]), "hint": ""},
+                {"label": "执行异常", "value": str(counts["执行异常"]), "hint": ""},
                 {
                     "label": PENDING_MANUAL_REVIEW,
                     "value": str(counts[PENDING_MANUAL_REVIEW]),
@@ -353,6 +354,11 @@ class WorkflowOperationsService:
         if status == "COMPLETED":
             new_task_status = "执行完成"
             new_status = "已完成"
+        elif status == "ABNORMAL":
+            # 抽取完成但含行级失败记录（已转人工审核）：任务按「执行异常」，
+            # 不与完全跑崩的「执行出错」混同（2026-09-28 口径）
+            new_task_status = "执行异常"
+            new_status = "执行异常"
         elif status in {"FAILED", "CANCELED", "TERMINATED", "TIMED_OUT"}:
             new_task_status = "执行出错"
             new_status = "执行出错"

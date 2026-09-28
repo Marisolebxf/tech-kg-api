@@ -855,6 +855,13 @@ onMounted(() => {
 .table-wrap tbody td,
 .table-wrap tbody tr:hover td{background:transparent}
 .table-wrap:not(.space-table) .config-action-col{box-sizing:border-box;overflow:visible;white-space:nowrap}
+/* 操作列与 Schema 管理表对齐：右侧固定列，横向滚动时操作不被遮挡。
+   thead 整体吸顶（z2）须高于固定列 td（z3），否则纵向滚动时被操作单元格盖住。 */
+.table-wrap:not(.space-table) thead{z-index:4}
+.table-wrap:not(.space-table) th.config-action-col{position:sticky;right:0;background:#f7f8fa;box-shadow:-1px 0 #e5e6eb}
+.table-wrap:not(.space-table) td.config-action-col{position:sticky;right:0;z-index:3;background:#fff;box-shadow:-1px 0 #e5e6eb}
+/* 固定列左侧向内容区渐隐的阴影（与 Schema 管理表同视觉提示） */
+.table-wrap:not(.space-table) :is(th,td).config-action-col::before{position:absolute;top:0;bottom:-1px;left:0;width:12px;content:"";pointer-events:none;transform:translateX(-100%);box-shadow:inset -10px 0 8px -8px rgba(78,89,105,.28)}
 .config-action-col .row-actions{display:inline-flex;width:auto;min-width:max-content;align-items:center;overflow:visible}
 .table-wrap th,.table-wrap td{box-sizing:border-box;padding-right:16px;padding-left:16px}
 @media (max-width: 767px) {

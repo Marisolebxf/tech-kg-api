@@ -2569,6 +2569,13 @@ print(response.json())</pre>
   overflow: auto;
 }
 
+/* 操作列与 Schema 管理表对齐：右侧固定列（表头 z 高于数据行），横向滚动时操作不被遮挡。 */
+.platform-quality-log .platform-table th:last-child { position:sticky;right:0;z-index:4;box-shadow:-1px 0 #e5e6eb; }
+.platform-quality-log .platform-table td:last-child { position:sticky;right:0;z-index:3;background:#fff;box-shadow:-1px 0 #e5e6eb; }
+.platform-quality-log .platform-table tbody tr:hover td:last-child { background:#f0f6ff; }
+/* 固定列左侧向内容区渐隐的阴影（与 Schema 管理表同视觉提示） */
+.platform-quality-log .platform-table :is(th,td):last-child::before { position:absolute;top:0;bottom:-1px;left:0;width:12px;content:"";pointer-events:none;transform:translateX(-100%);box-shadow:inset -10px 0 8px -8px rgba(78,89,105,.28); }
+
 .platform-trace-link {
   padding: 0;
   border: 0;

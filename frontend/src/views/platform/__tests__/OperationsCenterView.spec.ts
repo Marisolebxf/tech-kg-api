@@ -165,9 +165,10 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     expect(wrapper.find('thead .pick-col').exists()).toBe(false)
 
     await switchToCategoryC(wrapper)
+    // 批量重跑按钮唯一入口固定在分页条左下角（与右侧分页信息同条），筛选行不再放按钮
     expect(wrapper.find('.rerun-batch-action').exists()).toBe(true)
-    // 批量重跑按钮在筛选行最左侧（与筛选项同行），不再单独成行
-    expect(wrapper.find('.review-toolbar-actions .rerun-batch-action').exists()).toBe(true)
+    expect(wrapper.find('.review-pagination .rerun-batch-action').exists()).toBe(true)
+    expect(wrapper.find('.review-toolbar-actions .rerun-batch-action').exists()).toBe(false)
     expect(wrapper.find('.rerun-batch-row').exists()).toBe(false)
     expect(wrapper.find('thead .pick-col').exists()).toBe(true)
   })
@@ -460,12 +461,12 @@ describe('分页统计与页数收缩收敛（FUNC-00781）/ 处理实例 ID 纯
     mockPaged()
     const wrapper = renderReview()
     await flushPromises()
-    expect(wrapper.get('.review-pagination > span').text()).toBe('共 41 条 · 第 1 / 3 页')
+    expect(wrapper.get('.review-pagination .review-page-summary').text()).toBe('共 41 条 · 第 1 / 3 页')
 
     // 翻至第 3 页
     wrapper.findComponent(ListPagination).vm.$emit('change', 3)
     await flushPromises()
-    expect(wrapper.get('.review-pagination > span').text()).toBe('共 41 条 · 第 3 / 3 页')
+    expect(wrapper.get('.review-pagination .review-page-summary').text()).toBe('共 41 条 · 第 3 / 3 页')
 
     // 增加筛选（状态=待处理）使结果只剩 1 页：先按第 3 页请求 → 收敛到第 1 页重拉
     wrapper.findAllComponents({ name: 'ASelect' })[0].vm.$emit('update:modelValue', '待处理')
@@ -476,7 +477,7 @@ describe('分页统计与页数收缩收敛（FUNC-00781）/ 处理实例 ID 纯
     expect(pages).toEqual([1, 3, 3, 1])
     expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, statusGroup: 'pending' }))
     // 统计文案与实际数据一致，且无空页（收敛后立即有数据行）
-    expect(wrapper.get('.review-pagination > span').text()).toBe('共 5 条 · 第 1 / 1 页')
+    expect(wrapper.get('.review-pagination .review-page-summary').text()).toBe('共 5 条 · 第 1 / 1 页')
     expect(wrapper.findAll('tbody tr td.review-id-cell').length).toBeGreaterThan(0)
   })
 
@@ -496,7 +497,7 @@ describe('分页统计与页数收缩收敛（FUNC-00781）/ 处理实例 ID 纯
 
     // 61 条 = 4 页，第 3 页仍有效：筛选后停在原页
     expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ page: 3, statusGroup: 'pending' }))
-    expect(wrapper.get('.review-pagination > span').text()).toBe('共 61 条 · 第 3 / 4 页')
+    expect(wrapper.get('.review-pagination .review-page-summary').text()).toBe('共 61 条 · 第 3 / 4 页')
   })
 
   it('跳详情返回后恢复页码/页大小/分类/筛选（sessionStorage 快照），不回第 1 页', async () => {
@@ -515,7 +516,7 @@ describe('分页统计与页数收缩收敛（FUNC-00781）/ 处理实例 ID 纯
       category: 'C', page: 3, pageSize: 50, statusGroup: 'pending', kind: 'entity',
       updatedWithin: '7d', sort: 'updated_desc', keyword: '论文',
     }))
-    expect(wrapper.get('.review-pagination > span').text()).toBe('共 120 条 · 第 3 / 3 页')
+    expect(wrapper.get('.review-pagination .review-page-summary').text()).toBe('共 120 条 · 第 3 / 3 页')
     expect(wrapper.findAll('.review-tabs nav button')[1].classes()).toContain('active')
   })
 

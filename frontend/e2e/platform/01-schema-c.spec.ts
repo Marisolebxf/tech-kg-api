@@ -260,7 +260,9 @@ test.describe.serial('C. Schema 管理与属性管理', () => {
     await page.goto('/schema')
     await page.waitForLoadState('networkidle')
     const row = page.locator('tbody tr', { hasText: NAME }).first()
-    await row.getByRole('button', { name: '来源表' }).click()
+    // 来源表在「···」更多菜单里（操作 >3 个只平铺前两个）：先开菜单再点菜单项（菜单 teleport 到 body）
+    await row.locator('button.schema-action-more').click()
+    await page.locator('.arco-dropdown-option', { hasText: '来源表' }).click()
 
     const modal = page.locator('.sources-modal')
     await expect(modal).toBeVisible()
@@ -325,7 +327,9 @@ test.describe.serial('C. Schema 管理与属性管理', () => {
     await page.goto('/schema')
     await page.waitForLoadState('networkidle')
     const row = page.locator('tbody tr', { hasText: NAME }).first()
-    await row.getByRole('button', { name: '属性管理' }).click()
+    // 属性管理在「···」更多菜单里：先开菜单再点菜单项（菜单 teleport 到 body）
+    await row.locator('button.schema-action-more').click()
+    await page.locator('.arco-dropdown-option', { hasText: '属性管理' }).click()
 
     const modal = page.locator('.property-modal')
     await expect(modal).toBeVisible()
@@ -350,7 +354,9 @@ test.describe.serial('C. Schema 管理与属性管理', () => {
     await page.goto('/schema')
     await page.waitForLoadState('networkidle')
     const row = page.locator('tbody tr', { hasText: NAME }).first()
-    await row.getByRole('button', { name: '来源表' }).click()
+    // 来源表在「···」更多菜单里（操作 >3 个只平铺前两个）：先开菜单再点菜单项（菜单 teleport 到 body）
+    await row.locator('button.schema-action-more').click()
+    await page.locator('.arco-dropdown-option', { hasText: '来源表' }).click()
     const modal = page.locator('.sources-modal')
     await expect(modal).toBeVisible()
 
@@ -393,7 +399,9 @@ test.describe.serial('C. Schema 管理与属性管理', () => {
     await page.goto('/schema')
     await page.waitForLoadState('networkidle')
     const row = page.locator('tbody tr', { hasText: NAME }).first()
-    await row.getByRole('button', { name: '属性管理' }).click()
+    // 属性管理在「···」更多菜单里：先开菜单再点菜单项（菜单 teleport 到 body）
+    await row.locator('button.schema-action-more').click()
+    await page.locator('.arco-dropdown-option', { hasText: '属性管理' }).click()
     const modal = page.locator('.property-modal')
     await expect(modal).toBeVisible()
 

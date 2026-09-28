@@ -23,7 +23,7 @@ vi.mock('../api/auth', () => ({
 vi.mock('../api/graphSearch', () => ({
   listGraphSpaces: vi.fn(async () => ({ data: { spaces: ['dev2'] } })),
 }))
-vi.mock('@arco-design/web-vue/es/icon', () => ({ IconHistory: { template: '<i />' } }))
+vi.mock('@arco-design/web-vue/es/icon', () => ({ IconHistory: { template: '<i />' }, IconHome: { template: '<i />' } }))
 
 // 普通用户可见工作台（平台总览）、图谱查询与业务服务组；图谱建设与治理/平台管理仅管理员。
 const sharedPaths = [
@@ -185,14 +185,15 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
   })
 })
 
-describe('面包屑统一（Arco 规范：首项图标回首页、/ 分隔、末项当前页）', () => {
-  it('管理页展开分组层级：图谱建设与治理 / Schema 管理（当前页）', async () => {
+describe('面包屑统一（Arco 规范：首项首页图标、/ 分隔、除当前页外每级可点）', () => {
+  it('管理页展开分组层级，除当前页外每级都是链接（分组默认进首个子页）', async () => {
     const { wrapper } = await renderLayout(true, '/schema')
     const breadcrumb = wrapper.get('.app-breadcrumb')
-    // 首项 <> 图标入口回平台总览
+    // 首项首页图标入口回平台总览（图标不得形似「返回/前进」箭头）
     expect(breadcrumb.get('a.app-breadcrumb__home').attributes('href')).toBe('/overview')
     expect(breadcrumb.findAll('.app-breadcrumb__separator').map((node) => node.text())).toEqual(['/', '/'])
-    expect(breadcrumb.get('.app-breadcrumb__item').text()).toBe('图谱建设与治理')
+    expect(breadcrumb.findAll('.app-breadcrumb__link').map((node) => [node.text(), node.attributes('href')]))
+      .toEqual([['图谱建设与治理', '/schema']])
     const current = breadcrumb.get('.app-breadcrumb__current')
     expect(current.text()).toBe('Schema 管理')
     expect(current.attributes('aria-current')).toBe('page')
@@ -201,16 +202,14 @@ describe('面包屑统一（Arco 规范：首项图标回首页、/ 分隔、末
   it('图谱查询与业务服务页展开完整层级（分组 / 子组 / 当前页）', async () => {
     const query = await renderLayout(true, '/graph-query/entities')
     const queryNav = query.wrapper.get('.app-breadcrumb')
-    expect(queryNav.get('.app-breadcrumb__item').text()).toBe('知识图谱构建服务')
     expect(queryNav.findAll('.app-breadcrumb__link').map((node) => [node.text(), node.attributes('href')]))
-      .toEqual([['图谱查询', '/graph-query']])
+      .toEqual([['知识图谱构建服务', '/graph-query'], ['图谱查询', '/graph-query']])
     expect(queryNav.get('.app-breadcrumb__current').text()).toBe('实体列表')
 
     const service = await renderLayout(true, '/expert-direct')
     const serviceNav = service.wrapper.get('.app-breadcrumb')
-    expect(serviceNav.get('.app-breadcrumb__item').text()).toBe('知识图谱构建服务')
     expect(serviceNav.findAll('.app-breadcrumb__link').map((node) => [node.text(), node.attributes('href')]))
-      .toEqual([['科技专家/人才知识推理构建服务', '/business-service']])
+      .toEqual([['知识图谱构建服务', '/graph-query'], ['科技专家/人才知识推理构建服务', '/business-service']])
     expect(serviceNav.get('.app-breadcrumb__current').text()).toBe('科技专家/人才直接关系')
   })
 
@@ -218,13 +217,13 @@ describe('面包屑统一（Arco 规范：首项图标回首页、/ 分隔、末
     const job = await renderLayout(true, '/graph-build/jobs/job-1')
     const jobNav = job.wrapper.get('.app-breadcrumb')
     expect(jobNav.findAll('.app-breadcrumb__link').map((node) => [node.text(), node.attributes('href')]))
-      .toEqual([['图谱构建', '/graph-build']])
+      .toEqual([['图谱建设与治理', '/schema'], ['图谱构建', '/graph-build']])
     expect(jobNav.get('.app-breadcrumb__current').text()).toBe('任务详情')
 
     const review = await renderLayout(true, '/manual-review/task/case-1')
     const reviewNav = review.wrapper.get('.app-breadcrumb')
     expect(reviewNav.findAll('.app-breadcrumb__link').map((node) => [node.text(), node.attributes('href')]))
-      .toEqual([['人工审核', '/manual-review']])
+      .toEqual([['图谱建设与治理', '/schema'], ['人工审核', '/manual-review']])
     expect(reviewNav.get('.app-breadcrumb__current').text()).toBe('人工审核详情')
   })
 })

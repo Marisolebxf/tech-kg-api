@@ -1,23 +1,23 @@
 /**
- * 面包屑层级（Arco Design Breadcrumb 规范）：首项为图标入口（回平台总览），
- * 中间级按侧边栏导航树展开（分组 → 子组 → 页面），`/` 分隔，末项恒为当前页。
- * 层级与 AppLayout 侧边栏同口径；详情页（任务详情/人工审核详情）挂在所属功能页之下，
- * 取代页内「← 返回」链接。
+ * 面包屑层级（Arco Design Breadcrumb 规范）：首项为首页图标（回平台总览），
+ * 中间级按侧边栏导航树展开（分组 → 子组 → 页面），`/` 分隔，末项恒为当前页（蓝色高亮）。
+ * 层级与 AppLayout 侧边栏同口径，除当前页外每级都可点击跳转（分组默认进首个子页）；
+ * 详情页（任务详情/人工审核详情）挂在所属功能页之下，取代页内「← 返回」链接。
  */
 export interface BreadcrumbCrumb {
   label: string
-  /** 有 to 的中间级可点击回上级；末项恒为当前页不可点。 */
+  /** 跳转目标；除末项（当前页）外每级都有。 */
   to?: string
 }
 
 /** 面包屑首项（图标）指向平台总览。 */
 export const breadcrumbHomeTo = '/overview'
 
-/** 侧边栏导航分组名（与 AppLayout 导航结构一致）。 */
-const GROUP_BUILD = '图谱建设与治理'
-const GROUP_PLATFORM = '平台管理'
-const GROUP_SERVICE = '知识图谱构建服务'
-const QUERY_GROUP = '图谱查询'
+/** 侧边栏导航分组名与默认跳转（分组的第一个子页，与 AppLayout 导航结构一致）。 */
+const GROUP_BUILD = { label: '图谱建设与治理', to: '/schema' }
+const GROUP_PLATFORM = { label: '平台管理', to: '/configurations' }
+const GROUP_SERVICE = { label: '知识图谱构建服务', to: '/graph-query' }
+const QUERY_GROUP = { label: '图谱查询', to: '/graph-query' }
 
 /** 业务服务折叠组标题（产品命名自带「/」，面包屑按原样展示）。 */
 export const businessServiceGroupTitle = '科技专家/人才知识推理构建服务'
@@ -65,21 +65,21 @@ export function breadcrumbCrumbs(path: string, fallbackTitle: string): Breadcrum
 
   // 图谱建设与治理（管理页）：分组 + 页面，详情页挂在功能页之下
   if (path === '/schema' || path === '/graph-build' || path === '/manual-review')
-    return [{ label: GROUP_BUILD }, current(pageTitle)]
+    return [{ ...GROUP_BUILD }, current(pageTitle)]
   if (path.startsWith('/graph-build/jobs/'))
-    return [{ label: GROUP_BUILD }, { label: '图谱构建', to: '/graph-build' }, current('任务详情')]
+    return [{ ...GROUP_BUILD }, { label: '图谱构建', to: '/graph-build' }, current('任务详情')]
   if (path.startsWith('/manual-review/task/'))
-    return [{ label: GROUP_BUILD }, { label: '人工审核', to: '/manual-review' }, current('人工审核详情')]
+    return [{ ...GROUP_BUILD }, { label: '人工审核', to: '/manual-review' }, current('人工审核详情')]
 
   // 平台管理（管理页）
-  if (path === '/configurations') return [{ label: GROUP_PLATFORM }, current(pageTitle)]
+  if (path === '/configurations') return [{ ...GROUP_PLATFORM }, current(pageTitle)]
 
   // 知识图谱构建服务：图谱查询 / 业务服务两个折叠组
   if (QUERY_TITLES[path])
-    return [{ label: GROUP_SERVICE }, { label: QUERY_GROUP, to: '/graph-query' }, current(pageTitle)]
+    return [{ ...GROUP_SERVICE }, { ...QUERY_GROUP }, current(pageTitle)]
   if (SERVICE_TITLES[path])
     return [
-      { label: GROUP_SERVICE },
+      { ...GROUP_SERVICE },
       { label: businessServiceGroupTitle, to: '/business-service' },
       current(pageTitle),
     ]

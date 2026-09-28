@@ -698,14 +698,14 @@ onMounted(() => {
       <header><div><span>NEW CONFIGURATION</span><h2>新建{{ categories.find(item => item.key === activeCategory)?.label }}</h2></div><button type="button" @click="dialogOpen=false">×</button></header>
       <a-form :model="form" class="dialog-form config-create-form" layout="vertical">
         <template v-if="formKind === 'llm' || formKind === 'embedding'">
-          <a-form-item class="wide" field="name" label="配置名称" required><input aria-label="例如：科技文本抽取大模型" v-model="form.name" placeholder="例如：科技文本抽取大模型" /><small v-if="createFieldErrors.name" class="field-error">{{ createFieldErrors.name }}</small></a-form-item>
+          <a-form-item class="wide" field="name" label="配置名称" required><input aria-label="例如：科技文本抽取大模型" v-model="form.name" placeholder="例如：科技文本抽取大模型" /></a-form-item>
           <a-form-item class="wide" field="baseUrl" label="Base URL" required><input aria-label="baseUrl" v-model="form.baseUrl" /><small v-if="createFieldErrors.baseUrl" class="field-error">{{ createFieldErrors.baseUrl }}</small></a-form-item>
           <a-form-item class="wide" field="model" label="模型" required><input aria-label="model" v-model="form.model" /><small v-if="createFieldErrors.model" class="field-error">{{ createFieldErrors.model }}</small></a-form-item>
           <a-form-item v-if="formKind === 'embedding'" field="dimensions" label="维度"><input aria-label="number-input" :value="form.dimensions ?? ''" type="number" @input="form.dimensions = ($event.target as HTMLInputElement).value" /><small v-if="createFieldErrors.dimensions" class="field-error">{{ createFieldErrors.dimensions }}</small></a-form-item>
-          <a-form-item class="wide" field="apiKey" label="API Key" required><input aria-label="必填；验证通过后才能保存，明文入库脱敏展示" v-model="form.apiKey" type="password" placeholder="必填；验证通过后才能保存，明文入库脱敏展示" /><small v-if="createFieldErrors.apiKey" class="field-error">{{ createFieldErrors.apiKey }}</small></a-form-item>
+          <a-form-item class="wide" field="apiKey" label="API Key" required><input aria-label="必填；验证通过后才能保存，明文入库脱敏展示" v-model="form.apiKey" type="password" placeholder="必填；验证通过后才能保存，明文入库脱敏展示" /></a-form-item>
         </template>
         <template v-else>
-          <a-form-item class="wide" field="name" label="配置名称" required><input aria-label="name" v-model="form.name" /><small v-if="createFieldErrors.name" class="field-error">{{ createFieldErrors.name }}</small></a-form-item>
+          <a-form-item class="wide" field="name" label="配置名称" required><input aria-label="name" v-model="form.name" /></a-form-item>
           <a-form-item field="host" label="主机" required><input aria-label="host" v-model="form.host" /><small v-if="createFieldErrors.host" class="field-error">{{ createFieldErrors.host }}</small></a-form-item>
           <a-form-item label="端口"><input aria-label="number-input" :value="form.port ?? ''" type="number" @input="form.port = ($event.target as HTMLInputElement).value" /><small v-if="createFieldErrors.port" class="field-error">{{ createFieldErrors.port }}</small></a-form-item>
           <a-form-item label="默认库"><input aria-label="defaultDatabase" v-model="form.defaultDatabase" /><small v-if="createFieldErrors.defaultDatabase" class="field-error">{{ createFieldErrors.defaultDatabase }}</small></a-form-item>
@@ -795,8 +795,11 @@ onMounted(() => {
    底部留缝），几何随外层布局漂移。Teleport 后 fixed 直接相对视口钉满全高 */
 .detail-drawer{display:flex;flex-direction:column;top:0;bottom:0;height:auto;overflow:hidden}
 .detail-drawer>header{flex:0 0 auto;box-sizing:border-box}
-.detail-drawer-body{flex:1 1 0;min-height:0;overflow-y:auto;padding-bottom:16px;box-sizing:border-box}
-.detail-drawer-body .detail-form{padding-bottom:0}
+.detail-drawer-body{display:flex;box-sizing:border-box;flex:1 1 0;min-height:0;gap:16px;overflow-y:auto;padding:16px 24px;flex-direction:column}
+.detail-drawer-body .health-card,.detail-drawer-body .reference-card{margin:0}
+.detail-drawer-body .detail-form{padding:0}
+.detail-form :deep(.arco-form-item){margin-bottom:0}
+.detail-form :deep(.arco-form-item-layout-vertical>.arco-form-item-label-col){margin-bottom:8px}
 .detail-drawer>footer{flex:0 0 auto;margin-top:0;align-items:center}
 /* 新建弹窗：限高 + 表单区内部滚动（原来 overflow:hidden 直接裁掉超高表单） */
 .create-dialog{display:flex;max-height:min(88vh,760px);flex-direction:column}

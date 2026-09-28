@@ -1171,7 +1171,8 @@ async function loadPlatformOverview(): Promise<void> {
       pendingBatchCount: data.pendingBatchCount,
       updatedAt: data.updatedAt,
       dataMode: data.dataMode,
-      warnings: data.warnings,
+      // 兜底：旧版本/异常载荷缺 warnings 时模板里 .join 会直接把页面炸掉
+      warnings: data.warnings ?? [],
     }
     // 属性值数据卡片（key=property）为占位统计（待接入），总览页不展示
     assetOverviewGroups.value = data.assetOverviewGroups.filter((item) => item.key !== 'property')

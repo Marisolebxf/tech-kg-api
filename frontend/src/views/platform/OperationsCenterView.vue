@@ -830,6 +830,7 @@ onMounted(loadReviews)
 .ops-review-table-scroll .pick-col input[type="checkbox"]:disabled{opacity:.35;cursor:not-allowed}
 /* 日志弹窗内容（弹体外壳样式在全局块） */
 .case-log-sec{margin:0 0 16px}
+.case-log-sec:last-child{margin-bottom:0}
 .case-log-sec h4{margin:0 0 8px;color:#1d2129;font-size:14px;line-height:22px;font-weight:600}
 /* dt/dd 两列网格下沉到行 div：dl 直接网格化会把整行 div 当格子，落在 88px 窄格的值被硬折行 */
 .case-log-dl{display:grid;gap:6px 0;margin:0}

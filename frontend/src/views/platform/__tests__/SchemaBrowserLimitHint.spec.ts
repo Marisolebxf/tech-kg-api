@@ -21,6 +21,7 @@ vi.mock('../../../api/schemaManagement', () => ({
   deleteSchemaProperty: vi.fn(),
   getSchemaDeleteImpact: vi.fn(),
   getSchemaDetail: vi.fn(),
+  getSchemaTopology: vi.fn(async () => ({ nodes: [], edges: [] })),
   getScriptContent: vi.fn(),
   getSchemaOverview: vi.fn(),
   listEntityOptions: vi.fn(),
@@ -63,6 +64,14 @@ const ATextareaStub = defineComponent({
   template: `<textarea :value="modelValue" @input="$emit('update:modelValue', $event.target.value)"></textarea>`,
 })
 const SlotStub = defineComponent({ template: '<div><slot /></div>' })
+const DropdownStub = defineComponent({
+  data: () => ({ open: false }),
+  template: '<span><span @click="open = !open"><slot /></span><span v-if="open" class="test-dropdown-menu"><slot name="content" /></span></span>',
+})
+const DoptionStub = defineComponent({
+  props: ['disabled'],
+  template: '<button type="button" :disabled="disabled"><slot /></button>',
+})
 // Select 需可交互：fixed_string 长度提示的用例要切属性类型
 const ASelectStub = defineComponent({
   props: ['modelValue'],
@@ -107,6 +116,7 @@ function mountView() {
       components: {
         AInput: AInputStub, ATextarea: ATextareaStub, AForm: SlotStub, AFormItem: AFormItemStub,
         ASelect: ASelectStub, AOption: AOptionStub, ACheckbox: ACheckboxStub, ATooltip: SlotStub,
+        ADropdown: DropdownStub, ADoption: DoptionStub,
       },
       stubs: { KgGraphCanvas: true, teleport: true },
     },
@@ -122,6 +132,7 @@ function mountViewWithRealForm() {
       components: {
         AInput: AInputStub, ATextarea: ATextareaStub, AForm: Form, AFormItem: FormItem,
         ASelect: ASelectStub, AOption: AOptionStub, ACheckbox: ACheckboxStub, ATooltip: SlotStub,
+        ADropdown: DropdownStub, ADoption: DoptionStub,
       },
       stubs: { KgGraphCanvas: true, teleport: true },
     },
@@ -141,6 +152,25 @@ afterEach(() => {
 })
 
 describe('Schema 管理输入框达上限提示', () => {
+  it('操作列常显三项，更多菜单保留其余操作及权限状态', async () => {
+    vi.mocked(listSchemasPaged).mockResolvedValue({ items: [schemaFixture()], total: 1, page: 1, pageSize: 10 })
+    const view = mountView()
+    await flushPromises()
+
+    const actions = view.get('.schema-actions')
+    expect(actions.findAll('.schema-action-link').map((button) => button.text())).toEqual(['更换脚本', '查看脚本', '来源表', '···'])
+    expect(actions.find('.test-dropdown-menu').exists()).toBe(false)
+    await actions.get('.schema-action-more').trigger('click')
+    const options = actions.findAll('.test-dropdown-menu button')
+    expect(options.map((button) => button.text())).toEqual(['属性管理', '删除'])
+    expect(options[0].attributes('disabled')).toBeUndefined()
+    expect(options[1].attributes('disabled')).toBeDefined()
+
+    await view.get('.schema-topology-toggle').trigger('click')
+    await flushPromises()
+    expect(view.get('.schema-catalog').classes()).toContain('schema-catalog--topology-expanded')
+  })
+
   it('搜索框达 128 字上限：输入框下浮出提示，缩短后消失', async () => {
     const view = mountView()
     await flushPromises()
@@ -222,9 +252,8 @@ describe('Schema 管理输入框达上限提示', () => {
     const view = mountView()
     await flushPromises()
 
-    const manageButton = view.findAll('button.schema-action-link').find((button) => button.text() === '属性管理')
-    expect(manageButton).toBeTruthy()
-    await manageButton!.trigger('click')
+    await view.get('button.schema-action-more').trigger('click')
+    await view.findAll('.test-dropdown-menu button').find((button) => button.text() === '属性管理')!.trigger('click')
 
     const nameInput = view.get('input.property-add-form__name')
     await nameInput.setValue('f'.repeat(128))
@@ -262,9 +291,8 @@ describe('Schema 管理输入框达上限提示', () => {
     const view = mountView()
     await flushPromises()
 
-    const manageButton = view.findAll('button.schema-action-link').find((button) => button.text() === '属性管理')
-    expect(manageButton).toBeTruthy()
-    await manageButton!.trigger('click')
+    await view.get('button.schema-action-more').trigger('click')
+    await view.findAll('.test-dropdown-menu button').find((button) => button.text() === '属性管理')!.trigger('click')
 
     await view.get('.property-add-form select').setValue('fixed_string')
     expect(view.get('.property-section .prop-length-live').text()).toContain('当前 64，可定义 1~1024')
@@ -330,8 +358,8 @@ describe('Schema 列表说明列截断显示与删除脏行兜底', () => {
     const view = mountView()
     await flushPromises()
 
-    const deleteButton = view.findAll('button.schema-action-link--danger')[0]
-    await deleteButton.trigger('click')
+    await view.get('button.schema-action-more').trigger('click')
+    await view.findAll('.test-dropdown-menu button').find((button) => button.text() === '删除')!.trigger('click')
     expect(view.find('.schema-delete-modal').exists()).toBe(true)
 
     const listCallsBefore = vi.mocked(listSchemasPaged).mock.calls.length

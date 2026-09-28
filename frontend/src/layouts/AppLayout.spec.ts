@@ -226,4 +226,21 @@ describe('面包屑统一（Arco 规范：首项首页图标、/ 分隔、除当
       .toEqual([['图谱建设与治理', '/schema'], ['人工审核', '/manual-review']])
     expect(reviewNav.get('.app-breadcrumb__current').text()).toBe('人工审核详情')
   })
+
+  it('行首「<」返回按钮：无应用内历史时回最近上级，首页直达时不显示', async () => {
+    const job = await renderLayout(true, '/graph-build/jobs/job-1')
+    const back = job.wrapper.get('button.app-breadcrumb__back')
+    expect(back.attributes('title')).toBe('返回图谱构建')
+    await back.trigger('click')
+    await flushPromises()
+    expect(job.wrapper.get('.app-breadcrumb__current').text()).toBe('图谱构建')
+
+    // 业务服务页：组入口 /business-service 重定向回首服务（等价自页），兜底再上一级
+    const service = await renderLayout(true, '/expert-direct')
+    expect(service.wrapper.get('button.app-breadcrumb__back').attributes('title')).toBe('返回知识图谱构建服务')
+
+    // 平台总览直达（无上级、无应用内历史）：不渲染返回按钮
+    const home = await renderLayout(true, '/overview')
+    expect(home.wrapper.find('button.app-breadcrumb__back').exists()).toBe(false)
+  })
 })

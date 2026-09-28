@@ -92,3 +92,21 @@ export function breadcrumbCrumbs(path: string, fallbackTitle: string): Breadcrum
   // 平台总览、个人中心、任务实例详情（总览卡片/审核页直达）等：仅首页图标 + 当前页
   return [current(pageTitle)]
 }
+
+/**
+ * 行首「<」返回按钮的兜底目标（应用内无上一页时）：从最近的上级取第一个
+ * 不落回当前页的链接；都没有（如平台总览首页）返回首页本身，按钮由组件按需隐藏。
+ */
+export function breadcrumbBackTarget(
+  path: string,
+  crumbs: BreadcrumbCrumb[],
+): BreadcrumbCrumb & { to: string } {
+  for (let i = crumbs.length - 2; i >= 0; i--) {
+    const item = crumbs[i]
+    if (!item.to || item.to === path) continue
+    // 业务服务组入口 /business-service 重定向到首个服务页：当前就在服务页时等价于自页，跳过
+    if (item.to === '/business-service' && SERVICE_TITLES[path]) continue
+    return { label: item.label, to: item.to }
+  }
+  return { label: '平台总览', to: breadcrumbHomeTo }
+}

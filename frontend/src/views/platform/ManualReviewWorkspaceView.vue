@@ -629,18 +629,17 @@ const runPrimary = () => {
 
       </a-form>
       <p v-if="feedback" class="rw-feedback">{{ feedback }}</p>
-    </main>
 
-    <!-- 底部确认按钮全模板保留；已处理（终态）置灰不可点击；A 类（T_LINK/T_DIRECT）统一为「确认」；
-         查看档只读 case（共享生产空间）隐藏确认按钮只留提示 -->
-    <footer class="rw-foot">
-      <div v-if="isReadOnlyCase" class="rw-readonly-hint" role="note">
-        当前图空间为共享生产空间：该审核记录仅可查看，裁决需管理员或本业务开发维护人员执行。
-      </div>
-      <div v-else class="rw-foot__actions">
-        <button class="primary" type="button" :disabled="isPrimaryDisabled" @click="runPrimary">{{ templateId === 'T_EXTRACT_FAIL' ? primaryActionLabel : '确认' }}</button>
-      </div>
-    </footer>
+      <!-- 确认操作放在详情框内右下角；查看档只读 case 仅展示权限提示。 -->
+      <footer class="rw-foot">
+        <div v-if="isReadOnlyCase" class="rw-readonly-hint" role="note">
+          当前图空间为共享生产空间：该审核记录仅可查看，裁决需管理员或本业务开发维护人员执行。
+        </div>
+        <div v-else class="rw-foot__actions">
+          <button class="primary" type="button" :disabled="isPrimaryDisabled" @click="runPrimary">{{ templateId === 'T_EXTRACT_FAIL' ? primaryActionLabel : '确认' }}</button>
+        </div>
+      </footer>
+    </main>
   </div>
   <div v-else class="rw-empty">
     <h1>未找到处理实例</h1>
@@ -1137,13 +1136,9 @@ const runPrimary = () => {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 12px;
-  margin-top: 10px;
-  padding: 12px 14px;
-  border: 1px solid #dce8f8;
-  border-radius: 8px;
-  background: #fff;
+  margin-top: 16px;
 }
 
 .rw-foot > span {
@@ -1165,24 +1160,24 @@ const runPrimary = () => {
 
 .rw-foot__actions {
   display: flex;
-  flex: 1;
   flex-wrap: wrap;
-  align-items: stretch;
+  align-items: center;
   justify-content: flex-end;
   gap: 8px;
 }
 
-/* 最终确认按钮：加大并撑满所在容器（rw-foot 整行） */
+/* 最终确认按钮：详情框内右下角的常规尺寸操作按钮。 */
 .rw-foot button {
-  width: 100%;
-  height: 48px;
-  padding: 0 16px;
+  width: auto;
+  min-width: 88px;
+  height: 32px;
+  padding: 0 20px;
   border: 1px solid #bdd0ea;
-  border-radius: 6px;
+  border-radius: 4px;
   background: #fff;
   color: #40516d;
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 500;
   cursor: pointer;
 }
 
@@ -1330,8 +1325,8 @@ const runPrimary = () => {
 .rw-sec{margin-bottom:16px;padding:16px;border:0;border-radius:6px;background:#f7f8fa}.rw-sec__head{gap:8px;margin-bottom:16px}
 .cat-pill{padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.tri-grid{gap:16px}.tri-grid>div{gap:4px;padding:8px 16px;border-color:#e5e6eb;border-radius:4px}.tri-grid span,.tri-grid em{font-size:12px;line-height:20px}.tri-grid strong{font-size:14px;line-height:22px}
 .rw :is(button,input,select,textarea){font-size:14px;line-height:22px}.rw :is(button,input,select){min-height:32px;border-radius:4px}.rw textarea{border-radius:4px}
-/* 最终确认按钮：撑满 rw-foot 整行并加大（覆盖上面的通用 button 字号） */
-.rw-foot__actions{flex:1}.rw-foot button{width:100%;height:48px;padding:0 16px;font-size:16px;font-weight:600}
+/* 最终确认按钮保持详情框右下角的常规按钮尺寸。 */
+.rw-foot__actions{flex:none}.rw-foot button{width:auto;min-width:88px;height:32px;padding:0 20px;font-size:14px;font-weight:500}
 .direct-actions{gap:16px}.direct-accept,.direct-reject{min-height:32px;padding:8px 16px;border-radius:4px;font-size:14px}.direct-accept strong,.direct-reject strong{font-size:14px;line-height:22px}.direct-accept em,.direct-reject em{font-size:12px;line-height:20px}
 @media(max-width:960px){.tri-grid{grid-template-columns:1fr}}
 </style>

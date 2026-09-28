@@ -1343,14 +1343,12 @@ function descCell(text: string): string {
               </template>
               <template v-else>
                 <div class="schema-delete-impact schema-delete-impact--danger">
-                  <strong>删除影响</strong>
                   <p>该实体的相关关系已全部删除。继续操作将永久删除图空间 <b>{{ deleteTarget.graphSpace || activeSpace }}</b> 中该类型的全部实体点。</p>
                 </div>
               </template>
             </template>
             <template v-else>
               <div class="schema-delete-impact schema-delete-impact--danger">
-                <strong>删除影响</strong>
                 <p>继续操作将永久删除图空间 <b>{{ deleteTarget?.graphSpace || activeSpace }}</b> 中该类型的全部关系边。</p>
               </div>
             </template>
@@ -1707,7 +1705,7 @@ function descCell(text: string): string {
 .schema-delete-impact{margin-left:52px;padding:12px 14px;border:1px solid;border-radius:6px}
 .schema-delete-impact strong{display:block;margin-bottom:4px;font-size:13px;line-height:20px;font-weight:500}
 .schema-delete-impact p{margin:0;font-size:12px;line-height:20px}
-.schema-delete-impact--danger{border-color:#ffccc7;background:#fff2f0;color:#b42318}
+.schema-delete-impact--danger{border:0;background:#fff2f0;color:#b42318}
 .schema-delete-impact--blocked{border-color:#ffe4ba;background:#fff7e8;color:#b54708}
 .schema-delete-note{margin:0;font-size:11px;line-height:18px;color:#86909c}
 .schema-delete-rel-list{margin:8px 0 0;padding:6px 10px;max-height:160px;overflow:auto;border:1px solid rgba(181,71,8,.16);border-radius:4px;background:rgba(255,255,255,.72);list-style:none}

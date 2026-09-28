@@ -124,6 +124,20 @@ def test_sync_appends_data_lines_and_is_idempotent():
     assert service.repo.saved["logs"] == logs
 
 
+def test_sync_maps_abnormal_execution_to_distinct_task_status():
+    """ABNORMAL（抽取完成但含行级失败）→ 任务「执行异常」，不混入「执行出错」。"""
+    execution = _rerun_execution()
+    execution["status"] = "ABNORMAL"
+    execution["message"] = "抽取完成，含 2 条失败记录（已转人工审核）"
+    execution["output"]["failures"] = {"count": 2, "recorded": 2, "truncated": False}
+    service = WorkflowOperationsService(repo=_FakeRepo(_task([])))
+    service._sync_task_from_execution(execution)
+    assert service.repo.saved["taskStatus"] == "执行异常"
+    assert service.repo.saved["status"] == "执行异常"
+    # 失败汇总数据行照常回写（人工审核入口的行数依据）
+    assert "失败汇总：2 条（已落审核 case 2 条）" in service.repo.saved["logs"]
+
+
 def test_sync_backfills_data_lines_for_already_synced_task():
     """历史执行：状态早已同步、但日志只有通用文案——读取时补数据行。"""
     legacy_logs = ["工作流已下发", "执行状态同步：COMPLETED（output 无 stages，仅回写状态）"]

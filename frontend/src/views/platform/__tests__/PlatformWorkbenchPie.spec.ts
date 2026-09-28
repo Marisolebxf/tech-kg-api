@@ -21,9 +21,9 @@ vi.mock('../../../api/workflowOperations', () => ({
   listJobs: vi.fn(),
   getProductionReviews: vi.fn(),
   deriveJobUnifiedStatus: (job: { status?: string }) => job.status ?? '未运行',
-  countJobUnifiedStatuses: () => ({ 未运行: 0, 运行中: 0, 已暂停: 0, 已完成: 0, 运行失败: 0 }),
+  countJobUnifiedStatuses: () => ({ 未运行: 0, 运行中: 0, 已暂停: 0, 已完成: 0, 运行异常: 0, 运行失败: 0 }),
   jobGraphSpace: (job: { graphSpace?: string }, def: string, cur: string) => job.graphSpace || def || cur,
-  JOB_STATUS_TONE: { 未运行: 'warn', 运行中: 'run', 已暂停: 'warn', 已完成: 'ok', 运行失败: 'err' },
+  JOB_STATUS_TONE: { 未运行: 'warn', 运行中: 'run', 已暂停: 'warn', 已完成: 'ok', 运行异常: 'warn', 运行失败: 'err' },
 }))
 vi.mock('../../../api/platformOverview', () => ({ getPlatformOverview: vi.fn() }))
 vi.mock('../../../composables/use-toast', () => ({ useToast: () => ({ showToast: vi.fn() }) }))

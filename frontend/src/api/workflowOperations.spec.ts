@@ -31,6 +31,11 @@ describe('deriveJobUnifiedStatus 统一状态推导', () => {
     }
   })
 
+  it('ABNORMAL→运行异常：抽取完成但含行级失败记录，不占用「运行失败」（完全跑崩才叫失败）', () => {
+    expect(deriveJobUnifiedStatus(job('启用', 'ABNORMAL'))).toBe('运行异常')
+    expect(JOB_STATUS_TONE['运行异常']).toBe('warn')
+  })
+
   it('QUEUED 按未运行处理（本地待下发不自愈，可重新触发）', () => {
     expect(deriveJobUnifiedStatus(job('启用', 'QUEUED'))).toBe('未运行')
   })
@@ -45,19 +50,20 @@ describe('deriveJobUnifiedStatus 统一状态推导', () => {
     expect(deriveJobUnifiedStatus(job('启用', ''))).toBe('未运行')
   })
 
-  it('五种统一状态都有色调映射', () => {
-    const all = ['未运行', '运行中', '已暂停', '已完成', '运行失败'] as const
+  it('六种统一状态都有色调映射', () => {
+    const all = ['未运行', '运行中', '已暂停', '已完成', '运行异常', '运行失败'] as const
     for (const status of all) expect(JOB_STATUS_TONE[status]).toBeTruthy()
   })
 })
 
 describe('countJobUnifiedStatuses 统计卡', () => {
-  it('五态计数齐备，统计卡与列表行同源同口径', () => {
+  it('六态计数齐备，统计卡与列表行同源同口径', () => {
     const counts = countJobUnifiedStatuses([
       job('启用', 'RUNNING'),
       job('启用', 'RUNNING'),
       job('启用', 'COMPLETED'),
       job('暂停', 'COMPLETED'),
+      job('启用', 'ABNORMAL'),
       job('启用', 'FAILED'),
       job('启用', null),
       job('启用', 'QUEUED'),
@@ -67,6 +73,7 @@ describe('countJobUnifiedStatuses 统计卡', () => {
       运行中: 2,
       已暂停: 1,
       已完成: 1,
+      运行异常: 1,
       运行失败: 1,
     })
   })
@@ -77,6 +84,7 @@ describe('countJobUnifiedStatuses 统计卡', () => {
       运行中: 0,
       已暂停: 0,
       已完成: 0,
+      运行异常: 0,
       运行失败: 0,
     })
   })

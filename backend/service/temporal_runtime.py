@@ -44,14 +44,15 @@ def _format_workflow_failure(exc: BaseException) -> str:
 
 
 def _apply_output_failure_status(refreshed: dict[str, Any], output: Any) -> dict[str, Any]:
-    """COMPLETED 但产出含失败批次（kg.schema.extract 输出形状）→ 执行按失败标记。
+    """COMPLETED 但产出含失败批次（kg.schema.extract 输出形状）→ 执行按异常标记。
 
     逐行转换失败由 workflow 捕获记入 ``failures.count`` 并转 T_EXTRACT_FAIL 审核
     case，workflow 本身正常返回——Temporal 状态是 COMPLETED，output 可取回
     （详情页「失败记录」列依赖它）。控制面执行状态必须如实反映「含失败批次」
-    （FUNC-00901：执行标记失败并在失败记录列可查），否则部分批次全毒的执行
-    在执行历史里伪装成全程成功。映射在 refresh 侧完成且幂等：重复 refresh
-    读到同一 output，仍得到 FAILED。
+    （FUNC-00901），否则部分批次全毒的执行在执行历史里伪装成全程成功；
+    2026-09-28 口径调整：只有完全跑崩（Temporal workflow FAILED）才叫失败，
+    「抽取完成但含行级失败记录」标 ABNORMAL（异常），不再占用 FAILED。
+    映射在 refresh 侧完成且幂等：重复 refresh 读到同一 output，仍得到 ABNORMAL。
     """
     failures = output.get("failures") if isinstance(output, dict) else None
     if not isinstance(failures, dict):
@@ -64,7 +65,7 @@ def _apply_output_failure_status(refreshed: dict[str, Any], output: Any) -> dict
         return refreshed
     return {
         **refreshed,
-        "status": "FAILED",
+        "status": "ABNORMAL",
         "message": f"抽取完成，含 {count} 条失败记录（已转人工审核）",
     }
 

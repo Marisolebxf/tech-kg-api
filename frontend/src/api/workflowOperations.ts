@@ -1,7 +1,8 @@
 import { http } from './http'
 import { unwrapApiResponse, type ApiResponse } from './graphSearch'
 
-export type TaskStatus = '执行中' | '执行出错' | '等待人工审核' | '执行完成'
+/** 执行异常 = 抽取完成但含行级失败记录（已转人工审核）；执行出错 = 完全跑崩。 */
+export type TaskStatus = '执行中' | '执行出错' | '执行异常' | '等待人工审核' | '执行完成'
 
 export interface UpdateBatch {
   id: string
@@ -348,8 +349,9 @@ export const listJobs = (
 ) =>
   unwrap(http.get('/v1/workflow-system/jobs', { params: filters })) as Promise<{ items: WorkflowJob[]; total: number }>
 
-/** 任务统一状态：列表页/总览卡共用同一派生口径。 */
-export type JobUnifiedStatus = '未运行' | '运行中' | '已暂停' | '已完成' | '运行失败'
+/** 任务统一状态：列表页/总览卡共用同一派生口径。
+ *  运行异常 = 抽取完成但含行级失败记录（已转人工审核）；只有完全跑崩才是运行失败。 */
+export type JobUnifiedStatus = '未运行' | '运行中' | '已暂停' | '已完成' | '运行异常' | '运行失败'
 
 const JOB_RUNNING_STATUSES = new Set(['RUNNING'])
 const JOB_FAILED_STATUSES = new Set(['FAILED', 'CANCELED', 'TERMINATED', 'TIMED_OUT'])
@@ -360,6 +362,7 @@ export function deriveJobUnifiedStatus(job: Pick<WorkflowJob, 'status' | 'lastEx
   if (job.status === '暂停') return '已暂停'
   if (job.lastExecutionStatus && JOB_RUNNING_STATUSES.has(job.lastExecutionStatus)) return '运行中'
   if (job.lastExecutionStatus === 'COMPLETED') return '已完成'
+  if (job.lastExecutionStatus === 'ABNORMAL') return '运行异常'
   if (job.lastExecutionStatus && JOB_FAILED_STATUSES.has(job.lastExecutionStatus)) return '运行失败'
   // QUEUED = Temporal 不可用时的本地待下发记录，不会自愈，按未运行处理（可重新触发）
   return '未运行'
@@ -371,15 +374,34 @@ export const JOB_STATUS_TONE: Record<JobUnifiedStatus, 'ok' | 'err' | 'warn' | '
   运行中: 'run',
   已暂停: 'warn',
   已完成: 'ok',
+  运行异常: 'warn',
   运行失败: 'err',
 }
 
 export function countJobUnifiedStatuses(
   jobs: Array<Pick<WorkflowJob, 'status' | 'lastExecutionStatus'>>,
 ): Record<JobUnifiedStatus, number> {
-  const counts: Record<JobUnifiedStatus, number> = { 未运行: 0, 运行中: 0, 已暂停: 0, 已完成: 0, 运行失败: 0 }
+  const counts: Record<JobUnifiedStatus, number> = { 未运行: 0, 运行中: 0, 已暂停: 0, 已完成: 0, 运行异常: 0, 运行失败: 0 }
   for (const job of jobs) counts[deriveJobUnifiedStatus(job)] += 1
   return counts
+}
+
+/** 执行状态 → 中文标签（执行历史表/详情页展示用；未知值原样显示）。 */
+export const EXECUTION_STATUS_LABEL: Record<string, string> = {
+  RUNNING: '运行中',
+  COMPLETED: '已完成',
+  ABNORMAL: '异常',
+  FAILED: '失败',
+  CANCELED: '已取消',
+  TERMINATED: '已终止',
+  TIMED_OUT: '超时',
+  QUEUED: '排队中',
+  CONTINUED_AS_NEW: '接续运行',
+}
+
+export function executionStatusLabel(status?: string | null): string {
+  if (!status) return '—'
+  return EXECUTION_STATUS_LABEL[status.toUpperCase()] ?? status
 }
 
 /** 任务归属空间（列表页/总览卡共用同一口径）：payload 未带 graphSpace 的历史任务

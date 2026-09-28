@@ -765,9 +765,9 @@ onMounted(async () => {
 .pipeline-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
 .pipeline-head h2{margin:0;font-size:15px}
 .pipeline-message{margin:0 0 10px;padding:8px 12px;border:1px solid #b2ccff;border-radius:6px;background:#f0f5ff;color:#344f7a;font-size:11px}
-.index-degrade-alert{display:flex;flex-direction:column;gap:4px;margin:0 0 12px;padding:10px 14px;border:1px solid #f0a6a6;border-left:4px solid #d92d20;border-radius:6px;background:#fef3f2;color:#912018;font-size:12px}
+.index-degrade-alert{display:flex;flex-direction:column;gap:4px;margin:0 0 12px;padding:10px 14px;border:0;border-radius:6px;background:#fef3f2;color:#912018;font-size:12px}
 .index-degrade-alert strong{font-size:13px}
-.index-degrade-alert code{padding:2px 6px;border-radius:4px;background:#fde8e8;word-break:break-all}
+.index-degrade-alert code{padding:0;background:transparent;word-break:break-all}
 .index-degrade-alert em{color:#a8655c;font-style:normal;font-size:11px}
 /* 真实输入输出（脚本上报 JSON）：跨两列，输入/输出分块，超长 JSON 内部滚动 */
 .io-content h3 span{padding:2px 6px;border-radius:4px;background:#eef4ff;color:#165dff;font-size:8px;font-weight:500}
@@ -821,9 +821,9 @@ onMounted(async () => {
 .exec-table{width:100%;border-collapse:collapse;font-size:12px}
 .exec-table th{position:sticky;top:0;padding:8px 10px;background:#f7f8fa;color:#4e5969;text-align:left;font-weight:600}
 .exec-table td{padding:8px 10px;border-top:1px solid #f2f3f5;color:#1d2129}
-.exec-table tbody tr{cursor:pointer}
-.exec-table tbody tr:hover{background:#f7f9ff}
-.exec-table tbody tr.active{background:#eef4ff}
+.exec-table tbody tr{background:#fff;cursor:pointer}
+.exec-table tbody tr:hover{background:#f7f8fa}
+.exec-table tbody tr.active{background:#fff}
 .exec-table code{font-size:11px;color:#165dff}
 .trigger-chip{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;background:#f2f3f5;color:#4e5969}
 .trigger-chip[data-kind='SCHEDULE']{background:#e8ffea;color:#00b42a}

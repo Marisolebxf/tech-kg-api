@@ -818,11 +818,12 @@ onMounted(loadReviews)
 .review-kind-badge.is-实体{background:#eaf2ff;color:#175cd3}
 .review-kind-badge.is-关系{background:#fff3d8;color:#b54708}
 /* 操作列按钮化：查看记录（A 类）/ 日志、重跑、删除（C 类）统一为描边按钮，删除红色警示 */
-.review-action-btn{display:inline-flex;box-sizing:border-box;height:28px;min-width:0;align-items:center;justify-content:center;padding:0 10px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#1d2129;font-size:13px;line-height:26px;white-space:nowrap;text-decoration:none;cursor:pointer}
-.review-action-btn:hover{border-color:#165dff;color:#165dff}
-.review-action-btn.is-danger{border-color:#f6c1be;color:#b42318}
-.review-action-btn.is-danger:hover{border-color:#b42318;color:#b42318}
-.review-action-btn:disabled,.review-action-btn:disabled:hover{border-color:#e5e6eb;background:#f7f8fa;color:#c9cdd4;cursor:not-allowed}
+/* 操作按钮与 Schema 管理表同款：无边框纯文字链接；删除红、其余蓝、禁用灰 */
+.review-action-btn{height:auto;padding:0;border:0;background:transparent;color:#165dff;font-size:14px;line-height:22px;font-weight:400;white-space:nowrap;text-decoration:none;cursor:pointer}
+.review-action-btn:hover:not(:disabled){color:#4080ff;text-decoration:none}
+.review-action-btn:disabled{color:#a9b4c6;cursor:not-allowed;text-decoration:none}
+.review-action-btn.is-danger{color:#e5484d}
+.review-action-btn.is-danger:hover:not(:disabled){color:#b42318}
 .ops-review-table-scroll .pick-col input[type="checkbox"]:disabled{opacity:.35;cursor:not-allowed}
 /* 日志弹窗内容（弹体外壳样式在全局块） */
 .case-log-sec{margin:0 0 16px}

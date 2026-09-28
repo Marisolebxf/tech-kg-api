@@ -55,7 +55,7 @@ const renderReview = () => {
         ASelect: { name: 'ASelect', props: ['modelValue', 'options'], setup: () => () => null },
         AInput: { name: 'AInput', setup: () => () => null },
         // 弹窗 stub 直渲染默认插槽，让日志弹窗内容可被断言
-        AModal: { name: 'AModal', setup: (_props: Record<string, unknown>, { slots }: { slots: { default?: () => unknown } }) => () => h('div', slots.default?.()) },
+        AModal: { name: 'AModal', setup: (_props: Record<string, unknown>, { slots }: { slots: { default?: () => unknown; footer?: () => unknown } }) => () => h('div', [slots.default?.(), slots.footer?.()]) },
         // 分页已迁移到共享 ListPagination（真组件渲染，翻页直接对它 emit）
       },
       stubs: { RouterLink: true },
@@ -352,6 +352,7 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     // 执行 ID 纯文本展示，不再跳执行详情页
     expect(wrapper.text()).toContain('EXEC-RERUN-9')
     expect(wrapper.find('.case-log-dl router-link-stub').exists()).toBe(false)
+    expect(wrapper.get('.case-log-close').text()).toBe('关闭')
   })
 })
 

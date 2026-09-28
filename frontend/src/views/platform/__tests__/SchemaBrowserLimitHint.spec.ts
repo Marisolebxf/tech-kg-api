@@ -163,6 +163,8 @@ describe('Schema 管理输入框达上限提示', () => {
     await actions.get('.schema-action-more').trigger('click')
     const options = actions.findAll('.test-dropdown-menu button')
     expect(options.map((button) => button.text())).toEqual(['属性管理', '删除'])
+    expect(options[0].classes()).toContain('schema-action-menu-item')
+    expect(options[1].classes()).toContain('schema-action-menu-item--danger')
     expect(options[0].attributes('disabled')).toBeUndefined()
     expect(options[1].attributes('disabled')).toBeDefined()
 

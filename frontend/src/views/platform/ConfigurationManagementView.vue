@@ -646,7 +646,7 @@ onMounted(() => {
     <Teleport to="body">
       <button v-if="selected" class="mask" type="button" aria-label="关闭" @click="selected=null" />
       <aside v-if="selected" class="detail-drawer">
-      <header><div><span>{{ selected.id }}</span><h2>{{ selected.name }}<b v-if="selected.isDefault" class="default-tag">默认</b></h2></div><button type="button" @click="selected=null">×</button></header>
+      <header><div><h2>{{ selected.name }}<b v-if="selected.isDefault" class="default-tag">默认</b></h2><span class="config-id">{{ selected.id }}</span></div><button type="button" @click="selected=null">×</button></header>
       <div class="detail-drawer-body">
         <section class="health-card"><i :class="`is-${selected.status}`" /><div><strong>{{ selected.status === '正常' ? '配置可用' : selected.status === '异常' ? '连接存在异常' : '配置已停用' }}</strong><span>后端真实探活</span></div><button type="button" :disabled="testingId === selected.id" @click="testConnection(selected)">{{ testingId === selected.id ? '测试中…' : '测试连接' }}</button></section>
         <a-form :model="selected" class="detail-form" layout="vertical">
@@ -797,13 +797,14 @@ onMounted(() => {
 .detail-drawer>header{flex:0 0 auto;box-sizing:border-box}
 .detail-drawer-body{flex:1 1 0;min-height:0;overflow-y:auto;padding-bottom:32px;box-sizing:border-box}
 .detail-drawer-body .detail-form{padding-bottom:0}
-.detail-drawer>footer{flex:0 0 auto;margin-top:0}
+.detail-drawer>footer{flex:0 0 auto;margin-top:0;align-items:center}
 /* 新建弹窗：限高 + 表单区内部滚动（原来 overflow:hidden 直接裁掉超高表单） */
 .create-dialog{display:flex;max-height:min(88vh,760px);flex-direction:column}
 .create-dialog .dialog-form{flex:1 1 auto;min-height:0;overflow:auto}
 .create-dialog>footer{margin-top:auto}
-/* 图空间分类 */
-.bind-nav{display:flex;width:100%;gap:16px;align-items:center}.bind-nav :deep(.arco-select){width:200px;min-width:200px}.bind-nav button{height:32px;padding:0 16px;border:1px solid #bdd0ea;border-radius:4px;font-size:14px;cursor:pointer}
+/* 图空间分类。select 宽度按最长占位符「绑定已有图数据空间」(9 个汉字)定：
+   扣除边框/内边距/下拉箭头后 input 需 ~160px+，200px 会把最后一个字裁掉(实测)。 */
+.bind-nav{display:flex;width:100%;gap:16px;align-items:center}.bind-nav :deep(.arco-select){width:240px;min-width:240px}.bind-nav button{height:32px;padding:0 16px;border:1px solid #bdd0ea;border-radius:4px;font-size:14px;cursor:pointer}
 .space-hint{margin:8px 16px;color:#86909c;font-size:12px;line-height:20px}
 .space-dialog-hint{grid-column:1/-1;margin:0;color:#86909c;font-size:12px;line-height:20px}
 /* 字段级校验提示（输入即校验，超长/异常字符/范围/必填） */
@@ -835,6 +836,12 @@ onMounted(() => {
 .row-actions{gap:8px}.default-tag{margin-left:8px;padding:0 4px;font-size:12px;line-height:20px;font-weight:500}
 .config-list nav :deep(.arco-select-view-value){line-height:22px}
 .detail-drawer>header button,.create-dialog>header button{width:32px;height:32px;border-radius:4px}
+/* 详情抽屉右上角关闭按钮：去掉灰色底块（与新建弹窗关闭按钮一致） */
+.detail-drawer>header>button{border:0;background:transparent;color:#4e5969;font-size:20px;line-height:1}
+.detail-drawer>header>button:hover{background:transparent;color:#165dff}
+/* 详情抽屉头部：黑色标题在上，蓝色唯一标识在标题下方 */
+.detail-drawer>header h2{margin:0}
+.detail-drawer>header .config-id{display:block;margin-top:2px;color:#165dff;font-size:12px;line-height:20px;font-weight:400}
 .health-card{grid-template-columns:8px minmax(0,1fr) auto;gap:16px;margin:16px 24px 0;padding:16px;border-color:#e5e6eb;border-radius:6px;box-shadow:none}.health-card>i{width:8px;height:8px}.health-card>div{gap:4px}.health-card strong{font-size:14px;line-height:22px;font-weight:600}.health-card span{font-size:12px;line-height:20px;font-weight:400}.health-card button{height:32px;padding:0 16px;border-color:#e5e6eb;border-radius:4px;font-size:14px;line-height:22px;font-weight:400}
 .detail-form,.dialog-form{gap:16px;padding:24px}.detail-form label,.dialog-form label{gap:8px}.detail-form label span,.dialog-form label span{font-size:14px;line-height:22px;font-weight:400}
 .reference-card{margin:0 24px;padding:16px;border-color:#e5e6eb;border-radius:6px;box-shadow:none}.reference-card strong{font-size:14px;line-height:22px;font-weight:600}.reference-card span,.reference-card p,.space-hint,.space-dialog-hint{font-size:12px;line-height:20px;font-weight:400}

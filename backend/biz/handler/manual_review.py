@@ -74,9 +74,10 @@ def _queue_cache_clear() -> None:
 
 def _cache_scope(identity: ReviewIdentity, case_id: str | None = None) -> str:
     try:
-        spaces = identity.review_spaces()
+        spaces = identity.review_view_spaces()
         if spaces is not None and case_id is not None:
-            production_service.authorize_case(case_id, identity)
+            # 读路径缓存键按查看档校验（共享空间只读可见）；写端点不走此缓存
+            production_service.authorize_case_view(case_id, identity)
         return json.dumps(
             [identity.user_id, sorted(identity.roles), sorted(identity.domains), spaces],
             ensure_ascii=False,

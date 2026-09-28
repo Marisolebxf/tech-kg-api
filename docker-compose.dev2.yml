@@ -284,6 +284,9 @@ services:
     container_name: tech-kg-temporal-mysql-dev2
     environment:
       MYSQL_ROOT_PASSWORD: temporal
+      # glibc 多 arena 碎片：temporal 高频小对象分配 18 天会把 RSS 撑到 5.5G
+      # （有账内存仅 747MB）。限 arena 数可显著减缓回涨（2026-09-28 重启回收实测）。
+      MALLOC_ARENA_MAX: "2"
     volumes:
       - temporal-mysql-data-dev2:/var/lib/mysql
     networks:

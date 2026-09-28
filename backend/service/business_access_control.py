@@ -38,7 +38,7 @@ def resolve_membership(user_id: str) -> tuple[str, str]:
 
 
 def _space_allowed(actor: PlatformActor, row: BusinessGraphSpace, action: str) -> bool:
-    if action not in {"read", "write", "review"}:
+    if action not in {"read", "write", "review", "review_view"}:
         return False
     if actor.business_only:
         return action == "read" and (
@@ -55,6 +55,10 @@ def _space_allowed(actor: PlatformActor, row: BusinessGraphSpace, action: str) -
         return True
     if not actor.can_develop:
         return False
+    if action == "review_view":
+        # 查看档：开发维护对共享生产空间的人工审核可见（只读）；
+        # 操作档 review 仍排除共享空间，仅业务空间可审。
+        return True
     return action != "review" or not row.is_shared_production
 
 
@@ -65,7 +69,7 @@ def ensure_space_access(actor: PlatformActor, space: str | None, action: str = "
         from service.graph_space import default_graph_space
 
         space = default_graph_space()
-    if action not in {"read", "write", "review"}:
+    if action not in {"read", "write", "review", "review_view"}:
         raise HTTPException(403, "不支持的空间操作")
     if actor.is_admin and not actor.business_only:
         return

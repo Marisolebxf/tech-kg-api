@@ -6,6 +6,7 @@ import { Form, FormItem } from '@arco-design/web-vue'
 
 import {
   deleteSchema,
+  getSchemaDeleteImpact,
   getSchemaOverview,
   listSchemasPaged,
   type SchemaDefinition,
@@ -21,6 +22,7 @@ vi.mock('../../../api/schemaManagement', () => ({
   deleteSchemaProperty: vi.fn(),
   getSchemaDeleteImpact: vi.fn(),
   getSchemaDetail: vi.fn(),
+  getSchemaTopology: vi.fn(async () => ({ nodes: [], edges: [] })),
   getScriptContent: vi.fn(),
   getSchemaOverview: vi.fn(),
   listEntityOptions: vi.fn(),
@@ -63,6 +65,14 @@ const ATextareaStub = defineComponent({
   template: `<textarea :value="modelValue" @input="$emit('update:modelValue', $event.target.value)"></textarea>`,
 })
 const SlotStub = defineComponent({ template: '<div><slot /></div>' })
+const DropdownStub = defineComponent({
+  data: () => ({ open: false }),
+  template: '<span><span @click="open = !open"><slot /></span><span v-if="open" class="test-dropdown-menu"><slot name="content" /></span></span>',
+})
+const DoptionStub = defineComponent({
+  props: ['disabled'],
+  template: '<button type="button" :disabled="disabled"><slot /></button>',
+})
 // Select 需可交互：fixed_string 长度提示的用例要切属性类型
 const ASelectStub = defineComponent({
   props: ['modelValue'],
@@ -107,6 +117,7 @@ function mountView() {
       components: {
         AInput: AInputStub, ATextarea: ATextareaStub, AForm: SlotStub, AFormItem: AFormItemStub,
         ASelect: ASelectStub, AOption: AOptionStub, ACheckbox: ACheckboxStub, ATooltip: SlotStub,
+        ADropdown: DropdownStub, ADoption: DoptionStub,
       },
       stubs: { KgGraphCanvas: true, teleport: true },
     },
@@ -122,6 +133,7 @@ function mountViewWithRealForm() {
       components: {
         AInput: AInputStub, ATextarea: ATextareaStub, AForm: Form, AFormItem: FormItem,
         ASelect: ASelectStub, AOption: AOptionStub, ACheckbox: ACheckboxStub, ATooltip: SlotStub,
+        ADropdown: DropdownStub, ADoption: DoptionStub,
       },
       stubs: { KgGraphCanvas: true, teleport: true },
     },
@@ -141,6 +153,27 @@ afterEach(() => {
 })
 
 describe('Schema 管理输入框达上限提示', () => {
+  it('操作列常显三项，更多菜单保留其余操作及权限状态', async () => {
+    vi.mocked(listSchemasPaged).mockResolvedValue({ items: [schemaFixture()], total: 1, page: 1, pageSize: 10 })
+    const view = mountView()
+    await flushPromises()
+
+    const actions = view.get('.schema-actions')
+    expect(actions.findAll('.schema-action-link').map((button) => button.text())).toEqual(['更换脚本', '查看脚本', '来源表', '···'])
+    expect(actions.find('.test-dropdown-menu').exists()).toBe(false)
+    await actions.get('.schema-action-more').trigger('click')
+    const options = actions.findAll('.test-dropdown-menu button')
+    expect(options.map((button) => button.text())).toEqual(['属性管理', '删除'])
+    expect(options[0].classes()).toContain('schema-action-menu-item')
+    expect(options[1].classes()).toContain('schema-action-menu-item--danger')
+    expect(options[0].attributes('disabled')).toBeUndefined()
+    expect(options[1].attributes('disabled')).toBeDefined()
+
+    await view.get('.schema-topology-toggle').trigger('click')
+    await flushPromises()
+    expect(view.get('.schema-catalog').classes()).toContain('schema-catalog--topology-expanded')
+  })
+
   it('搜索框达 128 字上限：输入框下浮出提示，缩短后消失', async () => {
     const view = mountView()
     await flushPromises()
@@ -222,9 +255,8 @@ describe('Schema 管理输入框达上限提示', () => {
     const view = mountView()
     await flushPromises()
 
-    const manageButton = view.findAll('button.schema-action-link').find((button) => button.text() === '属性管理')
-    expect(manageButton).toBeTruthy()
-    await manageButton!.trigger('click')
+    await view.get('button.schema-action-more').trigger('click')
+    await view.findAll('.test-dropdown-menu button').find((button) => button.text() === '属性管理')!.trigger('click')
 
     const nameInput = view.get('input.property-add-form__name')
     await nameInput.setValue('f'.repeat(128))
@@ -262,9 +294,8 @@ describe('Schema 管理输入框达上限提示', () => {
     const view = mountView()
     await flushPromises()
 
-    const manageButton = view.findAll('button.schema-action-link').find((button) => button.text() === '属性管理')
-    expect(manageButton).toBeTruthy()
-    await manageButton!.trigger('click')
+    await view.get('button.schema-action-more').trigger('click')
+    await view.findAll('.test-dropdown-menu button').find((button) => button.text() === '属性管理')!.trigger('click')
 
     await view.get('.property-add-form select').setValue('fixed_string')
     expect(view.get('.property-section .prop-length-live').text()).toContain('当前 64，可定义 1~1024')
@@ -273,6 +304,73 @@ describe('Schema 管理输入框达上限提示', () => {
     const live = view.get('.property-section .prop-length-live')
     expect(live.text()).toContain('当前 1024，可定义 1~1024')
     expect(live.classes()).not.toContain('prop-length-live--invalid')
+  })
+})
+
+describe('Schema 属性与脚本弹窗样式', () => {
+  it('属性类别独立成列，公共属性删除按钮置灰并使用线性锁图标', async () => {
+    vi.mocked(listSchemasPaged).mockResolvedValue({
+      items: [schemaFixture({
+        properties: [
+          { name: 'id', dataType: 'string', required: true, rule: '', category: 'required', locked: true },
+          { name: 'score', dataType: 'double', required: false, rule: '', category: 'core', locked: false },
+        ],
+      })],
+      total: 1, page: 1, pageSize: 10,
+    })
+    const view = mountView()
+    await flushPromises()
+
+    const actions = view.get('.schema-actions')
+    await actions.get('.schema-action-more').trigger('click')
+    await actions.findAll('.test-dropdown-menu button').find((button) => button.text() === '属性管理')!.trigger('click')
+
+    const header = view.get('.property-table__row--head')
+    expect(header.text()).toContain('属性类别')
+    const rows = view.findAll('.property-table__row:not(.property-table__row--head)')
+    expect(rows[0].text()).toContain('公共属性')
+    expect(rows[0].get('.property-table__lock').element.tagName.toLowerCase()).toBe('svg')
+    expect(rows[0].get('button').attributes('disabled')).toBeDefined()
+    expect(rows[0].get('button').text()).toBe('删除')
+    expect(rows[1].text()).toContain('自定义属性')
+    expect(rows[1].get('button').attributes('disabled')).toBeUndefined()
+  })
+
+  it('上传脚本入口展示虚线添加文件区域和格式提示', async () => {
+    vi.mocked(listSchemasPaged).mockResolvedValue({ items: [schemaFixture()], total: 1, page: 1, pageSize: 10 })
+    const view = mountView()
+    await flushPromises()
+
+    const uploadButton = view.findAll('button.schema-action-link').find((button) => button.text() === '更换脚本')
+    await uploadButton!.trigger('click')
+
+    const dropzone = view.get('.upload-dropzone')
+    expect(dropzone.text()).toContain('添加脚本文件')
+    expect(dropzone.text()).toContain('仅支持 .py 文件')
+    expect(dropzone.attributes('role')).toBe('button')
+    expect(dropzone.find('button').exists()).toBe(false)
+  })
+
+  it('Schema 删除弹窗展示警示摘要和删除影响区域', async () => {
+    const schema = schemaFixture({ canDelete: true, label: '部件', graphSpace: 'dev2' })
+    vi.mocked(listSchemasPaged).mockResolvedValue({ items: [schema], total: 1, page: 1, pageSize: 10 })
+    vi.mocked(getSchemaDeleteImpact).mockResolvedValue({
+      id: schema.id, kind: 'entity', kindLabel: '实体', graphSpace: 'dev2', name: schema.name,
+      label: schema.label, isSystem: false, canDelete: true, referencingRelations: [],
+    })
+    const view = mountView()
+    await flushPromises()
+
+    const actions = view.get('.schema-actions')
+    await actions.get('.schema-action-more').trigger('click')
+    await actions.findAll('.test-dropdown-menu button').find((button) => button.text() === '删除')!.trigger('click')
+    await flushPromises()
+
+    const modal = view.get('.schema-delete-modal')
+    expect(modal.get('.schema-delete-summary').text()).toContain('确认删除“部件”吗')
+    expect(modal.get('.schema-delete-summary__icon').find('svg').exists()).toBe(true)
+    expect(modal.get('.schema-delete-impact--danger').text()).toContain('删除影响')
+    expect(modal.get('.schema-delete-impact--danger').text()).toContain('dev2')
   })
 })
 
@@ -330,8 +428,8 @@ describe('Schema 列表说明列截断显示与删除脏行兜底', () => {
     const view = mountView()
     await flushPromises()
 
-    const deleteButton = view.findAll('button.schema-action-link--danger')[0]
-    await deleteButton.trigger('click')
+    await view.get('button.schema-action-more').trigger('click')
+    await view.findAll('.test-dropdown-menu button').find((button) => button.text() === '删除')!.trigger('click')
     expect(view.find('.schema-delete-modal').exists()).toBe(true)
 
     const listCallsBefore = vi.mocked(listSchemasPaged).mock.calls.length

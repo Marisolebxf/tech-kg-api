@@ -190,6 +190,17 @@ def state_session(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture(autouse=True)
+def _clear_entity_types_cache():
+    # types() 短 TTL 进程缓存是模块级状态：多个用例都解析到 "dev2"，不清理
+    # 会让后一个用例吃到前一个用例缓存的类型清单（空列表/真实列表互相打架）。
+    import service.entity_search as entity_search_mod
+
+    entity_search_mod._types_cache.clear()
+    yield
+    entity_search_mod._types_cache.clear()
+
+
+@pytest.fixture(autouse=True)
 def _hermetic_embedding_config(monkeypatch: pytest.MonkeyPatch):
     """固定 embedding 配置解析：单测不依赖宿主环境变量（解析只读 env，不触 DB）。
 
@@ -1362,6 +1373,34 @@ def test_types_falls_back_to_graph_labels_without_index(state_session, monkeypat
         {"name": "Org", "count": 7},
         {"name": "Expert", "count": 4},
     ]
+
+
+class _CountingGraph(FakeGraph):
+    """统计 labels() 调用次数的替身：验证 types() 的短 TTL 进程缓存。"""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.labels_calls = 0
+
+    def labels(self) -> list[str]:
+        self.labels_calls += 1
+        return super().labels()
+
+
+def test_types_cached_within_ttl(state_session, monkeypatch) -> None:
+    """types() 短 TTL 缓存：实体列表页反复加载不再逐次打图——未建索引空间的
+    逐标签计数在共享图服务拥塞窗口里是放大器之一。"""
+    graph = _CountingGraph(["Expert", "Org"], {}, counts={"Expert": 4, "Org": 7})
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+    monkeypatch.setattr("service.entity_search._node_count_cache", {})
+
+    service = EntitySearchService(state_session)
+    first = service.types()
+    second = service.types()
+
+    assert second == first == [{"name": "Org", "count": 7}, {"name": "Expert", "count": 4}]
+    assert graph.labels_calls == 1  # 第二次命中进程缓存，不再打图
 
 
 def test_search_graph_vid_works_without_milvus(state_session, monkeypatch):

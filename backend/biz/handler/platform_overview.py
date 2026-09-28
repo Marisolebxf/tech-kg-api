@@ -46,9 +46,10 @@ async def _get_overview(space: str | None = None, actor=None) -> PlatformOvervie
         _ensure_space_access(actor, space)
     result = await asyncio.to_thread(application.get_overview, space)
     if rbac_enabled():
-        # Overview data is cached by space, shared across users. Never mutate
-        # that cached object or expose review entries on a read-only grant.
-        review_spaces = allowed_space_names(actor, action="review") if actor.can_develop else []
+        # Overview data is cached by space, shared across users. Never mutate that
+        # cached object. Review entries follow the view tier (developers also see
+        # shared-production cases read-only); operating them is enforced server-side.
+        review_spaces = allowed_space_names(actor, action="review_view") if actor.can_develop else []
         if space not in review_spaces:
             result = result.model_copy(update={"management_risks": []})
     return result

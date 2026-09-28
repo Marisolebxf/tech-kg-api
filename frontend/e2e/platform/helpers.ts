@@ -1,4 +1,5 @@
 import type { APIRequestContext, Page } from '@playwright/test'
+import { expect } from '@playwright/test'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
@@ -243,9 +244,22 @@ export async function selectArcoScrolled(page: Page, trigger: import('@playwrigh
   throw new Error(`下拉选项「${text}」滚动查找未命中`)
 }
 
-/** 切换右上角全局图空间选择器（.app-space-select）到指定空间；各业务页 watch 联动重载。 */
+/** 切换全局图空间（.app-space-select，0924 起仅平台总览页面包屑行渲染）：
+ * 暂离当前页 → 总览页选择器切换 → 回原路由；业务页重新挂载后按新空间拉数
+ * （与原 watch 联动等价）。 */
 export async function switchGraphSpace(page: Page, space: string): Promise<void> {
-  await selectArcoScrolled(page, page.locator('.app-space-select .arco-select-view-single'), space)
+  const from = new URL(page.url())
+  await gotoRoute(page, '/overview')
+  await page.locator('.app-breadcrumb .app-space-select').waitFor()
+  await selectArcoScrolled(
+    page,
+    page.locator('.app-breadcrumb .app-space-select .arco-select-view-single'),
+    space,
+  )
+  await expect(page.locator('.app-breadcrumb .app-space-select .arco-select-view-value')).toHaveText(space)
+  if (from.pathname !== '/overview') {
+    await gotoRoute(page, from.pathname + from.search + from.hash)
+  }
 }
 
 /** path 路由跳转并等页面骨架渲染（createWebHistory，非 hash 模式）。 */

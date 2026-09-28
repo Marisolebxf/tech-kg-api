@@ -95,24 +95,31 @@ def test_trusted_identity_ignores_browser_roles(review_service):
         identity(role="admin", restricted=True)
 
 
-def test_queue_filters_business_and_shared_production(review_service):
+def test_queue_view_scope_includes_shared_readonly(review_service):
     for space in ("space_a", "space_b", "production", None):
         create_case(review_service, space)
+    # 开发维护查看档=业务空间+共享生产空间；共享空间行只读（canOperate=False）
     own = review_service.list_cases({}, identity())
-    assert own["total"] == 1
-    assert [item["graphSpace"] for item in own["items"]] == ["space_a"]
+    assert own["total"] == 2
+    operate = {item["graphSpace"]: item["canOperate"] for item in own["items"]}
+    assert operate == {"space_a": True, "production": False}
     admin = review_service.list_cases({}, identity(role="admin"))
     assert admin["total"] == 3
+    assert all(item["canOperate"] for item in admin["items"])
 
 
 def test_queue_graph_space_filter_intersects_rbac_spaces(review_service):
-    # 队列页跟随图空间选择：graph_space 过滤与授权空间集合 AND 相交，
+    # 队列页跟随图空间选择：graph_space 过滤与查看档集合 AND 相交，
     # 请求未授权空间得到空列表而非报错（不额外 403）
     for space in ("space_a", "space_b", "production"):
         create_case(review_service, space)
     own = review_service.list_cases({"graph_space": "space_a"}, identity())
     assert own["total"] == 1
     assert own["items"][0]["graphSpace"] == "space_a"
+    # 共享空间：查看档可见（只读行）
+    shared = review_service.list_cases({"graph_space": "production"}, identity())
+    assert shared["total"] == 1
+    assert shared["items"][0]["canOperate"] is False
     assert review_service.list_cases({"graph_space": "space_b"}, identity())["total"] == 0
     admin = review_service.list_cases({"graph_space": "space_b"}, identity(role="admin"))
     assert admin["total"] == 1
@@ -122,7 +129,6 @@ def test_queue_graph_space_filter_intersects_rbac_spaces(review_service):
 @pytest.mark.parametrize(
     "operation",
     [
-        "detail",
         "claim",
         "heartbeat",
         "release",
@@ -132,7 +138,6 @@ def test_queue_graph_space_filter_intersects_rbac_spaces(review_service):
         "direct",
         "cancel",
         "delete",
-        "logs",
         "evidence",
     ],
 )
@@ -140,7 +145,6 @@ def test_every_case_operation_rejects_unreviewable_space(review_service, space, 
     case_id = create_case(review_service, space)
     actor = identity()
     operations = {
-        "detail": lambda: review_service.get_case(case_id, actor),
         "claim": lambda: review_service.claim(case_id, 1, actor),
         "heartbeat": lambda: review_service.heartbeat(case_id, 1, actor),
         "release": lambda: review_service.release(case_id, 1, actor),
@@ -150,7 +154,6 @@ def test_every_case_operation_rejects_unreviewable_space(review_service, space, 
         "direct": lambda: review_service.direct_decide(case_id, 1, False, "", actor),
         "cancel": lambda: review_service.cancel(case_id, 1, "", actor),
         "delete": lambda: review_service.delete_case(case_id, actor),
-        "logs": lambda: review_service.logs(case_id, actor),
         "evidence": lambda: review_service.evidence_upload(
             case_id, "a.pdf", "application/pdf", 1, "a" * 64, actor
         ),
@@ -161,6 +164,30 @@ def test_every_case_operation_rejects_unreviewable_space(review_service, space, 
         row = session.get(ReviewCase, case_id)
         assert row.status == "OPEN"
         assert row.version == 1
+
+
+@pytest.mark.parametrize(
+    "space,viewable,operable",
+    [
+        ("space_a", True, True),
+        ("production", True, False),
+        ("space_b", False, False),
+        (None, False, False),
+    ],
+)
+def test_detail_and_logs_follow_view_tier(review_service, space, viewable, operable):
+    """读路径（detail/logs）按查看档：共享空间可见只读；操作档仍只认业务空间。"""
+    case_id = create_case(review_service, space)
+    developer = identity()
+    if viewable:
+        detail = review_service.get_case(case_id, developer)
+        assert detail["canOperate"] is operable
+        review_service.logs(case_id, developer)
+    else:
+        with pytest.raises((HTTPException, ReviewForbiddenError)):
+            review_service.get_case(case_id, developer)
+        with pytest.raises((HTTPException, ReviewForbiddenError)):
+            review_service.logs(case_id, developer)
 
 
 def test_developer_reviews_own_space_and_admin_reviews_production(review_service):
@@ -197,8 +224,9 @@ async def test_warm_detail_cache_does_not_bypass_space_reassignment(review_servi
     actor = identity()
     response = await handler.production_detail(case_id, actor)
     assert json.loads(response.body)["data"]["id"] == case_id
+    # 移到他人业务空间（查看档也不可见）后热缓存不得放行；移共享空间则只读可见
     with review_service.sf() as session:
-        session.get(ReviewCase, case_id).graph_space = "production"
+        session.get(ReviewCase, case_id).graph_space = "space_b"
         session.commit()
     with pytest.raises(HTTPException) as denied:
         await handler.production_detail(case_id, actor)
@@ -237,7 +265,8 @@ async def test_queue_rechecks_rows_after_direct_sql_move(review_service, monkeyp
     response = await handler.production_queue(actor, **arguments)
     assert json.loads(response.body)["data"]["total"] == 1
     with review_service.sf() as session:
-        session.get(ReviewCase, case_id).graph_space = "production"
+        # 移到他人业务空间：查看档也不可见，队列即时收敛（共享空间则只读可见）
+        session.get(ReviewCase, case_id).graph_space = "space_b"
         session.commit()
     response = await handler.production_queue(actor, **arguments)
     assert json.loads(response.body)["data"]["total"] == 0
@@ -248,7 +277,8 @@ async def test_admin_cached_detail_and_logs_cannot_leak_to_developer(review_serv
 
     monkeypatch.setattr(handler, "production_service", review_service)
     handler._queue_cache_clear()
-    case_id = create_case(review_service, "production")
+    # 他人业务空间的 case 对开发维护两级都不可见（共享空间已改为只读可见，测不出隔离）
+    case_id = create_case(review_service, "space_b")
     for endpoint in (handler.production_detail, handler.case_audit_logs):
         await endpoint(case_id, identity(role="admin"))
         with pytest.raises(HTTPException) as denied:

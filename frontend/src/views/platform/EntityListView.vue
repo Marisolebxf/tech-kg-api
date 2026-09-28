@@ -26,7 +26,7 @@ const PROPERTY_CHIP_LIMIT = 4
 const keyword = ref('')
 const appliedKeyword = ref('')
 const entityType = ref('')
-// 图空间跟随右上角全局选择器（本页不再有空间筛选控件）
+// 图空间跟随平台总览页的全局选择器（本页不再有空间筛选控件）
 const space = computed(() => currentGraphSpace())
 const graphSpaceStore = useGraphSpaceStore()
 const pageSize = ref(10)
@@ -329,7 +329,7 @@ watch(
 .entity-props__more{justify-self:start;padding:4px 8px;border:1px solid #bcd4f7;border-radius:4px;background:#eaf2ff;color:#165dff;font-size:12px;line-height:20px;cursor:pointer}
 .entity-props__more:hover{background:#dcebff}
 .entity-props__empty{color:#c9cdd4;font-size:12px}
-.entity-pagination__info{min-width:0;overflow:hidden;color:#86909c;font-size:12px;line-height:20px;text-overflow:ellipsis;white-space:nowrap}
+.entity-pagination__info{min-width:0;overflow:hidden;margin-left:auto;color:#86909c;font-size:12px;line-height:20px;text-overflow:ellipsis;white-space:nowrap}
 </style>
 
 <style>

@@ -43,7 +43,7 @@ import {
   Textarea as ATextarea,
 } from '@arco-design/web-vue'
 import QueryResultTable from './QueryResultTable.vue'
-import { IconInfoCircle } from '@arco-design/web-vue/es/icon'
+import { IconInfoCircle, IconRefresh } from '@arco-design/web-vue/es/icon'
 import { useAuthStore } from '../../stores/auth'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
 import {
@@ -294,7 +294,7 @@ const processingReason = ref('')
 const processingStartDate = ref('2026-07-12')
 const processingEndDate = ref('2026-07-13')
 const isActionLoading = ref(false)
-// 查询统一跟随顶栏全局图空间。
+// 查询统一跟随平台总览页的全局图空间。
 let graphContextVersion = 0
 
 /** 查询模式：nGQL 直查 | 图算法。 */
@@ -567,7 +567,7 @@ const assetChangeRows = ref<Record<AssetOverviewKey, AssetChangeRow[]>>({
   relation: [],
   property: [],
 })
-// 今日新增数值合计（Σwritten，与资产卡徽标同源）：抽屉明细行受单执行
+// 昨日新增数值合计（Σwritten，与资产卡徽标同源）：抽屉明细行受单执行
 // 上限截断，行数 < 合计时页脚标注「共 N 条 · 展示前 n 条」
 const assetChangeTotals = ref<Partial<Record<AssetOverviewKey, number>>>({})
 function assetChangeFooterText(key: AssetOverviewKey | null): string {
@@ -592,7 +592,7 @@ const relationStructure = ref<StructureItem[]>([])
 
 // 总览两卡片：直连任务/审核队列真实数据（不进 platform_overview 的 60s 缓存），各自容错。
 // 任务卡与图谱构建页同空间口径：默认只看当前图空间（历史无空间任务落默认空间），
-// 不带「全部空间」开关——与图资产/今日新增随全局图空间过滤的语义一致。
+// 不带「全部空间」开关——与图资产/昨日新增随全局图空间过滤的语义一致。
 const overviewJobs = ref<WorkflowJob[]>([])
 const overviewJobsState = ref<'loading' | 'ready' | 'error'>('loading')
 const overviewJobsError = ref('')
@@ -880,7 +880,7 @@ async function handleNgqlQuery(): Promise<void> {
   resetNgqlPage()
 
   try {
-    // 图空间跟随右上角全局选择器（后端按 X-Graph-Space 路由）
+    // 图空间跟随平台总览页的全局选择器（后端按 X-Graph-Space 路由）
     const result = await runNgql(space, statement)
     if (context !== graphContextVersion) return
     ngqlResult.value = result
@@ -1171,7 +1171,8 @@ async function loadPlatformOverview(): Promise<void> {
       pendingBatchCount: data.pendingBatchCount,
       updatedAt: data.updatedAt,
       dataMode: data.dataMode,
-      warnings: data.warnings,
+      // 兜底：旧版本/异常载荷缺 warnings 时模板里 .join 会直接把页面炸掉
+      warnings: data.warnings ?? [],
     }
     // 属性值数据卡片（key=property）为占位统计（待接入），总览页不展示
     assetOverviewGroups.value = data.assetOverviewGroups.filter((item) => item.key !== 'property')
@@ -1199,7 +1200,7 @@ watch(activeTab, (tab) => {
   void loadOverviewCards()
 }, { immediate: true })
 
-// 全局图空间切换后重载已展示的总览（图资产/今日新增/任务卡均按空间隔离）
+// 全局图空间切换后重载已展示的总览（图资产/昨日新增/任务卡均按空间隔离）
 watch(algoSpace, () => {
   if (overviewDataLoaded.value) {
     void loadPlatformOverview()
@@ -1268,7 +1269,7 @@ const pageMeta = computed(() => {
     <main v-if="activeTab === 'overview'" class="platform-content platform-overview">
       <section class="platform-summary-grid" aria-label="实体与关系数据总览">
         <article v-for="group in assetOverviewGroups" :key="group.key" :class="['kg-panel', 'platform-summary-card', `is-${group.key}`]">
-          <header><div><strong>{{ group.title }}</strong><span><i />数据已更新</span></div><button type="button" @click="selectedAssetChange = group.key">查看今日新增 →</button></header>
+          <header><div><strong>{{ group.title }}</strong><span><i />数据已更新</span></div><button type="button" @click="selectedAssetChange = group.key">查看昨日新增 →</button></header>
           <div class="platform-summary-card__main"><section><strong>{{ group.total }}</strong><span>{{ group.totalLabel }}</span></section><section class="is-added"><strong>{{ group.added }}</strong><span>{{ group.addedLabel }}</span></section></div>
         </article>
       </section>
@@ -1708,7 +1709,7 @@ const pageMeta = computed(() => {
               <span v-if="algoJob.finishedAt">完成 {{ formatAlgoTime(algoJob.finishedAt) }}</span>
               <span v-if="algoJob.status !== 'running' && algoJobElapsedText">耗时 {{ algoJobElapsedText }}</span>
               <span v-if="algoJob.driverState">Spark Driver：{{ algoJob.driverState }}</span>
-              <button class="kg-button kg-button--text" type="button" @click="refreshAlgoJob">刷新状态</button>
+              <button class="kg-button kg-button--text" type="button" @click="refreshAlgoJob"><IconRefresh class="refresh-icon" />刷新状态</button>
             </div>
             <div v-if="algoJob.status === 'running'" class="platform-query-algo__job-running" role="status">
               <i class="platform-query-algo__job-spinner" aria-hidden="true"></i>
@@ -1965,15 +1966,15 @@ print(response.json())</pre>
       </template>
     </main>
 
-    <!-- 今日新增抽屉/遮罩必须 Teleport 到 body：祖先 .app-stage 带 backdrop-filter，
+    <!-- 昨日新增抽屉/遮罩必须 Teleport 到 body：祖先 .app-stage 带 backdrop-filter，
          会成为 fixed 后代的 containing block——不传送时 fixed 是相对 .app-stage（顶栏
          之下）定位的，height:100vh 的底部整段被顶出视口，表尾与 footer 永久看不见。 -->
     <Teleport to="body">
       <button v-if="selectedAssetChange" class="asset-change-mask" type="button" aria-label="关闭新增数据详情" @click="selectedAssetChange = null" />
       <aside aria-label="辅助区域 4" v-if="selectedAssetChange && activeAssetOverview" class="asset-change-drawer">
-        <header><div><span>今日图谱数据变化</span><h2>{{ activeAssetOverview.title }}新增明细</h2><p>{{ activeAssetOverview.addedLabel }} {{ activeAssetOverview.added }} · 数据更新至 {{ overviewMeta.updatedAt }}</p></div><button type="button" @click="selectedAssetChange = null">×</button></header>
+        <header><div><span>昨日图谱数据变化</span><h2>{{ activeAssetOverview.title }}新增明细</h2><p>{{ activeAssetOverview.addedLabel }} {{ activeAssetOverview.added }} · 数据更新至 {{ overviewMeta.updatedAt }}</p></div><button type="button" @click="selectedAssetChange = null">×</button></header>
         <section class="asset-change-summary"><article><span>当前总量</span><strong>{{ activeAssetOverview.total }}</strong></article><article><span>{{ activeAssetOverview.addedLabel }}</span><strong>{{ activeAssetOverview.added }}</strong></article></section>
-        <div class="asset-change-table"><table aria-label="数据表"><thead><tr><th>数据类型</th><th>具体对象</th><th>来源</th><th>识别时间</th></tr></thead><tbody><tr v-if="!assetChangeRows[selectedAssetChange].length"><td colspan="4">今日暂无写图记录</td></tr><tr v-for="(row, idx) in assetChangeRows[selectedAssetChange]" :key="`${row.object}-${row.time}`"><td>{{ row.type }}</td><td><a-tooltip :popup-visible="assetTipVisible.has(`obj-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`obj-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><span class="asset-change-object" @mouseenter="showAssetTipIfTruncated(`obj-${idx}`, $event)" @mouseleave="hideAssetTip(`obj-${idx}`)"><strong>{{ row.object }}</strong></span><template #content>{{ row.object }}</template></a-tooltip></td><td><a-tooltip :popup-visible="assetTipVisible.has(`src-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`src-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><code class="asset-change-source" @mouseenter="showAssetTipIfTruncated(`src-${idx}`, $event)" @mouseleave="hideAssetTip(`src-${idx}`)">{{ row.source }}</code><template #content>{{ row.source }}</template></a-tooltip></td><td>{{ row.time }}</td></tr></tbody></table></div>
+        <div class="asset-change-table"><table aria-label="数据表"><thead><tr><th>数据类型</th><th>具体对象</th><th>来源</th><th>识别时间</th></tr></thead><tbody><tr v-if="!assetChangeRows[selectedAssetChange].length"><td colspan="4">昨日暂无写图记录</td></tr><tr v-for="(row, idx) in assetChangeRows[selectedAssetChange]" :key="`${row.object}-${row.time}`"><td>{{ row.type }}</td><td><a-tooltip :popup-visible="assetTipVisible.has(`obj-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`obj-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><span class="asset-change-object" @mouseenter="showAssetTipIfTruncated(`obj-${idx}`, $event)" @mouseleave="hideAssetTip(`obj-${idx}`)"><strong>{{ row.object }}</strong></span><template #content>{{ row.object }}</template></a-tooltip></td><td><a-tooltip :popup-visible="assetTipVisible.has(`src-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`src-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><code class="asset-change-source" @mouseenter="showAssetTipIfTruncated(`src-${idx}`, $event)" @mouseleave="hideAssetTip(`src-${idx}`)">{{ row.source }}</code><template #content>{{ row.source }}</template></a-tooltip></td><td>{{ row.time }}</td></tr></tbody></table></div>
         <footer><span>{{ assetChangeFooterText(selectedAssetChange) }}</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看对应更新任务 →</RouterLink></footer>
       </aside>
     </Teleport>
@@ -2084,9 +2085,10 @@ print(response.json())</pre>
 }
 
 .platform-content {
+  box-sizing: border-box;
   min-height: 0;
   overflow: auto;
-  padding-bottom: 2px;
+  padding-bottom: 16px;
   /* 总览内容常超一屏（资产卡+任务/审核卡+分布图），外层工作区滚动条被隐藏，
      这里必须露出自己的滚动条，否则底部扇形图"看不到" */
   scrollbar-width: thin;

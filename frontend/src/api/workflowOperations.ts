@@ -154,6 +154,8 @@ export interface ProductionReviewCase {
   jobId?: string
   /** 建案时绑定的图空间（产生该 case 的抽取任务所在空间；队列按其过滤）。 */
   graphSpace?: string
+  /** 操作档可见性（RBAC）：false=查看档只读（如开发维护看共享生产空间），按钮禁用、后端仍强校验。 */
+  canOperate?: boolean
   errorType: string; category: string; templateId: string; domain: string; phase: string; riskLevel: 'P0'|'P1'|'P2'; scope: string
   status: ProductionReviewStatus; assigneeId?: string; assigneeName?: string; version: number; slaClaimAt: string; slaResolveAt: string
   diagnosis: string; sourceTable?: string; sourceRecordId?: string; createdAt: string; updatedAt: string

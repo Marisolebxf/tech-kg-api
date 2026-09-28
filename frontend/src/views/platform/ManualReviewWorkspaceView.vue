@@ -120,7 +120,10 @@ const directTitle = computed(() => {
   const subject = `${labelZh(directNodeLabel.value)}实体`
   return isHistory.value ? `${subject}审核结果` : `${subject}入库审核`
 })
+/** 查看档只读 case（如开发维护打开共享生产空间的记录）：仅查看，隐藏裁决操作。 */
+const isReadOnlyCase = computed(() => productionCase.value?.canOperate === false)
 const isEditable = computed(() => {
+  if (isReadOnlyCase.value) return false
   if (isDirectCase.value) return productionCase.value?.status === 'OPEN'
   // 直审模式：OPEN 打开即可裁决（无需领取）；CLAIMED/IN_REVIEW 为存量已领取 case
   return ['OPEN','CLAIMED','IN_REVIEW'].includes(productionCase.value?.status || '')
@@ -628,9 +631,13 @@ const runPrimary = () => {
       <p v-if="feedback" class="rw-feedback">{{ feedback }}</p>
     </main>
 
-    <!-- 底部确认按钮全模板保留；已处理（终态）置灰不可点击；A 类（T_LINK/T_DIRECT）统一为「确认」 -->
+    <!-- 底部确认按钮全模板保留；已处理（终态）置灰不可点击；A 类（T_LINK/T_DIRECT）统一为「确认」；
+         查看档只读 case（共享生产空间）隐藏确认按钮只留提示 -->
     <footer class="rw-foot">
-      <div class="rw-foot__actions">
+      <div v-if="isReadOnlyCase" class="rw-readonly-hint" role="note">
+        当前图空间为共享生产空间：该审核记录仅可查看，裁决需管理员或本业务开发维护人员执行。
+      </div>
+      <div v-else class="rw-foot__actions">
         <button class="primary" type="button" :disabled="isPrimaryDisabled" @click="runPrimary">{{ templateId === 'T_EXTRACT_FAIL' ? primaryActionLabel : '确认' }}</button>
       </div>
     </footer>
@@ -1142,6 +1149,18 @@ const runPrimary = () => {
 .rw-foot > span {
   color: #667085;
   font-size: 11px;
+}
+
+/* 查看档只读提示（共享生产空间的 case）：与列表页 review-readonly-bar 同色系 */
+.rw-readonly-hint {
+  flex: 1;
+  padding: 9px 16px;
+  border: 1px solid #fec84b;
+  border-radius: 6px;
+  background: #fffaeb;
+  color: #b54708;
+  font-size: 12px;
+  line-height: 20px;
 }
 
 .rw-foot__actions {

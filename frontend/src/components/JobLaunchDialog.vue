@@ -39,7 +39,7 @@ const extractBatchSize = ref<string>('')
 const extractSchemas = ref<SchemaDefinition[]>([])
 const schemasLoading = ref(false)
 
-// 图空间默认取右上角全局选择器的当前位置，弹窗内可改。
+// 图空间默认取平台总览页全局选择器的当前位置，弹窗内可改。
 // MySQL 数据源/库默认跟随所选 Schema 的来源绑定（"当前位置"），可改；
 // 二者仅注入脚本 ctx.mysql 与写图空间，读取源仍按 Schema 来源绑定。
 const graphSpace = computed(() => currentGraphSpace())

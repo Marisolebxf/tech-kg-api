@@ -20,6 +20,7 @@ const routeState = vi.hoisted(() => ({ query: {} as Record<string, string> }))
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: routeState.query }) }))
 vi.mock('@arco-design/web-vue/es/icon', () => ({
   IconSearch: { name: 'IconSearch', setup: () => () => null },
+  IconRefresh: { name: 'IconRefresh', setup: () => () => null },
 }))
 // 全局图空间 store：reactive 包装（Vue 对同一 target 缓存同一代理），
 // 用例经 graphSpaceMock.state 改 current 才能触发组件的切空间重拉 watch
@@ -165,9 +166,9 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
 
     await switchToCategoryC(wrapper)
     expect(wrapper.find('.rerun-batch-action').exists()).toBe(true)
-    // 批量重跑按钮单独一行右对齐，不挤在筛选栏里
-    expect(wrapper.find('.review-toolbar-actions .rerun-batch-action').exists()).toBe(false)
-    expect(wrapper.find('.rerun-batch-row .rerun-batch-action').exists()).toBe(true)
+    // 批量重跑按钮在筛选行最左侧（与筛选项同行），不再单独成行
+    expect(wrapper.find('.review-toolbar-actions .rerun-batch-action').exists()).toBe(true)
+    expect(wrapper.find('.rerun-batch-row').exists()).toBe(false)
     expect(wrapper.find('thead .pick-col').exists()).toBe(true)
   })
 
@@ -350,6 +351,69 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     // 执行 ID 纯文本展示，不再跳执行详情页
     expect(wrapper.text()).toContain('EXEC-RERUN-9')
     expect(wrapper.find('.case-log-dl router-link-stub').exists()).toBe(false)
+  })
+})
+
+describe('查看档只读（开发维护 × 共享生产空间）', () => {
+  it('canOperate=false 的行不可勾选/重跑/删除，整页出现只读提示条', async () => {
+    mocks.getProductionReviews.mockReset().mockResolvedValue({
+      items: [
+        { ...caseRow('MR-RO1', 'OPEN'), canOperate: false },
+        { ...caseRow('MR-RO2', 'RERUN_FAILED'), canOperate: false },
+      ],
+      total: 2, page: 1, pageSize: 10,
+    })
+
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+
+    // 整页只读：提示条出现
+    expect(wrapper.get('.review-readonly-bar').text()).toContain('共享生产空间')
+    // 行勾选全部禁用；表头全选也点不亮批量按钮
+    const boxes = rowCheckboxes(wrapper)
+    expect(boxes).toHaveLength(2)
+    for (const box of boxes) {
+      expect((box.element as HTMLInputElement).disabled).toBe(true)
+    }
+    const header = headerCheckbox(wrapper)
+    ;(header.element as HTMLInputElement).checked = true
+    await header.trigger('change')
+    expect(batchButton(wrapper).attributes()).toHaveProperty('disabled')
+    // 操作列三键保留但置灰（不隐藏，布局稳定），悬停说明指向共享空间只读
+    const firstRowButtons = wrapper.findAll('tbody tr')[0].findAll('.review-action-btn')
+    expect(firstRowButtons.map((button) => button.text())).toEqual(['日志', '重跑', '删除'])
+    expect(firstRowButtons[0].attributes().disabled).toBeUndefined()
+    expect(firstRowButtons[1].attributes()).toHaveProperty('disabled')
+    expect(firstRowButtons[1].attributes('title')).toBe('共享生产空间：仅可查看，操作需管理员或本业务开发维护人员')
+    expect(firstRowButtons[2].attributes()).toHaveProperty('disabled')
+  })
+
+  it('canOperate 混合页（不传空间过滤的跨空间全量）不整页只读：只读行无重跑按钮，可操作行保留', async () => {
+    mocks.getProductionReviews.mockReset().mockResolvedValue({
+      items: [
+        caseRow('MR-MIX1', 'OPEN'),
+        { ...caseRow('MR-MIX2', 'OPEN'), canOperate: false },
+      ],
+      total: 2, page: 1, pageSize: 10,
+    })
+
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+
+    expect(wrapper.find('.review-readonly-bar').exists()).toBe(false)
+    const rows = wrapper.findAll('tbody tr')
+    expect(rows[0].findAll('.review-action-btn').map((button) => button.text())).toEqual(['日志', '重跑', '删除'])
+    expect(rows[0].findAll('.review-action-btn')[1].attributes().disabled).toBeUndefined()
+    // 只读行三键保留、重跑/删除置灰（title 指向共享空间只读）
+    expect(rows[1].findAll('.review-action-btn').map((button) => button.text())).toEqual(['日志', '重跑', '删除'])
+    expect(rows[1].findAll('.review-action-btn')[1].attributes()).toHaveProperty('disabled')
+    expect(rows[1].findAll('.review-action-btn')[1].attributes('title')).toBe('共享生产空间：仅可查看，操作需管理员或本业务开发维护人员')
+    // 混合页只读行勾选禁用、可操作行正常
+    const boxes = rowCheckboxes(wrapper)
+    expect((boxes[0].element as HTMLInputElement).disabled).toBe(false)
+    expect((boxes[1].element as HTMLInputElement).disabled).toBe(true)
   })
 })
 

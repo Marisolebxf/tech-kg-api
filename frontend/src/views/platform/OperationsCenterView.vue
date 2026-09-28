@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { IconSearch } from '@arco-design/web-vue/es/icon'
+import { IconRefresh, IconSearch } from '@arco-design/web-vue/es/icon'
 
 import { deleteProductionReview, getExecution, getProductionReview, getProductionReviews, getTask, rerunExtractFailures, TRIGGER_SOURCE_LABEL, type ProcessingInstance, type ProductionReviewCase, type WorkflowExecution } from '../../api/workflowOperations'
 import { currentGraphSpace } from '../../api/currentGraphSpace'
@@ -61,13 +61,17 @@ const REVIEW_TIME_PARAMS: Record<string, string | undefined> = { '全部': undef
 const reviewTimeSort = ref<'default' | 'desc' | 'asc'>(pickSnapshotOption(queueSnapshot?.sort, ['default', 'desc', 'asc'] as const, 'default'))
 const reviewTotal = ref(0)
 /** 队列行 = manual-review-data 的 ReviewRecord + 重跑/删除/跳转所需的原始字段。 */
-type ReviewRow = ReviewRecord & { templateId?: string; rawStatus?: string; jobId?: string }
+type ReviewRow = ReviewRecord & { templateId?: string; rawStatus?: string; jobId?: string; canOperate?: boolean }
 
-/** 可重跑/可删除：与后端 rerun 门控同口径（未处理）。不可操作时按钮置灰禁用而非隐藏（保持操作列布局稳定）。 */
-const isRerunnable = (row: ReviewRow) => row.rawStatus === 'OPEN' || row.rawStatus === 'RERUN_FAILED'
+/** 可重跑/可删除：与后端 rerun 门控同口径（未处理）；查看档只读行（canOperate=false，
+ *  如开发维护看共享生产空间）同样不可操作，后端对操作档仍强校验 403。
+ *  不可操作时按钮置灰禁用而非隐藏（保持操作列布局稳定）。 */
+const isRerunnable = (row: ReviewRow) =>
+  (row.rawStatus === 'OPEN' || row.rawStatus === 'RERUN_FAILED') && row.canOperate !== false
 
 /** 置灰按钮的悬停说明：按记录状态给出不可操作的原因。 */
 function rerunDisabledReason(row: ReviewRow): string {
+  if (row.canOperate === false) return '共享生产空间：仅可查看，操作需管理员或本业务开发维护人员'
   if (row.rawStatus === 'RERUNNING') return '重跑中：等待本次重跑完成后再操作'
   return '已处理：仅「待处理 / 重跑失败」的记录可重跑或删除'
 }
@@ -85,6 +89,11 @@ let reviewRequestId = 0
 let reviewDisposed = false
 
 const reviewRows = computed(() => reviewRecords.value)
+
+/** 当前队列整页只读（查看档，如开发维护切到共享生产空间）：顶部提示条。 */
+const reviewReadOnly = computed(
+  () => reviewRows.value.length > 0 && reviewRows.value.every((row) => row.canOperate === false),
+)
 
 /** 分页状态：服务端分页，翻页/改页大小都会重新拉取当前筛选下的数据。
  *  分页条为共享 ListPagination（共 N 条/每页/跳页样式随组件自带），默认每页 20；
@@ -350,7 +359,7 @@ async function loadReviews() {
       return loadReviews()
     }
     reviewRecords.value = response.items.map((row: ProductionReviewCase) => ({
-      id: row.id, templateId: row.templateId, rawStatus: row.status, jobId: row.jobId || '', batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待处理', status: extractCaseStatusBadge(row.status), updatedAt: fmtReviewTime(row.updatedAt), sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,
+      id: row.id, templateId: row.templateId, rawStatus: row.status, jobId: row.jobId || '', canOperate: row.canOperate !== false, batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待处理', status: extractCaseStatusBadge(row.status), updatedAt: fmtReviewTime(row.updatedAt), sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,
     }))
     reviewLoadError.value = ''
   } catch (error) {
@@ -394,8 +403,9 @@ watch([reviewStatusFilter, reviewKindFilter, reviewTimeFilter], () => {
   void loadReviews()
 })
 
-/** 图空间切换：待审核队列跟随当前空间重新拉取（换的是整份数据，页码归 1；空间是全局态，不进 sessionStorage 快照，
- *  与其他业务页「切空间即重查」同口径）；同时清掉旧空间的批量操作对象与弹窗/日志抽屉，防止跨空间误操作。 */
+/** 图空间切换（总览页全局选择器，本页不设控件）：待审核队列跟随当前空间重新拉取
+ *  （换的是整份数据，页码归 1；空间是全局态，不进 sessionStorage 快照，与其他业务页
+ *  「切空间即重查」同口径）；同时清掉旧空间的批量操作对象与弹窗/日志抽屉，防止跨空间误操作。 */
 watch(() => graphSpaceStore.current, () => {
   if (props.mode !== 'review') return
   reviewPage.value = 1
@@ -432,6 +442,14 @@ onMounted(loadReviews)
       </nav>
       <div class="review-toolbar-actions">
         <div class="ops-filter is-review review-filter-row">
+          <button
+            v-if="reviewCategory === 'C'"
+            class="rerun-batch-action review-filter-batch"
+            type="button"
+            :disabled="!rerunSelection.size || rerunSubmitting"
+            :title="!rerunSelection.size ? '先勾选列表左侧的失败记录（仅「待处理 / 重跑失败」可勾选），勾选后按钮点亮' : undefined"
+            @click="rerunSelected()"
+          >{{ rerunSubmitting ? '下发中…' : `批量重跑（${rerunSelection.size}）` }}</button>
           <div class="review-filter-field">
             <span class="review-filter-label">状态</span>
             <a-select v-model="reviewStatusFilter" class="review-filter-select" :options="reviewStatusOptions" />
@@ -449,14 +467,9 @@ onMounted(loadReviews)
       </div>
     </div>
 
-    <!-- 批量重跑：单独一行右对齐（不挤在筛选栏里） -->
-    <div v-if="reviewCategory === 'C'" class="rerun-batch-row">
-      <button
-        class="rerun-batch-action"
-        type="button"
-        :disabled="!rerunSelection.size || rerunSubmitting"
-        @click="rerunSelected()"
-      >{{ rerunSubmitting ? '下发中…' : `批量重跑（${rerunSelection.size}）` }}</button>
+    <!-- 查看档只读提示（开发维护切到共享生产空间）：整页不可操作 -->
+    <div v-if="reviewReadOnly" class="review-readonly-bar" role="note">
+      当前图空间为共享生产空间：人工审核仅可查看，操作需管理员或本业务开发维护人员执行。
     </div>
 
     <section class="ops-panel">
@@ -487,6 +500,7 @@ onMounted(loadReviews)
           <tr>
             <th v-if="reviewCategory === 'C'" class="pick-col"><input aria-label="checkbox-input"
               type="checkbox"
+              title="全选当前页可重跑的失败记录（仅「待处理 / 重跑失败」状态可勾选）"
               :checked="rerunAllChecked"
               :indeterminate="rerunSomeChecked"
               @change="toggleRerunPickAll"
@@ -505,6 +519,7 @@ onMounted(loadReviews)
             <td v-if="reviewCategory === 'C'" class="pick-col"><input aria-label="checkbox-input"
               type="checkbox"
               :disabled="!isRerunnable(row)"
+              :title="!isRerunnable(row) ? rerunDisabledReason(row) : undefined"
               :checked="rerunSelection.has(row.id)"
               @change="((event?: Event) => toggleRerunPick(row.id, Boolean((event?.target as HTMLInputElement)?.checked)))"
             /></td>
@@ -550,7 +565,7 @@ onMounted(loadReviews)
               <span v-if="reviewLoading" role="status">正在加载人工审核记录…</span>
               <div v-else-if="reviewLoadError" role="alert">
                 <p>{{ reviewLoadError }}</p>
-                <button type="button" class="link" @click="loadReviews">重新加载</button>
+                <button type="button" class="link" @click="loadReviews"><IconRefresh class="refresh-icon" />重新加载</button>
               </div>
               <span v-else>{{ reviewStatusFilter === '全部' && reviewKindFilter === '全部' && reviewTimeFilter === '全部' && !keyword ? '暂无人工处理记录' : '暂无符合条件的记录' }}</span>
             </td>
@@ -566,7 +581,21 @@ onMounted(loadReviews)
         :page-size="reviewPageSize"
         @change="changeReviewPage"
         @change-size="changeReviewPageSize"
-      />
+      >
+        <template #summary="{ totalPages }">
+          <!-- 勾选后表格左下角出现重跑确认（与右侧分页信息同条） -->
+          <span v-if="reviewCategory === 'C' && rerunSelection.size" class="rerun-confirm-bar">
+            已选 {{ rerunSelection.size }} 条失败记录
+            <button
+              class="rerun-batch-action"
+              type="button"
+              :disabled="rerunSubmitting"
+              @click="rerunSelected()"
+            >{{ rerunSubmitting ? '下发中…' : '确认重跑' }}</button>
+          </span>
+          <span class="review-page-summary">共 {{ reviewTotal }} 条 · 第 {{ reviewPage }} / {{ totalPages }} 页</span>
+        </template>
+      </ListPagination>
     </section>
 
     <a-modal
@@ -687,7 +716,6 @@ onMounted(loadReviews)
 .review-status{display:inline-flex;align-items:center;gap:6px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.review-status::before{display:block;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
 .review-status.is-待处理,.review-status.is-已完成,.review-status.is-已撤销,.review-status.is-已驳回{background:transparent}
 .review-risk-explain{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:16px}.review-risk-explain>div{gap:4px;padding:8px 16px;border-radius:6px;background:#f7f8fa}.review-risk-explain strong{font-size:14px;line-height:22px}.review-risk-explain span,.review-confidence-cell>span{font-size:12px;line-height:20px}
-.review-pagination{height:56px;box-sizing:border-box;padding:12px 16px;font-size:12px;line-height:20px}.review-pagination :deep(.arco-pagination-item){min-width:28px;height:28px;border-radius:4px;font-size:12px;line-height:20px}.review-pagination :deep(.arco-pagination-item-active){background:#165dff;color:#fff}
 .review-drawer{width:min(640px,calc(100vw - 48px));background:#fff}.review-drawer>header{height:56px;box-sizing:border-box;padding:8px 24px}.review-body{padding:24px}.review-body section,.review-compare article{padding:16px;border-radius:6px}.review-compare{gap:16px;margin:16px 0}
 .review-drawer>footer{height:64px;box-sizing:border-box;gap:16px;padding:0 24px}.review-drawer>footer button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
 .ops-filter :deep(.arco-form-item){box-sizing:border-box;width:100%;min-width:0;margin:0!important}
@@ -707,14 +735,14 @@ onMounted(loadReviews)
 .ops-filter :deep(.arco-select-view-value){min-width:0;line-height:30px}
 @media(max-width:900px){.ops-filter,.ops-filter.is-review{grid-template-columns:1fr}.review-risk-explain{grid-template-columns:1fr}}
 /* 人工审核一级切换与筛选工具栏沿用 Schema 管理页的二级分段按钮。 */
-.review-tabs{display:flex;box-sizing:border-box;width:100%;min-height:40px;margin-bottom:16px;padding:0;border:0;background:transparent;align-items:center;justify-content:space-between;gap:16px;flex:0 0 auto;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;white-space:nowrap}
+.review-tabs{display:flex;box-sizing:border-box;width:100%;margin-bottom:16px;padding:0;border:0;background:transparent;flex-direction:column;align-items:flex-start;justify-content:flex-start;gap:12px;flex:0 0 auto}
 .review-tabs>nav{display:flex;box-sizing:border-box;height:40px;padding:4px;border-radius:4px;background:#f2f3f5;flex:0 0 auto;overflow:visible}
 .review-tabs>nav button{display:inline-flex;box-sizing:border-box;align-items:center;justify-content:center;width:120px;height:32px;padding:5px 16px;border:0;border-radius:4px;background:transparent;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;text-align:center}
 .review-tabs>nav button+button{border-left:1px solid #c9cdd4}
 .review-tabs>nav button.active{border-left-color:transparent;background:#fff;color:#165dff;font-weight:500}
 .review-tabs>nav button.active+button{border-left-color:transparent}
 .review-tabs>nav button:hover:not(.active){background:#fff;color:#165dff}
-.review-toolbar-actions{display:flex;min-width:0;align-items:center;justify-content:flex-end;gap:16px;margin-left:auto;flex:0 0 auto;flex-wrap:nowrap}
+.review-toolbar-actions{display:flex;min-width:0;align-items:center;justify-content:flex-start;gap:16px;flex:0 0 auto;flex-wrap:nowrap}
 .review-tabs .ops-filter.is-review{display:flex;box-sizing:border-box;width:auto;min-width:0;align-items:center;grid-template-columns:none;gap:16px!important;padding:0!important;border:0;background:transparent;flex:0 0 auto;flex-wrap:nowrap}
 .review-filter-row :deep(.review-filter-select.arco-select-view){flex:0 0 160px;width:160px}
 .review-filter-row :deep(.review-filter-search.arco-input-wrapper){flex:0 0 280px;width:280px}
@@ -722,8 +750,11 @@ onMounted(loadReviews)
 .ops-review-table-scroll td{color:#344763;font-size:14px;line-height:22px;font-weight:400;vertical-align:middle}
 .ops-review-table-scroll td>b,.ops-review-table-scroll td>strong{font-weight:400}
 /* 抽取失败重跑：批量重跑按钮 / 重跑反馈条 / 状态徽标扩展 */
-/* 批量重跑单独一行右对齐（贴合分段切换行下方，负 margin 收紧与上行的间距） */
-.rerun-batch-row{display:flex;box-sizing:border-box;width:100%;min-height:32px;margin:-8px 0 12px;align-items:center;justify-content:flex-end;flex:0 0 auto}
+/* 批量重跑按钮：筛选行最左侧；勾选后表格左下角出现重跑确认条（与右侧分页信息同条） */
+.review-filter-batch{flex:0 0 auto}
+.rerun-confirm-bar{display:inline-flex;align-items:center;gap:8px;flex:0 0 auto;color:#4e5969;font-size:13px;line-height:22px;white-space:nowrap}
+.rerun-confirm-bar .rerun-batch-action{height:28px;padding:0 12px;font-size:13px;line-height:20px}
+.review-pagination .review-page-summary{margin-left:auto;white-space:nowrap}
 .rerun-batch-action{height:32px;padding:0 16px;border:1px solid #165dff;border-radius:4px;background:#165dff;color:#fff;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
 .rerun-batch-action:hover:not(:disabled){border-color:#4080ff;background:#4080ff}
 .rerun-batch-action:active:not(:disabled){border-color:#0e42d2;background:#0e42d2}
@@ -732,6 +763,8 @@ onMounted(loadReviews)
 .rerun-feedback.is-error{border-color:#f5b8b3;background:#fef3f2;color:#b42318}
 .rerun-feedback.is-warning{border-color:#fec84b;background:#fffaeb;color:#b54708}
 .rerun-feedback-close{margin-left:auto;width:22px;height:22px;border:0;border-radius:4px;background:transparent;color:inherit;font-size:14px;cursor:pointer}
+/* 查看档只读提示条（共享生产空间）：与 rerun-feedback.is-warning 同色系 */
+.review-readonly-bar{flex:0 0 auto;padding:9px 16px;border:1px solid #fec84b;border-radius:6px;background:#fffaeb;color:#b54708;font-size:12px;line-height:20px;margin-bottom:10px}
 .rerun-confirm-text{margin:0;color:#4e5969;font-size:13px;line-height:22px}
 .review-status.is-重跑中,.review-status.is-执行中{color:#175cd3}
 .review-status.is-重跑失败,.review-status.is-失败{color:#b42318}

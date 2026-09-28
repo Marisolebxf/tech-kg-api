@@ -178,9 +178,12 @@ test.describe.serial('N. 一对一脚本全量管道', () => {
     // UI 表单建 1 个实体（Paper）：新空间全流程（幂等：已存在则跳过 UI 建）
     await page.goto('/schema')
     await page.waitForLoadState('networkidle')
-    // 空间经顶栏全局选择器切换（页面/弹窗内均无空间控件），提交固定落当前全局空间
+    // 空间经平台总览页的全局选择器切换（页面/弹窗内均无空间控件），提交固定
+    // 落当前全局空间。switchGraphSpace 内已核选择器选中值，这里以回到 /schema
+    // 后按新空间拉列表的实际请求收尾核对
+    const spaceLoad = page.waitForRequest((r) => r.url().includes(`graphSpace=${SPACE}`))
     await switchGraphSpace(page, SPACE)
-    await expect(page.locator('.app-space-select .arco-select-view-value')).toHaveText(SPACE)
+    await spaceLoad
     await page.waitForTimeout(800)
     let uiPaper = await apiMust<any>(request, 'GET', `/schema-management/schemas?graphSpace=${SPACE}&keyword=Paper`, undefined, '查 Paper')
     if (!(uiPaper.items ?? []).length) {

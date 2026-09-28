@@ -30,6 +30,7 @@ vi.mock('../../../composables/use-toast', () => ({ useToast: () => ({ showToast:
 vi.mock('@arco-design/web-vue/es/icon', () => ({
   IconSearch: { template: '<i />' },
   IconInfoCircle: { template: '<i />' },
+  IconRefresh: { template: '<i />' },
 }))
 
 // v-model 透传 stub：native select/option 同步值，不依赖 Arco 内部实现（口径同 SchemaBrowserLimitHint）

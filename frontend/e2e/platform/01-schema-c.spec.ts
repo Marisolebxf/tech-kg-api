@@ -68,14 +68,19 @@ test.describe.serial('C. Schema 管理与属性管理', () => {
   })
 
   test('C1 列表与拓扑加载 + 属性一等公民展示', async ({ page, request }) => {
+    // 全局空间默认 dev2（免登录模式无用户维度不落盘、选择器仅平台总览页渲染，
+    // 以页面实际请求的 graphSpace 参数核对）
+    const dev2Load = page.waitForRequest(
+      (r) => r.url().includes('/schema-management/schemas') && /[?&]graphSpace=dev2(&|$)/.test(r.url()),
+    )
     await page.goto('/schema')
     await page.waitForLoadState('networkidle')
+    await dev2Load
 
-    // 拓扑画布 + 顶栏全局图空间选择器（#253 后拓扑默认收起，先点「展开」再断言画布）
+    // 拓扑画布（#253 后拓扑默认收起，先点「展开」再断言画布）
     await expect(page.getByText('Schema 拓扑总览')).toBeVisible()
     await page.locator('.schema-topology-toggle').click()
     await expect(page.locator('[aria-label="Schema 实体关系拓扑"]')).toBeVisible()
-    await expect(page.locator('.app-space-select')).toBeVisible()
 
     // 两个 Tab 可切换，行数与 API 一致
     const data = await apiMust<any>(

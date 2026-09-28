@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
@@ -20,6 +21,11 @@ from biz.schemas.platform_overview import (
     StructureMember,
 )
 from infra.graph_db import get_trs_graph_client
+from infra.graph_db.client import is_known_no_index, is_no_index_error, mark_no_index
+
+# 今日新增图反查的单条查询读超时（秒）：反查任一环失败只是该执行退回聚合降级行，
+# 不该用默认 30s 在共享图服务拥塞窗口里把总览冷算拖到分钟级（0924 实测 30s×2=60s+）。
+_SWEEP_QUERY_TIMEOUT_SECONDS = float(os.getenv("PLATFORM_OVERVIEW_QUERY_TIMEOUT_SECONDS", "8"))
 
 logger = logging.getLogger(__name__)
 
@@ -63,59 +69,36 @@ class TRSGraphStatsProvider:
                     logger.exception("关闭图客户端失败")
 
     def _stats_via_client(self, client: Any) -> GraphStatsSnapshot:
-        # 优先用 SHOW STATS：单条 nGQL 一次性返回所有 Tag/Edge 计数与总数（NebulaGraph 预计算，
+        # SHOW STATS：单条 nGQL 一次性返回所有 Tag/Edge 计数与总数（NebulaGraph 预计算，
         # 毫秒级）。比逐 label 调 node_count / 逐 edge_type 调 edge_count（N 次串行 HTTP，
-        # 实测 ~57s）快 4 个数量级。SHOW STATS 需要 SUBMIT JOB STATS 已跑过；若返回空或抛错，
-        # 回退到逐个计数。
+        # 实测 ~57s）快 4 个数量级。SHOW STATS 需要 SUBMIT JOB STATS 已跑过。
+        #
+        # 走 stats_snapshot()（模块级 300s 快照 + 单飞，实体列表浏览同源）而非每次
+        # 直查：总览缓存过期高频回源时不再每分钟多打一遍 SHOW STATS 挤占共享会话池
+        # （0924 实测拥塞窗口内单次冷算被排队超时拖到 60s+）。统计本就只反映最近
+        # 一次 SUBMIT JOB STATS，300s 滞后可接受。快照不可用才回退 REST 逐项计数。
         try:
-            result = client.execute_query("SHOW STATS")
-            nodes: dict[str, int] = {}
-            edges: dict[str, int] = {}
-            total_nodes = 0
-            total_edges = 0
-            for rec in result.records:
-                rtype = rec.get("Type")
-                name = rec.get("Name")
-                count = int(rec.get("Count", 0) or 0)
-                if rtype == "Tag" and name:
-                    nodes[name] = count
-                elif rtype == "Edge" and name:
-                    edges[name] = count
-                elif rtype == "Space":
-                    if name == "vertices":
-                        total_nodes = count
-                    elif name == "edges":
-                        total_edges = count
+            snap = client.stats_snapshot()
+            nodes = dict(snap["tags"])
+            edges = dict(snap["edges"])
             if not nodes and not edges:
-                raise RuntimeError("SHOW STATS returned no rows")
+                raise RuntimeError("SHOW STATS snapshot empty")
             return GraphStatsSnapshot(
-                total_nodes=total_nodes or sum(nodes.values()),
-                total_edges=total_edges or sum(edges.values()),
+                total_nodes=snap["total_nodes"],
+                total_edges=snap["total_edges"],
                 nodes=nodes,
                 edges=edges,
             )
         except Exception as exc:
-            logger.warning("SHOW STATS 失败，先试统计快照缓存，再回退逐项计数: %s", exc)
-            # ① 客户端 300s 统计快照缓存（模块级按空间共享：实体列表浏览等
-            #    可能刚成功取过）——stats 任务卡死时总览仍能秒回
-            try:
-                snap = client.stats_snapshot()
-                return GraphStatsSnapshot(
-                    total_nodes=snap["total_nodes"],
-                    total_edges=snap["total_edges"],
-                    nodes=dict(snap["tags"]),
-                    edges=dict(snap["edges"]),
-                )
-            except Exception:  # noqa: BLE001 — 缓存也没有才走 REST 逐项计数
-                logger.warning("统计快照缓存不可用，回退 REST 逐项计数（会慢）")
-                labels = client.labels()
-                edge_types = client.edge_types()
-                return GraphStatsSnapshot(
-                    total_nodes=client.node_count(),
-                    total_edges=client.edge_count(),
-                    nodes={label: client.node_count(label) for label in labels},
-                    edges={edge_type: client.edge_count(edge_type) for edge_type in edge_types},
-                )
+            logger.warning("SHOW STATS 快照不可用，回退 REST 逐项计数（会慢）: %s", exc)
+            labels = client.labels()
+            edge_types = client.edge_types()
+            return GraphStatsSnapshot(
+                total_nodes=client.node_count(),
+                total_edges=client.edge_count(),
+                nodes={label: client.node_count(label) for label in labels},
+                edges={edge_type: client.edge_count(edge_type) for edge_type in edge_types},
+            )
 
 
 def _format_count(value: int) -> str:
@@ -128,7 +111,7 @@ def _format_count(value: int) -> str:
 
 @dataclass(frozen=True, slots=True)
 class ExtractExecutionInfo:
-    """当日一次完成执行的图反查描述（今日新增明细按图内对象逐行展示）。
+    """统计日（昨日）一次完成执行的图反查描述（昨日新增明细按图内对象逐行展示）。
 
     执行 output 只带 written 计数、无逐对象清单；明细行改按 schemaKey 对应
     的 tag/边类型 + 时间窗（源表水位 ~ 完成时刻）反查图，拿到每个对象的
@@ -145,10 +128,10 @@ class ExtractExecutionInfo:
 
 
 @dataclass(frozen=True, slots=True)
-class TodayChangesSnapshot:
-    """今日写图增量（来自工作流控制库，按图空间过滤）。
+class DayChangesSnapshot:
+    """昨日写图增量（来自工作流控制库，按图空间过滤）。
 
-    entity/relation_added 为今日完成执行的 ``output.sources[].written`` 合计；
+    entity/relation_added 为昨日完成执行的 ``output.sources[].written`` 合计；
     running_count 为当前 RUNNING 执行数；*_rows 为新增明细行——图反查成功时
     为逐对象行（数据类型=五类桶、具体对象=name/两端名、来源=source_table），
     失败时退回 ``*_executions`` 里各执行携带的聚合降级行。
@@ -163,14 +146,22 @@ class TodayChangesSnapshot:
     relation_executions: list[ExtractExecutionInfo] = field(default_factory=list)
 
 
-class TodayChangesProvider(Protocol):
-    def get_today_changes(self, space: str | None = None) -> TodayChangesSnapshot: ...
+class DayChangesProvider(Protocol):
+    def get_day_changes(self, space: str | None = None) -> DayChangesSnapshot: ...
+
+    def running_count(self, space: str | None = None) -> int: ...
 
 
 def _execution_space(record: dict[str, Any]) -> str:
     """执行记录的目标图空间：调度下发记 ``graph_space``、手动/重跑记 ``graphSpace``。"""
     payload = record.get("payload") or {}
     return str(payload.get("graph_space") or payload.get("graphSpace") or "")
+
+
+def _space_matches(record: dict[str, Any], target_space: str, default_space: str) -> bool:
+    """执行归属当前空间：显式空间相等，或旧执行未记空间且当前即默认空间。"""
+    space = _execution_space(record)
+    return space == target_space or (not space and target_space == default_space)
 
 
 def _written_of(output: dict[str, Any]) -> int:
@@ -180,11 +171,11 @@ def _written_of(output: dict[str, Any]) -> int:
 def parse_execution_records(
     payloads: list[str],
     *,
-    today: str,
+    day: str,
     target_space: str,
     default_space: str,
-) -> TodayChangesSnapshot:
-    """从控制库执行记录 JSON 解析今日写图增量（纯函数，便于单测）。
+) -> DayChangesSnapshot:
+    """从控制库执行记录 JSON 解析统计日（昨日）写图增量（纯函数，便于单测）。
 
     只统计 ``target_space`` 空间的执行；未记录空间的旧执行按默认空间归属。
     明细行列语义对齐 kgetl 演示行：类型 = Schema 名、变更内容 = 新增 + schemaKey、
@@ -205,8 +196,7 @@ def parse_execution_records(
             continue
         if not isinstance(record, dict):
             continue
-        space = _execution_space(record)
-        if space != target_space and not (not space and target_space == default_space):
+        if not _space_matches(record, target_space, default_space):
             continue
         status = str(record.get("status") or "")
         if status == "RUNNING":
@@ -215,7 +205,7 @@ def parse_execution_records(
         if status != "COMPLETED":
             continue
         completed_at = str(record.get("completedAt") or "")
-        if completed_at[:10] != today:
+        if completed_at[:10] != day:
             continue
         output = record.get("output") or {}
         kind = str(output.get("kind") or "")
@@ -232,7 +222,7 @@ def parse_execution_records(
         )
         display_label = schema_label or ("实体 Schema" if kind == "entity" else "关系 Schema")
         change = f"新增 {schema_key}"
-        completed_time = completed_at[11:19] or "-"
+        completed_time = completed_at[5:19] or "-"
         target_rows = entity_rows if kind == "entity" else relation_rows
         # 一次执行绑定多个来源表时按表拆行（来源列各自取本表名），只出 written>0 的表
         exec_rows: list[AssetChangeRow] = []
@@ -276,7 +266,7 @@ def parse_execution_records(
     # 明细按完成时间倒序（最新写图在前）
     entity_rows.sort(key=lambda pair: pair[0], reverse=True)
     relation_rows.sort(key=lambda pair: pair[0], reverse=True)
-    return TodayChangesSnapshot(
+    return DayChangesSnapshot(
         entity_added=entity_added,
         relation_added=relation_added,
         running_count=running,
@@ -287,17 +277,73 @@ def parse_execution_records(
     )
 
 
-class WorkflowControlTodayChangesProvider:
-    """默认实现：从工作流控制库（techkg_control.workflow_executions）读今日增量。
+class WorkflowControlDayChangesProvider:
+    """默认实现：从工作流控制库（techkg_control.workflow_executions）读昨日增量。
 
     覆盖平台唯一写图通道 ``kg.schema.extract`` 的执行记录；直连 ETL 脚本与
     T_DIRECT 审核直写不经过控制库，不计入（明细行口径即任务中心执行历史）。
+    昨日是闭合窗口——统计日结束后不会再有新执行落进该窗口，结果按
+    (空间, 日期) 进程内缓存到当天结束：每个 worker 每天最多冷算一次
+    （~秒级图反查），其后全天命中缓存，替代此前 60s 缓存每分钟可能重付全款。
     """
 
     # 抽取执行最长可跑数小时：取 7 天窗口兜住跨日完成的长执行
     _LOOKBACK_DAYS = 7
 
-    def get_today_changes(self, space: str | None = None) -> TodayChangesSnapshot:
+    def __init__(self) -> None:
+        self._cached_day: str | None = None
+        self._cached: dict[str | None, DayChangesSnapshot] = {}
+
+    def _current_day(self) -> str:
+        """统计日 = 容器本地日期的昨天（独立方法便于单测冻结日期）。"""
+        return (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    def get_day_changes(self, space: str | None = None) -> DayChangesSnapshot:
+        day = self._current_day()
+        if self._cached_day == day:
+            cached = self._cached.get(space)
+            if cached is not None:
+                return cached
+        snapshot = self._load(day, space)
+        if self._cached_day != day:
+            # 跨日翻页：旧统计日的缓存整体作废
+            self._cached_day = day
+            self._cached = {}
+        self._cached[space] = snapshot
+        return snapshot
+
+    def running_count(self, space: str | None = None) -> int:
+        """当前 RUNNING 执行数（实时短查）：日快照缓存到当天结束，「N 个执行
+        运行中」不能随快照冻结一整天；外层 60s 结果缓存内每次装配最多实查一次。"""
+        from sqlalchemy import text
+
+        from infra.graph_db.config import TRSGraphSettings
+        from infra.workflow_mysql import get_workflow_engine
+
+        target_space = space or TRSGraphSettings.from_env().space
+        default_space = TRSGraphSettings.from_env().space
+        now = datetime.now().astimezone()
+        since = (now - timedelta(days=self._LOOKBACK_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
+        engine = get_workflow_engine()
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    "SELECT payload FROM workflow_executions "
+                    "WHERE status = 'RUNNING' AND started_at >= :since"
+                ),
+                {"since": since},
+            ).fetchall()
+        count = 0
+        for row in rows:
+            try:
+                record = json.loads(row[0])
+            except (TypeError, ValueError):
+                continue
+            if isinstance(record, dict) and _space_matches(record, target_space, default_space):
+                count += 1
+        return count
+
+    def _load(self, day: str, space: str | None) -> DayChangesSnapshot:
         from sqlalchemy import text
 
         from infra.graph_db.config import TRSGraphSettings
@@ -317,10 +363,10 @@ class WorkflowControlTodayChangesProvider:
                 {"since": since},
             )
             payloads = [row[0] for row in result.fetchall()]
-        return enrich_today_rows_with_graph(
+        return enrich_day_rows_with_graph(
             parse_execution_records(
                 payloads,
-                today=now.strftime("%Y-%m-%d"),
+                day=day,
                 target_space=target_space,
                 default_space=default_space,
             ),
@@ -328,11 +374,12 @@ class WorkflowControlTodayChangesProvider:
         )
 
 
-# ---- 今日新增明细行：按图内对象逐行展示（图反查） ------------------------------
+# ---- 昨日新增明细行：按图内对象逐行展示（图反查） ------------------------------
 # 单次执行的对象行/端点 vid 上限：防大时间窗把明细表与查询打爆（抽取 written
 # 通常个位~百级；超限截断，行数语义见抽屉 footer）
 _OBJECT_ROW_CAP = 50
-_ENDPOINT_CAP = 40
+# 端点名批量 FETCH 的单批 vid 数：合并此前逐 vid 一次 FETCH 的 ~百次串行 HTTP
+_FETCH_PROP_BATCH = 50
 # 抽屉最终展示上限（实体/关系各自去重后）：当日多执行合计行数超限时统一截到
 # 同一上限，两个抽屉的「展示前 n 条」保持一致，且按识别时间倒序取最新
 _DISPLAY_ROW_CAP = 50
@@ -358,8 +405,9 @@ def _vertex_display_name(props: dict[str, Any], vid: str) -> str:
     return vid
 
 
-def _time_hhmmss(value: Any, fallback: str) -> str:
-    return str(value or "")[11:19] or fallback
+def _time_short(value: Any, fallback: str) -> str:
+    """识别时间带月日（MM-DD HH:MM:SS）：昨日窗口跨天后只剩时分秒有歧义。"""
+    return str(value or "")[5:19] or fallback
 
 
 def _flatten_vertex_props(vertex: Any) -> dict[str, Any]:
@@ -393,7 +441,7 @@ def _graph_time_prop(client: Any, kind: str, name: str, cache: dict[tuple[str, s
         statement = f"DESC TAG `{name}`" if kind == "entity" else f"DESC EDGE `{name}`"
         types = {
             str(rec.get("Field")): str(rec.get("Type") or "string").lower()
-            for rec in client.execute_query(statement).records
+            for rec in client.execute_query(statement, timeout=_SWEEP_QUERY_TIMEOUT_SECONDS).records
         }
     except Exception:
         types = {}
@@ -429,15 +477,21 @@ def _entity_object_rows(
     time_prop = _graph_time_prop(client, "entity", tag, time_props)
     if not time_prop:
         return None, []
+    space = getattr(client, "space", "")
+    # 无索引负缓存：-1005 是确定性失败（图服务侧还自动重试放大），TTL 内不再重发
+    if space and is_known_no_index(space, "lookup", f"{tag}.{time_prop}"):
+        return None, []
     statement = (
         f'LOOKUP ON `{tag}` WHERE `{tag}`.`{time_prop}` >= "{execution.window_lo}" '
         f'AND `{tag}`.`{time_prop}` <= "{execution.completed_at}" '
         "YIELD id(vertex) AS vid, properties(vertex) AS props"
     )
     try:
-        records = client.execute_query(statement).records
-    except Exception:
+        records = client.execute_query(statement, timeout=_SWEEP_QUERY_TIMEOUT_SECONDS).records
+    except Exception as exc:
         # tag 无任何索引（LOOKUP 400）或属性形态不符——退回聚合行
+        if space and is_no_index_error(exc):
+            mark_no_index(space, "lookup", f"{tag}.{time_prop}")
         return None, []
     # 数据类型/变更内容列都用单个 Schema 的目录中文名（与图谱资产构成图同口径），
     # 查不到目录名时退原 tag 名
@@ -454,7 +508,7 @@ def _entity_object_rows(
                 object=_vertex_display_name(props, vid),
                 change=f"新增 {type_label}",
                 source=str(props.get("source_table") or fallback_source),
-                time=_time_hhmmss(props.get(time_prop), execution.completed_at[11:19]),
+                time=_time_short(props.get(time_prop), execution.completed_at[5:19]),
             )
         )
         vids.append(vid)
@@ -492,15 +546,23 @@ def _relation_edges(
             edges.append((src, dst, props))
 
     if time_prop:
-        statement = (
-            f'LOOKUP ON `{edge_type}` WHERE `{edge_type}`.`{time_prop}` >= "{execution.window_lo}" '
-            f'AND `{edge_type}`.`{time_prop}` <= "{execution.completed_at}" '
-            "YIELD src(edge) AS src, dst(edge) AS dst, properties(edge) AS eprops"
-        )
-        try:
-            _collect(client.execute_query(statement).records, window_filter=False)
-        except Exception:
-            pass  # 边类型无索引（400）→ 走 GO FROM 兜底
+        space = getattr(client, "space", "")
+        # 无索引负缓存：-1005 是确定性失败（图服务侧还自动重试放大），TTL 内不再重发
+        if not (space and is_known_no_index(space, "lookup", f"{edge_type}.{time_prop}")):
+            statement = (
+                f'LOOKUP ON `{edge_type}` WHERE `{edge_type}`.`{time_prop}` >= "{execution.window_lo}" '
+                f'AND `{edge_type}`.`{time_prop}` <= "{execution.completed_at}" '
+                "YIELD src(edge) AS src, dst(edge) AS dst, properties(edge) AS eprops"
+            )
+            try:
+                _collect(
+                    client.execute_query(statement, timeout=_SWEEP_QUERY_TIMEOUT_SECONDS).records,
+                    window_filter=False,
+                )
+            except Exception as exc:
+                if space and is_no_index_error(exc):
+                    mark_no_index(space, "lookup", f"{edge_type}.{time_prop}")
+                # 边类型无索引（400）→ 走 GO FROM 兜底
     if not edges and seed_vids:
         vid_list = ", ".join(f'"{vid}"' for vid in seed_vids[:_OBJECT_ROW_CAP])
         statement = (
@@ -508,21 +570,36 @@ def _relation_edges(
             "YIELD src(edge) AS src, dst(edge) AS dst, properties(edge) AS eprops"
         )
         try:
-            _collect(client.execute_query(statement).records, window_filter=True)
+            _collect(
+                client.execute_query(statement, timeout=_SWEEP_QUERY_TIMEOUT_SECONDS).records,
+                window_filter=True,
+            )
         except Exception:
             pass
     return edges
 
 
 def _endpoint_names(client: Any, vids: list[str]) -> dict[str, str]:
+    """端点名批量反查：一次 FETCH 多个 vid。此前逐 vid 一次 FETCH、关系明细
+    ~百次串行 HTTP 是图反查最大耗时（~2s），合并成每执行 1-2 次调用。"""
     names: dict[str, str] = {}
-    for vid in vids[:_ENDPOINT_CAP]:
+    for start in range(0, len(vids), _FETCH_PROP_BATCH):
+        batch = vids[start : start + _FETCH_PROP_BATCH]
+        vid_list = ", ".join(f'"{vid}"' for vid in batch)
         try:
-            records = client.execute_query(f'FETCH PROP ON * "{vid}" YIELD vertex AS v').records
+            records = client.execute_query(
+                f"FETCH PROP ON * {vid_list} YIELD vertex AS v",
+                timeout=_SWEEP_QUERY_TIMEOUT_SECONDS,
+            ).records
         except Exception:
             continue
-        if records:
-            names[vid] = _vertex_display_name(_flatten_vertex_props(records[0].get("v")), vid)
+        for record in records:
+            vertex = record.get("v")
+            if not isinstance(vertex, dict):
+                continue
+            vid = _safe_vid(vertex.get("id"))
+            if vid:
+                names[vid] = _vertex_display_name(_flatten_vertex_props(vertex), vid)
     return names
 
 
@@ -541,7 +618,7 @@ def _relation_object_rows(
     if not edges:
         return None
     endpoint_vids: list[str] = []
-    for src, dst, _ in edges:
+    for src, dst, _ in edges[:_OBJECT_ROW_CAP]:
         for vid in (src, dst):
             if vid not in endpoint_vids:
                 endpoint_vids.append(vid)
@@ -550,7 +627,7 @@ def _relation_object_rows(
     # 查不到目录名时退原边类型名
     type_label = schema_labels.get(edge_type) or edge_type
     fallback_source = execution.fallback_rows[0].source if execution.fallback_rows else "-"
-    fallback_time = execution.completed_at[11:19]
+    fallback_time = execution.completed_at[5:19]
     rows: list[AssetChangeRow] = []
     for src, dst, edge_props in edges[:_OBJECT_ROW_CAP]:
         rows.append(
@@ -559,7 +636,7 @@ def _relation_object_rows(
                 object=f"{names.get(src, src)} → {names.get(dst, dst)}",
                 change=f"新增 {type_label}",
                 source=str(edge_props.get("source_table") or fallback_source),
-                time=_time_hhmmss(edge_props.get(time_prop), fallback_time) if time_prop else fallback_time,
+                time=_time_short(edge_props.get(time_prop), fallback_time) if time_prop else fallback_time,
             )
         )
     return rows
@@ -582,7 +659,7 @@ def _schema_names_by_key(schema_keys: list[str]) -> dict[str, str]:
             ).fetchall()
         return {str(row[0]): str(row[1]) for row in rows if row[1]}
     except Exception:
-        logger.warning("今日新增图反查：schema 名查询失败，明细行退回聚合展示", exc_info=True)
+        logger.warning("昨日新增图反查：schema 名查询失败，明细行退回聚合展示", exc_info=True)
         return {}
 
 
@@ -632,15 +709,15 @@ def _connect_graph_for_space(space: str | None) -> Any:
     return client
 
 
-def enrich_today_rows_with_graph(
-    snapshot: TodayChangesSnapshot,
+def enrich_day_rows_with_graph(
+    snapshot: DayChangesSnapshot,
     space: str | None,
     *,
     connect_client=None,
     schema_names: dict[str, str] | None = None,
     schema_labels: dict[str, str] | None = None,
-) -> TodayChangesSnapshot:
-    """今日新增明细按图内对象逐行展示：反查成功的执行用逐对象行替换聚合行。
+) -> DayChangesSnapshot:
+    """昨日新增明细按图内对象逐行展示：反查成功的执行用逐对象行替换聚合行。
 
     实体行：数据类型=单个 Schema 的目录中文名（与构成图同口径，查不到用图内
     原名）、具体对象=name 公共字段、来源=source_table 公共字段、变更内容=新增
@@ -664,7 +741,7 @@ def enrich_today_rows_with_graph(
     try:
         client = connect_client(space)
     except Exception:
-        logger.warning("今日新增图反查：图客户端连接失败，明细行退回聚合展示", exc_info=True)
+        logger.warning("昨日新增图反查：图客户端连接失败，明细行退回聚合展示", exc_info=True)
         return snapshot
     time_props: dict[tuple[str, str], str | None] = {}
     entity_rows: list[AssetChangeRow] = []
@@ -700,7 +777,7 @@ def enrich_today_rows_with_graph(
             try:
                 close()
             except Exception:  # noqa: BLE001
-                logger.exception("关闭今日新增反查图客户端失败")
+                logger.exception("关闭昨日新增反查图客户端失败")
     # 同一对象常被当日多次执行触碰（重跑/补写），明细按 (类型, 对象) 去重；
     # 执行按完成时间降序遍历，先到的行即最新一次写入的口径。随后按识别时间
     # 倒序并截到统一展示上限——实体/关系两抽屉的「展示前 n」一致且为最新行
@@ -831,20 +908,51 @@ class PlatformOverviewService:
     def __init__(
         self,
         stats_provider: GraphStatsProvider | None = None,
-        changes_provider: TodayChangesProvider | None = None,
+        changes_provider: DayChangesProvider | None = None,
     ) -> None:
         self._stats_provider = stats_provider or TRSGraphStatsProvider()
-        self._changes_provider = changes_provider or WorkflowControlTodayChangesProvider()
+        self._changes_provider = changes_provider or WorkflowControlDayChangesProvider()
         self._cache_seconds = int(os.getenv("PLATFORM_OVERVIEW_CACHE_SECONDS", "60"))
         # 缓存按空间隔离：总览随全局图空间选择器切换后 60s 内不串空间
         self._cached: dict[str | None, tuple[float, PlatformOverviewData]] = {}
+        self._compute_locks: dict[str | None, threading.Lock] = {}
+        self._locks_guard = threading.Lock()
+
+    def _lock_for(self, space: str | None) -> threading.Lock:
+        with self._locks_guard:
+            return self._compute_locks.setdefault(space, threading.Lock())
 
     def get_overview(self, space: str | None = None) -> PlatformOverviewData:
-        now = time.monotonic()
         cached = self._cached.get(space)
-        if cached is not None and cached[0] > now:
+        if cached is not None and cached[0] > time.monotonic():
             return cached[1]
+        if cached is not None:
+            # 过期：非阻塞抢刷新权，抢到即后台刷新，旧值立即返回
+            lock = self._lock_for(space)
+            if lock.acquire(blocking=False):
+                threading.Thread(
+                    target=self._refresh_in_background, args=(space, lock), daemon=True
+                ).start()
+            return cached[1]
+        # 冷路径：per-space 单飞同步计算（等锁线程双检命中刚写入的结果）
+        with self._lock_for(space):
+            cached = self._cached.get(space)
+            if cached is not None and cached[0] > time.monotonic():
+                return cached[1]
+            result = self._compute_overview(space)
+            self._cached[space] = (time.monotonic() + self._cache_seconds, result)
+            return result
 
+    def _refresh_in_background(self, space: str | None, lock: threading.Lock) -> None:
+        try:
+            result = self._compute_overview(space)
+            self._cached[space] = (time.monotonic() + self._cache_seconds, result)
+        except Exception:  # noqa: BLE001 - 刷新失败保留旧值，下一个请求再试
+            logger.warning("平台总览后台刷新失败 space=%s，继续沿用旧值", space, exc_info=True)
+        finally:
+            lock.release()
+
+    def _compute_overview(self, space: str | None) -> PlatformOverviewData:
         fallback = self._get_fallback_overview()
         try:
             stats = (
@@ -859,26 +967,26 @@ class PlatformOverviewService:
                     "data_mode": "mock",
                     "data_sources": {
                         "graphAssets": "demo-fallback",
-                        "todayChanges": "demo-fallback",
+                        "dayChanges": "demo-fallback",
                         "managementRisks": "demo-fallback",
                     },
                     "warnings": [
                         "图数据库统计不可用，资产总量和结构正在展示降级数据。",
-                        "今日变化和管理风险等待任务中心持久化接口接入。",
+                        "昨日变化和管理风险等待任务中心持久化接口接入。",
                     ],
                 }
             )
         else:
-            # 今日新增来自工作流控制库（唯一写图通道 kg.schema.extract 的执行记录）；
+            # 昨日新增来自工作流控制库（唯一写图通道 kg.schema.extract 的执行记录）；
             # 读不到时保持占位并给出警告，绝不回填虚构演示行
-            changes: TodayChangesSnapshot | None = None
+            changes: DayChangesSnapshot | None = None
             try:
-                changes = self._changes_provider.get_today_changes(space)
+                changes = self._changes_provider.get_day_changes(space)
             except Exception as exc:
-                logger.warning("首页今日新增读取失败（工作流控制库不可用）: %s", exc)
+                logger.warning("首页昨日新增读取失败（工作流控制库不可用）: %s", exc)
             if changes is not None:
                 # 有数才显示 +N；当日为 0 或读不到一律占位 --，标签统一不带括号说明
-                added_label = "今日新增"
+                added_label = "昨日新增"
                 entity_added = (
                     f"+{_format_count(changes.entity_added)}" if changes.entity_added else "--"
                 )
@@ -889,18 +997,23 @@ class PlatformOverviewService:
                 change_rows["entity"] = changes.entity_rows
                 change_rows["relation"] = changes.relation_rows
                 change_totals = {"entity": changes.entity_added, "relation": changes.relation_added}
-                today_source = "workflow-control-live"
+                day_source = "workflow-control-live"
                 extra_warnings: list[str] = []
             else:
-                added_label = "今日新增"
+                added_label = "昨日新增"
                 entity_added = "--"
                 relation_added = "--"
                 change_rows = dict(fallback.asset_change_rows)
                 change_rows["entity"] = []
                 change_rows["relation"] = []
                 change_totals = {"entity": 0, "relation": 0}
-                today_source = "demo-fallback"
-                extra_warnings = ["今日新增暂时不可读：工作流控制库不可用。"]
+                day_source = "demo-fallback"
+                extra_warnings = ["昨日新增暂时不可读：工作流控制库不可用。"]
+            # 运行中执行数实时短查（不随日快照冻结一整天）；控制库不可读回退快照值
+            try:
+                running_live = self._changes_provider.running_count(space)
+            except Exception:
+                running_live = changes.running_count if changes is not None else 0
             # 资产卡中心 = 真实体数（去重口径）：实体总量用 Space/vertices、
             # 关系总量用 Space/edges。构成图分段按 Schema(tag/边类型)计数、
             # 无法去重（需逐 vid 查标签），多标签顶点（如同一机构 vid 同挂
@@ -932,13 +1045,13 @@ class PlatformOverviewService:
                     total="--",
                     total_label="属性值总量（统计接口待接入）",
                     added="--",
-                    added_label="今日新增",
+                    added_label="昨日新增",
                 ),
             ]
             result = fallback.model_copy(
                 update={
                     "platform_status": "图数据库连接正常",
-                    "pending_batch_count": changes.running_count if changes else 0,
+                    "pending_batch_count": running_live,
                     "updated_at": datetime.now().strftime("%H:%M"),
                     "asset_overview_groups": groups,
                     "asset_change_rows": change_rows,
@@ -955,18 +1068,17 @@ class PlatformOverviewService:
                     "data_mode": "partial",
                     "data_sources": {
                         "graphAssets": "trsgraph-live",
-                        "todayChanges": today_source,
+                        "dayChanges": day_source,
                         "managementRisks": "demo-fallback",
                     },
                     "warnings": [
                         "实体与关系统计来自图数据库实时接口。",
-                        "今日新增与运行中执行数来自工作流控制库（按抽取写图计数）。",
+                        "昨日新增与运行中执行数来自工作流控制库（按抽取写图计数）。",
                         "属性值统计和管理风险等待任务中心接口接入。",
                         *extra_warnings,
                     ],
                 }
             )
-        self._cached[space] = (now + self._cache_seconds, result)
         return result
 
     def _get_fallback_overview(self) -> PlatformOverviewData:
@@ -981,7 +1093,7 @@ class PlatformOverviewService:
                     total="1.28 亿",
                     total_label="实体总量",
                     added="--",
-                    added_label="今日新增",
+                    added_label="昨日新增",
                 ),
                 AssetOverviewGroup(
                     key="relation",
@@ -989,7 +1101,7 @@ class PlatformOverviewService:
                     total="6.42 亿",
                     total_label="关系总量",
                     added="--",
-                    added_label="今日新增",
+                    added_label="昨日新增",
                 ),
                 AssetOverviewGroup(
                     key="property",
@@ -997,7 +1109,7 @@ class PlatformOverviewService:
                     total="18.76 亿",
                     total_label="属性值总量",
                     added="--",
-                    added_label="今日新增",
+                    added_label="昨日新增",
                 ),
             ],
             asset_change_rows={

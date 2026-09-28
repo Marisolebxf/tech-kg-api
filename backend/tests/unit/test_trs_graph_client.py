@@ -1477,10 +1477,15 @@ class TestStatsAndPagedNodes:
 
     @pytest.fixture(autouse=True)
     def _clear_stats_cache(self):
-        client_mod = __import__("infra.graph_db.client", fromlist=["_stats_snapshot_cache"])
+        client_mod = __import__(
+            "infra.graph_db.client",
+            fromlist=["_stats_snapshot_cache", "_no_index_cache"],
+        )
         client_mod._stats_snapshot_cache.clear()
+        client_mod._no_index_cache.clear()  # label_count 负缓存同是模块级状态
         yield
         client_mod._stats_snapshot_cache.clear()
+        client_mod._no_index_cache.clear()
 
     @staticmethod
     def _stats_payload():
@@ -1598,6 +1603,35 @@ class TestStatsAndPagedNodes:
             repo.label_count("Paper")
         # 只有 SHOW STATS 一次往返，没有跟进任何 nGQL count
         assert len(queries) == 1 and queries[0].endswith("SHOW STATS;")
+        repo.close()
+
+    def test_label_count_negative_cache_short_circuits_repeat_no_index(self):
+        """-1005 负缓存：无索引标签的 MATCH 失败被记住，TTL 内二次调用零图查询
+        往返快速失败——共享图服务对每条失败语句还会自动重试 4 次放大负载。"""
+        queries = []
+
+        def handler(request):
+            if request.url.path == "/health":
+                return _health_ok(request)
+            if request.url.path == "/api/v1/query/read":
+                query = json.loads(request.content)["query"]
+                queries.append(query)
+                if query.endswith("SHOW STATS;"):
+                    # 统计里没有 NoIdx 标签 → 走 nGQL count 兜底
+                    return httpx.Response(
+                        200, json={"records": [{"Type": "Tag", "Name": "Paper", "Count": 7}]}
+                    )
+                return httpx.Response(400, json={"error": "There is no index to use at runtime"})
+            return httpx.Response(404)
+
+        repo = _make_repo(handler)
+        with pytest.raises(GraphRequestError, match="no index"):
+            repo.label_count("NoIdx")
+        with pytest.raises(GraphRequestError, match="负缓存命中"):
+            repo.label_count("NoIdx")
+        # 只有 SHOW STATS + 一次 MATCH；第二次连 SHOW STATS 都没发（快照已缓存）
+        assert len(queries) == 2
+        assert "MATCH (v:`NoIdx`)" in queries[1]
         repo.close()
 
     def test_stats_snapshot_cached_even_when_show_stats_later_fails(self):

@@ -2,6 +2,7 @@
 import ElSelect, { ElOption } from "element-plus/es/components/select/index";
 import "element-plus/es/components/select/style/css";
 import { MonthPicker as AMonthPicker } from "@arco-design/web-vue";
+import { IconRefresh as AIconRefresh } from "@arco-design/web-vue/es/icon";
 import zhCN from "@arco-design/web-vue/es/locale/lang/zh-cn";
 import dayjs from "dayjs";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
@@ -4828,16 +4829,6 @@ function clearGraphSelection() {
       <div class="kg-panel__header">
         <h2 class="kg-panel__title">测试结果预览</h2>
         <div class="graph-panel__time">
-          <button
-            v-if="isPanorama"
-            class="kg-button kg-button--secondary graph-panel__refresh"
-            type="button"
-            :disabled="running"
-            title="忽略服务端缓存，重新拉取分层与子图"
-            @click="handleRefreshPanorama"
-          >
-            {{ running ? "刷新中…" : "刷新图谱" }}
-          </button>
           <label
             v-if="isPanorama"
             class="graph-panel__autorefresh"
@@ -4851,6 +4842,17 @@ function clearGraphSelection() {
             />
             <span>自动更新</span>
           </label>
+          <button
+            v-if="isPanorama"
+            class="kg-button kg-button--secondary graph-panel__refresh"
+            type="button"
+            :disabled="running"
+            title="忽略服务端缓存，重新拉取分层与子图"
+            @click="handleRefreshPanorama"
+          >
+            <AIconRefresh class="graph-panel__refresh-icon" />
+            {{ running ? "刷新中…" : "刷新图谱" }}
+          </button>
           <span>最近测试时间：</span>
           <strong>{{ lastTestTime }}</strong>
         </div>
@@ -6020,6 +6022,23 @@ function clearGraphSelection() {
   padding: 2px 10px;
   font-size: 12px;
   line-height: 20px;
+}
+
+.graph-panel__refresh-icon {
+  width: 12px;
+  height: 12px;
+  margin-right: 4px;
+  flex: 0 0 auto;
+}
+
+.graph-panel__refresh:disabled .graph-panel__refresh-icon {
+  animation: graph-panel-refresh-spin 1s linear infinite;
+}
+
+@keyframes graph-panel-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 .graph-panel__canvas {
   position: relative;

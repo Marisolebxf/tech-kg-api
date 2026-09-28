@@ -127,8 +127,8 @@ describe('平台总览构成饼图随数据驱动', () => {
     vi.mocked(getPlatformOverview).mockResolvedValue({
       ...baseOverview,
       assetOverviewGroups: [
-        { key: 'entity', title: '实体数据', total: '900', totalLabel: '实体总量', added: '+5', addedLabel: '今日新增' },
-        { key: 'relation', title: '关系数据', total: '1,500', totalLabel: '关系总量', added: '+2', addedLabel: '今日新增' },
+        { key: 'entity', title: '实体数据', total: '900', totalLabel: '实体总量', added: '+5', addedLabel: '昨日新增' },
+        { key: 'relation', title: '关系数据', total: '1,500', totalLabel: '关系总量', added: '+2', addedLabel: '昨日新增' },
       ],
       entityStructure: [
         { label: '专家', schema: 'Expert', count: '600', ratio: 60, tone: '#2e90fa' },
@@ -275,12 +275,12 @@ describe('平台总览构成饼图随数据驱动', () => {
     expect(wrapper.findAll('.platform-structure-legend article')).toHaveLength(0)
   })
 
-  it('今日新增与运行中执行数按接口数据渲染', async () => {
+  it('昨日新增与运行中执行数按接口数据渲染', async () => {
     vi.mocked(getPlatformOverview).mockResolvedValue({
       ...baseOverview,
       pendingBatchCount: 3,
       assetOverviewGroups: [
-        { key: 'entity', title: '实体数据', total: '1,000', totalLabel: '实体总量', added: '+61', addedLabel: '今日新增' },
+        { key: 'entity', title: '实体数据', total: '1,000', totalLabel: '实体总量', added: '+61', addedLabel: '昨日新增' },
       ],
     })
     wrapper = mountOverview()
@@ -289,14 +289,14 @@ describe('平台总览构成饼图随数据驱动', () => {
     const text = wrapper.text()
     expect(text).toContain('3 个执行运行中')
     expect(text).toContain('+61')
-    expect(text).toContain('今日新增')
+    expect(text).toContain('昨日新增')
   })
 
-  it('「查看今日新增」抽屉 Teleport 到 body：脱离 .app-stage backdrop-filter 圈住的子树，多行全量渲染', async () => {
+  it('「查看昨日新增」抽屉 Teleport 到 body：脱离 .app-stage backdrop-filter 圈住的子树，多行全量渲染', async () => {
     vi.mocked(getPlatformOverview).mockResolvedValue({
       ...baseOverview,
       assetOverviewGroups: [
-        { key: 'entity', title: '实体数据', total: '900', totalLabel: '实体总量', added: '+5', addedLabel: '今日新增' },
+        { key: 'entity', title: '实体数据', total: '900', totalLabel: '实体总量', added: '+5', addedLabel: '昨日新增' },
       ],
       assetChangeRows: {
         entity: Array.from({ length: 30 }, (_, idx) => ({
@@ -313,7 +313,7 @@ describe('平台总览构成饼图随数据驱动', () => {
     wrapper = mountOverview()
     await flushPromises()
 
-    const openButton = wrapper.findAll('button').filter((btn) => btn.text().includes('查看今日新增'))[0]!
+    const openButton = wrapper.findAll('button').filter((btn) => btn.text().includes('查看昨日新增'))[0]!
     await openButton.trigger('click')
     await flushPromises()
 

@@ -23,9 +23,9 @@ describe('ListPagination', () => {
   it('允许调用方用摘要插槽扩展列表口径', () => {
     const w = mount(ListPagination, {
       props: { total: 527336, page: 1, pageSize: 10 },
-      slots: { summary: '共 527336 个实体 · 第 1 / 52734 页 · 检索模式：浏览（图直查）' },
+      slots: { summary: '共 527336 个实体 · 第 1 / 52734 页' },
     })
-    expect(w.text()).toContain('共 527336 个实体 · 第 1 / 52734 页 · 检索模式：浏览（图直查）')
+    expect(w.text()).toContain('共 527336 个实体 · 第 1 / 52734 页')
   })
 
   it('a-pagination change 透传为 change 事件', () => {

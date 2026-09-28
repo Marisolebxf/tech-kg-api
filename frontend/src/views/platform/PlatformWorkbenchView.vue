@@ -2085,9 +2085,10 @@ print(response.json())</pre>
 }
 
 .platform-content {
+  box-sizing: border-box;
   min-height: 0;
   overflow: auto;
-  padding-bottom: 2px;
+  padding-bottom: 16px;
   /* 总览内容常超一屏（资产卡+任务/审核卡+分布图），外层工作区滚动条被隐藏，
      这里必须露出自己的滚动条，否则底部扇形图"看不到" */
   scrollbar-width: thin;

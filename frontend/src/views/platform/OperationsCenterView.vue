@@ -609,7 +609,7 @@ onMounted(loadReviews)
       modal-class="case-log-modal"
       :title="`执行日志 · ${logCase?.id || ''}`"
       :width="760"
-      :footer="false"
+      title-align="start"
     >
       <p v-if="logLoading" class="case-log-loading">加载中…</p>
       <p v-else-if="logError" class="case-log-error-text">{{ logError }}</p>
@@ -648,6 +648,9 @@ onMounted(loadReviews)
           </section>
         </template>
         <p v-else class="case-log-missing">该记录未关联工作流执行（无 executionId），无法展示执行日志。</p>
+      </template>
+      <template #footer>
+        <button type="button" class="case-log-close" @click="logVisible = false">关闭</button>
       </template>
     </a-modal>
 
@@ -836,9 +839,12 @@ onMounted(loadReviews)
 .case-log-error-text{margin:0;padding:10px 12px;border:1px solid #f6c6b4;border-radius:4px;background:#fff8f5;color:#b42318;font:12px/19px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-all}
 .case-log-loading{margin:0;padding:24px;color:#86909c;text-align:center}
 /* 执行日志弹窗：原执行/重跑执行切换 + 概要 + 阶段状态 + 日志终端 */
-.case-log-switch{display:flex;gap:8px;margin:0 0 12px}
-.case-log-switch button{height:28px;padding:0 14px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#4e5969;font-size:13px;line-height:20px;cursor:pointer}
-.case-log-switch button.active{border-color:#165dff;background:#165dff;color:#fff}
+.case-log-switch{display:flex;box-sizing:border-box;width:max-content;height:40px;margin:0 0 16px;padding:4px;border-radius:4px;background:#f2f3f5;overflow:visible}
+.case-log-switch button{display:inline-flex;box-sizing:border-box;align-items:center;justify-content:center;width:120px;height:32px;padding:5px 16px;border:0;border-radius:4px;background:transparent;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
+.case-log-switch button+button{border-left:1px solid #c9cdd4}
+.case-log-switch button.active{border-left-color:transparent;background:#fff;color:#165dff;font-weight:500}
+.case-log-switch button.active+button{border-left-color:transparent}
+.case-log-switch button:hover:not(.active){background:#fff;color:#165dff}
 .case-log-missing{margin:0;padding:14px;border:1px dashed #e5e6eb;border-radius:4px;background:#f7f8fa;color:#86909c;font-size:13px;line-height:20px;word-break:break-all}
 .case-log-console{margin:0;max-height:280px;overflow:auto;padding:12px 14px;border:1px solid #e5e6eb;border-radius:4px;background:#f7f8fa;color:#1d2129;font:12px/20px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-all}
 .case-log-steps{display:flex;flex-wrap:wrap;gap:8px;margin:0;padding:0;list-style:none}
@@ -871,5 +877,5 @@ onMounted(loadReviews)
 .rerun-confirm-modal .arco-modal-header{box-sizing:border-box;height:56px;padding:0 24px}.rerun-confirm-modal .arco-modal-title{font-size:16px;line-height:24px;font-weight:600;letter-spacing:0}.rerun-confirm-modal .arco-modal-body{padding:24px}.rerun-confirm-modal .arco-modal-footer{box-sizing:border-box;min-height:64px;padding:16px 24px}.rerun-confirm-modal .arco-btn{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}.rerun-confirm-modal .arco-btn+.arco-btn{margin-left:16px}
 /* 日志弹窗（teleport 到 body，需全局控制弹体） */
 .case-log-modal{border-radius:8px;font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
-.case-log-modal .arco-modal-header{box-sizing:border-box;height:56px;padding:0 24px}.case-log-modal .arco-modal-title{font-size:16px;line-height:24px;font-weight:600;letter-spacing:0}.case-log-modal .arco-modal-body{max-height:70vh;overflow:auto;padding:16px 24px}
+.case-log-modal .arco-modal-header{box-sizing:border-box;height:56px;padding:0 24px}.case-log-modal .arco-modal-title{justify-content:flex-start;text-align:left;font-size:16px;line-height:24px;font-weight:600;letter-spacing:0}.case-log-modal .arco-modal-body{max-height:70vh;overflow:auto;padding:16px 24px}.case-log-modal .arco-modal-footer{box-sizing:border-box;min-height:64px;padding:16px 24px;border-top:1px solid #e5e6eb}.case-log-modal .case-log-close{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;cursor:pointer}
 </style>

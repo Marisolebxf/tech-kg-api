@@ -1398,7 +1398,7 @@ function descCell(text: string): string {
                 </a-select>
                 <input aria-label="1~1024" v-if="propertyForm.dataType === 'fixed_string'" :value="propertyForm.length" type="text" inputmode="numeric" :maxlength="FIXED_STRING_MAX_INPUT_CHARS" class="property-add-form__len" :class="{ 'property-add-form__len--invalid': propertyLengthInvalid }" :title="propertyLengthError || undefined" placeholder="1~1024" @input="onPropertyLengthInput" />
                 <a-checkbox v-model="propertyForm.required" class="property-add-form__required">必填</a-checkbox>
-                <button type="button" class="primary" :disabled="propertySaving" @click="submitAddProperty">{{ propertySaving ? '新增中...' : '＋ 新增属性' }}</button>
+                <button type="button" class="primary" :disabled="propertySaving" @click="submitAddProperty">{{ propertySaving ? '新增中...' : '确认新增' }}</button>
               </div>
               <p v-if="propertyForm.dataType === 'fixed_string'" class="prop-length-live" :class="{ 'prop-length-live--invalid': propertyLengthInvalid }">长度：当前 {{ propertyForm.length || '—' }}，可定义 {{ FIXED_STRING_MIN }}~{{ FIXED_STRING_MAX }}</p>
               <p v-if="propertyAddLimitNote" class="limit-field-note">{{ propertyAddLimitNote }}</p>

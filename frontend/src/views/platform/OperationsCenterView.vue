@@ -656,7 +656,7 @@ onMounted(loadReviews)
 
     <a-modal
       v-model:visible="deleteVisible"
-      modal-class="rerun-confirm-modal"
+      modal-class="rerun-confirm-modal delete-confirm-modal"
       title="确认删除"
       :width="560"
       ok-text="删除"
@@ -876,6 +876,10 @@ onMounted(loadReviews)
 .app-workspace .ops-page .ops-filter.is-review .review-search-input.arco-input-wrapper input.arco-input:focus{border:0!important;background:transparent!important;box-shadow:none!important;outline:0!important}
 .rerun-confirm-modal{border-radius:8px;font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
 .rerun-confirm-modal .arco-modal-header{box-sizing:border-box;height:56px;padding:0 24px}.rerun-confirm-modal .arco-modal-title{font-size:16px;line-height:24px;font-weight:600;letter-spacing:0}.rerun-confirm-modal .arco-modal-body{padding:24px}.rerun-confirm-modal .arco-modal-footer{box-sizing:border-box;min-height:64px;padding:16px 24px}.rerun-confirm-modal .arco-btn{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}.rerun-confirm-modal .arco-btn+.arco-btn{margin-left:16px}
+/* 删除确认沿用短确认弹窗尺寸，标题左对齐，危险操作与 Schema 删除按钮同色。 */
+.delete-confirm-modal .arco-modal-title{justify-content:flex-start;text-align:left}
+.delete-confirm-modal .arco-modal-footer .arco-btn-primary{border-color:#e5484d;background:#e5484d;color:#fff}
+.delete-confirm-modal .arco-modal-footer .arco-btn-primary:hover:not(:disabled){border-color:#b42318;background:#b42318}
 /* 日志弹窗（teleport 到 body，需全局控制弹体） */
 .case-log-modal{border-radius:8px;font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
 .case-log-modal .arco-modal-header{box-sizing:border-box;height:56px;padding:0 24px}.case-log-modal .arco-modal-title{justify-content:flex-start;text-align:left;font-size:16px;line-height:24px;font-weight:600;letter-spacing:0}.case-log-modal .arco-modal-body{max-height:70vh;overflow:auto;padding:16px 24px}.case-log-modal .arco-modal-footer{box-sizing:border-box;min-height:64px;padding:16px 24px;border-top:1px solid #e5e6eb}.case-log-modal .case-log-close{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;cursor:pointer}

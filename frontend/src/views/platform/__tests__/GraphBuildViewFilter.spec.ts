@@ -129,6 +129,8 @@ describe('图谱构建任务筛选「未选择」伪选项（00843/00847）', ()
 
   it('「未选择」与名称筛选可叠加：清空状态不影响名称条件', async () => {
     await wrapper.find('#graph-build-filter-name').setValue('任务j2')
+    expect(rowCount()).toBe(3)
+    await wrapper.find('.gb-filters').trigger('submit')
     expect(rowCount()).toBe(1)
     const statusSelect = wrapper.find('#graph-build-filter-status')
     // 名称锁定 j2（运行中）后选「已完成」→ 交集为空
@@ -137,6 +139,18 @@ describe('图谱构建任务筛选「未选择」伪选项（00843/00847）', ()
     // 选「未选择」只清空状态维度，名称条件仍在
     await statusSelect.setValue('')
     expect(rowCount()).toBe(1)
+  })
+
+  it('查询只在提交后执行，清空输入并查询可恢复全部任务', async () => {
+    const input = wrapper.find('#graph-build-filter-name')
+    await input.setValue('任务j1')
+    expect(rowCount()).toBe(3)
+    await wrapper.find('.gb-filters').trigger('submit')
+    expect(rowCount()).toBe(1)
+    await input.setValue('')
+    expect(rowCount()).toBe(1)
+    await wrapper.find('.gb-filters').trigger('submit')
+    expect(rowCount()).toBe(3)
   })
 
   it('ABNORMAL 独立成「运行异常」桶：有专属状态卡，不被「运行失败」筛选命中', async () => {

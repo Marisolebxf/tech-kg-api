@@ -2003,10 +2003,10 @@ function descCell(text: string): string {
 
 /* Schema 类型切换沿用科技专家同事关系页的摘要/实体分段按钮，并置于表格边框之外。 */
 .schema-catalog{display:flex;flex-direction:column;gap:12px}
-.schema-tabs{min-height:40px;padding:0;border-bottom:0;background:transparent;overflow:visible}
-.schema-tabs>.schema-toolbar__actions{flex-wrap:nowrap;gap:16px}
+.schema-tabs{min-height:40px;padding:0;border-bottom:0;background:transparent;overflow:visible;flex-direction:column;align-items:stretch}
+.schema-tabs>.schema-toolbar__actions{align-self:flex-end;margin-left:0;flex-wrap:nowrap;gap:16px}
 .schema-tabs>.schema-toolbar__actions .limit-field{flex:0 1 280px;width:280px}
-.schema-tabs__items{box-sizing:border-box;height:40px;padding:4px;border-radius:4px;background:#f2f3f5;align-self:auto;overflow:visible}
+.schema-tabs__items{box-sizing:border-box;height:40px;padding:4px;border-radius:4px;background:#f2f3f5;align-self:flex-start;overflow:visible}
 .schema-tabs__items button{display:inline-flex;box-sizing:border-box;align-items:center;justify-content:center;width:88px;height:32px;padding:5px 16px;border:0;border-radius:4px;background:transparent;color:#4e5969;text-align:center}
 .schema-tabs__items button+button{border-left:1px solid #c9cdd4}
 .schema-tabs__items button.active{border-left-color:transparent;background:#fff;color:#165dff;font-weight:500}

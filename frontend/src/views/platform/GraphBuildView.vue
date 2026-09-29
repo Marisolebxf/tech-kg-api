@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { IconInfoCircle, IconRefresh, IconSearch } from '@arco-design/web-vue/es/icon'
 import {
@@ -38,6 +38,7 @@ const createOpen = ref(false)
 const triggeringJobId = ref('')
 
 const filterName = ref('')
+const submittedName = ref('')
 const filterStatus = ref('')
 const filterTaskType = ref('')
 
@@ -103,7 +104,7 @@ const TASK_TYPE_LABELS: Record<string, string> = {
 }
 
 const filteredJobs = computed(() => {
-  const name = filterName.value.trim().toLowerCase()
+  const name = submittedName.value.toLowerCase()
   const space = spaceScope.value || graphSpaceStore.current
   return jobs.value.filter((job) => {
     if (space !== ALL_SPACES && jobSpace(job) !== space) return false
@@ -136,7 +137,34 @@ const {
   changePage: changeJobPage,
   changePageSize: changeJobPageSize,
 } = useClientPagination(filteredJobs, 10)
-watch([filterName, filterStatus, filterTaskType, spaceScope, () => graphSpaceStore.current], resetJobPage)
+watch([submittedName, filterStatus, filterTaskType, spaceScope, () => graphSpaceStore.current], resetJobPage)
+
+function submitJobSearch() {
+  submittedName.value = filterName.value.trim()
+  resetJobPage()
+}
+
+const taskTableRef = ref<HTMLElement | null>(null)
+const tableHasMoreToScroll = ref(false)
+const tableScrollActive = ref(false)
+let scrollIdleTimer: ReturnType<typeof setTimeout> | undefined
+
+function updateTaskTableScrollState() {
+  const table = taskTableRef.value
+  tableHasMoreToScroll.value = !!table && table.scrollWidth - table.clientWidth - table.scrollLeft > 1
+}
+
+function handleTaskTableScroll() {
+  updateTaskTableScrollState()
+  tableScrollActive.value = true
+  clearTimeout(scrollIdleTimer)
+  scrollIdleTimer = setTimeout(() => { tableScrollActive.value = false }, 700)
+}
+
+watch(pagedJobs, async () => {
+  await nextTick()
+  updateTaskTableScrollState()
+}, { flush: 'post' })
 
 async function loadData(silent = false) {
   // silent：轮询刷新用，不转 loading、失败不弹 toast（避免每几秒闪一次）
@@ -176,6 +204,8 @@ async function reloadOnEvent(announce: boolean) {
 
 onUnmounted(() => {
   unsubscribeJobEvents?.()
+  window.removeEventListener('resize', updateTaskTableScrollState)
+  clearTimeout(scrollIdleTimer)
 })
 
 function openCreate() {
@@ -346,6 +376,8 @@ function executionStatusClass(status: string): string {
 }
 
 onMounted(() => {
+  window.addEventListener('resize', updateTaskTableScrollState)
+  void nextTick(updateTaskTableScrollState)
   void loadData()
   unsubscribeJobEvents = subscribeJobEvents(
     () => {
@@ -384,7 +416,7 @@ onMounted(() => {
     <section class="gb-jobs-section">
       <header class="gb-jobs-toolbar">
         <strong class="gb-section-title">任务列表</strong>
-        <div class="gb-filters">
+        <form class="gb-filters" role="search" @submit.prevent="submitJobSearch">
           <a-select
             v-model="spaceScopeSelect"
             class="gb-filter-select"
@@ -412,10 +444,11 @@ onMounted(() => {
             <a-option value="upload">上传脚本</a-option>
           </a-select>
           <a-input id="graph-build-filter-name" v-model="filterName" class="gb-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="按名称搜索" placeholder="按名称搜索"><template #prefix><IconSearch /></template></a-input>
-        </div>
+          <button class="gb-search-button" type="submit">查询</button>
+        </form>
       </header>
       <div class="gb-jobs-panel">
-      <div class="gb-task-table">
+      <div ref="taskTableRef" class="gb-task-table" :class="{ 'has-scroll-right': tableHasMoreToScroll, 'gb-scroll--active': tableScrollActive }" @scroll.passive="handleTaskTableScroll">
         <table>
           <thead>
             <tr><th>任务名</th><th>类型</th><th>脚本</th><th>图空间</th><th>调度</th><th>状态</th><th>最近任务 ID</th><th>最近执行</th><th>操作</th></tr>
@@ -487,9 +520,11 @@ onMounted(() => {
         :page="jobPage"
         :page-size="jobPageSize"
         :disabled="loading"
+        :show-jumper="false"
+        :size-at-end="true"
         @change="changeJobPage"
         @change-size="changeJobPageSize"
-      />
+      ><template #summary><span class="list-pagination__summary">共 {{ jobTotal }} 条</span></template></ListPagination>
       </div>
     </section>
 
@@ -517,14 +552,22 @@ onMounted(() => {
 .gb-section-title{position:relative;padding-left:11px;font-size:16px;line-height:24px;font-weight:600}
 .gb-section-title::before{position:absolute;top:5px;left:0;width:3px;height:14px;border-radius:1px;background:#165dff;content:""}
 .gb-jobs-panel{display:flex;flex:1;min-height:0;overflow:hidden;border:1px solid #e5e6eb;border-radius:6px;background:#fff;box-shadow:none;flex-direction:column}
-/* 四个筛选控件同一行（图空间/状态/类型定宽 160px，搜索定宽 280px），间距与人工审核筛选行同口径 */
-.gb-filters{display:flex;flex:0 0 auto;min-width:0;flex-wrap:wrap;align-items:center;gap:16px;font-weight:400}
+/* 筛选控件向右排列，窄屏时可换行。 */
+.gb-filters{display:flex;flex:0 0 auto;min-width:0;margin-left:auto;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:16px;font-weight:400}
+.gb-search-button{box-sizing:border-box;height:32px;padding:0 16px;border:1px solid #165dff;border-radius:4px;background:#165dff;color:#fff;font-size:14px;line-height:22px;cursor:pointer}
+.gb-search-button:hover{border-color:#4080ff;background:#4080ff}
+.gb-search-button:focus-visible{outline:2px solid rgba(22,93,255,.3);outline-offset:2px}
 /* 图空间下拉：跟随筛选条尺寸合同，不换行不被压缩 */
-.gb-task-table{flex:1;min-height:0;overflow:auto;padding:0}
+.gb-task-table{flex:1;min-height:0;overflow:auto;padding:0;scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:transparent transparent}
+.gb-task-table:hover,.gb-task-table.gb-scroll--active{scrollbar-color:rgba(78,89,105,.55) transparent}
+.gb-task-table::-webkit-scrollbar{width:8px;height:8px}
+.gb-task-table::-webkit-scrollbar-track{background:transparent}
+.gb-task-table::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background:transparent;background-clip:padding-box}
+.gb-task-table:hover::-webkit-scrollbar-thumb,.gb-task-table.gb-scroll--active::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
 /* 与 Schema 管理表一致：由内容语义自动分配列宽，空间不足时由表格容器承接横向滚动。 */
-.gb-task-table table{width:100%;margin:0;border-collapse:collapse;font-size:14px;line-height:22px}
+.gb-task-table table{width:max-content;min-width:100%;margin:0;border-collapse:collapse;font-size:14px;line-height:22px}
 .gb-task-table th{position:sticky;z-index:2;top:0;height:40px;padding:0 16px;background:#f7f8fa;color:#1d2129;font-size:14px;line-height:22px;font-weight:500;text-align:left;white-space:nowrap}
-.gb-task-table td{height:40px;padding:0 16px;border-bottom:1px solid #e5edf8;color:#344763;font-size:14px;line-height:22px;font-weight:400;vertical-align:middle}
+.gb-task-table td{height:40px;padding:0 16px;border-bottom:1px solid #e5edf8;color:#344763;font-size:14px;line-height:22px;font-weight:400;vertical-align:middle;white-space:nowrap}
 .gb-task-table tbody tr:hover td{background:#f4f8ff}
 .gb-task-table code{padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-family:inherit;font-size:14px;line-height:22px;font-weight:400;white-space:nowrap}
 .gb-task-table b{color:#1d2129;font-weight:400}
@@ -543,7 +586,7 @@ onMounted(() => {
 .gb-task-table td.gb-job-actions{position:sticky;right:0;z-index:3;background:#fff;box-shadow:-1px 0 #e5e6eb}
 .gb-task-table tbody tr:hover td.gb-job-actions{background:#f4f8ff}
 /* 固定列左侧向内容区渐隐的阴影（与 Schema 管理表同视觉提示） */
-.gb-task-table :is(thead th:last-child,td.gb-job-actions)::before{position:absolute;top:0;bottom:-1px;left:0;width:12px;content:"";pointer-events:none;transform:translateX(-100%);box-shadow:inset -10px 0 8px -8px rgba(78,89,105,.28)}
+.gb-task-table.has-scroll-right :is(thead th:last-child,td.gb-job-actions)::before{position:absolute;top:0;bottom:-1px;left:0;width:12px;content:"";pointer-events:none;transform:translateX(-100%);box-shadow:inset -10px 0 8px -8px rgba(78,89,105,.28)}
 .empty{padding:40px 14px;text-align:center;color:#8290a7;font-size:12px;line-height:20px;font-weight:400}
 .muted{color:#8191aa;font-size:12px;line-height:20px;font-weight:400}
 span.ok,span.err,span.warn,span.run{display:inline-flex;align-items:center;gap:6px;font-size:14px;line-height:22px;border-radius:0;background:transparent;padding:0;white-space:nowrap}

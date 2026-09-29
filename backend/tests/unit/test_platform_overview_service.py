@@ -1068,7 +1068,7 @@ def test_enrich_today_rows_skips_repeat_lookup_after_no_index_error() -> None:
             _execution_record(written=2, completed_at="2026-09-23 03:41:54"),
             _execution_record(written=3, completed_at="2026-09-23 04:10:00"),
         ],
-        today="2026-09-23",
+        day="2026-09-23",
         target_space="dev2",
         default_space="dev2",
     )
@@ -1079,7 +1079,7 @@ def test_enrich_today_rows_skips_repeat_lookup_after_no_index_error() -> None:
         ]
     )
 
-    result = enrich_today_rows_with_graph(
+    result = enrich_day_rows_with_graph(
         snapshot,
         "dev2",
         connect_client=lambda space: client,

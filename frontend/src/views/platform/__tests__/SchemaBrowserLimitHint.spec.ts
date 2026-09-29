@@ -152,6 +152,21 @@ afterEach(() => {
   wrapper?.unmount()
 })
 
+it('仅在点击查询或提交表单时按输入词请求第一页', async () => {
+  const view = mountView()
+  await flushPromises()
+  expect(listSchemasPaged).toHaveBeenCalledTimes(1)
+
+  await view.get('.schema-toolbar__actions input').setValue('Gadget')
+  await flushPromises()
+  expect(listSchemasPaged).toHaveBeenCalledTimes(1)
+
+  await view.get('.schema-toolbar__actions').trigger('submit')
+  await flushPromises()
+  expect(listSchemasPaged).toHaveBeenCalledTimes(2)
+  expect(vi.mocked(listSchemasPaged).mock.lastCall?.[1]).toMatchObject({ keyword: 'Gadget', page: 1 })
+})
+
 describe('Schema 管理输入框达上限提示', () => {
   it('操作 >3 个时只平铺前两个，第三个起收进「···」更多菜单（含权限状态）', async () => {
     vi.mocked(listSchemasPaged).mockResolvedValue({ items: [schemaFixture()], total: 1, page: 1, pageSize: 10 })

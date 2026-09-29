@@ -1270,7 +1270,7 @@ const pageMeta = computed(() => {
     <main v-if="activeTab === 'overview'" class="platform-content platform-overview">
       <section class="platform-summary-grid" aria-label="实体与关系数据总览">
         <article v-for="group in assetOverviewGroups" :key="group.key" :class="['kg-panel', 'platform-summary-card', `is-${group.key}`]">
-          <header><div><strong>{{ group.title }}</strong><span><i />数据已更新</span></div><button type="button" @click="selectedAssetChange = group.key">查看昨日新增 →</button></header>
+          <header><div><strong>{{ group.title }}</strong><span><i />数据已更新</span></div><button type="button" @click="selectedAssetChange = group.key">查看昨日新增</button></header>
           <div class="platform-summary-card__main"><section><strong>{{ group.total }}</strong><span>{{ group.totalLabel }}</span></section><section class="is-added"><strong>{{ group.added }}</strong><span>{{ group.addedLabel }}</span></section></div>
         </article>
       </section>
@@ -1291,7 +1291,7 @@ const pageMeta = computed(() => {
 
       <section v-if="canEnterAdminPages" class="platform-overview-main">
         <div class="kg-panel platform-jobs-panel">
-          <div class="kg-panel__header"><div><h2 class="kg-panel__title">图谱构建</h2></div><RouterLink to="/graph-build">查看全部任务 →</RouterLink></div>
+          <div class="kg-panel__header"><div><h2 class="kg-panel__title">图谱构建</h2></div><RouterLink to="/graph-build">查看全部任务</RouterLink></div>
           <template v-if="overviewJobsState === 'ready'">
             <div class="platform-jobs-stats">
               <article v-for="stat in overviewJobStats" :key="stat.label"><span :class="`is-${stat.tone}`">{{ stat.value }}</span><em>{{ stat.label }}</em></article>
@@ -1314,7 +1314,7 @@ const pageMeta = computed(() => {
         </div>
 
         <aside class="kg-panel platform-review-panel">
-          <div class="kg-panel__header"><div><h2 class="kg-panel__title">人工审核</h2></div><RouterLink to="/manual-review">查看处理队列 →</RouterLink></div>
+          <div class="kg-panel__header"><div><h2 class="kg-panel__title">人工审核</h2></div><RouterLink to="/manual-review">查看处理队列</RouterLink></div>
           <template v-if="overviewReviewsState === 'ready'">
             <div class="platform-review-count">待处理 <strong>{{ overviewReviewsTotal }}</strong> 条</div>
             <div class="platform-review-list">

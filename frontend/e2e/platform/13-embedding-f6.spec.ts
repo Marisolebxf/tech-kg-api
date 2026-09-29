@@ -27,7 +27,9 @@ async function upStack(): Promise<void> {
   throw new Error('api 容器重启后未就绪')
 }
 
-// F6. embedding 服务故障必须显式提醒用户（缺陷驱动：此前静默降级只在结果 JSON）
+// F6. embedding 服务故障必须显式提醒用户（2026-09-29 口径：索引构建失败整链
+// FAILED，失败原因经 cause 链展开进执行 message，详情页失败说明条显眼展示，
+// 不再是「执行成功 + 结果 JSON 里埋 degraded 标记」的静默降级）
 test.describe.serial('F6 embedding 故障显式提醒', () => {
   let widgetSchemaId = ''
   let envOriginal = ''
@@ -47,13 +49,13 @@ test.describe.serial('F6 embedding 故障显式提醒', () => {
     await upStack()
   })
 
-  test('注入坏 embedding 地址 → 执行详情显示降级告警', async ({ page, request }) => {
+  test('注入坏 embedding 地址 → 索引构建失败，执行标 FAILED 并显眼提示', async ({ page, request }) => {
     test.setTimeout(900_000)
     // 1. 注入故障：ENTITY_SEARCH_EMBEDDING_BASE_URL 指向不可用地址 + 重建容器
     await writeFile(ENV_PATH, `${envOriginal.trimEnd()}\n${MARKER}\n`, 'utf-8')
     await upStack()
 
-    // 2. 跑一次实体抽取（默认 buildIndex=true → 索引构建失败降级）
+    // 2. 跑一次实体抽取（默认 buildIndex=true → 索引构建失败整链 FAILED）
     await mysql(
       "UPDATE techkg_e2e.widgets SET name='挂件一号', update_time=NOW() WHERE id='w1'; " +
         "UPDATE techkg_e2e.widgets SET name='挂件二号', update_time=NOW() WHERE id='w2';",
@@ -72,20 +74,20 @@ test.describe.serial('F6 embedding 故障显式提醒', () => {
       },
       { timeout: 600_000, interval: 5_000, label: '抽取终态' },
     )
-    // 图数据写入正常（降级不拖垮抽取）
-    expect(exec.status).toBe('COMPLETED')
-    const execDetail = await apiMust<any>(request, 'GET', `/workflow-system/executions/${trig.executionId}`, undefined, '执行详情')
-    expect(execDetail.output?.index?.degraded).toBe(true)
+    // 索引构建失败即任务 FAILED（图数据在索引前已写图，但任务不再算成功）
+    expect(exec.status).toBe('FAILED')
 
-    // 3. 执行详情页 UI：显式告警条（不翻 JSON 即可见）
+    // 3. 执行详情页 UI：失败说明条显眼展示真实原因（cause 链展开进 message，
+    //    不翻 JSON 即可见），不再是静默降级
+    const execDetail = await apiMust<any>(request, 'GET', `/workflow-system/executions/${trig.executionId}`, undefined, '执行详情')
+    expect(String(execDetail.message || '')).toMatch(/失败|error|连接|embedding/i)
     await page.goto(`/processing-instance/${trig.executionId}`)
     await page.waitForLoadState('networkidle')
-    await expect(page.locator('.index-degrade-alert')).toBeVisible({ timeout: 30_000 })
-    await expect(page.getByText('实体索引构建失败（已降级）').first()).toBeVisible()
-    await expect(page.getByText(/embedding|连接|拒绝|失败/i).first()).toBeVisible()
+    await expect(page.locator('.exec-failure-alert')).toBeVisible({ timeout: 30_000 })
+    await expect(page.getByText('本次执行标记为失败').first()).toBeVisible()
   })
 
-  test('恢复正确配置 → 告警消失、索引正常', async ({ page, request }) => {
+  test('恢复正确配置 → 重跑成功、无失败提示', async ({ page, request }) => {
     test.setTimeout(900_000)
     // 1. 恢复 env（afterAll 也会兜底）+ 重建
     await writeFile(ENV_PATH, envOriginal, 'utf-8')
@@ -112,12 +114,11 @@ test.describe.serial('F6 embedding 故障显式提醒', () => {
     expect(exec.status).toBe('COMPLETED')
     const execDetail = await apiMust<any>(request, 'GET', `/workflow-system/executions/${trig.executionId}`, undefined, '执行详情')
 
-    // 索引正常重建（无 degraded 标记）
+    // 索引正常重建（无失败提示）
     await page.goto(`/processing-instance/${trig.executionId}`)
     await page.waitForLoadState('networkidle')
-    await expect(page.locator('.index-degrade-alert')).toHaveCount(0)
+    await expect(page.locator('.exec-failure-alert')).toHaveCount(0)
     const index = execDetail.output?.index
-    expect(Boolean(index?.degraded)).toBe(false)
     expect(index?.entityCount).toBeGreaterThanOrEqual(2)
   })
 })

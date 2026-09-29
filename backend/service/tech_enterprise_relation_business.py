@@ -515,7 +515,6 @@ class KeyEnterpriseRelationService:
                 client=graph_client,
             )
         resp.enterprises = len({r.enterprise_id for r in relations})
-        resp.roles = len({r.role_label for r in relations if r.role_label})
         resp.cooperation_fields = sorted({r.tech_field for r in relations if r.tech_field})
         resp.confidence = max((r.confidence for r in relations), default=0.0)
         resp.evidence = [

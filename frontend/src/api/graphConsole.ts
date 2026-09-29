@@ -7,7 +7,6 @@ export interface GraphConsoleResult {
   records: Array<Record<string, unknown>>
   columns: string[]
   summary: Record<string, unknown>
-  kind: 'read' | 'write'
 }
 
 export async function runNgql(space: string, statement: string): Promise<GraphConsoleResult> {

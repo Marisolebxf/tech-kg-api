@@ -160,12 +160,6 @@ const overview = ref<SchemaOverview>({
   entityTypes: 0,
   coreEntityTypes: 0,
   relationTypes: 0,
-  factRelationTypes: 0,
-  inferredRelationTypes: 0,
-  propertyFields: 0,
-  requiredFields: 0,
-  constraintRules: 0,
-  sourceMappings: 0,
 })
 const modalOpen = ref(false)
 const createForm = ref<CreateForm>(emptyCreateForm())

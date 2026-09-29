@@ -28,7 +28,6 @@ CREATE TABLE `kg_schema_definition` (
   `identity_key` varchar(512) NOT NULL,
   `attribute_identity_key` varchar(512) NOT NULL,
   `attribute_source` varchar(1024) NOT NULL,
-  `instance_count` bigint NOT NULL,
   `version` varchar(32) NOT NULL,
   `display_order` int NOT NULL,
   `is_core` tinyint(1) NOT NULL,

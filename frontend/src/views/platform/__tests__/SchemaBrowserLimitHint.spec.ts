@@ -93,15 +93,14 @@ const ACheckboxStub = defineComponent({
 
 const overviewFixture = {
   currentVersion: '', environment: '', releasedAt: '', entityTypes: 0, coreEntityTypes: 0,
-  relationTypes: 0, factRelationTypes: 0, inferredRelationTypes: 0, propertyFields: 0,
-  requiredFields: 0, constraintRules: 0, sourceMappings: 0,
+  relationTypes: 0,
 }
 
 function schemaFixture(overrides: Partial<SchemaDefinition> = {}): SchemaDefinition {
   return {
     id: 'sch-1', key: 'gadget', kind: 'entity', kindLabel: '实体', graphSpace: 'dev2',
     name: 'Gadget', label: '部件', description: '', identityKey: 'id', attributeIdentityKey: '',
-    attributeSource: '', instanceCount: 0, version: '1', isCore: false, relationCategory: null,
+    attributeSource: '', version: '1', isCore: false, relationCategory: null,
     isSystem: false, createdBy: null, createdAt: null, updatedAt: null, sourceSchemaId: null,
     sourceSchemaName: null, targetSchemaId: null, targetSchemaName: null, mappings: [],
     canDelete: false, canManageProperties: true, properties: [], script: null,

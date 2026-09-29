@@ -15,7 +15,7 @@
 - **原生 confirm 弹窗**：配置删除、任务删除用 `window.confirm`，Playwright 以 `page.on('dialog')` 接受。
 - **用例落点**：`frontend/e2e/platform/*.spec.ts` + 新增 `frontend/playwright.platform.config.ts`（baseURL `http://localhost:8089`，chromium）。宿主机执行。
 - 原 `review-full-integration.spec.ts` 需独占环境、不在本方案执行；该测试已随 graph-build 移交通道删除（2026-09-15），此条噪音不再存在。
-- **已知缺陷（待修复，非噪音）**：embedding 服务故障（如 key 过期 401）时索引构建**静默降级**——`index.degraded` 只写入执行结果 JSON（`temporal_workflows.py`），前端零渲染、任务仍显示成功。用户已判定不可接受：服务出错必须显式提醒，验收用例 F6。
+- **已修复（2026-09-29）**：embedding 服务故障（如 key 过期 401）导致索引构建失败时，此前是静默降级——`index.degraded` 只写执行结果 JSON、任务仍显示成功。现口径：索引构建失败（重试耗尽）即整链 FAILED，失败原因经 cause 链展开进执行 message，详情页失败说明条显眼展示；验收用例 F6。
 
 ---
 
@@ -258,12 +258,12 @@
 - **预期输出**：执行完成但写入 0 条（水位推进，无重复入库）。
 - **最终状态**：图库 count 不变；执行输出 JSON 的写入计数为 0；新执行在执行详情可见（触发方式=手动触发）。
 
-### F6 embedding 服务故障必须显式提醒用户 ★（当前不满足，缺陷驱动）
+### F6 embedding 服务故障必须显式提醒用户 ★（2026-09-29 起满足）
 - **前置**：实体索引构建走外部 embedding 服务（智谱 embedding-3，key 记录在本地项目 memory，不入库）。将 API key 改错（或 `ENTITY_SEARCH_EMBEDDING_BASE_URL` 指向不可用地址）制造 401/连接失败。
 - **步骤**：对实体 schema 执行一次抽取（实体默认 buildIndex=true）→ 打开该次执行详情页。
-- **预期输出（目标行为）**：图数据写入正常（数据链路降级保留），但界面必须**显式提醒服务出错**——执行详情出现「索引构建失败/已降级」徽标或告警条并含错误原因（如 embedding 401）；仅结果 JSON 可见不算通过。
-- **最终状态**：用户不翻 JSON/日志即可得知 embedding 服务故障；恢复正确 key 重跑，索引正常重建、告警消失。
-- **现状（2026-09-02）**：降级信息只在 workflow result（`temporal_workflows.py:2101` `index.degraded`），前端无任何渲染 → 本用例当前必失败，按缺陷驱动修复后验收。
+- **预期输出（现行行为）**：索引构建失败（activity 重试耗尽）→ 执行整链 **FAILED**（不再降级为「成功 + JSON 里 degraded 标记」）；失败原因（如 embedding 连接失败）经 cause 链展开进执行 message，执行详情页红色失败说明条显眼展示。
+- **最终状态**：用户不翻 JSON/日志即可得知 embedding 服务故障；恢复正确 key 重跑，索引正常重建、任务成功无失败提示。
+- **沿革**：2026-09-02 缺陷记录（静默降级只在结果 JSON）→ 曾以「已降级」告警条验收 → 2026-09-29 用户口径收紧为索引失败即 FAILED，降级告警条随旧链路删除。
 
 ---
 

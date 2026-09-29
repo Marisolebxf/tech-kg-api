@@ -246,6 +246,7 @@ const activeModuleError = computed(() => {
   if (isExpertDirect.value) return expertDirectError.value ?? liveError.value;
   if (isExpertIndirect.value)
     return expertIndirectError.value ?? liveError.value;
+  if (isPanorama.value) return panoramaError.value ?? liveError.value;
   return liveError.value;
 });
 const isNotFoundResult = computed(
@@ -1645,6 +1646,9 @@ const graphNodes = computed<GraphNodeData[]>(() => {
   if (lastTestTime.value === "—") return [];
   // 必填值不存在：按全景图未命中空态展示，不残留上一轮结果或示例图谱。
   if (isNotFoundResult.value) return [];
+  // 查询失败（HTTP/业务级报错）同样走空态画布，错误提示由 toast/结果区
+  // 承担——此前成功后再失败会回落演示 preset 冒充查询结果。
+  if (activeModuleError.value) return [];
   if (isLiveModule.value) return liveModuleGraph.value?.nodes ?? [];
   if (liveGraph.value) return liveGraph.value.nodes;
   return graphPreset.value.nodes;
@@ -3241,6 +3245,11 @@ function computePanoramaSummaryRows(
         ? compactSummaryText(coreSegment.items[0].label)
         : "—",
     ],
+    // 核心节点/关联关系/数据流向此前无覆盖、恒显示静态演示文案——改用
+    // 后端真实汇总值（节点/边总数、命中产业链串联），未命中时占位。
+    ["核心节点", `${resp.summary.totalNodes} 个`],
+    ["关联关系", `${resp.summary.totalEdges} 条`],
+    ["数据流向", chainLabels.length ? chainLabels.join(" → ") : "—"],
     ["关键技术", canvasLabel("技术主题")],
     ["重点企业", canvasLabel("企业")],
     ["核心专家", canvasLabel("科技专家")],

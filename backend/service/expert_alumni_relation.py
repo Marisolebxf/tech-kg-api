@@ -79,7 +79,7 @@ ALUMNI_RULES: list[dict[str, str]] = [
         "target": "同校 / 同学历 / 同期",
         "trigger": "同校匹配成功后",
         "logic": "学位归一相等→同学历；教育年份存在交集→同期。不编造同院系/同导师。",
-        "output": "dimensions、dimensionsCatalog",
+        "output": "dimensions",
         "threshold": "同校为必要条件",
         "audit": "数据不具备的维度不得出现在结果中",
     },
@@ -212,10 +212,9 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             "mode": mode,
             "total": len(items),
             "items": items,
-            "dimensionsCatalog": sorted(dim_catalog),
             "sourceMeta": source_meta,
         }
-        payload.update(self._frontend_view(payload))
+        payload.update(self._frontend_view(payload, dims=sorted(dim_catalog)))
         _cache_set(_result_cache, cache_key, payload, _RESULT_CACHE_TTL)
         return payload
 
@@ -963,13 +962,15 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             return src
         return None
 
-    def _frontend_view(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """补充前端算法测试页各 Tab 可直接渲染的结构。"""
+    def _frontend_view(self, payload: dict[str, Any], *, dims: list[str]) -> dict[str, Any]:
+        """补充前端算法测试页各 Tab 可直接渲染的结构。
+
+        ``dims``：本次查询命中的关系维度目录（同校/同学历/同期），供摘要行展示。
+        """
         expert = payload["expert"]
         items: list[dict[str, Any]] = payload["items"]
         mode = payload["mode"]
         total = payload["total"]
-        dims = payload["dimensionsCatalog"]
         meta = payload["sourceMeta"]
         first = items[0] if items else None
         alumni_names = [str(item.get("name") or item.get("alumniId")) for item in items]
@@ -1057,11 +1058,6 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         result_rows = [
             {"label": "校友数量", "value": str(total), "tone": "blue"},
             {"label": "查询模式", "value": str(mode), "tone": "green"},
-            {
-                "label": "关系维度",
-                "value": str(len(dims)),
-                "tone": "orange",
-            },
             {
                 "label": "截断标记",
                 "value": "是" if meta.get("truncated") else "否",

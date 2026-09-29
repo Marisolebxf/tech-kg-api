@@ -61,7 +61,7 @@ const processingInstance = ref<ProcessingInstance>()
 const fallbackBatch: UpdateBatch = { id: '-', name: '任务详情', updateDate: '-', dataWindow: '-', source: '-', trigger: '-', input: 0, entities: 0, relations: 0, completed: 0, abnormal: 0, progress: 0, status: '处理中', startedAt: '-', completedAt: '-' }
 const batch = computed(() => processingInstance.value?.batch ?? fallbackBatch)
 const isConstructionTask = computed(() => processingInstance.value?.stage === '图谱构建' || String(route.params.area) === 'construction')
-const needsTaskReview = computed(() => ['执行出错', '执行异常', '等待人工审核'].includes(processingInstance.value?.taskStatus ?? ''))
+const needsTaskReview = computed(() => ['执行出错', '执行异常'].includes(processingInstance.value?.taskStatus ?? ''))
 const activeTab = ref<DetailTab>('overview')
 const isPipelineTask = computed(() => ['kg.custom.steps', 'kg.custom.chain', 'kg.schema.extract.chain'].includes(processingInstance.value?.workflowType ?? ''))
 /** 多脚本串行任务：流程里每个 step 是一个 Schema 抽取（旧版为一个脚本），点击在按钮下方展开其 activity steps。 */
@@ -261,7 +261,6 @@ function buildExtractStep(instance: ProcessingInstance): Step {
   const written = sources.reduce((sum, item) => sum + Number(item.written ?? 0), 0)
   const failed = Number(output.failures?.count ?? sources.reduce((sum, item) => sum + Number(item.failed ?? 0), 0))
   const errored = instance.taskStatus === '执行出错'
-  const pending = instance.taskStatus === '等待人工审核'
   const abnormalTask = instance.taskStatus === '执行异常'
   const lastCursor = [...sources].reverse().find((item) => item.watermark || item.pkCursor)
   const cursorText = lastCursor?.watermark || (lastCursor?.pkCursor ? `pk > ${lastCursor.pkCursor}` : '')
@@ -269,7 +268,7 @@ function buildExtractStep(instance: ProcessingInstance): Step {
     id: 'extract',
     phase: '图谱构建',
     name: instance.objectName || '平台喂数抽取',
-    status: instance.taskStatus === '执行中' ? '运行中' : errored || pending ? '需人工处理' : abnormalTask || failed > 0 ? '异常' : '成功',
+    status: instance.taskStatus === '执行中' ? '运行中' : errored ? '需人工处理' : abnormalTask || failed > 0 ? '异常' : '成功',
     risk: (errored ? '高风险' : failed > 0 ? '中风险' : '低风险') as RiskLevel,
     count: rows ? `${rows} 行 · 写入 ${written}` : '-',
     abnormal: errored ? '1' : String(failed || 0),
@@ -420,13 +419,6 @@ const executionFailureNotice = computed(() => {
     count: Number(execution.output?.failures?.count ?? 0),
   }
 })
-/** F6：embedding/Milvus 等外部服务故障导致索引构建降级时，执行详情必须显式提醒（不能只埋在输出 JSON 里）。 */
-const indexDegrade = computed(() => {
-  const output = (selectedExecution.value as { output?: { index?: { degraded?: boolean; error?: string } } } | null)?.output
-  const index = output?.index
-  return index && typeof index === 'object' && (index.degraded || index.error) ? index : null
-})
-
 // === 数据溯源：只展示真实可查证的对象（Schema 来源绑定 / 抽取脚本 / 任务参数 /
 // 工作流回写的分批统计与水位）。行级原始字段值不落库，不做不可回放的编造。 ===
 const schemaDetail = ref<SchemaDefinition | null>(null)
@@ -695,13 +687,6 @@ onMounted(async () => {
 
     <p v-if="pipelineMessage" class="pipeline-message">{{ pipelineMessage }}</p>
 
-    <div v-if="indexDegrade" class="index-degrade-alert" role="alert" aria-label="索引构建降级告警">
-      <strong>⚠ 实体索引构建失败（已降级）</strong>
-      <span>图数据写入正常，但实体检索索引未重建——关键词 / 语义检索将缺失本次新增实体。</span>
-      <code v-if="indexDegrade.error">{{ indexDegrade.error }}</code>
-      <em>该告警针对选中的执行 {{ selectedExecutionId || '最新一次' }}（后续成功执行可能已重建索引）；请检查 embedding 服务可用性后，重新执行该任务——执行末尾会全量重建该图空间的实体索引。</em>
-    </div>
-
     <div v-if="executionFailureNotice" class="exec-failure-alert" :class="{ 'is-abnormal': executionFailureNotice.abnormal }" role="alert" aria-label="执行标记原因说明">
       <strong>{{ executionFailureNotice.abnormal ? '⚠ 本次执行标记为异常：' : '⚠ 本次执行标记为失败：' }}{{ executionFailureNotice.message }}</strong>
       <span v-if="executionFailureNotice.count > 0">逐行失败记录已转人工审核：到「人工审核」的处理中心可查看并勾选重跑；左下流程卡片的黄色感叹号与「N 异常」是对应环节的失败行数——环节本身执行成功，失败的是单条数据转换。</span>
@@ -815,10 +800,6 @@ onMounted(async () => {
 .pipeline-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
 .pipeline-head h2{margin:0;font-size:15px}
 .pipeline-message{margin:0 0 10px;padding:8px 12px;border:1px solid #b2ccff;border-radius:6px;background:#f0f5ff;color:#344f7a;font-size:11px}
-.index-degrade-alert{display:flex;flex-direction:column;gap:4px;margin:0 0 12px;padding:10px 14px;border:0;border-radius:6px;background:#fef3f2;color:#912018;font-size:12px}
-.index-degrade-alert strong{font-size:13px}
-.index-degrade-alert code{padding:0;background:transparent;word-break:break-all}
-.index-degrade-alert em{color:#a8655c;font-style:normal;font-size:11px}
 /* 执行标记原因说明条：FAILED 红 / ABNORMAL（抽取完成含失败行）橙 */
 .exec-failure-alert{display:flex;flex-direction:column;gap:4px;margin:0 0 12px;padding:10px 14px;border:1px solid #f0a6a6;border-left:4px solid #d92d20;border-radius:6px;background:#fef3f2;color:#912018;font-size:12px}
 .exec-failure-alert strong{font-size:13px}

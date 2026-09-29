@@ -62,6 +62,23 @@ class WorkflowRepository:
         Base.metadata.create_all(self._engine)
         self._migrate_job_columns()
         self._migrate_schema_space_column()
+        self._migrate_schema_instance_count_column()
+
+    def _migrate_schema_instance_count_column(self) -> None:
+        """幂等删除 kg_schema_definition.instance_count 列（恒 0 的死统计，已下线）。
+
+        仅 MySQL 方言；SQLite 测试库走 create_all，天生无此列。
+        """
+        from sqlalchemy import inspect, text
+
+        inspector = inspect(self._engine)
+        if "kg_schema_definition" not in inspector.get_table_names():
+            return
+        columns = {column["name"] for column in inspector.get_columns("kg_schema_definition")}
+        if "instance_count" not in columns:
+            return
+        with self._engine.begin() as conn:
+            conn.execute(text("ALTER TABLE kg_schema_definition DROP COLUMN instance_count"))
 
     def _migrate_job_columns(self) -> None:
         """无迁移框架：对已有 workflow_executions 表幂等补 job_id 列（仅 MySQL 方言）。"""

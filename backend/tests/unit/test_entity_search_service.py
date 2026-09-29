@@ -477,7 +477,7 @@ def test_reindex_builds_collection_and_state(
     ]
     status = service.status()
     assert status["indexed"] is True
-    assert status["entityCount"] == 3
+    assert status["recordedEntityCount"] == 3
     assert status["bm25Ready"] is True
     assert status["graphSpace"] == "dev2"
 
@@ -801,7 +801,7 @@ def test_reindex_aborts_when_all_labels_unreadable(
     # 旧行未清、无新写入；state 快照未被空结果覆盖
     assert milvus.deleted == []
     assert [row["vid"] for row in milvus.collections[COLLECTION_NAME]] == ["expert_1"]
-    assert service.status()["entityCount"] == 1
+    assert service.status()["recordedEntityCount"] == 1
 
 
 def test_reindex_aborts_when_second_pass_loses_everything(
@@ -863,7 +863,7 @@ def test_reindex_aborts_when_second_pass_loses_everything(
     # written=0 时绝不走「空空间」清空：旧索引与旧快照原样保留
     assert milvus.deleted == []
     assert [row["vid"] for row in milvus.collections[COLLECTION_NAME]] == ["expert_1"]
-    assert service.status()["entityCount"] == 1
+    assert service.status()["recordedEntityCount"] == 1
 
 
 def test_reindex_retries_transient_page_failure_instead_of_skipping_label(
@@ -1603,7 +1603,6 @@ def test_status_marks_stale_state_when_space_missing_in_milvus(state_session, mo
     assert status["indexed"] is False
     assert status["actualDataAvailable"] is False
     assert status["stateStale"] is True
-    assert status["entityCount"] == 0
     assert status["recordedEntityCount"] == 4
     assert status["typeCounts"] == {}
     assert status["recordedTypeCounts"] == {"E2EBigWidget": 4}
@@ -1627,7 +1626,7 @@ def test_status_marks_milvus_unreachable_as_explicit_degradation(state_session, 
     assert status["milvusReachable"] is False
     assert status["actualDataAvailable"] is False
     assert status["indexed"] is False
-    assert status["entityCount"] == 0
+    assert status["recordedEntityCount"] == 4
     assert status["stateStale"] is True
 
 

@@ -37,7 +37,7 @@ Schema 管理是图谱构建的**元数据中枢**：定义实体/关系结构�
 - **触发**（`POST /{id}/extract`）：要求已上传脚本 + ≥1 来源绑定，否则 409；由 schema 定义**合成** workflow definition（`schema-extract-{key}`，worker 端 activity 从 S3 下载脚本本体）。
 - **读取模式**：querySql 绑定走水位/pk keyset 游标（合成唯一 pk）；普通表走 LIMIT/OFFSET。
 - **多步脚本（脚本内 `@step` 装饰器声明，兼容旧 `STEPS` 清单）**：单 `transform` = 单步特例，九域既有脚本零改动。多步时批内步序串行（`@step` 的顺序 = 函数源码出现顺序），每步一次 `execute_transform` activity（第 k 步失败由 Temporal 只重试第 k 步，前序步输出经事件历史重放）；第 1 步 payload 与单步相同（`rows`/`source_table`/`kind`/`source`），第 N>1 步 payload 为 `{"input": 上一步完整输出, ...}`（无 `rows`），`ctx.prev_outputs`（`kg_sdk.current_context()`）可读本批次已完成各步输出、`ctx.step_id` 形如 `source:{绑定id}#{stepId}`（仅观测，水位键仍是来源级）。任意一步返回 `entities`/`edges` 即在该步之后写图（实体再接消歧），`failures`/`pendingReview` 跨步聚合进现有链路。步间透传有大小防护（input 单值 512KB / prevOutputs 单值 128KB / 额外键合计 256KB，超限截断为 `_truncated` 标记并告警，防 gRPC 上限炸批次）。水位仍是**来源全部批次整链成功后**一次性推进，不做 per-step 水位（`kg_script_watermark` 的 step_id 语义不变）；重跑模式（`recordIdsBySource`）语义不变。执行结果与进度摘要带分步计数 `steps: {stepId: {records, written, failed}}`（任务详情页经 `pipeline_steps` 渲染）。
-- **写图必须走 nGQL `INSERT VERTEX`**（trs-graph `/nodes/merge` 会把 id/name/vid 从属性剥离，DDL 的 NOT NULL id/name 会 400）；同名冲突检测（消歧）；实体重建 Milvus 索引失败降级不拖垮抽取；逐行失败落 **T_EXTRACT_FAIL** 审核 case（队列 category=C）。
+- **写图必须走 nGQL `INSERT VERTEX`**（trs-graph `/nodes/merge` 会把 id/name/vid 从属性剥离，DDL 的 NOT NULL id/name 会 400）；同名冲突检测（消歧）；实体重建 Milvus 索引失败即整链 FAILED（2026-09-29 口径，不降级）；逐行失败落 **T_EXTRACT_FAIL** 审核 case（队列 category=C）。
 - **失败重跑**：`POST /manual-reviews/production/rerun-extract-failures` → 所选 case 按 schema 合并为新执行，`triggerSource=RERUN`（与 MANUAL/SCHEDULE 同列展示）。
 - **回填**（`POST /{id}/backfill`）：清空该 Schema 全部来源水位后全量重跑，可反复执行；脚本落后时未带 `force` 返回 409，前端强确认后重发。
 - **水位语义**：`kg_script_watermark` 类比 Kafka consumer offset——step 成功后由 activity 写入，失败不写；`schema_key` 含大写/特殊字符时 definition_id 有原始/sanitized 两个变体，回填两个都清。
@@ -127,7 +127,7 @@ kg_script_watermark（业务库，definition_id+step_id 主键）
 | id / schema_key / name / label / kind | kind: entity/relation |
 | graph_space | 归属图空间（DDL 在该空间执行，同名 schema 可在不同空间）；与 key/name 组成两个唯一键 |
 | identity_key / attribute_identity_key / attribute_source | 身份键与属性来源描述 |
-| instance_count / version / display_order / is_core | 展示与统计 |
+| version / display_order / is_core | 展示与排序 |
 | relation_category / source_schema_id / target_schema_id / source_expression / target_expression | 仅关系：fact/inferred、起止实体（RESTRICT FK）、表达式 |
 | llm_config_id | 作业默认 LLM 配置（软关联 `platform_llm_config.id`，接配置管理） |
 | ddl_statement / ddl_status / ddl_error / ddl_executed_at | 图库 DDL 执行状态（pending/succeeded/failed/skipped） |
@@ -276,7 +276,7 @@ sequenceDiagram
         WK->>MR: failures 逐行 → T_EXTRACT_FAIL 审核 case（category=C）
     end
     WK->>SL: advance_schema_extract_watermark（该来源全部批次成功后一次性推游标；<br/>批次重试耗尽 → workflow FAILED，游标停上轮断点续读）
-    WK->>MV: 实体重建索引 buildIndex（失败降级，不拖垮抽取）
+    WK->>MV: 实体重建索引 buildIndex（失败即整链 FAILED，不降级）
     WK->>SL: record_schema_script_run（last_run_status=ok/failed 回写脚本健康信号）
     WK-->>TP: 执行记录落任务中心（SUCCEEDED/FAILED）
 ```

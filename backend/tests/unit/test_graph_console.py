@@ -132,7 +132,6 @@ def console_backend(monkeypatch):
 @pytest.mark.parametrize("space", ["shared_business", "bound_private"])
 def test_ordinary_user_can_read_shared_default_and_bound_space(console_backend, space) -> None:
     result = run_statement(_actor(), space, "RETURN 1 AS result")
-    assert result["kind"] == "read"
     assert result["records"] == [{"result": 1}]
     assert console_backend == [("read", "RETURN 1 AS result")]
 
@@ -153,6 +152,5 @@ def test_shared_or_bound_read_access_never_grants_write(console_backend, space) 
 
 
 def test_administrator_keeps_existing_write_permission(console_backend) -> None:
-    result = run_statement(_actor(is_admin=True), "other_private", 'DELETE VERTEX "p1"')
-    assert result["kind"] == "write"
+    run_statement(_actor(is_admin=True), "other_private", 'DELETE VERTEX "p1"')
     assert console_backend == [("write", 'DELETE VERTEX "p1"')]

@@ -60,7 +60,6 @@ class GraphSchemaDefinition(Base):
     identity_key: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     attribute_identity_key: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     attribute_source: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
-    instance_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     version: Mapped[str] = mapped_column(String(32), nullable=False, default="v1.0")
     display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=10000)
     is_core: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

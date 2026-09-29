@@ -144,7 +144,6 @@ class SchemaManagementDAO:
             or payload.get("identity_key", ""),
             attribute_source=payload.get("attribute_source")
             or " / ".join(payload.get("mappings", [])),
-            instance_count=0,
             version=payload["version"],
             display_order=-1,
             is_core=payload["is_core"],
@@ -257,45 +256,8 @@ class SchemaManagementDAO:
         core_count = _count(
             GraphSchemaDefinition.kind == "entity", GraphSchemaDefinition.is_core.is_(True)
         )
-        fact_count = _count(
-            GraphSchemaDefinition.kind == "relation",
-            GraphSchemaDefinition.relation_category == "fact",
-        )
-        inferred_count = _count(
-            GraphSchemaDefinition.kind == "relation",
-            GraphSchemaDefinition.relation_category == "inferred",
-        )
-        property_count = (
-            self.session.scalar(select(func.count()).select_from(GraphSchemaProperty)) or 0
-        )
-        required_count = (
-            self.session.scalar(
-                select(func.count())
-                .select_from(GraphSchemaProperty)
-                .where(GraphSchemaProperty.required.is_(True))
-            )
-            or 0
-        )
-        constraint_count = (
-            self.session.scalar(
-                select(func.count())
-                .select_from(GraphSchemaProperty)
-                .where(GraphSchemaProperty.rule != "")
-            )
-            or 0
-        )
-        mapping_count = (
-            self.session.scalar(select(func.count(func.distinct(GraphSchemaMapping.source_name))))
-            or 0
-        )
         return {
             "entity_count": int(entity_count),
             "relation_count": int(relation_count),
             "core_count": int(core_count),
-            "fact_count": int(fact_count),
-            "inferred_count": int(inferred_count),
-            "property_count": int(property_count),
-            "required_count": int(required_count),
-            "constraint_count": int(constraint_count),
-            "mapping_count": int(mapping_count),
         }

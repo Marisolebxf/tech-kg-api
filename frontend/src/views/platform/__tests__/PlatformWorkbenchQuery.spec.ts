@@ -54,7 +54,7 @@ function deferred<T>() {
 }
 
 function queryResult(value: string): GraphConsoleResult {
-  return { columns: ['name'], records: [{ name: value }], summary: {}, kind: 'read' }
+  return { columns: ['name'], records: [{ name: value }], summary: {} }
 }
 
 function algorithmResult(value: string): AlgorithmResultPayload {
@@ -452,7 +452,6 @@ describe('Algorithm result lists', () => {
       columns: ['name'],
       records: Array.from({ length: 13 }, (_, index) => ({ name: `result-${index}` })),
       summary: {},
-      kind: 'read',
     })
     await wrapper.get('textarea').setValue('MATCH (v) RETURN v LIMIT 13')
     await clickButton('执行 nGQL')

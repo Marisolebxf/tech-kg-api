@@ -565,7 +565,6 @@ const selectedAssetChange = ref<AssetOverviewKey | null>(null)
 const assetChangeRows = ref<Record<AssetOverviewKey, AssetChangeRow[]>>({
   entity: [],
   relation: [],
-  property: [],
 })
 // 昨日新增数值合计（Σwritten，与资产卡徽标同源）：抽屉明细行受单执行
 // 上限截断，行数 < 合计时页脚标注「共 N 条 · 展示前 n 条」
@@ -1175,8 +1174,7 @@ async function loadPlatformOverview(): Promise<void> {
       // 兜底：旧版本/异常载荷缺 warnings 时模板里 .join 会直接把页面炸掉
       warnings: data.warnings ?? [],
     }
-    // 属性值数据卡片（key=property）为占位统计（待接入），总览页不展示
-    assetOverviewGroups.value = data.assetOverviewGroups.filter((item) => item.key !== 'property')
+    assetOverviewGroups.value = data.assetOverviewGroups
     assetChangeRows.value = data.assetChangeRows
     assetChangeTotals.value = data.assetChangeTotals ?? {}
     entityStructure.value = data.entityStructure

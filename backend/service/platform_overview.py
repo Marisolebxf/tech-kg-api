@@ -1,4 +1,4 @@
-"""平台首页总览服务：图资产实时统计 + 尚未接入模块的显式降级数据。"""
+"""平台首页总览服务：图资产实时统计；图库不可用时诚实降级（显式占位，不回填演示数据）。"""
 
 from __future__ import annotations
 
@@ -14,8 +14,6 @@ from typing import Any, Protocol
 from biz.schemas.platform_overview import (
     AssetChangeRow,
     AssetOverviewGroup,
-    LatestChange,
-    ManagementRisk,
     PlatformOverviewData,
     StructureItem,
     StructureMember,
@@ -426,7 +424,9 @@ def _flatten_vertex_props(vertex: Any) -> dict[str, Any]:
     return props
 
 
-def _graph_time_prop(client: Any, kind: str, name: str, cache: dict[tuple[str, str], str | None]) -> str | None:
+def _graph_time_prop(
+    client: Any, kind: str, name: str, cache: dict[tuple[str, str], str | None]
+) -> str | None:
     """tag/边类型上可进时间窗 LOOKUP 的写入时间属性（仅 string 型列）。
 
     候选优先序：update_time → create_time → source_update_time（溯源列兜底，
@@ -637,7 +637,9 @@ def _relation_object_rows(
                 object=f"{names.get(src, src)} → {names.get(dst, dst)}",
                 change=f"新增 {type_label}",
                 source=str(edge_props.get("source_table") or fallback_source),
-                time=_time_short(edge_props.get(time_prop), fallback_time) if time_prop else fallback_time,
+                time=_time_short(edge_props.get(time_prop), fallback_time)
+                if time_prop
+                else fallback_time,
             )
         )
     return rows
@@ -656,7 +658,11 @@ def _schema_names_by_key(schema_keys: list[str]) -> dict[str, str]:
         engine = get_workflow_engine()
         with engine.connect() as connection:
             rows = connection.execute(
-                text("SELECT schema_key, name FROM kg_schema_definition WHERE schema_key IN (" + quoted + ")")
+                text(
+                    "SELECT schema_key, name FROM kg_schema_definition WHERE schema_key IN ("
+                    + quoted
+                    + ")"
+                )
             ).fetchall()
         return {str(row[0]): str(row[1]) for row in rows if row[1]}
     except Exception:
@@ -748,7 +754,9 @@ def enrich_day_rows_with_graph(
     entity_rows: list[AssetChangeRow] = []
     seed_vids: list[str] = []
     try:
-        for execution in sorted(snapshot.entity_executions, key=lambda ex: ex.completed_at, reverse=True):
+        for execution in sorted(
+            snapshot.entity_executions, key=lambda ex: ex.completed_at, reverse=True
+        ):
             schema_name = schema_names.get(execution.schema_key)
             rows, vids = (
                 _entity_object_rows(client, execution, schema_name, time_props, schema_labels)
@@ -762,7 +770,9 @@ def enrich_day_rows_with_graph(
                 seed_vids.extend(vids)
             entity_rows.extend(rows)
         relation_rows: list[AssetChangeRow] = []
-        for execution in sorted(snapshot.relation_executions, key=lambda ex: ex.completed_at, reverse=True):
+        for execution in sorted(
+            snapshot.relation_executions, key=lambda ex: ex.completed_at, reverse=True
+        ):
             schema_name = schema_names.get(execution.schema_key)
             rows = (
                 _relation_object_rows(
@@ -904,7 +914,7 @@ def _build_structure(
 
 
 class PlatformOverviewService:
-    """优先读取真实图统计；无法读取时保留可演示、可识别的降级结果。"""
+    """优先读取真实图统计；无法读取时进入诚实降级：显式占位，不回填演示数据。"""
 
     def __init__(
         self,
@@ -960,20 +970,21 @@ class PlatformOverviewService:
                 self._stats_provider.get_stats(space) if space else self._stats_provider.get_stats()
             )
         except Exception as exc:
-            logger.warning("首页图资产统计读取失败，使用降级数据: %s", exc)
+            logger.warning("首页图资产统计读取失败，进入诚实降级（占位不回填演示数据）: %s", exc)
+            # 运行中执行数来自控制库、与图无关：仍实时短查，拿不到回 0（不用演示常数）
+            try:
+                running_live = self._changes_provider.running_count(space)
+            except Exception:
+                running_live = 0
             result = fallback.model_copy(
                 update={
                     "platform_status": "图数据库暂不可用，页面已降级",
+                    "pending_batch_count": running_live,
                     "updated_at": datetime.now().strftime("%H:%M"),
                     "data_mode": "mock",
-                    "data_sources": {
-                        "graphAssets": "demo-fallback",
-                        "dayChanges": "demo-fallback",
-                        "managementRisks": "demo-fallback",
-                    },
+                    "data_sources": {"graphAssets": "unavailable", "dayChanges": "unavailable"},
                     "warnings": [
-                        "图数据库统计不可用，资产总量和结构正在展示降级数据。",
-                        "昨日变化和管理风险等待任务中心持久化接口接入。",
+                        "图数据库统计不可用，资产总量、构成图与昨日新增明细暂时无法展示。"
                     ],
                 }
             )
@@ -994,9 +1005,7 @@ class PlatformOverviewService:
                 relation_added = (
                     f"+{_format_count(changes.relation_added)}" if changes.relation_added else "--"
                 )
-                change_rows = dict(fallback.asset_change_rows)
-                change_rows["entity"] = changes.entity_rows
-                change_rows["relation"] = changes.relation_rows
+                change_rows = {"entity": changes.entity_rows, "relation": changes.relation_rows}
                 change_totals = {"entity": changes.entity_added, "relation": changes.relation_added}
                 day_source = "workflow-control-live"
                 extra_warnings: list[str] = []
@@ -1004,11 +1013,9 @@ class PlatformOverviewService:
                 added_label = "昨日新增"
                 entity_added = "--"
                 relation_added = "--"
-                change_rows = dict(fallback.asset_change_rows)
-                change_rows["entity"] = []
-                change_rows["relation"] = []
+                change_rows = {"entity": [], "relation": []}
                 change_totals = {"entity": 0, "relation": 0}
-                day_source = "demo-fallback"
+                day_source = "unavailable"
                 extra_warnings = ["昨日新增暂时不可读：工作流控制库不可用。"]
             # 运行中执行数实时短查（不随日快照冻结一整天）；控制库不可读回退快照值
             try:
@@ -1019,8 +1026,7 @@ class PlatformOverviewService:
             # 关系总量用 Space/edges。构成图分段按 Schema(tag/边类型)计数、
             # 无法去重（需逐 vid 查标签），多标签顶点（如同一机构 vid 同挂
             # organization_base+Organization，dev2 实测两口径差 ~23 万）会让
-            # 分段合计大于中心数——两个口径并存：卡片去重、分段合计取
-            # ΣSchema 计数（entity/relation_structure_total），与分段自洽。
+            # 分段合计大于卡片总量——两个口径并存：卡片去重、分段按标签计数。
             entity_total = stats.total_nodes
             relation_total = stats.total_edges
             groups = [
@@ -1040,14 +1046,6 @@ class PlatformOverviewService:
                     added=relation_added,
                     added_label=added_label,
                 ),
-                AssetOverviewGroup(
-                    key="property",
-                    title="属性值数据",
-                    total="--",
-                    total_label="属性值总量（统计接口待接入）",
-                    added="--",
-                    added_label="昨日新增",
-                ),
             ]
             result = fallback.model_copy(
                 update={
@@ -1063,19 +1061,14 @@ class PlatformOverviewService:
                     "relation_structure": _build_structure(
                         stats.edges, entity=False, labels=_schema_labels_by_name(space, "relation")
                     ),
-                    # 环形图中心 = 各分段之和（Σ标签/Σ边类型计数），与分段自洽
-                    "entity_structure_total": _format_count(sum(stats.nodes.values())),
-                    "relation_structure_total": _format_count(sum(stats.edges.values())),
                     "data_mode": "partial",
                     "data_sources": {
                         "graphAssets": "trsgraph-live",
                         "dayChanges": day_source,
-                        "managementRisks": "demo-fallback",
                     },
                     "warnings": [
                         "实体与关系统计来自图数据库实时接口。",
                         "昨日新增与运行中执行数来自工作流控制库（按抽取写图计数）。",
-                        "属性值统计和管理风险等待任务中心接口接入。",
                         *extra_warnings,
                     ],
                 }
@@ -1083,15 +1076,20 @@ class PlatformOverviewService:
         return result
 
     def _get_fallback_overview(self) -> PlatformOverviewData:
+        """降级骨架：所有数据位显式占位、空表，绝不回填演示数据。
+
+        图统计读取失败时以它为底做诚实降级；正常路径只借用字段结构，
+        装配时逐项覆盖为真实值。
+        """
         return PlatformOverviewData(
             platform_status="平台服务正常",
-            pending_batch_count=2,
-            updated_at="10:30",
+            pending_batch_count=0,
+            updated_at=datetime.now().strftime("%H:%M"),
             asset_overview_groups=[
                 AssetOverviewGroup(
                     key="entity",
                     title="实体数据",
-                    total="1.28 亿",
+                    total="--",
                     total_label="实体总量",
                     added="--",
                     added_label="昨日新增",
@@ -1099,244 +1097,14 @@ class PlatformOverviewService:
                 AssetOverviewGroup(
                     key="relation",
                     title="关系数据",
-                    total="6.42 亿",
+                    total="--",
                     total_label="关系总量",
                     added="--",
                     added_label="昨日新增",
                 ),
-                AssetOverviewGroup(
-                    key="property",
-                    title="属性值数据",
-                    total="18.76 亿",
-                    total_label="属性值总量",
-                    added="--",
-                    added_label="昨日新增",
-                ),
             ],
-            asset_change_rows={
-                "entity": [
-                    AssetChangeRow(
-                        type="组织机构",
-                        object="华南智能芯片有限公司",
-                        change="新增 Organization",
-                        source="enterprise_profile",
-                        time="10:30:13",
-                    ),
-                    AssetChangeRow(
-                        type="科技专家",
-                        object="周启航",
-                        change="新增 Expert",
-                        source="expert_profile",
-                        time="10:30:18",
-                    ),
-                    AssetChangeRow(
-                        type="论文",
-                        object="《多模态大模型知识推理方法研究》",
-                        change="新增 Paper",
-                        source="paper_record",
-                        time="10:30:21",
-                    ),
-                    AssetChangeRow(
-                        type="产品 / 技术产品",
-                        object="边缘推理芯片 X7",
-                        change="新增 Product",
-                        source="enterprise_product",
-                        time="10:30:26",
-                    ),
-                ],
-                "relation": [
-                    AssetChangeRow(
-                        type="专家任职",
-                        object="周启航 → 中国科学院自动化研究所",
-                        change="新增 WORKS_AT",
-                        source="expert_employment",
-                        time="10:30:22",
-                    ),
-                    AssetChangeRow(
-                        type="论文引用",
-                        object="周启航 → 多模态大模型知识推理方法研究",
-                        change="新增 PUBLISH",
-                        source="paper_author",
-                        time="10:30:25",
-                    ),
-                    AssetChangeRow(
-                        type="企业关联",
-                        object="华南智能芯片 → 边缘推理芯片 X7",
-                        change="新增 HAS_PRODUCT",
-                        source="enterprise_product",
-                        time="10:30:29",
-                    ),
-                ],
-                "property": [
-                    AssetChangeRow(
-                        type="企业属性",
-                        object="华南智能芯片·注册资本",
-                        change="新增 registered_capital",
-                        source="enterprise_profile",
-                        time="10:30:14",
-                    ),
-                    AssetChangeRow(
-                        type="企业属性",
-                        object="华南智能芯片·上市状态",
-                        change="更新 listing_status",
-                        source="enterprise_profile",
-                        time="10:30:16",
-                    ),
-                    AssetChangeRow(
-                        type="论文属性",
-                        object="P202607140018·发表时间",
-                        change="新增 publish_date",
-                        source="paper_record",
-                        time="10:30:23",
-                    ),
-                    AssetChangeRow(
-                        type="关系属性",
-                        object="WORKS_AT_20418·置信度",
-                        change="更新 confidence",
-                        source="graph_alignment",
-                        time="10:30:31",
-                    ),
-                ],
-            },
-            latest_changes=[
-                LatestChange(
-                    time="10:30",
-                    type="更新",
-                    domain="机构域",
-                    title="清华大学机构属性更新完成",
-                    detail="机构简称与统一标识已完成标准化更新",
-                    impact="处理实例 PI-20260714-0002",
-                    to="/processing-instance/PI-20260714-0002",
-                ),
-                LatestChange(
-                    time="10:18",
-                    type="对齐",
-                    domain="人才域",
-                    title="陈卓候选专家实体完成对齐",
-                    detail="机构别名经人工确认后，候选实体已合并至标准专家实体",
-                    impact="处理实例 PI-20260713-0008",
-                    to="/processing-instance/PI-20260713-0008",
-                ),
-                LatestChange(
-                    time="10:13",
-                    type="新增",
-                    domain="人才域",
-                    title="张明远标准专家实体构建完成",
-                    detail="完成来源读取、Schema 映射、实体标准化与图谱入库",
-                    impact="处理实例 PI-20260714-0001",
-                    to="/processing-instance/PI-20260714-0001",
-                ),
-                LatestChange(
-                    time="09:48",
-                    type="质量",
-                    domain="论文域",
-                    title="重复论文成果记录等待确认",
-                    detail="同一 paper_id 对应三条来源记录，需要人工确认主记录",
-                    impact="处理实例 PI-20260714-0007",
-                    to="/processing-instance/PI-20260714-0007",
-                ),
-                LatestChange(
-                    time="昨日",
-                    type="Schema",
-                    domain="全域",
-                    title="统一 Schema v1.8 已发布",
-                    detail="确认 11 个首版必落实体、42 个标准事实关系和 9 类候选实体",
-                    impact="所有新建批次使用 v1.8",
-                    to="/schema",
-                ),
-            ],
-            management_risks=[
-                ManagementRisk(
-                    title="大模型抽取流程已阻断",
-                    detail="PI-20260714-0101 · 326 条受影响 · 张建图",
-                    detail_to="/processing-instance/PI-20260714-0101",
-                    review_to="/manual-review/task/PI-20260714-0101",
-                ),
-                ManagementRisk(
-                    title="Schema 批量映射失败",
-                    detail="PI-20260714-0102 · 1,284 条任务受影响 · 张建图",
-                    detail_to="/processing-instance/PI-20260714-0102",
-                    review_to="/manual-review/task/PI-20260714-0102",
-                ),
-                ManagementRisk(
-                    title="张明远候选实体存在冲突",
-                    detail="PI-20260714-0004 · 实体对齐 · 王审核",
-                    detail_to="/processing-instance/PI-20260714-0004",
-                    review_to="/manual-review/task/PI-20260714-0004",
-                ),
-            ],
-            entity_structure=[
-                StructureItem(
-                    label="科技专家",
-                    schema="Expert",
-                    count="4,286 万",
-                    ratio=34,
-                    tone="#2e90fa",
-                ),
-                StructureItem(
-                    label="论文",
-                    schema="Paper",
-                    count="2,931 万",
-                    ratio=23,
-                    tone="#7a5af8",
-                ),
-                StructureItem(
-                    label="组织机构",
-                    schema="Organization",
-                    count="2,164 万",
-                    ratio=17,
-                    tone="#12b76a",
-                ),
-                StructureItem(
-                    label="项目",
-                    schema="Project / Patent",
-                    count="1,438 万",
-                    ratio=11,
-                    tone="#f79009",
-                ),
-                StructureItem(
-                    label="其他实体",
-                    schema="Event / Product / Field",
-                    count="1,901 万",
-                    ratio=15,
-                    tone="#98a2b3",
-                ),
-            ],
-            relation_structure=[
-                StructureItem(
-                    label="论文引用",
-                    schema="PUBLISH / CITES / OUTPUT",
-                    count="2.04 亿",
-                    ratio=32,
-                    tone="#165dff",
-                ),
-                StructureItem(
-                    label="专家任职",
-                    schema="WORKS_AT / STUDY_AT",
-                    count="1.28 亿",
-                    ratio=20,
-                    tone="#2e90fa",
-                ),
-                StructureItem(
-                    label="项目参与",
-                    schema="LEAD_PROJECT / INVENT_PATENT",
-                    count="1.16 亿",
-                    ratio=18,
-                    tone="#06aed4",
-                ),
-                StructureItem(
-                    label="企业关联",
-                    schema="HAS_PRODUCT / HAS_EVENT",
-                    count="0.92 亿",
-                    ratio=14,
-                    tone="#7a5af8",
-                ),
-                StructureItem(
-                    label="其他关系",
-                    schema="产业链 / 推理关系",
-                    count="1.02 亿",
-                    ratio=16,
-                    tone="#98a2b3",
-                ),
-            ],
+            asset_change_rows={"entity": [], "relation": []},
+            asset_change_totals={"entity": 0, "relation": 0},
+            entity_structure=[],
+            relation_structure=[],
         )

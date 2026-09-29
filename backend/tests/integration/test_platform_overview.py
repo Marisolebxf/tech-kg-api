@@ -26,10 +26,10 @@ class _IntegrationStatsProvider:
 
 
 class _IntegrationChangesProvider:
-    """控制库今日增量替身：避免集成测试依赖真实 techkg_control 数据。"""
+    """控制库昨日增量替身：避免集成测试依赖真实 techkg_control 数据。"""
 
-    def __init__(self) -> None:
-        self._snapshot = DayChangesSnapshot(
+    def get_day_changes(self, space: str | None = None) -> DayChangesSnapshot:
+        return DayChangesSnapshot(
             entity_added=5,
             relation_added=2,
             running_count=1,
@@ -39,17 +39,14 @@ class _IntegrationChangesProvider:
                     object="审测挂件 · 5 条",
                     change="新增 review-widget-64d0d5",
                     source="techkg_e2e_liz.review_widgets",
-                    time="10:30:00",
+                    time="09-22 10:30:00",
                 )
             ],
             relation_rows=[],
         )
 
-    def get_day_changes(self, space: str | None = None) -> DayChangesSnapshot:
-        return self._snapshot
-
     def running_count(self, space: str | None = None) -> int:
-        return self._snapshot.running_count
+        return 1
 
 
 @pytest.fixture
@@ -81,11 +78,8 @@ async def test_platform_overview_returns_frontend_contract(
     assert data["pendingBatchCount"] == 1
     assert len(data["updatedAt"]) == 5
     assert data["updatedAt"][2] == ":"
-    assert [item["key"] for item in data["assetOverviewGroups"]] == [
-        "entity",
-        "relation",
-        "property",
-    ]
+    # 资产卡只有实体/关系两类（属性值占位卡随演示数据清理一并删除）
+    assert [item["key"] for item in data["assetOverviewGroups"]] == ["entity", "relation"]
     # 昨日新增来自工作流控制库替身：数值与明细行均为真实口径的返回形状
     assert data["assetOverviewGroups"][0]["added"] == "+5"
     assert data["assetOverviewGroups"][0]["addedLabel"] == "昨日新增"
@@ -93,8 +87,12 @@ async def test_platform_overview_returns_frontend_contract(
     assert len(data["assetChangeRows"]["entity"]) == 1
     assert data["assetChangeRows"]["entity"][0]["change"] == "新增 review-widget-64d0d5"
     assert data["assetChangeRows"]["relation"] == []
-    assert len(data["latestChanges"]) == 5
-    assert len(data["managementRisks"]) == 3
+    assert set(data["assetChangeRows"]) == {"entity", "relation"}
+    # 纯演示字段已删：响应里不再有最新动态/管理风险/环形图中心数
+    assert "latestChanges" not in data
+    assert "managementRisks" not in data
+    assert "entityStructureTotal" not in data
+    assert "relationStructureTotal" not in data
     assert sum(item["ratio"] for item in data["entityStructure"]) == 100
     assert sum(item["ratio"] for item in data["relationStructure"]) == 100
     assert data["dataMode"] == "partial"
@@ -114,12 +112,20 @@ async def test_platform_overview_atomic_endpoints_are_registered(
     changes = await overview_client.get(
         "/api/v1/platform/overview/changes", params={"assetType": "relation"}
     )
-    activity = await overview_client.get("/api/v1/platform/overview/activity")
-    risks = await overview_client.get("/api/v1/platform/overview/risks")
     structures = await overview_client.get("/api/v1/platform/overview/structures")
 
     assert assets.json()["data"]["items"][0]["total"] == "1.28 亿"
     assert changes.json()["data"]["assetType"] == "relation"
-    assert len(activity.json()["data"]["items"]) == 5
-    assert len(risks.json()["data"]["items"]) == 3
+    assert changes.json()["data"]["dataSource"] == "workflow-control-live"
     assert structures.json()["data"]["dataSource"] == "trsgraph-live"
+
+
+async def test_platform_overview_demo_endpoints_are_removed(
+    overview_client: AsyncClient,
+) -> None:
+    """纯演示数据的 /activity、/risks 端点已删：不再对外提供演示内容。"""
+    activity = await overview_client.get("/api/v1/platform/overview/activity")
+    risks = await overview_client.get("/api/v1/platform/overview/risks")
+
+    assert activity.status_code == 404
+    assert risks.status_code == 404

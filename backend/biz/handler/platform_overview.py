@@ -10,16 +10,12 @@ from biz.dependencies.auth import CurrentActor
 from biz.handler.graph_search import _ensure_space_access
 from biz.schemas.platform_overview import (
     AssetOverviewKey,
-    PlatformActivityData,
-    PlatformActivityResponse,
     PlatformAssetChangesData,
     PlatformAssetChangesResponse,
     PlatformAssetSummaryData,
     PlatformAssetSummaryResponse,
     PlatformOverviewData,
     PlatformOverviewResponse,
-    PlatformRiskData,
-    PlatformRiskResponse,
     PlatformStructureData,
     PlatformStructureResponse,
 )
@@ -45,13 +41,6 @@ async def _get_overview(space: str | None = None, actor=None) -> PlatformOvervie
         # 选择的空间请求，总览会把无权空间的数据直接吐出来（2026-09-24 修复）。
         _ensure_space_access(actor, space)
     result = await asyncio.to_thread(application.get_overview, space)
-    if rbac_enabled():
-        # Overview data is cached by space, shared across users. Never mutate that
-        # cached object. Review entries follow the view tier (developers also see
-        # shared-production cases read-only); operating them is enforced server-side.
-        review_spaces = allowed_space_names(actor, action="review_view") if actor.can_develop else []
-        if space not in review_spaces:
-            result = result.model_copy(update={"management_risks": []})
     return result
 
 
@@ -93,35 +82,7 @@ async def get_platform_asset_changes(
         data=PlatformAssetChangesData(
             asset_type=asset_type,
             rows=overview.asset_change_rows[asset_type],
-            data_source=overview.data_sources.get("todayChanges", "unknown"),
-        )
-    )
-
-
-@router.get("/activity")
-async def get_platform_activity(
-    actor: CurrentActor,
-    space: Annotated[str | None, Query(max_length=64)] = None,
-) -> PlatformActivityResponse:
-    overview = await _get_overview(space, actor)
-    return PlatformActivityResponse(
-        data=PlatformActivityData(
-            items=overview.latest_changes,
-            data_source=overview.data_sources.get("todayChanges", "unknown"),
-        )
-    )
-
-
-@router.get("/risks")
-async def get_platform_risks(
-    actor: CurrentActor,
-    space: Annotated[str | None, Query(max_length=64)] = None,
-) -> PlatformRiskResponse:
-    overview = await _get_overview(space, actor)
-    return PlatformRiskResponse(
-        data=PlatformRiskData(
-            items=overview.management_risks,
-            data_source=overview.data_sources.get("managementRisks", "unknown"),
+            data_source=overview.data_sources.get("dayChanges", "unknown"),
         )
     )
 

@@ -29,8 +29,7 @@ export interface GraphNodeData {
   /**
    * 实体溯源字段，来自图节点 properties。
    *
-   * 缺失时回退 nodeSourceMap 静态映射，
-   * 保证溯源展示不会出现空白。
+   * 缺失时溯源展示显示「未提供」，不做静态映射兜底。
    */
   sourceTable?: string
   sourceRecordId?: string
@@ -70,7 +69,7 @@ export interface GraphEdgeData {
   /**
    * 关系溯源字段，来自图边 properties。
    *
-   * 缺失时回退 edgeSourceMap 静态映射。
+   * 缺失时溯源展示显示「未提供」，不做静态映射兜底。
    */
   sourceTable?: string
   sourceRecordId?: string
@@ -92,308 +91,15 @@ export interface GraphEdgeData {
   inferred?: boolean
 }
 
-export interface LiveEntityProvenance {
-  sourceTable?: string
-  sourceField?: string
-  sourceValue?: string
-  ingestBatch?: string
-  ingestTime?: string
-}
-
 export interface GraphPreset {
   nodes: GraphNodeData[]
   edges: GraphEdgeData[]
-}
-
-export interface GraphProvenanceEvidence {
-  title: string
-  businessTable: string
-  technicalTable: string
-  recordId: string
-  fieldIdentifier: string
-  sourceField?: string
-  graphVid?: string
-  summary: string
-}
-
-export interface GraphProvenance {
-  sourceDatabase: string
-  evidences: GraphProvenanceEvidence[]
-  relationEndpoints?: Array<{
-    role: '源实体' | '目标实体'
-    name: string
-    entityType: string
-    businessTable: string
-    technicalTable: string
-    recordId: string
-    fieldIdentifier: string
-    sourceField: string
-    graphVid: string
-  }>
-  task: {
-    name: string
-    instanceId: string
-    executedAt: string
-    status: string
-    mode: string
-    batch: string
-  }
-  result: {
-    ruleName: string
-    ruleVersion: string
-    graphVersion: string
-    generatedAt: string
-    status: string
-  }
-}
-
-const nodeSourceMap: Record<GraphNodeType, { businessTable: string; technicalTable: string; keyField: string; summary: string }> = {
-  main: { businessTable: '专家基本信息表', technicalTable: 'expert_profile', keyField: 'expert_id', summary: '专家姓名、任职机构和研究方向等基本信息' },
-  expert: { businessTable: '专家基本信息表', technicalTable: 'expert_profile', keyField: 'expert_id', summary: '专家姓名、任职机构和研究方向等基本信息' },
-  org: { businessTable: '科技机构信息表', technicalTable: 'organization_base', keyField: 'organization_id', summary: '机构标准名称、简称和统一标识信息' },
-  company: { businessTable: '科技企业信息表', technicalTable: 'enterprise_registry', keyField: 'enterprise_id', summary: '企业名称、统一社会信用代码和经营信息' },
-  paper: { businessTable: '论文成果表', technicalTable: 'paper_metadata', keyField: 'paper_id', summary: '论文题名、作者、发表时间和主题关键词' },
-  topic: { businessTable: '科技主题标签表', technicalTable: 'research_topic', keyField: 'topic_id', summary: '标准主题名称、关键词和所属技术领域' },
-  project: { businessTable: '科研项目表', technicalTable: 'research_project', keyField: 'project_id', summary: '项目名称、承担单位、成员和执行时间' },
-  event: { businessTable: '产业事件表', technicalTable: 'industry_event', keyField: 'event_id', summary: '事件名称、参与主体、时间和事件类型' },
-  chain: { businessTable: '以实体来源字段为准', technicalTable: '-', keyField: 'node_id', summary: '产业链或产业节点实体，实际来源以节点 source_table 属性为准' },
-  field: { businessTable: '以实体来源字段为准', technicalTable: '-', keyField: 'node_id', summary: '产品或关键词实体，实际来源以节点 source_table 属性为准' },
-  source: { businessTable: '以实体来源字段为准', technicalTable: '-', keyField: 'node_id', summary: '数据来源实体，实际来源以节点属性为准' },
-}
-
-const nodeSourceValue = (node: GraphNodeData) => {
-  if (node.id === 'core') return 'EXPERT-10286'
-  if (node.id === 'org-1') return 'ORG-10018'
-  return node.id.toUpperCase()
 }
 
 export interface ConfidenceBasis {
   rule: string
   originalEdgeType?: string
   scoreBreakdown: Record<string, number>
-}
-
-const sourceFieldIdentifier = (node: GraphNodeData) => {
-  if (node.sourceField && node.sourceValue) {
-    return `${node.sourceField} = ${node.sourceValue}`
-  }
-  if (node.sourceRecordId) {
-    return `source_record_id = ${node.sourceRecordId}`
-  }
-  return nodeFieldIdentifier(node)
-}
-
-const nodeFieldIdentifier = (node: GraphNodeData) => `${nodeSourceMap[node.nodeType].keyField} = ${nodeSourceValue(node)}`
-
-const edgeSourceMap: Record<string, { businessTable: string; technicalTable: string; summary: string }> = {
-  论文合作: { businessTable: '论文作者关联表', technicalTable: 'paper_author_relation', summary: '两端实体共同出现在同一论文作者列表中' },
-  同事: { businessTable: '专家任职经历表', technicalTable: 'expert_employment', summary: '两端专家在同一机构或部门存在任职时间重叠' },
-  校友: { businessTable: '专家教育经历表', technicalTable: 'expert_education', summary: '两端专家的院校、院系或导师信息存在匹配' },
-  企业关联: { businessTable: '专家企业角色表', technicalTable: 'expert_enterprise_role', summary: '工商角色、项目合作或成果转化记录关联两端实体' },
-  产业事件: { businessTable: '事件主体关联表', technicalTable: 'event_subject_relation', summary: '两端实体共同参与同一产业事件' },
-  直接关系: { businessTable: '业务关系记录表', technicalTable: 'direct_relation', summary: '结构化业务记录直接关联两端实体' },
-}
-
-export function getNodeProvenance(node: GraphNodeData): GraphProvenance {
-  const source = nodeSourceMap[node.nodeType]
-
-  // 真实溯源字段优先，缺失时回退静态映射。
-  const technicalTable =
-    node.sourceTable || source.technicalTable
-
-  const recordId =
-    node.sourceRecordId || `${node.id.toUpperCase()}-SRC`
-
-  const fieldIdentifier = sourceFieldIdentifier(node)
-
-  const ingestBatch =
-    node.ingestBatch || `PI-20260714-NODE-${node.id.toUpperCase()}`
-
-  const ingestTime =
-    node.ingestTime || '2026-07-13 02:12:36'
-
-  const sourceDatabase =
-    node.sourceSystem || '科技要素数据库'
-
-  return {
-    sourceDatabase,
-    evidences: [{
-      title: '原始业务记录',
-      businessTable: source.businessTable,
-      technicalTable,
-      recordId,
-      fieldIdentifier,
-      sourceField: node.sourceField || source.keyField,
-      graphVid: node.id,
-      summary: source.summary,
-    }],
-    task: {
-      name: `${node.entityType}标准化与实体融合`,
-      instanceId: ingestBatch,
-      executedAt: ingestTime,
-      status: '成功',
-      mode: '清洗规则 + 实体对齐',
-      batch: ingestBatch,
-    },
-    result: {
-      ruleName: `${node.entityType}实体融合规则`,
-      ruleVersion: 'ENTITY-MERGE-1.6',
-      graphVersion: 'v1.8',
-      generatedAt: ingestTime,
-      status: '已入图',
-    },
-  }
-}
-
-/**
- * 构造关系两端实体的来源信息。
- *
- * 两端实体都是真实图节点，
- * 因此源数据表/字段标识 ID 优先取节点真实溯源字段。
- */
-function endpointFromNode(
-  node: GraphNodeData,
-  role: '源实体' | '目标实体',
-) {
-  const source = nodeSourceMap[node.nodeType]
-  return {
-    role,
-    name: node.label,
-    entityType: node.entityType,
-    businessTable: source.businessTable,
-    technicalTable: node.sourceTable || source.technicalTable,
-    recordId: node.sourceRecordId || `${node.id.toUpperCase()}-SRC`,
-    fieldIdentifier: sourceFieldIdentifier(node),
-    sourceField: node.sourceField || source.keyField,
-    graphVid: node.id,
-  }
-}
-
-export function getEdgeProvenance(edge: GraphEdgeData, from?: GraphNodeData, to?: GraphNodeData): GraphProvenance {
-  const relationName = from && to ? `${from.label} → ${to.label}` : edge.id
-
-  // 前端推理生成的边（同事/校友），没有对应的真实图边。
-  const isFabricated = edge.inferred === true
-
-  // 间接关系是真实两跳边，仅分类重标签，仍保留真实入图任务。
-  const isPathInferred = edge.category === '间接关系'
-
-  const source = edgeSourceMap[edge.category] ?? edgeSourceMap.直接关系
-
-  // 边自身来源：真实字段优先，缺失回退静态映射。
-  const technicalTable =
-    edge.sourceTable || source.technicalTable
-
-  const recordId =
-    edge.sourceRecordId || `${edge.id.toUpperCase()}-SRC`
-
-  const evidenceSummary =
-    edge.matchEvidence || source.summary
-
-  const inferredEndpoints = from && to
-    ? [endpointFromNode(from, '源实体'), endpointFromNode(to, '目标实体')]
-    : []
-  let evidences: GraphProvenanceEvidence[]
-  if (isPathInferred) {
-    evidences = [
-        {
-          title: `${from?.label ?? '源实体'}关联记录`,
-          businessTable: '实体主题关联表',
-          technicalTable: 'entity_topic_relation',
-          recordId: `${(from?.id ?? edge.from).toUpperCase()}-TOPIC`,
-          fieldIdentifier: `entity_id = ${(from?.id ?? edge.from).toUpperCase()}`,
-          sourceField: 'entity_id',
-          graphVid: from?.id ?? edge.from,
-          summary: `记录${from?.label ?? '源实体'}关联的论文、项目或主题标签`,
-        },
-        {
-          title: `${to?.label ?? '目标实体'}关联记录`,
-          businessTable: '实体主题关联表',
-          technicalTable: 'entity_topic_relation',
-          recordId: `${(to?.id ?? edge.to).toUpperCase()}-TOPIC`,
-          fieldIdentifier: `entity_id = ${(to?.id ?? edge.to).toUpperCase()}`,
-          sourceField: 'entity_id',
-          graphVid: to?.id ?? edge.to,
-          summary: `记录${to?.label ?? '目标实体'}关联的论文、项目或主题标签`,
-        },
-        {
-          title: '推理路径证据',
-          businessTable: '实体关系记录表',
-          technicalTable: 'entity_relation',
-          recordId: `${edge.id.toUpperCase()}-PATH`,
-          fieldIdentifier: `relation_id = ${edge.id}`,
-          sourceField: 'relation_id',
-          graphVid: edge.id,
-          summary: `${relationName}通过共同论文、项目或主题节点形成两跳路径`,
-        },
-      ]
-  } else if (isFabricated && inferredEndpoints.length) {
-    evidences = inferredEndpoints.map((endpoint) => ({
-          title: `${endpoint.role}任职数据`,
-          businessTable: endpoint.businessTable,
-          technicalTable: endpoint.technicalTable,
-          recordId: endpoint.recordId,
-          fieldIdentifier: endpoint.fieldIdentifier,
-          sourceField: endpoint.sourceField,
-          graphVid: endpoint.graphVid,
-          summary: `${endpoint.name}的真实图谱实体及任职来源，用于推理同事关系`,
-        }))
-  } else {
-    evidences = [{
-        title: '原始业务记录',
-        businessTable: source.businessTable,
-        technicalTable,
-        recordId,
-        fieldIdentifier: `relation_id = ${edge.id}`,
-        sourceField: 'relation_id',
-        graphVid: edge.id,
-        summary: evidenceSummary,
-      }]
-  }
-
-  // 同事边由服务端规则推理后写入图谱，来源证据是两端真实实体及任职数据。
-  const taskInstanceId = isFabricated
-    ? 'expert_colleague_relation_service'
-    : (edge.ingestBatch || `PI-20260714-EDGE-${edge.id.toUpperCase()}`)
-
-  const taskExecutedAt = isFabricated
-    ? (edge.ingestTime || '-')
-    : (edge.ingestTime || '2026-07-13 02:12:36')
-
-  let taskMode = edge.matchMethod || '业务规则识别'
-  if (isFabricated) {
-    taskMode = '任职时间交集 + 机构/部门匹配'
-  } else if (isPathInferred) {
-    taskMode = '两跳路径 + 共现规则'
-  }
-
-  const taskStatus = isFabricated
-    ? '规则推理'
-    : '成功'
-
-  return {
-    sourceDatabase: '科技要素数据库',
-    evidences,
-    relationEndpoints: from && to ? [
-      endpointFromNode(from, '源实体'),
-      endpointFromNode(to, '目标实体'),
-    ] : undefined,
-    task: {
-      name: isPathInferred ? '图谱关系推理' : `${edge.label}关系识别`,
-      instanceId: taskInstanceId,
-      executedAt: taskExecutedAt,
-      status: taskStatus,
-      mode: taskMode,
-      batch: taskInstanceId,
-    },
-    result: {
-      ruleName: isPathInferred ? '两跳路径与主题共现规则' : `${edge.label}关系映射规则`,
-      ruleVersion: isPathInferred ? 'REL-INFER-1.3' : 'REL-MAP-2.1',
-      graphVersion: 'v1.8',
-      generatedAt: taskExecutedAt,
-      status: isFabricated ? '已推理并写入 COLLEAGUE' : '已入图',
-    },
-  }
 }
 
 const expertEvidence = [
@@ -965,12 +671,4 @@ export function edgeMatchesFilter(category: string, filter: string): boolean {
   const allowed = relationCategoryMap[filter]
   if (!allowed) return true
   return allowed.includes(category)
-}
-
-export const queryTypeLabels: Record<string, string> = {
-  科技专家: '科技专家',
-  科技企业: '科技企业',
-  论文成果: '论文成果',
-  机构团队: '机构团队',
-  产业链节点: '产业链节点',
 }

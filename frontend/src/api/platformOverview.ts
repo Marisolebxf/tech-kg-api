@@ -23,23 +23,6 @@ export interface AssetChangeRow {
   time: string
 }
 
-export interface LatestChange {
-  time: string
-  type: string
-  domain: string
-  title: string
-  detail: string
-  impact: string
-  to: string
-}
-
-export interface ManagementRisk {
-  title: string
-  detail: string
-  detailTo: string
-  reviewTo: string
-}
-
 export interface StructureMember {
   name: string
   count: number
@@ -66,14 +49,12 @@ export interface PlatformOverviewData {
   /** 昨日新增真实计数（Σwritten，与资产卡徽标同源）；明细行受单执行上限截断，
    *  行数 < 合计时用它展示「共 N 条 · 展示前 n 条」 */
   assetChangeTotals?: Partial<Record<AssetOverviewKey, number>>
-  latestChanges: LatestChange[]
-  managementRisks: ManagementRisk[]
   entityStructure: StructureItem[]
   relationStructure: StructureItem[]
   /** 环形图中心数 = 各分段之和（Σ标签/Σ边类型计数），与分段自洽；资产卡 total 仍是去重口径 */
   entityStructureTotal?: string
   relationStructureTotal?: string
-  dataMode: 'live' | 'partial' | 'mock'
+  dataMode: 'partial' | 'mock'
   dataSources: Record<string, string>
   warnings: string[]
 }

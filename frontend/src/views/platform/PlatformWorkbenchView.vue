@@ -12,6 +12,7 @@ import { currentGraphSpace } from '../../api/currentGraphSpace'
 import ListPagination from '../../components/list-pagination.vue'
 import { useClientPagination } from '../../composables/use-client-pagination'
 import { getErrorMessage } from '../../api/http'
+import { getKgOptionCounts, type KgOptionCounts } from '../../api/kgOptions'
 import {
   getPlatformOverview,
   type AssetChangeRow,
@@ -105,7 +106,7 @@ const modules: ServiceModule[] = [
     responseFields: commonResponseFields,
     requestExample: { source_expert_id: 'E10001', target_expert_id: 'E10002', relation_scene: '科研合作', start_time: '2020-01' },
     responseExample: { data: { relation_type: '论文合作', relation_count: 12, scenario: '科研合作', confidence: 0.94 } },
-    resultRows: [{ label: '直接关系', value: '12' }, { label: '关系类型', value: '4' }, { label: '关联成果', value: '18' }, { label: '最高置信度', value: '0.94' }],
+    resultRows: [{ label: '直接关系', value: '' }, { label: '关系类型', value: '' }, { label: '关联成果', value: '' }, { label: '最高置信度', value: '' }],
     evidence: ['共同发表论文 4 篇，作者列表和单位信息一致。', '共同参与项目 3 项，项目角色存在协作链路。', '关系发生时间、场景和成果均已结构化记录。'],
   },
   {
@@ -122,7 +123,7 @@ const modules: ServiceModule[] = [
     responseFields: commonResponseFields,
     requestExample: { core_node_id: '4G7t0B0t', relation_types: ['学术关联'], path_depth: 2, min_strength: 0.65 },
     responseExample: { data: { indirect_nodes: 36, paths: 58, average_strength: 0.76 } },
-    resultRows: [{ label: '间接节点', value: '36' }, { label: '路径数量', value: '58' }, { label: '关系类型', value: '4' }, { label: '平均强度', value: '0.76' }],
+    resultRows: [{ label: '间接节点', value: '' }, { label: '路径数量', value: '' }, { label: '关系类型', value: '' }, { label: '平均强度', value: '' }],
     evidence: ['路径：张明远 -> 李佳宁 -> 专家C。', '路径深度为 2，命中学术关联和机构关联。', '每条间接关系均返回传递路径和强度。'],
   },
   {
@@ -167,7 +168,7 @@ const modules: ServiceModule[] = [
     responseFields: commonResponseFields,
     requestExample: { expert_id: 'E10001', organization: '中国科学院自动化研究所', department: '智能系统实验室', overlap_period: '2018-2022' },
     responseExample: { data: { colleagues: 18, teams: 4, overlap_years: 4, achievements: 6 } },
-    resultRows: [{ label: '同事关系', value: '18' }, { label: '共同团队', value: '4' }, { label: '重叠年限', value: '4' }, { label: '期间成果', value: '6' }],
+    resultRows: [{ label: '同事关系', value: '' }, { label: '共同团队', value: '' }, { label: '重叠年限', value: '' }, { label: '期间成果', value: '' }],
     evidence: ['任职时间存在重叠，机构层级匹配到同一实验室。', '标注共同工作内容和协作场景。', '关联同事期间产生的合作成果。'],
   },
   {
@@ -213,7 +214,7 @@ const modules: ServiceModule[] = [
     responseFields: commonResponseFields,
     requestExample: { expertAId: 'person_121d48631f434f4d323ba521d33032ad', expertBId: 'person_42914016fe8d6e0e1d01dad5845c47e6', startTime: '2021-01', endTime: '2026-08' },
     responseExample: { data: { structuredResult: { cooperationPaperCount: 14, citation: { total: 1260, max: 90 }, stableTeamMembers: [], paperTopics: ['人工智能', '先进计算'] } } },
-    resultRows: [{ label: '合作论文', value: '14' }, { label: '总被引', value: '1260' }, { label: '研究方向', value: '5' }, { label: '核心人员', value: '7' }],
+    resultRows: [{ label: '合作论文', value: '' }, { label: '总被引', value: '' }, { label: '研究方向', value: '' }, { label: '核心人员', value: '' }],
     evidence: ['提取作者列表、作者单位、发表时间和论文主题。', '统计期刊会议级别和被引情况。', '识别长期稳定合作团队和核心合作人员。'],
   },
   {
@@ -230,7 +231,7 @@ const modules: ServiceModule[] = [
     responseFields: commonResponseFields,
     requestExample: { expert_id: 'E10001', enterprise_name: '华南智能芯片', role_type: '顾问/股东/合作方', industry: '集成电路' },
     responseExample: { data: { enterprises: 9, roles: 4, cooperation_fields: ['芯片设计', '智能制造'] } },
-    resultRows: [{ label: '关联企业', value: '9' }, { label: '角色类型', value: '4' }, { label: '合作领域', value: '6' }, { label: '经营风险', value: '2' }],
+    resultRows: [{ label: '关联企业', value: '' }, { label: '角色类型', value: '' }, { label: '合作领域', value: '' }, { label: '经营风险', value: '' }],
     evidence: ['标注专家在企业中的角色、合作领域、合作时间和模式。', '关联企业行业地位、技术方向与经营状况。', '支持产业界资源对接分析。'],
   },
   {
@@ -247,7 +248,7 @@ const modules: ServiceModule[] = [
     responseFields: commonResponseFields,
     requestExample: { chain_node_id: 'IC-CHIP-DESIGN', top_n: 10, event_type: '投融资/政策/风险', time_range: '2025-2026' },
     responseExample: { data: { events: 10, experts: 18, enterprises: 24, risk_level: '中' } },
-    resultRows: [{ label: 'TOP事件', value: '10' }, { label: '关联专家', value: '18' }, { label: '关联企业', value: '24' }, { label: '风险等级', value: '中' }],
+    resultRows: [{ label: 'TOP事件', value: '' }, { label: '关联专家', value: '' }, { label: '关联企业', value: '' }, { label: '风险等级', value: '' }],
     evidence: ['按影响力评估筛选产业链节点 TOP-N 事件。', '构建事件与专家、企业、人才的关联关系。', '分析产业链影响和后续发展趋势。'],
   },
   {
@@ -264,7 +265,7 @@ const modules: ServiceModule[] = [
     responseFields: commonResponseFields,
     requestExample: { chain_id: 'AI-COMPUTING', layer_depth: 3, relation_filter: ['技术', '企业', '专家'], include_events: true },
     responseExample: { data: { nodes: 186, relations: 420, key_technologies: 22, key_enterprises: 48 } },
-    resultRows: [{ label: '产业节点', value: '186' }, { label: '链路关系', value: '420' }, { label: '关键技术', value: '22' }, { label: '重点企业', value: '48' }],
+    resultRows: [{ label: '产业节点', value: '' }, { label: '链路关系', value: '' }, { label: '关键技术', value: '' }, { label: '重点企业', value: '' }],
     evidence: ['整合产业链实体、关系、事件数据。', '展示核心节点、关联关系和数据流向。', '支持层级展开、关系筛选和动态更新。'],
   },
 ]
@@ -508,11 +509,11 @@ const { showToast } = useToast()
 
 const activeService = computed(() => modules.find((item) => item.key === activeServiceKey.value) ?? modules[0])
 const activeRequestJson = computed(() => JSON.stringify(activeService.value.requestExample, null, 2))
-const activeResponseJson = computed(() => JSON.stringify({
-  code: 0,
-  message: 'success',
-  data: activeService.value.responseExample.data ?? activeService.value.responseExample,
-}, null, 2))
+// 响应体只展示接口示例本身：此处是接口文档示例控制台，不发起真实调用，
+// 不再包一层 code=0/message='success' 的假信封冒充真实响应。
+const activeResponseJson = computed(() =>
+  JSON.stringify(activeService.value.responseExample, null, 2),
+)
 const activeRequestEntries = computed(() =>
   activeService.value.requestFields.map((field) => ({
     label: field.description,
@@ -529,11 +530,34 @@ const serviceConsoleStats = computed(() => [
   { label: '接口路径', value: activeService.value.endpoint },
   { label: '参数数量', value: String(activeService.value.requestFields.length) },
 ])
-const serviceCallLogs = computed(() => [
-  { time: '10:30:12', level: 'SUCCESS', message: `已完成 ${activeService.value.title} 调用，返回 code=0。` },
-  { time: '10:30:11', level: 'INFO', message: `请求参数已标准化，准备发送到 ${activeService.value.endpoint}。` },
-  { time: '10:30:09', level: 'INFO', message: `命中服务路由 ${activeService.value.key}，开始装配请求体。` },
-])
+
+// 数据服务卡目录型计数（关系类型/角色/合作领域/关系维度）：真实目录来自
+// /kg-construction/options，首次进入数据服务页签时按需拉取；查询型 KPI
+// （关联企业数、合作论文数等）依赖具体查询参数，示例态一律留空。
+const optionCounts = ref<KgOptionCounts>({ relationTypes: 0, roles: 0, dimensions: 0, techFields: 0 })
+const optionCountsLoaded = ref(false)
+const CATALOG_COUNT_LABELS: Partial<Record<string, keyof KgOptionCounts>> = {
+  关系类型: 'relationTypes',
+  角色类型: 'roles',
+  合作领域: 'techFields',
+  关系维度: 'dimensions',
+}
+const activeResultRows = computed(() =>
+  activeService.value.resultRows.map((row) => {
+    const key = CATALOG_COUNT_LABELS[row.label]
+    return key && optionCounts.value[key] ? { ...row, value: String(optionCounts.value[key]) } : row
+  }),
+)
+
+async function loadOptionCounts(): Promise<void> {
+  optionCounts.value = await getKgOptionCounts()
+}
+
+watch(activeTab, (tab) => {
+  if (tab !== 'service' || optionCountsLoaded.value) return
+  optionCountsLoaded.value = true
+  void loadOptionCounts()
+}, { immediate: true })
 
 watch(
   () => props.initialTab,
@@ -1231,7 +1255,8 @@ function openProcessDetail(area: 'processing' | 'construction', taskId: string, 
 }
 
 function handleExecuteService() {
-  void runWithLoading(`${activeService.value.title} 调用成功，已刷新请求与响应结果`)
+  // 测试页签是接口示例控制台：执行按钮不发起真实调用，只如实提示。
+  showToast('当前为接口示例，未发起真实调用；请到对应业务功能页发起真实查询', 'info')
 }
 
 function handleCopyEndpoint() {
@@ -1258,7 +1283,7 @@ const pageMeta = computed(() => {
       <div class="platform-hero__main">
         <h1>{{ pageMeta.title }}</h1>
       </div>
-      <div class="platform-hero__actions"><span :title="overviewMeta.warnings.join('\n')"><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个执行运行中 · {{ overviewMeta.dataMode === 'live' ? '实时数据' : overviewMeta.dataMode === 'partial' ? '部分实时' : '降级数据' }}</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看任务</RouterLink><RouterLink v-if="canEnterAdminPages" to="/manual-review">进入人工处理</RouterLink></div>
+      <div class="platform-hero__actions"><span :title="overviewMeta.warnings.join('\n')"><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个执行运行中 · {{ overviewMeta.dataMode === 'partial' ? '部分实时' : '降级数据' }}</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看任务</RouterLink><RouterLink v-if="canEnterAdminPages" to="/manual-review">进入人工处理</RouterLink></div>
     </header>
 
     <header v-else-if="activeTab !== 'query'" class="platform-page-head">
@@ -1858,15 +1883,15 @@ const pageMeta = computed(() => {
               </dl>
             </div>
             <div class="platform-result-grid">
-              <div v-for="row in activeService.resultRows" :key="row.label">
+              <div v-for="row in activeResultRows" :key="row.label">
                 <span>{{ row.label }}</span>
                 <strong>{{ row.value }}</strong>
               </div>
             </div>
             <dl class="platform-service-info">
               <div><dt>命中服务</dt><dd>{{ activeService.title }}</dd></div>
-              <div><dt>状态码</dt><dd>0 / success</dd></div>
-              <div><dt>更新时间</dt><dd>2026-07-13 10:30</dd></div>
+              <div><dt>状态码</dt><dd>—（接口示例，未发起真实调用）</dd></div>
+              <div><dt>更新时间</dt><dd>—</dd></div>
             </dl>
           </div>
         </section>
@@ -1888,16 +1913,6 @@ const pageMeta = computed(() => {
               <strong>结果依据</strong>
               <ul>
                 <li v-for="(line, index) in activeService.evidence.slice(0, 3)" :key="index">{{ line }}</li>
-              </ul>
-            </div>
-            <div class="platform-service-log">
-              <strong>调用日志</strong>
-              <ul>
-                <li v-for="item in serviceCallLogs" :key="`${item.time}-${item.message}`">
-                  <span>{{ item.time }}</span>
-                  <b>{{ item.level }}</b>
-                  <p>{{ item.message }}</p>
-                </li>
               </ul>
             </div>
           </div>
@@ -4098,8 +4113,7 @@ print(response.json())</pre>
 }
 
 .platform-service-request strong,
-.platform-service-payload strong,
-.platform-service-log strong {
+.platform-service-payload strong {
   color: var(--text-primary);
   font-size: 13px;
 }
@@ -4283,58 +4297,6 @@ print(response.json())</pre>
   overflow-wrap: anywhere;
   border-radius: 6px;
   background: #f3f8ff;
-}
-
-.platform-service-log {
-  display: grid;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid #dce9ff;
-  border-radius: 8px;
-  background: #fbfdff;
-}
-
-.platform-service-log ul {
-  display: grid;
-  gap: 10px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.platform-service-log li {
-  display: grid;
-  grid-template-columns: 56px 56px minmax(0, 1fr);
-  gap: 10px;
-  align-items: start;
-  padding: 10px 0;
-  border-bottom: 1px solid #eef3fb;
-}
-
-.platform-service-log li:last-child {
-  border-bottom: 0;
-  padding-bottom: 0;
-}
-
-.platform-service-log span,
-.platform-service-log b,
-.platform-service-log p {
-  margin: 0;
-  font-size: 12px;
-  line-height: 18px;
-}
-
-.platform-service-log span {
-  color: var(--text-tertiary);
-  font-family: "SFMono-Regular", Consolas, monospace;
-}
-
-.platform-service-log b {
-  color: #00a870;
-}
-
-.platform-service-log p {
-  color: var(--text-secondary);
 }
 
 .platform-api-doc {

@@ -36,8 +36,6 @@ import {
   normalizeReturnedSubgraph,
 } from '../../utils/graphQueryConversion'
 import {
-  getEdgeProvenance,
-  getNodeProvenance,
   type GraphEdgeData,
   type GraphNodeData,
   type GraphNodeType,
@@ -315,15 +313,69 @@ const provenanceNode = computed(() => {
   return allNodes.value[0] ?? null
 })
 
-const provenance = computed(() => {
-  if (provenanceNode.value) return getNodeProvenance(provenanceNode.value)
+// 溯源信息直接读图节点/边自带的属性，缺失显示「未提供」——不再走
+// graph-presets 的静态映射兜底（演示画布专用，会编造表名/批次号/入图时间）。
+const NOT_PROVIDED = '未提供'
+interface VizProvenance {
+  sourceDatabase: string
+  evidences: Array<{ technicalTable: string; sourceField?: string; graphVid?: string }>
+  relationEndpoints?: Array<{
+    role: string
+    name: string
+    entityType: string
+    technicalTable: string
+    graphVid: string
+  }>
+  task: { instanceId: string; executedAt: string }
+}
+const provenance = computed<VizProvenance | null>(() => {
+  const node = provenanceNode.value
+  if (node) {
+    return {
+      sourceDatabase: node.sourceSystem || NOT_PROVIDED,
+      evidences: [
+        {
+          technicalTable: node.sourceTable || NOT_PROVIDED,
+          sourceField: node.sourceField || NOT_PROVIDED,
+          graphVid: node.id,
+        },
+      ],
+      task: {
+        instanceId: node.ingestBatch || NOT_PROVIDED,
+        executedAt: node.ingestTime || NOT_PROVIDED,
+      },
+    }
+  }
   const edge = selectedEdge.value
   if (edge) {
-    return getEdgeProvenance(
-      edge,
-      selectedEdgeNodes.value.from ?? undefined,
-      selectedEdgeNodes.value.to ?? undefined,
-    )
+    const { from, to } = selectedEdgeNodes.value
+    return {
+      sourceDatabase: NOT_PROVIDED,
+      evidences: [{ technicalTable: edge.sourceTable || NOT_PROVIDED }],
+      relationEndpoints:
+        from && to
+          ? [
+              {
+                role: '源实体',
+                name: from.label,
+                entityType: from.entityType,
+                technicalTable: from.sourceTable || NOT_PROVIDED,
+                graphVid: from.id,
+              },
+              {
+                role: '目标实体',
+                name: to.label,
+                entityType: to.entityType,
+                technicalTable: to.sourceTable || NOT_PROVIDED,
+                graphVid: to.id,
+              },
+            ]
+          : undefined,
+      task: {
+        instanceId: edge.ingestBatch || NOT_PROVIDED,
+        executedAt: edge.ingestTime || NOT_PROVIDED,
+      },
+    }
   }
   return null
 })

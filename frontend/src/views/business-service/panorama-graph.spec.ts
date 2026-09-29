@@ -23,12 +23,9 @@ function responseWithNodes(
       industry: "集成电路",
       totalNodes: nodes.length,
       totalEdges: 0,
-      nodesByLabel: {},
-      edgesByType: {},
     },
     layers: [],
     graph: { nodes, edges: [] },
-    source: { requested: "all", actual: "graph-api", fallback: false },
     apiResultExample: {},
   };
 }

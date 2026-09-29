@@ -17,12 +17,6 @@ export type ServiceField = {
   defaultValue?: string
 }
 
-export type ServiceResultRow = {
-  label: string
-  value: string
-  tone?: 'blue' | 'green' | 'orange' | 'purple' | 'red'
-}
-
 export type ServiceSummaryRow = {
   label: string
   value: string
@@ -52,7 +46,6 @@ export type ServiceModule = {
   /** 为 false 时参数表单初始为空，requestExample 只作为接口文档示例，不回填表单。 */
   prefillFormFromExample?: boolean
   responseExample: Record<string, unknown>
-  resultRows: ServiceResultRow[]
   summaryRows: ServiceSummaryRow[]
   evidence: string[]
   rules: ServiceRule[]
@@ -104,12 +97,6 @@ export const serviceModules: ServiceModule[] = [
     requestExample: { expertAId: '007Rb117', expertBId: '00867K10', institution: '', startTime: '', endTime: '', limit: 3 },
     prefillFormFromExample: false,
     responseExample: { taskName: '科技专家/人才直接关系', input: { dataSource: 'all', expertAId: '007Rb117', limit: 10 }, total: 1, items: [], graph: { nodes: [], edges: [] }, source: { requested: 'all', actual: 'graph-api', fallback: false }, provenance: null, apiResultExample: {} },
-    resultRows: [
-      { label: '直接关系', value: '12', tone: 'blue' },
-      { label: '关系类型', value: '4', tone: 'green' },
-      { label: '相关成果', value: '18', tone: 'orange' },
-      { label: '最高置信度', value: '0.94', tone: 'purple' },
-    ],
     summaryRows: [
       { label: '专家 A', value: '张明远｜研究员｜清华大学' },
       { label: '专家 B', value: '李佳宁｜副研究员｜清华大学' },
@@ -146,12 +133,6 @@ export const serviceModules: ServiceModule[] = [
     responseFields: structuredRelationResponseFields,
     requestExample: { core_node_id: '4G7t0B0t', min_strength: 0.65, path_depth: 2, relation_types: ['学术关联'] },
     responseExample: { structuredResult: { indirectNodeCount: 0, pathCount: 0, relationTypeCount: {}, averageStrength: 0 } },
-    resultRows: [
-      { label: '间接节点', value: '36', tone: 'blue' },
-      { label: '路径数量', value: '58', tone: 'green' },
-      { label: '关系类型', value: '4', tone: 'orange' },
-      { label: '关联强度', value: '0.76', tone: 'purple' },
-    ],
     summaryRows: [
       { label: '核心节点', value: '张明远｜科技专家' },
       { label: '路径分析深度', value: '2 跳' },
@@ -199,12 +180,6 @@ export const serviceModules: ServiceModule[] = [
         sourceMeta: { space: 'dev' },
       },
     },
-    resultRows: [
-      { label: '合作论文', value: '', tone: 'blue' },
-      { label: '合作专利', value: '', tone: 'green' },
-      { label: '共同项目', value: '', tone: 'orange' },
-      { label: '获奖成果', value: '', tone: 'red' },
-    ],
     summaryRows: [
       { label: '专家 A', value: '' },
       { label: '专家 B', value: '' },
@@ -243,12 +218,6 @@ export const serviceModules: ServiceModule[] = [
     // 测试数据不再作为表单默认值，避免用户误提交样例专家。
     requestExample: { expert_a_id: 'person_0512632S', expert_b_id: 'person_2406B66w', start_time: '2020-01', end_time: '2024-12' },
     responseExample: { code: 200, success: true, msg: 'success', data: { total: 1, summary: { commonOrganization: '中国科学院自动化研究所', commonDepartment: '智能系统实验室', effectivePeriod: '2018-01 至 2022-12', overlapDuration: '4 年', periodAchievements: 6 } } },
-    resultRows: [
-      { label: '同事关系', value: '18', tone: 'blue' },
-      { label: '所属团队', value: '4', tone: 'green' },
-      { label: '重叠年限', value: '4', tone: 'orange' },
-      { label: '期间成果', value: '6', tone: 'purple' },
-    ],
     summaryRows: [
       { label: '核心专家', value: '张明远｜研究员' },
       { label: '核心专家机构', value: '中国科学院自动化研究所｜智能系统实验室' },
@@ -295,16 +264,9 @@ export const serviceModules: ServiceModule[] = [
       data: {
         mode: 'pair',
         total: 1,
-        dimensionsCatalog: ['同校', '同学历', '同期'],
         sourceMeta: { space: 'dev', truncated: false },
       },
     },
-    resultRows: [
-      { label: '校友数量', value: '', tone: 'blue' },
-      { label: '查询模式', value: '', tone: 'green' },
-      { label: '关联维度', value: '', tone: 'orange' },
-      { label: '截断标记', value: '', tone: 'purple' },
-    ],
     summaryRows: [
       { label: '专家', value: '' },
       { label: '校友数', value: '' },
@@ -336,12 +298,6 @@ export const serviceModules: ServiceModule[] = [
     responseFields: structuredRelationResponseFields,
     requestExample: { expertAId: 'person_121d48631f434f4d323ba521d33032ad', expertBId: 'person_42914016fe8d6e0e1d01dad5845c47e6', startTime: '2021-01', endTime: '2026-08' },
     responseExample: { structuredResult: { cooperationPaperCount: 0, citation: { total: 0, max: 0 }, stableTeamMembers: [], paperTopics: [] } },
-    resultRows: [
-      { label: '合作论文', value: '14', tone: 'blue' },
-      { label: '论文被引', value: '1260', tone: 'green' },
-      { label: '研究方向', value: '5', tone: 'orange' },
-      { label: '核心合作人员', value: '7', tone: 'purple' },
-    ],
     summaryRows: [
       { label: '核心专家', value: '张明远｜清华大学' },
       { label: '合作专家', value: '李佳宁｜中国科学院自动化研究所' },
@@ -376,13 +332,7 @@ export const serviceModules: ServiceModule[] = [
     responseFields: apiResponseFields,
     // 测试数据不再预填到表单，避免误提交样例；测试用例见 backend/docs/enterprise_relation_test_parameters.md
     requestExample: { expert_id: 'person_94447y38' },
-    responseExample: { code: 200, success: true, data: { enterprises: 9, roles: 4, cooperation_fields: ['芯片设计', '智能制造'] }, msg: 'success' },
-    resultRows: [
-      { label: '关联企业', value: '9', tone: 'blue' },
-      { label: '角色类型', value: '4', tone: 'green' },
-      { label: '合作领域', value: '6', tone: 'orange' },
-      { label: '经营风险', value: '2', tone: 'purple' },
-    ],
+    responseExample: { code: 200, success: true, data: { enterprises: 9, cooperation_fields: ['芯片设计', '智能制造'] }, msg: 'success' },
     summaryRows: [
       { label: '科技专家', value: '张明远｜研究员' },
       { label: '重点关注企业', value: '华南智能芯片有限公司' },
@@ -420,12 +370,6 @@ export const serviceModules: ServiceModule[] = [
     // 测试数据不再预填到表单，避免误提交样例；测试用例见 backend/docs/industry_chain_topn_test_parameters.md
     requestExample: { chain_node_id: 'IC0007007', top_n: 10 },
     responseExample: { code: 200, success: true, data: { events: 10, experts: 18, enterprises: 24, risk_level: '中' }, msg: 'success' },
-    resultRows: [
-      { label: 'TOP事件', value: '10', tone: 'blue' },
-      { label: '关联专家', value: '18', tone: 'green' },
-      { label: '关联企业', value: '24', tone: 'orange' },
-      { label: '风险等级', value: '中', tone: 'purple' },
-    ],
     summaryRows: [
       { label: '产业链', value: '集成电路产业链' },
       { label: '产业链节点', value: '芯片设计' },
@@ -464,7 +408,6 @@ export const serviceModules: ServiceModule[] = [
       { name: 'summary', type: 'object', description: '规模统计与产业关键词' },
       { name: 'layers', type: 'array', description: '四个分层：核心技术、领军企业、领军专家、产业动态事件' },
       { name: 'graph', type: 'object', description: '以核心节点扩展的子图（nodes/edges）' },
-      { name: 'source', type: 'object', description: '数据来源，标记是否降级到样例数据' },
       { name: 'provenance', type: 'object', description: '数据溯源信息' },
       { name: 'apiResultExample', type: 'object', description: '接口调用示例' },
     ],
@@ -476,8 +419,6 @@ export const serviceModules: ServiceModule[] = [
         industry: '人工智能',
         totalNodes: 186,
         totalEdges: 420,
-        nodesByLabel: { Person: 42, Organization: 48, Paper: 60, Keyword: 36 },
-        edgesByType: { AFFILIATED_WITH: 120, AUTHORED_BY: 180, HAS_KEYWORD: 120 },
       },
       layers: [
         { key: 'core_technology', title: '核心技术', total: 22, items: [] },
@@ -486,19 +427,12 @@ export const serviceModules: ServiceModule[] = [
         { key: 'flagship_achievement', title: '产业动态事件', total: 3, items: [] },
       ],
       graph: { nodes: [], edges: [] },
-      source: { requested: 'all', actual: 'graph-api', fallback: false },
       apiResultExample: {
         url: '/api/v1/kg-construction/industry-chain-panorama/query',
         method: 'POST',
         query: { industry: '人工智能', anchorId: '', depth: 2, topK: 5 },
       },
     },
-    resultRows: [
-      { label: '产业节点', value: '186', tone: 'blue' },
-      { label: '关联关系', value: '420', tone: 'green' },
-      { label: '关键技术', value: '22', tone: 'orange' },
-      { label: '重点企业', value: '48', tone: 'purple' },
-    ],
     summaryRows: [
       { label: '产业链名称', value: '人工智能计算产业链' },
       { label: '展开层级', value: '3 级' },

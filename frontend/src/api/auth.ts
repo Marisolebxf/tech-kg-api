@@ -110,7 +110,6 @@ export interface OperationLogQuery {
   page?: number;
   pageSize?: number;
   category?: string;
-  result?: string;
   keyword?: string;
 }
 

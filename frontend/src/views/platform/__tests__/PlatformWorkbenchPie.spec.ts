@@ -55,8 +55,6 @@ const baseOverview: PlatformOverviewData = {
   assetChangeRows: { entity: [], relation: [], property: [] },
   entityStructure: [],
   relationStructure: [],
-  latestChanges: [],
-  managementRisks: [],
   dataSources: {},
 }
 

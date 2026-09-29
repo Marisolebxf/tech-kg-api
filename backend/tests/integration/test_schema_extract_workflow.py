@@ -1,7 +1,8 @@
 """kg.schema.extract 工作流编排测试（Temporal 测试服务 + 假 activity）。
 
 覆盖：批次并发窗口、游标一次推进、逐行失败 → record_extract_failures、
-重跑模式（recordIds）→ resolve_failure_cases 必调、批次失败 → workflow FAILED。
+重跑模式（recordIds）→ resolve_failure_cases 必调、批次失败 → workflow FAILED、
+索引构建失败 → workflow FAILED（不再降级成警告，2026-09-29 口径）。
 """
 
 from __future__ import annotations
@@ -39,7 +40,9 @@ PLAN = {
         }
     ],
     "scriptPath": "/tmp/fake.py",
-    "steps": [{"id": "clean", "fn": "step_clean"}],
+    # 单步脚本的转换步用中性名（relay 假 activity 按 fn 分发：step_clean/resolve/emit
+    # 是多步链专用语义，单步走通用出实体分支）
+    "steps": [{"id": "main", "fn": "step_main"}],
     "timeoutSeconds": 60,
     "maxInflight": 2,
     "failureCaseCap": 10,
@@ -89,12 +92,22 @@ MULTI_STEP_PLAN = {
 
 
 def _make_activities(
-    state: dict[str, Any], *, rows_per_batch=3, batches=2, fail_batch=None, fail_plan=False
+    state: dict[str, Any],
+    *,
+    rows_per_batch=3,
+    batches=2,
+    fail_batch=None,
+    fail_plan=False,
+    fail_index=False,
 ):
     """假 activity 集：读按游标吐批次；转换对毒行（id=bad）报 failures；记录调用。"""
 
     @activity.defn(name="load_schema_extract_plan")
-    async def load_plan(schema_id: str) -> dict[str, Any]:
+    async def load_plan(schema_id: str | dict[str, Any]) -> dict[str, Any]:
+        # business-rbac-context-v1 补丁后 workflow 送的是 {**request, schemaId}（真实
+        # activity 签名同为 str | dict），假 activity 同步收编
+        if isinstance(schema_id, dict):
+            schema_id = schema_id["schemaId"]
         state["load_plan"] = state.get("load_plan", 0) + 1
         if fail_plan:
             raise ValueError("下载 Schema 脚本失败: NoSuchKey")
@@ -185,6 +198,8 @@ def _make_activities(
     @activity.defn(name="build_entity_index")
     async def build_index(request: dict[str, Any]) -> dict[str, Any]:
         state.setdefault("index", []).append(request)
+        if fail_index:
+            raise RuntimeError("实体索引重建失败: Milvus 不可达")
         return {"reindexed": {"entityTypes": request.get("entityTypes")}}
 
     @activity.defn(name="revert_rerun_failure_cases")
@@ -300,6 +315,29 @@ class TestSchemaExtractOrchestration:
         assert state.get("advances") in (None, [])
         assert state.get("record_failures") in (None, [])
 
+    async def test_index_build_failure_fails_workflow(self):
+        """索引构建失败不再降级为警告（2026-09-29 用户口径）：重试耗尽后整链 FAILED。
+
+        此前索引 activity 抛错被捕获成 {"degraded": True} 警告、执行仍算成功；
+        现在写图完成后索引失败同样把任务打成 FAILED，失败原因带索引报错。"""
+        state: dict[str, Any] = {}
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue="t-3-idx",
+                workflows=[SchemaExtractWorkflow],
+                activities=_make_activities(state, rows_per_batch=2, batches=1, fail_index=True),
+            ):
+                with pytest.raises(WorkflowFailureError):
+                    await _run(
+                        env.client,
+                        "t-3-idx",
+                        {"schemaId": "schema-e2e", "graphSpace": "dev2", "batchSize": 2},
+                    )
+        # 抽取与写图已发生，索引失败把执行打成 FAILED（而非成功+警告）
+        assert state.get("writes")
+        assert state.get("index")
+
     async def test_rerun_crash_reverts_rerunning_cases(self):
         """重跑执行中途崩溃（如脚本对象丢失）：case 回滚 OPEN，不滞留 RERUNING。
 
@@ -361,7 +399,9 @@ def _make_step_activities(state: dict[str, Any], *, fail_on=None, block_on=None,
     """
 
     @activity.defn(name="load_schema_extract_plan")
-    async def load_plan(schema_id: str) -> dict[str, Any]:
+    async def load_plan(schema_id: str | dict[str, Any]) -> dict[str, Any]:
+        if isinstance(schema_id, dict):
+            schema_id = schema_id["schemaId"]
         return MULTI_STEP_PLAN
 
     @activity.defn(name="read_source_batch")
@@ -460,6 +500,10 @@ def _make_step_activities(state: dict[str, Any], *, fail_on=None, block_on=None,
         state.setdefault("resolve", []).append(request)
         return {"resolved": 1, "refailed": 0, "recreated": 0}
 
+    @activity.defn(name="record_schema_script_run")
+    async def record_script_run(request: dict[str, Any]) -> dict[str, Any]:
+        return {"ok": True}
+
     @activity.defn(name="refresh_graph_stats")
     async def refresh_stats(request: dict[str, Any]) -> dict[str, Any]:
         state.setdefault("stats_jobs", []).append(request)
@@ -479,6 +523,7 @@ def _make_step_activities(state: dict[str, Any], *, fail_on=None, block_on=None,
         collisions,
         record_failures,
         resolve,
+        record_script_run,
         build_index,
         refresh_stats,
     ]
@@ -535,11 +580,19 @@ class TestSchemaExtractMultiStep:
             assert stat["failed"] == failed
             assert stat["status"] == "COMPLETED"
             assert stat["startedAt"] and stat["finishedAt"]
-        assert result["sources"][0]["steps"] == {
+        source_steps = result["sources"][0]["steps"]
+        # 核心计数（startedAt/finishedAt 是耗时列展示字段，另行断言存在）
+        assert {
+            sid: {k: stat[k] for k in ("records", "written", "failed")}
+            for sid, stat in source_steps.items()
+        } == {
             "clean": {"records": 0, "written": 0, "failed": 1},
             "resolve": {"records": 0, "written": 0, "failed": 0},
             "emit": {"records": 1, "written": 1, "failed": 0},
         }
+        assert all(
+            stat.get("startedAt") and stat.get("finishedAt") for stat in source_steps.values()
+        )
         # 毒行失败（clean 步）经聚合进 T_EXTRACT_FAIL；关系不重建索引
         assert result["failures"]["count"] == 1
         assert state["record_failures"][0]["recordId"] == "bad"
@@ -580,7 +633,9 @@ def _make_chain_activities(state: dict[str, Any], *, fail_schema: str | None = N
     )
 
     @activity.defn(name="load_schema_extract_plan")
-    async def load_plan(schema_id: str) -> dict[str, Any]:
+    async def load_plan(schema_id: str | dict[str, Any]) -> dict[str, Any]:
+        if isinstance(schema_id, dict):
+            schema_id = str(schema_id["schemaId"])
         state.setdefault("plan_order", []).append(schema_id)
         return CHAIN_PLANS[schema_id]
 
@@ -725,11 +780,11 @@ class TestSchemaExtractChain:
         assert alpha["records"] == 2
         assert alpha["written"] == 2
         assert alpha["failed"] == 0
-        # chain 模式 activities：该 Schema 脚本各 @step 转换步（PLAN 单步 clean）
+        # chain 模式 activities：该 Schema 脚本各 @step 转换步（PLAN 单步 main）
         assert alpha["activities"] == {
-            "clean": {
+            "main": {
                 "status": "COMPLETED",
-                "name": "clean",
+                "name": "main",
                 "position": 1,
                 "records": 2,
                 "written": 2,
@@ -741,7 +796,7 @@ class TestSchemaExtractChain:
         assert beta["records"] == 2
         assert beta["written"] == 1
         assert beta["failed"] == 1
-        assert beta["activities"]["clean"]["failed"] == 1
+        assert beta["activities"]["main"]["failed"] == 1
         # 毒行失败跨环汇总；写图两环各一次
         assert result["failures"] == {"count": 1, "recorded": 1, "truncated": False}
         assert state["writes"] == ["Alpha", "Beta"]
@@ -875,7 +930,9 @@ def _make_relay_activities(
         return key
 
     @activity.defn(name="load_schema_extract_plan")
-    async def load_plan(schema_id: str) -> dict[str, Any]:
+    async def load_plan(schema_id: str | dict[str, Any]) -> dict[str, Any]:
+        if isinstance(schema_id, dict):
+            schema_id = schema_id["schemaId"]
         return plan or PLAN
 
     @activity.defn(name="read_source_batch")
@@ -1063,6 +1120,10 @@ def _make_relay_activities(
         state.setdefault("index", []).append(request)
         return {"reindexed": {"entityTypes": request.get("entityTypes")}}
 
+    @activity.defn(name="record_schema_script_run")
+    async def record_script_run(request: dict[str, Any]) -> dict[str, Any]:
+        return {"ok": True}
+
     return [
         load_plan,
         read_batch,
@@ -1073,6 +1134,7 @@ def _make_relay_activities(
         collisions,
         record_failures,
         resolve_cases,
+        record_script_run,
         build_index,
         refresh_stats,
     ]
@@ -1110,10 +1172,11 @@ class TestSchemaExtractS3Relay:
         # 写图/冲突检测收 recordsKey（resolve 中转产物）
         assert sum(state["writes"]) == 6
         assert state["collisions_calls"] == [True, True]
-        # 载荷对象确实落在共享存储（rows/out/resolved 三类）
+        # 载荷对象确实落在共享存储（rows/out/resolved 三类）；resolve 的 stepId
+        # 带 #stepId 后缀（ctxStepId 语义）
         assert "rows-b0-c0" in state["objects"] and "rows-b1-c0" in state["objects"]
-        assert any(k.startswith("out-transform-") for k in state["objects"])
-        assert any(k.startswith("resolved-source:bind-1-") for k in state["objects"])
+        assert any(k.startswith("out-step_main-") for k in state["objects"])
+        assert any(k.startswith("resolved-source:bind-1#") for k in state["objects"])
         # 无失败：不建 case；游标整链推进一次；实体默认重建索引
         assert state.get("record_failure_requests") in (None, [])
         assert len(state["advances"]) == 1
@@ -1127,7 +1190,7 @@ class TestSchemaExtractS3Relay:
                 env.client,
                 task_queue="t-relay-2",
                 workflows=[SchemaExtractWorkflow],
-                activities=_make_relay_activities(state, fail_on="transform"),
+                activities=_make_relay_activities(state, fail_on="step_main"),
             ):
                 result = await _run(
                     env.client,

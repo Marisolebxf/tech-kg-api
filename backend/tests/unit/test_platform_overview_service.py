@@ -292,9 +292,11 @@ def test_overview_marks_demo_fallback_when_graph_is_unavailable() -> None:
     assert result.data_sources["graphAssets"] == "demo-fallback"
     assert "降级" in result.platform_status
     assert result.warnings
-    # 降级态环形图中心 = 演示分段各自的合计（与分段自洽），不是卡片演示总量
-    assert result.entity_structure_total == "1.27 亿"
-    assert result.relation_structure_total == "6.42 亿"
+    # 降级基座不编造数字：总量/环形图中心一律占位，构成环为空（前端灰圆空态）
+    assert result.entity_structure_total == "--"
+    assert result.relation_structure_total == "--"
+    assert result.entity_structure == []
+    assert result.relation_structure == []
 
 
 def test_stats_provider_prefers_cached_snapshot_when_show_stats_fails() -> None:
@@ -394,8 +396,8 @@ def test_overview_uses_control_plane_day_changes() -> None:
     assert serialized["assetChangeTotals"] == {"entity": 61, "relation": 7}
     assert len(result.asset_change_rows["entity"]) == 1
     assert len(result.asset_change_rows["relation"]) == 0
-    # 属性值卡片仍为占位演示行（前端不展示该分组）
-    assert result.asset_change_rows["property"]
+    # 属性值分组恒为空集（统计接口待接入，不编造演示行；前端抽屉显示空表）
+    assert result.asset_change_rows["property"] == []
 
 
 def test_overview_running_count_is_live_not_frozen_in_day_snapshot() -> None:

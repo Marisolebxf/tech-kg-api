@@ -93,8 +93,6 @@ async def test_platform_overview_returns_frontend_contract(
     assert len(data["assetChangeRows"]["entity"]) == 1
     assert data["assetChangeRows"]["entity"][0]["change"] == "新增 review-widget-64d0d5"
     assert data["assetChangeRows"]["relation"] == []
-    assert len(data["latestChanges"]) == 5
-    assert len(data["managementRisks"]) == 3
     assert sum(item["ratio"] for item in data["entityStructure"]) == 100
     assert sum(item["ratio"] for item in data["relationStructure"]) == 100
     assert data["dataMode"] == "partial"
@@ -114,12 +112,8 @@ async def test_platform_overview_atomic_endpoints_are_registered(
     changes = await overview_client.get(
         "/api/v1/platform/overview/changes", params={"assetType": "relation"}
     )
-    activity = await overview_client.get("/api/v1/platform/overview/activity")
-    risks = await overview_client.get("/api/v1/platform/overview/risks")
     structures = await overview_client.get("/api/v1/platform/overview/structures")
 
     assert assets.json()["data"]["items"][0]["total"] == "1.28 亿"
     assert changes.json()["data"]["assetType"] == "relation"
-    assert len(activity.json()["data"]["items"]) == 5
-    assert len(risks.json()["data"]["items"]) == 3
     assert structures.json()["data"]["dataSource"] == "trsgraph-live"

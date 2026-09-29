@@ -39,23 +39,6 @@ class AssetChangeRow(CamelCaseModel):
     time: str
 
 
-class LatestChange(CamelCaseModel):
-    time: str
-    type: str
-    domain: str
-    title: str
-    detail: str
-    impact: str
-    to: str
-
-
-class ManagementRisk(CamelCaseModel):
-    title: str
-    detail: str
-    detail_to: str
-    review_to: str
-
-
 class StructureMember(CamelCaseModel):
     """分段成员（图内真实标签/边类型）及其计数，供前端悬停浮窗展示。"""
 
@@ -84,15 +67,13 @@ class PlatformOverviewData(CamelCaseModel):
     # 今日新增真实计数（Σwritten，与资产卡徽标同源）：抽屉明细行有单执行
     # 50 条上限，行数 ≠ 徽标数时前端用它展示「共 N 条 · 展示前 n 条」
     asset_change_totals: dict[AssetOverviewKey, int] = Field(default_factory=dict)
-    latest_changes: list[LatestChange]
-    management_risks: list[ManagementRisk]
     entity_structure: list[StructureItem]
     relation_structure: list[StructureItem]
     # 环形图中心数 = 各分段之和（Σ标签/Σ边类型计数），与分段自洽；资产卡
-    # total 仍是去重口径，两口径并存。默认值 = 降级演示分段各自的合计。
-    entity_structure_total: str = "1.27 亿"
-    relation_structure_total: str = "6.42 亿"
-    data_mode: Literal["live", "partial", "mock"] = "mock"
+    # total 仍是去重口径，两口径并存。降级时无分段，中心数占位。
+    entity_structure_total: str = "--"
+    relation_structure_total: str = "--"
+    data_mode: Literal["partial", "mock"] = "mock"
     data_sources: dict[str, str] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
 
@@ -101,7 +82,7 @@ class PlatformAssetSummaryData(CamelCaseModel):
     platform_status: str
     pending_batch_count: int
     updated_at: str
-    data_mode: Literal["live", "partial", "mock"]
+    data_mode: Literal["partial", "mock"]
     data_sources: dict[str, str]
     warnings: list[str]
     items: list[AssetOverviewGroup]
@@ -110,16 +91,6 @@ class PlatformAssetSummaryData(CamelCaseModel):
 class PlatformAssetChangesData(CamelCaseModel):
     asset_type: AssetOverviewKey
     rows: list[AssetChangeRow]
-    data_source: str
-
-
-class PlatformActivityData(CamelCaseModel):
-    items: list[LatestChange]
-    data_source: str
-
-
-class PlatformRiskData(CamelCaseModel):
-    items: list[ManagementRisk]
     data_source: str
 
 
@@ -139,14 +110,6 @@ class PlatformAssetSummaryResponse(ApiResponse):
 
 class PlatformAssetChangesResponse(ApiResponse):
     data: PlatformAssetChangesData
-
-
-class PlatformActivityResponse(ApiResponse):
-    data: PlatformActivityData
-
-
-class PlatformRiskResponse(ApiResponse):
-    data: PlatformRiskData
 
 
 class PlatformStructureResponse(ApiResponse):

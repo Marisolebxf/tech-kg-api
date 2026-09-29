@@ -230,7 +230,6 @@ def _upsert_entities(session: Session, *, graph_space: str) -> tuple[dict[str, s
         definition.identity_key = identity_key
         definition.attribute_identity_key = attribute_key
         definition.attribute_source = attribute_source or source
-        definition.instance_count = definition.instance_count or 0
         definition.version = "v1.8"
         definition.display_order = display_order
         definition.is_core = is_core
@@ -283,7 +282,6 @@ def _upsert_relations(
         definition.identity_key = ""
         definition.attribute_identity_key = ""
         definition.attribute_source = ""
-        definition.instance_count = definition.instance_count or 0
         definition.version = "v1.8"
         definition.display_order = display_order
         definition.is_core = False

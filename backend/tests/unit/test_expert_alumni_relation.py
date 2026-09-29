@@ -182,7 +182,7 @@ def test_pair_same_school_and_degree():
     assert alumni_evidence["sourceField"] == "name_zh"
     assert alumni_evidence["graphVid"] == "S2"
     assert resp["rules"][0]["name"] == "教育经历匹配算法"
-    assert "同校" in resp["dimensionsCatalog"]
+    assert "同校" in next(row["value"] for row in resp["summaryRows"] if row["label"] == "维度目录")
 
 
 def test_graph_entities_use_alumni_and_shared_achievement_relation_semantics():
@@ -422,7 +422,7 @@ def test_list_via_studied_at_neighborhood():
     assert not any(row["label"].startswith("合作") for row in resp["summaryRows"])
     assert resp["total"] == 1
     assert resp["items"][0]["alumniId"] == "S2"
-    assert "同校" in resp["dimensionsCatalog"]
+    assert "同校" in next(row["value"] for row in resp["summaryRows"] if row["label"] == "维度目录")
     entities_by_id = {entity["id"]: entity for entity in resp["entities"]}
     assert entities_by_id["S1"]["relations"] == "与乙存在校友关系"
     assert entities_by_id["S2"]["relations"] == "与甲存在校友关系（同校；共同院校：复旦大学）"

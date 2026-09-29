@@ -39,7 +39,6 @@ async def test_query_alumni_relation_success(async_client, monkeypatch):
                     },
                 }
             ],
-            "dimensionsCatalog": ["同校"],
             "sourceMeta": {"space": "dev", "graph": "trs-graph", "truncated": False},
         },
     )

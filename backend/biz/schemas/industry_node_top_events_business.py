@@ -147,7 +147,6 @@ class IndustryNodeTopEventsResponse(BaseModel):
     chain_node_id: str
     chain_node_name: str | None = None
     chain_name: str | None = None
-    node_imp_level: str | None = None
     events: int = 0  # TOP-N 事件数
     experts: int = 0  # 关联专家数
     enterprises: int = 0  # 关联企业数

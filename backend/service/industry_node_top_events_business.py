@@ -472,7 +472,6 @@ class IndustryNodeTopEventsService:
             raise KeyError(f"产业链节点不存在: {req.chain_node_id}")
         node_props = nodes_map.get(node_vid, {})
         resp.chain_node_name = node_props.get("node_name")
-        resp.node_imp_level = node_props.get("node_imp_level")
 
         orgs = []  # [(org_vid, chain_score)]
         for e in data.get("edges") or []:

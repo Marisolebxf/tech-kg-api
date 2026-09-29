@@ -197,8 +197,6 @@ class PanoramaSummary(BaseModel):
     industryChains: list[str] = Field(default_factory=list)
     totalNodes: int
     totalEdges: int
-    nodesByLabel: dict[str, int]
-    edgesByType: dict[str, int]
 
 
 class IndustryChainPanoramaQueryResponse(BaseModel):
@@ -207,6 +205,5 @@ class IndustryChainPanoramaQueryResponse(BaseModel):
     summary: PanoramaSummary
     layers: list[PanoramaLayer]
     graph: dict[str, list[Any]]
-    source: dict[str, Any]
     provenance: dict[str, Any] | None = None
     apiResultExample: dict[str, Any]

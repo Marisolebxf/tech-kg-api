@@ -15,8 +15,8 @@
 - ``POST /graph-search/nodes/search`` — 按属性搜索（产业关键词）
 - ``GET /graph-search/subgraph/{vid}?depth=N`` — 以核心节点扩展子图
 
-查询结果一律来自图库；关键词未命中或图服务异常时返回空结果并在 ``source.reason``
-标明原因，不返回内置示例数据。
+查询结果一律来自图库；关键词未命中或图服务异常时返回空结果，并在 ``provenance``
+中如实说明原因，不返回内置示例数据。
 """
 
 from __future__ import annotations
@@ -244,7 +244,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
                 layers, seed_vids = layer_payload
                 anchor = resolved_anchor
                 # 关键词未命中不兜底：不再回退到全库紧凑全景，让结果保持空，
-                # 由 reason=keyword_no_match 驱动前端「未查询到数据」提示。
+                # 由 provenance 如实说明未命中，驱动前端「未查询到数据」提示。
                 if rel_types:
                     graph = await self._fetch_graph(
                         client,
@@ -294,6 +294,8 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             )
         summary = self._build_summary(industry_kw, layers, graph, industry_chains)
 
+        # source 只作内部溯源口径（降级原因/锚点回填），不下发响应——对外降级
+        # 说明统一走 provenance
         source = {
             "requested": "all",
             "actual": "graph-api",
@@ -312,7 +314,6 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             "summary": summary,
             "layers": layers,
             "graph": graph,
-            "source": source,
             "provenance": self._build_provenance(summary, layers, graph, source),
             "apiResultExample": {
                 "url": "/api/v1/kg-construction/industry-chain-panorama/query",
@@ -1436,6 +1437,4 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             "industryChains": list(industry_chains or []),
             "totalNodes": sum(nodes_by_label.values()),
             "totalEdges": sum(edges_by_type.values()),
-            "nodesByLabel": nodes_by_label,
-            "edgesByType": edges_by_type,
         }

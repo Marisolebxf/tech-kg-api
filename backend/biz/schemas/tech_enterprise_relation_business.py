@@ -2,7 +2,7 @@
 
 对齐前端 service-modules.ts 的 enterprise-relation 契约：
 端点 POST /api/v1/kg-service/key-enterprise-relation，请求 {expert_id, enterprise_name,
-role_type, industry}，响应 data={enterprises, roles, cooperation_fields, relations}。
+role_type, industry}，响应 data={enterprises, cooperation_fields, relations}。
 """
 
 from __future__ import annotations
@@ -131,7 +131,6 @@ class KeyEnterpriseRelationResponse(BaseModel):
     expert_id: str
     expert_name: str | None = None
     enterprises: int = 0  # 关联企业数
-    roles: int = 0  # 角色类型数
     cooperation_fields: list[str] = Field(default_factory=list)
     relations: list[EnterpriseRelationItem] = Field(default_factory=list)
     confidence: float = 0.0  # 综合置信度（取关系置信度最大值）

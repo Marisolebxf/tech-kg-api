@@ -105,8 +105,6 @@ def test_build_summary_counts_only_returned_layer_items_and_graph_edges() -> Non
         "industryChains": ["集成电路", "低空经济"],
         "totalNodes": 3,
         "totalEdges": 3,
-        "nodesByLabel": {"核心技术": 2, "领军企业": 1, "领军专家": 0},
-        "edgesByType": {"HAS_KEYWORD": 2, "RELATED_TO": 1},
     }
 
 
@@ -245,7 +243,7 @@ async def test_query_returns_keyword_no_match_when_keyword_misses(monkeypatch) -
 
     result = await service.query(industry="人工智能", depth=1, top_k=3)
 
-    assert result["source"]["reason"] == "keyword_no_match"
+    assert "产业关键词未命中任何实体" in result["provenance"]["summary"]
     assert [not layer["items"] for layer in result["layers"]]
     assert result["graph"]["nodes"] == []
     assert result["summary"]["totalNodes"] == 0
@@ -292,8 +290,7 @@ async def test_query_reports_graph_api_error_when_searches_swallowed_failures(
 
     result = await service.query(industry="人工智能", depth=1, top_k=3)
 
-    assert result["source"]["reason"] == "graph_api_error"
-    assert result["source"]["fallback"] is False
+    assert "图查询服务不可用" in result["provenance"]["summary"]
 
 
 @pytest.mark.asyncio
@@ -1172,7 +1169,9 @@ async def test_query_reports_graph_api_error_on_timeout(monkeypatch) -> None:
 
     result = await service.query(industry="量子科技", depth=1, top_k=3)
 
-    assert result["source"]["reason"] == "graph_api_error"
+    # source 不再随响应下发，降级口径经 provenance 如实说明
+    assert "source" not in result
+    assert "图查询服务不可用" in result["provenance"]["summary"]
     assert result["layers"] == []
 
 

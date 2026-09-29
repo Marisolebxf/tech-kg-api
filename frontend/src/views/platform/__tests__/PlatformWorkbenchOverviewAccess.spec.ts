@@ -77,11 +77,9 @@ beforeEach(() => {
     dataMode: 'live',
     warnings: [],
     assetOverviewGroups: [],
-    assetChangeRows: { entity: [], relation: [], property: [] },
+    assetChangeRows: { entity: [], relation: [] },
     entityStructure: [],
     relationStructure: [],
-    latestChanges: [],
-    managementRisks: [],
     dataSources: {},
   })
   vi.mocked(listJobs).mockResolvedValue({ items: [], total: 0 })

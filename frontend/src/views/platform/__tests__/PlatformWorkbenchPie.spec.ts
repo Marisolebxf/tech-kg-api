@@ -52,11 +52,9 @@ const baseOverview: PlatformOverviewData = {
   dataMode: 'partial',
   warnings: [],
   assetOverviewGroups: [],
-  assetChangeRows: { entity: [], relation: [], property: [] },
+  assetChangeRows: { entity: [], relation: [] },
   entityStructure: [],
   relationStructure: [],
-  latestChanges: [],
-  managementRisks: [],
   dataSources: {},
 }
 
@@ -292,7 +290,7 @@ describe('平台总览构成饼图随数据驱动', () => {
     expect(text).toContain('今日新增')
   })
 
-  it('「查看今日新增」抽屉 Teleport 到 body：脱离 .app-stage backdrop-filter 圈住的子树，多行全量渲染', async () => {
+  it('「查看昨日新增」抽屉 Teleport 到 body：脱离 .app-stage backdrop-filter 圈住的子树，多行全量渲染', async () => {
     vi.mocked(getPlatformOverview).mockResolvedValue({
       ...baseOverview,
       assetOverviewGroups: [
@@ -307,13 +305,12 @@ describe('平台总览构成饼图随数据驱动', () => {
           time: '11:57:41',
         })),
         relation: [],
-        property: [],
       },
     })
     wrapper = mountOverview()
     await flushPromises()
 
-    const openButton = wrapper.findAll('button').filter((btn) => btn.text().includes('查看今日新增'))[0]!
+    const openButton = wrapper.findAll('button').filter((btn) => btn.text().includes('查看昨日新增'))[0]!
     await openButton.trigger('click')
     await flushPromises()
 

@@ -73,9 +73,10 @@ def test_overview_uses_live_graph_totals_and_explicit_partial_mode() -> None:
     assert result.platform_status == "图数据库连接正常"
     assert result.data_mode == "partial"
     assert result.data_sources["graphAssets"] == "trsgraph-live"
+    # 资产卡只有实体/关系两类（属性值占位卡已随演示数据清理删除）
+    assert [group.key for group in result.asset_overview_groups] == ["entity", "relation"]
     assert result.asset_overview_groups[0].total == "1.28 亿"
     assert result.asset_overview_groups[1].total == "6.42 亿"
-    assert result.asset_overview_groups[2].total == "--"
     assert sum(item.ratio for item in result.entity_structure) == 100
     assert sum(item.ratio for item in result.relation_structure) == 100
 
@@ -115,10 +116,7 @@ def test_overview_total_is_deduped_with_multi_tag_vertices() -> None:
     # 中心总量 = 去重 vid / 边总数（真实体数），Σ标签计数 32.03 万不冒充实体总量
     assert result.asset_overview_groups[0].total == "29.48 万"  # 294,800 ≠ Σ标签 32.03 万
     assert result.asset_overview_groups[1].total == "54.46 万"  # 544,600
-    # 环形图中心数 = 各分段之和（Σ标签/Σ边类型计数），与分段自洽、与卡片去重口径并存
-    assert result.entity_structure_total == "32.03 万"  # Σ标签 = 32,000+10,000+230,700+29,988+17,600
-    assert result.relation_structure_total == "54.46 万"  # Σ边类型 = 544,600
-    # 分段仍按标签计数：实体分段合计 32.03 万 > 中心 29.48 万（多标签顶点重复计入）
+    # 分段仍按标签计数：实体分段合计 32.03 万 > 卡片 29.48 万（多标签顶点重复计入）
     assert sum(item.ratio for item in result.entity_structure) == 100
 
 
@@ -271,16 +269,26 @@ def test_overview_cache_is_isolated_per_space() -> None:
     assert provider.spaces == ["gaoxing_test", "techkg", None]
 
 
-def test_overview_marks_demo_fallback_when_graph_is_unavailable() -> None:
-    result = PlatformOverviewService(stats_provider=FailingStatsProvider()).get_overview()
+def test_overview_degrades_honestly_when_graph_is_unavailable() -> None:
+    """图统计不可用：全部数据位显式占位/空表，绝不回填演示数据；运行数仍实查控制库。"""
+    changes = FakeChangesProvider(DayChangesSnapshot(running_count=4))
+    result = PlatformOverviewService(
+        stats_provider=FailingStatsProvider(), changes_provider=changes
+    ).get_overview()
 
     assert result.data_mode == "mock"
-    assert result.data_sources["graphAssets"] == "demo-fallback"
+    assert result.data_sources["graphAssets"] == "unavailable"
+    assert result.data_sources["dayChanges"] == "unavailable"
     assert "降级" in result.platform_status
     assert result.warnings
-    # 降级态环形图中心 = 演示分段各自的合计（与分段自洽），不是卡片演示总量
-    assert result.entity_structure_total == "1.27 亿"
-    assert result.relation_structure_total == "6.42 亿"
+    # 卡片占位、构成图与明细空表——不再有 1.28 亿/6.42 亿 演示总量与演示分段
+    assert [group.total for group in result.asset_overview_groups] == ["--", "--"]
+    assert result.entity_structure == []
+    assert result.relation_structure == []
+    assert result.asset_change_rows == {"entity": [], "relation": []}
+    assert result.asset_change_totals == {"entity": 0, "relation": 0}
+    # 运行中执行数与图无关：仍按控制库实时计数（不再是演示常数 2）
+    assert result.pending_batch_count == 4
 
 
 def test_stats_provider_prefers_cached_snapshot_when_show_stats_fails() -> None:
@@ -380,8 +388,8 @@ def test_overview_uses_control_plane_day_changes() -> None:
     assert serialized["assetChangeTotals"] == {"entity": 61, "relation": 7}
     assert len(result.asset_change_rows["entity"]) == 1
     assert len(result.asset_change_rows["relation"]) == 0
-    # 属性值卡片仍为占位演示行（前端不展示该分组）
-    assert result.asset_change_rows["property"]
+    # 属性值占位卡与演示行已删：明细只剩实体/关系两类
+    assert set(result.asset_change_rows) == {"entity", "relation"}
 
 
 def test_overview_running_count_is_live_not_frozen_in_day_snapshot() -> None:
@@ -461,7 +469,7 @@ def test_overview_tolerates_control_plane_failure() -> None:
     assert result.asset_change_rows["entity"] == []
     assert result.asset_change_rows["relation"] == []
     assert result.pending_batch_count == 0
-    assert result.data_sources["dayChanges"] == "demo-fallback"
+    assert result.data_sources["dayChanges"] == "unavailable"
     assert any("控制库不可用" in warning for warning in result.warnings)
 
 
@@ -936,7 +944,10 @@ def test_vertex_display_name_falls_back_to_title() -> None:
     """Project 无 name/title_zh，展示名退 title；候选序内更靠前的键优先。"""
     from service.platform_overview import _vertex_display_name
 
-    assert _vertex_display_name({"title": "面向城域网的全光交换方法"}, "proj-1") == "面向城域网的全光交换方法"
+    assert (
+        _vertex_display_name({"title": "面向城域网的全光交换方法"}, "proj-1")
+        == "面向城域网的全光交换方法"
+    )
     assert _vertex_display_name({"title_zh": "中文题名", "title": "兜底"}, "p-2") == "中文题名"
     assert _vertex_display_name({}, "vid-x") == "vid-x"
 
@@ -951,7 +962,10 @@ def test_dedupe_rows_keeps_first_occurrence() -> None:
     rows = [row("熔丝元件", "20:01:00"), row("旋转电机", "20:01:01"), row("熔丝元件", "20:05:00")]
     deduped = _dedupe_rows(rows)
     # 第一行（最新执行的口径）保留，后到的同对象行丢弃，顺序不变
-    assert [(r.object, r.time) for r in deduped] == [("熔丝元件", "20:01:00"), ("旋转电机", "20:01:01")]
+    assert [(r.object, r.time) for r in deduped] == [
+        ("熔丝元件", "20:01:00"),
+        ("旋转电机", "20:01:01"),
+    ]
 
 
 def test_cap_display_rows_sorts_newest_first_and_truncates() -> None:

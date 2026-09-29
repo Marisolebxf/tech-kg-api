@@ -44,6 +44,7 @@ test.describe.serial('D. 配置管理', () => {
 
     // 顶部搜索过滤
     await page.locator('input[placeholder="搜索名称、标识或地址"]').fill('model')
+    await page.locator('.config-search-form').getByRole('button', { name: '查询' }).click()
     await waitFor(
       async () => {
         const rows = page.locator('tbody tr')
@@ -53,6 +54,7 @@ test.describe.serial('D. 配置管理', () => {
       { label: '搜索收敛' },
     )
     await page.locator('input[placeholder="搜索名称、标识或地址"]').fill('')
+    await page.locator('.config-search-form').getByRole('button', { name: '查询' }).click()
   })
 
   test('D2 新建 LLM 配置（验证连接门禁）', async ({ page, request }) => {
@@ -117,14 +119,15 @@ test.describe.serial('D. 配置管理', () => {
     expect(llmId).toBeTruthy()
   })
 
-  test('D3 配置详情抽屉：测试连接/设默认/停用/删除', async ({ page, request }) => {
+  test('D3 配置详情抽屉：测试连接/设默认；列表操作启停与删除', async ({ page, request }) => {
     test.skip(!llmId, 'D2 未产出')
     test.setTimeout(180_000)
     autoAcceptConfirms(page)
     await page.goto('/configurations')
     await page.waitForLoadState('networkidle')
     await page.getByRole('button', { name: '语言模型', exact: false }).first().click()
-    await page.getByText(LLM_NAME).first().click()
+    const llmRow = page.locator('.config-table-wrap tbody tr', { hasText: LLM_NAME }).first()
+    await llmRow.getByRole('button', { name: '管理' }).click()
 
     const drawer = page.locator('.detail-drawer')
     await expect(drawer).toBeVisible({ timeout: 15_000 })
@@ -155,20 +158,21 @@ test.describe.serial('D. 配置管理', () => {
       async () => (await page.getByText(/默认|设为默认成功/).first().isVisible().catch(() => false)),
       { label: '设默认反馈' },
     )
+    await drawer.locator('header button').click()
     // 停用 → 启用
-    await drawer.getByRole('button', { name: '停用配置' }).click()
+    await llmRow.getByRole('button', { name: '停用', exact: true }).click()
     await waitFor(
-      async () => (await drawer.getByRole('button', { name: '启用配置' }).isVisible().catch(() => false)),
+      async () => (await llmRow.getByRole('button', { name: '启用', exact: true }).isVisible().catch(() => false)),
       { label: '停用→启用按钮翻转' },
     )
-    await drawer.getByRole('button', { name: '启用配置' }).click()
+    await llmRow.getByRole('button', { name: '启用', exact: true }).click()
     await waitFor(
-      async () => (await drawer.getByRole('button', { name: '停用配置' }).isVisible().catch(() => false)),
+      async () => (await llmRow.getByRole('button', { name: '停用', exact: true }).isVisible().catch(() => false)),
       { label: '启用→停用按钮翻转' },
     )
 
     // 删除（window.confirm）
-    await drawer.getByRole('button', { name: '删除', exact: true }).click()
+    await llmRow.getByRole('button', { name: '删除', exact: true }).click()
     await waitFor(
       async () => {
         const after = await apiMust<any>(request, 'GET', '/llm-config/llm-configs', undefined, '复核删除')
@@ -209,7 +213,8 @@ test.describe.serial('D. 配置管理', () => {
     expect(mysqlId).toBeTruthy()
 
     // 详情「测试连接」成功 toast
-    await page.getByText(MYSQL_NAME).first().click()
+    const mysqlRow = page.locator('.config-table-wrap tbody tr', { hasText: MYSQL_NAME }).first()
+    await mysqlRow.getByRole('button', { name: '管理' }).click()
     const drawer = page.locator('.detail-drawer')
     await expect(drawer).toBeVisible({ timeout: 15_000 })
     await expect(drawer.getByText(MYSQL_NAME).first()).toBeVisible()
@@ -241,7 +246,8 @@ test.describe.serial('D. 配置管理', () => {
 
     // 测试完删除
     autoAcceptConfirms(page)
-    await drawer.getByRole('button', { name: '删除', exact: true }).click()
+    await drawer.locator('header button').click()
+    await mysqlRow.getByRole('button', { name: '删除', exact: true }).click()
     await waitFor(
       async () => {
         const after = await apiMust<any>(request, 'GET', '/mysql-datasources', undefined, '复核删除')
@@ -285,7 +291,8 @@ test.describe.serial('D. 配置管理', () => {
       async () => (await page.getByText('e2e_embedding').first().isVisible().catch(() => false)),
       { label: 'embedding 配置入列' },
     )
-    await page.getByText('e2e_embedding').first().click()
+    const embeddingRow = page.locator('.config-table-wrap tbody tr', { hasText: 'e2e_embedding' }).first()
+    await embeddingRow.getByRole('button', { name: '管理' }).click()
     const drawer = page.locator('.detail-drawer')
     await expect(drawer).toBeVisible({ timeout: 15_000 })
     await expect(drawer.getByText('e2e_embedding').first()).toBeVisible()
@@ -294,7 +301,8 @@ test.describe.serial('D. 配置管理', () => {
       async () => (await page.getByText(/连接测试成功，延迟/).first().isVisible().catch(() => false)),
       { timeout: 90_000, label: 'embedding 测试连接' },
     )
-    await drawer.getByRole('button', { name: '删除', exact: true }).click()
+    await drawer.locator('header button').click()
+    await embeddingRow.getByRole('button', { name: '删除', exact: true }).click()
     await waitFor(
       async () => !(await page.getByText('e2e_embedding').first().isVisible().catch(() => false)),
       { label: 'embedding 配置删除' },

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useAuthStore } from '../../stores/auth'
 import { IconSearch } from '@arco-design/web-vue/es/icon'
 import ListPagination from '../../components/list-pagination.vue'
@@ -111,11 +111,33 @@ const spaceWorking = ref(false)
 const items = ref<ConfigItem[]>([])
 const activeCategory = ref('语言模型')
 const keyword = ref('')
+const submittedKeyword = ref('')
 const statusFilter = ref<string | undefined>('全部状态')
 const selected = ref<ConfigItem | null>(null)
 const dialogOpen = ref(false)
 const testingId = ref('')
 const saving = ref(false)
+const configTableRef = ref<HTMLElement | null>(null)
+const tableHasMoreToScroll = ref(false)
+const tableScrollActive = ref(false)
+let scrollIdleTimer: ReturnType<typeof setTimeout> | undefined
+
+function updateConfigTableScrollState() {
+  const table = configTableRef.value
+  tableHasMoreToScroll.value = !!table && table.scrollWidth - table.clientWidth - table.scrollLeft > 1
+}
+
+function handleConfigTableScroll() {
+  updateConfigTableScrollState()
+  tableScrollActive.value = true
+  clearTimeout(scrollIdleTimer)
+  scrollIdleTimer = setTimeout(() => { tableScrollActive.value = false }, 700)
+}
+
+function submitConfigSearch() {
+  submittedKeyword.value = keyword.value.trim()
+  resetConfigPage()
+}
 
 type ConfigForm = {
   name?: string
@@ -176,7 +198,7 @@ const formKind = computed<ConfigKind | null>(() => {
 
 const visibleItems = computed(() => items.value.filter((item) => {
   const matchCategory = item.category === activeCategory.value
-  const query = keyword.value.trim().toLowerCase()
+  const query = submittedKeyword.value.toLowerCase()
   const endpointOrUrl = item.baseUrl || item.host || item.endpoint
   const matchKeyword = !query || `${item.name}${item.id}${item.type}${endpointOrUrl}${item.model || ''}`.toLowerCase().includes(query)
   const matchStatus = !statusFilter.value || statusFilter.value === '全部状态' || item.status === statusFilter.value
@@ -193,7 +215,11 @@ const {
   changePage: changeConfigPage,
   changePageSize: changeConfigPageSize,
 } = useClientPagination(visibleItems, 10)
-watch([keyword, statusFilter, activeCategory], resetConfigPage)
+watch([submittedKeyword, statusFilter, activeCategory], resetConfigPage)
+watch([pagedItems, activeCategory], async () => {
+  await nextTick()
+  updateConfigTableScrollState()
+}, { flush: 'post' })
 
 function categoryCount(key: string) {
   if (key === '图数据空间') {
@@ -580,8 +606,14 @@ async function loadAllCategories() {
 }
 
 onMounted(() => {
+  window.addEventListener('resize', updateConfigTableScrollState)
+  void nextTick(updateConfigTableScrollState)
   void loadAllCategories()
   void loadGraphSpaces()
+})
+onUnmounted(() => {
+  window.removeEventListener('resize', updateConfigTableScrollState)
+  clearTimeout(scrollIdleTimer)
 })
 </script>
 
@@ -596,7 +628,7 @@ onMounted(() => {
       </aside>
 
       <main class="config-list">
-        <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilter" allow-clear placeholder="全部状态"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><a-input v-model="keyword" class="config-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识或地址" placeholder="搜索名称、标识或地址"><template #prefix><IconSearch /></template></a-input></nav><nav v-else class="bind-nav"><button class="primary" type="button" @click="spaceDialogOpen = true">＋ 新建图数据空间</button><a-select v-if="isAdmin && bindableSpaces.length" v-model="bindTarget" placeholder="绑定已有图数据空间" allow-clear><a-option v-for="space in bindableSpaces" :key="space.name" :value="space.name">{{ space.name }}</a-option></a-select><button v-if="isAdmin && bindableSpaces.length" type="button" :disabled="spaceWorking" @click="bindSpace">绑定</button></nav></header>
+        <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilter" allow-clear placeholder="全部状态"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><form class="config-search-form" role="search" @submit.prevent="submitConfigSearch"><a-input v-model="keyword" class="config-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识或地址" placeholder="搜索名称、标识或地址"><template #prefix><IconSearch /></template></a-input><button class="primary config-search-button" type="submit">查询</button></form></nav><nav v-else class="bind-nav"><button class="primary" type="button" @click="spaceDialogOpen = true">＋ 新建图数据空间</button><a-select v-if="isAdmin && bindableSpaces.length" v-model="bindTarget" placeholder="绑定已有图数据空间" allow-clear><a-option v-for="space in bindableSpaces" :key="space.name" :value="space.name">{{ space.name }}</a-option></a-select><button v-if="isAdmin && bindableSpaces.length" type="button" :disabled="spaceWorking" @click="bindSpace">绑定</button></nav></header>
         <div v-if="isGraphSpaceCategory" class="table-wrap space-table">
           <table>
             <thead><tr><th>图数据空间</th><th>绑定状态</th></tr></thead>
@@ -610,12 +642,13 @@ onMounted(() => {
           </table>
           <p class="space-hint">新建图数据空间会真实执行 CREATE SPACE（创建后有秒级传播延迟）；解除绑定请找管理员处理。</p>
         </div>
-        <div v-else class="table-wrap">
+        <div v-else ref="configTableRef" class="table-wrap config-table-wrap" :class="{ 'has-scroll-right': tableHasMoreToScroll, 'config-scroll--active': tableScrollActive }" @scroll.passive="handleConfigTableScroll">
           <table>
-            <thead><tr><th>配置名称</th><th>类型 / 地址</th><th class="config-status-col">状态</th><th class="config-usage-col">引用情况</th><th class="config-time-col">更新时间</th><th class="config-action-col">操作</th></tr></thead>
+            <thead><tr><th>配置名称</th><th>标识</th><th>类型 / 地址</th><th class="config-status-col">状态</th><th class="config-usage-col">引用情况</th><th class="config-time-col">更新时间</th><th class="config-action-col">操作</th></tr></thead>
             <tbody>
-              <tr v-for="item in pagedItems" :key="item.id" @click="openDetail(item)">
-                <td><div class="config-name"><span><strong>{{ item.name }}<b v-if="item.isDefault" class="default-tag">默认</b></strong><small>{{ item.id }} · {{ item.description }}</small></span></div></td>
+              <tr v-for="item in pagedItems" :key="item.id">
+                <td><div class="config-name"><span><strong>{{ item.name }}<b v-if="item.isDefault" class="default-tag">默认</b></strong><small v-if="item.description">{{ item.description }}</small></span></div></td>
+                <td class="config-id-col">{{ item.id }}</td>
                 <td><strong class="type-name">{{ item.type }}<template v-if="item.model"> · {{ item.model }}</template></strong><code>{{ item.baseUrl || item.host && `${item.host}:${item.port}` || item.endpoint }}</code></td>
                 <td class="config-status-col"><span class="status" :class="`is-${item.status}`"><i />{{ item.status }}</span></td>
                 <td class="config-usage-col">{{ item.usage }}</td>
@@ -628,7 +661,7 @@ onMounted(() => {
                   </div>
                 </td>
               </tr>
-              <tr v-if="!visibleItems.length"><td class="empty" colspan="6">没有符合条件的配置</td></tr>
+              <tr v-if="!visibleItems.length"><td class="empty" colspan="7">没有符合条件的配置</td></tr>
             </tbody>
           </table>
         </div>
@@ -637,9 +670,11 @@ onMounted(() => {
           :total="configTotal"
           :page="configPage"
           :page-size="configPageSize"
+          :show-jumper="false"
+          :size-at-end="true"
           @change="changeConfigPage"
           @change-size="changeConfigPageSize"
-        />
+        ><template #summary><span class="config-page-summary">共 {{ configTotal }} 条</span></template></ListPagination>
       </main>
     </section>
 
@@ -673,8 +708,6 @@ onMounted(() => {
       </div>
       <footer>
         <button v-if="!selected.isDefault" type="button" @click="setAsDefault(selected)">设为默认</button>
-        <button type="button" @click="toggleItem(selected)">{{ selected.status === '停用' ? '启用配置' : '停用配置' }}</button>
-        <button type="button" @click="removeConfig(selected)">删除</button>
         <button class="primary" type="button" :disabled="saving || hasDetailErrors" @click="saveDetail">{{ saving ? '保存中…' : '保存修改' }}</button>
       </footer>
       </aside>
@@ -871,9 +904,29 @@ onMounted(() => {
 .table-wrap:not(.space-table) th.config-action-col{position:sticky;right:0;background:#f7f8fa;box-shadow:-1px 0 #e5e6eb}
 .table-wrap:not(.space-table) td.config-action-col{position:sticky;right:0;z-index:3;background:#fff;box-shadow:-1px 0 #e5e6eb}
 /* 固定列左侧向内容区渐隐的阴影（与 Schema 管理表同视觉提示） */
-.table-wrap:not(.space-table) :is(th,td).config-action-col::before{position:absolute;top:0;bottom:-1px;left:0;width:12px;content:"";pointer-events:none;transform:translateX(-100%);box-shadow:inset -10px 0 8px -8px rgba(78,89,105,.28)}
+.table-wrap.has-scroll-right :is(th,td).config-action-col::before{position:absolute;top:0;bottom:-1px;left:0;width:12px;content:"";pointer-events:none;transform:translateX(-100%);box-shadow:inset -10px 0 8px -8px rgba(78,89,105,.28)}
 .config-action-col .row-actions{display:inline-flex;width:auto;min-width:max-content;align-items:center;overflow:visible}
 .table-wrap th,.table-wrap td{box-sizing:border-box;padding-right:16px;padding-left:16px}
+/* 配置列表在自身容器内横向滚动，内容按列单行展示，操作列仍固定。 */
+.config-table-wrap{scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:transparent transparent}
+.config-table-wrap:hover,.config-table-wrap.config-scroll--active{scrollbar-color:rgba(78,89,105,.55) transparent}
+.config-table-wrap::-webkit-scrollbar{width:8px;height:8px}
+.config-table-wrap::-webkit-scrollbar-track{background:transparent}
+.config-table-wrap::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background-color:transparent;background-clip:padding-box}
+.config-table-wrap:hover::-webkit-scrollbar-thumb,.config-table-wrap.config-scroll--active::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
+.config-table-wrap::-webkit-scrollbar-thumb:hover{background-color:rgba(78,89,105,.8)}
+.config-table-wrap table{width:max-content;min-width:max(100%,1350px)}
+.config-table-wrap :is(th,td){white-space:nowrap}
+.config-table-wrap tbody tr{cursor:default}
+.config-id-col{color:#4e5969}
+/* 筛选输入框固定为紧凑宽度；查询与新建使用同一主按钮。 */
+.config-search-form{display:flex;min-width:0;margin-left:auto;align-items:center;gap:16px}
+.config-list-actions .config-search-input.arco-input-wrapper{width:240px;max-width:240px;margin-left:0;flex:0 1 240px}
+.config-search-form .config-search-button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
+.config-search-form .config-search-button:hover{border-color:#4080ff!important;background:#4080ff!important}
+/* 自定义分页摘要由父组件定位，避免插槽内容在共享分页组件中靠左。 */
+.config-list :deep(.list-pagination){justify-content:flex-end}
+.config-list :deep(.config-page-summary){margin-left:auto;white-space:nowrap}
 @media (max-width: 767px) {
   .config-workbench {
     display: flex;

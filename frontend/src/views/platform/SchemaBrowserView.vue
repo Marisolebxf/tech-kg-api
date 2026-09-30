@@ -63,6 +63,7 @@ import SourceBindings from './schema-browser/sourceBindings.vue'
 import SchemaPropertyCell from './schema-browser/SchemaPropertyCell.vue'
 import {
   emptySourceBindingRow,
+  isSourceBindingComplete,
   toSourcePayload,
   type SourceBindingRow,
 } from './schema-browser/sourceBindingRows'
@@ -658,11 +659,28 @@ const nameRuleMax = computed(() =>
   isRelationTab() ? SCHEMA_RELATION_NAME_RULE.max : SCHEMA_ENTITY_NAME_RULE.max,
 )
 
+const propertyAddAttempted = ref(false)
+const sourceAddAttempted = ref(false)
+const incompleteProperties = computed(() => createForm.value.properties.some((row) =>
+  !row.name.trim() || !row.dataType || fixedLengthInvalid(row),
+))
+const incompleteSources = computed(() => createForm.value.sources.some((row) => !isSourceBindingComplete(row)))
+
 function addProperty() {
+  if (incompleteProperties.value) {
+    propertyAddAttempted.value = true
+    return
+  }
+  propertyAddAttempted.value = false
   createForm.value.properties.push(emptyPropertyRow())
 }
 
 function addSourceBinding() {
+  if (incompleteSources.value) {
+    sourceAddAttempted.value = true
+    return
+  }
+  sourceAddAttempted.value = false
   createForm.value.sources.push(emptySourceBindingRow())
 }
 
@@ -872,6 +890,8 @@ watch(
 
 function openCreate() {
   createForm.value = emptyCreateForm()
+  propertyAddAttempted.value = false
+  sourceAddAttempted.value = false
   confirming.value = false
   modalOpen.value = true
   // 关系表单的起点/终点下拉需要全量实体；列表已分页，不能复用当前页数据
@@ -1263,7 +1283,6 @@ function descCell(text: string): string {
               <template #label>
                 <div class="create-props__head">
                   <span>属性列表</span>
-                  <button type="button" class="create-props__add" @click.stop="addProperty">＋ 添加属性</button>
                 </div>
               </template>
               <div class="create-prop-list">
@@ -1295,15 +1314,22 @@ function descCell(text: string): string {
                 </template>
               </div>
               <p v-if="propListLimitNote" class="limit-field-note">{{ propListLimitNote }}</p>
+              <div class="create-module-actions">
+                <button type="button" class="create-props__add" @click.stop="addProperty">＋ 添加属性</button>
+              </div>
+              <p v-if="propertyAddAttempted && incompleteProperties" class="create-add-error" role="alert">请填写完已有属性的必填信息（属性名、类型及 fixed_string 长度）后再添加。</p>
             </a-form-item>
 
             <div class="create-sources">
               <div class="create-sources__head">
                 <span>来源表（可选）</span>
-                <button type="button" class="create-sources__add" @click="addSourceBinding">＋ 绑定来源表</button>
                 <span class="create-sources__hint">绑定后可在行级触发「平台喂数」抽取：按时间列水位分批读取来源表 → 脚本转换 → 写入图谱</span>
               </div>
               <SourceBindings v-model="createForm.sources" :show-add-button="false" />
+              <div class="create-module-actions">
+                <button type="button" class="create-sources__add" @click="addSourceBinding">＋ 绑定来源表</button>
+              </div>
+              <p v-if="sourceAddAttempted && incompleteSources" class="create-add-error" role="alert">请填写完已有来源表的必填信息（数据源、数据库、表）后再添加。</p>
             </div>
 
             <div class="create-ddl">
@@ -1568,20 +1594,20 @@ function descCell(text: string): string {
 .schema-table-wrap table,.trace-layout table{width:100%;border-collapse:collapse;font-size:11px}
 .schema-table-wrap table{table-layout:fixed}
 /* 按字段内容分配列宽，预留完整操作区；属性列的两列预览可在单元格内截断。 */
-.schema-entity-table th:nth-child(1){width:10%}
-.schema-entity-table th:nth-child(2){width:13%}
-.schema-entity-table th:nth-child(3){width:13%}
-.schema-entity-table th:nth-child(4){width:42%}
-.schema-entity-table th:nth-child(5){width:8%}
-.schema-entity-table th:nth-child(6){width:14%}
-.schema-relation-table th:nth-child(1){width:8%}
-.schema-relation-table th:nth-child(2){width:11%}
-.schema-relation-table th:nth-child(3){width:7%}
-.schema-relation-table th:nth-child(4){width:7%}
-.schema-relation-table th:nth-child(5){width:11%}
-.schema-relation-table th:nth-child(6){width:37%}
-.schema-relation-table th:nth-child(7){width:7%}
-.schema-relation-table th:nth-child(8){width:12%}
+.schema-entity-table th:nth-child(1){width:calc((100% - 200px) * 0.11627907)}
+.schema-entity-table th:nth-child(2){width:calc((100% - 200px) * 0.15116279)}
+.schema-entity-table th:nth-child(3){width:calc((100% - 200px) * 0.15116279)}
+.schema-entity-table th:nth-child(4){width:calc((100% - 200px) * 0.48837209)}
+.schema-entity-table th:nth-child(5){width:calc((100% - 200px) * 0.09302326)}
+.schema-entity-table th:nth-child(6){width:200px}
+.schema-relation-table th:nth-child(1){width:calc((100% - 200px) * 0.09090909)}
+.schema-relation-table th:nth-child(2){width:calc((100% - 200px) * 0.12500000)}
+.schema-relation-table th:nth-child(3){width:calc((100% - 200px) * 0.07954545)}
+.schema-relation-table th:nth-child(4){width:calc((100% - 200px) * 0.07954545)}
+.schema-relation-table th:nth-child(5){width:calc((100% - 200px) * 0.12500000)}
+.schema-relation-table th:nth-child(6){width:calc((100% - 200px) * 0.42045455)}
+.schema-relation-table th:nth-child(7){width:calc((100% - 200px) * 0.07954545)}
+.schema-relation-table th:nth-child(8){width:200px}
 .schema-desc-cell{word-break:break-word}
 .schema-table-wrap td code{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom}.schema-table-wrap th,.schema-table-wrap td,.trace-layout td{padding:11px 13px;border-bottom:1px solid #e5edf8;text-align:left;line-height:17px;vertical-align:top}.schema-table-wrap th{position:sticky;z-index:2;top:0;background:#f1f6fc;color:#5e6f88;white-space:nowrap}.schema-table-wrap td{color:#344763}.schema-table-wrap code,.trace-layout code{padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;white-space:nowrap}.core,.support,.evidence,.auto,.review{display:inline-flex;padding:2px 7px;border-radius:999px;background:#e9f8ef;color:#067647;font-size:9px;white-space:nowrap}.support{background:#f0f2f5;color:#5e6b7e}.evidence{background:#f0edff;color:#6941c6}.auto{white-space:normal}.review{background:#fff3df;color:#b54708;white-space:normal}.arrow{margin:0 5px;color:#8ba2c2}.candidate-layout{display:grid;flex:1;min-height:0;grid-template-columns:minmax(0,1fr) 245px}.candidate-layout>.schema-table-wrap{grid-column:1}.candidate-note{grid-column:1/-1;padding:10px 13px;border-bottom:1px solid #dce8f8;background:#f3f8ff}.candidate-note strong{font-size:12px}.candidate-note p{margin:3px 0 0;color:#657690;font-size:10px}.mention-fields{grid-column:2;grid-row:2;padding:13px;border-left:1px solid #e0e9f5;background:#fafcff}.mention-fields strong{display:block;margin-bottom:10px;font-size:12px}.mention-fields span{display:inline-flex;margin:0 5px 6px 0;padding:3px 6px;border-radius:4px;background:#edf4ff;color:#315b95;font:9px ui-monospace,SFMono-Regular,Menlo,monospace}.trace-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:12px;background:#f8fbff}.trace-layout section{overflow:hidden;border:1px solid #d5e3f5;border-radius:7px;background:#fff}.trace-layout header{display:flex;align-items:flex-start;justify-content:space-between;padding:13px;border-bottom:1px solid #e3ebf6}.trace-layout h2{margin:0;font-size:13px}.trace-layout p{margin:3px 0 0;color:#7b899e;font-size:10px}.trace-layout header>span{color:#165dff;font-size:10px}.trace-layout table{display:block;max-height:390px;overflow:auto}.trace-layout tbody,.trace-layout tr{display:table;width:100%;table-layout:fixed}.trace-layout td:first-child{width:160px}@media(max-width:1250px){.schema-flow{grid-template-columns:repeat(4,1fr)}.schema-flow b{display:none}}@media(max-width:900px){.trace-layout{grid-template-columns:1fr}.candidate-layout{display:block}.mention-fields{border-top:1px solid #e0e9f5;border-left:0}}
 
@@ -1665,8 +1691,8 @@ function descCell(text: string): string {
 .schema-actions__inner>*{flex:0 0 auto}
 .schema-action-more{min-width:24px;font-size:18px;line-height:22px;text-align:center}
 .schema-script-status__items{display:flex;align-items:flex-start;gap:4px;flex-direction:column}
-.schema-script-status__empty{color:#86909c}
-.schema-script-status__ready{color:#00b42a}
+.schema-script-status__empty{color:var(--status-neutral)}
+.schema-script-status__ready{color:var(--status-success)}
 /* 表头同时固定在顶部和右侧；数据行只固定右侧，避免横向滚动遮挡操作。 */
 .schema-table-wrap table th:last-child{position:sticky;right:0;z-index:4;background:#f7f8fa;box-shadow:-1px 0 #e5e6eb}
 .schema-table-wrap table td:last-child{position:sticky;right:0;z-index:3;background:#fff;box-shadow:-1px 0 #e5e6eb}
@@ -1723,9 +1749,9 @@ function descCell(text: string): string {
 .danger-text{color:#e5484d}
 
 /* 脚本双信号角标：落后于 Schema / 上次运行失败 */
-.script-badge{color:#ff7d00}
-.script-badge--failed{color:#f53f3f}
-.script-badge--rerun{color:#165dff}
+.script-badge{color:var(--status-warning)}
+.script-badge--failed{color:var(--status-danger)}
+.script-badge--rerun{color:var(--status-neutral)}
 
 /* 属性管理弹窗 */
 .property-panel{width:min(640px,100%)}
@@ -1881,7 +1907,9 @@ function descCell(text: string): string {
 .schema-modal__body{gap:16px;padding:24px}.schema-create-body{min-height:0;max-height:none;overflow-x:hidden;overflow-y:auto}.schema-modal__body label,.create-field{gap:8px;font-size:14px;line-height:22px}.create-row{gap:16px}
 .create-row>.create-field{min-width:0}.create-row>.create-field :deep(.arco-form-item-wrapper-col),.create-row>.create-field :deep(.arco-form-item-content-wrapper),.create-row>.create-field :deep(.arco-form-item-content){box-sizing:border-box;width:100%;min-width:0}.create-text-input,.create-field textarea,.create-field select{box-sizing:border-box;width:100%;height:32px;padding:0 12px;font-size:14px;line-height:22px;appearance:none}
 .create-field :deep(.arco-textarea-wrapper){box-sizing:border-box;width:100%;min-height:80px;border:1px solid #e5e6eb;border-radius:4px;background:#fff!important}.create-field :deep(.arco-textarea){box-sizing:border-box;width:100%;min-height:78px;padding:8px 12px 28px;background:#fff!important;color:#1d2129;font-size:14px;line-height:22px}.create-field :deep(.arco-textarea-word-limit){right:12px;bottom:6px;color:#86909c;font-size:12px;line-height:20px}.create-field :deep(.arco-textarea-wrapper:hover){border-color:#4080ff}.create-field :deep(.arco-textarea-wrapper.arco-textarea-focus){border-color:#165dff;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
-.create-props{gap:16px}.create-props :deep(.arco-form-item-label-col),.create-props :deep(.arco-form-item-label){box-sizing:border-box;width:100%}.create-props :deep(.arco-form-item-label){display:flex;align-items:center}.create-prop-list{display:grid;width:100%;gap:16px}.create-props :deep(.arco-form-item-content-flex){width:100%}.create-props__head{display:flex;width:100%;align-items:center;justify-content:space-between;font-size:14px;line-height:22px}.create-props__add{height:28px;font-size:14px}.create-prop-row{gap:8px}
+.create-props{gap:16px}.create-props :deep(.arco-form-item-label-col),.create-props :deep(.arco-form-item-label){box-sizing:border-box;width:100%}.create-props :deep(.arco-form-item-label){display:flex;align-items:center}.create-prop-list{display:grid;width:100%;gap:16px}.create-props :deep(.arco-form-item-content-flex){width:100%}.create-props__head{display:flex;width:100%;align-items:center;justify-content:space-between;font-size:14px;line-height:22px}.create-props__add{height:32px;font-size:14px}
+.create-module-actions{display:flex;justify-content:flex-end;margin-top:12px}
+.create-add-error{margin:8px 0 0;color:var(--status-danger);font-size:12px;line-height:20px}.create-prop-row{gap:8px}
 .prop-name,.prop-type,.prop-len{height:32px;font-size:14px;appearance:none}.prop-required{font-size:14px;line-height:22px}
 .create-prop-row{grid-template-columns:minmax(0,1.4fr) minmax(120px,1.2fr) auto 24px;align-items:center;column-gap:16px;row-gap:8px}
 .create-prop-row--has-length{grid-template-columns:minmax(0,1.4fr) minmax(120px,1.2fr) 72px auto 24px}

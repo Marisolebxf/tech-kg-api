@@ -369,12 +369,12 @@ export function deriveJobUnifiedStatus(job: Pick<WorkflowJob, 'status' | 'lastEx
 }
 
 /** 统一状态 → 状态点色调（对应 GraphBuildView/总览卡的 span.ok/.err/.warn/.run）。 */
-export const JOB_STATUS_TONE: Record<JobUnifiedStatus, 'ok' | 'err' | 'warn' | 'run'> = {
-  未运行: 'warn',
+export const JOB_STATUS_TONE: Record<JobUnifiedStatus, 'ok' | 'err' | 'warn' | 'run' | 'idle'> = {
+  未运行: 'idle',
   运行中: 'run',
-  已暂停: 'warn',
+  已暂停: 'idle',
   已完成: 'ok',
-  运行异常: 'warn',
+  运行异常: 'err',
   运行失败: 'err',
 }
 

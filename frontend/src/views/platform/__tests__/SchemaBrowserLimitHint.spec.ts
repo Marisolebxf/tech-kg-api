@@ -12,6 +12,7 @@ import {
   type SchemaDefinition,
 } from '../../../api/schemaManagement'
 import SchemaBrowserView from '../SchemaBrowserView.vue'
+import SourceBindings from '../schema-browser/sourceBindings.vue'
 
 vi.mock('../../../api/schemaManagement', () => ({
   addSchemaProperty: vi.fn(),
@@ -489,5 +490,61 @@ describe('Schema 新增弹窗必填提示文案', () => {
     const text = view.get('.schema-create-modal').text()
     expect(text).toContain('请输入实体名')
     expect(text).not.toContain('请输入名称')
+  })
+})
+
+
+describe('Create Schema incremental rows', () => {
+  it.each(['标准实体', '关系'])('requires existing property fields before adding another row in %s', async (tab) => {
+    const view = mountView()
+    await flushPromises()
+    if (tab === '关系') await view.findAll('.schema-tabs__items button').find((button) => button.text() === tab)!.trigger('click')
+    await view.get('.schema-tabs .primary').trigger('click')
+    const lockedCount = tab === '标准实体' ? 5 : 3
+    expect(view.find('.create-props__head .create-props__add').exists()).toBe(false)
+    const add = view.get('.create-props__add')
+    await add.trigger('click')
+    await add.trigger('click')
+    expect(view.findAll('.create-prop-row')).toHaveLength(lockedCount + 1)
+    expect(view.get('.create-props [role="alert"]').text()).toContain('请填写完')
+    await view.findAll('input.prop-name').at(-1)!.setValue('weight')
+    expect(view.find('.create-props [role="alert"]').exists()).toBe(false)
+    await view.get('select.prop-type').setValue('fixed_string')
+    await view.get('input.prop-len').setValue('')
+    await add.trigger('click')
+    expect(view.findAll('.create-prop-row')).toHaveLength(lockedCount + 1)
+    expect(view.get('.create-props [role="alert"]').text()).toContain('fixed_string 长度')
+    await view.get('input.prop-len').setValue('32')
+    await add.trigger('click')
+    expect(view.findAll('.create-prop-row')).toHaveLength(lockedCount + 2)
+    expect(view.find('.create-props [role="alert"]').exists()).toBe(false)
+  })
+
+  it('blocks incomplete source bindings, allows complete rows and clears errors when reopened', async () => {
+    const view = mountView()
+    await flushPromises()
+    await view.get('.schema-tabs .primary').trigger('click')
+    expect(view.find('.create-sources__head .create-sources__add').exists()).toBe(false)
+    const add = view.get('.create-sources__add')
+    await add.trigger('click')
+    await add.trigger('click')
+    const bindings = view.getComponent(SourceBindings)
+    expect(bindings.props('modelValue')).toHaveLength(1)
+    expect(view.get('.create-sources [role="alert"]').text()).toContain('数据源、数据库、表')
+    bindings.vm.$emit('update:modelValue', [{ datasourceId: 'ds', databaseName: 'db', tableName: '', pkColumn: 'id', timeColumn: 'update_time' }])
+    await flushPromises()
+    await add.trigger('click')
+    expect(bindings.props('modelValue')).toHaveLength(1)
+    bindings.vm.$emit('update:modelValue', [{ datasourceId: 'ds', databaseName: 'db', tableName: 'papers', pkColumn: 'id', timeColumn: 'update_time' }])
+    await flushPromises()
+    expect(view.find('.create-sources [role="alert"]').exists()).toBe(false)
+    await add.trigger('click')
+    expect(bindings.props('modelValue')).toHaveLength(2)
+    await add.trigger('click')
+    expect(view.find('.create-sources [role="alert"]').exists()).toBe(true)
+    await view.get('.schema-create-panel header button').trigger('click')
+    await view.get('.schema-tabs .primary').trigger('click')
+    expect(view.findAll('.create-add-error')).toHaveLength(0)
+    expect(view.getComponent(SourceBindings).props('modelValue')).toHaveLength(0)
   })
 })

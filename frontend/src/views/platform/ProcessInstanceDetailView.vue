@@ -11,13 +11,13 @@ import { useClientPagination } from '../../composables/use-client-pagination'
 const triggerLabel = (e: WorkflowExecution) => TRIGGER_SOURCE_LABEL[e.triggerSource ?? 'MANUAL'] ?? '手动触发'
 const failureCount = (e: WorkflowExecution) =>
   ((e as { output?: { failures?: { count?: number } } }).output?.failures?.count) ?? '—'
-/** 执行历史状态色：完成绿 / 异常橙 / 失败红 / 其余默认。 */
+/** 执行历史状态色：完成绿 / 异常与失败红 / 运行蓝 / 等待灰。 */
 const executionStatusTone = (status?: string | null) => {
   const s = (status || '').toUpperCase()
   if (s === 'COMPLETED') return 'ok'
-  if (s === 'ABNORMAL') return 'warn'
-  if (['FAILED', 'CANCELED', 'TERMINATED', 'TIMED_OUT'].includes(s)) return 'err'
-  return ''
+  if (['ABNORMAL', 'FAILED', 'CANCELED', 'TERMINATED', 'TIMED_OUT'].includes(s)) return 'err'
+  if (s === 'RUNNING') return 'run'
+  return 'idle'
 }
 
 type StepStatus = '成功' | '异常' | '运行中' | '需人工处理' | '待执行'
@@ -643,7 +643,7 @@ onMounted(async () => {
       <div class="job-config-grid job-config-grid-3">
         <div><span>图空间</span><strong>{{ job.graphSpace || '默认' }}</strong></div>
         <div><span>数据源</span><strong>{{ job.mysqlDatasourceId || '默认' }}{{ job.mysqlDatabase ? ` / ${job.mysqlDatabase}` : '' }}</strong></div>
-        <div><span>执行状态</span><strong>{{ deriveJobUnifiedStatus(job) }}</strong></div>
+        <div><span>执行状态</span><strong class="exec-status-cell" :class="executionStatusTone(job.status === '暂停' ? 'QUEUED' : job.lastExecutionStatus)">{{ deriveJobUnifiedStatus(job) }}</strong></div>
       </div>
     </section>
 
@@ -676,9 +676,13 @@ onMounted(async () => {
         :total="execTotal"
         :page="execPage"
         :page-size="execPageSize"
+        :show-jumper="false"
+        size-at-end
         @change="changeExecPage"
         @change-size="changeExecPageSize"
-      />
+      >
+        <template #summary><span>共 {{ execTotal }} 条</span></template>
+      </ListPagination>
     </section>
 
     <section v-if="!job && processingInstance" class="summary-grid">
@@ -864,11 +868,15 @@ onMounted(async () => {
 .exec-table tbody tr:hover{background:#f7f8fa}
 .exec-table tbody tr.active{background:#fff}
 .exec-table code{font-size:11px;color:#165dff}
-.trigger-chip{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;background:#f2f3f5;color:#4e5969}
+.trigger-chip{display:inline-block;padding:1px 8px;border-radius:10px;font-size:14px;line-height:22px;font-weight:400;background:#f2f3f5;color:#4e5969}
 .trigger-chip[data-kind='MANUAL']{background:transparent}
 .trigger-chip[data-kind='SCHEDULE']{background:#e8ffea;color:#00b42a}
 .trigger-chip[data-kind='RERUN']{background:#fff3e8;color:#f77234}
-.exec-status-cell{font-weight:500}
+.exec-status-cell,.job-config-grid .exec-status-cell{display:inline-flex;align-items:center;gap:6px;font-size:14px;line-height:22px;font-weight:400}
+.exec-status-cell::before{content:"";flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor}
+.exec-status-cell.idle{color:#86909c}
+.exec-status-cell.run{color:#175cd3}
+.execution-pagination{justify-content:flex-end}
 .exec-status-cell.ok{color:#067647}
 .exec-status-cell.warn{color:#b54708}
 .exec-status-cell.err{color:#b42318}

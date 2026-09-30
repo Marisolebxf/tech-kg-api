@@ -15,7 +15,7 @@
 | 4 | 创建 16 个实体 Schema + 绑定来源表 + 上传脚本 | TAG DDL 自动同步 |
 | 5 | 创建 29 个关系 Schema + 绑定 + 上传脚本（另有 4 个可建可不建的无脚本关系） | EDGE DDL 自动同步 |
 | 6 | 创建链任务并触发：还原-实体(16 环) → 还原-关系A(15 环) → 还原-关系B(14 环) | 全量抽取写图 |
-| 7 | 按验证基准比对图内各 TAG/EDGE 计数 | 与第 8 章基准一致即重建成功 |
+| 7 | 按验证基准比对图内各 TAG/EDGE 计数 | 除第 8 章已知偏差项外与基准一致即成功 |
 
 前置条件：平台后端可用（API 前缀 `/api/v1`，管理员账号）；MySQL 8.x 实例一台；脚本仅需平台注入（stdlib + venv 第三方 + `kg_sdk`），无仓库依赖。
 
@@ -1908,17 +1908,17 @@ CREATE TABLE `dwd_scholar_talent_flag` (
 | --- | --- |
 | 名称 | `gkx-element-rebuild`（可自定） |
 | 主机/端口/用户名/密码 | 指向上一步建好的库所在实例（密码不入本文档） |
-| 默认库 | `gkx_element` |
+| 默认库 | `gkx_element`（与第 1 步实际建库名保持一致） |
 
 ## 3. 创建图空间
 
 管理端「图空间管理」新建（等价 `POST /api/v1/graph-spaces`，body `{"name": "yunfei_test_1"}`）。平台执行真实 `CREATE SPACE` 并创建同名向量库。后续所有 Schema 建在该空间下。
 
-**VID 长度要求**：空间 `vid_type` 须为 `FIXED_STRING(256)`（机构域 vid 带前缀可超 64 字节，64 长度会在写图时报 `string fitting space vertex id length limit`）。平台建空间默认 256（`GRAPH_SPACE_VID_LENGTH` 可调）；若用其它途径手工建空间，务必对齐 256。
+**VID 长度要求**：空间 `vid_type` 须为 `FIXED_STRING(256)`（机构域 vid 带前缀可超 64 字节，64 长度会在写图时报 `string fitting space vertex id length limit`）。平台 2026-09-30 起建空间默认 256（`GRAPH_SPACE_VID_LENGTH` 可调）；**更早的平台版本建空间写死 64，会导致关系链写图整链 FAILED**——老版本平台须先升级，或绕过平台手工 `CREATE SPACE ... vid_type=FIXED_STRING(256)` 后再走后续步骤。
 
 ## 4. 实体 Schema（16 个）
 
-每个实体在「Schema 管理」创建（`POST /api/v1/schema-management/schemas/entities`），随后绑定来源表（`PUT .../schemas/{id}/sources`）并上传脚本（`PUT .../schemas/{id}/script`，multipart 文件）。脚本全文见附录 B；步 id 见各表。
+每个实体在「Schema 管理」创建（`POST /api/v1/schema-management/schemas/entities`），随后绑定来源表（`PUT .../schemas/{id}/sources`）并上传脚本（`PUT .../schemas/{id}/script`，multipart 文件）。脚本全文见附录 B；步 id 见各表。下文来源绑定表的「库」列为快照库名 `gkx_element`——第 1 步新建库名不同时，绑定时按实际库名替换该列，其余各列（表名/主键列/时间列/querySql）原样照抄。
 
 ### 数据来源（`DataSource`，schema_key=`tag-datasource`）
 
@@ -3489,18 +3489,21 @@ CREATE TABLE `dwd_scholar_talent_flag` (
 
 `HAS_NODE` → `HAS_OUTPUT` → `HAS_PARTICIPANT` → `INVESTS_IN` → `INVOLVED_IN` → `LEADS` → `LEGAL_REP_OF` → `MEMBER_OF_FAMILY` → `PRODUCES` → `PUBLISHED_IN` → `REFERENCED_BY` → `SHAREHOLDER_OF` → `SUBSIDIARY_OF` → `STUDIED_AT`
 
-链内任一环失败整链 FAILED；实体链每环完成后自动重建实体检索索引。单独补跑链（还原-实体B/C 等子集链）为运维便利，非重建必需。
+链内任一环**硬失败**（建库缺表、VID 超长、脚本异常等）整链 FAILED；源数据行级失败不中断抽取，链以 ABNORMAL 终态、消息「抽取完成，含 N 条失败记录（已转人工审核）」收场。本轮 e2e 实测：还原-实体 / 还原-关系A 各含 1077 条失败，还原-关系B 含 36520 条（构成见第 7 章），均属预期口径、环本身完成。实体链每环完成后自动重建实体检索索引。单独补跑链（还原-实体B/C 等子集链）为运维便利，非重建必需。
 
 ## 7. 已知数据口径（重建前必读）
 
-- `gkx_element.dwd_forg_act_contro_info` 中约 **1077 行** entity_type 不标识 Person，Person 抽取按口径抛错转 T_EXTRACT_FAIL 人工审核（历史累计 4308 条同类 case）。重建后「科技专家」环会带相同数量的失败记录（任务状态 ABNORMAL 属预期，环本身完成）。
+- `dwd_forg_act_contro_info` 中精确 **1077 行** entity_type 不标识 Person（1027 行 NULL + 50 行「测试数据-ORG_ETL_REFACTOR_20260727-*」残留，属源数据质量问题而非建图缺陷），Person 抽取按口径抛错转 T_EXTRACT_FAIL 人工审核；同一批坏行会被多遍扫描重复登记 case（本轮实测新空间累计 4308 条）。重建后「科技专家」环及含实控抽取的关系链会带相同数量的失败记录。
+- **同名消歧待审（T_LINK）**：候选点与图内既有实体同名时先入人工审核队列、暂不落图。新空间从零起算，本轮实测产生约 9244 条 T_LINK case——Person 因此比基准少 1663（1077 坏行 + 约 586 同名待裁点），并级联使 7 类学者系关系边短缺 1.1%~6.9%（明细见第 8 章已知偏差表）；审核裁决（合并）后计数会逐步回升。
+- **关系链既有失败口径**：`dwd_forg_shareholder_info` / `dwd_forg_subsidiary_info` 各约 2000 行及实控表 1077 行按同一口径转 T_EXTRACT_FAIL，故还原-关系B 以 ABNORMAL 收场（本轮实测 36520 条失败记录）。但这些失败行本就不产出边——对应边数与基准精确一致（SHAREHOLDER_OF 2407 / SUBSIDIARY_OF 118 / MEMBER_OF_FAMILY 2000），不构成重建偏差。
+- **HAS_OUTPUT 基准 5 条**为快照空间的历史灌入残留，按当前数据与脚本重跑产出恒 0（本轮实测 0），验证时按 0 预期。
 - 实体「数据来源 DataSource」绑定的是合成单行 querySql（`SELECT 1 AS id, ...`），不依赖真实表；其输出（39 个 DataSource 点）来自任务选择的资源清单。
 - 关系抽取普遍读图内既有实体做匹配（脚本内 `graph_client()` 走平台注入），因此**必须先跑实体链再跑关系链**，否则关系端点匹配为空。
-- 水位语义：链任务按来源表水位增量读取；全新环境首次执行水位为空，自动全量。
+- 水位语义：链任务按来源表水位增量读取；全新环境首次执行水位为空，自动全量。**注意 `kg_script_watermark` 按 `schema-extract-{schema_key}` 键跨图空间共享**——同一平台上若已有同名 schema_key 的水位行（如仍在跑的旧空间），首跑会因游标已到顶而读 0 行、图内为空；此时须先清除这些 key 的水位行再触发链。
 
 ## 8. 重建验证基准（yunfei_test 快照计数）
 
-重建完成后在平台总览或 Nebula `SHOW STATS` 比对（允许 ≤1% 抖动：消歧/时间窗/数据导出差异）：
+重建完成后在平台总览或 Nebula `SHOW STATS` 比对。**除下表已知偏差项按「重建后预期」列比对（允许小幅波动）外，其余 TAG/EDGE 允许 ≤1% 抖动**（消歧/时间窗/数据导出差异）：
 
 | TAG | 点数 |
 | --- | --- |
@@ -3552,6 +3555,22 @@ CREATE TABLE `dwd_scholar_talent_flag` (
 | SHAREHOLDER_OF | 2407 |
 | STUDIED_AT | 74 |
 | SUBSIDIARY_OF | 118 |
+
+### 已知偏差项（2026-09-30 e2e 实测，原因见第 7 章）
+
+| 类型 | 名称 | 快照基准 | 重建后预期 | 偏差 | 原因 |
+| --- | --- | --- | --- | --- | --- |
+| Tag | Person | 34247 | 32584 | -4.9% | 1077 坏行 + 同名待消歧（T_LINK 未裁决）点未入图 |
+| Edge | AFFILIATED_WITH | 2084 | 2038 | -2.2% | Person 缺失级联（学者-机构挂靠） |
+| Edge | AUTHORED_BY | 19068 | 18860 | -1.1% | Person 缺失级联（论文-作者） |
+| Edge | COAUTHOR_WITH | 150082 | 147104 | -2.0% | Person 缺失级联（合作网络按人成对缺失） |
+| Edge | EXECUTIVE_OF | 7434 | 7247 | -2.5% | Person 缺失级联（高管任职） |
+| Edge | HAS_PARTICIPANT | 1279 | 1191 | -6.9% | Person 缺失级联（项目参与人） |
+| Edge | LEADS | 252 | 237 | -6.0% | Person 缺失级联（高管统领） |
+| Edge | LEGAL_REP_OF | 1400 | 1345 | -3.9% | Person 缺失级联（法人代表） |
+| Edge | HAS_OUTPUT | 5 | 0 | -100.0% | 基准 5 条为快照空间历史灌入残留，当前脚本产出恒 0 |
+
+其余 36 项本轮实测全部过账（35 项与基准完全相等，BENEFICIAL_OWNER_OF 6297→6285 在 1% 容差内）；另有 11 项基准为 0（测试残留/无脚本关系）不参与比对。
 
 ## 附录 A. 数据源与环境参数速查
 
@@ -37384,7 +37403,72 @@ def emit(payload):
    "SOURCED_FROM": 0,
    "STUDIED_AT": 74,
    "SUBSIDIARY_OF": 118
-  }
+  },
+  "knownDeltas": [
+   {
+    "kind": "tag",
+    "name": "Person",
+    "baseline": 34247,
+    "expected": 32584,
+    "reason": "1077 坏行 + 同名待消歧（T_LINK 未裁决）点未入图"
+   },
+   {
+    "kind": "edge",
+    "name": "AFFILIATED_WITH",
+    "baseline": 2084,
+    "expected": 2038,
+    "reason": "Person 缺失级联（学者-机构挂靠）"
+   },
+   {
+    "kind": "edge",
+    "name": "AUTHORED_BY",
+    "baseline": 19068,
+    "expected": 18860,
+    "reason": "Person 缺失级联（论文-作者）"
+   },
+   {
+    "kind": "edge",
+    "name": "COAUTHOR_WITH",
+    "baseline": 150082,
+    "expected": 147104,
+    "reason": "Person 缺失级联（合作网络按人成对缺失）"
+   },
+   {
+    "kind": "edge",
+    "name": "EXECUTIVE_OF",
+    "baseline": 7434,
+    "expected": 7247,
+    "reason": "Person 缺失级联（高管任职）"
+   },
+   {
+    "kind": "edge",
+    "name": "HAS_PARTICIPANT",
+    "baseline": 1279,
+    "expected": 1191,
+    "reason": "Person 缺失级联（项目参与人）"
+   },
+   {
+    "kind": "edge",
+    "name": "LEADS",
+    "baseline": 252,
+    "expected": 237,
+    "reason": "Person 缺失级联（高管统领）"
+   },
+   {
+    "kind": "edge",
+    "name": "LEGAL_REP_OF",
+    "baseline": 1400,
+    "expected": 1345,
+    "reason": "Person 缺失级联（法人代表）"
+   },
+   {
+    "kind": "edge",
+    "name": "HAS_OUTPUT",
+    "baseline": 5,
+    "expected": 0,
+    "reason": "基准 5 条为快照空间历史灌入残留，当前脚本产出恒 0"
+   }
+  ]
  }
 }
 ```

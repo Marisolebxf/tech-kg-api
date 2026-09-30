@@ -1349,8 +1349,8 @@ const pageMeta = computed(() => {
             <div class="platform-review-count">待处理 <strong>{{ overviewReviewsTotal }}</strong> 条</div>
             <div class="platform-review-list">
               <RouterLink v-for="item in overviewReviews" :key="item.id" :to="reviewItemRoute(item)">
-                <strong>{{ item.objectName || item.objectId }}</strong>
-                <em>{{ reviewItemCategory(item) }}</em>
+                <strong :title="item.objectName || item.objectId">{{ item.objectName || item.objectId }}</strong>
+                <em :title="reviewItemCategory(item)">{{ reviewItemCategory(item) }}</em>
               </RouterLink>
             </div>
           </template>
@@ -2008,7 +2008,9 @@ print(response.json())</pre>
   grid-template-rows: auto minmax(0, 1fr);
   gap: 16px;
   height: 100%;
+  min-height: 0;
   min-width: 0;
+  overflow: hidden;
   color: var(--text-primary);
   font-size: 16px;
 }
@@ -2134,7 +2136,7 @@ print(response.json())</pre>
      overflow:hidden 裁掉，饼图因此"看不见"）。flex 纵向堆叠高度纯内容驱动。 */
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
   /* 外层 app-workspace 已提供 16px 底部间距，避免总览再次叠加。 */
   padding-bottom: 0;
 }
@@ -2238,8 +2240,8 @@ print(response.json())</pre>
 .platform-summary-card__items>a { display:grid;gap:3px;padding:2px 8px;border-right:1px solid #e1eaf5;color:inherit;text-decoration:none;transition:background-color .2s ease; }.platform-summary-card__items>a:last-child { border-right:0; }.platform-summary-card__items>a:hover { background:#eef5ff; }
 .platform-summary-card__items em { overflow:hidden;color:#8290a5;font-size:8px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }.platform-summary-card__items strong { overflow:hidden;color:#344861;font-size:10px;text-overflow:ellipsis;white-space:nowrap; }
 
-/* 同上：任务/审核面板加载中只占小高度，预留就绪高度防止布局跳动 */
-.platform-overview-main { display:grid;flex-grow:1;grid-template-columns:minmax(0,1.65fr) minmax(360px,.72fr);gap:14px;min-height:340px; }
+/* 末尾面板按真实内容定高，避免填满剩余空间造成空白滚动。 */
+.platform-overview-main { display:grid;grid-template-columns:minmax(0,1.65fr) minmax(360px,.72fr);gap:16px;align-items:start;min-height:0; }
 .platform-jobs-panel,.platform-review-panel { min-width:0;overflow:hidden; }
 .platform-jobs-panel .kg-panel__header>div,.platform-review-panel .kg-panel__header>div { display:grid;gap:2px; }
 .platform-jobs-panel .kg-panel__header span,.platform-review-panel .kg-panel__header span { color:#7b8aa1;font-size:12px;line-height:20px; }
@@ -2259,14 +2261,14 @@ print(response.json())</pre>
 .platform-jobs-list a>span::before { flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor;content:""; }
 .platform-jobs-list a>span.ok { color:#067647;background:transparent; }.platform-jobs-list a>span.err { color:#b42318;background:transparent; }.platform-jobs-list a>span.warn { color:#b54708;background:transparent; }
 .platform-jobs-list em { color:#59636f;font-size:12px;line-height:20px;font-style:normal;white-space:nowrap; }
-.platform-review-count { padding:11px 14px;border-bottom:1px solid #e4ecf6;color:#62728a;font-size:14px;line-height:22px; }
-.platform-review-count strong { margin:0 4px;color:#10264c;font-size:18px; }
+.platform-review-count { display:flex;align-items:baseline;gap:8px;padding:16px;border-bottom:1px solid #e4ecf6;color:#62728a;font-size:14px;line-height:22px; }
+.platform-review-count strong { margin:0;color:#10264c;font-size:18px; }
 .platform-review-list { display:grid; }
-.platform-review-list a { display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 10px;align-items:center;padding:9px 14px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
+.platform-review-list a { display:grid;grid-template-columns:minmax(0,1fr);gap:4px 16px;align-items:center;padding:16px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
 .platform-review-list a:last-child { border-bottom:0; }
 .platform-review-list a:hover { background:#f4f8ff; }
-.platform-review-list strong { overflow:hidden;color:#253752;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap; }
-.platform-review-list em { overflow:hidden;color:#8a97aa;font-size:12px;line-height:20px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }
+.platform-review-list strong { min-width:0;overflow:hidden;font-weight:500;color:#253752;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap; }
+.platform-review-list em { min-width:0;overflow:hidden;color:#8a97aa;font-size:12px;line-height:20px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }
 .platform-card-empty { display:grid;gap:6px;justify-items:center;align-content:center;min-height:170px;padding:20px;text-align:center; }
 .platform-card-empty strong { color:#253752;font-size:14px;line-height:22px; }
 .platform-card-empty p { margin:0;color:#8a97aa;font-size:12px;line-height:20px; }

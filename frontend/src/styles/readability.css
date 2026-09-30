@@ -204,6 +204,7 @@
 }
 
 .app-main.is-overview-page .app-workspace {
+  box-sizing: border-box;
   height: 100% !important;
   min-height: 0;
   overflow: hidden !important;
@@ -219,7 +220,8 @@
   min-height: 0 !important;
   overflow: auto !important;
   padding-right: 4px;
-  padding-bottom: 16px;
+  /* 工作卡片已提供 16px 底部内距，不再重复添加。 */
+  padding-bottom: 0;
   scrollbar-color: #91acd2 transparent !important;
   scrollbar-width: thin !important;
 }

@@ -552,6 +552,8 @@ onMounted(() => {
 .gb-section-title{position:relative;padding-left:11px;font-size:16px;line-height:24px;font-weight:600}
 .gb-section-title::before{position:absolute;top:5px;left:0;width:3px;height:14px;border-radius:1px;background:#165dff;content:""}
 .gb-jobs-panel{display:flex;flex:1;min-height:0;overflow:hidden;border:1px solid #e5e6eb;border-radius:6px;background:#fff;box-shadow:none;flex-direction:column}
+.gb-jobs-panel :deep(.list-pagination){justify-content:flex-end}
+.gb-jobs-panel :deep(.list-pagination__summary){margin-left:auto}
 /* 筛选控件向右排列，窄屏时可换行。 */
 .gb-filters{display:flex;flex:0 0 auto;min-width:0;margin-left:auto;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:16px;font-weight:400}
 .gb-search-button{box-sizing:border-box;height:32px;padding:0 16px;border:1px solid #165dff;border-radius:4px;background:#165dff;color:#fff;font-size:14px;line-height:22px;cursor:pointer}

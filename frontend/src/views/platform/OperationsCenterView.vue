@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { IconRefresh, IconSearch } from '@arco-design/web-vue/es/icon'
 
@@ -48,6 +48,7 @@ function pickSnapshotOption<T extends string>(value: unknown, allowed: readonly 
 const queueSnapshot = readQueueSnapshot()
 
 const keyword = ref(clampSearchKeyword(String(route.query.keyword || queueSnapshot?.keyword || '')))
+const submittedKeyword = ref(keyword.value)
 /** 人工审核筛选：状态分组（待处理/已处理）与对象种类（实体/关系/都看）；C 类额外支持 重跑中 精确过滤。
  *  重跑仍失败的记录会重建为新待处理案（attempt+1），不存在「重跑失败」状态，故不提供该筛选项。
  *  undefined = 未选择（清空），语义等同「全部」。 */
@@ -103,7 +104,33 @@ const snapshotPageSize = Number(queueSnapshot?.pageSize)
 const reviewPage = ref(snapshotPage >= 1 ? snapshotPage : 1)
 const reviewPageSize = ref(PAGE_SIZE_OPTIONS.includes(snapshotPageSize) ? snapshotPageSize : 20)
 
-watch(() => route.query.keyword, (value) => { keyword.value = clampSearchKeyword(String(value || '')) })
+watch(() => route.query.keyword, (value) => {
+  keyword.value = clampSearchKeyword(String(value || ''))
+  submittedKeyword.value = keyword.value
+  void loadReviews()
+})
+
+const reviewTableRef = ref<HTMLElement | null>(null)
+const tableHasMoreToScroll = ref(false)
+const tableScrollActive = ref(false)
+let scrollIdleTimer: ReturnType<typeof setTimeout> | undefined
+
+function updateReviewTableScrollState() {
+  const table = reviewTableRef.value
+  tableHasMoreToScroll.value = !!table && table.scrollWidth - table.clientWidth - table.scrollLeft > 1
+}
+
+function handleReviewTableScroll() {
+  updateReviewTableScrollState()
+  tableScrollActive.value = true
+  clearTimeout(scrollIdleTimer)
+  scrollIdleTimer = setTimeout(() => { tableScrollActive.value = false }, 700)
+}
+
+function submitReviewSearch() {
+  submittedKeyword.value = keyword.value.trim()
+  void loadReviews()
+}
 
 /** 审核队列分类：A=入库决策（Tab 只筛 T_LINK 实体对齐，T_DIRECT 详情由工作台总览/实例详情直达）；C=抽取失败重跑（T_EXTRACT_FAIL）。
  *  支持 ?category=A|C 深链初始定位子页（工作台总览的「抽取失败重跑」卡片直达 C 子页），深链优先于快照恢复。 */
@@ -112,6 +139,10 @@ const reviewCategory = ref<'A' | 'C'>(
     ? route.query.category
     : queueSnapshot?.category === 'C' ? 'C' : 'A',
 )
+watch([reviewRows, reviewCategory], async () => {
+  await nextTick()
+  updateReviewTableScrollState()
+}, { flush: 'post' })
 // A 类没有「重跑中」筛选项：快照恢复后按当前分类收敛，避免 Select 挂着不属于该分类的选项
 if (reviewCategory.value === 'A' && reviewStatusFilter.value === '重跑中') reviewStatusFilter.value = '全部'
 /** C 类勾选的待重跑 case。 */
@@ -309,7 +340,8 @@ async function confirmDelete() {
 onUnmounted(() => {
   reviewDisposed = true
   reviewRequestId += 1
-  window.clearTimeout(reviewKeywordTimer)
+  window.removeEventListener('resize', updateReviewTableScrollState)
+  clearTimeout(scrollIdleTimer)
   window.clearTimeout(rerunFeedbackTimer)
 })
 
@@ -325,7 +357,7 @@ async function loadReviews() {
       kind: reviewKindFilter.value ?? '全部',
       time: reviewTimeFilter.value ?? '全部',
       sort: reviewTimeSort.value,
-      keyword: keyword.value,
+      keyword: submittedKeyword.value,
     } satisfies QueueSnapshot))
   } catch {
     /* 隐私模式等存储不可用：跳过快照，返回时退回默认第 1 页 */
@@ -342,7 +374,7 @@ async function loadReviews() {
       graphSpace: currentGraphSpace() || undefined,
       category: reviewCategory.value,
       templateId: reviewCategory.value === 'A' ? 'T_LINK' : undefined,
-      keyword: keyword.value || undefined,
+      keyword: submittedKeyword.value || undefined,
       statusGroup: reviewStatusFilter.value === '待处理' ? 'pending' : reviewStatusFilter.value === '已处理' ? 'processed' : undefined,
       status: reviewStatusFilter.value === '重跑中' ? 'RERUNNING' : undefined,
       kind: !reviewKindFilter.value || reviewKindFilter.value === '全部' ? undefined : reviewKindFilter.value === '实体' ? 'entity' : 'relation',
@@ -421,16 +453,11 @@ watch(() => graphSpaceStore.current, () => {
   void loadReviews()
 })
 
-/** 关键字输入防抖后走服务端检索（与分页/筛选同口径，避免页内客户端过滤与总数不一致）；页码同样保留+收敛。 */
-let reviewKeywordTimer: number | undefined
-watch(keyword, () => {
-  if (props.mode !== 'review') return
-  window.clearTimeout(reviewKeywordTimer)
-  reviewKeywordTimer = window.setTimeout(() => {
-    void loadReviews()
-  }, 300)
+onMounted(() => {
+  window.addEventListener('resize', updateReviewTableScrollState)
+  void nextTick(updateReviewTableScrollState)
+  void loadReviews()
 })
-onMounted(loadReviews)
 </script>
 
 <template>
@@ -441,7 +468,7 @@ onMounted(loadReviews)
         <button type="button" :class="{ active: reviewCategory === 'C' }" @click="switchReviewCategory('C')">抽取失败重跑</button>
       </nav>
       <div class="review-toolbar-actions">
-        <div class="ops-filter is-review review-filter-row">
+        <form class="ops-filter is-review review-filter-row" role="search" @submit.prevent="submitReviewSearch">
           <div class="review-filter-field">
             <span class="review-filter-label">状态</span>
             <a-select v-model="reviewStatusFilter" class="review-filter-select" :options="reviewStatusOptions" />
@@ -455,7 +482,8 @@ onMounted(loadReviews)
             <a-select v-model="reviewTimeFilter" class="review-filter-select" :options="reviewTimeOptions" />
           </div>
           <a-input v-model="keyword" class="review-search-input review-filter-search" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索处理实例 ID、对象或来源记录" placeholder="搜索处理实例 ID、对象或来源记录"><template #prefix><IconSearch /></template></a-input>
-        </div>
+          <button class="review-search-button" type="submit">查询</button>
+        </form>
       </div>
     </div>
 
@@ -476,7 +504,7 @@ onMounted(loadReviews)
         <button class="rerun-feedback-close" type="button" @click="rerunFeedback = null">×</button>
       </div>
 
-      <div class="ops-review-table-scroll" :aria-busy="reviewLoading"><table class="review-case-table" :class="{ 'review-case-table--selectable': reviewCategory === 'C' }">
+      <div ref="reviewTableRef" class="ops-review-table-scroll" :class="{ 'has-scroll-right': tableHasMoreToScroll, 'review-scroll--active': tableScrollActive }" :aria-busy="reviewLoading" @scroll.passive="handleReviewTableScroll"><table class="review-case-table" :class="{ 'review-case-table--selectable': reviewCategory === 'C' }">
         <!-- 固定列宽：有数据/无数据切换时表头列位不漂移（待处理对象列吃剩余宽度） -->
         <colgroup>
           <col v-if="reviewCategory === 'C'" class="col-pick" />
@@ -559,7 +587,7 @@ onMounted(loadReviews)
                 <p>{{ reviewLoadError }}</p>
                 <button type="button" class="link" @click="loadReviews"><IconRefresh class="refresh-icon" />重新加载</button>
               </div>
-              <span v-else>{{ reviewStatusFilter === '全部' && reviewKindFilter === '全部' && reviewTimeFilter === '全部' && !keyword ? '暂无人工处理记录' : '暂无符合条件的记录' }}</span>
+              <span v-else>{{ reviewStatusFilter === '全部' && reviewKindFilter === '全部' && reviewTimeFilter === '全部' && !submittedKeyword ? '暂无人工处理记录' : '暂无符合条件的记录' }}</span>
             </td>
           </tr>
         </tbody>
@@ -571,10 +599,12 @@ onMounted(loadReviews)
         :total="reviewTotal"
         :page="reviewPage"
         :page-size="reviewPageSize"
+        :show-jumper="false"
+        :size-at-end="true"
         @change="changeReviewPage"
         @change-size="changeReviewPageSize"
       >
-        <template #summary="{ totalPages }">
+        <template #summary>
           <!-- 批量重跑唯一入口固定在表格左下角（与右侧分页信息同条）：未勾选置灰，勾选后点亮变色并带出已选数 -->
           <span v-if="reviewCategory === 'C'" class="rerun-confirm-bar">
             <template v-if="rerunSelection.size">已选 {{ rerunSelection.size }} 条失败记录</template>
@@ -586,7 +616,7 @@ onMounted(loadReviews)
               @click="rerunSelected()"
             >{{ rerunSubmitting ? '下发中…' : `批量重跑（${rerunSelection.size}）` }}</button>
           </span>
-          <span class="review-page-summary">共 {{ reviewTotal }} 条 · 第 {{ reviewPage }} / {{ totalPages }} 页</span>
+          <span class="review-page-summary">共 {{ reviewTotal }} 条</span>
         </template>
       </ListPagination>
     </section>
@@ -738,8 +768,11 @@ onMounted(loadReviews)
 .review-tabs>nav button.active{border-left-color:transparent;background:#fff;color:#165dff;font-weight:500}
 .review-tabs>nav button.active+button{border-left-color:transparent}
 .review-tabs>nav button:hover:not(.active){background:#fff;color:#165dff}
-.review-toolbar-actions{display:flex;min-width:0;align-items:center;justify-content:flex-start;gap:16px;flex:0 0 auto;flex-wrap:nowrap}
-.review-tabs .ops-filter.is-review{display:flex;box-sizing:border-box;width:auto;min-width:0;align-items:center;grid-template-columns:none;gap:16px!important;padding:0!important;border:0;background:transparent;flex:0 0 auto;flex-wrap:nowrap}
+.review-toolbar-actions{display:flex;width:100%;min-width:0;align-items:center;justify-content:flex-end;gap:16px;flex:0 0 auto;flex-wrap:wrap}
+.review-tabs .ops-filter.is-review{display:flex;box-sizing:border-box;width:auto;min-width:0;margin-left:auto;align-items:center;justify-content:flex-end;grid-template-columns:none;gap:16px!important;padding:0!important;border:0;background:transparent;flex:0 1 auto;flex-wrap:wrap}
+.review-search-button{box-sizing:border-box;height:32px;padding:0 16px;border:1px solid #165dff!important;border-radius:4px;background:#165dff!important;color:#fff!important;font-size:14px;line-height:22px;cursor:pointer}
+.review-search-button:hover{border-color:#4080ff!important;background:#4080ff!important}
+.review-search-button:focus-visible{outline:2px solid rgba(22,93,255,.3);outline-offset:2px}
 .review-filter-row :deep(.review-filter-select.arco-select-view){flex:0 0 160px;width:160px}
 .review-filter-row :deep(.review-filter-search.arco-input-wrapper){flex:0 0 280px;width:280px}
 .review-tabs .ops-filter.is-review :deep(.arco-select-view-value){font-size:14px;line-height:22px;font-weight:400}
@@ -789,7 +822,7 @@ onMounted(loadReviews)
 .ops-review-table-scroll th.review-action-col{position:sticky;top:0;right:0;z-index:4;background:#f7f8fa;box-shadow:-1px 0 #e5e6eb;text-align:center}
 .ops-review-table-scroll td.review-action-col{position:sticky;right:0;z-index:3;box-sizing:border-box;background:#fff;box-shadow:-1px 0 #e5e6eb;white-space:nowrap}
 /* 固定列左侧向内容区渐隐的阴影（与 Schema 管理表同视觉提示） */
-.ops-review-table-scroll :is(th,td).review-action-col::before{position:absolute;top:0;bottom:-1px;left:0;width:12px;content:"";pointer-events:none;transform:translateX(-100%);box-shadow:inset -10px 0 8px -8px rgba(78,89,105,.28)}
+.ops-review-table-scroll.has-scroll-right :is(th,td).review-action-col::before{position:absolute;top:0;bottom:-1px;left:0;width:12px;content:"";pointer-events:none;transform:translateX(-100%);box-shadow:inset -10px 0 8px -8px rgba(78,89,105,.28)}
 .review-action-col .alert-actions{display:flex;width:100%;min-width:0;align-items:center;justify-content:center;gap:8px}
 .ops-review-table-scroll th,.ops-review-table-scroll td{box-sizing:border-box;padding-right:16px;padding-left:16px}
 /* 固定列合计 1076px，最小表宽为对象列保留 268px；勾选列额外占 52px。 */
@@ -811,7 +844,13 @@ onMounted(loadReviews)
 .ops-review-table-scroll .review-id-cell{overflow:hidden;text-overflow:ellipsis}
 .ops-review-table-scroll .review-id-cell :is(code,.link){display:inline-block;box-sizing:border-box;max-width:100%;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom}
 /* 滚动条出现/消失（数据多少切换）不挤动列宽 */
-.ops-review-table-scroll{scrollbar-gutter:stable}
+.ops-review-table-scroll{scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:transparent transparent}
+.ops-review-table-scroll:hover,.ops-review-table-scroll.review-scroll--active{scrollbar-color:rgba(78,89,105,.55) transparent}
+.ops-review-table-scroll::-webkit-scrollbar{width:8px;height:8px}
+.ops-review-table-scroll::-webkit-scrollbar-track{background:transparent}
+.ops-review-table-scroll::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background-color:transparent;background-clip:padding-box}
+.ops-review-table-scroll:hover::-webkit-scrollbar-thumb,.ops-review-table-scroll.review-scroll--active::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
+.ops-review-table-scroll::-webkit-scrollbar-thumb:hover{background-color:rgba(78,89,105,.8)}
 /* 筛选字段标签 / 类型徽标 / 勾选禁用态 / 删除按钮 */
 .review-filter-field{display:flex;flex:0 0 auto;align-items:center;gap:8px}
 .review-filter-label{color:#4e5969;font-size:14px;line-height:22px;white-space:nowrap}

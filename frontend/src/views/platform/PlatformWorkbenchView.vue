@@ -39,12 +39,12 @@ import {
   Empty as AEmpty,
   Form as AForm,
   FormItem as AFormItem,
-  InputSearch as AInputSearch,
+  Input as AInput,
   Popover as APopover,
   Textarea as ATextarea,
 } from '@arco-design/web-vue'
 import QueryResultTable from './QueryResultTable.vue'
-import { IconInfoCircle, IconRefresh } from '@arco-design/web-vue/es/icon'
+import { IconInfoCircle, IconRefresh, IconSearch } from '@arco-design/web-vue/es/icon'
 import { useAuthStore } from '../../stores/auth'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
 import {
@@ -377,6 +377,11 @@ const algoResultColumns = computed<string[]>(() =>
 const ALGO_RESULT_DISPLAY_LIMIT = 200
 // 搜索和排序覆盖已返回的整个结果集，页面最多展示 200 条。
 const algoSearch = ref('')
+const submittedAlgoSearch = ref('')
+function queryAlgoResults(): void {
+  submittedAlgoSearch.value = algoSearch.value.trim()
+  resetAlgoPage()
+}
 const algoSortColumn = ref('')
 const algoSortDirection = ref<'asc' | 'desc'>('desc')
 const algorithmColumnLabels: Record<string, string> = {
@@ -390,7 +395,7 @@ function sortAlgoColumn(column: string, direction?: 'asc' | 'desc'): void {
   resetAlgoPage()
 }
 const filteredAndSortedAlgoRows = computed(() => {
-  const search = algoSearch.value.trim()
+  const search = submittedAlgoSearch.value
   const rows = search
     ? algoRows.value.filter((row) => String(row.vid ?? '').includes(search))
     : algoRows.value
@@ -415,9 +420,9 @@ const {
   changePageSize: changeAlgoPageSize,
 } = useClientPagination(visibleAlgoRows, 20)
 
-watch(algoSearch, () => resetAlgoPage())
 watch(algoResult, () => {
   algoSearch.value = ''
+  submittedAlgoSearch.value = ''
   algoSortColumn.value = algoResultColumns.value.find((column) => ['pagerank', 'degree', 'louvain', 'community'].includes(column)) ?? ''
   algoSortDirection.value = 'desc'
   resetAlgoPage()
@@ -1560,7 +1565,7 @@ const pageMeta = computed(() => {
     <!-- 两种查询模式共用固定结果列表，表格内部滚动。 -->
     <main
       v-else-if="activeTab === 'query'"
-      :class="['platform-content', 'platform-query', 'platform-query--scrollbar-suppressed']"
+      class="platform-content platform-query"
     >
       <section class="kg-panel platform-query-form">
         <!-- 一级模式切换；算法页签和引擎状态位于下方独立一行。 -->
@@ -1630,7 +1635,7 @@ const pageMeta = computed(() => {
                 :title="algoMetadata?.engine?.message ?? undefined"
               >算法引擎{{ algoEngineStatus.label }}</span>
               <button
-                class="kg-button kg-button--text"
+                class="kg-button kg-button--text platform-query-engine-refresh"
                 type="button"
                 :disabled="algoMetadataLoading || !algoSpace"
                 @click="refreshAlgoEngine"
@@ -1782,9 +1787,13 @@ const pageMeta = computed(() => {
             :page="ngqlPage"
             :page-size="ngqlPageSize"
             :disabled="ngqlLoading"
+            :show-jumper="false"
+            :size-at-end="true"
             @change="changeNgqlPage"
             @change-size="changeNgqlPageSize"
-          />
+          >
+            <template #summary><span class="list-pagination__summary">共 {{ ngqlTotal }} 条</span></template>
+          </ListPagination>
         </div>
       </section>
 
@@ -1802,17 +1811,24 @@ const pageMeta = computed(() => {
           </h2>
         </header>
         <div v-if="algoResult" class="platform-algo-list-toolbar">
-          <AInputSearch v-model="algoSearch" class="platform-algo-search platform-algo-search--entity-style" :input-attrs="{ 'aria-label': '搜索图 VID' }" allow-clear placeholder="输入图 VID 筛选结果" />
+          <form class="platform-algo-search-form" @submit.prevent="queryAlgoResults">
+            <AInput v-model="algoSearch" class="platform-algo-search platform-algo-search--entity-style" :input-attrs="{ 'aria-label': '搜索图 VID' }" allow-clear placeholder="输入图 VID 筛选结果">
+              <template #prefix><IconSearch aria-hidden="true" /></template>
+            </AInput>
+            <AButton type="primary" html-type="submit">查询</AButton>
+          </form>
           <AButton type="primary" :disabled="!algoRows.length" @click="exportAlgoCsv">导出{{ algoResult.truncated ? '预览' : '当前结果' }} CSV</AButton>
         </div>
         <div class="platform-query-result__body">
           <div class="platform-query-result__table">
             <QueryResultTable v-if="algoTotal" aria-label="图算法执行结果" :rows="pagedAlgoRows" :columns="algoResultColumns" :labels="algorithmColumnLabels" :page="algoPage" :page-size="algoPageSize" sortable :sort-column="algoSortColumn" :sort-direction="algoSortDirection" @sort="sortAlgoColumn" />
             <div v-else class="platform-query-result__empty" role="status" aria-live="polite">
-              <AEmpty :description="algoSubmitLoading ? '正在提交作业，请稍候…' : isAlgoJobRunning ? '算法运行中，完成后自动展示结果' : algoResult ? (algoSearch ? '没有匹配的结果，请调整搜索条件' : '算法执行成功，无返回记录') : algoJob?.status === 'failed' ? '算法执行失败，请查看上方失败原因' : '暂无数据，提交算法作业后在此查看结果'" />
+              <AEmpty :description="algoSubmitLoading ? '正在提交作业，请稍候…' : isAlgoJobRunning ? '算法运行中，完成后自动展示结果' : algoResult ? (submittedAlgoSearch ? '没有匹配的结果，请调整搜索条件' : '算法执行成功，无返回记录') : algoJob?.status === 'failed' ? '算法执行失败，请查看上方失败原因' : '暂无数据，提交算法作业后在此查看结果'" />
             </div>
           </div>
-          <ListPagination v-if="algoTotal > 0" :total="algoTotal" :page="algoPage" :page-size="algoPageSize" :page-size-options="[20, 50, 100]" @change="changeAlgoPage" @change-size="changeAlgoPageSize" />
+          <ListPagination v-if="algoTotal > 0" :total="algoTotal" :page="algoPage" :page-size="algoPageSize" :page-size-options="[20, 50, 100]" :show-jumper="false" :size-at-end="true" @change="changeAlgoPage" @change-size="changeAlgoPageSize">
+            <template #summary><span class="list-pagination__summary">共 {{ algoTotal }} 条</span></template>
+          </ListPagination>
         </div>
       </section>
 
@@ -4693,8 +4709,7 @@ print(response.json())</pre>
 
 /* 综合图谱展示 / 查询结果：复用科技专家同事关系页的预览与详情布局。 */
 .platform-query{grid-row:1/-1;height:100%;min-height:0;align-self:stretch;overflow:auto}
-.platform-query.platform-query--scrollbar-suppressed{scrollbar-width:none!important;scrollbar-color:transparent transparent!important;scrollbar-gutter:auto!important;-ms-overflow-style:none}
-.platform-query.platform-query--scrollbar-suppressed::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}
+
 .platform-query .platform-status{display:inline-flex;align-items:center;gap:6px;min-height:22px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.platform-query .platform-status::before{display:block;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
 .platform-query .platform-table th,.platform-query .platform-table td{height:40px;padding:0 16px;font-size:14px;line-height:22px}.platform-query .platform-table th{background:#f7f8fa;font-weight:500}
 .platform-query-empty{gap:8px;padding:24px 16px}.platform-query-empty strong{font-size:16px;line-height:24px;font-weight:600}.platform-query-empty p{font-size:14px;line-height:22px}
@@ -4812,13 +4827,17 @@ print(response.json())</pre>
 .platform-query .platform-query-result--fill .platform-query-result__table{display:flex;min-height:0;flex:1 1 auto}
 .platform-query .platform-query-result--fill .platform-query-result__empty{width:100%;flex:1 1 auto}
 .platform-algo-list-toolbar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;color:var(--color-text-3);font-size:12px}
+.platform-algo-search-form{display:flex;align-items:center;gap:16px;max-width:100%}
 .platform-algo-search{width:320px;max-width:100%}
 .platform-query :deep(.platform-algo-search--entity-style.arco-input-wrapper){box-sizing:border-box;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important}
 .platform-query :deep(.platform-algo-search--entity-style.arco-input-wrapper:hover){border-color:#4080ff!important;background:#fff!important}
 .platform-query :deep(.platform-algo-search--entity-style.arco-input-wrapper:focus-within),.platform-query :deep(.platform-algo-search--entity-style.arco-input-focus){border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
 .platform-query :deep(.platform-algo-search--entity-style input.arco-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
 .platform-algo-list-toolbar>button{margin-left:auto}
-@media(max-width:768px){.platform-query-algo__controls{flex-direction:column;gap:12px}.platform-query-algo__form{width:100%}.platform-query-algo__actions{padding-top:0}.platform-algo-search{width:100%}.platform-algo-list-toolbar>button{margin-left:0}}
+@media(max-width:768px){.platform-query-algo__controls{flex-direction:column;gap:12px}.platform-query-algo__form{width:100%}.platform-query-algo__actions{padding-top:0}.platform-algo-search-form{width:100%}.platform-algo-search{width:100%;min-width:0;flex:1}.platform-algo-list-toolbar>button{margin-left:0}}
+.platform-query .platform-query-engine-refresh,.platform-query .platform-query-engine-refresh:hover,.platform-query .platform-query-engine-refresh:active{padding:0;border:0;background:transparent;color:#165dff;font-size:14px;box-shadow:none}
+.platform-query .platform-query-engine-refresh:disabled{color:#c9cdd4;cursor:not-allowed}
+.platform-query :deep(.platform-algo-search .arco-input-prefix){color:#86909c;margin-right:8px}
 .platform-ngql-input :deep(.arco-textarea::placeholder){color:#86909c!important;opacity:1}
 .platform-relation-label-hint{margin-left:4px;color:var(--color-text-3);font-size:12px;font-weight:400}
 .platform-query-algo__tabs .platform-algorithm-info{align-self:center;display:inline-flex;align-items:center;justify-content:center;min-height:32px;width:32px;height:32px;padding:0;margin-left:8px;color:var(--color-text-3)}
@@ -4842,4 +4861,15 @@ print(response.json())</pre>
 .platform-structure-legend .platform-legend-label{cursor:help}
 .platform-legend-tooltip{border:1px solid #e5e6eb;box-shadow:0 4px 10px rgba(31,35,41,.1)}
 .platform-legend-members{min-width:150px;max-height:224px;overflow-y:auto;font-size:12px;line-height:1.9;color:#1d2129}
+</style>
+<style scoped>
+.platform-query.platform-content{scrollbar-width:thin!important;scrollbar-color:transparent transparent!important}
+.platform-query.platform-content:hover,.platform-query.platform-content.kg-is-scrolling{scrollbar-color:rgba(78,89,105,.55) transparent!important}
+.platform-query :deep(pre),.platform-query :deep(textarea){scrollbar-width:thin;scrollbar-color:transparent transparent}
+.platform-query:hover,.platform-query.kg-is-scrolling,.platform-query :deep(pre:hover),.platform-query :deep(pre.kg-is-scrolling),.platform-query :deep(textarea:hover),.platform-query :deep(textarea.kg-is-scrolling){scrollbar-color:rgba(78,89,105,.55) transparent}
+.platform-query::-webkit-scrollbar,.platform-query :deep(pre::-webkit-scrollbar),.platform-query :deep(textarea::-webkit-scrollbar){width:8px!important;height:8px!important}
+.platform-query::-webkit-scrollbar-track,.platform-query :deep(pre::-webkit-scrollbar-track),.platform-query :deep(textarea::-webkit-scrollbar-track){background:transparent}
+.platform-query::-webkit-scrollbar-thumb,.platform-query :deep(pre::-webkit-scrollbar-thumb),.platform-query :deep(textarea::-webkit-scrollbar-thumb){border:2px solid transparent;border-radius:999px;background-color:transparent!important;background-clip:padding-box}
+.platform-query:hover::-webkit-scrollbar-thumb,.platform-query.kg-is-scrolling::-webkit-scrollbar-thumb,.platform-query :deep(pre:hover::-webkit-scrollbar-thumb),.platform-query :deep(pre.kg-is-scrolling::-webkit-scrollbar-thumb),.platform-query :deep(textarea:hover::-webkit-scrollbar-thumb),.platform-query :deep(textarea.kg-is-scrolling::-webkit-scrollbar-thumb){background-color:rgba(78,89,105,.55)!important}
+.platform-query::-webkit-scrollbar-thumb:hover,.platform-query :deep(pre::-webkit-scrollbar-thumb:hover),.platform-query :deep(textarea::-webkit-scrollbar-thumb:hover){background-color:rgba(78,89,105,.8)!important}
 </style>

@@ -594,7 +594,6 @@ const selectedAssetChange = ref<AssetOverviewKey | null>(null)
 const assetChangeRows = ref<Record<AssetOverviewKey, AssetChangeRow[]>>({
   entity: [],
   relation: [],
-  property: [],
 })
 // 昨日新增数值合计（Σwritten，与资产卡徽标同源）：抽屉明细行受单执行
 // 上限截断，行数 < 合计时页脚标注「共 N 条 · 展示前 n 条」
@@ -684,7 +683,9 @@ async function loadOverviewCards(): Promise<void> {
     overviewJobsState.value = 'error'
   }
   try {
-    const data = await getProductionReviews({ graphSpace: space || undefined, statusGroup: 'pending', page: 1, pageSize: 5 })
+    // 取 8 条：单行行高 44px 与左卡任务行对齐，8 行约与「图谱构建」卡等高；
+    // 更多的走底部「还有 N 条」与右上角「查看处理队列」进专门页
+    const data = await getProductionReviews({ graphSpace: space || undefined, statusGroup: 'pending', page: 1, pageSize: 8 })
     if (!isCurrent()) return
     overviewReviews.value = data.items
     overviewReviewsTotal.value = data.total
@@ -1209,8 +1210,7 @@ async function loadPlatformOverview(): Promise<void> {
       // 兜底：旧版本/异常载荷缺 warnings 时模板里 .join 会直接把页面炸掉
       warnings: data.warnings ?? [],
     }
-    // 属性值数据卡片（key=property）为占位统计（待接入），总览页不展示
-    assetOverviewGroups.value = data.assetOverviewGroups.filter((item) => item.key !== 'property')
+    assetOverviewGroups.value = data.assetOverviewGroups
     assetChangeRows.value = data.assetChangeRows
     assetChangeTotals.value = data.assetChangeTotals ?? {}
     entityStructure.value = data.entityStructure
@@ -1358,6 +1358,7 @@ const pageMeta = computed(() => {
                 <em :title="reviewItemCategory(item)">{{ reviewItemCategory(item) }}</em>
               </RouterLink>
             </div>
+            <RouterLink v-if="overviewReviewsTotal > overviewReviews.length" class="platform-review-more" to="/manual-review">还有 {{ overviewReviewsTotal - overviewReviews.length }} 条待处理 →</RouterLink>
           </template>
           <div v-else-if="overviewReviewsState === 'empty'" class="platform-card-empty">
             <strong>当前没有待审核任务</strong>
@@ -2256,9 +2257,11 @@ print(response.json())</pre>
 .platform-summary-card__items>a { display:grid;gap:3px;padding:2px 8px;border-right:1px solid #e1eaf5;color:inherit;text-decoration:none;transition:background-color .2s ease; }.platform-summary-card__items>a:last-child { border-right:0; }.platform-summary-card__items>a:hover { background:#eef5ff; }
 .platform-summary-card__items em { overflow:hidden;color:#8290a5;font-size:8px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }.platform-summary-card__items strong { overflow:hidden;color:#344861;font-size:10px;text-overflow:ellipsis;white-space:nowrap; }
 
-/* 末尾面板按真实内容定高，避免填满剩余空间造成空白滚动。 */
-.platform-overview-main { display:grid;grid-template-columns:minmax(0,1.65fr) minmax(360px,.72fr);gap:16px;align-items:start;min-height:0; }
-.platform-jobs-panel,.platform-review-panel { min-width:0;overflow:hidden; }
+/* 末尾两卡仍等高：面板吃满所在网格行，剩余高度由列表弹性行摊平（不留底部空白）；
+ * gap 统一 16px 与页头间距对齐。加载中/异常时由 min-height 预留就绪高度。 */
+.platform-overview-main { display:grid;flex-grow:1;grid-template-columns:minmax(0,1.65fr) minmax(360px,.72fr);gap:16px;min-height:340px; }
+/* 两卡同为 flex 列 + 列表区 1fr 弹性行：面板等高时行自动摊满，不再留底部空白 */
+.platform-jobs-panel,.platform-review-panel { display:flex;flex-direction:column;min-width:0;overflow:hidden; }
 .platform-jobs-panel .kg-panel__header>div,.platform-review-panel .kg-panel__header>div { display:grid;gap:2px; }
 .platform-jobs-panel .kg-panel__header span,.platform-review-panel .kg-panel__header span { color:#7b8aa1;font-size:12px;line-height:20px; }
 .platform-jobs-panel .kg-panel__header>a,.platform-review-panel .kg-panel__header>a { color:#004ecc;font-size:14px;line-height:22px;text-decoration:none; }
@@ -2268,7 +2271,7 @@ print(response.json())</pre>
 .platform-jobs-stats article span { font-size:18px;font-weight:600; }
 .platform-jobs-stats article span.is-run { color:#004ecc; }.platform-jobs-stats article span.is-ok { color:#067647; }.platform-jobs-stats article span.is-err { color:#b42318; }.platform-jobs-stats article span.is-warn { color:#b54708; }
 .platform-jobs-stats article em { color:#52627a;font-size:12px;line-height:20px;font-style:normal; }
-.platform-jobs-list { display:grid; }
+.platform-jobs-list { display:grid;flex:1;grid-auto-rows:minmax(44px,1fr);overflow-y:auto; }
 .platform-jobs-list a { display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:10px;min-height:44px;padding:9px 14px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
 .platform-jobs-list a:last-child { border-bottom:0; }
 .platform-jobs-list a:hover { background:#f4f8ff; }
@@ -2277,14 +2280,20 @@ print(response.json())</pre>
 .platform-jobs-list a>span::before { flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor;content:""; }
 .platform-jobs-list a>span.ok { color:#067647;background:transparent; }.platform-jobs-list a>span.err { color:#b42318;background:transparent; }.platform-jobs-list a>span.warn { color:#b54708;background:transparent; }
 .platform-jobs-list em { color:#59636f;font-size:12px;line-height:20px;font-style:normal;white-space:nowrap; }
-.platform-review-count { display:flex;align-items:baseline;gap:8px;padding:16px;border-bottom:1px solid #e4ecf6;color:#62728a;font-size:14px;line-height:22px; }
+.platform-review-count { display:flex;align-items:baseline;gap:8px;padding:11px 14px;border-bottom:1px solid #e4ecf6;color:#62728a;font-size:14px;line-height:22px; }
 .platform-review-count strong { margin:0;color:#10264c;font-size:18px; }
-.platform-review-list { display:grid; }
-.platform-review-list a { display:grid;grid-template-columns:minmax(0,1fr);gap:4px 16px;align-items:center;padding:16px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
+/* 行紧贴左侧任务行（44px 上下限 + 弹性摊高），类别列在行内右侧而非换行堆叠——
+ * 8 行与「图谱构建」卡等高，更多的走粘底「还有 N 条待处理」。 */
+.platform-review-list { display:grid;flex:1;grid-auto-rows:minmax(44px,1fr);overflow-y:auto; }
+.platform-review-list a { display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 10px;align-items:center;padding:9px 14px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
 .platform-review-list a:last-child { border-bottom:0; }
 .platform-review-list a:hover { background:#f4f8ff; }
-.platform-review-list strong { min-width:0;overflow:hidden;font-weight:500;color:#253752;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap; }
+.platform-review-list strong { min-width:0;overflow:hidden;color:#253752;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap; }
 .platform-review-list em { min-width:0;overflow:hidden;color:#8a97aa;font-size:12px;line-height:20px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }
+.platform-review-more { flex:0 0 auto;padding:10px 14px;border-top:1px solid #e4ecf6;color:#004ecc;font-size:12px;line-height:20px;text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+.platform-review-more:hover { background:#f4f8ff; }
+/* 加载/空态/错误卡同样吃满面板剩余高度（grid 居中已有），两卡视觉等高 */
+.platform-jobs-panel .platform-card-empty,.platform-review-panel .platform-card-empty { flex:1; }
 .platform-card-empty { display:grid;gap:6px;justify-items:center;align-content:center;min-height:170px;padding:20px;text-align:center; }
 .platform-card-empty strong { color:#253752;font-size:14px;line-height:22px; }
 .platform-card-empty p { margin:0;color:#8a97aa;font-size:12px;line-height:20px; }

@@ -82,7 +82,7 @@ async def get_platform_asset_changes(
         data=PlatformAssetChangesData(
             asset_type=asset_type,
             rows=overview.asset_change_rows[asset_type],
-            data_source=overview.data_sources.get("todayChanges", "unknown"),
+            data_source=overview.data_sources.get("dayChanges", "unknown"),
         )
     )
 

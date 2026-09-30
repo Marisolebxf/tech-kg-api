@@ -1,4 +1,4 @@
-"""平台首页总览服务：图资产实时统计 + 尚未接入模块的显式降级数据。"""
+"""平台首页总览服务：图资产实时统计；图库不可用时诚实降级（显式占位，不回填演示数据）。"""
 
 from __future__ import annotations
 
@@ -424,7 +424,9 @@ def _flatten_vertex_props(vertex: Any) -> dict[str, Any]:
     return props
 
 
-def _graph_time_prop(client: Any, kind: str, name: str, cache: dict[tuple[str, str], str | None]) -> str | None:
+def _graph_time_prop(
+    client: Any, kind: str, name: str, cache: dict[tuple[str, str], str | None]
+) -> str | None:
     """tag/边类型上可进时间窗 LOOKUP 的写入时间属性（仅 string 型列）。
 
     候选优先序：update_time → create_time → source_update_time（溯源列兜底，
@@ -635,7 +637,9 @@ def _relation_object_rows(
                 object=f"{names.get(src, src)} → {names.get(dst, dst)}",
                 change=f"新增 {type_label}",
                 source=str(edge_props.get("source_table") or fallback_source),
-                time=_time_short(edge_props.get(time_prop), fallback_time) if time_prop else fallback_time,
+                time=_time_short(edge_props.get(time_prop), fallback_time)
+                if time_prop
+                else fallback_time,
             )
         )
     return rows
@@ -654,7 +658,11 @@ def _schema_names_by_key(schema_keys: list[str]) -> dict[str, str]:
         engine = get_workflow_engine()
         with engine.connect() as connection:
             rows = connection.execute(
-                text("SELECT schema_key, name FROM kg_schema_definition WHERE schema_key IN (" + quoted + ")")
+                text(
+                    "SELECT schema_key, name FROM kg_schema_definition WHERE schema_key IN ("
+                    + quoted
+                    + ")"
+                )
             ).fetchall()
         return {str(row[0]): str(row[1]) for row in rows if row[1]}
     except Exception:
@@ -746,7 +754,9 @@ def enrich_day_rows_with_graph(
     entity_rows: list[AssetChangeRow] = []
     seed_vids: list[str] = []
     try:
-        for execution in sorted(snapshot.entity_executions, key=lambda ex: ex.completed_at, reverse=True):
+        for execution in sorted(
+            snapshot.entity_executions, key=lambda ex: ex.completed_at, reverse=True
+        ):
             schema_name = schema_names.get(execution.schema_key)
             rows, vids = (
                 _entity_object_rows(client, execution, schema_name, time_props, schema_labels)
@@ -760,7 +770,9 @@ def enrich_day_rows_with_graph(
                 seed_vids.extend(vids)
             entity_rows.extend(rows)
         relation_rows: list[AssetChangeRow] = []
-        for execution in sorted(snapshot.relation_executions, key=lambda ex: ex.completed_at, reverse=True):
+        for execution in sorted(
+            snapshot.relation_executions, key=lambda ex: ex.completed_at, reverse=True
+        ):
             schema_name = schema_names.get(execution.schema_key)
             rows = (
                 _relation_object_rows(
@@ -902,7 +914,7 @@ def _build_structure(
 
 
 class PlatformOverviewService:
-    """优先读取真实图统计；无法读取时保留可演示、可识别的降级结果。"""
+    """优先读取真实图统计；无法读取时进入诚实降级：显式占位，不回填演示数据。"""
 
     def __init__(
         self,
@@ -958,19 +970,21 @@ class PlatformOverviewService:
                 self._stats_provider.get_stats(space) if space else self._stats_provider.get_stats()
             )
         except Exception as exc:
-            logger.warning("首页图资产统计读取失败，使用降级数据: %s", exc)
+            logger.warning("首页图资产统计读取失败，进入诚实降级（占位不回填演示数据）: %s", exc)
+            # 运行中执行数来自控制库、与图无关：仍实时短查，拿不到回 0（不用演示常数）
+            try:
+                running_live = self._changes_provider.running_count(space)
+            except Exception:
+                running_live = 0
             result = fallback.model_copy(
                 update={
                     "platform_status": "图数据库暂不可用，页面已降级",
+                    "pending_batch_count": running_live,
                     "updated_at": datetime.now().strftime("%H:%M"),
                     "data_mode": "mock",
-                    "data_sources": {
-                        "graphAssets": "demo-fallback",
-                        "dayChanges": "demo-fallback",
-                    },
+                    "data_sources": {"graphAssets": "unavailable", "dayChanges": "unavailable"},
                     "warnings": [
-                        "图数据库统计不可用，资产总量和结构正在展示降级数据。",
-                        "昨日变化依赖工作流控制库，图库不可用时同样暂不可读。",
+                        "图数据库统计不可用，资产总量、构成图与昨日新增明细暂时无法展示。"
                     ],
                 }
             )
@@ -991,9 +1005,7 @@ class PlatformOverviewService:
                 relation_added = (
                     f"+{_format_count(changes.relation_added)}" if changes.relation_added else "--"
                 )
-                change_rows = dict(fallback.asset_change_rows)
-                change_rows["entity"] = changes.entity_rows
-                change_rows["relation"] = changes.relation_rows
+                change_rows = {"entity": changes.entity_rows, "relation": changes.relation_rows}
                 change_totals = {"entity": changes.entity_added, "relation": changes.relation_added}
                 day_source = "workflow-control-live"
                 extra_warnings: list[str] = []
@@ -1001,11 +1013,9 @@ class PlatformOverviewService:
                 added_label = "昨日新增"
                 entity_added = "--"
                 relation_added = "--"
-                change_rows = dict(fallback.asset_change_rows)
-                change_rows["entity"] = []
-                change_rows["relation"] = []
+                change_rows = {"entity": [], "relation": []}
                 change_totals = {"entity": 0, "relation": 0}
-                day_source = "demo-fallback"
+                day_source = "unavailable"
                 extra_warnings = ["昨日新增暂时不可读：工作流控制库不可用。"]
             # 运行中执行数实时短查（不随日快照冻结一整天）；控制库不可读回退快照值
             try:
@@ -1016,8 +1026,7 @@ class PlatformOverviewService:
             # 关系总量用 Space/edges。构成图分段按 Schema(tag/边类型)计数、
             # 无法去重（需逐 vid 查标签），多标签顶点（如同一机构 vid 同挂
             # organization_base+Organization，dev2 实测两口径差 ~23 万）会让
-            # 分段合计大于中心数——两个口径并存：卡片去重、分段合计取
-            # ΣSchema 计数（entity/relation_structure_total），与分段自洽。
+            # 分段合计大于卡片总量——两个口径并存：卡片去重、分段按标签计数。
             entity_total = stats.total_nodes
             relation_total = stats.total_edges
             groups = [
@@ -1037,14 +1046,6 @@ class PlatformOverviewService:
                     added=relation_added,
                     added_label=added_label,
                 ),
-                AssetOverviewGroup(
-                    key="property",
-                    title="属性值数据",
-                    total="--",
-                    total_label="属性值总量（统计接口待接入）",
-                    added="--",
-                    added_label="昨日新增",
-                ),
             ]
             result = fallback.model_copy(
                 update={
@@ -1060,9 +1061,6 @@ class PlatformOverviewService:
                     "relation_structure": _build_structure(
                         stats.edges, entity=False, labels=_schema_labels_by_name(space, "relation")
                     ),
-                    # 环形图中心 = 各分段之和（Σ标签/Σ边类型计数），与分段自洽
-                    "entity_structure_total": _format_count(sum(stats.nodes.values())),
-                    "relation_structure_total": _format_count(sum(stats.edges.values())),
                     "data_mode": "partial",
                     "data_sources": {
                         "graphAssets": "trsgraph-live",
@@ -1071,7 +1069,6 @@ class PlatformOverviewService:
                     "warnings": [
                         "实体与关系统计来自图数据库实时接口。",
                         "昨日新增与运行中执行数来自工作流控制库（按抽取写图计数）。",
-                        "属性值统计等待任务中心接口接入。",
                         *extra_warnings,
                     ],
                 }
@@ -1079,10 +1076,10 @@ class PlatformOverviewService:
         return result
 
     def _get_fallback_overview(self) -> PlatformOverviewData:
-        """降级基座：图库不可读时的兜底响应。
+        """降级骨架：所有数据位显式占位、空表，绝不回填演示数据。
 
-        全部用占位/空集，不编造演示数字——黄标「降级数据」+ warnings 说明原因，
-        数据本身保持诚实（前端空结构走灰圆空态、明细行显示空表）。
+        图统计读取失败时以它为底做诚实降级；正常路径只借用字段结构，
+        装配时逐项覆盖为真实值。
         """
         return PlatformOverviewData(
             platform_status="平台服务正常",
@@ -1105,16 +1102,9 @@ class PlatformOverviewService:
                     added="--",
                     added_label="昨日新增",
                 ),
-                AssetOverviewGroup(
-                    key="property",
-                    title="属性值数据",
-                    total="--",
-                    total_label="属性值总量（统计接口待接入）",
-                    added="--",
-                    added_label="昨日新增",
-                ),
             ],
-            asset_change_rows={"entity": [], "relation": [], "property": []},
+            asset_change_rows={"entity": [], "relation": []},
+            asset_change_totals={"entity": 0, "relation": 0},
             entity_structure=[],
             relation_structure=[],
         )

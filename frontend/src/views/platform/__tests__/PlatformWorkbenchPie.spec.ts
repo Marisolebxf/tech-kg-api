@@ -52,7 +52,7 @@ const baseOverview: PlatformOverviewData = {
   dataMode: 'partial',
   warnings: [],
   assetOverviewGroups: [],
-  assetChangeRows: { entity: [], relation: [], property: [] },
+  assetChangeRows: { entity: [], relation: [] },
   entityStructure: [],
   relationStructure: [],
   dataSources: {},
@@ -305,7 +305,6 @@ describe('平台总览构成饼图随数据驱动', () => {
           time: '11:57:41',
         })),
         relation: [],
-        property: [],
       },
     })
     wrapper = mountOverview()

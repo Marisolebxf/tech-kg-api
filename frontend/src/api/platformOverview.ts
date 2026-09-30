@@ -4,7 +4,7 @@ import {
   type ApiResponse,
 } from './graphSearch'
 
-export type AssetOverviewKey = 'entity' | 'relation' | 'property'
+export type AssetOverviewKey = 'entity' | 'relation'
 
 export interface AssetOverviewGroup {
   key: AssetOverviewKey
@@ -31,7 +31,7 @@ export interface StructureMember {
 export interface StructureItem {
   label: string
   schema: string
-  /** 全部非零成员（按计数降序，展示名=Schema 目录中文名）；降级演示数据无此字段 */
+  /** 全部非零成员（按计数降序，展示名=Schema 目录中文名）；降级空态无成员 */
   members?: StructureMember[]
   count: string
   ratio: number
@@ -51,9 +51,6 @@ export interface PlatformOverviewData {
   assetChangeTotals?: Partial<Record<AssetOverviewKey, number>>
   entityStructure: StructureItem[]
   relationStructure: StructureItem[]
-  /** 环形图中心数 = 各分段之和（Σ标签/Σ边类型计数），与分段自洽；资产卡 total 仍是去重口径 */
-  entityStructureTotal?: string
-  relationStructureTotal?: string
   dataMode: 'partial' | 'mock'
   dataSources: Record<string, string>
   warnings: string[]

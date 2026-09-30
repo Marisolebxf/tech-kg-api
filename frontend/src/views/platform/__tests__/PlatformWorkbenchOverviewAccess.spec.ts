@@ -77,7 +77,7 @@ beforeEach(() => {
     dataMode: 'partial',
     warnings: [],
     assetOverviewGroups: [],
-    assetChangeRows: { entity: [], relation: [], property: [] },
+    assetChangeRows: { entity: [], relation: [] },
     entityStructure: [],
     relationStructure: [],
     dataSources: {},

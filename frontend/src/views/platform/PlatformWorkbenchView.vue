@@ -1358,7 +1358,7 @@ const pageMeta = computed(() => {
                 <em :title="reviewItemCategory(item)">{{ reviewItemCategory(item) }}</em>
               </RouterLink>
             </div>
-            <RouterLink v-if="overviewReviewsTotal > overviewReviews.length" class="platform-review-more" to="/manual-review">还有 {{ overviewReviewsTotal - overviewReviews.length }} 条待处理 →</RouterLink>
+            <RouterLink v-if="overviewReviewsTotal > overviewReviews.length" class="platform-review-more" to="/manual-review">还有 {{ overviewReviewsTotal - overviewReviews.length }} 条待处理</RouterLink>
           </template>
           <div v-else-if="overviewReviewsState === 'empty'" class="platform-card-empty">
             <strong>当前没有待审核任务</strong>
@@ -1616,19 +1616,20 @@ const pageMeta = computed(() => {
         <div v-else class="platform-query-algo__body">
           <div class="platform-query-algo__toolbar">
             <nav class="platform-query-algo__tabs" aria-label="算法切换">
-              <button
-                v-for="algo in GRAPH_ALGORITHMS"
-                :key="algo.id"
-                type="button"
-                :class="{ 'is-active': selectedAlgorithm === algo.id }"
-                @click="selectedAlgorithm = algo.id"
-              >{{ algo.label }}</button>
-              <APopover :key="selectedAlgorithm" trigger="click" :title="selectedAlgorithmDef.label" position="bottom">
-                <AButton type="text" shape="circle" class="platform-algorithm-info" aria-label="查看算法说明">
-                  <IconInfoCircle aria-hidden="true" />
-                </AButton>
-                <template #content><p class="platform-algorithm-description">{{ selectedAlgorithmDef.description }}</p></template>
-              </APopover>
+              <div v-for="algo in GRAPH_ALGORITHMS" :key="algo.id" class="platform-algorithm-tab" :class="{ 'is-active': selectedAlgorithm === algo.id }">
+                <button
+                  type="button"
+                  class="platform-algorithm-tab__select"
+                  :class="{ 'is-active': selectedAlgorithm === algo.id }"
+                  @click="selectedAlgorithm = algo.id"
+                >{{ algo.label }}</button>
+                <APopover trigger="click" :title="algo.label" position="bottom">
+                  <AButton type="text" shape="circle" class="platform-algorithm-info" :class="{ 'is-active': selectedAlgorithm === algo.id }" :aria-label="`查看${algo.label}说明`">
+                    <IconInfoCircle aria-hidden="true" />
+                  </AButton>
+                  <template #content><p class="platform-algorithm-description">{{ algo.description }}</p></template>
+                </APopover>
+              </div>
             </nav>
             <div class="platform-query-algo__engine">
               <span
@@ -2269,7 +2270,7 @@ print(response.json())</pre>
 .platform-jobs-stats article { display:grid;gap:2px;padding:12px 8px;text-align:center;border-right:1px solid #edf2f8; }
 .platform-jobs-stats article:last-child { border-right:0; }
 .platform-jobs-stats article span { font-size:18px;font-weight:600; }
-.platform-jobs-stats article span.is-run { color:#004ecc; }.platform-jobs-stats article span.is-ok { color:#067647; }.platform-jobs-stats article span.is-err { color:#b42318; }.platform-jobs-stats article span.is-warn { color:#b54708; }
+.platform-jobs-stats article span.is-run { color:var(--status-info); }.platform-jobs-stats article span.is-ok { color:var(--status-success); }.platform-jobs-stats article span.is-err { color:var(--status-danger); }.platform-jobs-stats article span.is-warn { color:var(--status-warning); }.platform-jobs-stats article span.is-idle { color:var(--status-neutral); }
 .platform-jobs-stats article em { color:#52627a;font-size:12px;line-height:20px;font-style:normal; }
 .platform-jobs-list { display:grid;flex:1;grid-auto-rows:minmax(44px,1fr);overflow-y:auto; }
 .platform-jobs-list a { display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:10px;min-height:44px;padding:9px 14px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
@@ -2278,7 +2279,7 @@ print(response.json())</pre>
 .platform-jobs-list strong { overflow:hidden;color:#253752;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap; }
 .platform-jobs-list a>span { display:inline-flex;align-items:center;gap:6px;padding:0;border-radius:0;background:transparent;color:#004ecc;font-size:14px;line-height:22px;white-space:nowrap; }
 .platform-jobs-list a>span::before { flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor;content:""; }
-.platform-jobs-list a>span.ok { color:#067647;background:transparent; }.platform-jobs-list a>span.err { color:#b42318;background:transparent; }.platform-jobs-list a>span.warn { color:#b54708;background:transparent; }
+.platform-jobs-list a>span.ok { color:var(--status-success);background:transparent; }.platform-jobs-list a>span.err { color:var(--status-danger);background:transparent; }.platform-jobs-list a>span.warn { color:var(--status-warning);background:transparent; }
 .platform-jobs-list em { color:#59636f;font-size:12px;line-height:20px;font-style:normal;white-space:nowrap; }
 .platform-review-count { display:flex;align-items:baseline;gap:8px;padding:11px 14px;border-bottom:1px solid #e4ecf6;color:#62728a;font-size:14px;line-height:22px; }
 .platform-review-count strong { margin:0;color:#10264c;font-size:18px; }
@@ -2350,11 +2351,12 @@ print(response.json())</pre>
 .platform-recent-tasks,.platform-alert-overview { min-width:0;overflow:hidden; }
 .platform-recent-tasks .kg-panel__header a,.platform-alert-overview .kg-panel__header a { color:#004ecc;font-size:12px;text-decoration:none; }
 .platform-recent-tasks td small { display:block;margin-top:2px;color:#52627a;font-size:10px; }
-.platform-status.is-阻断 { background:#fee4e2;color:#b42318; }
-.platform-status.is-成功,.platform-status.is-完成,.platform-status.is-正常 { background:#dcfae6;color:#067647; }
-.platform-status.is-运行中 { background:#eaf2ff;color:#004ecc; }
-.platform-status.is-异常,.platform-status.is-告警 { background:#fef0c7;color:#b54708; }
-.platform-status.is-更新中,.platform-status.is-排队 { background:#eaf2ff;color:#004ecc; }
+.platform-status.is-阻断 { background:#fee4e2;color:var(--status-danger); }
+.platform-status.is-成功,.platform-status.is-完成,.platform-status.is-正常 { background:#dcfae6;color:var(--status-success); }
+.platform-status.is-运行中 { background:#eaf2ff;color:var(--status-info); }
+.platform-status.is-异常 { background:transparent;color:var(--status-danger); }
+.platform-status.is-告警 { background:transparent;color:var(--status-warning); }
+.platform-status.is-更新中,.platform-status.is-排队 { background:#eaf2ff;color:var(--status-info); }
 .platform-alert-overview { display:grid;grid-template-rows:auto repeat(3,auto) 1fr; }
 .platform-alert-overview>button { display:grid;grid-template-columns:8px minmax(0,1fr) 14px;align-items:start;gap:10px;padding:12px 14px;border:0;border-bottom:1px solid #e3ebf7;background:rgba(255,255,255,.64);text-align:left;cursor:pointer; }
 .platform-alert-overview>button:hover { background:#f4f8ff; }
@@ -4764,12 +4766,12 @@ print(response.json())</pre>
 .platform-query-algo__body .platform-form-grid{padding:0}
 /* 算法切换页签：二级工具栏内使用蓝色下划线标记当前算法。 */
 .platform-query-algo__tabs{display:flex;flex:0 1 auto;align-self:stretch;margin:0;min-width:0}
-.platform-query-algo__tabs button{position:relative;min-height:36px;padding:0 14px;border:0;background:transparent;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer;transition:color .2s cubic-bezier(0,0,1,1)}
-.platform-query-algo__tabs button::after{position:absolute;right:0;bottom:0;left:0;height:2px;background:#165dff;content:"";opacity:0;transform:scaleX(0);transition:opacity .2s cubic-bezier(0,0,1,1),transform .2s cubic-bezier(.34,.69,.1,1)}
-.platform-query-algo__tabs button:hover{color:#1d2129}
-.platform-query-algo__tabs button.is-active{color:#165dff;font-weight:500}
-.platform-query-algo__tabs button.is-active::after{opacity:1;transform:scaleX(1)}
-.platform-query-algo__tabs button:focus-visible{border-radius:2px;outline:2px solid rgba(22,93,255,.28);outline-offset:2px}
+.platform-query-algo__tabs .platform-algorithm-tab__select{position:relative;min-height:36px;padding:0 14px;border:0;background:transparent;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer;transition:color .2s cubic-bezier(0,0,1,1)}
+.platform-query-algo__tabs .platform-algorithm-tab__select::after{position:absolute;right:0;bottom:0;left:0;height:2px;background:#165dff;content:"";opacity:0;transform:scaleX(0);transition:opacity .2s cubic-bezier(0,0,1,1),transform .2s cubic-bezier(.34,.69,.1,1)}
+.platform-query-algo__tabs .platform-algorithm-tab__select:hover{color:#1d2129}
+.platform-query-algo__tabs .platform-algorithm-tab__select.is-active{color:#165dff;font-weight:500}
+.platform-query-algo__tabs .platform-algorithm-tab__select.is-active::after{opacity:1;transform:scaleX(1)}
+.platform-query-algo__tabs .platform-algorithm-tab__select:focus-visible{border-radius:2px;outline:2px solid rgba(22,93,255,.28);outline-offset:2px}
 .platform-query-algo__engine-hint{margin:0;padding:8px 12px;border:1px solid #ffd6c6;border-radius:4px;background:#fff3ea;color:#b42318;font-size:12px;line-height:20px}
 .platform-query-algo__desc{margin:0;color:#4e5969;font-size:12px;line-height:20px}
 .platform-query-algo__required{display:inline-block;margin:0 4px 0 0;color:#b42318;font-style:normal}
@@ -4851,7 +4853,14 @@ print(response.json())</pre>
 .platform-query :deep(.platform-algo-search .arco-input-prefix){color:#86909c;margin-right:8px}
 .platform-ngql-input :deep(.arco-textarea::placeholder){color:#86909c!important;opacity:1}
 .platform-relation-label-hint{margin-left:4px;color:var(--color-text-3);font-size:12px;font-weight:400}
-.platform-query-algo__tabs .platform-algorithm-info{align-self:center;display:inline-flex;align-items:center;justify-content:center;min-height:32px;width:32px;height:32px;padding:0;margin-left:8px;color:var(--color-text-3)}
+.platform-query-algo__tabs .platform-algorithm-info{align-self:center;display:inline-flex;align-items:center;justify-content:center;min-height:32px;width:32px;height:32px;padding:0;margin-left:0;color:var(--color-text-3)}
+.platform-algorithm-tab{position:relative;display:flex;align-items:center;padding-right:8px}
+.platform-algorithm-tab.is-active::after{position:absolute;right:0;bottom:0;left:0;height:2px;background:#165dff;content:""}
+.platform-query-algo__tabs .platform-algorithm-tab__select.is-active::after{display:none}
+.platform-query-algo__tabs .platform-algorithm-info.is-active{color:#165dff}
+.platform-query :deep(.list-pagination){justify-content:flex-end}
+.platform-jobs-list a>span.run{color:var(--status-info)}
+.platform-jobs-list a>span.idle{color:var(--status-neutral);background:transparent}
 .platform-query-algo__tabs .platform-algorithm-info::after{display:none}
 .platform-query-algo__tabs .platform-algorithm-info :deep(svg){width:16px;height:16px}
 .platform-algorithm-description{max-width:320px;margin:0;color:var(--color-text-2);font-size:14px;line-height:22px;white-space:normal}

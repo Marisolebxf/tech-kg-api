@@ -629,7 +629,7 @@ describe('Query page concise controls and graph VIDs', () => {
     expect(wrapper.find('.arco-form-item-extra').exists()).toBe(false)
     expect(wrapper.get('.arco-form-item-label').text()).toContain('可多选，最多 20 个')
     expect(wrapper.find('.platform-query-algo__desc').exists()).toBe(false)
-    expect(wrapper.find('button[aria-label="查看算法说明"]').exists()).toBe(true)
+    expect(wrapper.findAll('.platform-algorithm-info')).toHaveLength(3)
   })
 
   it('uses the same primary button style in both modes and validates an empty query on click', async () => {
@@ -697,5 +697,24 @@ describe('nGQL error toast stays concise and in Chinese', () => {
       '不支持的语句开头；允许的只读语句：MATCH / LOOKUP / GO / SHOW 等',
       'warning',
     ])
+  })
+})
+
+
+describe('Per-algorithm help', () => {
+  it('keeps a dedicated help button beside each algorithm and follows selection', async () => {
+    await enterAlgorithms()
+    const labels = ['PageRank算法', 'Louvain算法', 'Degree算法']
+    for (const label of labels) {
+      await clickButton(label)
+      const tabs = wrapper.findAll('.platform-algorithm-tab')
+      expect(tabs).toHaveLength(3)
+      for (const [index, tab] of tabs.entries()) {
+        const info = tab.get('.platform-algorithm-info')
+        expect(info.attributes('aria-label')).toBe(`查看${labels[index]}说明`)
+        expect(info.classes().includes('is-active')).toBe(labels[index] === label)
+        expect(tab.classes().includes('is-active')).toBe(labels[index] === label)
+      }
+    }
   })
 })

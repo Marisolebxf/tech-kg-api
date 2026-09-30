@@ -704,7 +704,7 @@ onMounted(() => {
 <style scoped>
 .ops-page{height:100%;overflow:auto;padding-bottom:2px;color:#16233b}.ops-panel{overflow:hidden;border:1px solid #bdd7ff;border-radius:9px;background:rgba(255,255,255,.94);box-shadow:0 12px 28px rgba(48,105,194,.1)}.ops-filter{display:grid;grid-template-columns:minmax(260px,1fr) repeat(3,160px) auto;gap:10px;padding:14px;border-bottom:1px solid #dce9ff;background:#f7fbff}.ops-filter input,.ops-filter select{height:34px;padding:0 10px;border:1px solid #bdd7ff;border-radius:6px;background:#fff;color:#273957}table{width:100%;border-collapse:collapse;font-size:13px}th,td{height:52px;padding:10px 14px;border-bottom:1px solid #e5edf8;text-align:left;white-space:nowrap}th{position:sticky;z-index:2;top:0;background:#f4f8fd;color:#5a6c88;font-weight:600}td{color:#273957}td small{display:block;margin-top:4px;color:#7b89a1}.alert-actions{display:grid;gap:5px}.alert-tabs{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 14px;border-bottom:1px solid #dce9ff}.alert-tabs nav{display:flex;overflow:auto}.alert-tabs button{padding:13px 14px;border:0;border-bottom:2px solid transparent;background:transparent;color:#52647f;white-space:nowrap;cursor:pointer}.alert-tabs button.active{border-color:#165dff;color:#165dff;font-weight:600}.alert-tabs label{color:#5f6f88;font-size:12px;white-space:nowrap}.alert-tabs input{margin-right:6px}td a,.link{border:0;background:transparent;color:#165dff;cursor:pointer;text-decoration:none}@media(max-width:1100px){.ops-filter{grid-template-columns:1fr 1fr}.ops-panel{overflow:hidden}}
 .review-context{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:12px;padding:12px 14px;border:1px solid #b2ccff;border-radius:7px;background:#f0f5ff}.review-context div{display:grid;gap:3px}.review-context strong{font-size:13px}.review-context span{color:#65738b;font-size:11px}.review-context a{color:#165dff;font-size:12px;text-decoration:none;white-space:nowrap}
-.review-evidence{min-width:260px;max-width:360px;white-space:normal;line-height:19px}.review-status{display:inline-flex;padding:3px 8px;border-radius:10px;background:#edf2f7;color:#52647f}.review-status.is-待处理{background:#fff0e8;color:#c4320a}.review-status.is-已完成{background:#e9f8ef;color:#067647}
+.review-evidence{min-width:260px;max-width:360px;white-space:normal;line-height:19px}.review-status{display:inline-flex;padding:3px 8px;border-radius:10px;background:#edf2f7;color:#52647f}.review-status.is-待处理{background:#fff0e8;color:var(--status-warning)}.review-status.is-已完成{background:#e9f8ef;color:var(--status-success)}
 .link-disabled{color:#98a2b3;font-size:12px;cursor:default}
 .pick-col{width:36px;text-align:center}.pick-col input{cursor:pointer}
 .review-severity{min-width:230px;max-width:300px;white-space:normal}.review-severity small{margin:0 0 6px}.review-severity span{display:block;color:#65738b;font-size:11px;line-height:17px}
@@ -728,8 +728,8 @@ onMounted(() => {
 .review-question-cell small{margin-top:4px;color:#165dff}
 .scope-batch{color:#b42318!important}
 .scope-task{color:#175cd3!important}
-.review-status.is-已撤销{background:#f2f4f7;color:#475467}
-.review-status.is-已驳回{background:#f2f4f7;color:#b42318}
+.review-status.is-已撤销{background:#f2f4f7;color:var(--status-neutral)}
+.review-status.is-已驳回{background:#f2f4f7;color:var(--status-danger)}
 </style>
 <style scoped>
 /* DESIGN_RULES: manual review list contract. */
@@ -790,11 +790,11 @@ onMounted(() => {
 /* 查看档只读提示条（共享生产空间）：与 rerun-feedback.is-warning 同色系 */
 .review-readonly-bar{flex:0 0 auto;padding:9px 16px;border:1px solid #fec84b;border-radius:6px;background:#fffaeb;color:#b54708;font-size:12px;line-height:20px;margin-bottom:10px}
 .rerun-confirm-text{margin:0;color:#4e5969;font-size:13px;line-height:22px}
-.review-status.is-重跑中,.review-status.is-执行中{color:#175cd3}
-.review-status.is-重跑失败,.review-status.is-失败{color:#b42318}
-.review-status.is-已完成{color:#067647}
-.review-status.is-排队中{color:#b54708}
-.review-status.is-已取消{color:#86909c}
+.review-status.is-重跑中,.review-status.is-执行中{color:var(--status-info)}
+.review-status.is-重跑失败,.review-status.is-失败{color:var(--status-danger)}
+.review-status.is-已完成{color:var(--status-success)}
+.review-status.is-排队中{color:var(--status-warning)}
+.review-status.is-已取消{color:var(--status-neutral)}
 
 /* 人工审核页排版、间距与控件合同。 */
 .ops-page,.ops-page :deep(*){font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;letter-spacing:0}
@@ -887,10 +887,10 @@ onMounted(() => {
 .case-log-steps li{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;font-size:12px;line-height:20px}
 .case-log-step-name{color:#4e5969}
 .case-log-step-status{color:#165dff}
-.case-log-step-status.is-成功{color:#067647}
-.case-log-step-status.is-运行中{color:#175cd3}
-.case-log-step-status.is-需人工处理{color:#b54708}
-.case-log-step-status.is-待执行{color:#86909c}
+.case-log-step-status.is-成功{color:var(--status-success)}
+.case-log-step-status.is-运行中{color:var(--status-info)}
+.case-log-step-status.is-需人工处理{color:var(--status-warning)}
+.case-log-step-status.is-待执行{color:var(--status-neutral)}
 .case-log-empty{color:#86909c}
 /* 更新时间表头三态排序 */
 .th-time-sort{cursor:pointer;user-select:none}

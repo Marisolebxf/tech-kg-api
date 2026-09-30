@@ -473,30 +473,6 @@ async def test_delete_property_column_missing_skips_ddl(
 
 
 @pytest.mark.asyncio
-async def test_stats_after_hard_delete(property_api, monkeypatch: pytest.MonkeyPatch) -> None:
-    _, _set_actor = property_api
-    _patch_drop(monkeypatch, None)  # 图库对象不存在 → 跳 DDL 只删目录
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        overview_before = await client.get("/api/v1/schema-management/overview")
-        before = overview_before.json()["data"]["propertyFields"]
-
-        listing = await client.get(
-            "/api/v1/schema-management/schemas",
-            params={"kind": "entity", "pageSize": 100, "includeDetails": True},
-        )
-        expert = next(item for item in listing.json()["data"]["items"] if item["name"] == "Expert")
-        deletable = next(p["name"] for p in expert["properties"] if not p["locked"])
-        deleted = await client.delete(
-            f"/api/v1/schema-management/schemas/{expert['id']}/properties/{deletable}"
-        )
-        assert deleted.status_code == 200
-
-        overview_after = await client.get("/api/v1/schema-management/overview")
-        after = overview_after.json()["data"]["propertyFields"]
-        assert after == before - 1
-
-
-@pytest.mark.asyncio
 async def test_list_script_available_flag(property_api) -> None:
     """script.available 标记脚本对象在存储中是否真实存在。
 

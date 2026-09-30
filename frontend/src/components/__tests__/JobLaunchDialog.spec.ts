@@ -20,7 +20,6 @@ const { schema } = vi.hoisted(() => ({
     identityKey: 'id',
     attributeIdentityKey: 'name',
     attributeSource: '',
-    instanceCount: 0,
     version: 'v1',
     isCore: false,
     relationCategory: null,

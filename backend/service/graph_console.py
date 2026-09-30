@@ -299,4 +299,4 @@ def run_statement(actor: PlatformActor, space: str, statement: str) -> dict:
     summary = getattr(result, "summary", None) or {}
     if not isinstance(summary, dict):
         summary = {"summary": str(summary)}
-    return {"records": records, "columns": columns, "summary": summary, "kind": kind}
+    return {"records": records, "columns": columns, "summary": summary}

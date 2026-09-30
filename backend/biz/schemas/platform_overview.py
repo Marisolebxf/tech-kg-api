@@ -69,7 +69,7 @@ class PlatformOverviewData(CamelCaseModel):
     asset_change_totals: dict[AssetOverviewKey, int] = Field(default_factory=dict)
     entity_structure: list[StructureItem]
     relation_structure: list[StructureItem]
-    data_mode: Literal["live", "partial", "mock"] = "mock"
+    data_mode: Literal["partial", "mock"] = "mock"
     data_sources: dict[str, str] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
 
@@ -78,7 +78,7 @@ class PlatformAssetSummaryData(CamelCaseModel):
     platform_status: str
     pending_batch_count: int
     updated_at: str
-    data_mode: Literal["live", "partial", "mock"]
+    data_mode: Literal["partial", "mock"]
     data_sources: dict[str, str]
     warnings: list[str]
     items: list[AssetOverviewGroup]

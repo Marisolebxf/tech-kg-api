@@ -12,6 +12,7 @@ import { currentGraphSpace } from '../../api/currentGraphSpace'
 import ListPagination from '../../components/list-pagination.vue'
 import { useClientPagination } from '../../composables/use-client-pagination'
 import { getErrorMessage } from '../../api/http'
+import { getKgOptionCounts, type KgOptionCounts } from '../../api/kgOptions'
 import {
   getPlatformOverview,
   type AssetChangeRow,
@@ -105,7 +106,7 @@ const modules: ServiceModule[] = [
     responseFields: commonResponseFields,
     requestExample: { source_expert_id: 'E10001', target_expert_id: 'E10002', relation_scene: '科研合作', start_time: '2020-01' },
     responseExample: { data: { relation_type: '论文合作', relation_count: 12, scenario: '科研合作', confidence: 0.94 } },
-    resultRows: [{ label: '直接关系', value: '12' }, { label: '关系类型', value: '4' }, { label: '关联成果', value: '18' }, { label: '最高置信度', value: '0.94' }],
+    resultRows: [{ label: '直接关系', value: '' }, { label: '关系类型', value: '' }, { label: '关联成果', value: '' }, { label: '最高置信度', value: '' }],
     evidence: ['共同发表论文 4 篇，作者列表和单位信息一致。', '共同参与项目 3 项，项目角色存在协作链路。', '关系发生时间、场景和成果均已结构化记录。'],
   },
   {
@@ -122,7 +123,7 @@ const modules: ServiceModule[] = [
     responseFields: commonResponseFields,
     requestExample: { core_node_id: '4G7t0B0t', relation_types: ['学术关联'], path_depth: 2, min_strength: 0.65 },
     responseExample: { data: { indirect_nodes: 36, paths: 58, average_strength: 0.76 } },
-    resultRows: [{ label: '间接节点', value: '36' }, { label: '路径数量', value: '58' }, { label: '关系类型', value: '4' }, { label: '平均强度', value: '0.76' }],
+    resultRows: [{ label: '间接节点', value: '' }, { label: '路径数量', value: '' }, { label: '关系类型', value: '' }, { label: '平均强度', value: '' }],
     evidence: ['路径：张明远 -> 李佳宁 -> 专家C。', '路径深度为 2，命中学术关联和机构关联。', '每条间接关系均返回传递路径和强度。'],
   },
   {
@@ -167,7 +168,7 @@ const modules: ServiceModule[] = [
     responseFields: commonResponseFields,
     requestExample: { expert_id: 'E10001', organization: '中国科学院自动化研究所', department: '智能系统实验室', overlap_period: '2018-2022' },
     responseExample: { data: { colleagues: 18, teams: 4, overlap_years: 4, achievements: 6 } },
-    resultRows: [{ label: '同事关系', value: '18' }, { label: '共同团队', value: '4' }, { label: '重叠年限', value: '4' }, { label: '期间成果', value: '6' }],
+    resultRows: [{ label: '同事关系', value: '' }, { label: '共同团队', value: '' }, { label: '重叠年限', value: '' }, { label: '期间成果', value: '' }],
     evidence: ['任职时间存在重叠，机构层级匹配到同一实验室。', '标注共同工作内容和协作场景。', '关联同事期间产生的合作成果。'],
   },
   {
@@ -213,7 +214,7 @@ const modules: ServiceModule[] = [
     responseFields: commonResponseFields,
     requestExample: { expertAId: 'person_121d48631f434f4d323ba521d33032ad', expertBId: 'person_42914016fe8d6e0e1d01dad5845c47e6', startTime: '2021-01', endTime: '2026-08' },
     responseExample: { data: { structuredResult: { cooperationPaperCount: 14, citation: { total: 1260, max: 90 }, stableTeamMembers: [], paperTopics: ['人工智能', '先进计算'] } } },
-    resultRows: [{ label: '合作论文', value: '14' }, { label: '总被引', value: '1260' }, { label: '研究方向', value: '5' }, { label: '核心人员', value: '7' }],
+    resultRows: [{ label: '合作论文', value: '' }, { label: '总被引', value: '' }, { label: '研究方向', value: '' }, { label: '核心人员', value: '' }],
     evidence: ['提取作者列表、作者单位、发表时间和论文主题。', '统计期刊会议级别和被引情况。', '识别长期稳定合作团队和核心合作人员。'],
   },
   {
@@ -230,7 +231,7 @@ const modules: ServiceModule[] = [
     responseFields: commonResponseFields,
     requestExample: { expert_id: 'E10001', enterprise_name: '华南智能芯片', role_type: '顾问/股东/合作方', industry: '集成电路' },
     responseExample: { data: { enterprises: 9, roles: 4, cooperation_fields: ['芯片设计', '智能制造'] } },
-    resultRows: [{ label: '关联企业', value: '9' }, { label: '角色类型', value: '4' }, { label: '合作领域', value: '6' }, { label: '经营风险', value: '2' }],
+    resultRows: [{ label: '关联企业', value: '' }, { label: '角色类型', value: '' }, { label: '合作领域', value: '' }, { label: '经营风险', value: '' }],
     evidence: ['标注专家在企业中的角色、合作领域、合作时间和模式。', '关联企业行业地位、技术方向与经营状况。', '支持产业界资源对接分析。'],
   },
   {
@@ -247,7 +248,7 @@ const modules: ServiceModule[] = [
     responseFields: commonResponseFields,
     requestExample: { chain_node_id: 'IC-CHIP-DESIGN', top_n: 10, event_type: '投融资/政策/风险', time_range: '2025-2026' },
     responseExample: { data: { events: 10, experts: 18, enterprises: 24, risk_level: '中' } },
-    resultRows: [{ label: 'TOP事件', value: '10' }, { label: '关联专家', value: '18' }, { label: '关联企业', value: '24' }, { label: '风险等级', value: '中' }],
+    resultRows: [{ label: 'TOP事件', value: '' }, { label: '关联专家', value: '' }, { label: '关联企业', value: '' }, { label: '风险等级', value: '' }],
     evidence: ['按影响力评估筛选产业链节点 TOP-N 事件。', '构建事件与专家、企业、人才的关联关系。', '分析产业链影响和后续发展趋势。'],
   },
   {
@@ -264,7 +265,7 @@ const modules: ServiceModule[] = [
     responseFields: commonResponseFields,
     requestExample: { chain_id: 'AI-COMPUTING', layer_depth: 3, relation_filter: ['技术', '企业', '专家'], include_events: true },
     responseExample: { data: { nodes: 186, relations: 420, key_technologies: 22, key_enterprises: 48 } },
-    resultRows: [{ label: '产业节点', value: '186' }, { label: '链路关系', value: '420' }, { label: '关键技术', value: '22' }, { label: '重点企业', value: '48' }],
+    resultRows: [{ label: '产业节点', value: '' }, { label: '链路关系', value: '' }, { label: '关键技术', value: '' }, { label: '重点企业', value: '' }],
     evidence: ['整合产业链实体、关系、事件数据。', '展示核心节点、关联关系和数据流向。', '支持层级展开、关系筛选和动态更新。'],
   },
 ]
@@ -508,11 +509,11 @@ const { showToast } = useToast()
 
 const activeService = computed(() => modules.find((item) => item.key === activeServiceKey.value) ?? modules[0])
 const activeRequestJson = computed(() => JSON.stringify(activeService.value.requestExample, null, 2))
-const activeResponseJson = computed(() => JSON.stringify({
-  code: 0,
-  message: 'success',
-  data: activeService.value.responseExample.data ?? activeService.value.responseExample,
-}, null, 2))
+// 响应体只展示接口示例本身：此处是接口文档示例控制台，不发起真实调用，
+// 不再包一层 code=0/message='success' 的假信封冒充真实响应。
+const activeResponseJson = computed(() =>
+  JSON.stringify(activeService.value.responseExample, null, 2),
+)
 const activeRequestEntries = computed(() =>
   activeService.value.requestFields.map((field) => ({
     label: field.description,
@@ -529,11 +530,34 @@ const serviceConsoleStats = computed(() => [
   { label: '接口路径', value: activeService.value.endpoint },
   { label: '参数数量', value: String(activeService.value.requestFields.length) },
 ])
-const serviceCallLogs = computed(() => [
-  { time: '10:30:12', level: 'SUCCESS', message: `已完成 ${activeService.value.title} 调用，返回 code=0。` },
-  { time: '10:30:11', level: 'INFO', message: `请求参数已标准化，准备发送到 ${activeService.value.endpoint}。` },
-  { time: '10:30:09', level: 'INFO', message: `命中服务路由 ${activeService.value.key}，开始装配请求体。` },
-])
+
+// 数据服务卡目录型计数（关系类型/角色/合作领域/关系维度）：真实目录来自
+// /kg-construction/options，首次进入数据服务页签时按需拉取；查询型 KPI
+// （关联企业数、合作论文数等）依赖具体查询参数，示例态一律留空。
+const optionCounts = ref<KgOptionCounts>({ relationTypes: 0, roles: 0, dimensions: 0, techFields: 0 })
+const optionCountsLoaded = ref(false)
+const CATALOG_COUNT_LABELS: Partial<Record<string, keyof KgOptionCounts>> = {
+  关系类型: 'relationTypes',
+  角色类型: 'roles',
+  合作领域: 'techFields',
+  关系维度: 'dimensions',
+}
+const activeResultRows = computed(() =>
+  activeService.value.resultRows.map((row) => {
+    const key = CATALOG_COUNT_LABELS[row.label]
+    return key && optionCounts.value[key] ? { ...row, value: String(optionCounts.value[key]) } : row
+  }),
+)
+
+async function loadOptionCounts(): Promise<void> {
+  optionCounts.value = await getKgOptionCounts()
+}
+
+watch(activeTab, (tab) => {
+  if (tab !== 'service' || optionCountsLoaded.value) return
+  optionCountsLoaded.value = true
+  void loadOptionCounts()
+}, { immediate: true })
 
 watch(
   () => props.initialTab,
@@ -674,9 +698,14 @@ function reviewItemRoute(item: ProductionReviewCase): string | { path: string; q
   const keyword = (item.objectName || item.sourceRecordId || item.id).trim()
   return { path: '/manual-review', query: keyword ? { category: 'C', keyword } : { category: 'C' } }
 }
+
+/** 审核卡片类别文案：与人工审核页子页对齐——抽取失败重跑（T_EXTRACT_FAIL）同名，
+ *  其余（T_LINK 实体对齐裁决 / T_DIRECT 候选审核）统称「入库决策」，
+ *  不再透传后端 category 原文（T_DIRECT 会露出英文技术名）。 */
+function reviewItemCategory(item: ProductionReviewCase): string {
+  return item.templateId === 'T_EXTRACT_FAIL' ? '抽取失败重跑' : '入库决策'
+}
 const activeAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === selectedAssetChange.value))
-const entityAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === 'entity'))
-const relationAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === 'relation'))
 
 // 构成图饼图分段由图例数据驱动（pieSlices 纯函数，随图例 tone+ratio 生成扇形 path）；
 // 图上只标百分比。饼图扇区全部保留悬浮（外移放大 + 浮窗）；右侧图例只有「其他」
@@ -1229,7 +1258,8 @@ function openProcessDetail(area: 'processing' | 'construction', taskId: string, 
 }
 
 function handleExecuteService() {
-  void runWithLoading(`${activeService.value.title} 调用成功，已刷新请求与响应结果`)
+  // 测试页签是接口示例控制台：执行按钮不发起真实调用，只如实提示。
+  showToast('当前为接口示例，未发起真实调用；请到对应业务功能页发起真实查询', 'info')
 }
 
 function handleCopyEndpoint() {
@@ -1256,7 +1286,7 @@ const pageMeta = computed(() => {
       <div class="platform-hero__main">
         <h1>{{ pageMeta.title }}</h1>
       </div>
-      <div class="platform-hero__actions"><span :title="overviewMeta.warnings.join('\n')"><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个执行运行中 · {{ overviewMeta.dataMode === 'live' ? '实时数据' : overviewMeta.dataMode === 'partial' ? '部分实时' : '降级数据' }}</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看任务</RouterLink><RouterLink v-if="canEnterAdminPages" to="/manual-review">进入人工处理</RouterLink></div>
+      <div class="platform-hero__actions"><span :title="overviewMeta.warnings.join('\n')"><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个执行运行中 · {{ overviewMeta.dataMode === 'partial' ? '部分实时' : '降级数据' }}</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看任务</RouterLink><RouterLink v-if="canEnterAdminPages" to="/manual-review">进入人工处理</RouterLink></div>
     </header>
 
     <header v-else-if="activeTab !== 'query'" class="platform-page-head">
@@ -1268,13 +1298,13 @@ const pageMeta = computed(() => {
     <main v-if="activeTab === 'overview'" class="platform-content platform-overview">
       <section class="platform-summary-grid" aria-label="实体与关系数据总览">
         <article v-for="group in assetOverviewGroups" :key="group.key" :class="['kg-panel', 'platform-summary-card', `is-${group.key}`]">
-          <header><div><strong>{{ group.title }}</strong><span><i />数据已更新</span></div><button type="button" @click="selectedAssetChange = group.key">查看昨日新增 →</button></header>
+          <header><div><strong>{{ group.title }}</strong><span><i />数据已更新</span></div><button type="button" @click="selectedAssetChange = group.key">查看昨日新增</button></header>
           <div class="platform-summary-card__main"><section><strong>{{ group.total }}</strong><span>{{ group.totalLabel }}</span></section><section class="is-added"><strong>{{ group.added }}</strong><span>{{ group.addedLabel }}</span></section></div>
         </article>
       </section>
 
       <section class="kg-panel platform-structure-overview">
-        <div class="kg-panel__header"><div><h2 class="kg-panel__title">当前图谱资产</h2></div><span>实体 {{ entityAssetOverview?.total ?? '--' }} · 关系 {{ relationAssetOverview?.total ?? '--' }} · 数据截至 {{ overviewMeta.updatedAt }}</span></div>
+        <div class="kg-panel__header"><div><h2 class="kg-panel__title">当前图谱资产</h2></div></div>
         <div class="platform-structure-grid">
           <div class="platform-structure-chart"><header><strong>实体标签构成</strong></header><div class="platform-pie-layout"><div class="platform-pie-wrap"><svg class="platform-pie is-entity" viewBox="0 0 160 160" role="img" aria-label="实体标签构成饼图"><circle v-if="!entityPieSlices.length" cx="80" cy="80" r="64" fill="#e5edf8" /><g v-for="slice in entityPieSlices" :key="slice.item.label" class="platform-pie-slice" :class="{ 'is-other': slice.item.isOther }" :style="{ transform: pieHoverKey === `entity-${slice.item.label}` ? `translate(${slice.dx}px, ${slice.dy}px)` : undefined }" @mouseenter="showPieTip('entity', slice, $event)" @mousemove="movePieTip" @mouseleave="hidePieTip('entity')"><path :d="slice.path" :fill="slice.item.tone" /><text v-if="slice.showLabel" :x="slice.labelX" :y="slice.labelY">{{ slice.percent }}%</text></g></svg></div><div class="platform-structure-legend"><article v-for="item in entityStructure" :key="item.label"><span><i :style="{ background: item.tone }" /><a-tooltip v-if="item.isOther" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><span class="platform-legend-label">{{ item.label }}</span><template #content><div class="platform-legend-members"><template v-if="item.members?.length"><div v-for="m in item.members" :key="m.name">{{ m.name }} · {{ m.count.toLocaleString() }}</div></template><div v-else>暂无标签数据</div></div></template></a-tooltip><span v-else>{{ item.label }}</span></span><strong class="platform-legend-ratio">{{ item.ratio }}%</strong></article></div></div></div>
           <div class="platform-structure-chart"><header><strong>关系类型构成</strong></header><div class="platform-pie-layout"><div class="platform-pie-wrap"><svg class="platform-pie is-relation" viewBox="0 0 160 160" role="img" aria-label="关系类型构成饼图"><circle v-if="!relationPieSlices.length" cx="80" cy="80" r="64" fill="#e5edf8" /><g v-for="slice in relationPieSlices" :key="slice.item.label" class="platform-pie-slice" :class="{ 'is-other': slice.item.isOther }" :style="{ transform: pieHoverKey === `relation-${slice.item.label}` ? `translate(${slice.dx}px, ${slice.dy}px)` : undefined }" @mouseenter="showPieTip('relation', slice, $event)" @mousemove="movePieTip" @mouseleave="hidePieTip('relation')"><path :d="slice.path" :fill="slice.item.tone" /><text v-if="slice.showLabel" :x="slice.labelX" :y="slice.labelY">{{ slice.percent }}%</text></g></svg></div><div class="platform-structure-legend"><article v-for="item in relationStructure" :key="item.label"><span><i :style="{ background: item.tone }" /><a-tooltip v-if="item.isOther" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><span class="platform-legend-label">{{ item.label }}</span><template #content><div class="platform-legend-members"><template v-if="item.members?.length"><div v-for="m in item.members" :key="m.name">{{ m.name }} · {{ m.count.toLocaleString() }}</div></template><div v-else>暂无类型数据</div></div></template></a-tooltip><span v-else>{{ item.label }}</span></span><strong class="platform-legend-ratio">{{ item.ratio }}%</strong></article></div></div></div>
@@ -1289,7 +1319,7 @@ const pageMeta = computed(() => {
 
       <section v-if="canEnterAdminPages" class="platform-overview-main">
         <div class="kg-panel platform-jobs-panel">
-          <div class="kg-panel__header"><div><h2 class="kg-panel__title">图谱构建</h2></div><RouterLink to="/graph-build">查看全部任务 →</RouterLink></div>
+          <div class="kg-panel__header"><div><h2 class="kg-panel__title">图谱构建</h2></div><RouterLink to="/graph-build">查看全部任务</RouterLink></div>
           <template v-if="overviewJobsState === 'ready'">
             <div class="platform-jobs-stats">
               <article v-for="stat in overviewJobStats" :key="stat.label"><span :class="`is-${stat.tone}`">{{ stat.value }}</span><em>{{ stat.label }}</em></article>
@@ -1312,14 +1342,13 @@ const pageMeta = computed(() => {
         </div>
 
         <aside class="kg-panel platform-review-panel">
-          <div class="kg-panel__header"><div><h2 class="kg-panel__title">人工审核</h2></div><RouterLink to="/manual-review">查看处理队列 →</RouterLink></div>
+          <div class="kg-panel__header"><div><h2 class="kg-panel__title">人工审核</h2></div><RouterLink to="/manual-review">查看处理队列</RouterLink></div>
           <template v-if="overviewReviewsState === 'ready'">
             <div class="platform-review-count">待处理 <strong>{{ overviewReviewsTotal }}</strong> 条</div>
             <div class="platform-review-list">
               <RouterLink v-for="item in overviewReviews" :key="item.id" :to="reviewItemRoute(item)">
                 <strong>{{ item.objectName || item.objectId }}</strong>
-                <em>{{ item.category }}</em>
-                <span class="is-risk">风险 {{ item.riskLevel }}</span>
+                <em>{{ reviewItemCategory(item) }}</em>
               </RouterLink>
             </div>
           </template>
@@ -1856,15 +1885,15 @@ const pageMeta = computed(() => {
               </dl>
             </div>
             <div class="platform-result-grid">
-              <div v-for="row in activeService.resultRows" :key="row.label">
+              <div v-for="row in activeResultRows" :key="row.label">
                 <span>{{ row.label }}</span>
                 <strong>{{ row.value }}</strong>
               </div>
             </div>
             <dl class="platform-service-info">
               <div><dt>命中服务</dt><dd>{{ activeService.title }}</dd></div>
-              <div><dt>状态码</dt><dd>0 / success</dd></div>
-              <div><dt>更新时间</dt><dd>2026-07-13 10:30</dd></div>
+              <div><dt>状态码</dt><dd>—（接口示例，未发起真实调用）</dd></div>
+              <div><dt>更新时间</dt><dd>—</dd></div>
             </dl>
           </div>
         </section>
@@ -1886,16 +1915,6 @@ const pageMeta = computed(() => {
               <strong>结果依据</strong>
               <ul>
                 <li v-for="(line, index) in activeService.evidence.slice(0, 3)" :key="index">{{ line }}</li>
-              </ul>
-            </div>
-            <div class="platform-service-log">
-              <strong>调用日志</strong>
-              <ul>
-                <li v-for="item in serviceCallLogs" :key="`${item.time}-${item.message}`">
-                  <span>{{ item.time }}</span>
-                  <b>{{ item.level }}</b>
-                  <p>{{ item.message }}</p>
-                </li>
               </ul>
             </div>
           </div>
@@ -2218,37 +2237,37 @@ print(response.json())</pre>
 .platform-summary-card__items em { overflow:hidden;color:#8290a5;font-size:8px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }.platform-summary-card__items strong { overflow:hidden;color:#344861;font-size:10px;text-overflow:ellipsis;white-space:nowrap; }
 
 /* 同上：任务/审核面板加载中只占小高度，预留就绪高度防止布局跳动 */
-.platform-overview-main { display:grid;grid-template-columns:minmax(0,1.65fr) minmax(360px,.72fr);gap:14px;min-height:340px; }
+.platform-overview-main { display:grid;flex-grow:1;grid-template-columns:minmax(0,1.65fr) minmax(360px,.72fr);gap:14px;min-height:340px; }
 .platform-jobs-panel,.platform-review-panel { min-width:0;overflow:hidden; }
 .platform-jobs-panel .kg-panel__header>div,.platform-review-panel .kg-panel__header>div { display:grid;gap:2px; }
-.platform-jobs-panel .kg-panel__header span,.platform-review-panel .kg-panel__header span { color:#7b8aa1;font-size:10px; }
-.platform-jobs-panel .kg-panel__header>a,.platform-review-panel .kg-panel__header>a { color:#004ecc;font-size:11px;text-decoration:none; }
+.platform-jobs-panel .kg-panel__header span,.platform-review-panel .kg-panel__header span { color:#7b8aa1;font-size:12px;line-height:20px; }
+.platform-jobs-panel .kg-panel__header>a,.platform-review-panel .kg-panel__header>a { color:#004ecc;font-size:14px;line-height:22px;text-decoration:none; }
 .platform-jobs-stats { display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border-bottom:1px solid #e4ecf6; }
 .platform-jobs-stats article { display:grid;gap:2px;padding:12px 8px;text-align:center;border-right:1px solid #edf2f8; }
 .platform-jobs-stats article:last-child { border-right:0; }
 .platform-jobs-stats article span { font-size:18px;font-weight:600; }
 .platform-jobs-stats article span.is-run { color:#004ecc; }.platform-jobs-stats article span.is-ok { color:#067647; }.platform-jobs-stats article span.is-err { color:#b42318; }.platform-jobs-stats article span.is-warn { color:#b54708; }
-.platform-jobs-stats article em { color:#52627a;font-size:10px;font-style:normal; }
+.platform-jobs-stats article em { color:#52627a;font-size:12px;line-height:20px;font-style:normal; }
 .platform-jobs-list { display:grid; }
 .platform-jobs-list a { display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:10px;min-height:44px;padding:9px 14px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
 .platform-jobs-list a:last-child { border-bottom:0; }
 .platform-jobs-list a:hover { background:#f4f8ff; }
-.platform-jobs-list strong { overflow:hidden;color:#253752;font-size:11px;text-overflow:ellipsis;white-space:nowrap; }
-.platform-jobs-list a>span { padding:2px 8px;border-radius:999px;background:#eaf2ff;color:#004ecc;font-size:9px;white-space:nowrap; }
-.platform-jobs-list a>span.ok { color:#067647;background:#e9f8ef; }.platform-jobs-list a>span.err { color:#b42318;background:#fee4e2; }.platform-jobs-list a>span.warn { color:#b54708;background:#fff3df; }
-.platform-jobs-list em { color:#59636f;font-size:9px;font-style:normal;white-space:nowrap; }
-.platform-review-count { padding:11px 14px;border-bottom:1px solid #e4ecf6;color:#62728a;font-size:11px; }
+.platform-jobs-list strong { overflow:hidden;color:#253752;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap; }
+.platform-jobs-list a>span { display:inline-flex;align-items:center;gap:6px;padding:0;border-radius:0;background:transparent;color:#004ecc;font-size:14px;line-height:22px;white-space:nowrap; }
+.platform-jobs-list a>span::before { flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor;content:""; }
+.platform-jobs-list a>span.ok { color:#067647;background:transparent; }.platform-jobs-list a>span.err { color:#b42318;background:transparent; }.platform-jobs-list a>span.warn { color:#b54708;background:transparent; }
+.platform-jobs-list em { color:#59636f;font-size:12px;line-height:20px;font-style:normal;white-space:nowrap; }
+.platform-review-count { padding:11px 14px;border-bottom:1px solid #e4ecf6;color:#62728a;font-size:14px;line-height:22px; }
 .platform-review-count strong { margin:0 4px;color:#10264c;font-size:18px; }
 .platform-review-list { display:grid; }
 .platform-review-list a { display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 10px;align-items:center;padding:9px 14px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
 .platform-review-list a:last-child { border-bottom:0; }
 .platform-review-list a:hover { background:#f4f8ff; }
-.platform-review-list strong { overflow:hidden;color:#253752;font-size:11px;text-overflow:ellipsis;white-space:nowrap; }
-.platform-review-list em { overflow:hidden;color:#8a97aa;font-size:9px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }
-.platform-review-list .is-risk { justify-self:end;color:#b54708;font-size:9px;white-space:nowrap; }
+.platform-review-list strong { overflow:hidden;color:#253752;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap; }
+.platform-review-list em { overflow:hidden;color:#8a97aa;font-size:12px;line-height:20px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }
 .platform-card-empty { display:grid;gap:6px;justify-items:center;align-content:center;min-height:170px;padding:20px;text-align:center; }
-.platform-card-empty strong { color:#253752;font-size:12px; }
-.platform-card-empty p { margin:0;color:#8a97aa;font-size:10px;line-height:16px; }
+.platform-card-empty strong { color:#253752;font-size:14px;line-height:22px; }
+.platform-card-empty p { margin:0;color:#8a97aa;font-size:12px;line-height:20px; }
 .platform-card-empty a.primary { margin-top:6px;padding:7px 14px;border-radius:5px;background:#004ecc;color:#fff;font-size:11px;text-decoration:none; }
 .platform-card-empty a:not(.primary) { margin-top:6px;color:#004ecc;font-size:11px;text-decoration:none; }
 
@@ -4105,8 +4124,7 @@ print(response.json())</pre>
 }
 
 .platform-service-request strong,
-.platform-service-payload strong,
-.platform-service-log strong {
+.platform-service-payload strong {
   color: var(--text-primary);
   font-size: 13px;
 }
@@ -4290,58 +4308,6 @@ print(response.json())</pre>
   overflow-wrap: anywhere;
   border-radius: 6px;
   background: #f3f8ff;
-}
-
-.platform-service-log {
-  display: grid;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid #dce9ff;
-  border-radius: 8px;
-  background: #fbfdff;
-}
-
-.platform-service-log ul {
-  display: grid;
-  gap: 10px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.platform-service-log li {
-  display: grid;
-  grid-template-columns: 56px 56px minmax(0, 1fr);
-  gap: 10px;
-  align-items: start;
-  padding: 10px 0;
-  border-bottom: 1px solid #eef3fb;
-}
-
-.platform-service-log li:last-child {
-  border-bottom: 0;
-  padding-bottom: 0;
-}
-
-.platform-service-log span,
-.platform-service-log b,
-.platform-service-log p {
-  margin: 0;
-  font-size: 12px;
-  line-height: 18px;
-}
-
-.platform-service-log span {
-  color: var(--text-tertiary);
-  font-family: "SFMono-Regular", Consolas, monospace;
-}
-
-.platform-service-log b {
-  color: #00a870;
-}
-
-.platform-service-log p {
-  color: var(--text-secondary);
 }
 
 .platform-api-doc {
@@ -4814,7 +4780,6 @@ print(response.json())</pre>
   .platform-jobs-list a{grid-template-columns:minmax(0,1fr) auto}
   .platform-jobs-list em{display:none}
   .platform-review-list a{grid-template-columns:minmax(0,1fr)}
-  .platform-review-list .is-risk{justify-self:start}
 }
 .platform-query-form{flex:0 0 auto}
 .platform-query .platform-query-form{padding-bottom:24px;border-bottom:1px solid var(--color-border-2)!important}

@@ -74,7 +74,7 @@ beforeEach(() => {
     platformStatus: '平台运行正常',
     pendingBatchCount: 0,
     updatedAt: '--',
-    dataMode: 'live',
+    dataMode: 'partial',
     warnings: [],
     assetOverviewGroups: [],
     assetChangeRows: { entity: [], relation: [] },

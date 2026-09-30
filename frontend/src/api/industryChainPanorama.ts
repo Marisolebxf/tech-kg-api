@@ -99,18 +99,6 @@ export interface PanoramaSummary {
   industryChains?: string[];
   totalNodes: number;
   totalEdges: number;
-  nodesByLabel: Record<string, number>;
-  edgesByType: Record<string, number>;
-}
-
-/**
- * 数据来源信息，用于区分真实图查询结果与降级样例。
- */
-export interface PanoramaSource {
-  requested: string;
-  actual: string;
-  fallback: boolean;
-  reason?: string;
 }
 
 /**
@@ -125,7 +113,6 @@ export interface IndustryChainPanoramaQueryResponse {
     nodes: PanoramaGraphNode[];
     edges: PanoramaGraphEdge[];
   };
-  source: PanoramaSource;
   provenance?: AlumniProvenance;
   apiResultExample: Record<string, unknown>;
 }

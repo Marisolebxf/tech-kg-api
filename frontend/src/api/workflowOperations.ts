@@ -2,7 +2,7 @@ import { http } from './http'
 import { unwrapApiResponse, type ApiResponse } from './graphSearch'
 
 /** 执行异常 = 抽取完成但含行级失败记录（已转人工审核）；执行出错 = 完全跑崩。 */
-export type TaskStatus = '执行中' | '执行出错' | '执行异常' | '等待人工审核' | '执行完成'
+export type TaskStatus = '执行中' | '执行出错' | '执行异常' | '执行完成'
 
 export interface UpdateBatch {
   id: string

@@ -51,7 +51,7 @@ export interface PlatformOverviewData {
   assetChangeTotals?: Partial<Record<AssetOverviewKey, number>>
   entityStructure: StructureItem[]
   relationStructure: StructureItem[]
-  dataMode: 'live' | 'partial' | 'mock'
+  dataMode: 'partial' | 'mock'
   dataSources: Record<string, string>
   warnings: string[]
 }

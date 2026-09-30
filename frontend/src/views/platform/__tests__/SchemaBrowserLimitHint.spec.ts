@@ -93,15 +93,14 @@ const ACheckboxStub = defineComponent({
 
 const overviewFixture = {
   currentVersion: '', environment: '', releasedAt: '', entityTypes: 0, coreEntityTypes: 0,
-  relationTypes: 0, factRelationTypes: 0, inferredRelationTypes: 0, propertyFields: 0,
-  requiredFields: 0, constraintRules: 0, sourceMappings: 0,
+  relationTypes: 0,
 }
 
 function schemaFixture(overrides: Partial<SchemaDefinition> = {}): SchemaDefinition {
   return {
     id: 'sch-1', key: 'gadget', kind: 'entity', kindLabel: '实体', graphSpace: 'dev2',
     name: 'Gadget', label: '部件', description: '', identityKey: 'id', attributeIdentityKey: '',
-    attributeSource: '', instanceCount: 0, version: '1', isCore: false, relationCategory: null,
+    attributeSource: '', version: '1', isCore: false, relationCategory: null,
     isSystem: false, createdBy: null, createdAt: null, updatedAt: null, sourceSchemaId: null,
     sourceSchemaName: null, targetSchemaId: null, targetSchemaName: null, mappings: [],
     canDelete: false, canManageProperties: true, properties: [], script: null,
@@ -150,6 +149,21 @@ beforeEach(() => {
 
 afterEach(() => {
   wrapper?.unmount()
+})
+
+it('仅在点击查询或提交表单时按输入词请求第一页', async () => {
+  const view = mountView()
+  await flushPromises()
+  expect(listSchemasPaged).toHaveBeenCalledTimes(1)
+
+  await view.get('.schema-toolbar__actions input').setValue('Gadget')
+  await flushPromises()
+  expect(listSchemasPaged).toHaveBeenCalledTimes(1)
+
+  await view.get('.schema-toolbar__actions').trigger('submit')
+  await flushPromises()
+  expect(listSchemasPaged).toHaveBeenCalledTimes(2)
+  expect(vi.mocked(listSchemasPaged).mock.lastCall?.[1]).toMatchObject({ keyword: 'Gadget', page: 1 })
 })
 
 describe('Schema 管理输入框达上限提示', () => {

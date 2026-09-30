@@ -130,7 +130,6 @@ export interface AlumniQueryResult {
   mode: 'pair' | 'list'
   total: number
   items: AlumniItem[]
-  dimensionsCatalog: string[]
   sourceMeta: { space?: string; graph?: string; truncated?: boolean }
   /** 前端结果详情 Tab 对齐字段 */
   summaryRows?: AlumniSummaryRow[]

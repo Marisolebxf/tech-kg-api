@@ -117,8 +117,6 @@ async def test_schema_management_full_flow(schema_api, monkeypatch: pytest.Monke
         overview = await client.get("/api/v1/schema-management/overview")
         assert overview.status_code == 200
         assert overview.json()["data"]["entityTypes"] == 14
-        assert overview.json()["data"]["factRelationTypes"] == 44
-        assert overview.json()["data"]["inferredRelationTypes"] == 9
 
         listing = await client.get(
             "/api/v1/schema-management/schemas",

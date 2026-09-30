@@ -11,7 +11,7 @@ describe('serviceModules', () => {
     ['two-point-achievement', ['code', 'success', 'data', 'msg']],
     ['enterprise-relation', ['code', 'success', 'data', 'msg']],
     ['industry-chain-event', ['code', 'success', 'data', 'msg']],
-    ['industry-chain-panorama', ['taskName', 'input', 'summary', 'layers', 'graph', 'source', 'provenance', 'apiResultExample']],
+    ['industry-chain-panorama', ['taskName', 'input', 'summary', 'layers', 'graph', 'provenance', 'apiResultExample']],
   ])('shows the actual response fields for %s', (key, expectedFields) => {
     const module = serviceModules.find((item) => item.key === key)
     expect(module?.responseFields.map((field) => field.name)).toEqual(expectedFields)

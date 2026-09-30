@@ -330,7 +330,6 @@ class AuthService:
         page: int = 1,
         page_size: int = 20,
         category: str | None = None,
-        result: str | None = None,
         keyword: str | None = None,
     ) -> OperationLogPage:
         payload = await self._store_get_json(self._audit_key(context)) or {}
@@ -346,8 +345,6 @@ class AuthService:
         normalized_keyword = (keyword or "").strip().lower()
         if category:
             items = [item for item in items if item.category == category]
-        if result:
-            items = [item for item in items if item.result == result]
         if normalized_keyword:
             items = [
                 item

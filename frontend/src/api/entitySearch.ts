@@ -41,12 +41,10 @@ export interface EntityListResult {
 
 export interface EntityIndexStatus {
   indexed: boolean
-  entityCount: number
   typeCounts: Record<string, number>
   types: EntityTypeCount[]
   graphSpace: string | null
   embeddingModel: string | null
-  updatedAt: string | null
   collectionExists: boolean
   bm25Ready: boolean
   reindexing: boolean

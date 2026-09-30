@@ -686,7 +686,6 @@ class EntitySearchService:
     def _reindex_locked(
         self, *, space: str | None, entity_types: list[str] | None
     ) -> dict[str, Any]:
-        started = time.monotonic()
         resolved_space = space or _default_space()
         graph = get_space_client(resolved_space)
         labels = sorted(graph.labels())
@@ -826,7 +825,6 @@ class EntitySearchService:
             "graphSpace": resolved_space,
             "embeddingModel": embedding_config["model"],
             "skippedLabels": sorted(set(skipped_labels)),
-            "durationSeconds": round(time.monotonic() - started, 2),
         }
 
     def upsert_entity(
@@ -1345,11 +1343,9 @@ class EntitySearchService:
             return {
                 **base,
                 "indexed": False,
-                "entityCount": 0,
                 "typeCounts": {},
                 "types": [],
                 "embeddingModel": None,
-                "updatedAt": None,
                 "bm25Ready": False,
                 "stateStale": False,
             }
@@ -1362,7 +1358,6 @@ class EntitySearchService:
         return {
             **base,
             "indexed": collection_exists and space_has_rows and row.entity_count > 0,
-            "entityCount": row.entity_count if space_has_rows else 0,
             "recordedEntityCount": row.entity_count,
             "stateStale": state_stale,
             "typeCounts": effective_type_counts,
@@ -1379,7 +1374,6 @@ class EntitySearchService:
                 and row.embedding_model is not None
                 and base["currentEmbeddingModel"] != row.embedding_model
             ),
-            "updatedAt": row.updated_at.isoformat() if row.updated_at else None,
             "bm25Ready": bool(space_has_rows and row.vocabulary and row.document_count),
         }
 

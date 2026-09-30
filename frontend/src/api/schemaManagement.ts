@@ -19,12 +19,6 @@ export interface SchemaOverview {
   entityTypes: number
   coreEntityTypes: number
   relationTypes: number
-  factRelationTypes: number
-  inferredRelationTypes: number
-  propertyFields: number
-  requiredFields: number
-  constraintRules: number
-  sourceMappings: number
 }
 
 export interface SchemaProperty {
@@ -72,7 +66,6 @@ export interface SchemaDefinition {
   identityKey: string
   attributeIdentityKey: string
   attributeSource: string
-  instanceCount: number
   version: string
   isCore: boolean
   relationCategory: 'fact' | 'inferred' | null

@@ -3042,24 +3042,24 @@ class SchemaExtractWorkflow:
                 # 共享图库内存受限时可不随环重建（SCHEMA_EXTRACT_BUILD_INDEX=0，
                 # env 在 load_schema_extract_plan activity 内读、经 plan 传入）：
                 # 全空间重建 pass 自身也可能把宿主顶过高水位，且被上限取消的
-                # 线程仍后台读图，与下一环写图叠加越线整链 FAILED。索引本就允许
-                # 降级，跳过时用管理端点 POST /entity-search/reindex 在全部抽取
+                # 线程仍后台读图，与下一环写图叠加越线整链 FAILED。显式跳过
+                # 不是失败，用管理端点 POST /entity-search/reindex 在全部抽取
                 # 结束后统一全量重建。
                 do_index = kind == "entity" and plan.get("buildIndexEnabled", True)
             if do_index and kind == "entity":
-                # 索引是后置增强（embedding/Milvus 依赖外部服务），失败降级不拖垮抽取
-                try:
-                    index_result = await workflow.execute_activity(
-                        build_entity_index,
-                        {"space": graph_space},
-                        start_to_close_timeout=timedelta(
-                            seconds=int(plan.get("indexTimeoutSeconds", 1800))
-                        ),
-                        retry_policy=ACTIVITY_RETRY_POLICY,
-                    )
-                    index_summary = (index_result or {}).get("reindexed")
-                except ActivityError as exc:
-                    index_summary = {"degraded": True, "error": str(exc)[:300]}
+                # 索引构建失败即任务 FAILED（2026-09-29 用户口径）：不再降级成
+                # 警告吞掉——重试耗尽后 ActivityError 上抛，整链失败，执行详情
+                # 的失败原因带上索引 activity 的报错信息。显式关闭
+                # （buildIndexEnabled=False）属计划内跳过，不算失败。
+                index_result = await workflow.execute_activity(
+                    build_entity_index,
+                    {"space": graph_space},
+                    start_to_close_timeout=timedelta(
+                        seconds=int(plan.get("indexTimeoutSeconds", 1800))
+                    ),
+                    retry_policy=ACTIVITY_RETRY_POLICY,
+                )
+                index_summary = (index_result or {}).get("reindexed")
             if failures_total:
                 fail_resp = await workflow.execute_activity(
                     record_extract_failures,

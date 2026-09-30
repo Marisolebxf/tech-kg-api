@@ -1,8 +1,16 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
+import { defineComponent } from 'vue'
 import { describe, expect, it, vi } from 'vitest'
 
 import ConfigurationManagementView from './ConfigurationManagementView.vue'
+import ListPagination from '../../components/list-pagination.vue'
+
+const AInputStub = defineComponent({
+  props: ['modelValue'],
+  emits: ['update:modelValue'],
+  template: '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
+})
 
 // 管理抽屉编辑隔离（第一轮复测捉虫）：抽屉直接绑定列表项共享引用时，
 // 未保存输入（含非法值）实时串进页面卡片、关抽屉后残留脏值到刷新。
@@ -70,7 +78,7 @@ function mountView() {
     global: {
       stubs: {
         teleport: true,
-        'a-select': true, 'a-option': true, 'a-input': true,
+        'a-select': true, 'a-option': true, 'a-input': AInputStub,
         'a-form': { template: '<form><slot /></form>' },
         'a-form-item': { template: '<label><slot /></label>' },
         'a-textarea': true, 'a-checkbox': true,
@@ -85,6 +93,60 @@ async function openDrawer(wrapper: ReturnType<typeof mountView>) {
 }
 
 describe('配置管理 · 管理抽屉编辑隔离', () => {
+  it('仅管理按钮打开详情；标识独立成列，抽屉底部不再提供启停与删除', async () => {
+    setActivePinia(createPinia())
+    const wrapper = mountView()
+    await flushPromises()
+    const row = wrapper.get('.config-table-wrap tbody tr')
+    expect(row.get('.config-id-col').text()).toBe('LLM-E2E')
+    expect(row.get('.config-name').text()).not.toContain('LLM-E2E')
+    await row.get('.config-name').trigger('click')
+    expect(wrapper.find('.detail-drawer').exists()).toBe(false)
+    await openDrawer(wrapper)
+    const footer = wrapper.get('.detail-drawer footer')
+    expect(footer.text()).toContain('保存修改')
+    expect(footer.text()).not.toContain('停用配置')
+    expect(footer.text()).not.toContain('启用配置')
+    expect(footer.text()).not.toContain('删除')
+    wrapper.unmount()
+  })
+
+  it('输入关键字后点击查询才筛选，分页只显示总条数且页大小在末尾', async () => {
+    setActivePinia(createPinia())
+    const wrapper = mountView()
+    await flushPromises()
+    const search = wrapper.get('.config-search-input')
+    await search.setValue('没有匹配的配置')
+    expect(wrapper.find('.config-table-wrap tbody tr .config-id-col').exists()).toBe(true)
+    await wrapper.get('.config-search-form').trigger('submit')
+    expect(wrapper.find('.config-table-wrap tbody tr .config-id-col').exists()).toBe(false)
+    await search.setValue('')
+    await wrapper.get('.config-search-form').trigger('submit')
+    expect(wrapper.find('.config-table-wrap tbody tr .config-id-col').exists()).toBe(true)
+    expect(wrapper.get('.config-page-summary').text()).toBe('共 1 条')
+    expect(wrapper.findComponent(ListPagination).props()).toMatchObject({ showJumper: false, sizeAtEnd: true })
+    wrapper.unmount()
+  })
+
+  it('操作列阴影只在右侧尚有内容时出现', async () => {
+    setActivePinia(createPinia())
+    const wrapper = mountView()
+    await flushPromises()
+    const scroll = wrapper.get('.config-table-wrap')
+    const element = scroll.element as HTMLElement
+    Object.defineProperties(element, {
+      scrollWidth: { configurable: true, value: 1400 },
+      clientWidth: { configurable: true, value: 800 },
+      scrollLeft: { configurable: true, writable: true, value: 0 },
+    })
+    await scroll.trigger('scroll')
+    expect(scroll.classes()).toContain('has-scroll-right')
+    element.scrollLeft = 600
+    await scroll.trigger('scroll')
+    expect(scroll.classes()).not.toContain('has-scroll-right')
+    wrapper.unmount()
+  })
+
   it('抽屉输入（含非法值）不实时串进列表卡片，关闭后卡片保持服务端值', async () => {
     setActivePinia(createPinia())
     const wrapper = mountView()

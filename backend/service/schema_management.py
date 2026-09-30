@@ -324,12 +324,6 @@ class SchemaManagementService:
             "entityTypes": stats["entity_count"],
             "coreEntityTypes": stats["core_count"],
             "relationTypes": stats["relation_count"],
-            "factRelationTypes": stats["fact_count"],
-            "inferredRelationTypes": stats["inferred_count"],
-            "propertyFields": stats["property_count"],
-            "requiredFields": stats["required_count"],
-            "constraintRules": stats["constraint_count"],
-            "sourceMappings": stats["mapping_count"],
         }
 
     def list_schemas(
@@ -1329,7 +1323,6 @@ class SchemaManagementService:
             "identityKey": definition.identity_key,
             "attributeIdentityKey": definition.attribute_identity_key,
             "attributeSource": definition.attribute_source,
-            "instanceCount": definition.instance_count,
             "version": definition.version,
             "isCore": definition.is_core,
             "relationCategory": definition.relation_category,

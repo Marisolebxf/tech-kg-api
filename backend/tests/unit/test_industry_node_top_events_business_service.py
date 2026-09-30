@@ -139,7 +139,6 @@ async def test_topn_via_graph_helpers(monkeypatch):
 
     assert resp.chain_node_name == "测试节点"
     assert resp.chain_name == "测试产业链"
-    assert resp.node_imp_level == "1"
     assert resp.enterprises == 2  # 2 个 org
     assert resp.events == 2  # 2 个事件（破产 + 招聘）
     # bankruptcy 权重高，排在 recruit 前

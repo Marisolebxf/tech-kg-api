@@ -278,12 +278,15 @@ watch(
           :page="page"
           :page-size="pageSize"
           :disabled="loading"
+          :show-jumper="false"
+          :size-at-end="true"
           @change="goPage"
           @change-size="onPageSizeChange"
         >
           <template #summary>
             <span class="entity-pagination__info">
-              <template v-if="isBrowseMode && result?.total != null">共 {{ result.total }} 个实体 · </template>第 {{ page }} / {{ totalPages }} 页
+              <template v-if="isBrowseMode && result?.total != null">共 {{ result.total }} 个实体</template>
+              <template v-else>共 {{ paginationTotal }} 条</template>
             </span>
           </template>
         </ListPagination>

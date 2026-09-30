@@ -153,7 +153,7 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
       expect.objectContaining({ category: 'C', templateId: undefined }),
     )
     expect(wrapper.findAll('.review-tabs nav button')[1].classes()).toContain('active')
-    expect(wrapper.find('.rerun-batch-action').exists()).toBe(true)
+    expect(wrapper.find('.rerun-batch-action').exists()).toBe(false)
 
     // 工作台总览「抽取失败重跑」卡片跳转携带对象名：首次加载即按关键字过滤
     routeState.query = { category: 'C', keyword: 'MR-1' }
@@ -198,19 +198,33 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     expect(scroll.classes()).not.toContain('has-scroll-right')
   })
 
-  it('A 类不渲染批量重跑按钮与勾选列；C 类才渲染', async () => {
+  it('A 类不渲染勾选列；C 类选中记录后才显示批量重跑按钮', async () => {
     const wrapper = renderReview()
     await flushPromises()
     expect(wrapper.find('.rerun-batch-action').exists()).toBe(false)
     expect(wrapper.find('thead .pick-col').exists()).toBe(false)
 
     await switchToCategoryC(wrapper)
-    // 批量重跑按钮唯一入口固定在分页条左下角（与右侧分页信息同条），筛选行不再放按钮
+    expect(wrapper.find('.rerun-batch-action').exists()).toBe(false)
+    await rowCheckboxes(wrapper)[0].setValue(true)
     expect(wrapper.find('.rerun-batch-action').exists()).toBe(true)
     expect(wrapper.find('.review-pagination .rerun-batch-action').exists()).toBe(true)
     expect(wrapper.find('.review-toolbar-actions .rerun-batch-action').exists()).toBe(false)
     expect(wrapper.find('.rerun-batch-row').exists()).toBe(false)
     expect(wrapper.find('thead .pick-col').exists()).toBe(true)
+  })
+
+  it('当前页没有可重跑记录时，全选置灰且不显示批量重跑入口', async () => {
+    mocks.getProductionReviews.mockResolvedValue({ items: [caseRow('MR-done', 'RESOLVED'), caseRow('MR-running', 'RERUNNING')], total: 2 })
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+    const header = headerCheckbox(wrapper)
+    expect((header.element as HTMLInputElement).disabled).toBe(true)
+    expect((header.element as HTMLInputElement).checked).toBe(false)
+    await header.setValue(true)
+    expect(rowCheckboxes(wrapper).every((input) => !(input.element as HTMLInputElement).checked)).toBe(true)
+    expect(wrapper.find('.rerun-batch-action').exists()).toBe(false)
   })
 
   it('不可重跑行（重跑中/已完成）的重跑、删除按钮置灰禁用而非隐藏', async () => {
@@ -238,12 +252,12 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     expect(resolvedRow[2].attributes('title')).toBe('已处理：仅「待处理 / 重跑失败」的记录可重跑或删除')
   })
 
-  it('表头全选只勾选当前页可重跑行（OPEN/RERUN_FAILED），批量重跑按钮随之点亮', async () => {
+  it('表头全选只勾选当前页可重跑行（OPEN/RERUN_FAILED），批量重跑按钮随之显示', async () => {
     const wrapper = renderReview()
     await flushPromises()
     await switchToCategoryC(wrapper)
 
-    expect(batchButton(wrapper).attributes()).toHaveProperty('disabled')
+    expect(wrapper.find('.rerun-batch-action').exists()).toBe(false)
 
     const header = headerCheckbox(wrapper)
     ;(header.element as HTMLInputElement).checked = true
@@ -259,7 +273,7 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     expect(batchButton(wrapper).text()).toBe('批量重跑（2）')
   })
 
-  it('再点表头全选取消当前页勾选，批量按钮回到禁用', async () => {
+  it('再点表头全选取消当前页勾选，批量按钮隐藏', async () => {
     const wrapper = renderReview()
     await flushPromises()
     await switchToCategoryC(wrapper)
@@ -272,7 +286,7 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
 
     const checked = rowCheckboxes(wrapper).map((input) => (input.element as HTMLInputElement).checked)
     expect(checked).toEqual([false, false, false, false])
-    expect(batchButton(wrapper).attributes()).toHaveProperty('disabled')
+    expect(wrapper.find('.rerun-batch-action').exists()).toBe(false)
   })
 
   it('部分勾选时表头呈半选态；点批量重跑按勾选集合下发', async () => {
@@ -421,7 +435,7 @@ describe('查看档只读（开发维护 × 共享生产空间）', () => {
     const header = headerCheckbox(wrapper)
     ;(header.element as HTMLInputElement).checked = true
     await header.trigger('change')
-    expect(batchButton(wrapper).attributes()).toHaveProperty('disabled')
+    expect(wrapper.find('.rerun-batch-action').exists()).toBe(false)
     // 操作列三键保留但置灰（不隐藏，布局稳定），悬停说明指向共享空间只读
     const firstRowButtons = wrapper.findAll('tbody tr')[0].findAll('.review-action-btn')
     expect(firstRowButtons.map((button) => button.text())).toEqual(['日志', '重跑', '删除'])

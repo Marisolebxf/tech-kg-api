@@ -1,7 +1,7 @@
 /* GKX production UI contract. Loaded last to reconcile legacy page styles. */
 :root {
   --control-height: 32px;
-  --gkx-brand: #004ecc;
+  --gkx-brand: #165dff;
   --gkx-brand-hover: #4080ff;
   --gkx-brand-active: #0e42d2;
   --gkx-brand-light: #e8f3ff;

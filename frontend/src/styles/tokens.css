@@ -11,18 +11,18 @@
   --text-inverse: #ffffff;
   --border: #e5e6eb;
   --border-strong: #c9cdd4;
-  --primary: #004ecc;
+  --primary: #165dff;
   --primary-hover: #4080ff;
   --primary-active: #0e42d2;
   --primary-special: #6aa1ff;
   --primary-disabled: #94bfff;
   --primary-subtle: #e8f3ff;
-  /* Shared business status colors, aligned with graph-build status text. */
+  /* 业务状态色，对齐 backend/docs/DESIGN_RULES.md：状态=「6px 语义色圆点 + 14/22px 文字」，信息态用品牌蓝。 */
   --status-neutral: #86909c;
-  --status-info: #175cd3;
-  --status-success: #067647;
-  --status-warning: #b54708;
-  --status-danger: #b42318;
+  --status-info: #165dff;
+  --status-success: #00b42a;
+  --status-warning: #ff7d00;
+  --status-danger: #f53f3f;
   --success: #00b42a;
   --success-subtle: #e8ffea;
   --warning: #ff7d00;

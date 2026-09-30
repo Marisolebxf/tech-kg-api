@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   getExecution: vi.fn(),
   getTask: vi.fn(),
   TRIGGER_SOURCE_LABEL: { MANUAL: '手动触发', SCHEDULE: '定期触发', RERUN: '重新执行' },
+  executionStatusLabel: (status?: string | null) => status || '—',
 }))
 vi.mock('../../../api/workflowOperations', () => ({ ...mocks }))
 // 路由 query 可按用例覆写（?category=C 深链直达抽取失败重跑子页）

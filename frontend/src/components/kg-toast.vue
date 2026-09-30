@@ -134,3 +134,23 @@ const { toasts, dismissToast } = useToast()
   color: var(--text-primary);
 }
 </style>
+
+<style>
+/* 平台布局（AppLayout）下，提示应在去掉左侧「目录」后的内容区水平居中。
+   KgToast 挂在 #app 下、与 .app-shell 平级（门户嵌入页/登录页没有 shell），
+   无法用后代选择器感知目录，改用 body:has() 按目录实际占位偏移：
+   内容区中心 = 50vw + 目录宽 / 2。≤767px 时目录为浮层抽屉、内容占满全屏
+   （与 AppLayout isMobile 断口一致），连同无 shell 的页面一起保持整屏居中；
+   不支持 :has() 的旧浏览器同样退回整屏居中。 */
+@media (min-width: 768px) {
+  body:has(.app-shell:not(.is-collapsed)) .kg-toast-stack {
+    left: calc(50% + var(--sidebar-width) / 2);
+    width: min(360px, calc(100vw - var(--sidebar-width) - 32px));
+  }
+
+  body:has(.app-shell.is-collapsed) .kg-toast-stack {
+    left: calc(50% + var(--sidebar-width-collapsed) / 2);
+    width: min(360px, calc(100vw - var(--sidebar-width-collapsed) - 32px));
+  }
+}
+</style>

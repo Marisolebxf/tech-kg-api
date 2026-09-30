@@ -33,7 +33,7 @@ describe('deriveJobUnifiedStatus 统一状态推导', () => {
 
   it('ABNORMAL→运行异常：抽取完成但含行级失败记录，不占用「运行失败」（完全跑崩才叫失败）', () => {
     expect(deriveJobUnifiedStatus(job('启用', 'ABNORMAL'))).toBe('运行异常')
-    expect(JOB_STATUS_TONE['运行异常']).toBe('err')
+    expect(JOB_STATUS_TONE['运行异常']).toBe('warn')
     expect(JOB_STATUS_TONE['运行失败']).toBe('err')
   })
 

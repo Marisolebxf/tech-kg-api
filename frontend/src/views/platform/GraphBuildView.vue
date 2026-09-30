@@ -643,8 +643,10 @@ span.run{color:var(--status-info)}
 .app-workspace .gb-filters .gb-filter-select input.arco-select-view-input{box-sizing:border-box;width:100%;height:30px!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
 .app-workspace .gb-filters .gb-filter-select .arco-select-view-input-hidden{position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important}.app-workspace .gb-filters .gb-filter-select .arco-select-view-value{min-width:0;overflow:hidden;font-size:14px;line-height:22px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
 .app-workspace .gb-filters .gb-filter-select :is(.arco-select-view-input,.arco-select-view-value){background:transparent!important}
+/* 筛选下拉右侧的箭头/清除图标：Arco 默认仅 12px 且偏淡，肉眼几乎看不出有下拉符号——放大到 14px 并显式着色（与输入框前缀图标同灰度） */
+.app-workspace .gb-filters .gb-filter-select .arco-select-view-suffix svg{width:14px;height:14px;font-size:14px;color:#4e5969}
 /* 任务操作列「···」更多菜单（teleport 到 body，需全局控制；菜单项口径对齐 Schema 管理表） */
-.gb-action-menu-item.arco-dropdown-option{color:#165dff;font-size:14px;line-height:22px;font-weight:400;text-decoration:none}
+.gb-action-menu-item.arco-dropdown-option{box-sizing:border-box;min-height:32px;padding:5px 16px;color:#165dff;font-size:14px;line-height:22px;font-weight:400;text-decoration:none}
 .gb-action-menu-item.arco-dropdown-option:hover{color:#4080ff;text-decoration:none}
 .gb-action-menu-item--danger.arco-dropdown-option:not(.arco-dropdown-option-disabled){color:#f53f3f}
 .gb-action-menu-item--danger.arco-dropdown-option:not(.arco-dropdown-option-disabled):hover{color:#b42318}

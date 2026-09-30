@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import DeleteConfirmDialog from '../../components/DeleteConfirmDialog.vue'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useAuthStore } from '../../stores/auth'
 import { IconSearch } from '@arco-design/web-vue/es/icon'
@@ -591,8 +592,21 @@ async function toggleDefault(item: ConfigItem, value: unknown) {
   }
 }
 
-async function removeConfig(item: ConfigItem) {
-  if (!window.confirm(`确认删除配置“${item.name}”？删除后不可恢复。`)) return
+const deleteTarget = ref<ConfigItem>()
+const deleteVisible = ref(false)
+const deleteSubmitting = ref(false)
+const deleteError = ref('')
+function removeConfig(item: ConfigItem) {
+  deleteTarget.value = item
+  deleteError.value = ''
+  deleteVisible.value = true
+}
+async function confirmDeleteConfig() {
+  const item = deleteTarget.value
+  if (!item || deleteSubmitting.value) return
+  deleteSubmitting.value = true
+  deleteError.value = ''
+
   try {
     if (item.kind === 'llm') {
       await deleteLlmConfig(item.id, currentUserId())
@@ -601,11 +615,14 @@ async function removeConfig(item: ConfigItem) {
     } else if (item.kind === 'mysql') {
       await deleteMysqlDatasource(item.id, currentUserId())
     }
+    deleteVisible.value = false
     showToast(`“${item.name}”已删除。`, 'success')
     selected.value = null
     await loadByCategory(activeCategory.value)
   } catch (err) {
-    showToast(`删除失败：${(err as Error).message}`, 'warning')
+    deleteError.value = `删除失败：${(err as Error).message}`
+  } finally {
+    deleteSubmitting.value = false
   }
 }
 
@@ -780,6 +797,7 @@ onUnmounted(() => {
       </footer>
       </aside>
     </Teleport>
+    <DeleteConfirmDialog v-model:visible="deleteVisible" title="删除配置" :name="deleteTarget?.name || ''" :identifier="deleteTarget?.id" identifier-label="配置 ID" description="继续操作将永久删除该配置。请确认相关任务不再依赖此配置。" :loading="deleteSubmitting" :error="deleteError" @confirm="confirmDeleteConfig" />
   </div>
 </template>
 

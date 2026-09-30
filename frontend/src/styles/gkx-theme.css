@@ -95,6 +95,16 @@ body {
   padding-inline: 16px;
 }
 
+/* The global scrollbar rail applies to every element, including Arco's tiny
+   required-mark SVG. A reserved gutter clips the scaled asterisk in dialogs. */
+.arco-form-item-label-required-symbol {
+  color: #b42318;
+}
+
+.arco-form-item-label-required-symbol svg {
+  scrollbar-gutter: auto;
+}
+
 .arco-modal {
   border-radius: var(--radius-lg);
   box-shadow: 0 12px 32px rgba(29, 33, 41, 0.16);

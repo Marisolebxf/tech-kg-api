@@ -237,8 +237,8 @@ async function submit() {
       <div class="job-launch-body">
         <div class="job-basics">
           <label class="job-field">
-            <span>任务名称</span>
-            <input aria-label="如：论文-专家抽取" v-model="name" :maxlength="JOB_NAME_RULE.max" placeholder="如：论文-专家抽取" />
+            <span><i class="job-required" aria-hidden="true">*</i>任务名称</span>
+            <input aria-label="如：论文-专家抽取" aria-required="true" v-model="name" :maxlength="JOB_NAME_RULE.max" placeholder="如：论文-专家抽取" />
             <small v-if="nameError" class="field-error">{{ nameError }}</small>
           </label>
           <div class="job-field">
@@ -260,8 +260,8 @@ async function submit() {
 
         <div v-if="taskType === 'extract'" class="job-row">
           <div class="job-field">
-            <span>目标 Schema（已传脚本并绑定来源表）</span>
-            <a-select v-model="extractSchemaId" class="job-select" :loading="schemasLoading" placeholder="选择要抽取的实体/关系" allow-search allow-clear>
+            <span><i class="job-required" aria-hidden="true">*</i>目标 Schema（已传脚本并绑定来源表）</span>
+            <a-select v-model="extractSchemaId" class="job-select" aria-required="true" :loading="schemasLoading" placeholder="选择要抽取的实体/关系" allow-search allow-clear>
               <a-option v-for="s in extractSchemas" :key="s.id" :value="s.id">{{ schemaOptionLabel(s) }}</a-option>
             </a-select>
           </div>
@@ -274,7 +274,7 @@ async function submit() {
 
         <template v-else>
           <div class="job-field">
-            <span>串联 Schema 队列（按顺序串行执行，任一失败即中止）</span>
+            <span><i class="job-required" aria-hidden="true">*</i>串联 Schema 队列（按顺序串行执行，任一失败即中止）</span>
             <a-select :model-value="chainPick" class="job-select" :loading="schemasLoading" placeholder="搜索并添加 Schema" allow-search allow-clear @change="addChainStep">
               <a-option v-for="s in extractSchemas" :key="s.id" :value="s.id">{{ schemaOptionLabel(s) }}</a-option>
             </a-select>
@@ -381,6 +381,7 @@ async function submit() {
 .job-basics{display:grid;gap:16px}
 .job-field{display:flex;min-width:0;flex-direction:column;gap:8px;color:#4e5969;font-size:14px;line-height:22px}
 .job-field>span{color:#4e5969;font-size:14px;line-height:22px}
+.job-field .job-required{margin-right:4px;color:#b42318;font-style:normal}
 .job-field__label-row{display:flex;min-width:0;align-items:center;gap:8px;flex-wrap:wrap}.job-field__label-row>span{flex:0 0 auto;color:#4e5969;font-size:14px;line-height:22px}.job-field__label-row>.muted-warn{color:#ff7d00!important}
 .job-field>input:not([type="file"]){box-sizing:border-box;width:100%;height:32px;padding:0 12px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#1d2129;font-size:14px;line-height:14px;outline:0;box-shadow:none}
 .job-field>input:not([type="file"]):hover{border-color:#4080ff}

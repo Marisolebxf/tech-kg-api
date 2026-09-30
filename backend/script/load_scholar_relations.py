@@ -376,7 +376,7 @@ def ensure_schema(graph) -> None:
             else:
                 logger.warning("DESCRIBE EDGE %s 失败，跳过 ALTER，依赖建库 DDL", edge_type)
                 continue
-        missing = [(field, kind) for field, kind in wanted if field not in existing]
+        missing = [(name, kind) for name, kind in wanted if name not in existing]
         if not missing:
             continue
         graph.execute_write(

@@ -117,12 +117,12 @@ def collect_output_candidates(
             sql = apply_since(sql, since, col="o.updated_time")
         params = {"since": since} if since else None
         for row in iter_rows(engine, sql, batch_size=batch_size, limit=limit, params=params):
-            for field in (
+            for field_name in (
                 "output_journal_articles",
                 "output_conference_papers",
                 "output_degree_papers",
             ):
-                for item in parse_json_objects(row.get(field)):
+                for item in parse_json_objects(row.get(field_name)):
                     _add(candidates["paper_doi"], item.get("doi"))
                     _add(candidates["paper_doi"], normalize_doi(item.get("doi")))
                     _add(candidates["paper_title"], item.get("title"))
@@ -219,8 +219,8 @@ def make_has_output_mapper(
             return []
         pvid = f"project_{project_id}"
         records: list[EdgeRecord] = []
-        for field, output_type, target_type in OUTPUT_FIELDS:
-            for item in parse_json_objects(row.get(field)):
+        for field_name, output_type, target_type in OUTPUT_FIELDS:
+            for item in parse_json_objects(row.get(field_name)):
                 report.increment(f"{target_type}_output_candidates")
                 result = matchers[target_type](item)
                 title, identifier = _output_title(item), _output_identifier(item)
@@ -349,12 +349,12 @@ def transform(payload: dict[str, Any]) -> dict[str, Any]:
     rows = payload.get("rows") or []
     candidates = {key: set() for key in EMPTY_CANDIDATES}
     for r in rows:
-        for field in (
+        for field_name in (
             "output_journal_articles",
             "output_conference_papers",
             "output_degree_papers",
         ):
-            for item in parse_json_objects(r.get(field)):
+            for item in parse_json_objects(r.get(field_name)):
                 _add(candidates["paper_doi"], item.get("doi"))
                 _add(candidates["paper_doi"], normalize_doi(item.get("doi")))
                 _add(candidates["paper_title"], item.get("title"))

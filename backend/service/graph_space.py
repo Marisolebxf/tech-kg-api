@@ -201,10 +201,15 @@ class GraphSpaceService:
         # 文档同述），默认 1；多节点生产集群设 GRAPH_SPACE_REPLICA_FACTOR=3
         replica = int(os.getenv("GRAPH_SPACE_REPLICA_FACTOR", "1"))
         partition = int(os.getenv("GRAPH_SPACE_PARTITION_NUM", "100"))
+        # VID 长度写死 64 装不下业务长 VID（机构域 vid 带前缀可超 64 字节，
+        # 写图报 "string fitting space vertex id length limit"）；与线下手工
+        # 建空间口径对齐默认 256，可用 GRAPH_SPACE_VID_LENGTH 调整
+        vid_length = int(os.getenv("GRAPH_SPACE_VID_LENGTH", "256"))
         try:
             self.client.execute_write(
                 f"CREATE SPACE IF NOT EXISTS `{space_name}` "
-                f"(vid_type = FIXED_STRING(64), partition_num = {partition}, replica_factor = {replica});"
+                f"(vid_type = FIXED_STRING({vid_length}), partition_num = {partition}, "
+                f"replica_factor = {replica});"
             )
         except Exception as exc:  # noqa: BLE001
             hint = ""

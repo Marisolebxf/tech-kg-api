@@ -1664,9 +1664,9 @@ function descCell(text: string): string {
 .schema-actions__inner{display:flex;align-items:center;gap:8px;flex-wrap:nowrap;white-space:nowrap}
 .schema-actions__inner>*{flex:0 0 auto}
 .schema-action-more{min-width:24px;font-size:18px;line-height:22px;text-align:center}
-.schema-script-status__items{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.schema-script-status__items{display:flex;align-items:flex-start;gap:4px;flex-direction:column}
 .schema-script-status__empty{color:#86909c}
-.schema-script-status__ready{color:#4e5969}
+.schema-script-status__ready{color:#00b42a}
 /* 表头同时固定在顶部和右侧；数据行只固定右侧，避免横向滚动遮挡操作。 */
 .schema-table-wrap table th:last-child{position:sticky;right:0;z-index:4;background:#f7f8fa;box-shadow:-1px 0 #e5e6eb}
 .schema-table-wrap table td:last-child{position:sticky;right:0;z-index:3;background:#fff;box-shadow:-1px 0 #e5e6eb}
@@ -1723,9 +1723,9 @@ function descCell(text: string): string {
 .danger-text{color:#e5484d}
 
 /* 脚本双信号角标：落后于 Schema / 上次运行失败 */
-.script-badge{display:inline-flex;align-items:center;padding:1px 7px;border-radius:999px;background:#fff7e8;color:#b54708;font-size:10px;line-height:16px;white-space:nowrap}
-.script-badge--failed{background:#fef3f2;color:#b42318}
-.script-badge--rerun{background:#e8f3ff;color:#165dff}
+.script-badge{color:#ff7d00}
+.script-badge--failed{color:#f53f3f}
+.script-badge--rerun{color:#165dff}
 
 /* 属性管理弹窗 */
 .property-panel{width:min(640px,100%)}
@@ -1992,7 +1992,8 @@ function descCell(text: string): string {
 .schema-table-wrap th,.property-table__row--head{font-size:14px;line-height:22px;font-weight:500}
 .schema-table-wrap td b{font-weight:400}
 .legend-item,.schema-topology-canvas__empty,.schema-flow span,.schema-flow>header span,.candidate-note p,.mention-fields span,.trace-card p,.trace-card dd,.trace-card code,.trace-card>header b,.trace-layout header>span,.trace-layout>aside strong,.trace-layout>aside span{font-size:12px;line-height:20px;font-weight:400}
-.script-badge{font-size:12px;line-height:20px;font-weight:400}
+.schema-script-status__items>span{display:inline-flex;align-items:center;gap:6px;padding:0;border:0;border-radius:0;background:transparent;font-size:14px;line-height:22px;font-weight:400;white-space:nowrap}
+.schema-script-status__items>span::before{flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
 .schema-delete-text,.property-table__row,.property-table__name code,.property-table__type,.property-table__category,.property-add-form__name,.property-add-form__len,.property-add-form__type :deep(.arco-select-view),.property-add-form__required,.property-add-form .primary,.upload-idle p,.upload-idle .primary,.upload-working__text strong,.upload-result strong,.view-loading,.view-error{font-size:14px;line-height:22px;font-weight:400}
 .schema-delete-note,.property-section__head span,.upload-stage,.upload-message,.upload-result span,.upload-result__msg,.upload-result__issues,.script-pre code,.create-ddl__pre,.create-ddl__confirm,.create-sources__hint,.sources-note{font-size:12px;line-height:20px;font-weight:400}
 .schema-modal__body label,.schema-modal__body input,.schema-modal__body textarea,.schema-modal__panel footer button,.create-field,.create-text-input,.create-field textarea,.create-field select,.create-props__head,.create-props__add,.prop-name,.prop-type,.prop-len,.prop-required{font-size:14px;line-height:22px;font-weight:400}

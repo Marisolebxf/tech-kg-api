@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Button as AButton, Modal as AModal, Table as ATable } from '@arco-design/web-vue'
 import type { TableColumnData } from '@arco-design/web-vue/es/table/interface'
 
@@ -17,6 +17,27 @@ const props = withDefaults(defineProps<{
   labels: () => ({}), sortable: false, sortColumn: '', sortDirection: 'desc', loading: false,
 })
 const emit = defineEmits<{ sort: [column: string, direction: 'asc' | 'desc' | undefined] }>()
+const tableRoot = ref<HTMLElement | null>(null)
+const hasHiddenColumns = ref(false)
+let resizeObserver: ResizeObserver | undefined
+function updateColumnShadow(): void {
+  const scroller = tableRoot.value?.querySelector<HTMLElement>('.arco-table-content')
+  hasHiddenColumns.value = !!scroller && scroller.scrollWidth - scroller.clientWidth - scroller.scrollLeft > 1
+}
+onMounted(() => {
+  if (typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(updateColumnShadow)
+    if (tableRoot.value) resizeObserver.observe(tableRoot.value)
+    const table = tableRoot.value?.querySelector('.arco-table-element')
+    if (table) resizeObserver.observe(table)
+  }
+  updateColumnShadow()
+})
+onUnmounted(() => resizeObserver?.disconnect())
+watch(() => [props.rows, props.columns], async () => {
+  await nextTick()
+  updateColumnShadow()
+}, { flush: 'post' })
 const selectedRow = ref<Record<string, unknown> | null>(null)
 const detailsOpen = ref(false)
 watch(() => props.rows, () => { detailsOpen.value = false })
@@ -65,7 +86,7 @@ function showDetails(row: Record<string, unknown>): void {
 </script>
 
 <template>
-  <div class="query-result-table">
+  <div ref="tableRoot" class="query-result-table" :class="{ 'query-result-table--hidden-columns': hasHiddenColumns }" @scroll.capture="updateColumnShadow">
     <ATable
       :columns="tableColumns"
       :data="tableRows"
@@ -100,6 +121,15 @@ function showDetails(row: Record<string, unknown>): void {
 
 <style scoped>
 .query-result-table{min-width:0;overflow:hidden}
+/* The fixed action column only signals data still hidden to its left. */
+.query-result-table:not(.query-result-table--hidden-columns) :deep(.arco-table-col-fixed-right-first::after){box-shadow:none}
+.query-result-table :deep(.arco-table-content),.query-record-details{scrollbar-width:thin;scrollbar-color:transparent transparent}
+.query-result-table:hover :deep(.arco-table-content),.query-result-table :deep(.arco-table-content.kg-is-scrolling),.query-record-details:hover,.query-record-details.kg-is-scrolling{scrollbar-color:rgba(78,89,105,.55) transparent}
+.query-result-table :deep(.arco-table-content::-webkit-scrollbar),.query-record-details::-webkit-scrollbar{width:8px;height:8px}
+.query-result-table :deep(.arco-table-content::-webkit-scrollbar-track),.query-record-details::-webkit-scrollbar-track{background:transparent}
+.query-result-table :deep(.arco-table-content::-webkit-scrollbar-thumb),.query-record-details::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background-color:transparent;background-clip:padding-box}
+.query-result-table:hover :deep(.arco-table-content::-webkit-scrollbar-thumb),.query-result-table :deep(.arco-table-content.kg-is-scrolling::-webkit-scrollbar-thumb),.query-record-details:hover::-webkit-scrollbar-thumb,.query-record-details.kg-is-scrolling::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
+.query-result-table :deep(.arco-table-content::-webkit-scrollbar-thumb:hover),.query-record-details::-webkit-scrollbar-thumb:hover{background-color:rgba(78,89,105,.8)}
 .query-result-table :deep(.arco-table){color:var(--color-text-1)}
 .query-result-table :deep(.arco-table-container){border:0;border-radius:0}
 .query-result-table :deep(.arco-table-th){background:#f7f8fa;color:var(--color-text-1);font-weight:500}

@@ -181,6 +181,7 @@ function toggleRerunPick(id: string, checked: boolean) {
 
 /** 表头全选/取消：只作用于当前页可重跑行（不可重跑行禁用不勾选）；跨页勾选保持，按钮数字展示总数。 */
 function toggleRerunPickAll(event: Event) {
+  if (!rerunPageEligibleIds.value.length || reviewLoading.value || rerunSubmitting.value) return
   const checked = (event.target as HTMLInputElement).checked
   for (const id of rerunPageEligibleIds.value) toggleRerunPick(id, checked)
 }
@@ -521,6 +522,7 @@ onMounted(() => {
             <th v-if="reviewCategory === 'C'" class="pick-col"><input aria-label="checkbox-input"
               type="checkbox"
               title="全选当前页可重跑的失败记录（仅「待处理 / 重跑失败」状态可勾选）"
+              :disabled="!rerunPageEligibleIds.length || reviewLoading || rerunSubmitting"
               :checked="rerunAllChecked"
               :indeterminate="rerunSomeChecked"
               @change="toggleRerunPickAll"
@@ -605,14 +607,13 @@ onMounted(() => {
         @change-size="changeReviewPageSize"
       >
         <template #summary>
-          <!-- 批量重跑唯一入口固定在表格左下角（与右侧分页信息同条）：未勾选置灰，勾选后点亮变色并带出已选数 -->
-          <span v-if="reviewCategory === 'C'" class="rerun-confirm-bar">
+          <!-- 选中可重跑记录后，在分页条左侧显示批量重跑入口。 -->
+          <span v-if="reviewCategory === 'C' && rerunSelection.size" class="rerun-confirm-bar">
             <template v-if="rerunSelection.size">已选 {{ rerunSelection.size }} 条失败记录</template>
             <button
-              class="rerun-batch-action"
+              class="review-action-btn rerun-batch-action"
               type="button"
-              :disabled="!rerunSelection.size || rerunSubmitting"
-              :title="!rerunSelection.size ? '先勾选列表左侧的失败记录（仅「待处理 / 重跑失败」可勾选），勾选后按钮点亮' : undefined"
+              :disabled="rerunSubmitting"
               @click="rerunSelected()"
             >{{ rerunSubmitting ? '下发中…' : `批量重跑（${rerunSelection.size}）` }}</button>
           </span>
@@ -779,14 +780,9 @@ onMounted(() => {
 .ops-review-table-scroll td{color:#344763;font-size:14px;line-height:22px;font-weight:400;vertical-align:middle}
 .ops-review-table-scroll td>b,.ops-review-table-scroll td>strong{font-weight:400}
 /* 抽取失败重跑：批量重跑按钮 / 重跑反馈条 / 状态徽标扩展 */
-/* 批量重跑按钮：唯一入口固定在分页条左下角；未勾选中性灰置灰，勾选后点亮为蓝（变色反馈） */
+/* 批量重跑沿用日志的文字链接样式。 */
 .rerun-confirm-bar{display:inline-flex;align-items:center;gap:8px;flex:0 0 auto;color:#4e5969;font-size:13px;line-height:22px;white-space:nowrap}
-.rerun-confirm-bar .rerun-batch-action{height:28px;padding:0 12px;font-size:13px;line-height:20px}
 .review-pagination .review-page-summary{margin-left:auto;white-space:nowrap}
-.rerun-batch-action{height:32px;padding:0 16px;border:1px solid #165dff;border-radius:4px;background:#165dff;color:#fff;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
-.rerun-batch-action:hover:not(:disabled){border-color:#4080ff;background:#4080ff}
-.rerun-batch-action:active:not(:disabled){border-color:#0e42d2;background:#0e42d2}
-.rerun-batch-action:disabled{border-color:#e5e6eb;background:#f7f8fa;color:#c9cdd4;cursor:not-allowed}
 .rerun-feedback{flex:0 0 auto;display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid #a6f4c5;background:#ecfdf3;color:#067647;font-size:12px;line-height:20px}
 .rerun-feedback.is-error{border-color:#f5b8b3;background:#fef3f2;color:#b42318}
 .rerun-feedback.is-warning{border-color:#fec84b;background:#fffaeb;color:#b54708}
@@ -819,11 +815,11 @@ onMounted(() => {
 .rerun-feedback{gap:8px;padding:8px 16px}.rerun-feedback-close{width:24px;height:24px}
 .rerun-confirm-text{font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
 /* 操作列与 Schema 管理表对齐：右侧固定列（表头同时吸顶，z 高于数据行），横向滚动时操作不被遮挡 */
-.ops-review-table-scroll th.review-action-col{position:sticky;top:0;right:0;z-index:4;background:#f7f8fa;box-shadow:-1px 0 #e5e6eb;text-align:center}
+.ops-review-table-scroll th.review-action-col{position:sticky;top:0;right:0;z-index:4;background:#f7f8fa;box-shadow:-1px 0 #e5e6eb;text-align:left}
 .ops-review-table-scroll td.review-action-col{position:sticky;right:0;z-index:3;box-sizing:border-box;background:#fff;box-shadow:-1px 0 #e5e6eb;white-space:nowrap}
 /* 固定列左侧向内容区渐隐的阴影（与 Schema 管理表同视觉提示） */
 .ops-review-table-scroll.has-scroll-right :is(th,td).review-action-col::before{position:absolute;top:0;bottom:-1px;left:0;width:12px;content:"";pointer-events:none;transform:translateX(-100%);box-shadow:inset -10px 0 8px -8px rgba(78,89,105,.28)}
-.review-action-col .alert-actions{display:flex;width:100%;min-width:0;align-items:center;justify-content:center;gap:8px}
+.review-action-col .alert-actions{display:flex;width:100%;min-width:0;align-items:center;justify-content:flex-start;gap:8px}
 .ops-review-table-scroll th,.ops-review-table-scroll td{box-sizing:border-box;padding-right:16px;padding-left:16px}
 /* 固定列合计 1076px，最小表宽为对象列保留 268px；勾选列额外占 52px。 */
 .ops-review-table-scroll table.review-case-table{width:100%;min-width:1344px;table-layout:fixed}

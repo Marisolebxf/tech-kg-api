@@ -28,7 +28,7 @@ vi.mock('../../../api/graphAlgorithm', () => ({
   submitAlgorithmJob: vi.fn(),
 }))
 vi.mock('../../../composables/use-toast', () => ({ useToast: () => ({ showToast }) }))
-vi.mock('@arco-design/web-vue/es/icon', () => ({ IconInfoCircle: { template: '<i />' }, IconRefresh: { template: '<i />' } }))
+vi.mock('@arco-design/web-vue/es/icon', () => ({ IconInfoCircle: { template: '<i />' }, IconRefresh: { template: '<i />' }, IconSearch: { template: '<i class="search-icon" />' } }))
 
 // Preserve v-model and user selection without depending on Arco's popup layout.
 const SelectStub = defineComponent({
@@ -42,9 +42,9 @@ const OptionStub = defineComponent({
   template: '<option :value="value"><slot /></option>',
 })
 const PaginationStub = defineComponent({
-  props: ['total', 'showJumper'],
+  props: ['total', 'showJumper', 'sizeAtEnd'],
   // showJumper 缺省即组件默认恒显，stub 与真实组件同口径
-  template: '<div class="list-pagination-stub" :data-total="total" :data-show-jumper="String(showJumper ?? true)" />',
+  template: '<div class="list-pagination-stub" :data-total="total" :data-show-jumper="String(showJumper ?? true)" :data-size-at-end="String(sizeAtEnd ?? false)"><slot name="summary" /></div>',
 })
 
 function deferred<T>() {
@@ -458,6 +458,10 @@ describe('Algorithm result lists', () => {
     await flushPromises()
     expect(wrapper.find('.platform-query-result__meta').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('13 行记录')
+    const pagination = wrapper.get('.list-pagination-stub')
+    expect(pagination.text()).toBe('共 13 条')
+    expect(pagination.attributes('data-show-jumper')).toBe('false')
+    expect(pagination.attributes('data-size-at-end')).toBe('true')
   })
 
   it('shows the shared vertical marker on nGQL and every algorithm result title', async () => {
@@ -485,10 +489,10 @@ describe('Algorithm result lists', () => {
     expect(algorithmResult.text()).toContain('暂无数据，提交算法作业后在此查看结果')
   })
 
-  it('keeps the query page scrollable without showing its scrollbar in either mode', async () => {
-    expect(wrapper.get('.platform-query').classes()).toContain('platform-query--scrollbar-suppressed')
+  it('allows hover scrollbars in both query modes', async () => {
+    expect(wrapper.get('.platform-query').classes()).not.toContain('platform-query--scrollbar-suppressed')
     await enterAlgorithms()
-    expect(wrapper.get('.platform-query').classes()).toContain('platform-query--scrollbar-suppressed')
+    expect(wrapper.get('.platform-query').classes()).not.toContain('platform-query--scrollbar-suppressed')
   })
 
   it('does not show the verbose server-truncation alert', async () => {
@@ -551,18 +555,27 @@ describe('Algorithm result lists', () => {
     await clickButton('Degree算法')
     await submitAlgorithm()
     expect(wrapper.get('.list-pagination-stub').attributes('data-total')).toBe('200')
-    expect(wrapper.get('.list-pagination-stub').attributes('data-show-jumper')).toBe('true')
+    expect(wrapper.get('.list-pagination-stub').attributes('data-show-jumper')).toBe('false')
+    expect(wrapper.get('.list-pagination-stub').attributes('data-size-at-end')).toBe('true')
+    expect(wrapper.get('.list-pagination-stub').text()).toBe('共 200 条')
     expect(wrapper.findAll('tbody tr')).toHaveLength(20)
     expect(wrapper.findAll('tbody tr')[0]!.text()).toContain('node-200')
     expect(wrapper.find('aside').exists()).toBe(false)
     const search = wrapper.get('.platform-algo-search')
     expect(search.classes()).toContain('platform-algo-search--entity-style')
     await wrapper.get('input[aria-label="搜索图 VID"]').setValue('node-0')
+    expect(wrapper.findAll('tbody tr')).toHaveLength(20)
+    expect(wrapper.get('.platform-algo-search-form .arco-input-prefix .search-icon').exists()).toBe(true)
+    expect(wrapper.get('.platform-algo-search-form button').text()).toBe('查询')
+    expect(wrapper.get('.platform-algo-search-form button').attributes('type')).toBe('submit')
+    await wrapper.get('.platform-algo-search-form').trigger('submit')
     expect(wrapper.findAll('tbody tr')).toHaveLength(1)
     expect(wrapper.get('tbody').text()).toContain('node-0')
     await wrapper.get('input[aria-label="搜索图 VID"]').setValue('missing-node')
+    await wrapper.get('.platform-algo-search-form').trigger('submit')
     expect(wrapper.text()).toContain('没有匹配')
     await wrapper.get('input[aria-label="搜索图 VID"]').setValue('')
+    await wrapper.get('.platform-algo-search-form').trigger('submit')
     const exportButton = wrapper.findAll('button').find((item) => item.text() === '导出预览 CSV')
     expect(exportButton?.classes()).toContain('arco-btn-primary')
     await exportButton!.trigger('click')
@@ -596,13 +609,17 @@ describe('Query page concise controls and graph VIDs', () => {
     expect(wrapper.get('.query-result-table').text()).toContain('图 VID')
     const input = wrapper.get('input[aria-label="搜索图 VID"]')
     await input.setValue('person_AbC')
+    await wrapper.get('.platform-algo-search-form').trigger('submit')
     expect(wrapper.findAll('.query-result-table tbody tr')).toHaveLength(1)
     expect(wrapper.get('.query-result-table').text()).toContain('person_AbC')
     await input.setValue('0.123')
+    await wrapper.get('.platform-algo-search-form').trigger('submit')
     expect(wrapper.find('.query-result-table').exists()).toBe(false)
     await input.setValue('community-77')
+    await wrapper.get('.platform-algo-search-form').trigger('submit')
     expect(wrapper.find('.query-result-table').exists()).toBe(false)
     await input.setValue('person_abc')
+    await wrapper.get('.platform-algo-search-form').trigger('submit')
     expect(wrapper.find('.query-result-table').exists()).toBe(false)
   })
 

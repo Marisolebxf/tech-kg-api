@@ -885,7 +885,8 @@ onUnmounted(() => {
 
 /* 工作台留白与表格背景：操作区、数据行不使用额外底色，仅表头区分层级。 */
 .category-nav>header{box-sizing:border-box;min-height:56px;padding:16px}
-.config-list{background:transparent}
+/* 列表、固定操作列和分页条共用不透明底色，横向滚动时避免内容透出。 */
+.config-list{background:#fff}
 .config-list>header{min-height:64px;padding:16px;margin:0;border-bottom:0;background:transparent!important}
 .config-list-actions .create-entry{background:#165dff!important;color:#fff!important}
 .config-list-actions :deep(.arco-select-view),

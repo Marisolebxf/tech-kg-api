@@ -678,7 +678,9 @@ async function loadOverviewCards(): Promise<void> {
     overviewJobsState.value = 'error'
   }
   try {
-    const data = await getProductionReviews({ graphSpace: space || undefined, statusGroup: 'pending', page: 1, pageSize: 5 })
+    // 取 8 条：单行行高 44px 与左卡任务行对齐，8 行约与「图谱构建」卡等高；
+    // 更多的走底部「还有 N 条」与右上角「查看处理队列」进专门页
+    const data = await getProductionReviews({ graphSpace: space || undefined, statusGroup: 'pending', page: 1, pageSize: 8 })
     if (!isCurrent()) return
     overviewReviews.value = data.items
     overviewReviewsTotal.value = data.total
@@ -1351,6 +1353,7 @@ const pageMeta = computed(() => {
                 <em>{{ reviewItemCategory(item) }}</em>
               </RouterLink>
             </div>
+            <RouterLink v-if="overviewReviewsTotal > overviewReviews.length" class="platform-review-more" to="/manual-review">还有 {{ overviewReviewsTotal - overviewReviews.length }} 条待处理 →</RouterLink>
           </template>
           <div v-else-if="overviewReviewsState === 'empty'" class="platform-card-empty">
             <strong>当前没有待审核任务</strong>
@@ -2238,7 +2241,8 @@ print(response.json())</pre>
 
 /* 同上：任务/审核面板加载中只占小高度，预留就绪高度防止布局跳动 */
 .platform-overview-main { display:grid;flex-grow:1;grid-template-columns:minmax(0,1.65fr) minmax(360px,.72fr);gap:14px;min-height:340px; }
-.platform-jobs-panel,.platform-review-panel { min-width:0;overflow:hidden; }
+/* 两卡同为 flex 列 + 列表区 1fr 弹性行：面板等高时行自动摊满，不再留底部空白 */
+.platform-jobs-panel,.platform-review-panel { display:flex;flex-direction:column;min-width:0;overflow:hidden; }
 .platform-jobs-panel .kg-panel__header>div,.platform-review-panel .kg-panel__header>div { display:grid;gap:2px; }
 .platform-jobs-panel .kg-panel__header span,.platform-review-panel .kg-panel__header span { color:#7b8aa1;font-size:12px;line-height:20px; }
 .platform-jobs-panel .kg-panel__header>a,.platform-review-panel .kg-panel__header>a { color:#004ecc;font-size:14px;line-height:22px;text-decoration:none; }
@@ -2248,7 +2252,7 @@ print(response.json())</pre>
 .platform-jobs-stats article span { font-size:18px;font-weight:600; }
 .platform-jobs-stats article span.is-run { color:#004ecc; }.platform-jobs-stats article span.is-ok { color:#067647; }.platform-jobs-stats article span.is-err { color:#b42318; }.platform-jobs-stats article span.is-warn { color:#b54708; }
 .platform-jobs-stats article em { color:#52627a;font-size:12px;line-height:20px;font-style:normal; }
-.platform-jobs-list { display:grid; }
+.platform-jobs-list { display:grid;flex:1;grid-auto-rows:minmax(44px,1fr);overflow-y:auto; }
 .platform-jobs-list a { display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:10px;min-height:44px;padding:9px 14px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
 .platform-jobs-list a:last-child { border-bottom:0; }
 .platform-jobs-list a:hover { background:#f4f8ff; }
@@ -2259,12 +2263,16 @@ print(response.json())</pre>
 .platform-jobs-list em { color:#59636f;font-size:12px;line-height:20px;font-style:normal;white-space:nowrap; }
 .platform-review-count { padding:11px 14px;border-bottom:1px solid #e4ecf6;color:#62728a;font-size:14px;line-height:22px; }
 .platform-review-count strong { margin:0 4px;color:#10264c;font-size:18px; }
-.platform-review-list { display:grid; }
+.platform-review-list { display:grid;flex:1;grid-auto-rows:minmax(44px,1fr);overflow-y:auto; }
 .platform-review-list a { display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 10px;align-items:center;padding:9px 14px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
 .platform-review-list a:last-child { border-bottom:0; }
 .platform-review-list a:hover { background:#f4f8ff; }
 .platform-review-list strong { overflow:hidden;color:#253752;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap; }
 .platform-review-list em { overflow:hidden;color:#8a97aa;font-size:12px;line-height:20px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }
+.platform-review-more { flex:0 0 auto;padding:10px 14px;border-top:1px solid #e4ecf6;color:#004ecc;font-size:12px;line-height:20px;text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+.platform-review-more:hover { background:#f4f8ff; }
+/* 加载/空态/错误卡同样吃满面板剩余高度（grid 居中已有），两卡视觉等高 */
+.platform-jobs-panel .platform-card-empty,.platform-review-panel .platform-card-empty { flex:1; }
 .platform-card-empty { display:grid;gap:6px;justify-items:center;align-content:center;min-height:170px;padding:20px;text-align:center; }
 .platform-card-empty strong { color:#253752;font-size:14px;line-height:22px; }
 .platform-card-empty p { margin:0;color:#8a97aa;font-size:12px;line-height:20px; }

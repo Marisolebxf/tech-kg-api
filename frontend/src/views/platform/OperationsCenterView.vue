@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import DeleteConfirmDialog from '../../components/DeleteConfirmDialog.vue'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { IconRefresh, IconSearch } from '@arco-design/web-vue/es/icon'
@@ -685,19 +686,7 @@ onMounted(() => {
       </template>
     </a-modal>
 
-    <a-modal
-      v-model:visible="deleteVisible"
-      modal-class="rerun-confirm-modal delete-confirm-modal"
-      title="确认删除"
-      :width="560"
-      ok-text="删除"
-      cancel-text="取消"
-      :ok-loading="deleteSubmitting"
-      @ok="confirmDelete"
-    >
-      <p class="rerun-confirm-text">即将物理删除失败记录 <code>{{ deleteTarget?.id }}</code>（{{ deleteTarget?.object }}），连同其草稿/决议/审计一并清除，不可恢复。仅未处理记录可删除。</p>
-      <p v-if="deleteError" class="case-log-error-text">{{ deleteError }}</p>
-    </a-modal>
+    <DeleteConfirmDialog v-model:visible="deleteVisible" title="删除失败记录" :name="deleteTarget?.object || deleteTarget?.id || ''" :identifier="deleteTarget?.id" identifier-label="处理实例 ID" description="继续操作将物理删除该失败记录，连同其草稿、决议和审计记录一并清除，不可恢复。仅未处理记录可删除。" :loading="deleteSubmitting" :error="deleteError" @confirm="confirmDelete" />
   </div>
 </template>
 

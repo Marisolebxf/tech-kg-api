@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import DeleteConfirmDialog from '../../components/DeleteConfirmDialog.vue'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { IconInfoCircle, IconRefresh, IconSearch } from '@arco-design/web-vue/es/icon'
@@ -297,14 +298,30 @@ async function onToggleState(job: WorkflowJob) {
   }
 }
 
-async function onDelete(job: WorkflowJob) {
-  if (!window.confirm(`确认删除任务「${job.name}」？执行历史将保留。`)) return
+const deleteTarget = ref<WorkflowJob>()
+const deleteVisible = ref(false)
+const deleteSubmitting = ref(false)
+const deleteError = ref('')
+function onDelete(job: WorkflowJob) {
+  deleteTarget.value = job
+  deleteError.value = ''
+  deleteVisible.value = true
+}
+async function confirmDeleteJob() {
+  const job = deleteTarget.value
+  if (!job || deleteSubmitting.value) return
+  deleteSubmitting.value = true
+  deleteError.value = ''
+
   try {
     await deleteJob(job.id)
+    deleteVisible.value = false
     showToast('任务已删除', 'success')
     await loadData()
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
+    deleteError.value = schemaErrorMessage(error)
+  } finally {
+    deleteSubmitting.value = false
   }
 }
 
@@ -533,6 +550,7 @@ onMounted(() => {
       @close="createOpen = false"
       @created="loadData()"
     />
+    <DeleteConfirmDialog v-model:visible="deleteVisible" title="删除任务" :name="deleteTarget?.name || ''" :identifier="deleteTarget?.id" identifier-label="任务 ID" description="继续操作将删除该图谱构建任务，执行历史将保留。" :loading="deleteSubmitting" :error="deleteError" @confirm="confirmDeleteJob" />
   </main>
 </template>
 

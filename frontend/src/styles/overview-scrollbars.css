@@ -1,0 +1,10 @@
+/* Same hover thumb as Schema standard entities, for overview scroll regions only. */
+:is(.app-main.is-overview-page .platform-content, .platform-overview, .platform-overview *){scrollbar-width:thin!important;scrollbar-color:transparent transparent!important}
+:is(.app-main.is-overview-page .platform-content, .platform-overview, .platform-overview *):is(:hover,.kg-is-scrolling){scrollbar-color:rgba(78,89,105,.55) transparent!important}
+:is(.app-main.is-overview-page .platform-content, .platform-overview, .platform-overview *)::-webkit-scrollbar{width:8px!important;height:8px!important}
+:is(.app-main.is-overview-page .platform-content, .platform-overview, .platform-overview *)::-webkit-scrollbar-track{background:transparent!important}
+:is(.app-main.is-overview-page .platform-content, .platform-overview, .platform-overview *)::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background-color:transparent!important;background-clip:padding-box}
+:is(.app-main.is-overview-page .platform-content, .platform-overview, .platform-overview *):is(:hover,.kg-is-scrolling)::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)!important}
+:is(.app-main.is-overview-page .platform-content, .platform-overview, .platform-overview *)::-webkit-scrollbar-thumb:hover{background-color:rgba(78,89,105,.8)!important}
+.kg-delete-dialog .arco-modal-body{scrollbar-width:thin;scrollbar-color:transparent transparent}
+.kg-delete-dialog .arco-modal-body:is(:hover,.kg-is-scrolling){scrollbar-color:rgba(78,89,105,.55) transparent}

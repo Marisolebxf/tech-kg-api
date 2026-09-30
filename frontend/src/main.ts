@@ -5,6 +5,7 @@ import './styles/global.css'
 import './styles/readability.css'
 import './styles/gkx-theme.css'
 import './styles/design-rules.css'
+import './styles/overview-scrollbars.css'
 
 import { createPinia } from 'pinia'
 import { createApp } from 'vue'

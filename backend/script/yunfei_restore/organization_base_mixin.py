@@ -60,7 +60,7 @@ def _mixin_props(source_table: str, source_record_id: str) -> dict[str, Any]:
     }
 
 
-@step
+@step("organization_base_mixin")
 def emit(payload: Mapping[str, Any]) -> dict[str, Any]:
     source = payload.get("source") or {}
     table = str(payload.get("source_table") or source.get("tableName") or "")

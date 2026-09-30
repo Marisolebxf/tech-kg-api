@@ -10,6 +10,6 @@ from kg_sdk import step
 from script.entity_extractors_one_entity import industry_chain_entity as legacy
 
 
-@step
+@step("industry_chain_entity")
 def emit(payload):
     return legacy.transform(payload)

@@ -10,6 +10,6 @@ from kg_sdk import step
 from script.entity_extractors_one_entity import report_entity as legacy
 
 
-@step
+@step("report_entity")
 def emit(payload):
     return legacy.transform(payload)

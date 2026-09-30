@@ -10,6 +10,6 @@ from kg_sdk import step
 from script.entity_extractors_one_entity import patent_family_entity as legacy
 
 
-@step
+@step("patent_family_entity")
 def emit(payload):
     return legacy.transform(payload)

@@ -501,6 +501,11 @@ class ManualReviewService:
             c = self.need(s, i)
             self.require_case_view(a, c)
             d = self.detail(s, c)
+            # T_LINK 判定证据实时富化（fail-open，不回写快照）：候选属性/评分明细/
+            # 同名总数/挂起边端点名——建案快照只存 vid/name/score，打开详情时现查补齐
+            d["candidate"] = self._enrich_link_snapshot(c, d.get("candidate") or {})
+            if isinstance(d.get("data"), dict):
+                d["data"]["candidate"] = d["candidate"]
             # 只读查看档（如开发维护看共享空间）：detail 默认可操作，按操作档覆写
             d["canOperate"] = self._can_operate(a, c)
             return d
@@ -1191,6 +1196,138 @@ class ManualReviewService:
                     out[key] = str(target)
             kept.append(out)
         return {"records": kept, "parked": len(parked_records), "dropped": dropped}
+
+    def _enrich_link_snapshot(self, c: ReviewCase, snapshot: dict[str, Any]) -> dict[str, Any]:
+        """T_LINK 详情实时富化（只读，不回写快照）：给裁决补判定证据。
+
+        建案快照只存 ``{vid, name, score}``（temporal_workflows 建案处丢弃了
+        评分明细与候选属性），存量 OPEN 案打开详情时现查图库补齐：
+
+        - 每个候选补全量 ``props`` 并重算评分明细（nameSim/propsAgree/comparedProps）；
+        - 图库同名实体总数（TOP_K 截断外的候选评审员看不见）；
+        - ``_pendingRelations`` 挂起边补两端显示名（reject 会把这些边一并丢弃）。
+
+        任一步失败按原快照返回，不阻塞详情。
+        """
+        if canonical_template(c.template_id) != "T_LINK" or not snapshot:
+            return snapshot
+        incoming = snapshot.get("_incoming")
+        incoming_props = (incoming.get("props") or {}) if isinstance(incoming, dict) else {}
+        display = str(snapshot.get("name") or c.object_name or "")
+        incoming_vid = str((incoming or {}).get("vid") or c.object_id or "")
+        try:
+            from service.entity_disambiguation import (
+                display_name,
+                recall_same_name,
+                score_candidate,
+            )
+
+            client = self._graph_client_for(snapshot)
+            try:
+                # 同名召回一次拿全：总数 + 各候选属性（tag 无显示名列时为空，逐点降级）；
+                # tag 取快照 _nodeLabel（与 _apply_link_verdict 同源，ReviewCase 无此列）
+                node_label = str(snapshot.get("_nodeLabel") or "")
+                recalled: dict[str, list[dict[str, Any]]] = {}
+                if display and node_label:
+                    recalled = recall_same_name(client, node_label, [display]) or {}
+                    # 矛盾防御：快照有候选而召回为空（trs-graph 会话池紧张时 DESCRIBE
+                    # 偶发 500 → 降级裸 name 列 → 空结果），重试一次再采信
+                    if not any(recalled.values()) and snapshot.get("existingCandidates"):
+                        recalled = recall_same_name(client, node_label, [display]) or {}
+                by_vid = {
+                    str(cand.get("vid")): cand
+                    for cands in recalled.values()
+                    for cand in cands
+                    if cand.get("vid")
+                }
+                by_vid.pop(incoming_vid, None)
+
+                def _props_of(vid: str) -> dict[str, Any]:
+                    raw: dict[str, Any] = {}
+                    if by_vid.get(vid, {}).get("props"):
+                        raw = by_vid[vid]["props"] or {}
+                    else:
+                        for _ in range(2):  # 单次抖动重试一次，仍失败按空属性
+                            try:
+                                node = client.get_node(vid)
+                                raw = dict(getattr(node, "properties", {}) or {})
+                                break
+                            except Exception:  # noqa: BLE001
+                                continue
+                    # 图库历史乱码读出即修（对照表/评分/挂起边点名共用此出口）
+                    return {k: self._fix_mojibake(v) for k, v in raw.items()}
+
+                for cand in snapshot.get("existingCandidates") or []:
+                    if not isinstance(cand, dict) or not cand.get("vid"):
+                        continue
+                    props = _props_of(str(cand["vid"]))
+                    if props:
+                        cand["props"] = props
+                        # 建案时快照的候选名同样可能来自乱码属性，一并修复后再评分
+                        cand["name"] = self._fix_mojibake(cand.get("name")) or cand.get("name")
+                        _, detail = score_candidate(
+                            display,
+                            incoming_props,
+                            str(cand.get("name") or display_name(props)),
+                            props,
+                        )
+                        cand.update(detail)  # nameSim / propsAgree / comparedProps
+
+                # 挂起边两端显示名（reject 裁决会把这些边一并丢弃，评审员需可见代价）
+                names: dict[str, str] = {}
+                for rel in snapshot.get("_pendingRelations") or []:
+                    if not isinstance(rel, dict):
+                        continue
+                    for side in ("fromId", "toId"):
+                        vid = str(rel.get(side) or "")
+                        if vid and vid not in names:
+                            names[vid] = display_name(_props_of(vid)) or vid
+                    rel["fromName"] = names.get(str(rel.get("fromId") or ""), "")
+                    rel["toName"] = names.get(str(rel.get("toId") or ""), "")
+
+                snapshot["_enriched"] = {
+                    "policyVersion": "detail-enrich-v1",
+                    "sameNameTotal": len(by_vid),
+                }
+            finally:
+                try:
+                    client.close()
+                except Exception:  # noqa: BLE001
+                    pass
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("T_LINK 详情证据富化失败 case=%s，按原快照展示: %s", c.id, exc)
+        return snapshot
+
+    @staticmethod
+    def _fix_mojibake(value: Any) -> Any:
+        """修复图库读出的 UTF-8→单字节编码乱码串（如 ``æ¸…å¤§å­¦`` → ``清华大学``）。
+
+        历史写入通道把中文按 latin-1/cp1252 字节落库（后续消歧更新字段正常），
+        候选属性整片乱码会同时毁掉对照表与属性一致率评分。仅当全串能还原回
+        单字节且 utf-8 解码后含 CJK 才替换——正常中文单字节编码必抛错、纯
+        ASCII 解码后不含 CJK，均原样返回，零误伤；只修读出的值，不动图数据。
+        """
+        if not isinstance(value, str) or not value:
+            return value
+        # 逐字符还原原字节：cp1252 优先（€ ˆ ™ “ 等映射 0x80-0x9F），其未定义
+        # 空洞（0x81/0x8D/0x8F/0x90/0x9D，Java 通道按 ISO 控制符解码）用 latin-1
+        # 兜底；出现两种编码都编不了的字符（正常中文/emoji）即认定非双重编码串
+        out = bytearray()
+        for ch in value:
+            try:
+                out += ch.encode("cp1252")
+            except UnicodeEncodeError:
+                try:
+                    out += ch.encode("latin-1")
+                except UnicodeEncodeError:
+                    return value
+        try:
+            fixed = bytes(out).decode("utf-8")
+        except UnicodeDecodeError:
+            return value
+        if any("一" <= ch <= "鿿" for ch in fixed):
+            return fixed
+        return value
 
     def _graph_client_for(self, snapshot: dict[str, Any]) -> Any:
         """按快照记载的图空间建客户端（缺省走环境默认空间）并完成连接。"""

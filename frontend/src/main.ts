@@ -7,6 +7,7 @@ import './styles/overview-scrollbars.css'
 import './styles/gkx-theme.css'
 import './styles/design-rules.css'
 import './styles/detail-scrollbars.css'
+import './styles/platform-scrollbar-appearance.css'
 
 import { createPinia } from 'pinia'
 import { createApp } from 'vue'

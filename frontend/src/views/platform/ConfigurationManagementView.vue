@@ -125,7 +125,20 @@ let scrollIdleTimer: ReturnType<typeof setTimeout> | undefined
 
 function updateConfigTableScrollState() {
   const table = configTableRef.value
-  tableHasMoreToScroll.value = !!table && table.scrollWidth - table.clientWidth - table.scrollLeft > 1
+  if (!table || table.scrollWidth <= table.clientWidth + 1) {
+    tableHasMoreToScroll.value = false
+    return
+  }
+  // The action column is sticky, so scroll distance alone does not tell us
+  // whether any data is still hidden behind it. Compare the last data column
+  // with the visible edge of the action column instead.
+  const lastDataColumn = table.querySelector<HTMLElement>('thead .config-time-col')
+  const actionColumn = table.querySelector<HTMLElement>('thead .config-action-col')
+  const dataRect = lastDataColumn?.getBoundingClientRect()
+  const actionRect = actionColumn?.getBoundingClientRect()
+  tableHasMoreToScroll.value = dataRect?.width && actionRect?.width
+    ? dataRect.right > actionRect.left + 2
+    : table.scrollWidth - table.clientWidth - table.scrollLeft > 1
 }
 
 function handleConfigTableScroll() {
@@ -691,7 +704,19 @@ onUnmounted(() => {
                 <td class="config-id-col">{{ item.id }}</td>
                 <td><strong class="type-name">{{ item.type }}<template v-if="item.model"> · {{ item.model }}</template></strong><code>{{ item.baseUrl || item.host && `${item.host}:${item.port}` || item.endpoint }}</code></td>
                 <td class="config-status-col"><span class="status" :class="`is-${item.status}`"><i />{{ item.status }}</span></td>
-                <td class="config-usage-col"><a-switch :model-value="item.isDefault" :disabled="defaultSwitchDisabled(item)" :loading="defaultUpdating" :aria-label="`将${item.name}设为默认`" :title="!item.isDefault && hasCategoryDefault ? '请先关闭当前默认配置' : item.isDefault ? '关闭默认配置' : '设为默认配置'" @change="value => toggleDefault(item, value)" /></td>
+                <td class="config-usage-col">
+                  <button
+                    type="button"
+                    class="config-default-toggle"
+                    :class="{ 'is-default': item.isDefault }"
+                    :disabled="defaultSwitchDisabled(item)"
+                    :aria-pressed="item.isDefault"
+                    :aria-busy="defaultUpdating"
+                    :aria-label="item.isDefault ? `取消${item.name}的默认配置` : `将${item.name}设为默认配置`"
+                    :title="!item.isDefault && hasCategoryDefault ? '请先关闭当前默认配置' : item.isDefault ? '取消默认配置' : '设为默认配置'"
+                    @click.stop="toggleDefault(item, !item.isDefault)"
+                  ><span class="config-default-toggle__dot" aria-hidden="true" />{{ item.isDefault ? '默认' : '设为默认' }}</button>
+                </td>
                 <td class="config-time-col"><span>{{ item.owner }}</span><small class="updated">{{ item.updatedAt }}</small></td>
                 <td class="config-action-col">
                   <div class="row-actions">
@@ -945,11 +970,18 @@ onUnmounted(() => {
 /* 操作列与 Schema 管理表对齐：右侧固定列，横向滚动时操作不被遮挡。
    thead 整体吸顶（z2）须高于固定列 td（z3），否则纵向滚动时被操作单元格盖住。 */
 .table-wrap:not(.space-table) thead{z-index:4}
-.table-wrap:not(.space-table) th.config-action-col{position:sticky;right:0;background:#f7f8fa;box-shadow:-1px 0 #e5e6eb}
-.table-wrap:not(.space-table) td.config-action-col{position:sticky;right:0;z-index:3;background:#fff;box-shadow:-1px 0 #e5e6eb}
+.table-wrap:not(.space-table) th.config-action-col{position:sticky;right:0;background:#f7f8fa}
+.table-wrap:not(.space-table) td.config-action-col{position:sticky;right:0;z-index:3;background:#fff}
 /* 固定列左侧向内容区渐隐的阴影（与 Schema 管理表同视觉提示） */
 .table-wrap.has-scroll-right :is(th,td).config-action-col::before{position:absolute;top:0;bottom:-1px;left:0;width:12px;content:"";pointer-events:none;transform:translateX(-100%);box-shadow:inset -10px 0 8px -8px rgba(78,89,105,.28)}
 .config-action-col .row-actions{display:inline-flex;width:auto;min-width:max-content;align-items:center;overflow:visible}
+.config-default-toggle{display:inline-flex;box-sizing:border-box;align-items:center;justify-content:center;gap:6px;min-width:88px;height:32px;padding:0 10px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;white-space:nowrap;cursor:pointer}
+.config-default-toggle__dot{width:6px;height:6px;flex:0 0 6px;border:1px solid currentColor;border-radius:50%}
+.config-default-toggle.is-default{border-color:#94bfff;background:#e8f3ff;color:#165dff;font-weight:500}
+.config-default-toggle.is-default .config-default-toggle__dot{background:currentColor}
+.config-default-toggle:hover:not(:disabled){border-color:#4080ff;color:#165dff}
+.config-default-toggle:focus-visible{outline:2px solid #165dff;outline-offset:2px}
+.config-default-toggle:disabled{border-color:#e5e6eb;background:#f7f8fa;color:#86909c;cursor:not-allowed}
 .table-wrap th,.table-wrap td{box-sizing:border-box;padding-right:16px;padding-left:16px}
 /* 配置列表在自身容器内横向滚动，内容按列单行展示，操作列仍固定。 */
 .config-table-wrap{scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:transparent transparent}

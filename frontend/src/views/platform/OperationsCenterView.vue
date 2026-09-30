@@ -713,7 +713,7 @@ onMounted(() => {
 .review-type-cell{min-width:170px}.review-type-cell>span{display:inline-flex;padding:3px 9px;border-radius:99px;background:#eaf2ff;color:#175cd3;font-size:11px}.review-type-cell>span.is-low-confidence{background:#fff3d8;color:#b54708}.review-type-cell>span.is-extraction{background:#fef3f2;color:#b42318}.review-type-cell>span.is-schema{background:#edf0ff;color:#444ce7}.review-type-cell>span.is-normalization{background:#ecfdf3;color:#067647}.review-type-cell>span.is-other{background:#f2f4f7;color:#475467}
 .ops-review-table-scroll table{min-width:1900px}.review-risk-explain{display:grid;flex:0 0 auto;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px}.review-risk-explain>div{display:grid;gap:3px;padding:11px 14px;border:1px solid #b9d2f4;border-radius:7px;background:#f7fbff}.review-risk-explain strong{color:#344861;font-size:11px}.review-risk-explain span{color:#6d7c93;font-size:9px;line-height:16px}.review-confidence-cell{min-width:190px;white-space:normal}.review-confidence-cell>b{display:inline-block;margin-right:7px;font-size:13px}.review-confidence-cell>small{display:inline;color:#718098}.review-confidence-cell>span{display:block;margin-top:4px;color:#78869b;font-size:9px;line-height:15px}@media(max-width:900px){.review-risk-explain{grid-template-columns:1fr}}
 .review-risk-explain{grid-template-columns:repeat(2,minmax(0,1fr))}.review-risk-explain>div:first-child{border-color:#f5b8b3;background:#fff5f4}.review-risk-explain>div:first-child strong{color:#d92d20}.review-risk-explain>div:nth-child(2){border-color:#f3d08a;background:#fffaf0}.review-risk-explain>div:nth-child(2) strong{color:#b54708}.review-type{min-width:150px}.review-confidence-cell{min-width:130px}.review-confidence-cell>em{display:block;width:max-content;margin-top:5px;padding:2px 7px;border-radius:9px;background:#fff3d8;color:#b54708;font-size:9px;font-style:normal}
-.ops-review-table-scroll table{min-width:1344px}
+.ops-review-table-scroll table{min-width:1288px}
 .review-id-cell{min-width:150px;white-space:nowrap}
 .review-id-cell .link{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
 .review-source-cell{min-width:160px}
@@ -738,7 +738,7 @@ onMounted(() => {
 .ops-filter,.ops-filter.is-review{box-sizing:border-box;width:100%;grid-template-columns:minmax(280px,1fr) minmax(160px,200px) minmax(160px,200px) auto;column-gap:16px!important;row-gap:16px!important;padding:16px!important;background:#fff}
 .alert-tabs nav button{height:36px;padding:0 16px;font-size:14px;line-height:22px}.alert-tabs nav button.active{font-weight:500}
 .ops-filter input,.ops-filter select,.ops-filter button{height:32px;padding:0 12px;border-color:#e5e6eb;border-radius:4px;font-size:14px;line-height:22px}.ops-filter button{padding:0 16px}
-.ops-review-table-scroll table{min-width:1344px;font-size:14px;line-height:22px}.ops-review-table-scroll th,.ops-review-table-scroll td{height:40px;padding:0 16px}.ops-review-table-scroll th{background:#f7f8fa;color:#1d2129;font-weight:500}
+.ops-review-table-scroll table{min-width:1288px;font-size:14px;line-height:22px}.ops-review-table-scroll th,.ops-review-table-scroll td{height:40px;padding:0 16px}.ops-review-table-scroll th{background:#f7f8fa;color:#1d2129;font-weight:500}
 .ops-review-table-scroll td small,.review-source-cell strong,.review-question-cell strong,.review-confidence-cell>b{font-size:12px;line-height:20px}
 .review-status{display:inline-flex;align-items:center;gap:6px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.review-status::before{display:block;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
 .review-status.is-待处理,.review-status.is-已完成,.review-status.is-已撤销,.review-status.is-已驳回{background:transparent}
@@ -822,8 +822,8 @@ onMounted(() => {
 .review-action-col .alert-actions{display:flex;width:100%;min-width:0;align-items:center;justify-content:flex-start;gap:8px}
 .ops-review-table-scroll th,.ops-review-table-scroll td{box-sizing:border-box;padding-right:16px;padding-left:16px}
 /* 固定列合计 1076px，最小表宽为对象列保留 268px；勾选列额外占 52px。 */
-.ops-review-table-scroll table.review-case-table{width:100%;min-width:1344px;table-layout:fixed}
-.ops-review-table-scroll table.review-case-table--selectable{min-width:1396px}
+.ops-review-table-scroll table.review-case-table{width:100%;min-width:1288px;table-layout:fixed}
+.ops-review-table-scroll table.review-case-table--selectable{min-width:1340px}
 .ops-review-table-scroll .review-object-cell{padding-top:8px;padding-bottom:8px;overflow-wrap:anywhere;word-break:normal}
 .ops-review-table-scroll td{white-space:normal}
 .ops-review-table-scroll :is(code,.review-id-cell,.review-status){white-space:nowrap}
@@ -836,7 +836,7 @@ onMounted(() => {
 .review-case-table col.col-source{width:220px}
 .review-case-table col.col-status{width:104px}
 .review-case-table col.col-time{width:200px}
-.review-case-table col.col-actions{width:200px}
+.review-case-table col.col-actions{width:144px}
 .ops-review-table-scroll .review-id-cell{overflow:hidden;text-overflow:ellipsis}
 .ops-review-table-scroll .review-id-cell :is(code,.link){display:inline-block;box-sizing:border-box;max-width:100%;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom}
 /* 滚动条出现/消失（数据多少切换）不挤动列宽 */

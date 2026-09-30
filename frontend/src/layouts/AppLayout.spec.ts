@@ -196,13 +196,13 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
   })
 })
 
-describe('面包屑统一（Arco 规范：首项首页图标、/ 分隔、除当前页外每级可点）', () => {
+describe('面包屑统一（Arco 规范：/ 分隔、除当前页外每级可点）', () => {
   it('管理页展开分组层级，除当前页外每级都是链接（分组默认进首个子页）', async () => {
     const { wrapper } = await renderLayout(true, '/schema')
     const breadcrumb = wrapper.get('.app-breadcrumb')
-    // 首项首页图标入口回平台总览（图标不得形似「返回/前进」箭头）
-    expect(breadcrumb.get('a.app-breadcrumb__home').attributes('href')).toBe('/overview')
-    expect(breadcrumb.findAll('.app-breadcrumb__separator').map((node) => node.text())).toEqual(['/', '/'])
+    // 行首不再渲染首页图标入口（小房子图标已按需求去掉）
+    expect(breadcrumb.find('a.app-breadcrumb__home').exists()).toBe(false)
+    expect(breadcrumb.findAll('.app-breadcrumb__separator').map((node) => node.text())).toEqual(['/'])
     expect(breadcrumb.findAll('.app-breadcrumb__link').map((node) => [node.text(), node.attributes('href')]))
       .toEqual([['图谱建设与治理', '/schema']])
     const current = breadcrumb.get('.app-breadcrumb__current')

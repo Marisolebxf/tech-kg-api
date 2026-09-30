@@ -328,8 +328,9 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     await batchButton(wrapper).trigger('click')
     await flushPromises()
 
+    // 批量重跑反馈条已统一为 AppAlert（Arco Alert 四态）：部分 schema 被跳过 = 警告态
     const bar = wrapper.get('.rerun-feedback')
-    expect(bar.classes()).toContain('is-warning')
+    expect(bar.classes()).toContain('app-alert--warning')
     expect(bar.text()).toContain('已下发重跑：2 条失败记录')
     expect(bar.text()).toContain('跳过 1 条')
     expect(bar.text()).toContain('patent×1')
@@ -352,8 +353,8 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     await flushPromises()
 
     const bar = wrapper.get('.rerun-feedback')
-    expect(bar.classes()).toContain('is-success')
-    expect(bar.classes()).not.toContain('is-warning')
+    expect(bar.classes()).toContain('app-alert--success')
+    expect(bar.classes()).not.toContain('app-alert--warning')
     // 执行信息是纯文本，不再提供跳执行详情的链接
     expect(bar.findAll('router-link-stub')).toHaveLength(0)
     expect(bar.text()).toContain('schema-paper · 2 条')

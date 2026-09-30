@@ -11,6 +11,30 @@ const { toasts, dismissToast } = useToast()
       :key="item.id"
       :class="['kg-toast', `kg-toast--${item.tone}`]"
     >
+      <!-- 提示符：与 AppAlert 同一套 Arco 四态填充圆形图标 -->
+      <span class="kg-toast__icon" aria-hidden="true">
+        <svg v-if="item.tone === 'success'" viewBox="0 0 48 48">
+          <circle cx="24" cy="24" r="20" fill="currentColor" />
+          <path d="M21.2 31.6 13.6 24l3.1-3.1 4.5 4.5 10.1-10.1 3.1 3.1z" fill="#fff" />
+        </svg>
+        <svg v-else-if="item.tone === 'warning'" viewBox="0 0 48 48">
+          <circle cx="24" cy="24" r="20" fill="currentColor" />
+          <rect x="21.8" y="13" width="4.4" height="15" rx="2.2" fill="#fff" />
+          <circle cx="24" cy="34" r="2.8" fill="#fff" />
+        </svg>
+        <svg v-else-if="item.tone === 'error'" viewBox="0 0 48 48">
+          <circle cx="24" cy="24" r="20" fill="currentColor" />
+          <path
+            d="m24 20.7-5.1-5.1-2.8 2.8 5.1 5.1-5.1 5.1 2.8 2.8 5.1-5.1 5.1 5.1 2.8-2.8-5.1-5.1 5.1-5.1-2.8-2.8z"
+            fill="#fff"
+          />
+        </svg>
+        <svg v-else viewBox="0 0 48 48">
+          <circle cx="24" cy="24" r="20" fill="currentColor" />
+          <rect x="21.8" y="20" width="4.4" height="14" rx="2.2" fill="#fff" />
+          <circle cx="24" cy="14.8" r="2.8" fill="#fff" />
+        </svg>
+      </span>
       <span>{{ item.message }}</span>
       <button type="button" aria-label="关闭" @click="dismissToast(item.id)">×</button>
     </article>
@@ -47,12 +71,49 @@ const { toasts, dismissToast } = useToast()
   pointer-events: auto;
 }
 
+/* 提示符与四态描边（Arco 亮色 token：*-6 图标色） */
+.kg-toast__icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+}
+
+.kg-toast__icon svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.kg-toast > span:not(.kg-toast__icon) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .kg-toast--success {
   border-color: rgba(0, 180, 42, 0.24);
 }
 
+.kg-toast--success .kg-toast__icon {
+  color: #00b42a;
+}
+
+.kg-toast--info .kg-toast__icon {
+  color: #165dff;
+}
+
 .kg-toast--warning {
   border-color: rgba(255, 125, 0, 0.24);
+}
+
+.kg-toast--warning .kg-toast__icon {
+  color: #ff7d00;
+}
+
+.kg-toast--error {
+  border-color: rgba(245, 63, 63, 0.24);
+}
+
+.kg-toast--error .kg-toast__icon {
+  color: #f53f3f;
 }
 
 .kg-toast button {

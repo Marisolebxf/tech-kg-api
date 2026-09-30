@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import DeleteConfirmDialog from '../../components/DeleteConfirmDialog.vue'
+import AppAlert from '../../components/AppAlert.vue'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { IconRefresh, IconSearch } from '@arco-design/web-vue/es/icon'
@@ -490,21 +491,27 @@ onMounted(() => {
     </div>
 
     <!-- 查看档只读提示（开发维护切到共享生产空间）：整页不可操作 -->
-    <div v-if="reviewReadOnly" class="review-readonly-bar" role="note">
+    <AppAlert v-if="reviewReadOnly" type="warning" class="review-readonly-bar">
       当前图空间为共享生产空间：人工审核仅可查看，操作需管理员或本业务开发维护人员执行。
-    </div>
+    </AppAlert>
 
     <section class="ops-panel">
 
-      <div v-if="rerunFeedback" :class="['rerun-feedback', `is-${rerunFeedback.type}`]">
+      <!-- 批量重跑结果反馈：成功/警告/错误按 Arco Alert 四态规范展示（带提示符，可关闭） -->
+      <AppAlert
+        v-if="rerunFeedback"
+        :type="rerunFeedback.type"
+        class="rerun-feedback"
+        closable
+        @close="rerunFeedback = null"
+      >
         <span>{{ rerunFeedback.text }}</span>
         <span
           v-for="item in rerunFeedback.executions"
           :key="item.executionId"
           class="rerun-feedback-exec"
         >{{ item.schemaId }} · {{ item.cases }} 条</span>
-        <button class="rerun-feedback-close" type="button" @click="rerunFeedback = null">×</button>
-      </div>
+      </AppAlert>
 
       <div ref="reviewTableRef" class="ops-review-table-scroll" :class="{ 'has-scroll-right': tableHasMoreToScroll, 'review-scroll--active': tableScrollActive }" :aria-busy="reviewLoading" @scroll.passive="handleReviewTableScroll"><table class="review-case-table" :class="{ 'review-case-table--selectable': reviewCategory === 'C' }">
         <!-- 固定列宽：有数据/无数据切换时表头列位不漂移（待处理对象列吃剩余宽度） -->
@@ -586,8 +593,8 @@ onMounted(() => {
           <tr v-if="!reviewRows.length">
             <td class="review-empty" :colspan="reviewCategory === 'C' ? 8 : 7">
               <span v-if="reviewLoading" role="status">正在加载人工审核记录…</span>
-              <div v-else-if="reviewLoadError" role="alert">
-                <p>{{ reviewLoadError }}</p>
+              <div v-else-if="reviewLoadError" role="alert" class="review-load-error">
+                <AppAlert type="error" class="review-load-error__alert">{{ reviewLoadError }}</AppAlert>
                 <button type="button" class="link" @click="loadReviews"><IconRefresh class="refresh-icon" />重新加载</button>
               </div>
               <span v-else>{{ reviewStatusFilter === '全部' && reviewKindFilter === '全部' && reviewTimeFilter === '全部' && !submittedKeyword ? '暂无人工处理记录' : '暂无符合条件的记录' }}</span>
@@ -633,7 +640,7 @@ onMounted(() => {
       :ok-loading="rerunSubmitting"
       @ok="rerunSelected(undefined, true)"
     >
-      <p class="rerun-confirm-text">即将对已勾选的 {{ rerunSelection.size }} 条失败记录下发重跑，按 schema 合并为新执行（类别=重新执行）。重跑成功的记录自动关闭，仍失败的会重新进入失败列表。</p>
+      <AppAlert type="warning" class="rerun-confirm-text">即将对已勾选的 {{ rerunSelection.size }} 条失败记录下发重跑，按 schema 合并为新执行（类别=重新执行）。重跑成功的记录自动关闭，仍失败的会重新进入失败列表。</AppAlert>
     </a-modal>
 
     <a-modal
@@ -644,14 +651,16 @@ onMounted(() => {
       title-align="start"
     >
       <p v-if="logLoading" class="case-log-loading">加载中…</p>
-      <p v-else-if="logError" class="case-log-error-text">{{ logError }}</p>
+      <AppAlert v-else-if="logError" type="error" class="case-log-error-block">
+        <pre class="case-log-error-text">{{ logError }}</pre>
+      </AppAlert>
       <template v-else-if="logCase">
         <!-- 原执行/重跑执行切换（两者都有时才显示；默认看重跑执行=最新一次处理） -->
         <div v-if="logRerunExecutionId && logOriginalExecutionId" class="case-log-switch">
           <button type="button" :class="{ active: logExecutionChoice === 'rerun' }" @click="switchLogExecution('rerun')">重跑执行</button>
           <button type="button" :class="{ active: logExecutionChoice === 'original' }" @click="switchLogExecution('original')">原执行</button>
         </div>
-        <p v-if="logExecutionMissing" class="case-log-missing">未找到关联的工作流执行记录（{{ logActiveExecutionId || '该记录未关联执行 ID' }}）——执行记录可能已随环境重置被清理。</p>
+        <AppAlert v-if="logExecutionMissing" type="warning" class="case-log-missing">未找到关联的工作流执行记录（{{ logActiveExecutionId || '该记录未关联执行 ID' }}）——执行记录可能已随环境重置被清理。</AppAlert>
         <template v-else-if="logExecution">
           <section class="case-log-sec">
             <h4>执行概要</h4>
@@ -679,7 +688,7 @@ onMounted(() => {
             <p v-else class="case-log-empty">该执行暂无任务日志。</p>
           </section>
         </template>
-        <p v-else class="case-log-missing">该记录未关联工作流执行（无 executionId），无法展示执行日志。</p>
+        <AppAlert v-else type="warning" class="case-log-missing">该记录未关联工作流执行（无 executionId），无法展示执行日志。</AppAlert>
       </template>
       <template #footer>
         <button type="button" class="case-log-close" @click="logVisible = false">关闭</button>
@@ -772,13 +781,14 @@ onMounted(() => {
 /* 批量重跑沿用日志的文字链接样式。 */
 .rerun-confirm-bar{display:inline-flex;align-items:center;gap:8px;flex:0 0 auto;color:#4e5969;font-size:13px;line-height:22px;white-space:nowrap}
 .review-pagination .review-page-summary{margin-left:auto;white-space:nowrap}
-.rerun-feedback{flex:0 0 auto;display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid #a6f4c5;background:#ecfdf3;color:#067647;font-size:12px;line-height:20px}
-.rerun-feedback.is-error{border-color:#f5b8b3;background:#fef3f2;color:#b42318}
-.rerun-feedback.is-warning{border-color:#fec84b;background:#fffaeb;color:#b54708}
-.rerun-feedback-close{margin-left:auto;width:22px;height:22px;border:0;border-radius:4px;background:transparent;color:inherit;font-size:14px;cursor:pointer}
-/* 查看档只读提示条（共享生产空间）：与 rerun-feedback.is-warning 同色系 */
-.review-readonly-bar{flex:0 0 auto;padding:9px 16px;border:1px solid #fec84b;border-radius:6px;background:#fffaeb;color:#b54708;font-size:12px;line-height:20px;margin-bottom:10px}
-.rerun-confirm-text{margin:0;color:#4e5969;font-size:13px;line-height:22px}
+/* 批量重跑反馈：四态底色/提示符/关闭按钮由 AppAlert（Arco Alert 规范）提供 */
+.rerun-feedback{flex:0 0 auto;margin:0 0 10px}
+/* 查看档只读提示条（共享生产空间）：警告态底色与提示符由 AppAlert 提供 */
+.review-readonly-bar{flex:0 0 auto;margin:0 0 10px}
+/* 队列加载失败态：错误态提示条 + 重新加载入口 */
+.review-load-error{display:flex;flex-direction:column;align-items:center;gap:8px}
+.review-load-error__alert{max-width:720px;text-align:left}
+.rerun-confirm-text{margin:0}
 .review-status.is-重跑中,.review-status.is-执行中{color:var(--status-info)}
 .review-status.is-重跑失败,.review-status.is-失败{color:var(--status-danger)}
 .review-status.is-已完成{color:var(--status-success)}
@@ -801,8 +811,6 @@ onMounted(() => {
 /* 审核分页已迁移到共享 ListPagination 组件（样式随组件自带）；.review-pagination 仅保留 flex 布局占位。 */
 .ops-review-table-scroll .pick-col{vertical-align:middle;text-align:center}.ops-review-table-scroll .pick-col input[type="checkbox"]{display:block;width:14px;height:14px;margin:0 auto;vertical-align:middle;cursor:pointer}
 .rerun-batch-action:focus-visible{outline:0;box-shadow:0 0 0 2px rgba(22,93,255,.2)}
-.rerun-feedback{gap:8px;padding:8px 16px}.rerun-feedback-close{width:24px;height:24px}
-.rerun-confirm-text{font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
 /* 操作列与 Schema 管理表对齐：右侧固定列（表头同时吸顶，z 高于数据行），横向滚动时操作不被遮挡 */
 .ops-review-table-scroll th.review-action-col{position:sticky;top:0;right:0;z-index:4;background:#f7f8fa;box-shadow:-1px 0 #e5e6eb;text-align:left}
 .ops-review-table-scroll td.review-action-col{position:sticky;right:0;z-index:3;box-sizing:border-box;background:#fff;box-shadow:-1px 0 #e5e6eb;white-space:nowrap}
@@ -861,7 +869,8 @@ onMounted(() => {
 .case-log-dl>div{display:grid;grid-template-columns:88px 1fr;column-gap:12px}
 .case-log-dl dt{color:#86909c;font-size:12px;line-height:20px}
 .case-log-dl dd{margin:0;color:#1d2129;font-size:13px;line-height:20px;overflow-wrap:anywhere}
-.case-log-error-text{margin:0;padding:10px 12px;border:1px solid #f6c6b4;border-radius:4px;background:#fff8f5;color:#b42318;font:12px/19px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-all}
+.case-log-error-block{margin:0}
+.case-log-error-text{margin:0;font:12px/19px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-all}
 .case-log-loading{margin:0;padding:24px;color:#86909c;text-align:center}
 /* 执行日志弹窗：原执行/重跑执行切换 + 概要 + 阶段状态 + 日志终端 */
 .case-log-switch{display:flex;box-sizing:border-box;width:max-content;height:40px;margin:0 0 16px;padding:4px;border-radius:4px;background:#f2f3f5;overflow:visible}
@@ -870,7 +879,7 @@ onMounted(() => {
 .case-log-switch button.active{border-left-color:transparent;background:#fff;color:#165dff;font-weight:500}
 .case-log-switch button.active+button{border-left-color:transparent}
 .case-log-switch button:hover:not(.active){background:#fff;color:#165dff}
-.case-log-missing{margin:0;padding:14px;border:1px dashed #e5e6eb;border-radius:4px;background:#f7f8fa;color:#86909c;font-size:13px;line-height:20px;word-break:break-all}
+.case-log-missing{margin:0;word-break:break-all}
 .case-log-console{margin:0;max-height:280px;overflow:auto;padding:12px 14px;border:1px solid #e5e6eb;border-radius:4px;background:#f7f8fa;color:#1d2129;font:12px/20px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-all}
 .case-log-steps{display:flex;flex-wrap:wrap;gap:8px;margin:0;padding:0;list-style:none}
 .case-log-steps li{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;font-size:12px;line-height:20px}

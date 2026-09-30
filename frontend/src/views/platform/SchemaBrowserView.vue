@@ -268,7 +268,7 @@ async function loadTopology() {
   try {
     applyTopology(await getSchemaTopology(activeSpace.value || undefined))
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
+    showToast(schemaErrorMessage(error), 'error')
   }
 }
 
@@ -357,7 +357,7 @@ async function runBackfill(force: boolean) {
       backfillConfirmOpen.value = true
       return
     }
-    showToast(message, 'warning')
+    showToast(message, 'error')
   } finally {
     backfilling.value = false
   }
@@ -379,7 +379,7 @@ async function triggerExtraction(schema: SchemaDefinition) {
     }
     return result
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
+    showToast(schemaErrorMessage(error), 'error')
     return null
   } finally {
     extracting.value = false
@@ -447,7 +447,7 @@ async function saveSources(): Promise<boolean> {
     await loadSchemas()
     return true
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
+    showToast(schemaErrorMessage(error), 'error')
     return false
   } finally {
     sourcesSaving.value = false
@@ -478,7 +478,7 @@ async function refreshPropertyTarget() {
   try {
     propertyTarget.value = await getSchemaDetail(target.id, currentUserId)
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
+    showToast(schemaErrorMessage(error), 'error')
   }
   await loadSchemas().catch(() => undefined)
 }
@@ -517,14 +517,14 @@ async function submitAddProperty() {
     if (result.ddlStatus === 'succeeded') {
       showToast(`属性已新增并执行图 DDL：${result.ddlStatement}`, 'success')
     } else {
-      showToast(`属性已新增，但图 DDL 执行失败：${result.ddlError || '未知错误'}`, 'warning')
+      showToast(`属性已新增，但图 DDL 执行失败：${result.ddlError || '未知错误'}`, 'error')
     }
     propertyForm.value = { name: '', dataType: 'string', length: '64', required: false }
     await refreshPropertyTarget()
     propertyChangeKind.value = 'add'
     propertyScriptGuideOpen.value = true
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
+    showToast(schemaErrorMessage(error), 'error')
   } finally {
     propertySaving.value = false
   }
@@ -557,7 +557,7 @@ async function confirmDeleteProperty() {
     propertyChangeKind.value = 'delete'
     propertyScriptGuideOpen.value = true
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
+    showToast(schemaErrorMessage(error), 'error')
   } finally {
     propertyDeleting.value = false
   }
@@ -580,7 +580,7 @@ async function loadDeleteImpact(schemaId: string) {
   try {
     deleteImpact.value = await getSchemaDeleteImpact(schemaId, currentUserId)
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
+    showToast(schemaErrorMessage(error), 'error')
   } finally {
     deleteImpactLoading.value = false
   }
@@ -613,7 +613,7 @@ async function confirmDelete() {
     void loadEntityOptions()
   } catch (error) {
     const message = schemaErrorMessage(error)
-    showToast(message, 'warning')
+    showToast(message, 'error')
     if (message.includes('不存在')) {
       // 脏行兜底：行已被删（如他处/缓存期删除），关弹窗并刷新列表清掉它
       deleteModalOpen.value = false
@@ -883,7 +883,7 @@ watch(
     topologyExpanded.value = true
     resetPages()
     void Promise.all([loadSchemas(), loadTopology()]).catch((error: unknown) => {
-      showToast(schemaErrorMessage(error), 'warning')
+      showToast(schemaErrorMessage(error), 'error')
     })
   },
 )
@@ -1000,7 +1000,7 @@ async function saveItem() {
     await Promise.all([loadSchemas(), ...(topologyExpanded.value ? [loadTopology()] : [])])
     void loadEntityOptions()
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
+    showToast(schemaErrorMessage(error), 'error')
   } finally {
     creating.value = false
   }
@@ -1018,7 +1018,7 @@ async function bindSourcesAfterCreate(schemaId: string, sources: SourceBindingRo
   } catch (error) {
     showToast(
       `来源表绑定保存失败（${schemaErrorMessage(error)}），可稍后在行级「来源表」入口补绑`,
-      'warning',
+      'error',
     )
   }
 }
@@ -1027,7 +1027,7 @@ function toastCreateResult(result: SchemaDefinition) {
   if (result.ddlStatus === 'succeeded') {
     showToast(`已创建并执行图 DDL：${result.ddlStatement?.split('(')[0] || result.name}`, 'success')
   } else if (result.ddlStatus === 'failed') {
-    showToast(`Schema 已保存，但图 DDL 执行失败：${result.ddlError || '未知错误'}`, 'warning')
+    showToast(`Schema 已保存，但图 DDL 执行失败：${result.ddlError || '未知错误'}`, 'error')
   } else {
     showToast('Schema 已创建', 'success')
   }
@@ -1136,7 +1136,7 @@ onMounted(async () => {
   try {
     await loadSchemas()
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
+    showToast(schemaErrorMessage(error), 'error')
   }
 })
 

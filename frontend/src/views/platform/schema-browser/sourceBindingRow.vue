@@ -51,7 +51,7 @@ async function loadDatabases() {
   try {
     databases.value = await listMysqlDatabases(row.value.datasourceId)
   } catch (error) {
-    showToast(error instanceof Error ? error.message : '列库失败', 'warning')
+    showToast(error instanceof Error ? error.message : '列库失败', 'error')
   } finally {
     loadingDatabases.value = false
   }
@@ -64,7 +64,7 @@ async function loadTables() {
   try {
     tables.value = await listMysqlTables(row.value.datasourceId, row.value.databaseName)
   } catch (error) {
-    showToast(error instanceof Error ? error.message : '列表失败', 'warning')
+    showToast(error instanceof Error ? error.message : '列表失败', 'error')
   } finally {
     loadingTables.value = false
   }
@@ -81,7 +81,7 @@ async function loadColumns() {
       row.value.databaseName,
     )
   } catch (error) {
-    showToast(error instanceof Error ? error.message : '列信息加载失败', 'warning')
+    showToast(error instanceof Error ? error.message : '列信息加载失败', 'error')
   } finally {
     loadingColumns.value = false
   }

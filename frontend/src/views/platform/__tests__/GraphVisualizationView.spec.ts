@@ -436,7 +436,8 @@ describe('GraphVisualizationView', () => {
     await wrapper.findAll('.graphviz-start__item')[0].trigger('click')
     await runQuery({ nodes: [], edges: [] })
     expect(wrapper.get('.graphviz-canvas__empty').text()).toContain('未查询到「张三」的关联子图')
-    expect(showToast).toHaveBeenCalledWith('未查询到该起点的关联子图', 'warning')
+    // 查询成功但未命中属信息态（Arco 全局提示四态：说明/未命中=info）
+    expect(showToast).toHaveBeenCalledWith('未查询到该起点的关联子图', 'info')
   })
 
   it('图例点击隐藏实体类型并裁掉关联边，再点恢复', async () => {

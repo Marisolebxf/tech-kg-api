@@ -273,12 +273,42 @@ nltk/jieba，nltk_data 随镜像或卷预置。
 | --- | --- | --- |
 | **全等 / 容差内**（差值 ≤ ±10） | DataSource 39、Journal 2134、PatentFamily 1999、Project 4005、Report 3000、IndustryNode 180、CHILD_OF 174、DOWNSTREAM_OF 4、HAS_NODE 180、MEMBER_OF_FAMILY 2000、PUBLISHED_IN 4081、COAUTHOR_WITH 156144、RELATED_TO 79320(≈79319)、SAME_AS 259、REFERENCED_BY 12806(≈12808)、FUNDED_BY 140(≈150)、COVERS_CHAIN 476(≈479)、STUDIED_AT 92(≈96) | 过账 |
 | **源数据年代差**（dev 自 8 月起累积，现行 gkx_element 已无那些行，不可复现） | Organization −2428、Person −401、Paper −74、News −103、Patent −10、Product −1、IndustryChain −1、AFFILIATED_WITH −1502、HAS_KEYWORD −19212、AUTHORED_BY −162（后三项为缺 Org/Person 端点的级联） | 接受（以当前源为准） |
-| **fixture / 业务边**（不在还原范围） | APPLIED_BY −80、INVENTED_BY −20、HAS_OUTPUT −38、OWNED_BY −1、ALUMNI −55、COLLEAGUE −25、EMPLOYED_BY 全缺（STUDIED_AT 中 4 条同源） | 预期缺失 |
+| **fixture / 业务边**（不在还原范围） | APPLIED_BY −80、INVENTED_BY −20、HAS_OUTPUT −38、OWNED_BY −1、ALUMNI −55、COLLEAGUE −25、EMPLOYED_BY 全缺（边类型 dev 与重建空间均未建，见 §7.1；STUDIED_AT 中 4 条同源） | 预期缺失 |
 | **yft_1 更全**（当前源比 dev 历史抽取更全，保留） | CITES +171874、INVOLVED_IN +24637、EXECUTIVE_OF +7041、BENEFICIAL_OWNER_OF +6284、Keyword +7861、Event +4202、organization_base +7950、INVESTS_IN +4083、SHAREHOLDER_OF +2307、BELONGS_TO_NODE +2562、CITED_BY +2559、PRODUCES +2046、LEGAL_REP_OF +1045、HAS_NEWS +813、ACQUIRES +853、HAS_PARTICIPANT +162、SUBSIDIARY_OF +118、LEADS +22、ACTUAL_CONTROLLER_OF +50 | 保留 |
 | **平台链专属**（dev 未经历过该平台环） | OrganizationBase tag 61652（dev 无此 tag） | 预期多出 |
 
 > 上表「全等」列的数字为本轮实测快照；重跑时逐项对 dev 现值比即可，落入上述任一分组
 > 即视为过账，不必逐项追平绝对值。
+
+### 7.1 九大业务模块可用性验证（2026-09-30 实测）
+
+九模块的数据面走 env 冻结空间（运行中 api 容器恒为 dev），验证不动 compose：容器内
+`docker exec -e TRS_GRAPH_SPACE=<空间>` 起新进程，用 `httpx.AsyncClient(transport=
+httpx.ASGITransport(app=main.app))` 进程内打 `/api/v1` 路由（加 `-e PREWARM_BUSINESS=false`
+免预热干扰）。测试实体必须从图内真实关系挑——如 COAUTHOR_WITH 对不含共同 Paper 邻居，
+测「两点成果/论文合作」要挑同一 `Paper -AUTHORED_BY-> 两人` 的对，否则得到的是真空而非缺数。
+
+| 模块 | 结果 | 实测样本 |
+| --- | --- | --- |
+| 学者直接关系 | ✅ | 王建宇↔潘建伟 1 条直接关系（COAUTHOR_WITH） |
+| 节点间接关系 | ✅ | 王甫园：间接节点 92 / 路径 228（接口限制 `relation_types` 单次 ≤1 项） |
+| 两点成果 | ✅ | 王甫园↔王开泳 共同论文 1 篇 |
+| 学者同事 | ✅ | 杨彬↔薛宁 金能科技任职时间重叠 1 条（AFFILIATED_WITH 边上 work_experience_date） |
+| 学者校友 | ✅ | 裴诗雅↔熊若兰 北京大学同校（STUDIED_AT 推得） |
+| 论文合作 | ❌ | `PAPER_COOPERATED_WITH` 边类型未建（见下） |
+| 企业关联 | ⚠️ | 查询空；构建链路本身可用（见下） |
+| 产业链事件 | ✅ | IC0007005（半导体设备）top5 事件 + 15 专家 + 3 企业 |
+| 产业链全景 | ✅ | 集成电路 4 层（核心技术/…） |
+
+两个空模块均为**业务自建边类型从未初始化**——dev 与重建空间一致缺（`DESCRIBE EDGE` 双双
+EdgeNotFound），属 §0「不在还原范围」的业务边，非重建缺数：
+
+- **论文合作**：服务遍历 `PAPER_COOPERATED_WITH` 边类型 → traversal 400 被吞、恒空；
+  当前无任何链路产出该边，dev 上同样跑不出结果。
+- **企业关联**：`EMPLOYED_BY` 边类型两空间均无。实测临时 `CREATE EDGE EMPLOYED_BY`
+  （5 属性：relation_type/role/start_date/end_date/source）后 `build` 正常——`effective=True`、
+  写出并返回 1 条关系；要让模块可用需显式建边类型（业务动作）。`/kg-service/key-enterprise-relation`
+  查询走 2 跳子图解析，构建后仍解析 0 条，未深挖。测试后已删边 + `DROP EDGE` 还原。
 
 ## 8. 源表清单（73 张，括号为装数后行数核对）
 

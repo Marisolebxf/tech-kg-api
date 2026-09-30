@@ -371,7 +371,8 @@ function executionStatusClass(status: string): string {
   const s = status.toUpperCase()
   if (s === 'COMPLETED') return 'ok'
   if (s === 'FAILED' || s === 'CANCELED' || s === 'TERMINATED' || s === 'TIMED_OUT') return 'err'
-  if (s === 'ABNORMAL' || s === 'QUEUED') return 'warn'
+  if (s === 'ABNORMAL') return 'err'
+  if (s === 'QUEUED') return 'idle'
   return 'run'
 }
 
@@ -467,8 +468,8 @@ onMounted(() => {
                 <span v-else>单次</span>
               </td>
               <td>
-                <span v-if="pausingJobIds[job.id]" class="warn">暂停中…</span>
-                <span v-else-if="resumingJobIds[job.id]" class="ok">恢复中…</span>
+                <span v-if="pausingJobIds[job.id]" class="run">暂停中…</span>
+                <span v-else-if="resumingJobIds[job.id]" class="run">恢复中…</span>
                 <span v-else :class="JOB_STATUS_TONE[deriveJobUnifiedStatus(job)]">{{ deriveJobUnifiedStatus(job) }}</span>
               </td>
               <td>
@@ -477,7 +478,7 @@ onMounted(() => {
               </td>
               <td>
                 <span v-if="job.lastExecutionStatus" :class="executionStatusClass(job.lastExecutionStatus)">{{ job.lastExecutionStatus }}</span>
-                <span v-else class="muted">未执行</span>
+                <span v-else class="idle">未执行</span>
                 <small v-if="job.lastRunAt" class="gb-last-run">{{ job.lastRunAt }}</small>
               </td>
               <td class="gb-job-actions">
@@ -591,12 +592,13 @@ onMounted(() => {
 .gb-task-table.has-scroll-right :is(thead th:last-child,td.gb-job-actions)::before{position:absolute;top:0;bottom:-1px;left:0;width:12px;content:"";pointer-events:none;transform:translateX(-100%);box-shadow:inset -10px 0 8px -8px rgba(78,89,105,.28)}
 .empty{padding:40px 14px;text-align:center;color:#8290a7;font-size:12px;line-height:20px;font-weight:400}
 .muted{color:#8191aa;font-size:12px;line-height:20px;font-weight:400}
-span.ok,span.err,span.warn,span.run{display:inline-flex;align-items:center;gap:6px;font-size:14px;line-height:22px;border-radius:0;background:transparent;padding:0;white-space:nowrap}
-span.ok::before,span.err::before,span.warn::before,span.run::before{display:block;flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
-span.ok{color:#067647}
-span.err{color:#b42318}
-span.warn{color:#b54708}
-span.run{color:#175cd3}
+span.ok,span.err,span.warn,span.run,span.idle{display:inline-flex;align-items:center;gap:6px;font-size:14px;line-height:22px;border-radius:0;background:transparent;padding:0;white-space:nowrap}
+span.ok::before,span.err::before,span.warn::before,span.run::before,span.idle::before{display:block;flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
+span.idle{color:var(--status-neutral)}
+span.ok{color:var(--status-success)}
+span.err{color:var(--status-danger)}
+span.warn{color:var(--status-warning)}
+span.run{color:var(--status-info)}
 
 @media (max-width: 1024px) {
   .graph-build-page {

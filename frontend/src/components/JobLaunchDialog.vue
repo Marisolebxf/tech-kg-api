@@ -219,7 +219,7 @@ async function submit() {
     emit('created', job.id)
     emit('close')
   } catch (error) {
-    showToast(error instanceof Error ? error.message : '创建任务失败', 'warning')
+    showToast(error instanceof Error ? error.message : '创建任务失败', 'error')
   } finally {
     submitting.value = false
   }

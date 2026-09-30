@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { IconSearch } from '@arco-design/web-vue/es/icon'
 
 import KgGraphCanvas from '../../components/kg-graph-canvas.vue'
+import AppAlert from '../../components/AppAlert.vue'
 import {
   getFilteredSubgraph,
   getGraphNode,
@@ -399,7 +400,7 @@ async function loadStats(): Promise<void> {
   } catch {
     if (context !== graphContextVersion) return
     stats.value = null
-    showToast('图空间统计加载失败，类型下拉暂不可用（仍可检索起点直接查询）', 'warning')
+    showToast('图空间统计加载失败，类型下拉暂不可用（仍可检索起点直接查询）', 'error')
   }
 }
 
@@ -592,13 +593,13 @@ async function runQuery(vidOverride?: string, labelOverride?: string): Promise<v
       time: formatQueryTimestamp(new Date()),
     }
     if (normalized.nodes.length === 0) {
-      showToast('未查询到该起点的关联子图', 'warning')
+      showToast('未查询到该起点的关联子图', 'info')
     } else {
       showToast(`已加载 ${normalized.nodes.length} 个实体、${normalized.edges.length} 条关系`, 'success')
     }
   } catch (error) {
     if (context !== graphContextVersion) return
-    showToast(error instanceof Error ? error.message : '图谱查询失败', 'warning')
+    showToast(error instanceof Error ? error.message : '图谱查询失败', 'error')
   } finally {
     if (context === graphContextVersion) querying.value = false
   }
@@ -902,10 +903,11 @@ onUnmounted(() => {
             <i /><span>{{ entityTypeLabel(item.label) }}</span><em>{{ item.count }}</em>
           </button>
         </div>
-        <div v-if="capHiddenCount > 0" class="graphviz-cap-banner" role="status">
+        <!-- 结果截断说明：信息态提示条（AppAlert），右侧保留「显示全部」入口 -->
+        <AppAlert v-if="capHiddenCount > 0" type="info" class="graphviz-cap-banner">
           <span>结果超过 {{ NODE_CAP }} 个节点，已按连接度保留 {{ visibleNodes.length }} 个（隐藏 {{ capHiddenCount }} 个低连接度节点）。</span>
           <button type="button" @click="showAllNodes = true">显示全部</button>
-        </div>
+        </AppAlert>
         <div class="graphviz-canvas">
           <KgGraphCanvas
             v-if="visibleNodes.length"
@@ -1112,7 +1114,9 @@ onUnmounted(() => {
 .graphviz-legend__item.is-chain i{background:#4f46e5}
 .graphviz-legend__item.is-field i{background:#a855f7}
 .graphviz-legend__item.is-source i{background:#eb2f96}
-.graphviz-cap-banner{display:flex;flex:0 0 auto;align-items:center;justify-content:space-between;gap:12px;padding:6px 16px;border-bottom:1px solid #ffe4ba;background:#fff7e8;color:#b54708;font-size:12px;line-height:20px}
+/* 截断说明条：信息态底色与提示符由 AppAlert 提供，这里只保持条状贴边与右侧按钮 */
+.graphviz-cap-banner{flex:0 0 auto;margin:0;border-radius:0;border-bottom:1px solid #e5e6eb}
+.graphviz-cap-banner :deep(.app-alert__content){display:flex;align-items:center;justify-content:space-between;gap:12px}
 .graphviz-cap-banner button{flex:0 0 auto;border:0;background:transparent;color:#165dff;cursor:pointer;font-size:12px;line-height:20px;white-space:nowrap}
 .graphviz-cap-banner button:hover{text-decoration:underline}
 .graphviz-canvas{position:relative;flex:1;min-height:480px;overflow:hidden;border-radius:4px}

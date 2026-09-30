@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import AppAlert from '../../components/AppAlert.vue'
 import { directDecideProductionReview, getProductionReview, heartbeatProductionReview, rerunExtractFailures, submitProductionReview, type ProductionReviewCase } from '../../api/workflowOperations'
 
 import {
@@ -37,10 +38,10 @@ async function rerunThisRecord() {
   try {
     const result = await rerunExtractFailures({ caseIds: [productionCase.value.id] })
     const executionId = result.executions[0]?.executionId ?? '—'
-    window.alert(`已下发重跑（新执行 ${executionId}，类别=重新执行），完成后本条自动关闭；仍失败会生成新的待处理记录。`)
+    notify('success', `已下发重跑（新执行 ${executionId}，类别=重新执行），完成后本条自动关闭；仍失败会生成新的待处理记录。`)
     productionCase.value = await getProductionReview(productionCase.value.id)
   } catch (error) {
-    window.alert(error instanceof Error ? error.message : '重跑下发失败')
+    notify('error', error instanceof Error ? error.message : '重跑下发失败')
   } finally {
     extractRerunSubmitting.value = false
   }
@@ -142,7 +143,12 @@ const consequence = computed(() => {
 })
 
 const note = ref(record.value?.decisionNote ?? '')
-const feedback = ref('')
+/** 操作反馈：按 Arco Alert 规范分状态展示（成功/错误/警告），带前置提示符。 */
+type FeedbackTone = 'success' | 'error' | 'warning'
+const feedback = ref<{ type: FeedbackTone; text: string } | null>(null)
+function notify(type: FeedbackTone, text: string) {
+  feedback.value = { type, text }
+}
 const submitting = ref(false)
 const actionMeta: Record<string, { label: string; kind: string; rerun?: boolean }> = {
   'entity-confirm': { label: '确认实体裁决', kind: 'primary' }, 'reject-candidate': { label: '驳回候选', kind: 'danger' },
@@ -258,7 +264,7 @@ async function loadReview() {
     note.value = String(productionCase.value.draft?.note || '')
     initWorkspace(record.value)
     startHeartbeat()
-  } catch (error) { feedback.value = error instanceof Error ? error.message : '人工处理详情加载失败' }
+  } catch (error) { notify('error', error instanceof Error ? error.message : '人工处理详情加载失败') }
 }
 
 onMounted(loadReview)
@@ -335,7 +341,7 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
   if (isDirectCase.value && productionCase.value && ['accept', 'accept-fix', 'reject'].includes(action.id)) {
     const patched = action.id === 'accept-fix' ? directPatchedCandidate.value : undefined
     if (action.id === 'accept-fix' && !patched) {
-      feedback.value = '请先修改候选字段，再修正后入库'
+      notify('warning', '请先修改候选字段，再修正后入库')
       return
     }
     // 修改数字要在响应覆盖 candidate 前取（响应里的候选已是修正值，事后取恒为 0）
@@ -352,11 +358,11 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
       record.value = mapProductionRecord(productionCase.value)
       directEditing.value = false
       directEdits.value = {}
-      feedback.value = action.id === 'accept-fix'
+      notify('success', action.id === 'accept-fix'
         ? `已按修正后候选写入图（修改 ${editedCount} 个字段，已记入审计）`
-        : action.id === 'accept' ? '已通过，候选已写入图' : '已驳回，候选丢弃'
+        : action.id === 'accept' ? '已通过，候选已写入图' : '已驳回，候选丢弃')
     } catch (error) {
-      feedback.value = error instanceof Error ? error.message : '决策失败'
+      notify('error', error instanceof Error ? error.message : '决策失败')
     } finally {
       submitting.value = false
     }
@@ -366,7 +372,7 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
   const actionId = action.id === 'entity-confirm' && entityVerdict.value === 'reject' ? 'reject-candidate' : action.id
   // merge 必须指定并入目标（服务端校验 targetEntityId ∈ 候选集，缺失会被 400 拒绝）
   if (entityVerdict.value === 'merge' && linkCandidates.value.length && !selectedTarget.value) {
-    feedback.value = '请先选择要并入的候选实体'
+    notify('warning', '请先选择要并入的候选实体')
     return
   }
   const result: Record<string, unknown> = {
@@ -380,9 +386,9 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
       record.value = mapProductionRecord(productionCase.value)
       window.clearInterval(heartbeatTimer)
     }
-    feedback.value = `裁决已回写「${consequence.value?.writeTarget ?? '处理结果'}」。`
+    notify('success', `裁决已回写「${consequence.value?.writeTarget ?? '处理结果'}」。`)
   } catch (error) {
-    feedback.value = error instanceof Error ? error.message : '人工处理提交失败'
+    notify('error', error instanceof Error ? error.message : '人工处理提交失败')
   }
 }
 
@@ -436,7 +442,9 @@ const runPrimary = () => {
 
         <section class="direct-why">
           <h3>失败原因</h3>
-          <pre class="extract-error-text">{{ record.sourceResult || productionCase?.diagnosis || '—' }}</pre>
+          <AppAlert type="error" class="extract-error-block">
+            <pre class="extract-error-text">{{ record.sourceResult || productionCase?.diagnosis || '—' }}</pre>
+          </AppAlert>
           <details class="direct-trace">
             <summary>溯源信息</summary>
             <dl>
@@ -461,15 +469,15 @@ const runPrimary = () => {
               <strong>{{ extractRerunSubmitting ? '下发中…' : '重跑该记录' }}</strong>
               <em>只重读该记录 · 新执行类别=重新执行</em>
             </button>
-            <p v-if="extractRerunning" class="direct-done">重跑执行中（{{ extractRerunExecutionId || '新执行' }}）· 完成后自动关闭，仍失败会生成新记录</p>
-            <p v-else-if="productionCase?.status !== 'OPEN'" class="direct-done">已处理 · 状态 {{ record.status }}</p>
+            <AppAlert v-if="extractRerunning" type="info" class="direct-done">重跑执行中（{{ extractRerunExecutionId || '新执行' }}）· 完成后自动关闭，仍失败会生成新记录</AppAlert>
+            <AppAlert v-else-if="productionCase?.status !== 'OPEN'" type="info" class="direct-done">已处理 · 状态 {{ record.status }}</AppAlert>
           </div>
         </section>
       </section>
 
       <!-- A 类（T_LINK / T_DIRECT）统一裁决框布局 -->
       <section v-else-if="templateId === 'T_LINK' || templateId === 'T_DIRECT'" class="zone zone-entity">
-        <p v-if="record.type === '单任务执行失败'" class="zone-banner">对齐任务超时未生成候选，请基于源记录人工裁决后重跑。</p>
+        <AppAlert v-if="record.type === '单任务执行失败'" type="warning" class="zone-banner">对齐任务超时未生成候选，请基于源记录人工裁决后重跑。</AppAlert>
 
         <!-- 待入库记录卡（T_LINK：消歧扣留记录；T_DIRECT：低置信抽取候选） -->
         <div class="link-incoming">
@@ -517,9 +525,9 @@ const runPrimary = () => {
         </template>
 
         <!-- T_LINK 空候选（脚本挂实体改道、召回无同名）：无 merge 目标，降级为新建/驳回 -->
-        <p v-else-if="templateId === 'T_LINK' && linkSnapshot" class="zone-banner">
+        <AppAlert v-else-if="templateId === 'T_LINK' && linkSnapshot" type="info" class="zone-banner">
           图库无同名候选，无法并入——请「确认为新实体」落图，或驳回丢弃该挂起实体及其暂存边。
-        </p>
+        </AppAlert>
 
         <!-- T_DIRECT：待入库候选字段（可修正，确认时按修正后写图） -->
         <div v-else-if="templateId === 'T_DIRECT'" class="direct-fields-block">
@@ -538,7 +546,7 @@ const runPrimary = () => {
             </tbody>
           </table>
           <p v-else class="direct-empty">暂无候选字段</p>
-          <p v-if="directEditing" class="direct-edit-hint">发现 schema 映射字段不对时可在此修正；点底部「确认」将按修正后候选写图（修改 {{ directEditedKeys.length }} 个字段，记入审计）。</p>
+          <AppAlert v-if="directEditing" type="info" class="direct-edit-hint">发现 schema 映射字段不对时可在此修正；点底部「确认」将按修正后候选写图（修改 {{ directEditedKeys.length }} 个字段，记入审计）。</AppAlert>
         </div>
 
         <!-- 无候选快照（存量写后 case / 演示数据）沿用原对照卡 -->
@@ -623,13 +631,13 @@ const runPrimary = () => {
       </section>
 
       </a-form>
-      <p v-if="feedback" class="rw-feedback">{{ feedback }}</p>
+      <AppAlert v-if="feedback" :type="feedback.type" class="rw-feedback">{{ feedback.text }}</AppAlert>
 
       <!-- 确认操作放在详情框内右下角；查看档只读 case 仅展示权限提示。 -->
       <footer class="rw-foot">
-        <div v-if="isReadOnlyCase" class="rw-readonly-hint" role="note">
+        <AppAlert v-if="isReadOnlyCase" type="warning" class="rw-readonly-hint">
           当前图空间为共享生产空间：该审核记录仅可查看，裁决需管理员或本业务开发维护人员执行。
-        </div>
+        </AppAlert>
         <div v-else class="rw-foot__actions">
           <button class="primary" type="button" :disabled="isPrimaryDisabled" @click="runPrimary">{{ templateId === 'T_EXTRACT_FAIL' ? primaryActionLabel : '确认' }}</button>
         </div>
@@ -907,13 +915,10 @@ const runPrimary = () => {
   }
 }
 
+/* 页内提示统一走 AppAlert（Arco Alert 四态规范：状态底色 + 前置提示符），
+   这里只保留间距等版式口径 */
 .zone-banner {
   margin: 0 0 12px;
-  padding: 8px 10px;
-  border-radius: 6px;
-  background: #f0f5ff;
-  color: #344f7a;
-  font-size: 11px;
 }
 
 .note-inline input {
@@ -1020,9 +1025,9 @@ const runPrimary = () => {
   color: #175cd3;
 }
 
-/* T_LINK 消歧 v2：待入库记录卡 + 候选选择列表 */
+/* T_LINK 消歧 v2：待入库记录卡 + 候选选择列表（内容框间距统一 16px） */
 .link-incoming {
-  margin-bottom: 12px;
+  margin-bottom: 16px;
   padding: 12px 14px;
   border: 1px dashed #b8d0ee;
   border-radius: 8px;
@@ -1107,17 +1112,13 @@ const runPrimary = () => {
 
 .zone-entity .zone-extra {
   display: block;
-  margin-top: 12px;
+  /* 内容框（溯源 / 原始记录 / LLM I/O）间距统一 16px，折叠态薄条不再挤在一起 */
+  margin-top: 16px;
 }
 
+/* 操作反馈：成功/错误/警告由 AppAlert 按状态着色 */
 .rw-feedback {
   margin: 14px 0 0;
-  padding: 10px 12px;
-  border: 1px solid #a6f4c5;
-  border-radius: 6px;
-  background: #ecfdf3;
-  color: #067647;
-  font-size: 12px;
 }
 
 .rw-foot {
@@ -1134,16 +1135,9 @@ const runPrimary = () => {
   font-size: 11px;
 }
 
-/* 查看档只读提示（共享生产空间的 case）：与列表页 review-readonly-bar 同色系 */
+/* 查看档只读提示（共享生产空间的 case）：警告态由 AppAlert 提供 */
 .rw-readonly-hint {
   flex: 1;
-  padding: 9px 16px;
-  border: 1px solid #fec84b;
-  border-radius: 6px;
-  background: #fffaeb;
-  color: #b54708;
-  font-size: 12px;
-  line-height: 20px;
 }
 
 .rw-foot__actions {
@@ -1233,7 +1227,7 @@ const runPrimary = () => {
 .direct-fields.is-editing td input:focus{outline:none;border-color:#165dff}
 .direct-fields tr.is-edited th{background:#fff8ec;color:#b54708}
 .direct-fields tr.is-edited td input{border-color:#f0c877;background:#fffdf5}
-.direct-edit-hint{margin:10px 0 0;padding:8px 10px;border:1px dashed #e2c98f;border-radius:6px;background:#fffcf2;color:#8a6512;font-size:11px;line-height:17px}
+.direct-edit-hint{margin:10px 0 0}
 .direct-accept-fix{border-color:#f79009;background:#f79009}
 .direct-accept-fix:disabled{border-color:#f2d5a8;background:#fdeccd}
 /* ① 原始记录（折叠块） */
@@ -1246,7 +1240,7 @@ const runPrimary = () => {
 .direct-section-meta code{padding:2px 6px;border-radius:3px;background:#f1f5fa;color:#344f73;font:11px Consolas,monospace}
 .direct-section-body{margin-top:10px}
 /* ② 抽取推理过程（LLM I/O 折叠块） */
-.direct-llm-io{margin-top:10px;border:1px solid #eef2f7;border-radius:6px;background:#f8fafc}
+.direct-llm-io{margin-top:16px;border:1px solid #eef2f7;border-radius:6px;background:#f8fafc}
 .direct-llm-io:first-child{margin-top:0}
 .direct-llm-io summary{padding:10px 14px;cursor:pointer;color:#667085;font-size:12px;list-style:none}
 .direct-llm-io summary::-webkit-details-marker{display:none}
@@ -1268,7 +1262,7 @@ const runPrimary = () => {
 .direct-why p{margin:0 0 10px;color:#475569;line-height:1.7}
 .direct-why strong{color:#b54708;font-weight:600}
 .direct-confidence-inline{padding:2px 6px;border-radius:3px;background:#fff0d5;color:#b54708;font:12px Consolas,monospace;font-weight:600}
-.direct-trace{margin-top:12px;padding:10px 14px;border:1px solid #eef2f7;border-radius:6px;background:#f8fafc}
+.direct-trace{margin-top:16px;padding:10px 14px;border:1px solid #eef2f7;border-radius:6px;background:#f8fafc}
 .direct-trace summary{cursor:pointer;color:#667085;font-size:12px;list-style:none}
 .direct-trace summary::-webkit-details-marker{display:none}
 .direct-trace summary::before{content:"▶ ";font-size:10px;color:#9aa5b5}
@@ -1296,8 +1290,11 @@ const runPrimary = () => {
 .direct-accept:disabled em,.direct-reject:disabled em{color:#98a2b3}
 .direct-actions .direct-done{grid-column:1/-1}
 .direct-accept:hover:not(:disabled),.direct-reject:hover:not(:disabled){opacity:.92}
-.direct-done{margin:0;padding:14px;text-align:center;color:#475569;font-size:13px;background:#fff;border-radius:6px;border:1px solid #e4ecf6}
-.extract-error-text{margin:0;padding:10px 12px;border:1px solid #f6c6b4;border-radius:6px;background:#fff8f5;color:#b42318;font-size:12px;line-height:19px;white-space:pre-wrap;word-break:break-all}
+/* 终态/重跑中状态条：信息态由 AppAlert 提供 */
+.direct-done{margin:0}
+/* 失败原因：错误态提示符 + 等宽原文（原样换行） */
+.extract-error-block{margin:0}
+.extract-error-text{margin:0;font:12px/19px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-all}
 </style>
 <style scoped>
 /* DESIGN_RULES: manual review detail contract. */

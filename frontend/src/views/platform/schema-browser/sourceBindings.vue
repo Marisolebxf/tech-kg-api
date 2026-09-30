@@ -28,7 +28,7 @@ onMounted(async () => {
   try {
     datasources.value = await listMysqlDatasources()
   } catch (error) {
-    showToast(error instanceof Error ? error.message : '数据源列表加载失败', 'warning')
+    showToast(error instanceof Error ? error.message : '数据源列表加载失败', 'error')
   }
 })
 

@@ -67,7 +67,7 @@ async function loadIndexInfo() {
     types.value = typeItems
     status.value = statusData
   } catch (error) {
-    showToast(entitySearchErrorMessage(error), 'warning')
+    showToast(entitySearchErrorMessage(error), 'error')
   }
 }
 

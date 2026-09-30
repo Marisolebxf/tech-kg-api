@@ -287,7 +287,7 @@ async function loadByCategory(key: string) {
       loaded = (await listMysqlDatasources(currentUserId())).map((c) => toConfigItem('mysql', c))
     }
   } catch (err) {
-    showToast(`加载配置失败：${(err as Error).message}`, 'warning')
+    showToast(`加载配置失败：${(err as Error).message}`, 'error')
   }
   items.value = [...loaded, ...others]
 }
@@ -296,13 +296,13 @@ async function loadGraphSpaces() {
   try {
     graphSpaces.value = await listGraphSpaceItems()
   } catch (err) {
-    showToast(`加载图空间失败：${(err as Error).message}`, 'warning')
+    showToast(`加载图空间失败：${(err as Error).message}`, 'error')
   }
 }
 
 async function createSpace() {
   if (!isAdmin.value) {
-    showToast('请线下向管理员申请创建图空间。', 'warning')
+    showToast('请线下向管理员申请创建图空间。', 'info')
     return
   }
   if (spaceNameError.value) return
@@ -317,7 +317,7 @@ async function createSpace() {
     // 平台总览页的全局图空间选择器同步出现新空间（创建即绑定）
     void graphSpaceStore.ensureLoaded(true)
   } catch (err) {
-    showToast(`创建失败：${(err as Error).message}`, 'warning')
+    showToast(`创建失败：${(err as Error).message}`, 'error')
   } finally {
     spaceWorking.value = false
   }
@@ -336,7 +336,7 @@ async function bindSpace() {
     // 绑定对所有用户生效：平台总览页全局图空间选择器立即出现该空间
     void graphSpaceStore.ensureLoaded(true)
   } catch (err) {
-    showToast(`绑定失败：${(err as Error).message}`, 'warning')
+    showToast(`绑定失败：${(err as Error).message}`, 'error')
   } finally {
     spaceWorking.value = false
   }
@@ -344,7 +344,7 @@ async function bindSpace() {
 
 function canChangeLegacyBinding(): boolean {
   if (!isAdmin.value || useAuthStore().profile?.businessRbacEnabled) {
-    showToast('图空间业务归属由管理员通过 SQL 配置。', 'warning')
+    showToast('图空间业务归属由管理员通过 SQL 配置。', 'info')
     return false
   }
   return true
@@ -412,11 +412,11 @@ async function verifyForm() {
       showToast(`验证成功，延迟 ${result.latencyMs ?? '-'} ms，可以保存。`, 'success')
     } else {
       verified.value = false
-      showToast(`验证失败：${result.error ?? '未知错误'}`, 'warning')
+      showToast(`验证失败：${result.error ?? '未知错误'}`, 'error')
     }
   } catch (err) {
     verified.value = false
-    showToast(`验证请求失败：${(err as Error).message}`, 'warning')
+    showToast(`验证请求失败：${(err as Error).message}`, 'error')
   } finally {
     verifying.value = false
   }
@@ -465,7 +465,7 @@ async function saveConfig() {
     showToast(`“${String(form.value.name)}”已保存。`, 'success')
     await loadByCategory(activeCategory.value)
   } catch (err) {
-    showToast(`保存失败：${(err as Error).message}`, 'warning')
+    showToast(`保存失败：${(err as Error).message}`, 'error')
   } finally {
     saving.value = false
   }
@@ -500,7 +500,7 @@ async function saveDetail() {
     await loadByCategory(activeCategory.value)
     showToast(`“${item.name}”的修改已保存。`, 'success')
   } catch (err) {
-    showToast(`保存失败：${(err as Error).message}`, 'warning')
+    showToast(`保存失败：${(err as Error).message}`, 'error')
   } finally {
     saving.value = false
   }
@@ -522,13 +522,13 @@ async function testConnection(item: ConfigItem) {
       showToast(`${item.name} 连接测试成功，延迟 ${result.latencyMs ?? '-'} ms。`, 'success')
     } else {
       item.status = '异常'
-      showToast(`${item.name} 连接失败：${result.error ?? '未知错误'}`, 'warning')
+      showToast(`${item.name} 连接失败：${result.error ?? '未知错误'}`, 'error')
     }
     // 探活结果同步列表卡片（抽屉编辑副本不再共享列表项引用）
     const listed = items.value.find((i) => i.id === item.id)
     if (listed) listed.status = item.status
   } catch (err) {
-    showToast(`测试请求失败：${(err as Error).message}`, 'warning')
+    showToast(`测试请求失败：${(err as Error).message}`, 'error')
   } finally {
     testingId.value = ''
   }
@@ -547,7 +547,7 @@ async function toggleItem(item: ConfigItem) {
     showToast(`${item.name}已${nextStatus === '停用' ? '停用' : '启用'}。`, 'info')
     await loadByCategory(activeCategory.value)
   } catch (err) {
-    showToast(`切换状态失败：${(err as Error).message}`, 'warning')
+    showToast(`切换状态失败：${(err as Error).message}`, 'error')
   }
 }
 
@@ -586,7 +586,7 @@ async function toggleDefault(item: ConfigItem, value: unknown) {
     if (enabled) resetConfigPage()
     showToast(`“${item.name}”已${enabled ? '设为默认' : '取消默认'}。`, 'success')
   } catch (err) {
-    showToast(`更新默认配置失败：${(err as Error).message}`, 'warning')
+    showToast(`更新默认配置失败：${(err as Error).message}`, 'error')
   } finally {
     defaultUpdating.value = false
   }
@@ -641,7 +641,7 @@ async function loadAllCategories() {
   else failed.push('向量模型')
   if (mysql.status === 'fulfilled') loaded.push(...mysql.value.map((c) => toConfigItem('mysql', c)))
   else failed.push('MySQL 数据源')
-  if (failed.length) showToast(`加载${[...new Set(failed)].join('、')}配置失败`, 'warning')
+  if (failed.length) showToast(`加载${[...new Set(failed)].join('、')}配置失败`, 'error')
   items.value = loaded
 }
 

@@ -3,7 +3,8 @@ import { ref } from 'vue'
 interface ToastItem {
   id: number
   message: string
-  tone: 'success' | 'info' | 'warning'
+  /** Arco 全局提示四态：info/success/warning/error（每种状态带对应提示符） */
+  tone: 'success' | 'info' | 'warning' | 'error'
 }
 
 const toasts = ref<ToastItem[]>([])

@@ -9,6 +9,7 @@ import {
 import { RouterLink, useRouter } from 'vue-router'
 import { runNgql, type GraphConsoleResult } from '../../api/graphConsole'
 import { currentGraphSpace } from '../../api/currentGraphSpace'
+import AppAlert from '../../components/AppAlert.vue'
 import ListPagination from '../../components/list-pagination.vue'
 import { useClientPagination } from '../../composables/use-client-pagination'
 import { getErrorMessage } from '../../api/http'
@@ -1008,7 +1009,7 @@ async function pollAlgoJob(): Promise<void> {
     if (job.status === 'succeeded') {
       await fetchAlgoResult(state)
     } else if (job.status === 'failed') {
-      showToast('算法作业执行失败，详情见作业状态面板', 'warning')
+      showToast('算法作业执行失败，详情见作业状态面板', 'error')
     } else {
       scheduleAlgoPoll(state)
     }
@@ -1142,7 +1143,7 @@ async function handleAlgoSubmit(): Promise<void> {
     } else if (job.status === 'succeeded') {
       await fetchAlgoResult(state)
     } else {
-      showToast('算法作业执行失败，详情见作业状态面板', 'warning')
+      showToast('算法作业执行失败，详情见作业状态面板', 'error')
     }
   } catch (error) {
     if (context !== graphContextVersion) return
@@ -1217,7 +1218,7 @@ async function loadPlatformOverview(): Promise<void> {
     relationStructure.value = data.relationStructure
   } catch (error) {
     const message = error instanceof Error ? error.message : '未知错误'
-    showToast(`首页总览数据加载失败：${message}`, 'warning')
+    showToast(`首页总览数据加载失败：${message}`, 'error')
   }
 }
 
@@ -1455,14 +1456,11 @@ const pageMeta = computed(() => {
         </table>
       </section>
 
-      <section class="platform-review-notice is-warning" aria-label="数据处理异常提示">
-        <div class="platform-review-notice__icon" aria-hidden="true">!</div>
-        <div>
-          <strong>发现 385 条数据质量异常</strong>
-          <p>必填缺失 18 条 · 唯一性冲突 326 条 · 枚举异常 41 条</p>
-        </div>
+      <!-- 数据质量异常提醒：Arco Alert 警告态（需人工处理） -->
+      <AppAlert type="warning" class="platform-review-notice" title="发现 385 条数据质量异常" aria-label="数据处理异常提示">
+        <p>必填缺失 18 条 · 唯一性冲突 326 条 · 枚举异常 41 条</p>
         <div class="platform-review-notice__actions"><RouterLink to="/graph-build?module=图谱构建&amp;batch=UPD-20260714">查看处理实例</RouterLink><RouterLink to="/manual-review?batch=UPD-20260714">进入人工处理 →</RouterLink></div>
-      </section>
+      </AppAlert>
 
       <section class="kg-panel platform-task-list">
         <div class="kg-panel__header">
@@ -1552,14 +1550,11 @@ const pageMeta = computed(() => {
         </table>
       </section>
 
-      <section class="platform-review-notice" aria-label="图谱构建人工处理提示">
-        <div class="platform-review-notice__icon" aria-hidden="true">!</div>
-        <div>
-          <strong>326 个候选对象需要人工确认</strong>
-          <p>实体冲突 86 个 · 低置信度关系 198 条 · 属性异常 42 项</p>
-        </div>
+      <!-- 候选对象待确认提醒：Arco Alert 信息态（处理进度说明） -->
+      <AppAlert type="info" class="platform-review-notice" title="326 个候选对象需要人工确认" aria-label="图谱构建人工处理提示">
+        <p>实体冲突 86 个 · 低置信度关系 198 条 · 属性异常 42 项</p>
         <div class="platform-review-notice__actions"><RouterLink to="/graph-build?module=图谱构建&amp;batch=UPD-20260714">查看处理实例</RouterLink><RouterLink to="/manual-review?batch=UPD-20260714">进入人工处理 →</RouterLink></div>
-      </section>
+      </AppAlert>
 
     </main>
 
@@ -1646,9 +1641,10 @@ const pageMeta = computed(() => {
               </button>
             </div>
           </div>
-          <p v-if="algoMetadata?.engine?.status === 'DOWN'" class="platform-query-algo__engine-hint" role="note">
+          <!-- 引擎不可用：错误态提示（提交可能失败） -->
+          <AppAlert v-if="algoMetadata?.engine?.status === 'DOWN'" type="error" class="platform-query-algo__engine-hint">
             算法引擎当前不可用（{{ algoMetadata.engine.message ?? 'Spark 运行器未就绪' }}），提交可能失败，可稍后重试
-          </p>
+          </AppAlert>
           <!-- 仅显示业务输入，算法调优参数使用默认值。 -->
           <div class="platform-query-algo__controls">
             <AForm :model="{ labels: algoLabels }" layout="vertical" class="platform-query-algo__form">
@@ -2662,45 +2658,15 @@ print(response.json())</pre>
 }
 .platform-task-filters a { color:#004ecc;font-size:11px;text-decoration:none;white-space:nowrap; }
 
+/* 人工处理提醒卡：警告/信息态底色与提示符由 AppAlert 提供，这里只管网格占位与动作行 */
 .platform-review-notice {
   grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 14px;
-  min-height: 86px;
-  padding: 15px 18px;
-  border: 1px solid #b2ccff;
-  border-radius: 9px;
-  background: linear-gradient(90deg, #eff4ff, #f8fbff);
-  box-shadow: 0 8px 20px rgba(48, 105, 194, .08);
 }
 
-.platform-review-notice.is-warning {
-  border-color: #fedf89;
-  background: linear-gradient(90deg, #fffaeb, #fffdf7);
-}
-
-.platform-review-notice__icon {
-  display: inline-grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  background: #004ecc;
-  color: #fff;
-  font-size: 18px;
-  font-weight: 800;
-}
-
-.platform-review-notice.is-warning .platform-review-notice__icon { background: #f79009; }
-.platform-review-notice strong { color: #10264c; font-size: 15px; }
-.platform-review-notice p { margin: 5px 0 0; color: var(--text-secondary); font-size: 13px; line-height: 20px; }
-.platform-review-notice__actions { display: flex; align-items: center; gap: 8px; }
+.platform-review-notice p { margin: 0; }
+.platform-review-notice__actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 .platform-review-notice__actions button,.platform-review-notice__actions a { display: inline-flex; align-items: center; height: 34px; padding: 0 13px; border: 1px solid #004ecc; border-radius: 6px; background: #fff; color: #004ecc; font-size: 12px; font-weight: 600; text-decoration: none; white-space: nowrap; cursor: pointer; }
 .platform-review-notice__actions a { background: #004ecc; color: #fff; }
-.platform-review-notice.is-warning .platform-review-notice__actions button { border-color: #93370d; color: #b54708; }
-.platform-review-notice.is-warning .platform-review-notice__actions a { border-color: #93370d; background: #93370d; }
 
 .platform-processing-controls label {
   display: grid;
@@ -4559,13 +4525,7 @@ print(response.json())</pre>
   .platform-pie-layout { grid-template-columns:150px minmax(0,1fr);gap:12px; }
   .platform-pie-wrap { width:138px;height:138px; }
   .platform-pie { width:138px;height:138px; }
-  .platform-review-notice {
-    grid-template-columns: 34px minmax(0, 1fr);
-  }
-
   .platform-review-notice__actions {
-    grid-column: 2;
-    justify-self: start;
     flex-wrap: wrap;
   }
 
@@ -4772,7 +4732,8 @@ print(response.json())</pre>
 .platform-query-algo__tabs .platform-algorithm-tab__select.is-active{color:#165dff;font-weight:500}
 .platform-query-algo__tabs .platform-algorithm-tab__select.is-active::after{opacity:1;transform:scaleX(1)}
 .platform-query-algo__tabs .platform-algorithm-tab__select:focus-visible{border-radius:2px;outline:2px solid rgba(22,93,255,.28);outline-offset:2px}
-.platform-query-algo__engine-hint{margin:0;padding:8px 12px;border:1px solid #ffd6c6;border-radius:4px;background:#fff3ea;color:#b42318;font-size:12px;line-height:20px}
+/* 引擎不可用：错误态底色与提示符由 AppAlert 提供 */
+.platform-query-algo__engine-hint{margin:0 0 8px}
 .platform-query-algo__desc{margin:0;color:#4e5969;font-size:12px;line-height:20px}
 .platform-query-algo__required{display:inline-block;margin:0 4px 0 0;color:#b42318;font-style:normal}
 .platform-query-algo__input{box-sizing:border-box;width:100%;height:32px;padding:0 12px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#1d2129;font-size:14px;line-height:22px;outline:0}

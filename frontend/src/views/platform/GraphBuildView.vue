@@ -174,7 +174,7 @@ async function loadData(silent = false) {
     const jobList = await listJobs()
     jobs.value = jobList.items
   } catch (error) {
-    if (!silent) showToast(schemaErrorMessage(error), 'warning')
+    if (!silent) showToast(schemaErrorMessage(error), 'error')
   } finally {
     if (!silent) loading.value = false
   }
@@ -193,7 +193,7 @@ function announceFinished(prevJobs: WorkflowJob[]) {
     if (prev.get(job.id) !== '运行中') continue // 只报「运行中→终态」的翻转，历史终态不弹
     if (now === '已完成') showToast(`任务「${job.name}」执行完成`, 'success')
     else if (now === '运行异常') showToast(`任务「${job.name}」执行完成但含失败记录（已转人工审核），点任务名查看`, 'warning')
-    else if (now === '运行失败') showToast(`任务「${job.name}」执行失败，点任务名查看原因`, 'warning')
+    else if (now === '运行失败') showToast(`任务「${job.name}」执行失败，点任务名查看原因`, 'error')
   }
 }
 
@@ -235,7 +235,7 @@ async function onTrigger(job: WorkflowJob) {
     showToast(`任务「${job.name}」已触发`, 'success')
     await loadData()
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
+    showToast(schemaErrorMessage(error), 'error')
   } finally {
     triggeringJobId.value = ''
   }
@@ -294,7 +294,7 @@ async function onToggleState(job: WorkflowJob) {
     await loadData()
   } catch (error) {
     delete pausingJobIds.value[job.id]
-    showToast(schemaErrorMessage(error), 'warning')
+    showToast(schemaErrorMessage(error), 'error')
   }
 }
 

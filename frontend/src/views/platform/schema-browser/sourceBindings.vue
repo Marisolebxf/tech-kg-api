@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import { listMysqlDatasources, type MysqlDatasource } from '../../../api/mysqlDatasource'
 import { useToast } from '../../../composables/use-toast'
-import { emptySourceBindingRow, type SourceBindingRow } from './sourceBindingRows'
+import { emptySourceBindingRow, isSourceBindingComplete, type SourceBindingRow } from './sourceBindingRows'
 import SourceBindingRowVue from './sourceBindingRow.vue'
 
 // showAddButton 默认 true：Boolean prop 不给默认值时缺省为 false，
@@ -32,7 +32,15 @@ onMounted(async () => {
   }
 })
 
+const addAttempted = ref(false)
+const hasIncompleteRow = computed(() => props.modelValue.some(row => !isSourceBindingComplete(row)))
+
 function addRow() {
+  if (hasIncompleteRow.value) {
+    addAttempted.value = true
+    return
+  }
+  addAttempted.value = false
   emit('update:modelValue', [...props.modelValue, emptySourceBindingRow()])
 }
 
@@ -63,6 +71,7 @@ function updateRow(index: number, value: SourceBindingRow) {
       @update:model-value="(value) => updateRow(index, value)"
       @remove="removeRow(index)"
     />
+    <p v-if="showAddButton && addAttempted && hasIncompleteRow" class="source-bindings__validation" role="alert">请填写完已有来源表的必填信息（数据源、数据库、来源表）后再添加。</p>
     <button v-if="showAddButton" type="button" class="source-bindings__add" @click="addRow">＋ 绑定来源表</button>
   </div>
 </template>
@@ -71,6 +80,7 @@ function updateRow(index: number, value: SourceBindingRow) {
 /* 行内五列有像素下限（行 min-width 720px），弹窗窄时整块横向拖动看全 */
 .source-bindings{display:flex;flex-direction:column;gap:8px;overflow-x:auto}
 .source-bindings__empty{padding:8px 16px;border:1px dashed #e5e6eb;border-radius:6px;color:#86909c;font-size:12px;line-height:20px}
+.source-bindings__validation{margin:0;color:#b42318;font-size:14px;line-height:22px}
 .source-bindings__add{align-self:flex-start;height:28px;padding:0 12px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#165dff;font-size:12px;cursor:pointer}
 .source-bindings__add:hover{border-color:#165dff}
 </style>

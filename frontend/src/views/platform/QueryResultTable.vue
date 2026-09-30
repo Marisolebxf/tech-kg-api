@@ -121,6 +121,8 @@ function showDetails(row: Record<string, unknown>): void {
 
 <style scoped>
 .query-result-table{min-width:0;overflow:hidden}
+/* Horizontal overflow is indicated by the fixed action column only. */
+.query-result-table :deep(.arco-table-container::before){display:none;box-shadow:none}
 /* The fixed action column only signals data still hidden to its left. */
 .query-result-table:not(.query-result-table--hidden-columns) :deep(.arco-table-col-fixed-right-first::after){box-shadow:none}
 .query-result-table :deep(.arco-table-content),.query-record-details{scrollbar-width:thin;scrollbar-color:transparent transparent}

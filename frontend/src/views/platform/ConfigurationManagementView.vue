@@ -203,7 +203,7 @@ const visibleItems = computed(() => items.value.filter((item) => {
   const matchKeyword = !query || `${item.name}${item.id}${item.type}${endpointOrUrl}${item.model || ''}`.toLowerCase().includes(query)
   const matchStatus = !statusFilter.value || statusFilter.value === '全部状态' || item.status === statusFilter.value
   return matchCategory && matchKeyword && matchStatus
-}))
+}).sort((a, b) => Number(b.isDefault) - Number(a.isDefault)))
 
 // 配置列表客户端分页；筛选/切类后回到第一页（图数据空间分类下 visibleItems 恒空，分页条自动隐藏）
 const {
@@ -550,21 +550,44 @@ async function toggleItem(item: ConfigItem) {
   }
 }
 
-async function setAsDefault(item: ConfigItem) {
+const defaultUpdating = ref(false)
+const hasCategoryDefault = computed(() => items.value.some(item => item.category === activeCategory.value && item.isDefault))
+function defaultSwitchDisabled(item: ConfigItem) {
+  return defaultUpdating.value || (!item.isDefault && items.value.some(other => other.kind === item.kind && other.isDefault))
+}
+async function toggleDefault(item: ConfigItem, value: unknown) {
+  const enabled = value === true
+  if (defaultSwitchDisabled(item) || enabled === item.isDefault) return
+  defaultUpdating.value = true
   try {
+    let updated: ConfigItem
     if (item.kind === 'llm') {
-      await setDefaultLlmConfig(item.id, currentUserId())
+      updated = toConfigItem('llm', enabled
+        ? await setDefaultLlmConfig(item.id, currentUserId())
+        : await updateLlmConfig(item.id, { isDefault: false }, currentUserId()))
     } else if (item.kind === 'embedding') {
-      await setDefaultEmbeddingConfig(item.id, currentUserId())
-    } else if (item.kind === 'mysql') {
-      await setDefaultMysqlDatasource(item.id, currentUserId())
+      updated = toConfigItem('embedding', enabled
+        ? await setDefaultEmbeddingConfig(item.id, currentUserId())
+        : await updateEmbeddingConfig(item.id, { isDefault: false }, currentUserId()))
+    } else {
+      updated = toConfigItem('mysql', enabled
+        ? await setDefaultMysqlDatasource(item.id, currentUserId())
+        : await updateMysqlDatasource(item.id, { isDefault: false }, currentUserId()))
     }
-    showToast(`“${item.name}”已设为默认。`, 'success')
-    await loadByCategory(activeCategory.value)
-    const fresh = items.value.find((i) => i.id === item.id)
-    if (fresh && selected.value) selected.value = { ...selected.value, ...fresh }
+    items.value = items.value.map(other => {
+      if (other.id === item.id && other.kind === item.kind) return updated
+      if (enabled && other.kind === item.kind) return { ...other, isDefault: false, usage: buildUsage(other.kind, false) }
+      return other
+    })
+    if (selected.value?.id === item.id && selected.value.kind === item.kind) {
+      selected.value = { ...selected.value, isDefault: updated.isDefault, usage: updated.usage }
+    }
+    if (enabled) resetConfigPage()
+    showToast(`“${item.name}”已${enabled ? '设为默认' : '取消默认'}。`, 'success')
   } catch (err) {
-    showToast(`设为默认失败：${(err as Error).message}`, 'warning')
+    showToast(`更新默认配置失败：${(err as Error).message}`, 'warning')
+  } finally {
+    defaultUpdating.value = false
   }
 }
 
@@ -651,7 +674,7 @@ onUnmounted(() => {
                 <td class="config-id-col">{{ item.id }}</td>
                 <td><strong class="type-name">{{ item.type }}<template v-if="item.model"> · {{ item.model }}</template></strong><code>{{ item.baseUrl || item.host && `${item.host}:${item.port}` || item.endpoint }}</code></td>
                 <td class="config-status-col"><span class="status" :class="`is-${item.status}`"><i />{{ item.status }}</span></td>
-                <td class="config-usage-col">{{ item.usage }}</td>
+                <td class="config-usage-col"><a-switch :model-value="item.isDefault" :disabled="defaultSwitchDisabled(item)" :loading="defaultUpdating" :aria-label="`将${item.name}设为默认`" :title="!item.isDefault && hasCategoryDefault ? '请先关闭当前默认配置' : item.isDefault ? '关闭默认配置' : '设为默认配置'" @change="value => toggleDefault(item, value)" /></td>
                 <td class="config-time-col"><span>{{ item.owner }}</span><small class="updated">{{ item.updatedAt }}</small></td>
                 <td class="config-action-col">
                   <div class="row-actions">
@@ -707,7 +730,6 @@ onUnmounted(() => {
         <section class="reference-card"><header><strong>引用关系</strong><span>{{ selected.usage }}</span></header><p>配置变更将在下次脚本调用时生效（context 按触发时所选数据源 / 图空间 / LLM / embedding 注入；向量库随图空间自动同名创建）。</p></section>
       </div>
       <footer>
-        <button v-if="!selected.isDefault" type="button" @click="setAsDefault(selected)">设为默认</button>
         <button class="primary" type="button" :disabled="saving || hasDetailErrors" @click="saveDetail">{{ saving ? '保存中…' : '保存修改' }}</button>
       </footer>
       </aside>
@@ -746,7 +768,7 @@ onUnmounted(() => {
           <a-form-item class="wide" label="密码"><input aria-label="password" v-model="form.password" type="password" /><small v-if="createFieldErrors.password" class="field-error">{{ createFieldErrors.password }}</small></a-form-item>
         </template>
         <a-form-item class="wide" label="说明"><a-textarea v-model="form.description" :auto-size="{ minRows: 3, maxRows: 5 }" /><small v-if="createFieldErrors.description" class="field-error">{{ createFieldErrors.description }}</small></a-form-item>
-        <a-form-item class="wide" field="isDefault"><a-checkbox v-model="form.isDefault" class="default-config-checkbox">设为默认（同一类别仅一条默认生效）</a-checkbox></a-form-item>
+        <a-form-item class="wide" field="isDefault"><a-checkbox v-model="form.isDefault" :disabled="hasCategoryDefault || defaultUpdating" class="default-config-checkbox">设为默认（同一类别仅一条默认生效）</a-checkbox></a-form-item>
       </a-form>
       <footer>
         <button type="button" @click="dialogOpen=false">取消</button>
@@ -762,8 +784,11 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.configuration-page{display:flex;box-sizing:border-box;height:100%;min-height:0;overflow:hidden;color:#17233b;flex-direction:column}.page-header{display:flex;flex:0 0 auto;align-items:flex-end;justify-content:space-between;margin-bottom:12px}.page-header span{color:#165dff;font-size:9px;letter-spacing:.12em}.page-header h1{margin:3px 0 0;font-size:22px}.page-header p{margin:4px 0 0;color:#66758f;font-size:11px}.primary{border-color:#165dff!important;background:#165dff!important;color:#fff!important}.config-workbench{display:grid;flex:1;min-height:0;grid-template-columns:248px minmax(0,1fr);overflow:hidden;border:1px solid #bdd7ff;border-radius:9px;background:#fff}.category-nav{display:flex;min-height:0;border-right:1px solid #dce8f8;background:#f8fbff;flex-direction:column}.category-nav>header{display:grid;gap:3px;padding:14px;border-bottom:1px solid #dce8f8}.category-nav>header strong{font-size:13px}.category-nav>header span{color:#8290a7;font-size:9px}.category-nav>button{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:9px;width:100%;padding:11px 12px;border:0;border-bottom:1px solid #edf2f8;background:transparent;color:#344766;text-align:left;cursor:pointer}.category-nav>button.active{background:#eaf2ff;box-shadow:inset 3px 0 #165dff}.category-nav>button>span{display:grid;gap:3px}.category-nav>button strong{font-size:11px}.category-nav>button small{color:#8290a7;font-size:8px}.category-nav>button em{min-width:20px;padding:2px 6px;border-radius:99px;background:#e7eef8;color:#71809a;font-size:9px;font-style:normal;text-align:center}.config-list{display:flex;min-width:0;min-height:0;flex-direction:column}.config-list>header{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid #dce8f8;background:#fff}.config-list>header>div{display:flex;align-items:baseline;gap:8px}.config-list h2{margin:0;font-size:15px}.config-list>header span{color:#8290a7;font-size:9px}.config-list nav{display:flex;flex:1;min-width:0;flex-wrap:wrap;gap:8px;align-items:center}.config-list nav button{height:31px;padding:0 12px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#40516d;font-size:10px;cursor:pointer}.config-list input,.config-list select{height:31px;padding:0 9px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#344766;font-size:10px}.config-list input{width:210px}.table-wrap{flex:1;min-height:0;overflow:auto}.table-wrap table{width:100%;border-collapse:collapse;font-size:10px}.table-wrap thead{position:sticky;z-index:2;top:0}.table-wrap th,.table-wrap td{padding:10px 11px;border-bottom:1px solid #e7eef7;text-align:left;vertical-align:middle}.table-wrap th{background:#f2f7fd;color:#60708a;font-weight:600;white-space:nowrap}.table-wrap tbody tr{cursor:pointer}.table-wrap tbody tr:hover td{background:#f7faff}.config-name{display:flex;align-items:center;gap:9px;min-width:210px}.config-name>span{display:grid;gap:3px}.config-name strong{font-size:11px}.config-name small,.updated{display:block;color:#8290a7;font-size:8px}.type-name{display:block;color:#40516d;font-size:10px}.table-wrap code{display:block;max-width:210px;margin-top:3px;overflow:hidden;color:#71809a;font-size:8px;text-overflow:ellipsis;white-space:nowrap}.status{display:inline-flex;align-items:center;gap:5px;padding:3px 7px;border-radius:99px}.status>i{width:6px;height:6px;border-radius:50%;background:currentColor}.status.is-正常{background:#dcfae6;color:#067647}.status.is-异常{background:#fee4e2;color:#b42318}.status.is-停用{background:#eef1f5;color:#667085}.link{border:0;background:transparent;color:#165dff;font-size:10px;cursor:pointer}.empty{height:100px;color:#8290a7;text-align:center!important}.mask{position:fixed;z-index:40;inset:0;border:0;background:rgba(16,36,76,.24)}.detail-drawer{position:fixed;z-index:41;top:0;right:0;display:flex;width:min(500px,90vw);height:100vh;background:#f8fbff;box-shadow:-18px 0 46px rgba(28,58,107,.25);flex-direction:column}.detail-drawer>header,.create-dialog>header{display:flex;align-items:flex-start;justify-content:space-between;padding:18px;border-bottom:1px solid #dce8f8;background:#fff}.detail-drawer>header span,.create-dialog>header span{color:#165dff;font-size:9px}.detail-drawer h2,.create-dialog h2{margin:4px 0;font-size:18px}.detail-drawer>header button,.create-dialog>header button{width:29px;height:29px;border:0;border-radius:5px;background:#f0f4fa;font-size:19px;cursor:pointer}.health-card{display:grid;grid-template-columns:10px minmax(0,1fr) auto;align-items:center;gap:10px;margin:14px 16px 0;padding:12px;border:1px solid #cfe4d7;border-radius:7px;background:#fff}.health-card>i{width:9px;height:9px;border-radius:50%;background:#12b76a;box-shadow:0 0 0 4px rgba(18,183,106,.12)}.health-card>i.is-异常{background:#f04438;box-shadow:0 0 0 4px rgba(240,68,56,.12)}.health-card>i.is-停用{background:#98a2b3;box-shadow:none}.health-card>div{display:grid;gap:3px}.health-card strong{font-size:11px}.health-card span{color:#71809a;font-size:9px}.health-card button{height:29px;padding:0 10px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#165dff;font-size:9px;cursor:pointer}.detail-form,.dialog-form{display:grid;grid-template-columns:1fr 1fr;gap:11px;padding:16px}.detail-form label,.dialog-form label{display:grid;gap:5px}.detail-form label span,.dialog-form label span{color:#60708a;font-size:9px}.detail-form input,.detail-form textarea,.dialog-form input,.dialog-form select,.dialog-form textarea{box-sizing:border-box;width:100%;height:33px;padding:0 9px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#344766;font:10px inherit}.detail-form textarea,.dialog-form textarea{height:65px;padding-top:8px;resize:none}.wide{grid-column:1/-1}.reference-card{margin:0 16px;padding:12px;border:1px solid #d6e3f4;border-radius:7px;background:#fff}.reference-card header{display:flex;justify-content:space-between}.reference-card strong{font-size:10px}.reference-card span{color:#165dff;font-size:9px}.reference-card p{margin:5px 0 0;color:#71809a;font-size:9px;line-height:16px}.detail-drawer>footer,.create-dialog>footer{display:flex;justify-content:flex-end;gap:8px;margin-top:auto;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.detail-drawer>footer button,.create-dialog>footer button{height:33px;padding:0 13px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#40516d;cursor:pointer}.create-dialog{position:fixed;z-index:42;top:50%;left:50%;width:min(650px,calc(100vw - 40px));overflow:hidden;border-radius:10px;background:#f8fbff;box-shadow:0 24px 70px rgba(28,58,107,.3);transform:translate(-50%,-50%)}.create-dialog>footer{margin-top:0}.create-dialog button:disabled{opacity:.5;cursor:not-allowed}.default-tag{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:99px;background:#fff3d8;color:#b54708;font-size:8px;font-weight:600;font-style:normal}.checkbox{display:flex;flex-direction:row;align-items:center;gap:8px}.checkbox input{width:auto;height:14px}.checkbox span{color:#344766;font-size:10px}@media(max-width:1100px){.config-workbench{grid-template-columns:210px minmax(0,1fr)}}
+.configuration-page{display:flex;box-sizing:border-box;height:100%;min-height:0;overflow:hidden;color:#17233b;flex-direction:column}.page-header{display:flex;flex:0 0 auto;align-items:flex-end;justify-content:space-between;margin-bottom:12px}.page-header span{color:#165dff;font-size:9px;letter-spacing:.12em}.page-header h1{margin:3px 0 0;font-size:22px}.page-header p{margin:4px 0 0;color:#66758f;font-size:11px}.primary{border-color:#165dff!important;background:#165dff!important;color:#fff!important}.config-workbench{display:grid;flex:1;min-height:0;grid-template-columns:248px minmax(0,1fr);overflow:hidden;border:1px solid #bdd7ff;border-radius:9px;background:#fff}.category-nav{display:flex;min-height:0;border-right:1px solid #dce8f8;background:#f8fbff;flex-direction:column}.category-nav>header{display:grid;gap:3px;padding:14px;border-bottom:1px solid #dce8f8}.category-nav>header strong{font-size:13px}.category-nav>header span{color:#8290a7;font-size:9px}.category-nav>button{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:9px;width:100%;padding:11px 12px;border:0;border-bottom:1px solid #edf2f8;background:transparent;color:#344766;text-align:left;cursor:pointer}.category-nav>button.active{background:#eaf2ff;box-shadow:inset 3px 0 #165dff}.category-nav>button>span{display:grid;gap:3px}.category-nav>button strong{font-size:11px}.category-nav>button small{color:#8290a7;font-size:8px}.category-nav>button em{min-width:20px;padding:2px 6px;border-radius:99px;background:#e7eef8;color:#71809a;font-size:9px;font-style:normal;text-align:center}.config-list{display:flex;min-width:0;min-height:0;flex-direction:column}.config-list>header{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid #dce8f8;background:#fff}.config-list>header>div{display:flex;align-items:baseline;gap:8px}.config-list h2{margin:0;font-size:15px}.config-list>header span{color:#8290a7;font-size:9px}.config-list nav{display:flex;flex:1;min-width:0;flex-wrap:wrap;gap:8px;align-items:center}.config-list nav button{height:31px;padding:0 12px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#40516d;font-size:10px;cursor:pointer}.config-list input,.config-list select{height:31px;padding:0 9px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#344766;font-size:10px}.config-list input{width:210px}.table-wrap{flex:1;min-height:0;overflow:auto}.table-wrap table{width:100%;border-collapse:collapse;font-size:10px}.table-wrap thead{position:sticky;z-index:2;top:0}.table-wrap th,.table-wrap td{padding:10px 11px;border-bottom:1px solid #e7eef7;text-align:left;vertical-align:middle}.table-wrap th{background:#f2f7fd;color:#60708a;font-weight:600;white-space:nowrap}.table-wrap tbody tr{cursor:pointer}.table-wrap tbody tr:hover td{background:#f7faff}.config-name{display:flex;align-items:center;gap:9px;min-width:210px}.config-name>span{display:grid;gap:3px}.config-name strong{font-size:11px}.config-name small,.updated{display:block;color:#8290a7;font-size:8px}.type-name{display:block;color:#40516d;font-size:10px}.table-wrap code{display:block;max-width:210px;margin-top:3px;overflow:hidden;color:#71809a;font-size:8px;text-overflow:ellipsis;white-space:nowrap}.status{display:inline-flex;align-items:center;gap:5px;padding:3px 7px;border-radius:99px}.status>i{width:6px;height:6px;border-radius:50%;background:currentColor}.status.is-正常{background:#dcfae6;color:var(--status-success)}.status.is-异常{background:#fee4e2;color:var(--status-danger)}.status.is-停用{background:#eef1f5;color:var(--status-neutral)}.link{border:0;background:transparent;color:#165dff;font-size:10px;cursor:pointer}.empty{height:100px;color:#8290a7;text-align:center!important}.mask{position:fixed;z-index:40;inset:0;border:0;background:rgba(16,36,76,.24)}.detail-drawer{position:fixed;z-index:41;top:0;right:0;display:flex;width:min(500px,90vw);height:100vh;background:#f8fbff;box-shadow:-18px 0 46px rgba(28,58,107,.25);flex-direction:column}.detail-drawer>header,.create-dialog>header{display:flex;align-items:flex-start;justify-content:space-between;padding:18px;border-bottom:1px solid #dce8f8;background:#fff}.detail-drawer>header span,.create-dialog>header span{color:#165dff;font-size:9px}.detail-drawer h2,.create-dialog h2{margin:4px 0;font-size:18px}.detail-drawer>header button,.create-dialog>header button{width:29px;height:29px;border:0;border-radius:5px;background:#f0f4fa;font-size:19px;cursor:pointer}.health-card{display:grid;grid-template-columns:10px minmax(0,1fr) auto;align-items:center;gap:10px;margin:14px 16px 0;padding:12px;border:1px solid #cfe4d7;border-radius:7px;background:#fff}.health-card>i{width:9px;height:9px;border-radius:50%;background:var(--status-success);box-shadow:none}.health-card>i.is-异常{background:var(--status-danger);box-shadow:none}.health-card>i.is-停用{background:var(--status-neutral);box-shadow:none}.health-card>div{display:grid;gap:3px}.health-card strong{font-size:11px}.health-card span{color:#71809a;font-size:9px}.health-card button{height:29px;padding:0 10px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#165dff;font-size:9px;cursor:pointer}.detail-form,.dialog-form{display:grid;grid-template-columns:1fr 1fr;gap:11px;padding:16px}.detail-form label,.dialog-form label{display:grid;gap:5px}.detail-form label span,.dialog-form label span{color:#60708a;font-size:9px}.detail-form input,.detail-form textarea,.dialog-form input,.dialog-form select,.dialog-form textarea{box-sizing:border-box;width:100%;height:33px;padding:0 9px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#344766;font:10px inherit}.detail-form textarea,.dialog-form textarea{height:65px;padding-top:8px;resize:none}.wide{grid-column:1/-1}.reference-card{margin:0 16px;padding:12px;border:1px solid #d6e3f4;border-radius:7px;background:#fff}.reference-card header{display:flex;justify-content:space-between}.reference-card strong{font-size:10px}.reference-card span{color:#165dff;font-size:9px}.reference-card p{margin:5px 0 0;color:#71809a;font-size:9px;line-height:16px}.detail-drawer>footer,.create-dialog>footer{display:flex;justify-content:flex-end;gap:8px;margin-top:auto;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.detail-drawer>footer button,.create-dialog>footer button{height:33px;padding:0 13px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#40516d;cursor:pointer}.create-dialog{position:fixed;z-index:42;top:50%;left:50%;width:min(650px,calc(100vw - 40px));overflow:hidden;border-radius:10px;background:#f8fbff;box-shadow:0 24px 70px rgba(28,58,107,.3);transform:translate(-50%,-50%)}.create-dialog>footer{margin-top:0}.create-dialog button:disabled{opacity:.5;cursor:not-allowed}.default-tag{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:99px;background:#fff3d8;color:#b54708;font-size:8px;font-weight:600;font-style:normal}.checkbox{display:flex;flex-direction:row;align-items:center;gap:8px}.checkbox input{width:auto;height:14px}.checkbox span{color:#344766;font-size:10px}@media(max-width:1100px){.config-workbench{grid-template-columns:210px minmax(0,1fr)}}
 
+/* Compact fixed action column; free width belongs to data columns. */
+.config-table-wrap :is(th,td).config-action-col{width:152px;min-width:152px;max-width:152px}
+.config-usage-col :deep(.arco-switch){vertical-align:middle}
 </style>
 <style scoped>
 /* DESIGN_RULES: configuration management page contract. */
@@ -986,9 +1011,15 @@ onUnmounted(() => {
 }
 
 
+/* Compact fixed action column; free width belongs to data columns. */
+.config-table-wrap :is(th,td).config-action-col{width:152px;min-width:152px;max-width:152px}
+.config-usage-col :deep(.arco-switch){vertical-align:middle}
 </style>
 <style>
 /* The wrapper is the only visible shell; global native-input rules must not restyle Arco's inner field. */
 .app-workspace .configuration-page .config-list .config-search-input.arco-input-wrapper input.arco-input{box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
 .app-workspace .configuration-page .config-list .config-search-input.arco-input-wrapper input.arco-input:focus{border:0!important;background:transparent!important;box-shadow:none!important;outline:0!important}
+/* Compact fixed action column; free width belongs to data columns. */
+.config-table-wrap :is(th,td).config-action-col{width:152px;min-width:152px;max-width:152px}
+.config-usage-col :deep(.arco-switch){vertical-align:middle}
 </style>

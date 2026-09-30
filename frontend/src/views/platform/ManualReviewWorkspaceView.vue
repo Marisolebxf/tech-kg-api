@@ -705,12 +705,12 @@ const runPrimary = () => {
 
 .status.is-待处理 {
   background: #fff0e8;
-  color: #c4320a;
+  color:var(--status-warning);
 }
 
 .status.is-已完成 {
   background: #e9f8ef;
-  color: #067647;
+  color:var(--status-success);
 }
 
 .rw-diag {
@@ -893,12 +893,12 @@ const runPrimary = () => {
 
 .status.is-已撤销 {
   background: #f2f4f7;
-  color: #475467;
+  color:var(--status-neutral);
 }
 
 .status.is-已驳回 {
   background: #f2f4f7;
-  color: #b42318;
+  color:var(--status-danger);
 }
 
 @media (max-width: 960px) {

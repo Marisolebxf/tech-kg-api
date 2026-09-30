@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { IconHome } from '@arco-design/web-vue/es/icon'
 
-import { breadcrumbBackTarget, breadcrumbCrumbs, breadcrumbHomeTo } from '../composables/use-breadcrumb'
+import { breadcrumbBackTarget, breadcrumbCrumbs } from '../composables/use-breadcrumb'
 
 const route = useRoute()
 const router = useRouter()
-/** 层级链条（首项首页图标由模板单独渲染；末项为当前页）。 */
+/** 层级链条（末项为当前页）。 */
 const crumbs = computed(() =>
   breadcrumbCrumbs(route.path, String(route.meta.title ?? '亿级知识图谱')),
 )
@@ -56,17 +55,8 @@ function goBack() {
       </svg>
     </button>
     <span v-if="showBack" class="app-breadcrumb__divider" aria-hidden="true"></span>
-    <!-- 首项：首页图标入口回平台总览（Arco Breadcrumb 首项放图标的通用模式） -->
-    <RouterLink
-      class="app-breadcrumb__home"
-      :to="breadcrumbHomeTo"
-      aria-label="平台总览"
-      title="平台总览"
-    >
-      <IconHome />
-    </RouterLink>
     <template v-for="(item, index) in crumbs" :key="`${item.label}-${index}`">
-      <span class="app-breadcrumb__separator" aria-hidden="true">/</span>
+      <span v-if="index > 0" class="app-breadcrumb__separator" aria-hidden="true">/</span>
       <RouterLink v-if="item.to" class="app-breadcrumb__link" :to="item.to">{{ item.label }}</RouterLink>
       <span v-else class="app-breadcrumb__current" aria-current="page">{{ item.label }}</span>
     </template>
@@ -123,28 +113,6 @@ function goBack() {
   width: 1px;
   height: 12px;
   background: #e5e6eb;
-}
-
-
-.app-breadcrumb__home {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  padding: 0 8px;
-  margin: 0 -8px;
-  border-radius: 2px;
-  color: #4e5969;
-}
-
-.app-breadcrumb__home svg {
-  display: block;
-  width: 16px;
-  height: 16px;
-}
-
-.app-breadcrumb__home:hover {
-  color: #165dff;
-  background: #f2f3f5;
 }
 
 .app-breadcrumb__separator {

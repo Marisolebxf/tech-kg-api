@@ -699,6 +699,13 @@ function reviewItemRoute(item: ProductionReviewCase): string | { path: string; q
   const keyword = (item.objectName || item.sourceRecordId || item.id).trim()
   return { path: '/manual-review', query: keyword ? { category: 'C', keyword } : { category: 'C' } }
 }
+
+/** 审核卡片类别文案：与人工审核页子页对齐——抽取失败重跑（T_EXTRACT_FAIL）同名，
+ *  其余（T_LINK 实体对齐裁决 / T_DIRECT 候选审核）统称「入库决策」，
+ *  不再透传后端 category 原文（T_DIRECT 会露出英文技术名）。 */
+function reviewItemCategory(item: ProductionReviewCase): string {
+  return item.templateId === 'T_EXTRACT_FAIL' ? '抽取失败重跑' : '入库决策'
+}
 const activeAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === selectedAssetChange.value))
 
 // 构成图饼图分段由图例数据驱动（pieSlices 纯函数，随图例 tone+ratio 生成扇形 path）；
@@ -1343,8 +1350,7 @@ const pageMeta = computed(() => {
             <div class="platform-review-list">
               <RouterLink v-for="item in overviewReviews" :key="item.id" :to="reviewItemRoute(item)">
                 <strong>{{ item.objectName || item.objectId }}</strong>
-                <em>{{ item.category }}</em>
-                <span class="is-risk">风险 {{ item.riskLevel }}</span>
+                <em>{{ reviewItemCategory(item) }}</em>
               </RouterLink>
             </div>
           </template>
@@ -2261,7 +2267,6 @@ print(response.json())</pre>
 .platform-review-list a:hover { background:#f4f8ff; }
 .platform-review-list strong { overflow:hidden;color:#253752;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap; }
 .platform-review-list em { overflow:hidden;color:#8a97aa;font-size:12px;line-height:20px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }
-.platform-review-list .is-risk { justify-self:end;color:#b54708;font-size:12px;line-height:20px;white-space:nowrap; }
 .platform-card-empty { display:grid;gap:6px;justify-items:center;align-content:center;min-height:170px;padding:20px;text-align:center; }
 .platform-card-empty strong { color:#253752;font-size:14px;line-height:22px; }
 .platform-card-empty p { margin:0;color:#8a97aa;font-size:12px;line-height:20px; }
@@ -4777,7 +4782,6 @@ print(response.json())</pre>
   .platform-jobs-list a{grid-template-columns:minmax(0,1fr) auto}
   .platform-jobs-list em{display:none}
   .platform-review-list a{grid-template-columns:minmax(0,1fr)}
-  .platform-review-list .is-risk{justify-self:start}
 }
 .platform-query-form{flex:0 0 auto}
 .platform-query .platform-query-form{padding-bottom:24px;border-bottom:1px solid var(--color-border-2)!important}

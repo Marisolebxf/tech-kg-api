@@ -212,11 +212,11 @@ def make_index(
     result: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         seen = set()
-        for field in fields:
+        for field_name in fields:
             keys = (
-                names_from(row.get(field))
-                if field == "name_alias"
-                else {normalize_name(row.get(field))}
+                names_from(row.get(field_name))
+                if field_name == "name_alias"
+                else {normalize_name(row.get(field_name))}
             )
             for key in keys:
                 if key and key not in seen:
@@ -228,11 +228,16 @@ def make_index(
 def identifier_index(rows: list[dict[str, Any]]) -> dict[str, list[str]]:
     result: dict[str, list[str]] = defaultdict(list)
     for row in rows:
-        for field in ("patent_id", "publication_number", "application_number", "granted_number"):
+        for field_name in (
+            "patent_id",
+            "publication_number",
+            "application_number",
+            "granted_number",
+        ):
             key = (
-                application_number_key(row.get(field))
-                if field == "application_number"
-                else normalize_identifier(row.get(field))
+                application_number_key(row.get(field_name))
+                if field_name == "application_number"
+                else normalize_identifier(row.get(field_name))
             )
             if key and str(row["vid"]) not in result[key]:
                 result[key].append(str(row["vid"]))
@@ -384,13 +389,13 @@ def project_evidence_context(
             if not project_vid:
                 continue
             evidence_names = set()
-            for field in (
+            for field_name in (
                 "project_host",
                 "participants",
                 "funded_institution",
                 "participating_institution",
             ):
-                evidence_names.update(names_from(row.get(field)))
+                evidence_names.update(names_from(row.get(field_name)))
             for item in parse_json(row.get("output_patents"), []):
                 if not isinstance(item, dict):
                     continue
@@ -425,14 +430,14 @@ def candidate_view(row: dict[str, Any], entity_type: str) -> dict[str, Any]:
 
 def person_org_names(row: dict[str, Any]) -> set[str]:
     result = set()
-    for field in (
+    for field_name in (
         "scholar_org_name_zh",
         "scholar_org_name_en",
         "work_experience_institution_zh",
         "work_experience_institution_en",
         "scholar_org",
     ):
-        result.update(names_from(row.get(field)))
+        result.update(names_from(row.get(field_name)))
     return result
 
 

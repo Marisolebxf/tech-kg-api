@@ -405,6 +405,10 @@ from kg_sdk import access_report, flush_access_sidecar
 path, function_name = sys.argv[1], sys.argv[2]
 spec = importlib.util.spec_from_file_location("uploaded_workflow", path)
 module = importlib.util.module_from_spec(spec)
+# 注册进 sys.modules：dataclasses 等标准库按 cls.__module__ 反查模块字典解析
+# 字符串注解（from __future__ import annotations 下全是字符串），未注册的合成
+# 模块会以 None.__dict__ 在 import 期炸掉——任何带 @dataclass 的上传脚本都中招。
+sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 function = getattr(module, function_name)
 payload = json.loads(sys.stdin.read() or "{}")

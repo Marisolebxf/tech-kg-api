@@ -14,20 +14,69 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+import logging
+from collections.abc import Mapping
+from typing import Any
 
 from kg_sdk import step
 
-from script.load_scholar_relations import (
-    build_org_name_vid_index,
-    resolve_org_vid_by_name,
-)
-from script.scholar_provenance import CONFIDENCE_PLACEHOLDER_ORG
+logger = logging.getLogger("studied_at")
+
+
+def resolve_org_vid_by_name(
+    name_zh: str | None, name_en: str | None, index: dict[str, str]
+) -> str | None:
+    """``scholar_org_id`` 缺失时,用机构名(中→英,精确→小写)在 index 里查 org 真实 vid。
+
+    index 来自 :func:`build_org_name_vid_index`(图里已存在 Organization 的 name->vid)。
+    找不到返回 None——调用方应跳过,不建悬挂边(替代旧的 md5 桩 vid 回退)。
+    """
+    for name in (name_zh, name_en):
+        if not (name and name.strip()):
+            continue
+        key = name.strip()
+        if key in index:
+            return index[key]
+        key_l = key.lower()
+        if key_l in index:
+            return index[key_l]
+    return None
+
+
+def build_org_name_vid_index(graph) -> dict[str, str]:
+    """从图里已存在 Organization 节点建 name->vid 索引(只读)。
+
+    匹配 ``organization_entity_etl`` 已灌的真实 vid(org_{org_id}),替代失效的 md5 桩 vid,
+    避免 AFFILIATED_WITH 边指向不存在的 org。读失败/空 → 返回 {}(调用方跳过无 id 的)。
+    """
+    index: dict[str, str] = {}
+    try:
+        result = graph.execute_read(
+            "MATCH (v:Organization) RETURN id(v) AS vid, "
+            "v.Organization.name_cn AS name_cn, v.Organization.name_en AS name_en;"
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("build_org_name_vid_index: 读 Organization 失败,返回空索引")
+        return index
+    for rec in result.records if result else []:
+        vid = rec.get("vid")
+        if not vid:
+            continue
+        for k in ("name_cn", "name_en"):
+            name = rec.get(k)
+            if isinstance(name, str) and name.strip():
+                index[name.strip()] = str(vid)
+                index[name.strip().lower()] = str(vid)
+    return index
+
+
+CONFIDENCE_PLACEHOLDER_ORG = 0.6
+
 
 _BATCH = "yunfei_restore_studied_at"
 
 
-@step
+@step("studied_at")
 def emit(payload: Mapping[str, Any]) -> dict[str, Any]:
     from kg_sdk import current_context
 

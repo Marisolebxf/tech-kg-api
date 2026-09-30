@@ -5,7 +5,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { IconRefresh, IconSearch } from '@arco-design/web-vue/es/icon'
 
-import { deleteProductionReview, getExecution, getProductionReview, getProductionReviews, getTask, rerunExtractFailures, TRIGGER_SOURCE_LABEL, type ProcessingInstance, type ProductionReviewCase, type WorkflowExecution } from '../../api/workflowOperations'
+import { deleteProductionReview, executionStatusLabel, getExecution, getProductionReview, getProductionReviews, getTask, rerunExtractFailures, TRIGGER_SOURCE_LABEL, type ProcessingInstance, type ProductionReviewCase, type WorkflowExecution } from '../../api/workflowOperations'
 import { currentGraphSpace } from '../../api/currentGraphSpace'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
 import { clampSearchKeyword, SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
@@ -232,6 +232,17 @@ const logLoading = ref(false)
 const logError = ref('')
 const logCase = ref<ProductionReviewCase>()
 const logExecution = ref<WorkflowExecution | null>(null)
+/** 处理日志弹窗执行概要的状态色调（五类语义，与执行历史表同口径）：
+ *  完成=成功 / 异常=警告 / 失败与超时=危险 / 取消与终止=中性 / 运行=信息 / 其余等待=中性。 */
+const logExecutionTone = (status?: string | null) => {
+  const s = (status || '').toUpperCase()
+  if (s === 'COMPLETED') return 'ok'
+  if (s === 'ABNORMAL') return 'warn'
+  if (['FAILED', 'TIMED_OUT'].includes(s)) return 'err'
+  if (['CANCELED', 'TERMINATED'].includes(s)) return 'idle'
+  if (s === 'RUNNING') return 'run'
+  return 'idle'
+}
 const logTask = ref<ProcessingInstance | null>(null)
 const logExecutionMissing = ref(false)
 /** 当前展示哪个执行：rerun=重跑执行（最新一次处理）；original=原执行。 */
@@ -667,7 +678,7 @@ onMounted(() => {
             <dl class="case-log-dl">
               <div><dt>执行 ID</dt><dd><code>{{ logExecution.id }}</code></dd></div>
               <div><dt>触发方式</dt><dd>{{ TRIGGER_SOURCE_LABEL[logExecution.triggerSource || 'MANUAL'] || logExecution.triggerSource || '—' }}</dd></div>
-              <div><dt>状态</dt><dd>{{ logExecution.status }}</dd></div>
+              <div><dt>状态</dt><dd><span :class="['case-log-exec-status', logExecutionTone(logExecution.status)]">{{ executionStatusLabel(logExecution.status) }}</span></dd></div>
               <div><dt>开始时间</dt><dd>{{ logExecution.startedAt || '—' }}</dd></div>
               <div><dt>完成时间</dt><dd>{{ logExecution.completedAt || '—' }}</dd></div>
               <div v-if="logExtractSummary"><dt>抽取结果</dt><dd>写入 {{ logExtractSummary.written }} · 失败 {{ logExtractSummary.failed }}（{{ logExtractSummary.sourceCount }} 个来源）</dd></div>
@@ -792,7 +803,7 @@ onMounted(() => {
 .review-status.is-重跑中,.review-status.is-执行中{color:var(--status-info)}
 .review-status.is-重跑失败,.review-status.is-失败{color:var(--status-danger)}
 .review-status.is-已完成{color:var(--status-success)}
-.review-status.is-排队中{color:var(--status-warning)}
+.review-status.is-排队中{color:var(--status-neutral)}
 .review-status.is-已取消{color:var(--status-neutral)}
 
 /* 人工审核页排版、间距与控件合同。 */
@@ -884,11 +895,21 @@ onMounted(() => {
 .case-log-steps{display:flex;flex-wrap:wrap;gap:8px;margin:0;padding:0;list-style:none}
 .case-log-steps li{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;font-size:12px;line-height:20px}
 .case-log-step-name{color:#4e5969}
-.case-log-step-status{color:#165dff}
+/* 阶段状态与执行概要状态：系统标准「6px 语义色圆点 + 文字」，五类语义色 */
+.case-log-step-status{display:inline-flex;align-items:center;gap:6px;color:var(--status-info)}
+.case-log-step-status::before{content:"";flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor}
 .case-log-step-status.is-成功{color:var(--status-success)}
 .case-log-step-status.is-运行中{color:var(--status-info)}
-.case-log-step-status.is-需人工处理{color:var(--status-warning)}
+.case-log-step-status.is-异常{color:var(--status-warning)}
+.case-log-step-status.is-需人工处理{color:var(--status-danger)}
 .case-log-step-status.is-待执行{color:var(--status-neutral)}
+.case-log-exec-status{display:inline-flex;align-items:center;gap:6px}
+.case-log-exec-status::before{content:"";flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor}
+.case-log-exec-status.ok{color:var(--status-success)}
+.case-log-exec-status.warn{color:var(--status-warning)}
+.case-log-exec-status.err{color:var(--status-danger)}
+.case-log-exec-status.run{color:var(--status-info)}
+.case-log-exec-status.idle{color:var(--status-neutral)}
 .case-log-empty{color:#86909c}
 /* 更新时间表头三态排序 */
 .th-time-sort{cursor:pointer;user-select:none}

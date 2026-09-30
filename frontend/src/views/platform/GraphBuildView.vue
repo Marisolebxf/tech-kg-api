@@ -384,12 +384,14 @@ function overflowJobActions(job: WorkflowJob): JobAction[] {
   return actions.length > 3 ? actions.slice(2) : []
 }
 
+/** 执行状态 → 五类语义色：完成=成功 / 异常=警告（含失败行转人工）/ 失败与超时=危险 /
+ *  取消与终止=中性（人为中断，非故障）/ 排队与未知等待=中性 / 其余（运行中）=信息。 */
 function executionStatusClass(status: string): string {
   const s = status.toUpperCase()
   if (s === 'COMPLETED') return 'ok'
-  if (s === 'FAILED' || s === 'CANCELED' || s === 'TERMINATED' || s === 'TIMED_OUT') return 'err'
-  if (s === 'ABNORMAL') return 'err'
-  if (s === 'QUEUED') return 'idle'
+  if (s === 'FAILED' || s === 'TIMED_OUT') return 'err'
+  if (s === 'ABNORMAL') return 'warn'
+  if (s === 'CANCELED' || s === 'TERMINATED' || s === 'QUEUED') return 'idle'
   return 'run'
 }
 
@@ -559,12 +561,12 @@ onMounted(() => {
 .graph-build-page{display:flex;box-sizing:border-box;height:100%;min-height:0;overflow:hidden;padding:0;color:#1d2129;font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0;flex-direction:column}
 .graph-build-page :deep(*){font-family:inherit;letter-spacing:0}
 .gb-actions{display:flex;gap:8px;margin-bottom:12px}
-.gb-actions button{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
+.gb-actions button{height:32px;padding:0 16px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
 .gb-actions .primary{border-color:#165dff;background:#165dff;color:#fff}
 .gb-summary{display:grid;flex-shrink:0;grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr));gap:16px;margin-bottom:16px}
 .gb-summary article{display:flex;flex:1;min-height:80px;gap:8px;padding:12px 16px;border:1px solid #e5e6eb;border-radius:6px;background:#fff;flex-direction:column;justify-content:center}
-.gb-summary span{color:#1d2129;font-size:16px;line-height:24px;font-weight:600}
-.gb-summary strong{color:#1d2129;font-size:28px;line-height:32px;font-weight:600;letter-spacing:0}
+.gb-summary span{color:#4e5969;font-size:12px;line-height:20px;font-weight:400}
+.gb-summary strong{color:#1d2129;font-size:20px;line-height:28px;font-weight:600;letter-spacing:0}
 .gb-summary__label,.gb-summary__task-stats{display:flex;align-items:center;min-width:0}.gb-summary__label{gap:8px}.gb-summary__hint{display:inline-flex;align-items:center;justify-content:center;flex:0 0 24px;width:24px;height:24px;padding:0;border:0;border-radius:4px;background:transparent;color:#86909c;cursor:help}.gb-summary__hint:hover,.gb-summary__hint:focus-visible{background:#f2f3f5;color:#165dff}.gb-summary__hint svg{width:16px;height:16px}
 .gb-jobs-section{display:flex;flex:1;min-height:0;flex-direction:column;gap:16px}
 .gb-jobs-toolbar{display:flex;flex-direction:column;flex:0 0 auto;align-items:stretch;gap:12px;box-sizing:border-box;color:#1d2129}
@@ -588,28 +590,28 @@ onMounted(() => {
 /* 与 Schema 管理表一致：由内容语义自动分配列宽，空间不足时由表格容器承接横向滚动。 */
 .gb-task-table table{width:max-content;min-width:100%;margin:0;border-collapse:collapse;font-size:14px;line-height:22px}
 .gb-task-table th{position:sticky;z-index:2;top:0;height:40px;padding:0 16px;background:#f7f8fa;color:#1d2129;font-size:14px;line-height:22px;font-weight:500;text-align:left;white-space:nowrap}
-.gb-task-table td{height:40px;padding:0 16px;border-bottom:1px solid #e5edf8;color:#344763;font-size:14px;line-height:22px;font-weight:400;vertical-align:middle;white-space:nowrap}
-.gb-task-table tbody tr:hover td{background:#f4f8ff}
-.gb-task-table code{padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-family:inherit;font-size:14px;line-height:22px;font-weight:400;white-space:nowrap}
+.gb-task-table td{height:40px;padding:0 16px;border-bottom:1px solid #e5e6eb;color:#1d2129;font-size:14px;line-height:22px;font-weight:400;vertical-align:middle;white-space:nowrap}
+.gb-task-table tbody tr:hover td{background:#f2f3f5}
+.gb-task-table code{padding:2px 6px;border-radius:4px;background:#e8f3ff;color:#165dff;font-family:inherit;font-size:14px;line-height:22px;font-weight:400;white-space:nowrap}
 .gb-task-table b{color:#1d2129;font-weight:400}
-.gb-last-run{display:block;color:#8191aa;font-size:12px;line-height:20px;font-weight:400}
+.gb-last-run{display:block;color:#86909c;font-size:12px;line-height:20px;font-weight:400}
 .gb-job-actions{white-space:nowrap}
 .gb-job-actions__inner{display:flex;align-items:center;gap:8px}
 /* 操作按钮与 Schema 管理表同款：无边框纯文字链接；删除红、其余蓝、禁用灰 */
 .gb-action-link{height:auto;padding:0;border:0;background:transparent;color:#165dff;font-size:14px;line-height:22px;font-weight:400;cursor:pointer;text-decoration:none}
 .gb-action-link:hover:not(:disabled){color:#4080ff;text-decoration:none}
-.gb-action-link:disabled{color:#a9b4c6;cursor:not-allowed;text-decoration:none}
-.gb-action-link.is-danger{color:#e5484d}
-.gb-action-link.is-danger:hover:not(:disabled){color:#b42318}
-.gb-action-more{min-width:24px;font-size:18px;line-height:22px;text-align:center}
+.gb-action-link:disabled{color:#c9cdd4;cursor:not-allowed;text-decoration:none}
+.gb-action-link.is-danger{color:#f53f3f}
+.gb-action-link.is-danger:hover:not(:disabled){color:#f53f3f;text-decoration:underline}
+.gb-action-more{min-width:24px;font-size:16px;line-height:22px;text-align:center}
 /* 操作列与 Schema 管理表对齐：右侧固定列（表头同时吸顶，z 高于数据行），横向滚动时操作不被遮挡 */
 .gb-task-table thead th:last-child{position:sticky;right:0;z-index:4;background:#f7f8fa;box-shadow:-1px 0 #e5e6eb}
 .gb-task-table td.gb-job-actions{position:sticky;right:0;z-index:3;background:#fff;box-shadow:-1px 0 #e5e6eb}
-.gb-task-table tbody tr:hover td.gb-job-actions{background:#f4f8ff}
+.gb-task-table tbody tr:hover td.gb-job-actions{background:#f2f3f5}
 /* 固定列左侧向内容区渐隐的阴影（与 Schema 管理表同视觉提示） */
 .gb-task-table.has-scroll-right :is(thead th:last-child,td.gb-job-actions)::before{position:absolute;top:0;bottom:-1px;left:0;width:12px;content:"";pointer-events:none;transform:translateX(-100%);box-shadow:inset -10px 0 8px -8px rgba(78,89,105,.28)}
-.empty{padding:40px 14px;text-align:center;color:#8290a7;font-size:12px;line-height:20px;font-weight:400}
-.muted{color:#8191aa;font-size:12px;line-height:20px;font-weight:400}
+.empty{padding:40px 14px;text-align:center;color:#86909c;font-size:12px;line-height:20px;font-weight:400}
+.muted{color:#86909c;font-size:12px;line-height:20px;font-weight:400}
 span.ok,span.err,span.warn,span.run,span.idle{display:inline-flex;align-items:center;gap:6px;font-size:14px;line-height:22px;border-radius:0;background:transparent;padding:0;white-space:nowrap}
 span.ok::before,span.err::before,span.warn::before,span.run::before,span.idle::before{display:block;flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
 span.idle{color:var(--status-neutral)}
@@ -649,6 +651,6 @@ span.run{color:var(--status-info)}
 .gb-action-menu-item.arco-dropdown-option{box-sizing:border-box;min-height:32px;padding:5px 16px;color:#165dff;font-size:14px;line-height:22px;font-weight:400;text-decoration:none}
 .gb-action-menu-item.arco-dropdown-option:hover{color:#4080ff;text-decoration:none}
 .gb-action-menu-item--danger.arco-dropdown-option:not(.arco-dropdown-option-disabled){color:#f53f3f}
-.gb-action-menu-item--danger.arco-dropdown-option:not(.arco-dropdown-option-disabled):hover{color:#b42318}
-.gb-action-menu-item.arco-dropdown-option-disabled{color:#a9b4c6}
+.gb-action-menu-item--danger.arco-dropdown-option:not(.arco-dropdown-option-disabled):hover{color:#f53f3f}
+.gb-action-menu-item.arco-dropdown-option-disabled{color:#c9cdd4}
 </style>

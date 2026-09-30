@@ -144,7 +144,38 @@ describe('配置管理 · 管理抽屉编辑隔离', () => {
     element.scrollLeft = 600
     await scroll.trigger('scroll')
     expect(scroll.classes()).not.toContain('has-scroll-right')
+    // Sticky action column can cover no data even if the scroll container
+    // still reports a few pixels of remaining horizontal scroll.
+    element.scrollLeft = 590
+    const lastData = wrapper.get('.config-table-wrap thead .config-time-col').element as HTMLElement
+    const action = wrapper.get('.config-table-wrap thead .config-action-col').element as HTMLElement
+    const dataRect = vi.spyOn(lastData, 'getBoundingClientRect').mockReturnValue({ width: 100, right: 650 } as DOMRect)
+    const actionRect = vi.spyOn(action, 'getBoundingClientRect').mockReturnValue({ width: 100, left: 650 } as DOMRect)
+    await scroll.trigger('scroll')
+    expect(scroll.classes()).not.toContain('has-scroll-right')
+    dataRect.mockReturnValue({ width: 100, right: 720 } as DOMRect)
+    await scroll.trigger('scroll')
+    expect(scroll.classes()).toContain('has-scroll-right')
+    dataRect.mockRestore()
+    actionRect.mockRestore()
     wrapper.unmount()
+  })
+
+  it('引用情况使用清晰的默认状态按钮并保留取消默认操作', async () => {
+    setActivePinia(createPinia())
+    const { updateLlmConfig } = await import('../../api/llmConfig')
+    const previous = { ...state.current }
+    const wrapper = mountView()
+    await flushPromises()
+    const control = wrapper.get('.config-usage-col .config-default-toggle')
+    expect(control.text()).toBe('默认')
+    expect(control.attributes('aria-pressed')).toBe('true')
+    await control.trigger('click')
+    await flushPromises()
+    expect(updateLlmConfig).toHaveBeenCalledWith('LLM-E2E', { isDefault: false }, 'user-e2e')
+    expect(wrapper.get('.config-usage-col .config-default-toggle').text()).toBe('设为默认')
+    wrapper.unmount()
+    state.current = previous
   })
 
   it('抽屉输入（含非法值）不实时串进列表卡片，关闭后卡片保持服务端值', async () => {

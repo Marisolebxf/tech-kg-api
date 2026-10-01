@@ -295,20 +295,22 @@ httpx.ASGITransport(app=main.app))` 进程内打 `/api/v1` 路由（加 `-e PREW
 | 两点成果 | ✅ | 王甫园↔王开泳 共同论文 1 篇 |
 | 学者同事 | ✅ | 杨彬↔薛宁 金能科技任职时间重叠 1 条（AFFILIATED_WITH 边上 work_experience_date） |
 | 学者校友 | ✅ | 裴诗雅↔熊若兰 北京大学同校（STUDIED_AT 推得） |
-| 论文合作 | ❌ | `PAPER_COOPERATED_WITH` 边类型未建（见下） |
+| 论文合作 | ✅ | 王甫园↔王开泳：合作论文 1 篇、合作频次 1、学术影响力 10.7、核心合作者 4（数据在 `structuredResult` 嵌套层） |
 | 企业关联 | ⚠️ | 查询空；构建链路本身可用（见下） |
 | 产业链事件 | ✅ | IC0007005（半导体设备）top5 事件 + 15 专家 + 3 企业 |
 | 产业链全景 | ✅ | 集成电路 4 层（核心技术/…） |
 
-两个空模块均为**业务自建边类型从未初始化**——dev 与重建空间一致缺（`DESCRIBE EDGE` 双双
-EdgeNotFound），属 §0「不在还原范围」的业务边，非重建缺数：
+探针解读注意（首轮曾因此误报两个模块空）：时间参数本栈要求 `YYYY-MM-DD`（`YYYY-MM` 422）；
+模块 2/6 的实体关系数据在响应的 `structuredResult` 嵌套层，只扫顶层列表字段会误判为空。
 
-- **论文合作**：服务遍历 `PAPER_COOPERATED_WITH` 边类型 → traversal 400 被吞、恒空；
-  当前无任何链路产出该边，dev 上同样跑不出结果。
-- **企业关联**：`EMPLOYED_BY` 边类型两空间均无。实测临时 `CREATE EDGE EMPLOYED_BY`
-  （5 属性：relation_type/role/start_date/end_date/source）后 `build` 正常——`effective=True`、
-  写出并返回 1 条关系；要让模块可用需显式建边类型（业务动作）。`/kg-service/key-enterprise-relation`
-  查询走 2 跳子图解析，构建后仍解析 0 条，未深挖。测试后已删边 + `DROP EDGE` 还原。
+- **论文合作**：`PAPER_COOPERATED_WITH` 是可选的**预计算缓存边**，两空间均未建
+  （traversal 400 被吞、仅留 stderr 日志噪音），主路径走子图共同论文解析，不依赖该边。
+- **企业关联**（唯一空模块）：`EMPLOYED_BY` 边类型 dev 与重建空间均未初始化
+  （`DESCRIBE EDGE` 双双 EdgeNotFound），属 §0「不在还原范围」的业务边，非重建缺数。
+  实测临时 `CREATE EDGE EMPLOYED_BY`（5 属性：relation_type/role/start_date/end_date/source）
+  后 `build` 正常——`effective=True`、写出并返回 1 条关系；要让模块可用需显式建边类型
+  （业务动作）。`/kg-service/key-enterprise-relation` 查询走 2 跳子图解析，构建后仍解析
+  0 条，未深挖。测试后已删边 + `DROP EDGE` 还原。
 
 ## 8. 源表清单（73 张，括号为装数后行数核对）
 

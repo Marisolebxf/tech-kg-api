@@ -11,7 +11,7 @@ import re
 import sys
 import tempfile
 from collections.abc import Iterator
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -599,6 +599,46 @@ def _stamp_job_latest(execution: dict[str, Any]) -> None:
         _repo.save_job(job)
     except Exception:  # noqa: BLE001
         pass
+
+
+@activity.defn
+async def finalize_scheduled_execution(request: dict[str, Any]) -> dict[str, Any]:
+    """调度执行收尾：workflow 自报终态，回写 execution/task 行（与 register 对称）。
+
+    Schedule 直发 workflow 不经过 API，没有完成回调；终态此前只靠详情页惰性刷新，
+    没人查看就永远 RUNNING。终态由 workflow 亲口传入（此处不能向 Temporal describe
+    核实——activity 执行时 workflow 自身尚未结束，describe 恒为 RUNNING）。幂等：
+    行已是终态则跳过；CANCELLED 场景 workflow 无法收尾，由 execution_reconciler 兜底。
+    """
+    from service.temporal_runtime import _apply_output_failure_status
+    from service.workflow_operations import WorkflowOperationsService
+    from service.workflow_repository import repository
+
+    run_id = request.get("runId")
+    execution = repository.get_execution_by_run(run_id) if run_id else None
+    if execution is None:
+        return {"ok": False, "reason": "execution-missing"}
+    if execution.get("status") not in (None, "", "RUNNING"):
+        return {"ok": True, "deduped": True}
+    error = request.get("error")
+    if error:
+        execution["status"] = "FAILED"
+        execution["message"] = str(error)[:500]
+    else:
+        execution["status"] = "COMPLETED"
+        execution["message"] = "工作流执行完成"
+        output = request.get("result")
+        if isinstance(output, dict):
+            execution["output"] = output
+            execution = _apply_output_failure_status(execution, output)
+    execution["completedAt"] = datetime.now(UTC).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    repository.save_execution(execution)
+    try:
+        WorkflowOperationsService()._sync_task_from_execution(execution)
+    except Exception:  # noqa: BLE001
+        logger.exception("调度执行收尾同步 task 失败: %s", execution.get("id"))
+    _stamp_job_latest(execution)
+    return {"ok": True, "status": execution.get("status")}
 
 
 def _pending_graph_client(space: str | None) -> Any:
@@ -2222,6 +2262,29 @@ async def _register_scheduled_run(request: dict[str, Any]) -> None:
     )
 
 
+async def _finalize_scheduled_run(
+    request: dict[str, Any], *, result: Any = None, error: str | None = None
+) -> None:
+    """与 ``_register_scheduled_run`` 对称的收尾：workflow 自报终态回写控制库。
+
+    只在 payload 带 ``_scheduleId`` 时生效；best-effort（失败不阻断 workflow 终态），
+    CANCELLED 场景 workflow 无法收尾，由 ``service.execution_reconciler`` 对账兜底。
+    """
+    schedule_id = request.get("_scheduleId") or (request.get("payload") or {}).get("_scheduleId")
+    if not schedule_id:
+        return
+    info = workflow.info()
+    try:
+        await workflow.execute_activity(
+            finalize_scheduled_execution,
+            {"runId": info.run_id, "result": result, "error": error},
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=ACTIVITY_RETRY_POLICY,
+        )
+    except ActivityError:
+        workflow.logger.warning("调度执行收尾回写失败: %s", info.run_id)
+
+
 @workflow.defn(name="kg.custom.configurable")
 class ConfigurableWorkflow:
     """declarative 定义的记账工作流：按定义 steps 逐步回显 payload（占位语义，C1 范畴）。
@@ -2233,25 +2296,31 @@ class ConfigurableWorkflow:
     @workflow.run
     async def run(self, request: dict[str, Any]) -> dict[str, Any]:
         await _register_scheduled_run(request)
-        definition = await workflow.execute_activity(
-            load_workflow_definition,
-            request["definitionId"],
-            start_to_close_timeout=timedelta(seconds=30),
-            retry_policy=ACTIVITY_RETRY_POLICY,
-        )
-        payload = request.get("payload", {})
-        results = [
-            {
-                "step": step if isinstance(step, str) else step.get("id") or step.get("name"),
-                "kind": "custom",
-                "domain": definition["id"],
-                "status": "completed",
-                "input": payload,
-                "output": payload,
-            }
-            for step in definition.get("steps", [])
-        ]
-        return {"definitionId": definition["id"], "status": "completed", "steps": results}
+        try:
+            definition = await workflow.execute_activity(
+                load_workflow_definition,
+                request["definitionId"],
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=ACTIVITY_RETRY_POLICY,
+            )
+            payload = request.get("payload", {})
+            results = [
+                {
+                    "step": step if isinstance(step, str) else step.get("id") or step.get("name"),
+                    "kind": "custom",
+                    "domain": definition["id"],
+                    "status": "completed",
+                    "input": payload,
+                    "output": payload,
+                }
+                for step in definition.get("steps", [])
+            ]
+            result = {"definitionId": definition["id"], "status": "completed", "steps": results}
+        except Exception as exc:
+            await _finalize_scheduled_run(request, error=str(exc)[:500])
+            raise
+        await _finalize_scheduled_run(request, result=result)
+        return result
 
 
 _EXTRACT_SELECTOR_KEYS = (
@@ -2337,6 +2406,23 @@ class SchemaExtractWorkflow:
 
     @workflow.run
     async def run(self, request: dict[str, Any]) -> dict[str, Any]:
+        # 周期 Schedule 触发的执行：收尾时自报终态回写控制库（与开头的
+        # register_scheduled_execution 落行对称），否则没人查看详情就永远 RUNNING。
+        schedule_id = request.get("_scheduleId") or (request.get("payload") or {}).get(
+            "_scheduleId"
+        )
+        if not schedule_id:
+            return await self._run_dispatch(request)
+        try:
+            result = await self._run_dispatch(request)
+        except Exception as exc:
+            await _finalize_scheduled_run(request, error=str(exc)[:500])
+            raise
+        await _finalize_scheduled_run(request, result=result)
+        return result
+
+    async def _run_dispatch(self, request: dict[str, Any]) -> dict[str, Any]:
+        """原 run() 分发体：单 Schema / chain（kg.schema.extract.chain）。"""
         schema_ids = request.get("schemaIds") or []
         if len(schema_ids) >= 2:
             # chain 模式（kg.schema.extract.chain）：多 Schema 严格串行。
@@ -3267,6 +3353,7 @@ WORKFLOW_CLASSES = [
 ACTIVITIES = [
     load_workflow_definition,
     register_scheduled_execution,
+    finalize_scheduled_execution,
     load_schema_extract_plan,
     read_source_batch,
     execute_transform,

@@ -21,6 +21,11 @@ function isUnauthorized(error: unknown): boolean {
   );
 }
 
+function isExpiredSession(error: unknown): boolean {
+  const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+  return typeof detail === "string" && /登录已过期|访问令牌已过期/.test(detail);
+}
+
 export const useAuthStore = defineStore("auth", {
   state: () => ({
     profile: null as AuthProfile | null,
@@ -28,6 +33,7 @@ export const useAuthStore = defineStore("auth", {
     loading: false,
     loggingOut: false,
     skipSilentLogin: false,
+    sessionExpired: false,
   }),
   getters: {
     isAuthenticated: (state) => state.profile !== null,
@@ -44,12 +50,13 @@ export const useAuthStore = defineStore("auth", {
     isAdmin: (state) => Boolean(state.profile?.isAdmin) && !state.profile?.businessOnly,
   },
   actions: {
-    invalidate(): void {
+    invalidate(expired = false): void {
       invalidateSessionVersion();
       profileLoads.delete(this);
       this.profile = null;
       this.initialized = true;
       this.loading = false;
+      this.sessionExpired = expired;
       useGraphSpaceStore().reset();
     },
     async loadCurrentUser(force = false): Promise<AuthProfile | null> {
@@ -64,11 +71,13 @@ export const useAuthStore = defineStore("auth", {
           const profile = await getCurrentProfile();
           if (version !== currentSessionVersion()) return null;
           this.profile = profile;
+          this.sessionExpired = false;
           useGraphSpaceStore().bindUser(String(profile.user?.id ?? ""));
           return profile;
         } catch (error) {
           if (version !== currentSessionVersion()) return null;
-          this.invalidate();
+          // 首次无会话不等于过期：须有此前身份，或后端明确返回过期原因。
+          this.invalidate(isUnauthorized(error) && (this.isAuthenticated || isExpiredSession(error)));
           if (!isUnauthorized(error)) throw error;
           return null;
         } finally {
@@ -93,6 +102,7 @@ export const useAuthStore = defineStore("auth", {
       const profile = await refreshCurrentSession();
       if (version !== currentSessionVersion()) return null;
       this.profile = profile;
+      this.sessionExpired = false;
       useGraphSpaceStore().bindUser(String(profile.user?.id ?? ""));
       this.initialized = true;
       return profile;

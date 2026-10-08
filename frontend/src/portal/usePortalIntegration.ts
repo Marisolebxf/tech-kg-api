@@ -29,6 +29,9 @@ export function usePortalIntegration() {
     if (route.query.portalState === 'logout') {
       return '已退出登录，请从统一门户重新进入。'
     }
+    if (route.query.portalState !== 'session-expired') {
+      return '尚未登录，请从统一门户进入。'
+    }
     return '登录状态已失效，已通知统一门户处理。'
   })
 

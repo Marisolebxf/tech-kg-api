@@ -4,6 +4,9 @@ const mocks = vi.hoisted(() => ({
   authDisabled: false,
   graphVisualization: false,
   embedded: false,
+  sessionExpired: false,
+  skipSilentLogin: false,
+  send: vi.fn(),
   loadCurrentUser: vi.fn(),
 }))
 
@@ -13,11 +16,11 @@ vi.mock('../config', () => ({
   get authDisabled() { return mocks.authDisabled },
   get graphVisualizationEnabled() { return mocks.graphVisualization },
 }))
-vi.mock('../stores/auth', () => ({ useAuthStore: () => ({ loadCurrentUser: mocks.loadCurrentUser }) }))
+vi.mock('../stores/auth', () => ({ useAuthStore: () => ({ loadCurrentUser: mocks.loadCurrentUser, get sessionExpired() { return mocks.sessionExpired }, get skipSilentLogin() { return mocks.skipSilentLogin } }) }))
 vi.mock('../portal/iframeBridge', () => ({
   isPortalEmbeddedMode: () => mocks.embedded,
   PortalAction: { SESSION_EXPIRED: 'session-expired' },
-  portalBridge: { isInIframe: false, send: vi.fn() },
+  portalBridge: { get isInIframe() { return mocks.embedded }, send: mocks.send },
 }))
 vi.mock('../views/business-service/BusinessServiceView.vue', () => ({ default: {} }))
 vi.mock('../views/auth/LoginView.vue', () => ({ default: {} }))
@@ -37,6 +40,7 @@ vi.mock('../views/platform/GraphVisualizationView.vue', () => ({ default: {} }))
 vi.mock('../views/platform/ConfigurationManagementView.vue', () => ({ default: {} }))
 
 import { router } from './index'
+import { invalidateSessionVersion } from '../auth/sessionVersion'
 
 // 图谱构建/人工审核等管理页仅管理员可见；平台总览与图谱查询对所有登录用户开放。
 const restrictedPaths = [
@@ -53,6 +57,10 @@ const sharedPaths = [
 beforeEach(async () => {
   mocks.authDisabled = false
   mocks.embedded = false
+  mocks.sessionExpired = false
+  mocks.skipSilentLogin = false
+  mocks.send.mockClear()
+  invalidateSessionVersion()
   mocks.loadCurrentUser.mockReset().mockResolvedValue({ isAdmin: false, permissions: [] })
   await router.push('/login')
 })
@@ -139,10 +147,30 @@ describe('角色控制与默认入口', () => {
 
   it('iframe 内会话失效仍走现有门户登录提示', async () => {
     mocks.embedded = true
+    mocks.sessionExpired = true
     mocks.loadCurrentUser.mockResolvedValue(null)
     await router.push('/expert-direct')
     expect(router.currentRoute.value.path).toBe('/login')
     expect(router.currentRoute.value.query).toEqual({ embedded: '1', portalState: 'session-expired' })
+    expect(mocks.send).toHaveBeenCalledTimes(1)
+  })
+
+  it('iframe 首次未登录不发送会话失效事件', async () => {
+    mocks.embedded = true
+    mocks.loadCurrentUser.mockResolvedValue(null)
+    await router.push('/expert-direct')
+    expect(router.currentRoute.value.query).toEqual({ embedded: '1', portalState: 'login-required' })
+    expect(mocks.send).not.toHaveBeenCalled()
+  })
+
+  it('主动退出后的导航不被归为过期', async () => {
+    mocks.embedded = true
+    mocks.sessionExpired = true
+    mocks.skipSilentLogin = true
+    mocks.loadCurrentUser.mockResolvedValue(null)
+    await router.push('/expert-direct')
+    expect(router.currentRoute.value.query.portalState).toBe('login-required')
+    expect(mocks.send).not.toHaveBeenCalled()
   })
 
   it('后端明确允许的免登录开发身份保留管理页访问', async () => {

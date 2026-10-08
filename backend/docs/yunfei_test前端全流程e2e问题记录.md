@@ -166,6 +166,14 @@ schema 属性（全可空口径）补建」，把「dev 口径」从隐含前提
 > 水位被整批弹回。`drop_caches` 开窗 ~1 分钟不够覆盖浏览器启动 + UI 触发的延迟，缓存
 > 分钟级回涨。环境性阻断与第一轮同源，晚间负载更重；改为「探针探窗（连续 3 次小写
 > 全过）→ 窗口即开即经 UI 触发」的研磨重试。
+>
+> **后续勘误（当晚串行研磨实测）**：worker 降到活动并发 1（compose override）+ 批 100 后
+> 链可贴线爬行，实体链 22 分钟 COMPLETED。「并发 write-200 流 vs SHOW STATS 0 点」之谜
+> 解开：`write_records` 是**逐条 INSERT VERTEX**（~247/s 串行合理），写入真实落库；SHOW STATS
+> 是统计快照，水位期 `SUBMIT JOB STATS` 未真正算成时快照停 0——**对账要用 LOOKUP 直数**
+> （DataSource 39 / Journal 2134 / OrganizationBase 61652 全中）而非 SHOW STATS。另水位表
+> `updated_at` 存 UTC，探针脚本用东八区时间过滤会误报「0 行更新」。三链后续被 ⑱
+> （Temporal 历史事件数硬限）截断，非水位所致。
 
 ## 前端正常项（正向结论）
 
@@ -280,6 +288,39 @@ watermark(0.900000)`）→ DELETE 502 → 前端弹窗滞留错误态（error to
 探测失败时先重试再判「无法判定」；删除链路对水位类 400/500 做批内退避；错误态弹窗常显
 错误文案（当前 toast 消失后无任何提示）。
 
+### ⑱ chain 长 run 撞 Temporal 历史事件数硬限被服务端 TERMINATED（r2 晚间实测，新发现）
+
+关系A 链运行 55 分钟后突然停止，控制库 `workflow_executions` 行翻 `TERMINATED`、前端状态列
+「运行失败」，worker 无任何错误日志、写入流戛然而止。Temporal 侧实锤（describe + 历史末事件）：
+
+- 历史事件 **51,199 条**，末事件 `WorkflowExecutionTerminated`，`reason: "Workflow history
+  count exceeds limit." identity: "history-service"`——**服务端 history count 硬限（默认 5 万）**
+  主动 TERMINATE，非人工、非水位、非代码异常；
+- 撞限前服务端曾**自动 continue-as-new** 过一次（describe 捕获到 status=CONTINUED_AS_NEW，
+  新 run 接续跑），新 run 再次积累满 5 万事件后同样终止——大源链在「批 100 + 逐条
+  INSERT」模式下事件吞吐 ~15 事件/批，CITES+COAUTHOR_WITH 30 万+行必然撞限；
+- 控制面把 server auto-continue-as-new 的中间态映射成 `TERMINATED`/「运行失败」展示，
+  实际续跑 run 仍在执行——**UI 状态与 Temporal 真值短暂背离**（续 run 也终止后两者才一致）。
+
+**处置**：依赖「重新执行」的水位增量语义研磨收敛（已抽取部分水位已过账，重跑只吃剩余行，
+新 run 事件数够用）；批大小越大事件越少（批 500 比批 100 少 5 倍事件），大源链建议用大批。
+**建议**：① chain workflow 对大源按事件预算显式 `continue_as_new`（带水位恢复语义，现依赖
+服务端 auto-continue 的行为不可控）；② 控制面把 `history count exceeds limit` 识别为「可续跑
+截断」类终态，前端提示「链过长已截断，重新执行可续抽」而不是笼统「运行失败」；
+③ CONTINUED_AS_NEW 中间态应保持「运行中」展示而不是翻 TERMINATED。
+
+### ⑲ 离线域 ETL schema 阶段新建索引不 REBUILD → 空索引把图读全部遮成 0（r2 实测，静默假数据丢失）
+
+域1 `rebuild_scholar_graph --stages schema` 对已有数据的空间执行「对齐」时 `CREATE TAG INDEX
+IF NOT EXISTS person_tag_idx ...`（另有 edu_inst 两列索引）。**Nebula 新建索引不回填既有数据**，
+而查询计划器会优先选它：此后 `LOOKUP ON Person`（连 `| YIELD count(*)`）与 REST
+`GET /nodes/label/Person` 全部返回 **0 行**——32,547 个 Person 「凭空消失」，域1 milvus 阶段
+`person scan: total=0` 写出空集合，全程无任何报错（脚本日志还自提示「需再执行 REBUILD
+TAG INDEX 索引才生效」，但流程不执行它）。修复：CLI 逐个 `REBUILD TAG INDEX`（异步 job，
+需等 FINISHED；进行中读数偏小），读数即恢复。**建议**：① ETL schema 阶段建索引后自动
+SUBMIT `REBUILD TAG INDEX` 并等 job 终态；② 手册 §6 域1 加显式 REBUILD 步骤；③
+`total=0` 且非新空间时 ETL 应告警而非静默写空集合。
+
 ### e2e 工程问题（附带记录，非产品缺陷）
 
 - **arco a-input 的 aria-label 落在包裹层** `span.arco-input-wrapper` 上而非内层
@@ -301,3 +342,19 @@ watermark(0.900000)`）→ DELETE 502 → 前端弹窗滞留错误态（error to
 - **重绑操作语义**：来源表弹窗打开即预填已保存绑定（非空表单），自动化重绑必须先经
   UI 逐行删 `.source-binding-row__remove` 再重加，否则造出重复行、保存 500（见⑭-2）；
   另外行组件「＋ 绑定来源表」在存在未填完整行时会被前端拦截（内联提示，非 toast）。
+
+### r2 阶段进展实录（2026-10-09 凌晨更新）
+
+- **平台三链终态全达**（09 用例 3 passed）：实体链 COMPLETED（22 分钟）、关系A COMPLETED
+  （撞 ⑱ 历史事件硬限后「重新执行」水位续跑轮 44.5 分钟）、关系B ABNORMAL（行级失败
+  转审核，与 r1 同口径，32.4 分钟）。期间 worker 临时降到活动并发 1（compose override，
+  用后已恢复 4）。
+- **实体锚点 LOOKUP 直数已中**：DataSource 39 / Journal 2134 / Organization 8179 /
+  Person 32448（+域1 并入 99=32547）/ OrganizationBase 61652（对上 r1）。
+- **离线域**：域1 schema/entities/relations/align ✓（COAUTHOR_WITH written=156144 与 r1
+  精确一致；SAME_AS 边类型由域1 创建）；域2 机构三连 ✓（try1 撞 DDL 传播延迟重跑即过）；
+  域3 schema/实体关系/引用关系/置信度 四步 ✓；**域3-溯源、域4-桩对齐、域1-milvus 三步
+  被 ⑫ 连续阻断**（`/query/read` 与 `/nodes/label` 读路径全被水位 500/400 拒，drop_caches
+  开窗亦不够——扫描自身把 RocksDB 页拽回 cache 即越线，与 r1 域5/reindex 同型），
+  已挂定时研磨任务待窗口（session cron）。
+- ⑲ 索引空壳事故当场修复（REBUILD TAG INDEX 后读数恢复），无数据损失。

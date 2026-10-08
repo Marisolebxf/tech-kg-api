@@ -38,18 +38,21 @@ async function waitTerminal(page: Page, name: string, timeoutMs: number): Promis
 
 /** 触发一条链并等终态；可续跑（研磨重试，⑫ 水位期常态）：
  *  - 已完成/运行异常 → 本轮已过账直接返回（已完成无重跑入口，问题②）；
+ *  - 运行中 → 上一轮触发的链仍在爬（测试等待窗超时不影响服务端），直接等待；
  *  - 运行失败 → 「重新执行」（a36e70e7，重跑=水位增量续抽）；
  *  - 未运行 → 「执行」。 */
-async function runChain(page: Page, name: string, shotPrefix: string): Promise<string> {
+async function runChain(page: Page, name: string, shotPrefix: string, timeoutMs = 45 * 60_000): Promise<string> {
   const row = page.locator('table tbody tr', { hasText: name }).first()
   const state0 = ((await row.locator('td').nth(5).innerText().catch(() => '')) || '').trim()
-  if (!/已完成|运行异常/.test(state0)) {
+  if (/运行中/.test(state0)) {
+    // 大源（如 CITES 6 源串行）单链可超 45 分钟——服务端仍在推进，只等待不重触发
+  } else if (!/已完成|运行异常/.test(state0)) {
     expect(/未运行/.test(state0) || TERMINAL.test(state0), `${name} 初始态「${state0}」不可触发`).toBe(true)
     await row.getByRole('button', { name: /^(执行|重新执行)$/ }).first().click()
     await expect(row.locator('td').nth(5)).toHaveText(/运行中/, { timeout: 60_000 })
     await shot(page, `${shotPrefix}-running`)
   }
-  const final = await waitTerminal(page, name, 45 * 60_000)
+  const final = await waitTerminal(page, name, timeoutMs)
   expect(HARD_FAIL.test(final), `${name} 终态「${final}」`).toBe(false)
   await shot(page, `${shotPrefix}-final`)
   return final
@@ -69,14 +72,15 @@ test.describe.serial('S9 三链执行', () => {
   })
 
   test('S9b 触发关系A链并等终态', async ({ page }) => {
-    test.setTimeout(50 * 60_000)
+    // CITES 6 源 + COAUTHOR_WITH 大源串行（worker 并发 1）单链可超 45 分钟，等待窗放宽
+    test.setTimeout(100 * 60_000)
     await openBuild(page)
-    await runChain(page, CHAIN_NAMES[1], 'r2-s9-4-rela-chain')
+    await runChain(page, CHAIN_NAMES[1], 'r2-s9-4-rela-chain', 95 * 60_000)
   })
 
   test('S9c 触发关系B链并等终态', async ({ page }) => {
-    test.setTimeout(50 * 60_000)
+    test.setTimeout(100 * 60_000)
     await openBuild(page)
-    await runChain(page, CHAIN_NAMES[2], 'r2-s9-5-relb-chain')
+    await runChain(page, CHAIN_NAMES[2], 'r2-s9-5-relb-chain', 95 * 60_000)
   })
 })

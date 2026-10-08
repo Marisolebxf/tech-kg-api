@@ -1,0 +1,174 @@
+# yunfei_test_1 全量重建「纯前端操作」e2e 问题记录（2026-10-08）
+
+按 `backend/docs/yunfei_test全量重建文档.md`（58d66cee 精简版）重跑 yunfei_test_1 全量重建，
+要求**所有操作通过前端 UI 完成**，前端做不到的记为问题并走 CLI 兜底。本文是问题清单与
+处置实录；每条问题的截图证据在 `artifacts/yft1-frontend-e2e/`（文件名见各条目），可复现
+e2e 用例在 `frontend/e2e/yft1/`（宿主机 Playwright → yunfei3 栈 8093/8004，`workers=1` 串行）。
+
+## 结论速览
+
+| 阶段 | 前端完成度 | 兜底（CLI） |
+| --- | --- | --- |
+| 清场（手册 §3） | **0/3**——DROP 图空间 / Milvus 同名库 / 抽取水位全部无前端通道 | ✅ 全部 CLI |
+| 建空间（§4 ①） | ✅ 配置管理→新建图数据空间，vid FIXED_STRING(256) 默认口径正确 | 无 |
+| 预建统一 schema（§4 ②） | ❌ 无通道（DDL 禁令 + 平台建表 NOT NULL 口径冲突） | ✅ CLI |
+| Schema 目录核对 | ✅ 16 实体 + 33 关系全列出，空间隔离正确 | 无 |
+| 平台三链（§5） | ✅ 删旧任务 / 新建三链 / 触发执行 / 终态轮询全走 UI | 无 |
+| 离线域 ETL（§6） | ❌ 五域全是脚本通道，平台无对应页面 | ✅ 全部 CLI |
+| 索引重建 | ❌ 前端按钮已下线（5ce8d455），后端端点仍在；本轮三试皆被宿主内存水位掐断（⑫） | ⚠️ 环境受阻，待内存缓解重试 |
+| 对账验证（§7） | ◐ SHOW STATS 可读（窗口期）；SUBMIT JOB STATS 被禁；九模块 env 冻结 dev | ◐ CLI SUBMIT + SHOW STATS 快照 |
+
+**本轮终态**（2026-10-08）：三链 实体=COMPLETED（修复轮）/ 关系A=COMPLETED（修复轮，小源库行级零失败）/
+关系B=ABNORMAL（行级失败转审核：T_EXTRACT_FAIL 6408 / T_LINK 4520，符合口径）；离线域 域1/域2/域3/域4
+全过（域5 可选被 ⑫ 环境阻断）；全空间 308,084 点 / 664,404 边；**全部对账锚点精确命中**：
+SAME_AS 259=dev 259（域4 written=259）、Journal 2134、DataSource 39、PatentFamily 1999、Project 4005、
+Report 3000、OrganizationBase 61652；Person 39737 / COAUTHOR_WITH 156144（源年代差组，与重灌小源自洽）。
+
+## 问题清单
+
+### ① 前端无删除/清空图空间通道（清场 3 项全缺）
+
+- nGQL 控制台对 DDL/管理语句一律 403：`DROP SPACE IF EXISTS yunfei_test_1` 被拒，报
+  「禁止执行 DDL/管理类语句（DROP）；图空间与 Schema 请通过配置页 / Schema 管理维护」。
+  证据：`s1a-console-drop-space-rejected.png`（e2e 用例 S1a）。
+- 配置管理→图数据空间只有「＋ 新建图数据空间」，表内无删除/解绑/清空按钮；后端也无
+  DELETE 端点（`DELETE /{name}` 是解绑且明确「图空间数据保留」）。
+  证据：`s1b-config-space-no-delete.png`（S1b）。
+- Milvus 同名库/映射行、抽取水位（`kg_script_watermark`，跨空间共享）属后端内部状态，
+  前端无任何水位/向量库管理页面。
+
+**影响**：「清空某个图空间重新装载」这一操作在前端不可达，只能 CLI（手册 §3 全套）。
+
+### ② ABNORMAL/已完成任务无重触发入口
+
+`GraphBuildView` 的执行按钮仅对统一状态 `未运行/运行失败` 渲染（`已完成按产品决策不提供
+重复执行`，`运行异常`即 ABNORMAL 同样被排除）。上轮（09-30）全量重建三链终态均为
+ABNORMAL（行级失败转审核是常态口径），**前端唯一路径是删任务重建**——本次沿用了该路径
+（e2e S6a 删除三链后经新建任务弹窗重建）。本轮重灌后的小源库行级零失败，修复轮实体链与
+关系A 直接 COMPLETED——终态分布取决于数据脏度，但「已完成/运行异常均无重触发入口」
+的结论不变。若产品预期「重跑=增量续抽」，这两态也应提供入口（或提供显式
+「重置水位全量重跑」）。
+
+### ③ 预建统一 schema 无前端通道（§4 存在理由本身）
+
+平台建 Schema 会把 required 属性建成 NOT NULL，与离线域整行 `INSERT VERTEX/EDGE` 结构
+冲突；正确顺序是先以全可空口径预建两路并集。前端两条路都走不通：
+
+- 控制台 DDL 禁令（同①）；
+- Schema 管理页逐个建表的口径仍是 NOT NULL——预建的目的恰恰是绕开它。
+
+且 45+ 个 schema 从 dev 整体复制无任何「跨空间复制/导入」能力。本次按手册 §4 脚本 CLI
+预建（TAG 20 / EDGE 42 与 dev 现网完全一致，含 dev 本周新增的 ALUMNI/COLLEAGUE 等）。
+
+### ④ 水位清理无前端入口
+
+「清空重跑」语义要求把 45+ 链内 schema 的抽取水位一并清掉（水位按
+`schema-extract-{schema_key}` 键控、**跨空间共享**——不清则新空间首跑直接读 0 行）。
+本次 CLI 清 151 行 / 49 definition_id（与上轮实测一致）。前端既无水位展示也无清理入口。
+
+### ⑤ SUBMIT JOB STATS 被控制台禁（对账只读半边）
+
+对账需要 `SUBMIT JOB STATS` 刷新统计快照后 `SHOW STATS` 才是现值；SUBMIT 属管理语句被
+403。前端只能读上次快照。本次 CLI 提交统计、前端控制台读数取证（`s8-1-show-stats.png`、
+`s8-2-submit-job-stats-rejected.png`）。建议：控制台放开 `SUBMIT JOB STATS`（幂等安全）
+或状态页内置「刷新统计」。
+
+### ⑥ 索引重建前端按钮已下线
+
+实体列表依赖的检索索引（`POST /api/v1/entity-search/reindex`）按钮随 5ce8d455 下线，
+重建后新空间的索引只能 CLI 打 admin 端点。若产品确认不再从 UI 触发，建议在重建手册
+层面显式标注为固定 CLI 步骤。
+
+### ⑦ 九大业务模块 env 冻结 dev 空间（待终验取证）
+
+九模块查询走容器 `TRS_GRAPH_SPACE`（本栈恒为 dev），不跟全局图空间选择器；业务模块
+页面也无空间切换入口（`s8-3-expert-direct-page.png`）。重建空间的数据无法从九模块 UI
+验证，只能容器内 `-e TRS_GRAPH_SPACE=<空间>` 起进程探针（手册 §7.1 口径）。
+属已知架构决策（图空间全局选择改造审计结论），此处作为「前端无法完成重建验证」记录。
+
+### ⑧ 链式任务的 Schema 搜索易误选（实测踩中）
+
+新建任务弹窗「串联 Schema 队列」下拉是子串模糊匹配且选中后无精确校验：搜索
+`Organization` 会把 `OrganizationBase`（DOM 序在前）加进队列、搜索 `Patent` 会误加
+`PatentFamily`——本次首轮实测即错装了实体链（14 项、顺序错位），靠 e2e 的
+`· 名称）` 后缀精确匹配 + 队列长度断言才纠正。建议：选项匹配按英文全名精确优先，
+或队列加入时校验与搜索词全等。队列虽有 ↑↓× 可修，但用户很难发现静默错选。
+
+### ⑨ 排障口径：schema 目录活表在 control 库，业务库同名残留易误导
+
+`kg_schema_definition` 等四表实际挂 `service.workflow_models.Base`（`techkg_control` 库），
+业务库（本栈 `gkx_element` 库）存在一套同名残留表。本次排查时先查到业务库副本误判
+「45 个 schema 定义已被删」，实际 control 库 49 行健在（含 4 个链外关系）。
+建议清理残留表或在手册标注。
+
+### ⑩ dev 现网 schema 漂移 → 平台链两轮硬失败（本轮实测阻断项，两个表现）
+
+手册 §4 预建口径是「从 dev 现网 DDL 复制」，隐含前提是 dev 稳定；dev 本周被重建过
+schema，本轮两个表现先后炸链：
+
+1. **TAG 小写化**：dev 的 `OrganizationBase` 已变为小写 `organization_base`。实体链首轮
+   终态 FAILED（非预期 ABNORMAL）：worker 反复 `No schema found for 'OrganizationBase'`
+   （平台按 schema 驼峰名写图，Nebula 大小写敏感），write_records 重试耗尽。
+   修复：按平台 schema 属性（17 列、全可空）CLI 补建大写 TAG → 前端「重新执行」→
+   COMPLETED，OrganizationBase 61652 与上轮精确一致。
+2. **EDGE/TAG 瘦化**：dev 现网 EDGE/TAG 只剩业务列，缺平台治理列
+   （`create_time/update_time/match_method/match_evidence/ingest_batch/...`）。关系A 首轮
+   FAILED：`Unknown column 'update_time' in schema`。对比 control 库 schema 属性全集，
+   33 个 EDGE + 15 个 TAG 共 48 个缺列（实体脚本输出列恰被瘦口径覆盖所以实体链先漏过）。
+   修复：按 schema 属性 `ALTER ... ADD`（幂等补齐、天然可空）→ 前端「重新执行」。
+   另有 **9 个目录外 EDGE**（SAME_AS/CITED_BY/SOURCED_FROM/ALUMNI 等离线域 ETL 专用边）
+   + BidNotice TAG 同样瘦化——它们不在 schema 目录里、修复脚本按目录对账时漏过，阶段 6/7
+   交接时补齐（同 ALTER 口径，参照全列边超集补列，多余可空列无害）。
+
+**建议**：预建脚本增加兜底——「schema 目录里存在的 TAG/EDGE/属性列，dev 缺失时按
+schema 属性（全可空口径）补建」，把「dev 口径」从隐含前提变成校验项。
+
+### ⑪ 源库 gkx_element_yft1 已被重灌（残差归因，非链问题）
+
+本轮 Person 终值 32599（上轮 ~13.3 万）：源库各 Person 源表加总仅 ~4.3 万原始行
+（dwd_scholar 2175 / dwd_zh_author 7906 / dwd_en_author 12977 / 股东·高管·受益人·实控
+~2 万），与上轮装数时的行数量级不同——副本库在上轮之后被重灌过小数据集。装载结果与
+当前源自洽（32599 = 源表去重合并口径），按 §7「以当前源为准」过账；全等锚点
+（Journal 2134 / DataSource 39 / Project 4005 / Report 3000 / OrganizationBase 61652）
+均精确命中，装载链路本身无缺陷。**环境事实**：重建前应按 §1 核对源库行数快照，
+否则残差归因会被放大。
+
+### ⑫ 共享宿主机内存贴死 Nebula 水位线（0.9），读路径按请求抖动拒绝（本轮环境阻断项）
+
+宿主机 62.78G 常态已用 ~55G（多套栈共享：dev2/生产/他人 dev server 等），Nebula 的
+高水位按**整机内存**计算（page cache 计入），本轮全程在 90% 边界抖动，表现为：
+
+- `MATCH` 全扫类读（对账计数、`/nodes/label`）被 `use space failed: Used memory hits the
+  high watermark` 按请求拒绝；SHOW STATS 快照读与 CLI `execute_read/write` 大体可过；
+- **域5 学者消歧（可选）被阻断**：`GET /nodes/label/Person` 直接 400（手册口径：跑与
+  不跑不影响计数，本轮跳过）；
+- **实体索引重建三试皆中止**：两遍流式读中第二遍归零，防御性中止逻辑（2026-09-21 加）
+  正确保住旧索引——这是该保护在真实环境退化的首次实战触发；
+- e2e 06 用例的 UI 控制台读数需抢内存窗口（本轮窗口期已取证 s8-1/s8-2；S8b 锚点断言
+  改走 SHOW STATS 快照 + 退避重试后通过）。
+
+`drop_caches`（仅 pagecache）可临时开窗 ~1 分钟，但窗口极短且属共享生产宿主机运维动作，
+不宜反复执行。**建议**：图服务水位告警接入运维（当前无感知）；重建类长任务（reindex
+两遍流式读）考虑对水位 400 做批内退避重试而不是整体中止。
+
+## 前端正常项（正向结论）
+
+- 建空间 → vid 默认 256 口径无需任何干预；
+- Schema 管理空间隔离正确：切 yunfei_test_1 后 16 实体 + 33 关系全列出（服务端分页正常）；
+- 任务中心删任务（confirm）、新建链（任务类型/队列/批大小/数据源跟随绑定/一次性不立即执行）、
+  触发执行、SSE 终态 toast、状态列翻转为「运行异常」全链路 UI 可用；
+- **运行失败态的「重新执行」是修复轮的主力通道**：CLI 补建大写 TAG / 补齐缺列后，两轮
+  修复全靠该入口续跑（水位增量语义），无需删任务重建；
+- 控制台只读语句（SHOW/MATCH/DESCRIBE）正常，读数与 CLI 一致（内存窗口期内取证）。
+
+## 复现
+
+```bash
+cd frontend
+pnpm exec playwright test -c e2e/yft1/playwright.config.ts   # 全部串行
+# 阶段拆跑：01(基线/清场取证) 02/02b(建空间) 03(Schema) 04(建链)
+#   05(首轮三链) 05b(实体修复轮) 05c/05d(关系修复轮) 06(对账)
+```
+
+注意：05 系列为 40–60 分钟长跑（三链串行等终态）；06 需阶段 7 离线 ETL 完成后再跑，
+且受 ⑫ 内存水位影响——控制台读数需抢窗口，S8b 走 SHOW STATS 快照 + 重试。

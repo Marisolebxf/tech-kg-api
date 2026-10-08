@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   getExecution: vi.fn(),
   getTask: vi.fn(),
   TRIGGER_SOURCE_LABEL: { MANUAL: '手动触发', SCHEDULE: '定期触发', RERUN: '重新执行' },
+  executionStatusLabel: (status?: string | null) => status || '—',
 }))
 vi.mock('../../../api/workflowOperations', () => ({ ...mocks }))
 // 路由 query 可按用例覆写（?category=C 深链直达抽取失败重跑子页）
@@ -53,9 +54,15 @@ const renderReview = () => {
     global: {
       components: {
         ASelect: { name: 'ASelect', props: ['modelValue', 'options'], setup: () => () => null },
-        AInput: { name: 'AInput', setup: () => () => null },
+        AInput: {
+          name: 'AInput',
+          props: ['modelValue'],
+          emits: ['update:modelValue'],
+          setup: (props: { modelValue?: string }, { emit }: { emit: (event: string, value: string) => void }) =>
+            () => h('input', { value: props.modelValue, onInput: (event: Event) => emit('update:modelValue', (event.target as HTMLInputElement).value) }),
+        },
         // 弹窗 stub 直渲染默认插槽，让日志弹窗内容可被断言
-        AModal: { name: 'AModal', setup: (_props: Record<string, unknown>, { slots }: { slots: { default?: () => unknown } }) => () => h('div', slots.default?.()) },
+        AModal: { name: 'AModal', setup: (_props: Record<string, unknown>, { slots }: { slots: { default?: () => unknown; footer?: () => unknown } }) => () => h('div', [slots.default?.(), slots.footer?.()]) },
         // 分页已迁移到共享 ListPagination（真组件渲染，翻页直接对它 emit）
       },
       stubs: { RouterLink: true },
@@ -147,7 +154,7 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
       expect.objectContaining({ category: 'C', templateId: undefined }),
     )
     expect(wrapper.findAll('.review-tabs nav button')[1].classes()).toContain('active')
-    expect(wrapper.find('.rerun-batch-action').exists()).toBe(true)
+    expect(wrapper.find('.rerun-batch-action').exists()).toBe(false)
 
     // 工作台总览「抽取失败重跑」卡片跳转携带对象名：首次加载即按关键字过滤
     routeState.query = { category: 'C', keyword: 'MR-1' }
@@ -158,18 +165,67 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     )
   })
 
-  it('A 类不渲染批量重跑按钮与勾选列；C 类才渲染', async () => {
+  it('关键字在点击查询或提交表单后才请求，清空后可重新查询全部', async () => {
+    const wrapper = renderReview()
+    await flushPromises()
+    const input = wrapper.get('.review-filter-search')
+    expect(wrapper.get('.review-search-button').attributes('type')).toBe('submit')
+    await input.setValue('MR-2')
+    expect(mocks.getProductionReviews).toHaveBeenCalledTimes(1)
+    await wrapper.get('.review-filter-row').trigger('submit')
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: 'MR-2' }))
+    await input.setValue('')
+    expect(mocks.getProductionReviews).toHaveBeenCalledTimes(2)
+    await wrapper.get('.review-filter-row').trigger('submit')
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: undefined }))
+  })
+
+  it('操作列阴影只在右侧仍有可滚动内容时出现', async () => {
+    const wrapper = renderReview()
+    await flushPromises()
+    const scroll = wrapper.get('.ops-review-table-scroll')
+    const element = scroll.element as HTMLElement
+    Object.defineProperties(element, {
+      scrollWidth: { configurable: true, value: 1400 },
+      clientWidth: { configurable: true, value: 800 },
+      scrollLeft: { configurable: true, writable: true, value: 0 },
+    })
+    await scroll.trigger('scroll')
+    expect(scroll.classes()).toContain('has-scroll-right')
+    element.scrollLeft = 600
+    await scroll.trigger('scroll')
+    expect(scroll.classes()).not.toContain('has-scroll-right')
+  })
+
+  it('A 类不渲染勾选列；C 类选中记录后才显示批量重跑按钮', async () => {
     const wrapper = renderReview()
     await flushPromises()
     expect(wrapper.find('.rerun-batch-action').exists()).toBe(false)
     expect(wrapper.find('thead .pick-col').exists()).toBe(false)
 
     await switchToCategoryC(wrapper)
+    expect(wrapper.find('.rerun-batch-action').exists()).toBe(false)
+    await rowCheckboxes(wrapper)[0].setValue(true)
     expect(wrapper.find('.rerun-batch-action').exists()).toBe(true)
-    // 批量重跑按钮在筛选行最左侧（与筛选项同行），不再单独成行
-    expect(wrapper.find('.review-toolbar-actions .rerun-batch-action').exists()).toBe(true)
+    expect(wrapper.find('.review-pagination .rerun-batch-action').exists()).toBe(true)
+    expect(wrapper.find('.review-toolbar-actions .rerun-batch-action').exists()).toBe(false)
     expect(wrapper.find('.rerun-batch-row').exists()).toBe(false)
     expect(wrapper.find('thead .pick-col').exists()).toBe(true)
+  })
+
+  it('当前页没有可重跑记录时，全选置灰且不显示批量重跑入口', async () => {
+    mocks.getProductionReviews.mockResolvedValue({ items: [caseRow('MR-done', 'RESOLVED'), caseRow('MR-running', 'RERUNNING')], total: 2 })
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+    const header = headerCheckbox(wrapper)
+    expect((header.element as HTMLInputElement).disabled).toBe(true)
+    expect((header.element as HTMLInputElement).checked).toBe(false)
+    await header.setValue(true)
+    expect(rowCheckboxes(wrapper).every((input) => !(input.element as HTMLInputElement).checked)).toBe(true)
+    expect(wrapper.find('.rerun-batch-action').exists()).toBe(false)
   })
 
   it('不可重跑行（重跑中/已完成）的重跑、删除按钮置灰禁用而非隐藏', async () => {
@@ -197,12 +253,12 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     expect(resolvedRow[2].attributes('title')).toBe('已处理：仅「待处理 / 重跑失败」的记录可重跑或删除')
   })
 
-  it('表头全选只勾选当前页可重跑行（OPEN/RERUN_FAILED），批量重跑按钮随之点亮', async () => {
+  it('表头全选只勾选当前页可重跑行（OPEN/RERUN_FAILED），批量重跑按钮随之显示', async () => {
     const wrapper = renderReview()
     await flushPromises()
     await switchToCategoryC(wrapper)
 
-    expect(batchButton(wrapper).attributes()).toHaveProperty('disabled')
+    expect(wrapper.find('.rerun-batch-action').exists()).toBe(false)
 
     const header = headerCheckbox(wrapper)
     ;(header.element as HTMLInputElement).checked = true
@@ -218,7 +274,7 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     expect(batchButton(wrapper).text()).toBe('批量重跑（2）')
   })
 
-  it('再点表头全选取消当前页勾选，批量按钮回到禁用', async () => {
+  it('再点表头全选取消当前页勾选，批量按钮隐藏', async () => {
     const wrapper = renderReview()
     await flushPromises()
     await switchToCategoryC(wrapper)
@@ -231,7 +287,7 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
 
     const checked = rowCheckboxes(wrapper).map((input) => (input.element as HTMLInputElement).checked)
     expect(checked).toEqual([false, false, false, false])
-    expect(batchButton(wrapper).attributes()).toHaveProperty('disabled')
+    expect(wrapper.find('.rerun-batch-action').exists()).toBe(false)
   })
 
   it('部分勾选时表头呈半选态；点批量重跑按勾选集合下发', async () => {
@@ -273,8 +329,9 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     await batchButton(wrapper).trigger('click')
     await flushPromises()
 
+    // 批量重跑反馈条已统一为 AppAlert（Arco Alert 四态）：部分 schema 被跳过 = 警告态
     const bar = wrapper.get('.rerun-feedback')
-    expect(bar.classes()).toContain('is-warning')
+    expect(bar.classes()).toContain('app-alert--warning')
     expect(bar.text()).toContain('已下发重跑：2 条失败记录')
     expect(bar.text()).toContain('跳过 1 条')
     expect(bar.text()).toContain('patent×1')
@@ -297,8 +354,8 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     await flushPromises()
 
     const bar = wrapper.get('.rerun-feedback')
-    expect(bar.classes()).toContain('is-success')
-    expect(bar.classes()).not.toContain('is-warning')
+    expect(bar.classes()).toContain('app-alert--success')
+    expect(bar.classes()).not.toContain('app-alert--warning')
     // 执行信息是纯文本，不再提供跳执行详情的链接
     expect(bar.findAll('router-link-stub')).toHaveLength(0)
     expect(bar.text()).toContain('schema-paper · 2 条')
@@ -351,6 +408,7 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     // 执行 ID 纯文本展示，不再跳执行详情页
     expect(wrapper.text()).toContain('EXEC-RERUN-9')
     expect(wrapper.find('.case-log-dl router-link-stub').exists()).toBe(false)
+    expect(wrapper.get('.case-log-close').text()).toBe('关闭')
   })
 })
 
@@ -379,7 +437,7 @@ describe('查看档只读（开发维护 × 共享生产空间）', () => {
     const header = headerCheckbox(wrapper)
     ;(header.element as HTMLInputElement).checked = true
     await header.trigger('change')
-    expect(batchButton(wrapper).attributes()).toHaveProperty('disabled')
+    expect(wrapper.find('.rerun-batch-action').exists()).toBe(false)
     // 操作列三键保留但置灰（不隐藏，布局稳定），悬停说明指向共享空间只读
     const firstRowButtons = wrapper.findAll('tbody tr')[0].findAll('.review-action-btn')
     expect(firstRowButtons.map((button) => button.text())).toEqual(['日志', '重跑', '删除'])
@@ -460,12 +518,12 @@ describe('分页统计与页数收缩收敛（FUNC-00781）/ 处理实例 ID 纯
     mockPaged()
     const wrapper = renderReview()
     await flushPromises()
-    expect(wrapper.get('.review-pagination > span').text()).toBe('共 41 条 · 第 1 / 3 页')
+    expect(wrapper.get('.review-pagination .review-page-summary').text()).toBe('共 41 条')
 
     // 翻至第 3 页
     wrapper.findComponent(ListPagination).vm.$emit('change', 3)
     await flushPromises()
-    expect(wrapper.get('.review-pagination > span').text()).toBe('共 41 条 · 第 3 / 3 页')
+    expect(wrapper.get('.review-pagination .review-page-summary').text()).toBe('共 41 条')
 
     // 增加筛选（状态=待处理）使结果只剩 1 页：先按第 3 页请求 → 收敛到第 1 页重拉
     wrapper.findAllComponents({ name: 'ASelect' })[0].vm.$emit('update:modelValue', '待处理')
@@ -476,7 +534,7 @@ describe('分页统计与页数收缩收敛（FUNC-00781）/ 处理实例 ID 纯
     expect(pages).toEqual([1, 3, 3, 1])
     expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, statusGroup: 'pending' }))
     // 统计文案与实际数据一致，且无空页（收敛后立即有数据行）
-    expect(wrapper.get('.review-pagination > span').text()).toBe('共 5 条 · 第 1 / 1 页')
+    expect(wrapper.get('.review-pagination .review-page-summary').text()).toBe('共 5 条')
     expect(wrapper.findAll('tbody tr td.review-id-cell').length).toBeGreaterThan(0)
   })
 
@@ -496,7 +554,7 @@ describe('分页统计与页数收缩收敛（FUNC-00781）/ 处理实例 ID 纯
 
     // 61 条 = 4 页，第 3 页仍有效：筛选后停在原页
     expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ page: 3, statusGroup: 'pending' }))
-    expect(wrapper.get('.review-pagination > span').text()).toBe('共 61 条 · 第 3 / 4 页')
+    expect(wrapper.get('.review-pagination .review-page-summary').text()).toBe('共 61 条')
   })
 
   it('跳详情返回后恢复页码/页大小/分类/筛选（sessionStorage 快照），不回第 1 页', async () => {
@@ -515,7 +573,7 @@ describe('分页统计与页数收缩收敛（FUNC-00781）/ 处理实例 ID 纯
       category: 'C', page: 3, pageSize: 50, statusGroup: 'pending', kind: 'entity',
       updatedWithin: '7d', sort: 'updated_desc', keyword: '论文',
     }))
-    expect(wrapper.get('.review-pagination > span').text()).toBe('共 120 条 · 第 3 / 3 页')
+    expect(wrapper.get('.review-pagination .review-page-summary').text()).toBe('共 120 条')
     expect(wrapper.findAll('.review-tabs nav button')[1].classes()).toContain('active')
   })
 

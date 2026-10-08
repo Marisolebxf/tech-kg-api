@@ -95,6 +95,11 @@ body {
   padding-inline: 16px;
 }
 
+/* Keep the required marker in the design system's danger color. */
+.arco-form-item-label-required-symbol {
+  color: #b42318;
+}
+
 .arco-modal {
   border-radius: var(--radius-lg);
   box-shadow: 0 12px 32px rgba(29, 33, 41, 0.16);

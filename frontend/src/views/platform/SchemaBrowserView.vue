@@ -63,6 +63,7 @@ import SourceBindings from './schema-browser/sourceBindings.vue'
 import SchemaPropertyCell from './schema-browser/SchemaPropertyCell.vue'
 import {
   emptySourceBindingRow,
+  isSourceBindingComplete,
   toSourcePayload,
   type SourceBindingRow,
 } from './schema-browser/sourceBindingRows'
@@ -85,10 +86,18 @@ type CreateForm = {
 const currentUserId = getCurrentUserId()
 
 const scrollTimers = new Map<HTMLElement, ReturnType<typeof setTimeout>>()
+const tableWrapRef = ref<HTMLElement | null>(null)
+const tableHasMoreToScroll = ref(false)
+
+function updateTableScrollState(): void {
+  const table = tableWrapRef.value
+  tableHasMoreToScroll.value = !!table && table.scrollWidth - table.clientWidth - table.scrollLeft > 1
+}
 
 function handleScroll(event: Event): void {
   const target = event.currentTarget
   if (!(target instanceof HTMLElement)) return
+  if (target === tableWrapRef.value) updateTableScrollState()
   target.classList.add('schema-scroll--active')
   const timer = scrollTimers.get(target)
   if (timer) clearTimeout(timer)
@@ -101,6 +110,7 @@ function handleScroll(event: Event): void {
 onBeforeUnmount(() => {
   scrollTimers.forEach((timer) => clearTimeout(timer))
   scrollTimers.clear()
+  window.removeEventListener('resize', updateTableScrollState)
 })
 
 const activeTab = ref('标准实体')
@@ -108,6 +118,7 @@ const activeTab = ref('标准实体')
 const graphSpaceStore = useGraphSpaceStore()
 const activeSpace = computed(() => currentGraphSpace())
 const keyword = ref('')
+const submittedKeyword = ref('')
 // 版本记录（已隐藏）
 // const schemaVersionMessage = ref('')
 const tabs = ['标准实体', '关系']
@@ -257,7 +268,7 @@ async function loadTopology() {
   try {
     applyTopology(await getSchemaTopology(activeSpace.value || undefined))
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
+    showToast(schemaErrorMessage(error), 'error')
   }
 }
 
@@ -346,7 +357,7 @@ async function runBackfill(force: boolean) {
       backfillConfirmOpen.value = true
       return
     }
-    showToast(message, 'warning')
+    showToast(message, 'error')
   } finally {
     backfilling.value = false
   }
@@ -368,7 +379,7 @@ async function triggerExtraction(schema: SchemaDefinition) {
     }
     return result
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
+    showToast(schemaErrorMessage(error), 'error')
     return null
   } finally {
     extracting.value = false
@@ -436,7 +447,7 @@ async function saveSources(): Promise<boolean> {
     await loadSchemas()
     return true
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
+    showToast(schemaErrorMessage(error), 'error')
     return false
   } finally {
     sourcesSaving.value = false
@@ -467,7 +478,7 @@ async function refreshPropertyTarget() {
   try {
     propertyTarget.value = await getSchemaDetail(target.id, currentUserId)
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
+    showToast(schemaErrorMessage(error), 'error')
   }
   await loadSchemas().catch(() => undefined)
 }
@@ -506,14 +517,14 @@ async function submitAddProperty() {
     if (result.ddlStatus === 'succeeded') {
       showToast(`属性已新增并执行图 DDL：${result.ddlStatement}`, 'success')
     } else {
-      showToast(`属性已新增，但图 DDL 执行失败：${result.ddlError || '未知错误'}`, 'warning')
+      showToast(`属性已新增，但图 DDL 执行失败：${result.ddlError || '未知错误'}`, 'error')
     }
     propertyForm.value = { name: '', dataType: 'string', length: '64', required: false }
     await refreshPropertyTarget()
     propertyChangeKind.value = 'add'
     propertyScriptGuideOpen.value = true
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
+    showToast(schemaErrorMessage(error), 'error')
   } finally {
     propertySaving.value = false
   }
@@ -546,7 +557,7 @@ async function confirmDeleteProperty() {
     propertyChangeKind.value = 'delete'
     propertyScriptGuideOpen.value = true
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
+    showToast(schemaErrorMessage(error), 'error')
   } finally {
     propertyDeleting.value = false
   }
@@ -569,7 +580,7 @@ async function loadDeleteImpact(schemaId: string) {
   try {
     deleteImpact.value = await getSchemaDeleteImpact(schemaId, currentUserId)
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
+    showToast(schemaErrorMessage(error), 'error')
   } finally {
     deleteImpactLoading.value = false
   }
@@ -602,7 +613,7 @@ async function confirmDelete() {
     void loadEntityOptions()
   } catch (error) {
     const message = schemaErrorMessage(error)
-    showToast(message, 'warning')
+    showToast(message, 'error')
     if (message.includes('不存在')) {
       // 脏行兜底：行已被删（如他处/缓存期删除），关弹窗并刷新列表清掉它
       deleteModalOpen.value = false
@@ -648,11 +659,28 @@ const nameRuleMax = computed(() =>
   isRelationTab() ? SCHEMA_RELATION_NAME_RULE.max : SCHEMA_ENTITY_NAME_RULE.max,
 )
 
+const propertyAddAttempted = ref(false)
+const sourceAddAttempted = ref(false)
+const incompleteProperties = computed(() => createForm.value.properties.some((row) =>
+  !row.name.trim() || !row.dataType || fixedLengthInvalid(row),
+))
+const incompleteSources = computed(() => createForm.value.sources.some((row) => !isSourceBindingComplete(row)))
+
 function addProperty() {
+  if (incompleteProperties.value) {
+    propertyAddAttempted.value = true
+    return
+  }
+  propertyAddAttempted.value = false
   createForm.value.properties.push(emptyPropertyRow())
 }
 
 function addSourceBinding() {
+  if (incompleteSources.value) {
+    sourceAddAttempted.value = true
+    return
+  }
+  sourceAddAttempted.value = false
   createForm.value.sources.push(emptySourceBindingRow())
 }
 
@@ -797,7 +825,7 @@ async function loadSchemas() {
       getSchemaOverview(activeSpace.value || undefined),
       listSchemasPaged(currentUserId, {
         kind,
-        keyword: keyword.value,
+        keyword: submittedKeyword.value,
         page: activePage.value,
         pageSize: pageSize.value,
         graphSpace: activeSpace.value || undefined,
@@ -811,6 +839,8 @@ async function loadSchemas() {
       return
     }
     applyPageData(kind, listData)
+    await nextTick()
+    updateTableScrollState()
   } finally {
     listLoading.value = false
   }
@@ -834,18 +864,15 @@ async function switchTab(tab: string) {
   if (activeTab.value === tab) return
   activeTab.value = tab
   keyword.value = ''
-  clearTimeout(searchTimer)
+  submittedKeyword.value = ''
   await loadSchemas()
 }
 
-// 搜索走服务端 keyword（匹配名称/中文名/标识），输入防抖 300ms 后重新拉第一页
-let searchTimer: ReturnType<typeof setTimeout> | undefined
-function onKeywordInput() {
-  clearTimeout(searchTimer)
-  searchTimer = setTimeout(() => {
-    resetPages()
-    void loadSchemas()
-  }, 300)
+// 输入仅编辑查询条件；按钮和 Enter 才提交服务端查询。
+async function submitKeyword() {
+  submittedKeyword.value = keyword.value.trim()
+  resetPages()
+  await loadSchemas()
 }
 
 // 全局图空间切换：自动展开拓扑、重置页码后按新空间重载列表与拓扑
@@ -856,13 +883,15 @@ watch(
     topologyExpanded.value = true
     resetPages()
     void Promise.all([loadSchemas(), loadTopology()]).catch((error: unknown) => {
-      showToast(schemaErrorMessage(error), 'warning')
+      showToast(schemaErrorMessage(error), 'error')
     })
   },
 )
 
 function openCreate() {
   createForm.value = emptyCreateForm()
+  propertyAddAttempted.value = false
+  sourceAddAttempted.value = false
   confirming.value = false
   modalOpen.value = true
   // 关系表单的起点/终点下拉需要全量实体；列表已分页，不能复用当前页数据
@@ -971,7 +1000,7 @@ async function saveItem() {
     await Promise.all([loadSchemas(), ...(topologyExpanded.value ? [loadTopology()] : [])])
     void loadEntityOptions()
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
+    showToast(schemaErrorMessage(error), 'error')
   } finally {
     creating.value = false
   }
@@ -989,7 +1018,7 @@ async function bindSourcesAfterCreate(schemaId: string, sources: SourceBindingRo
   } catch (error) {
     showToast(
       `来源表绑定保存失败（${schemaErrorMessage(error)}），可稍后在行级「来源表」入口补绑`,
-      'warning',
+      'error',
     )
   }
 }
@@ -998,7 +1027,7 @@ function toastCreateResult(result: SchemaDefinition) {
   if (result.ddlStatus === 'succeeded') {
     showToast(`已创建并执行图 DDL：${result.ddlStatement?.split('(')[0] || result.name}`, 'success')
   } else if (result.ddlStatus === 'failed') {
-    showToast(`Schema 已保存，但图 DDL 执行失败：${result.ddlError || '未知错误'}`, 'warning')
+    showToast(`Schema 已保存，但图 DDL 执行失败：${result.ddlError || '未知错误'}`, 'error')
   } else {
     showToast('Schema 已创建', 'success')
   }
@@ -1103,10 +1132,11 @@ async function openViewModal(rowId: string, rowName: string) {
 }
 
 onMounted(async () => {
+  window.addEventListener('resize', updateTableScrollState)
   try {
     await loadSchemas()
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
+    showToast(schemaErrorMessage(error), 'error')
   }
 })
 
@@ -1175,33 +1205,37 @@ function descCell(text: string): string {
         <div class="schema-tabs__items">
           <button v-for="tab in tabs" :key="tab" type="button" :class="{ active: activeTab === tab }" @click="switchTab(tab)">{{ tab }}</button>
         </div>
-        <div class="schema-toolbar__actions">
+        <form class="schema-toolbar__actions" role="search" @submit.prevent="submitKeyword">
           <button class="primary" type="button" @click="openCreate">＋ 增加</button>
           <span class="limit-field">
-            <a-input v-model="keyword" class="schema-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" :aria-label="`搜索${activeTab}`" :placeholder="`搜索${activeTab}`" @input="onKeywordInput">
+            <a-input v-model="keyword" class="schema-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" :aria-label="`搜索${activeTab}`" :placeholder="`搜索${activeTab}`">
               <template #prefix><IconSearch /></template>
             </a-input>
             <span v-if="atLimit(keyword, SEARCH_KEYWORD_MAX_LENGTH)" class="limit-field__hint">已达 {{ SEARCH_KEYWORD_MAX_LENGTH }} 字上限，无法继续输入</span>
           </span>
-        </div>
+          <button class="primary" type="submit" :disabled="listLoading">查询</button>
+        </form>
       </nav>
       <div class="schema-shell schema-table-shell">
 
-      <div v-if="activeTab === '标准实体'" class="schema-table-wrap" @scroll.passive="handleScroll"><table class="schema-entity-table"><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>说明</th><th>属性</th><th>脚本状态</th><th>操作</th></tr></thead><tbody><template v-for="row in entities" :key="row.id"><tr><td><b>{{ row.label }}</b></td><td><a-tooltip v-if="row.name.length > 10" :content="row.name" position="top"><code>{{ schemaNameCell(row.name) }}</code></a-tooltip><code v-else>{{ row.name }}</code></td><td class="schema-desc-cell"><a-tooltip v-if="(row.description || '').length > DESC_CELL_LIMIT" :content="row.description" position="top"><span class="schema-desc-text">{{ descCell(row.description || '') }}</span></a-tooltip><template v-else>{{ row.description }}</template></td><td class="schema-props-cell"><SchemaPropertyCell :schema="row.schema" /></td><td class="schema-script-status"><div class="schema-script-status__items"><span v-if="!scriptByRow[row.name]" class="schema-script-status__empty">未上传</span><span v-else-if="!scriptByRow[row.name].stale && !scriptByRow[row.name].needsRun && scriptByRow[row.name].lastRunStatus !== 'failed'" class="schema-script-status__ready">已上传</span><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本（更新后还需重跑）`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name] && !scriptByRow[row.name].stale && scriptByRow[row.name].needsRun" class="script-badge script-badge--rerun" :title="scriptByRow[row.name].lastRunAt ? '脚本更新后尚未重新运行：最新脚本尚未应用到图数据，请到「来源表」触发抽取或回填历史数据（重跑完成前持续提示）' : '脚本上传后尚未运行过抽取：请到「来源表」触发抽取或回填历史数据，将脚本应用到图数据（运行前持续提示）'">{{ scriptByRow[row.name].lastRunAt ? '待重跑' : '未运行' }}</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span></div></td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? (scriptByRow[row.name] ? '更换脚本' : '上传脚本') : '无权维护脚本'" @click="openUploadModal(row.id, row.name)">更换脚本</button><button type="button" class="schema-action-link" :disabled="!scriptByRow[row.name]" :title="scriptByRow[row.name] ? '查看脚本' : '尚未上传脚本'" @click="openViewModal(row.id, row.name)">查看脚本</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><a-dropdown trigger="click" position="bl"><button type="button" class="schema-action-link schema-action-more" :aria-label="`${row.label}更多操作`" title="更多操作">···</button><template #content><a-doption class="schema-action-menu-item" :disabled="!row.schema.canManageProperties" @click="openPropertyModal(row.schema)">属性管理</a-doption><a-doption class="schema-action-menu-item schema-action-menu-item--danger" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</a-doption></template></a-dropdown></div></td></tr></template></tbody></table></div>
+      <div v-if="activeTab === '标准实体'" ref="tableWrapRef" class="schema-table-wrap" :class="{ 'has-scroll-right': tableHasMoreToScroll }" @scroll.passive="handleScroll"><table class="schema-entity-table"><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>说明</th><th>属性</th><th>脚本状态</th><th>操作</th></tr></thead><tbody><template v-for="row in entities" :key="row.id"><tr><td><b>{{ row.label }}</b></td><td><a-tooltip v-if="row.name.length > 10" :content="row.name" position="top"><code>{{ schemaNameCell(row.name) }}</code></a-tooltip><code v-else>{{ row.name }}</code></td><td class="schema-desc-cell"><a-tooltip v-if="(row.description || '').length > DESC_CELL_LIMIT" :content="row.description" position="top"><span class="schema-desc-text">{{ descCell(row.description || '') }}</span></a-tooltip><template v-else>{{ row.description }}</template></td><td class="schema-props-cell"><SchemaPropertyCell :schema="row.schema" /></td><td class="schema-script-status"><div class="schema-script-status__items"><span v-if="!scriptByRow[row.name]" class="schema-script-status__empty">未上传</span><span v-else-if="!scriptByRow[row.name].stale && !scriptByRow[row.name].needsRun && scriptByRow[row.name].lastRunStatus !== 'failed'" class="schema-script-status__ready">已上传</span><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本（更新后还需重跑）`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name] && !scriptByRow[row.name].stale && scriptByRow[row.name].needsRun" class="script-badge script-badge--rerun" :title="scriptByRow[row.name].lastRunAt ? '脚本更新后尚未重新运行：最新脚本尚未应用到图数据，请到「来源表」触发抽取或回填历史数据（重跑完成前持续提示）' : '脚本上传后尚未运行过抽取：请到「来源表」触发抽取或回填历史数据，将脚本应用到图数据（运行前持续提示）'">{{ scriptByRow[row.name].lastRunAt ? '待重跑' : '未运行' }}</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span></div></td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? (scriptByRow[row.name] ? '更换脚本' : '上传脚本') : '无权维护脚本'" @click="openUploadModal(row.id, row.name)">更换脚本</button><button type="button" class="schema-action-link" :disabled="!scriptByRow[row.name]" :title="scriptByRow[row.name] ? '查看脚本' : '尚未上传脚本'" @click="openViewModal(row.id, row.name)">查看脚本</button><!-- 操作 >3 个：第三个起收进「···」（来源表/属性管理/删除） --><a-dropdown trigger="click" position="bl"><button type="button" class="schema-action-link schema-action-more" :aria-label="`${row.label}更多操作`" title="更多操作">···</button><template #content><a-doption class="schema-action-menu-item" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</a-doption><a-doption class="schema-action-menu-item" :disabled="!row.schema.canManageProperties" @click="openPropertyModal(row.schema)">属性管理</a-doption><a-doption class="schema-action-menu-item schema-action-menu-item--danger" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</a-doption></template></a-dropdown></div></td></tr></template></tbody></table></div>
 
-      <div v-else class="schema-table-wrap" @scroll.passive="handleScroll"><table class="schema-relation-table"><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>说明</th><th>属性</th><th>脚本状态</th><th>操作</th></tr></thead><tbody><template v-for="row in relations" :key="row.id"><tr><td><a-tooltip v-if="row.label.length > 10" :content="row.label" position="top"><b>{{ schemaNameCell(row.label) }}</b></a-tooltip><b v-else>{{ row.label }}</b></td><td><a-tooltip v-if="row.name.length > 10" :content="row.name" position="top"><code>{{ schemaNameCell(row.name) }}</code></a-tooltip><code v-else>{{ row.name }}</code></td><td><a-tooltip v-if="row.source.length > 5" :content="row.source" position="top"><span>{{ endpointNameCell(row.source) }}</span></a-tooltip><template v-else>{{ row.source }}</template></td><td><a-tooltip v-if="row.target.length > 5" :content="row.target" position="top"><span>{{ endpointNameCell(row.target) }}</span></a-tooltip><template v-else>{{ row.target }}</template></td><td class="schema-desc-cell"><a-tooltip v-if="(row.basis || '').length > DESC_CELL_LIMIT" :content="row.basis" position="top"><span class="schema-desc-text">{{ descCell(row.basis || '') }}</span></a-tooltip><template v-else>{{ row.basis }}</template></td><td class="schema-props-cell"><SchemaPropertyCell :schema="row.schema" /></td><td class="schema-script-status"><div class="schema-script-status__items"><span v-if="!scriptByRow[row.name]" class="schema-script-status__empty">未上传</span><span v-else-if="!scriptByRow[row.name].stale && !scriptByRow[row.name].needsRun && scriptByRow[row.name].lastRunStatus !== 'failed'" class="schema-script-status__ready">已上传</span><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本（更新后还需重跑）`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name] && !scriptByRow[row.name].stale && scriptByRow[row.name].needsRun" class="script-badge script-badge--rerun" :title="scriptByRow[row.name].lastRunAt ? '脚本更新后尚未重新运行：最新脚本尚未应用到图数据，请到「来源表」触发抽取或回填历史数据（重跑完成前持续提示）' : '脚本上传后尚未运行过抽取：请到「来源表」触发抽取或回填历史数据，将脚本应用到图数据（运行前持续提示）'">{{ scriptByRow[row.name].lastRunAt ? '待重跑' : '未运行' }}</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span></div></td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? (scriptByRow[row.name] ? '更换脚本' : '上传脚本') : '无权维护脚本'" @click="openUploadModal(row.id, row.name)">更换脚本</button><button type="button" class="schema-action-link" :disabled="!scriptByRow[row.name]" :title="scriptByRow[row.name] ? '查看脚本' : '尚未上传脚本'" @click="openViewModal(row.id, row.name)">查看脚本</button><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</button><a-dropdown trigger="click" position="bl"><button type="button" class="schema-action-link schema-action-more" :aria-label="`${row.label}更多操作`" title="更多操作">···</button><template #content><a-doption class="schema-action-menu-item" :disabled="!row.schema.canManageProperties" @click="openPropertyModal(row.schema)">属性管理</a-doption><a-doption class="schema-action-menu-item schema-action-menu-item--danger" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</a-doption></template></a-dropdown></div></td></tr></template></tbody></table></div>
+      <div v-else ref="tableWrapRef" class="schema-table-wrap" :class="{ 'has-scroll-right': tableHasMoreToScroll }" @scroll.passive="handleScroll"><table class="schema-relation-table"><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>说明</th><th>属性</th><th>脚本状态</th><th>操作</th></tr></thead><tbody><template v-for="row in relations" :key="row.id"><tr><td><a-tooltip v-if="row.label.length > 10" :content="row.label" position="top"><b>{{ schemaNameCell(row.label) }}</b></a-tooltip><b v-else>{{ row.label }}</b></td><td><a-tooltip v-if="row.name.length > 10" :content="row.name" position="top"><code>{{ schemaNameCell(row.name) }}</code></a-tooltip><code v-else>{{ row.name }}</code></td><td><a-tooltip v-if="row.source.length > 5" :content="row.source" position="top"><span>{{ endpointNameCell(row.source) }}</span></a-tooltip><template v-else>{{ row.source }}</template></td><td><a-tooltip v-if="row.target.length > 5" :content="row.target" position="top"><span>{{ endpointNameCell(row.target) }}</span></a-tooltip><template v-else>{{ row.target }}</template></td><td class="schema-desc-cell"><a-tooltip v-if="(row.basis || '').length > DESC_CELL_LIMIT" :content="row.basis" position="top"><span class="schema-desc-text">{{ descCell(row.basis || '') }}</span></a-tooltip><template v-else>{{ row.basis }}</template></td><td class="schema-props-cell"><SchemaPropertyCell :schema="row.schema" /></td><td class="schema-script-status"><div class="schema-script-status__items"><span v-if="!scriptByRow[row.name]" class="schema-script-status__empty">未上传</span><span v-else-if="!scriptByRow[row.name].stale && !scriptByRow[row.name].needsRun && scriptByRow[row.name].lastRunStatus !== 'failed'" class="schema-script-status__ready">已上传</span><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本（更新后还需重跑）`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name] && !scriptByRow[row.name].stale && scriptByRow[row.name].needsRun" class="script-badge script-badge--rerun" :title="scriptByRow[row.name].lastRunAt ? '脚本更新后尚未重新运行：最新脚本尚未应用到图数据，请到「来源表」触发抽取或回填历史数据（重跑完成前持续提示）' : '脚本上传后尚未运行过抽取：请到「来源表」触发抽取或回填历史数据，将脚本应用到图数据（运行前持续提示）'">{{ scriptByRow[row.name].lastRunAt ? '待重跑' : '未运行' }}</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span></div></td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? (scriptByRow[row.name] ? '更换脚本' : '上传脚本') : '无权维护脚本'" @click="openUploadModal(row.id, row.name)">更换脚本</button><button type="button" class="schema-action-link" :disabled="!scriptByRow[row.name]" :title="scriptByRow[row.name] ? '查看脚本' : '尚未上传脚本'" @click="openViewModal(row.id, row.name)">查看脚本</button><!-- 操作 >3 个：第三个起收进「···」（来源表/属性管理/删除） --><a-dropdown trigger="click" position="bl"><button type="button" class="schema-action-link schema-action-more" :aria-label="`${row.label}更多操作`" title="更多操作">···</button><template #content><a-doption class="schema-action-menu-item" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</a-doption><a-doption class="schema-action-menu-item" :disabled="!row.schema.canManageProperties" @click="openPropertyModal(row.schema)">属性管理</a-doption><a-doption class="schema-action-menu-item schema-action-menu-item--danger" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</a-doption></template></a-dropdown></div></td></tr></template></tbody></table></div>
 
-      <!-- 列表分页（服务端分页，两个页签共用每页条数、各自记住页码）；
-           紧凑页码（最多 5 个页码按钮 + 尾页折叠），跳页框随组件恒显 -->
+      <!-- 列表分页（服务端分页，两个页签共用每页条数、各自记住页码）。 -->
       <ListPagination
         :total="activeTotal"
         :page="activePage"
         :page-size="pageSize"
         :disabled="listLoading"
         :compact-pages="true"
+        :show-jumper="false"
+        :size-at-end="true"
         @change="changePage"
         @change-size="changePageSize"
-      />
+      >
+        <template #summary><span class="list-pagination__summary">共 {{ activeTotal }} 条</span></template>
+      </ListPagination>
 
       <!-- 版本记录（已隐藏）
       <div v-else class="schema-table-wrap schema-version-table"><table><thead><tr><th>版本</th><th>状态</th><th>发布时间</th><th>实体范围</th><th>关系范围</th><th>变更内容</th><th>发布人</th><th>操作</th></tr></thead><tbody><tr v-for="row in schemaVersions" :key="row.version"><td><code>{{ row.version }}</code></td><td><span :class="row.status === '当前版本' ? 'core' : 'support'">{{ row.status }}</span></td><td>{{ row.time }}</td><td>{{ row.entities }}</td><td>{{ row.relations }}</td><td>{{ row.change }}</td><td>{{ row.publisher }}</td><td><div class="schema-version-actions"><button type="button" @click="schemaVersionMessage = `已打开 ${row.version} 的完整变更清单。`">变更详情</button><button v-if="row.status !== '当前版本'" class="danger" type="button" @click="schemaVersionMessage = `已创建回退至 ${row.version} 的申请，通过影响分析与审批后才会执行。`">申请回退</button></div></td></tr></tbody></table></div>
@@ -1249,7 +1283,6 @@ function descCell(text: string): string {
               <template #label>
                 <div class="create-props__head">
                   <span>属性列表</span>
-                  <button type="button" class="create-props__add" @click.stop="addProperty">＋ 添加属性</button>
                 </div>
               </template>
               <div class="create-prop-list">
@@ -1281,15 +1314,22 @@ function descCell(text: string): string {
                 </template>
               </div>
               <p v-if="propListLimitNote" class="limit-field-note">{{ propListLimitNote }}</p>
+              <div class="create-module-actions">
+                <button type="button" class="create-props__add" @click.stop="addProperty">＋ 添加属性</button>
+              </div>
+              <p v-if="propertyAddAttempted && incompleteProperties" class="create-add-error" role="alert">请填写完已有属性的必填信息（属性名、类型及 fixed_string 长度）后再添加。</p>
             </a-form-item>
 
             <div class="create-sources">
               <div class="create-sources__head">
                 <span>来源表（可选）</span>
-                <button type="button" class="create-sources__add" @click="addSourceBinding">＋ 绑定来源表</button>
                 <span class="create-sources__hint">绑定后可在行级触发「平台喂数」抽取：按时间列水位分批读取来源表 → 脚本转换 → 写入图谱</span>
               </div>
               <SourceBindings v-model="createForm.sources" :show-add-button="false" />
+              <div class="create-module-actions">
+                <button type="button" class="create-sources__add" @click="addSourceBinding">＋ 绑定来源表</button>
+              </div>
+              <p v-if="sourceAddAttempted && incompleteSources" class="create-add-error" role="alert">请填写完已有来源表的必填信息（数据源、数据库、表）后再添加。</p>
             </div>
 
             <div class="create-ddl">
@@ -1337,14 +1377,12 @@ function descCell(text: string): string {
               </template>
               <template v-else>
                 <div class="schema-delete-impact schema-delete-impact--danger">
-                  <strong>删除影响</strong>
                   <p>该实体的相关关系已全部删除。继续操作将永久删除图空间 <b>{{ deleteTarget.graphSpace || activeSpace }}</b> 中该类型的全部实体点。</p>
                 </div>
               </template>
             </template>
             <template v-else>
               <div class="schema-delete-impact schema-delete-impact--danger">
-                <strong>删除影响</strong>
                 <p>继续操作将永久删除图空间 <b>{{ deleteTarget?.graphSpace || activeSpace }}</b> 中该类型的全部关系边。</p>
               </div>
             </template>
@@ -1556,20 +1594,20 @@ function descCell(text: string): string {
 .schema-table-wrap table,.trace-layout table{width:100%;border-collapse:collapse;font-size:11px}
 .schema-table-wrap table{table-layout:fixed}
 /* 按字段内容分配列宽，预留完整操作区；属性列的两列预览可在单元格内截断。 */
-.schema-entity-table th:nth-child(1){width:10%}
-.schema-entity-table th:nth-child(2){width:13%}
-.schema-entity-table th:nth-child(3){width:13%}
-.schema-entity-table th:nth-child(4){width:38%}
-.schema-entity-table th:nth-child(5){width:8%}
-.schema-entity-table th:nth-child(6){width:18%}
-.schema-relation-table th:nth-child(1){width:8%}
-.schema-relation-table th:nth-child(2){width:11%}
-.schema-relation-table th:nth-child(3){width:7%}
-.schema-relation-table th:nth-child(4){width:7%}
-.schema-relation-table th:nth-child(5){width:11%}
-.schema-relation-table th:nth-child(6){width:33%}
-.schema-relation-table th:nth-child(7){width:7%}
-.schema-relation-table th:nth-child(8){width:16%}
+.schema-entity-table th:nth-child(1){width:calc((100% - 200px) * 0.11627907)}
+.schema-entity-table th:nth-child(2){width:calc((100% - 200px) * 0.15116279)}
+.schema-entity-table th:nth-child(3){width:calc((100% - 200px) * 0.15116279)}
+.schema-entity-table th:nth-child(4){width:calc((100% - 200px) * 0.48837209)}
+.schema-entity-table th:nth-child(5){width:calc((100% - 200px) * 0.09302326)}
+.schema-entity-table th:nth-child(6){width:200px}
+.schema-relation-table th:nth-child(1){width:calc((100% - 200px) * 0.09090909)}
+.schema-relation-table th:nth-child(2){width:calc((100% - 200px) * 0.12500000)}
+.schema-relation-table th:nth-child(3){width:calc((100% - 200px) * 0.07954545)}
+.schema-relation-table th:nth-child(4){width:calc((100% - 200px) * 0.07954545)}
+.schema-relation-table th:nth-child(5){width:calc((100% - 200px) * 0.12500000)}
+.schema-relation-table th:nth-child(6){width:calc((100% - 200px) * 0.42045455)}
+.schema-relation-table th:nth-child(7){width:calc((100% - 200px) * 0.07954545)}
+.schema-relation-table th:nth-child(8){width:200px}
 .schema-desc-cell{word-break:break-word}
 .schema-table-wrap td code{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom}.schema-table-wrap th,.schema-table-wrap td,.trace-layout td{padding:11px 13px;border-bottom:1px solid #e5edf8;text-align:left;line-height:17px;vertical-align:top}.schema-table-wrap th{position:sticky;z-index:2;top:0;background:#f1f6fc;color:#5e6f88;white-space:nowrap}.schema-table-wrap td{color:#344763}.schema-table-wrap code,.trace-layout code{padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;white-space:nowrap}.core,.support,.evidence,.auto,.review{display:inline-flex;padding:2px 7px;border-radius:999px;background:#e9f8ef;color:#067647;font-size:9px;white-space:nowrap}.support{background:#f0f2f5;color:#5e6b7e}.evidence{background:#f0edff;color:#6941c6}.auto{white-space:normal}.review{background:#fff3df;color:#b54708;white-space:normal}.arrow{margin:0 5px;color:#8ba2c2}.candidate-layout{display:grid;flex:1;min-height:0;grid-template-columns:minmax(0,1fr) 245px}.candidate-layout>.schema-table-wrap{grid-column:1}.candidate-note{grid-column:1/-1;padding:10px 13px;border-bottom:1px solid #dce8f8;background:#f3f8ff}.candidate-note strong{font-size:12px}.candidate-note p{margin:3px 0 0;color:#657690;font-size:10px}.mention-fields{grid-column:2;grid-row:2;padding:13px;border-left:1px solid #e0e9f5;background:#fafcff}.mention-fields strong{display:block;margin-bottom:10px;font-size:12px}.mention-fields span{display:inline-flex;margin:0 5px 6px 0;padding:3px 6px;border-radius:4px;background:#edf4ff;color:#315b95;font:9px ui-monospace,SFMono-Regular,Menlo,monospace}.trace-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:12px;background:#f8fbff}.trace-layout section{overflow:hidden;border:1px solid #d5e3f5;border-radius:7px;background:#fff}.trace-layout header{display:flex;align-items:flex-start;justify-content:space-between;padding:13px;border-bottom:1px solid #e3ebf6}.trace-layout h2{margin:0;font-size:13px}.trace-layout p{margin:3px 0 0;color:#7b899e;font-size:10px}.trace-layout header>span{color:#165dff;font-size:10px}.trace-layout table{display:block;max-height:390px;overflow:auto}.trace-layout tbody,.trace-layout tr{display:table;width:100%;table-layout:fixed}.trace-layout td:first-child{width:160px}@media(max-width:1250px){.schema-flow{grid-template-columns:repeat(4,1fr)}.schema-flow b{display:none}}@media(max-width:900px){.trace-layout{grid-template-columns:1fr}.candidate-layout{display:block}.mention-fields{border-top:1px solid #e0e9f5;border-left:0}}
 
@@ -1630,7 +1668,7 @@ function descCell(text: string): string {
 
 .schema-toolbar__actions{display:flex;min-width:0;flex-wrap:wrap;align-items:center;gap:10px}
 .schema-toolbar__actions>.primary{flex-shrink:0;white-space:nowrap}
-.schema-tabs>.schema-toolbar__actions{min-width:0;width:100%;justify-content:flex-start}
+.schema-tabs>.schema-toolbar__actions{min-width:0;width:auto;justify-content:flex-end;margin-left:auto}
 .prop-len--invalid,.property-add-form__len--invalid{border-color:#e5484d!important;background:#fff3f3!important}
 /* 长度达上限：与校验失败同款红边高亮（可见文案见 .limit-field-note / .limit-field__hint） */
 .is-at-limit{border-color:#e5484d!important;background:#fff3f3!important}
@@ -1652,20 +1690,20 @@ function descCell(text: string): string {
 .schema-actions__inner{display:flex;align-items:center;gap:8px;flex-wrap:nowrap;white-space:nowrap}
 .schema-actions__inner>*{flex:0 0 auto}
 .schema-action-more{min-width:24px;font-size:18px;line-height:22px;text-align:center}
-.schema-script-status__items{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
-.schema-script-status__empty{color:#86909c}
-.schema-script-status__ready{color:#4e5969}
+.schema-script-status__items{display:flex;align-items:flex-start;gap:4px;flex-direction:column}
+.schema-script-status__empty{color:var(--status-neutral)}
+.schema-script-status__ready{color:var(--status-success)}
 /* 表头同时固定在顶部和右侧；数据行只固定右侧，避免横向滚动遮挡操作。 */
 .schema-table-wrap table th:last-child{position:sticky;right:0;z-index:4;background:#f7f8fa;box-shadow:-1px 0 #e5e6eb}
 .schema-table-wrap table td:last-child{position:sticky;right:0;z-index:3;background:#fff;box-shadow:-1px 0 #e5e6eb}
 /* 复用 nGQL 结果表固定列的视觉提示：在操作列左侧增加向内容区渐隐的阴影。 */
-.schema-table-wrap table :is(th,td):last-child::before{position:absolute;top:0;bottom:-1px;left:0;width:12px;content:"";pointer-events:none;transform:translateX(-100%);box-shadow:inset -10px 0 8px -8px rgba(78,89,105,.28)}
+.schema-table-wrap.has-scroll-right table :is(th,td):last-child::before{position:absolute;top:0;bottom:-1px;left:0;width:12px;content:"";pointer-events:none;transform:translateX(-100%);box-shadow:inset -10px 0 8px -8px rgba(78,89,105,.28)}
 .schema-action-link{height:auto;padding:0;border:0;background:transparent;color:#165dff;font-size:14px;line-height:22px;font-weight:400;cursor:pointer;text-decoration:none}
 .schema-action-link:hover:not(:disabled){color:#4080ff;text-decoration:none}
 .schema-action-link:disabled{color:#a9b4c6;cursor:not-allowed;text-decoration:none}
 .schema-action-link--danger{color:#e5484d}
 .schema-action-link--danger:hover:not(:disabled){color:#b42318}
-:global(.schema-action-menu-item.arco-dropdown-option){color:#165dff;font-size:14px;line-height:22px;font-weight:400;text-decoration:none}
+:global(.schema-action-menu-item.arco-dropdown-option){box-sizing:border-box;min-height:32px;padding:5px 16px;color:#165dff;font-size:14px;line-height:22px;font-weight:400;text-decoration:none}
 :global(.schema-action-menu-item.arco-dropdown-option:hover){color:#4080ff;text-decoration:none}
 :global(.schema-action-menu-item--danger.arco-dropdown-option:not(.arco-dropdown-option-disabled)){color:#f53f3f}
 :global(.schema-action-menu-item--danger.arco-dropdown-option:not(.arco-dropdown-option-disabled):hover){color:#b42318}
@@ -1701,7 +1739,7 @@ function descCell(text: string): string {
 .schema-delete-impact{margin-left:52px;padding:12px 14px;border:1px solid;border-radius:6px}
 .schema-delete-impact strong{display:block;margin-bottom:4px;font-size:13px;line-height:20px;font-weight:500}
 .schema-delete-impact p{margin:0;font-size:12px;line-height:20px}
-.schema-delete-impact--danger{border-color:#ffccc7;background:#fff2f0;color:#b42318}
+.schema-delete-impact--danger{border:0;background:#fff2f0;color:#b42318}
 .schema-delete-impact--blocked{border-color:#ffe4ba;background:#fff7e8;color:#b54708}
 .schema-delete-note{margin:0;font-size:11px;line-height:18px;color:#86909c}
 .schema-delete-rel-list{margin:8px 0 0;padding:6px 10px;max-height:160px;overflow:auto;border:1px solid rgba(181,71,8,.16);border-radius:4px;background:rgba(255,255,255,.72);list-style:none}
@@ -1711,9 +1749,9 @@ function descCell(text: string): string {
 .danger-text{color:#e5484d}
 
 /* 脚本双信号角标：落后于 Schema / 上次运行失败 */
-.script-badge{display:inline-flex;align-items:center;padding:1px 7px;border-radius:999px;background:#fff7e8;color:#b54708;font-size:10px;line-height:16px;white-space:nowrap}
-.script-badge--failed{background:#fef3f2;color:#b42318}
-.script-badge--rerun{background:#e8f3ff;color:#165dff}
+.script-badge{color:var(--status-warning)}
+.script-badge--failed{color:var(--status-danger)}
+.script-badge--rerun{color:var(--status-neutral)}
 
 /* 属性管理弹窗 */
 .property-panel{width:min(640px,100%)}
@@ -1726,7 +1764,7 @@ function descCell(text: string): string {
 .property-table__row{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(90px,1fr) 52px 82px 64px;gap:8px;align-items:center;padding:7px 12px;border-bottom:1px solid #f2f3f5;font-size:12px;color:#4e5969}
 .property-table__row:last-child{border-bottom:0}
 .property-table__row--head{background:#f7f8fa;font-size:11px;color:#86909c}
-.property-table__row--locked{background:#fffbf4}
+.property-table__row--locked{background:#fff}
 .property-table__name{display:flex;align-items:center;gap:6px;min-width:0}
 .property-table__name code{overflow:hidden;padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:11px;text-overflow:ellipsis;white-space:nowrap}
 .property-table__lock{flex:0 0 auto;width:16px;height:16px;fill:none;stroke:#4e5969;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
@@ -1854,7 +1892,7 @@ function descCell(text: string): string {
 /* DESIGN_RULES: Schema management page contract. */
 .schema-page{padding:0;color:#1d2129}
 .schema-shell{border-color:#e5e6eb;border-radius:6px;box-shadow:none}
-.schema-tabs{display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;gap:12px}.schema-tabs__items{display:flex;align-self:stretch;overflow:auto}.schema-tabs button{height:32px;padding:0 16px;font-size:14px;line-height:22px;font-weight:400}.schema-tabs button.active{font-weight:500}
+.schema-tabs{display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:16px}.schema-tabs__items{display:flex;align-self:auto;overflow:auto}.schema-tabs button{height:32px;padding:0 16px;font-size:14px;line-height:22px;font-weight:400}.schema-tabs button.active{font-weight:500}
 .schema-toolbar{min-height:48px;gap:16px;padding:8px 16px;background:#fff}.schema-toolbar>div,.schema-toolbar__actions{gap:16px}
 .schema-toolbar strong{font-size:16px;line-height:24px;font-weight:600}.schema-toolbar>div span{font-size:12px;line-height:20px}
 .schema-toolbar label{gap:8px;width:280px;height:32px;padding:0 12px;border-color:#e5e6eb;border-radius:4px}.schema-toolbar input{height:30px;padding:0!important;font-size:14px;line-height:22px}
@@ -1869,7 +1907,9 @@ function descCell(text: string): string {
 .schema-modal__body{gap:16px;padding:24px}.schema-create-body{min-height:0;max-height:none;overflow-x:hidden;overflow-y:auto}.schema-modal__body label,.create-field{gap:8px;font-size:14px;line-height:22px}.create-row{gap:16px}
 .create-row>.create-field{min-width:0}.create-row>.create-field :deep(.arco-form-item-wrapper-col),.create-row>.create-field :deep(.arco-form-item-content-wrapper),.create-row>.create-field :deep(.arco-form-item-content){box-sizing:border-box;width:100%;min-width:0}.create-text-input,.create-field textarea,.create-field select{box-sizing:border-box;width:100%;height:32px;padding:0 12px;font-size:14px;line-height:22px;appearance:none}
 .create-field :deep(.arco-textarea-wrapper){box-sizing:border-box;width:100%;min-height:80px;border:1px solid #e5e6eb;border-radius:4px;background:#fff!important}.create-field :deep(.arco-textarea){box-sizing:border-box;width:100%;min-height:78px;padding:8px 12px 28px;background:#fff!important;color:#1d2129;font-size:14px;line-height:22px}.create-field :deep(.arco-textarea-word-limit){right:12px;bottom:6px;color:#86909c;font-size:12px;line-height:20px}.create-field :deep(.arco-textarea-wrapper:hover){border-color:#4080ff}.create-field :deep(.arco-textarea-wrapper.arco-textarea-focus){border-color:#165dff;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
-.create-props{gap:16px}.create-props :deep(.arco-form-item-label-col),.create-props :deep(.arco-form-item-label){box-sizing:border-box;width:100%}.create-props :deep(.arco-form-item-label){display:flex;align-items:center}.create-prop-list{display:grid;width:100%;gap:16px}.create-props :deep(.arco-form-item-content-flex){width:100%}.create-props__head{display:flex;width:100%;align-items:center;justify-content:space-between;font-size:14px;line-height:22px}.create-props__add{height:28px;font-size:14px}.create-prop-row{gap:8px}
+.create-props{gap:16px}.create-props :deep(.arco-form-item-label-col),.create-props :deep(.arco-form-item-label){box-sizing:border-box;width:100%}.create-props :deep(.arco-form-item-label){display:flex;align-items:center}.create-prop-list{display:grid;width:100%;gap:16px}.create-props :deep(.arco-form-item-content-flex){width:100%}.create-props__head{display:flex;width:100%;align-items:center;justify-content:space-between;font-size:14px;line-height:22px}.create-props__add{height:32px;font-size:14px}
+.create-module-actions{display:flex;justify-content:flex-end;margin-top:12px}
+.create-add-error{margin:8px 0 0;color:var(--status-danger);font-size:12px;line-height:20px}.create-prop-row{gap:8px}
 .prop-name,.prop-type,.prop-len{height:32px;font-size:14px;appearance:none}.prop-required{font-size:14px;line-height:22px}
 .create-prop-row{grid-template-columns:minmax(0,1.4fr) minmax(120px,1.2fr) auto 24px;align-items:center;column-gap:16px;row-gap:8px}
 .create-prop-row--has-length{grid-template-columns:minmax(0,1.4fr) minmax(120px,1.2fr) 72px auto 24px}
@@ -1932,7 +1972,7 @@ function descCell(text: string): string {
 .schema-create-panel .create-ddl__label{color:#4e5969;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}.schema-create-panel .create-ddl__confirm{font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
 .schema-create-panel .create-ddl__pre{font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
 .schema-create-panel footer button{font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
-@media(max-width:900px){.schema-tabs{align-items:stretch;flex-direction:column}.schema-tabs__items{min-height:36px}.schema-toolbar__actions{justify-content:flex-start}.create-row{grid-template-columns:1fr}.create-field--full{grid-column:auto}}
+@media(max-width:900px){.schema-tabs{align-items:stretch;flex-direction:column}.schema-tabs__items{min-height:36px}.schema-tabs>.schema-toolbar__actions{width:100%;margin-left:0;justify-content:flex-end}.create-row{grid-template-columns:1fr}.create-field--full{grid-column:auto}}
 .schema-create-body>.create-field,.create-row>.create-field{margin-bottom:0;gap:0}.schema-create-body>.create-props{margin-bottom:0}.create-ddl{margin-top:0;gap:8px}.create-ddl__confirm{margin:0}
 /* Schema 拓扑总览 */
 .schema-topology-shell{margin-bottom:16px;padding-bottom:0}
@@ -1962,6 +2002,7 @@ function descCell(text: string): string {
 .schema-entity-table{min-width:1600px}
 .schema-relation-table{min-width:1750px}
 .schema-table-shell > .list-pagination{flex:0 0 auto}
+.schema-table-shell :deep(.list-pagination){justify-content:flex-end}
 @media(max-height:600px){
   .schema-catalog,.schema-table-shell{flex:0 0 auto;min-height:0}
   .schema-table-wrap{flex:0 0 auto;min-height:160px;max-height:50vh}
@@ -1979,7 +2020,8 @@ function descCell(text: string): string {
 .schema-table-wrap th,.property-table__row--head{font-size:14px;line-height:22px;font-weight:500}
 .schema-table-wrap td b{font-weight:400}
 .legend-item,.schema-topology-canvas__empty,.schema-flow span,.schema-flow>header span,.candidate-note p,.mention-fields span,.trace-card p,.trace-card dd,.trace-card code,.trace-card>header b,.trace-layout header>span,.trace-layout>aside strong,.trace-layout>aside span{font-size:12px;line-height:20px;font-weight:400}
-.script-badge{font-size:12px;line-height:20px;font-weight:400}
+.schema-script-status__items>span{display:inline-flex;align-items:center;gap:6px;padding:0;border:0;border-radius:0;background:transparent;font-size:14px;line-height:22px;font-weight:400;white-space:nowrap}
+.schema-script-status__items>span::before{flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
 .schema-delete-text,.property-table__row,.property-table__name code,.property-table__type,.property-table__category,.property-add-form__name,.property-add-form__len,.property-add-form__type :deep(.arco-select-view),.property-add-form__required,.property-add-form .primary,.upload-idle p,.upload-idle .primary,.upload-working__text strong,.upload-result strong,.view-loading,.view-error{font-size:14px;line-height:22px;font-weight:400}
 .schema-delete-note,.property-section__head span,.upload-stage,.upload-message,.upload-result span,.upload-result__msg,.upload-result__issues,.script-pre code,.create-ddl__pre,.create-ddl__confirm,.create-sources__hint,.sources-note{font-size:12px;line-height:20px;font-weight:400}
 .schema-modal__body label,.schema-modal__body input,.schema-modal__body textarea,.schema-modal__panel footer button,.create-field,.create-text-input,.create-field textarea,.create-field select,.create-props__head,.create-props__add,.prop-name,.prop-type,.prop-len,.prop-required{font-size:14px;line-height:22px;font-weight:400}
@@ -1990,8 +2032,10 @@ function descCell(text: string): string {
 
 /* Schema 类型切换沿用科技专家同事关系页的摘要/实体分段按钮，并置于表格边框之外。 */
 .schema-catalog{display:flex;flex-direction:column;gap:12px}
-.schema-tabs{min-height:40px;padding:0;border-bottom:0;background:transparent;overflow:visible}
-.schema-tabs__items{box-sizing:border-box;height:40px;padding:4px;border-radius:4px;background:#f2f3f5;align-self:auto;overflow:visible}
+.schema-tabs{min-height:40px;padding:0;border-bottom:0;background:transparent;overflow:visible;flex-direction:column;align-items:stretch}
+.schema-tabs>.schema-toolbar__actions{align-self:flex-end;margin-left:0;flex-wrap:nowrap;gap:16px}
+.schema-tabs>.schema-toolbar__actions .limit-field{flex:0 1 280px;width:280px}
+.schema-tabs__items{box-sizing:border-box;height:40px;padding:4px;border-radius:4px;background:#f2f3f5;align-self:flex-start;overflow:visible}
 .schema-tabs__items button{display:inline-flex;box-sizing:border-box;align-items:center;justify-content:center;width:88px;height:32px;padding:5px 16px;border:0;border-radius:4px;background:transparent;color:#4e5969;text-align:center}
 .schema-tabs__items button+button{border-left:1px solid #c9cdd4}
 .schema-tabs__items button.active{border-left-color:transparent;background:#fff;color:#165dff;font-weight:500}

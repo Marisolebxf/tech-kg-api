@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import DeleteConfirmDialog from '../../components/DeleteConfirmDialog.vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useAuthStore } from '../../stores/auth'
 import { IconSearch } from '@arco-design/web-vue/es/icon'
 import ListPagination from '../../components/list-pagination.vue'
@@ -111,11 +112,46 @@ const spaceWorking = ref(false)
 const items = ref<ConfigItem[]>([])
 const activeCategory = ref('语言模型')
 const keyword = ref('')
+const submittedKeyword = ref('')
 const statusFilter = ref<string | undefined>('全部状态')
 const selected = ref<ConfigItem | null>(null)
 const dialogOpen = ref(false)
 const testingId = ref('')
 const saving = ref(false)
+const configTableRef = ref<HTMLElement | null>(null)
+const tableHasMoreToScroll = ref(false)
+const tableScrollActive = ref(false)
+let scrollIdleTimer: ReturnType<typeof setTimeout> | undefined
+
+function updateConfigTableScrollState() {
+  const table = configTableRef.value
+  if (!table || table.scrollWidth <= table.clientWidth + 1) {
+    tableHasMoreToScroll.value = false
+    return
+  }
+  // The action column is sticky, so scroll distance alone does not tell us
+  // whether any data is still hidden behind it. Compare the last data column
+  // with the visible edge of the action column instead.
+  const lastDataColumn = table.querySelector<HTMLElement>('thead .config-time-col')
+  const actionColumn = table.querySelector<HTMLElement>('thead .config-action-col')
+  const dataRect = lastDataColumn?.getBoundingClientRect()
+  const actionRect = actionColumn?.getBoundingClientRect()
+  tableHasMoreToScroll.value = dataRect?.width && actionRect?.width
+    ? dataRect.right > actionRect.left + 2
+    : table.scrollWidth - table.clientWidth - table.scrollLeft > 1
+}
+
+function handleConfigTableScroll() {
+  updateConfigTableScrollState()
+  tableScrollActive.value = true
+  clearTimeout(scrollIdleTimer)
+  scrollIdleTimer = setTimeout(() => { tableScrollActive.value = false }, 700)
+}
+
+function submitConfigSearch() {
+  submittedKeyword.value = keyword.value.trim()
+  resetConfigPage()
+}
 
 type ConfigForm = {
   name?: string
@@ -176,12 +212,12 @@ const formKind = computed<ConfigKind | null>(() => {
 
 const visibleItems = computed(() => items.value.filter((item) => {
   const matchCategory = item.category === activeCategory.value
-  const query = keyword.value.trim().toLowerCase()
+  const query = submittedKeyword.value.toLowerCase()
   const endpointOrUrl = item.baseUrl || item.host || item.endpoint
   const matchKeyword = !query || `${item.name}${item.id}${item.type}${endpointOrUrl}${item.model || ''}`.toLowerCase().includes(query)
   const matchStatus = !statusFilter.value || statusFilter.value === '全部状态' || item.status === statusFilter.value
   return matchCategory && matchKeyword && matchStatus
-}))
+}).sort((a, b) => Number(b.isDefault) - Number(a.isDefault)))
 
 // 配置列表客户端分页；筛选/切类后回到第一页（图数据空间分类下 visibleItems 恒空，分页条自动隐藏）
 const {
@@ -193,7 +229,11 @@ const {
   changePage: changeConfigPage,
   changePageSize: changeConfigPageSize,
 } = useClientPagination(visibleItems, 10)
-watch([keyword, statusFilter, activeCategory], resetConfigPage)
+watch([submittedKeyword, statusFilter, activeCategory], resetConfigPage)
+watch([pagedItems, activeCategory], async () => {
+  await nextTick()
+  updateConfigTableScrollState()
+}, { flush: 'post' })
 
 function categoryCount(key: string) {
   if (key === '图数据空间') {
@@ -260,7 +300,7 @@ async function loadByCategory(key: string) {
       loaded = (await listMysqlDatasources(currentUserId())).map((c) => toConfigItem('mysql', c))
     }
   } catch (err) {
-    showToast(`加载配置失败：${(err as Error).message}`, 'warning')
+    showToast(`加载配置失败：${(err as Error).message}`, 'error')
   }
   items.value = [...loaded, ...others]
 }
@@ -269,13 +309,13 @@ async function loadGraphSpaces() {
   try {
     graphSpaces.value = await listGraphSpaceItems()
   } catch (err) {
-    showToast(`加载图空间失败：${(err as Error).message}`, 'warning')
+    showToast(`加载图空间失败：${(err as Error).message}`, 'error')
   }
 }
 
 async function createSpace() {
   if (!isAdmin.value) {
-    showToast('请线下向管理员申请创建图空间。', 'warning')
+    showToast('请线下向管理员申请创建图空间。', 'info')
     return
   }
   if (spaceNameError.value) return
@@ -290,7 +330,7 @@ async function createSpace() {
     // 平台总览页的全局图空间选择器同步出现新空间（创建即绑定）
     void graphSpaceStore.ensureLoaded(true)
   } catch (err) {
-    showToast(`创建失败：${(err as Error).message}`, 'warning')
+    showToast(`创建失败：${(err as Error).message}`, 'error')
   } finally {
     spaceWorking.value = false
   }
@@ -309,7 +349,7 @@ async function bindSpace() {
     // 绑定对所有用户生效：平台总览页全局图空间选择器立即出现该空间
     void graphSpaceStore.ensureLoaded(true)
   } catch (err) {
-    showToast(`绑定失败：${(err as Error).message}`, 'warning')
+    showToast(`绑定失败：${(err as Error).message}`, 'error')
   } finally {
     spaceWorking.value = false
   }
@@ -317,7 +357,7 @@ async function bindSpace() {
 
 function canChangeLegacyBinding(): boolean {
   if (!isAdmin.value || useAuthStore().profile?.businessRbacEnabled) {
-    showToast('图空间业务归属由管理员通过 SQL 配置。', 'warning')
+    showToast('图空间业务归属由管理员通过 SQL 配置。', 'info')
     return false
   }
   return true
@@ -385,11 +425,11 @@ async function verifyForm() {
       showToast(`验证成功，延迟 ${result.latencyMs ?? '-'} ms，可以保存。`, 'success')
     } else {
       verified.value = false
-      showToast(`验证失败：${result.error ?? '未知错误'}`, 'warning')
+      showToast(`验证失败：${result.error ?? '未知错误'}`, 'error')
     }
   } catch (err) {
     verified.value = false
-    showToast(`验证请求失败：${(err as Error).message}`, 'warning')
+    showToast(`验证请求失败：${(err as Error).message}`, 'error')
   } finally {
     verifying.value = false
   }
@@ -438,7 +478,7 @@ async function saveConfig() {
     showToast(`“${String(form.value.name)}”已保存。`, 'success')
     await loadByCategory(activeCategory.value)
   } catch (err) {
-    showToast(`保存失败：${(err as Error).message}`, 'warning')
+    showToast(`保存失败：${(err as Error).message}`, 'error')
   } finally {
     saving.value = false
   }
@@ -473,7 +513,7 @@ async function saveDetail() {
     await loadByCategory(activeCategory.value)
     showToast(`“${item.name}”的修改已保存。`, 'success')
   } catch (err) {
-    showToast(`保存失败：${(err as Error).message}`, 'warning')
+    showToast(`保存失败：${(err as Error).message}`, 'error')
   } finally {
     saving.value = false
   }
@@ -495,13 +535,13 @@ async function testConnection(item: ConfigItem) {
       showToast(`${item.name} 连接测试成功，延迟 ${result.latencyMs ?? '-'} ms。`, 'success')
     } else {
       item.status = '异常'
-      showToast(`${item.name} 连接失败：${result.error ?? '未知错误'}`, 'warning')
+      showToast(`${item.name} 连接失败：${result.error ?? '未知错误'}`, 'error')
     }
     // 探活结果同步列表卡片（抽屉编辑副本不再共享列表项引用）
     const listed = items.value.find((i) => i.id === item.id)
     if (listed) listed.status = item.status
   } catch (err) {
-    showToast(`测试请求失败：${(err as Error).message}`, 'warning')
+    showToast(`测试请求失败：${(err as Error).message}`, 'error')
   } finally {
     testingId.value = ''
   }
@@ -520,30 +560,66 @@ async function toggleItem(item: ConfigItem) {
     showToast(`${item.name}已${nextStatus === '停用' ? '停用' : '启用'}。`, 'info')
     await loadByCategory(activeCategory.value)
   } catch (err) {
-    showToast(`切换状态失败：${(err as Error).message}`, 'warning')
+    showToast(`切换状态失败：${(err as Error).message}`, 'error')
   }
 }
 
-async function setAsDefault(item: ConfigItem) {
+const defaultUpdating = ref(false)
+const hasCategoryDefault = computed(() => items.value.some(item => item.category === activeCategory.value && item.isDefault))
+function defaultSwitchDisabled(item: ConfigItem) {
+  return defaultUpdating.value || (!item.isDefault && items.value.some(other => other.kind === item.kind && other.isDefault))
+}
+async function toggleDefault(item: ConfigItem, value: unknown) {
+  const enabled = value === true
+  if (defaultSwitchDisabled(item) || enabled === item.isDefault) return
+  defaultUpdating.value = true
   try {
+    let updated: ConfigItem
     if (item.kind === 'llm') {
-      await setDefaultLlmConfig(item.id, currentUserId())
+      updated = toConfigItem('llm', enabled
+        ? await setDefaultLlmConfig(item.id, currentUserId())
+        : await updateLlmConfig(item.id, { isDefault: false }, currentUserId()))
     } else if (item.kind === 'embedding') {
-      await setDefaultEmbeddingConfig(item.id, currentUserId())
-    } else if (item.kind === 'mysql') {
-      await setDefaultMysqlDatasource(item.id, currentUserId())
+      updated = toConfigItem('embedding', enabled
+        ? await setDefaultEmbeddingConfig(item.id, currentUserId())
+        : await updateEmbeddingConfig(item.id, { isDefault: false }, currentUserId()))
+    } else {
+      updated = toConfigItem('mysql', enabled
+        ? await setDefaultMysqlDatasource(item.id, currentUserId())
+        : await updateMysqlDatasource(item.id, { isDefault: false }, currentUserId()))
     }
-    showToast(`“${item.name}”已设为默认。`, 'success')
-    await loadByCategory(activeCategory.value)
-    const fresh = items.value.find((i) => i.id === item.id)
-    if (fresh && selected.value) selected.value = { ...selected.value, ...fresh }
+    items.value = items.value.map(other => {
+      if (other.id === item.id && other.kind === item.kind) return updated
+      if (enabled && other.kind === item.kind) return { ...other, isDefault: false, usage: buildUsage(other.kind, false) }
+      return other
+    })
+    if (selected.value?.id === item.id && selected.value.kind === item.kind) {
+      selected.value = { ...selected.value, isDefault: updated.isDefault, usage: updated.usage }
+    }
+    if (enabled) resetConfigPage()
+    showToast(`“${item.name}”已${enabled ? '设为默认' : '取消默认'}。`, 'success')
   } catch (err) {
-    showToast(`设为默认失败：${(err as Error).message}`, 'warning')
+    showToast(`更新默认配置失败：${(err as Error).message}`, 'error')
+  } finally {
+    defaultUpdating.value = false
   }
 }
 
-async function removeConfig(item: ConfigItem) {
-  if (!window.confirm(`确认删除配置“${item.name}”？删除后不可恢复。`)) return
+const deleteTarget = ref<ConfigItem>()
+const deleteVisible = ref(false)
+const deleteSubmitting = ref(false)
+const deleteError = ref('')
+function removeConfig(item: ConfigItem) {
+  deleteTarget.value = item
+  deleteError.value = ''
+  deleteVisible.value = true
+}
+async function confirmDeleteConfig() {
+  const item = deleteTarget.value
+  if (!item || deleteSubmitting.value) return
+  deleteSubmitting.value = true
+  deleteError.value = ''
+
   try {
     if (item.kind === 'llm') {
       await deleteLlmConfig(item.id, currentUserId())
@@ -552,11 +628,14 @@ async function removeConfig(item: ConfigItem) {
     } else if (item.kind === 'mysql') {
       await deleteMysqlDatasource(item.id, currentUserId())
     }
+    deleteVisible.value = false
     showToast(`“${item.name}”已删除。`, 'success')
     selected.value = null
     await loadByCategory(activeCategory.value)
   } catch (err) {
-    showToast(`删除失败：${(err as Error).message}`, 'warning')
+    deleteError.value = `删除失败：${(err as Error).message}`
+  } finally {
+    deleteSubmitting.value = false
   }
 }
 
@@ -575,13 +654,19 @@ async function loadAllCategories() {
   else failed.push('向量模型')
   if (mysql.status === 'fulfilled') loaded.push(...mysql.value.map((c) => toConfigItem('mysql', c)))
   else failed.push('MySQL 数据源')
-  if (failed.length) showToast(`加载${[...new Set(failed)].join('、')}配置失败`, 'warning')
+  if (failed.length) showToast(`加载${[...new Set(failed)].join('、')}配置失败`, 'error')
   items.value = loaded
 }
 
 onMounted(() => {
+  window.addEventListener('resize', updateConfigTableScrollState)
+  void nextTick(updateConfigTableScrollState)
   void loadAllCategories()
   void loadGraphSpaces()
+})
+onUnmounted(() => {
+  window.removeEventListener('resize', updateConfigTableScrollState)
+  clearTimeout(scrollIdleTimer)
 })
 </script>
 
@@ -596,7 +681,7 @@ onMounted(() => {
       </aside>
 
       <main class="config-list">
-        <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilter" allow-clear placeholder="全部状态"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><a-input v-model="keyword" class="config-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识或地址" placeholder="搜索名称、标识或地址"><template #prefix><IconSearch /></template></a-input></nav><nav v-else class="bind-nav"><button class="primary" type="button" @click="spaceDialogOpen = true">＋ 新建图数据空间</button><a-select v-if="isAdmin && bindableSpaces.length" v-model="bindTarget" placeholder="绑定已有图数据空间" allow-clear><a-option v-for="space in bindableSpaces" :key="space.name" :value="space.name">{{ space.name }}</a-option></a-select><button v-if="isAdmin && bindableSpaces.length" type="button" :disabled="spaceWorking" @click="bindSpace">绑定</button></nav></header>
+        <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilter" allow-clear placeholder="全部状态"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><form class="config-search-form" role="search" @submit.prevent="submitConfigSearch"><a-input v-model="keyword" class="config-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识或地址" placeholder="搜索名称、标识或地址"><template #prefix><IconSearch /></template></a-input><button class="primary config-search-button" type="submit">查询</button></form></nav><nav v-else class="bind-nav"><button class="primary" type="button" @click="spaceDialogOpen = true">＋ 新建图数据空间</button><a-select v-if="isAdmin && bindableSpaces.length" v-model="bindTarget" placeholder="绑定已有图数据空间" allow-clear><a-option v-for="space in bindableSpaces" :key="space.name" :value="space.name">{{ space.name }}</a-option></a-select><button v-if="isAdmin && bindableSpaces.length" type="button" :disabled="spaceWorking" @click="bindSpace">绑定</button></nav></header>
         <div v-if="isGraphSpaceCategory" class="table-wrap space-table">
           <table>
             <thead><tr><th>图数据空间</th><th>绑定状态</th></tr></thead>
@@ -610,15 +695,28 @@ onMounted(() => {
           </table>
           <p class="space-hint">新建图数据空间会真实执行 CREATE SPACE（创建后有秒级传播延迟）；解除绑定请找管理员处理。</p>
         </div>
-        <div v-else class="table-wrap">
+        <div v-else ref="configTableRef" class="table-wrap config-table-wrap" :class="{ 'has-scroll-right': tableHasMoreToScroll, 'config-scroll--active': tableScrollActive }" @scroll.passive="handleConfigTableScroll">
           <table>
-            <thead><tr><th>配置名称</th><th>类型 / 地址</th><th class="config-status-col">状态</th><th class="config-usage-col">引用情况</th><th class="config-time-col">更新时间</th><th class="config-action-col">操作</th></tr></thead>
+            <thead><tr><th>配置名称</th><th>标识</th><th>类型 / 地址</th><th class="config-status-col">状态</th><th class="config-usage-col">引用情况</th><th class="config-time-col">更新时间</th><th class="config-action-col">操作</th></tr></thead>
             <tbody>
-              <tr v-for="item in pagedItems" :key="item.id" @click="openDetail(item)">
-                <td><div class="config-name"><span><strong>{{ item.name }}<b v-if="item.isDefault" class="default-tag">默认</b></strong><small>{{ item.id }} · {{ item.description }}</small></span></div></td>
+              <tr v-for="item in pagedItems" :key="item.id">
+                <td><div class="config-name"><span><strong>{{ item.name }}<b v-if="item.isDefault" class="default-tag">默认</b></strong><small v-if="item.description">{{ item.description }}</small></span></div></td>
+                <td class="config-id-col">{{ item.id }}</td>
                 <td><strong class="type-name">{{ item.type }}<template v-if="item.model"> · {{ item.model }}</template></strong><code>{{ item.baseUrl || item.host && `${item.host}:${item.port}` || item.endpoint }}</code></td>
                 <td class="config-status-col"><span class="status" :class="`is-${item.status}`"><i />{{ item.status }}</span></td>
-                <td class="config-usage-col">{{ item.usage }}</td>
+                <td class="config-usage-col">
+                  <button
+                    type="button"
+                    class="config-default-toggle"
+                    :class="{ 'is-default': item.isDefault }"
+                    :disabled="defaultSwitchDisabled(item)"
+                    :aria-pressed="item.isDefault"
+                    :aria-busy="defaultUpdating"
+                    :aria-label="item.isDefault ? `取消${item.name}的默认配置` : `将${item.name}设为默认配置`"
+                    :title="!item.isDefault && hasCategoryDefault ? '请先关闭当前默认配置' : item.isDefault ? '取消默认配置' : '设为默认配置'"
+                    @click.stop="toggleDefault(item, !item.isDefault)"
+                  ><span class="config-default-toggle__dot" aria-hidden="true" />{{ item.isDefault ? '默认' : '设为默认' }}</button>
+                </td>
                 <td class="config-time-col"><span>{{ item.owner }}</span><small class="updated">{{ item.updatedAt }}</small></td>
                 <td class="config-action-col">
                   <div class="row-actions">
@@ -628,7 +726,7 @@ onMounted(() => {
                   </div>
                 </td>
               </tr>
-              <tr v-if="!visibleItems.length"><td class="empty" colspan="6">没有符合条件的配置</td></tr>
+              <tr v-if="!visibleItems.length"><td class="empty" colspan="7">没有符合条件的配置</td></tr>
             </tbody>
           </table>
         </div>
@@ -637,16 +735,18 @@ onMounted(() => {
           :total="configTotal"
           :page="configPage"
           :page-size="configPageSize"
+          :show-jumper="false"
+          :size-at-end="true"
           @change="changeConfigPage"
           @change-size="changeConfigPageSize"
-        />
+        ><template #summary><span class="config-page-summary">共 {{ configTotal }} 条</span></template></ListPagination>
       </main>
     </section>
 
     <Teleport to="body">
       <button v-if="selected" class="mask" type="button" aria-label="关闭" @click="selected=null" />
       <aside v-if="selected" class="detail-drawer">
-      <header><div><span>{{ selected.id }}</span><h2>{{ selected.name }}<b v-if="selected.isDefault" class="default-tag">默认</b></h2></div><button type="button" @click="selected=null">×</button></header>
+      <header><div><h2>{{ selected.name }}<b v-if="selected.isDefault" class="default-tag">默认</b></h2><span class="config-id">{{ selected.id }}</span></div><button type="button" @click="selected=null">×</button></header>
       <div class="detail-drawer-body">
         <section class="health-card"><i :class="`is-${selected.status}`" /><div><strong>{{ selected.status === '正常' ? '配置可用' : selected.status === '异常' ? '连接存在异常' : '配置已停用' }}</strong><span>后端真实探活</span></div><button type="button" :disabled="testingId === selected.id" @click="testConnection(selected)">{{ testingId === selected.id ? '测试中…' : '测试连接' }}</button></section>
         <a-form :model="selected" class="detail-form" layout="vertical">
@@ -672,9 +772,6 @@ onMounted(() => {
         <section class="reference-card"><header><strong>引用关系</strong><span>{{ selected.usage }}</span></header><p>配置变更将在下次脚本调用时生效（context 按触发时所选数据源 / 图空间 / LLM / embedding 注入；向量库随图空间自动同名创建）。</p></section>
       </div>
       <footer>
-        <button v-if="!selected.isDefault" type="button" @click="setAsDefault(selected)">设为默认</button>
-        <button type="button" @click="toggleItem(selected)">{{ selected.status === '停用' ? '启用配置' : '停用配置' }}</button>
-        <button type="button" @click="removeConfig(selected)">删除</button>
         <button class="primary" type="button" :disabled="saving || hasDetailErrors" @click="saveDetail">{{ saving ? '保存中…' : '保存修改' }}</button>
       </footer>
       </aside>
@@ -698,14 +795,14 @@ onMounted(() => {
       <header><div><span>NEW CONFIGURATION</span><h2>新建{{ categories.find(item => item.key === activeCategory)?.label }}</h2></div><button type="button" @click="dialogOpen=false">×</button></header>
       <a-form :model="form" class="dialog-form config-create-form" layout="vertical">
         <template v-if="formKind === 'llm' || formKind === 'embedding'">
-          <a-form-item class="wide" field="name" label="配置名称" required><input aria-label="例如：科技文本抽取大模型" v-model="form.name" placeholder="例如：科技文本抽取大模型" /><small v-if="createFieldErrors.name" class="field-error">{{ createFieldErrors.name }}</small></a-form-item>
+          <a-form-item class="wide" field="name" label="配置名称" required><input aria-label="例如：科技文本抽取大模型" v-model="form.name" placeholder="例如：科技文本抽取大模型" /></a-form-item>
           <a-form-item class="wide" field="baseUrl" label="Base URL" required><input aria-label="baseUrl" v-model="form.baseUrl" /><small v-if="createFieldErrors.baseUrl" class="field-error">{{ createFieldErrors.baseUrl }}</small></a-form-item>
           <a-form-item class="wide" field="model" label="模型" required><input aria-label="model" v-model="form.model" /><small v-if="createFieldErrors.model" class="field-error">{{ createFieldErrors.model }}</small></a-form-item>
           <a-form-item v-if="formKind === 'embedding'" field="dimensions" label="维度"><input aria-label="number-input" :value="form.dimensions ?? ''" type="number" @input="form.dimensions = ($event.target as HTMLInputElement).value" /><small v-if="createFieldErrors.dimensions" class="field-error">{{ createFieldErrors.dimensions }}</small></a-form-item>
-          <a-form-item class="wide" field="apiKey" label="API Key" required><input aria-label="必填；验证通过后才能保存，明文入库脱敏展示" v-model="form.apiKey" type="password" placeholder="必填；验证通过后才能保存，明文入库脱敏展示" /><small v-if="createFieldErrors.apiKey" class="field-error">{{ createFieldErrors.apiKey }}</small></a-form-item>
+          <a-form-item class="wide" field="apiKey" label="API Key" required><input aria-label="必填；验证通过后才能保存，明文入库脱敏展示" v-model="form.apiKey" type="password" placeholder="必填；验证通过后才能保存，明文入库脱敏展示" /></a-form-item>
         </template>
         <template v-else>
-          <a-form-item class="wide" field="name" label="配置名称" required><input aria-label="name" v-model="form.name" /><small v-if="createFieldErrors.name" class="field-error">{{ createFieldErrors.name }}</small></a-form-item>
+          <a-form-item class="wide" field="name" label="配置名称" required><input aria-label="name" v-model="form.name" /></a-form-item>
           <a-form-item field="host" label="主机" required><input aria-label="host" v-model="form.host" /><small v-if="createFieldErrors.host" class="field-error">{{ createFieldErrors.host }}</small></a-form-item>
           <a-form-item label="端口"><input aria-label="number-input" :value="form.port ?? ''" type="number" @input="form.port = ($event.target as HTMLInputElement).value" /><small v-if="createFieldErrors.port" class="field-error">{{ createFieldErrors.port }}</small></a-form-item>
           <a-form-item label="默认库"><input aria-label="defaultDatabase" v-model="form.defaultDatabase" /><small v-if="createFieldErrors.defaultDatabase" class="field-error">{{ createFieldErrors.defaultDatabase }}</small></a-form-item>
@@ -713,7 +810,7 @@ onMounted(() => {
           <a-form-item class="wide" label="密码"><input aria-label="password" v-model="form.password" type="password" /><small v-if="createFieldErrors.password" class="field-error">{{ createFieldErrors.password }}</small></a-form-item>
         </template>
         <a-form-item class="wide" label="说明"><a-textarea v-model="form.description" :auto-size="{ minRows: 3, maxRows: 5 }" /><small v-if="createFieldErrors.description" class="field-error">{{ createFieldErrors.description }}</small></a-form-item>
-        <a-form-item class="wide" field="isDefault"><a-checkbox v-model="form.isDefault" class="default-config-checkbox">设为默认（同一类别仅一条默认生效）</a-checkbox></a-form-item>
+        <a-form-item class="wide" field="isDefault"><a-checkbox v-model="form.isDefault" :disabled="hasCategoryDefault || defaultUpdating" class="default-config-checkbox">设为默认（同一类别仅一条默认生效）</a-checkbox></a-form-item>
       </a-form>
       <footer>
         <button type="button" @click="dialogOpen=false">取消</button>
@@ -725,12 +822,16 @@ onMounted(() => {
       </footer>
       </aside>
     </Teleport>
+    <DeleteConfirmDialog v-model:visible="deleteVisible" title="删除配置" :name="deleteTarget?.name || ''" :identifier="deleteTarget?.id" identifier-label="配置 ID" description="继续操作将永久删除该配置。请确认相关任务不再依赖此配置。" :loading="deleteSubmitting" :error="deleteError" @confirm="confirmDeleteConfig" />
   </div>
 </template>
 
 <style scoped>
-.configuration-page{display:flex;box-sizing:border-box;height:100%;min-height:0;overflow:hidden;color:#17233b;flex-direction:column}.page-header{display:flex;flex:0 0 auto;align-items:flex-end;justify-content:space-between;margin-bottom:12px}.page-header span{color:#165dff;font-size:9px;letter-spacing:.12em}.page-header h1{margin:3px 0 0;font-size:22px}.page-header p{margin:4px 0 0;color:#66758f;font-size:11px}.primary{border-color:#165dff!important;background:#165dff!important;color:#fff!important}.config-workbench{display:grid;flex:1;min-height:0;grid-template-columns:248px minmax(0,1fr);overflow:hidden;border:1px solid #bdd7ff;border-radius:9px;background:#fff}.category-nav{display:flex;min-height:0;border-right:1px solid #dce8f8;background:#f8fbff;flex-direction:column}.category-nav>header{display:grid;gap:3px;padding:14px;border-bottom:1px solid #dce8f8}.category-nav>header strong{font-size:13px}.category-nav>header span{color:#8290a7;font-size:9px}.category-nav>button{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:9px;width:100%;padding:11px 12px;border:0;border-bottom:1px solid #edf2f8;background:transparent;color:#344766;text-align:left;cursor:pointer}.category-nav>button.active{background:#eaf2ff;box-shadow:inset 3px 0 #165dff}.category-nav>button>span{display:grid;gap:3px}.category-nav>button strong{font-size:11px}.category-nav>button small{color:#8290a7;font-size:8px}.category-nav>button em{min-width:20px;padding:2px 6px;border-radius:99px;background:#e7eef8;color:#71809a;font-size:9px;font-style:normal;text-align:center}.config-list{display:flex;min-width:0;min-height:0;flex-direction:column}.config-list>header{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid #dce8f8;background:#fff}.config-list>header>div{display:flex;align-items:baseline;gap:8px}.config-list h2{margin:0;font-size:15px}.config-list>header span{color:#8290a7;font-size:9px}.config-list nav{display:flex;flex:1;min-width:0;flex-wrap:wrap;gap:8px;align-items:center}.config-list nav button{height:31px;padding:0 12px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#40516d;font-size:10px;cursor:pointer}.config-list input,.config-list select{height:31px;padding:0 9px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#344766;font-size:10px}.config-list input{width:210px}.table-wrap{flex:1;min-height:0;overflow:auto}.table-wrap table{width:100%;border-collapse:collapse;font-size:10px}.table-wrap thead{position:sticky;z-index:2;top:0}.table-wrap th,.table-wrap td{padding:10px 11px;border-bottom:1px solid #e7eef7;text-align:left;vertical-align:middle}.table-wrap th{background:#f2f7fd;color:#60708a;font-weight:600;white-space:nowrap}.table-wrap tbody tr{cursor:pointer}.table-wrap tbody tr:hover td{background:#f7faff}.config-name{display:flex;align-items:center;gap:9px;min-width:210px}.config-name>span{display:grid;gap:3px}.config-name strong{font-size:11px}.config-name small,.updated{display:block;color:#8290a7;font-size:8px}.type-name{display:block;color:#40516d;font-size:10px}.table-wrap code{display:block;max-width:210px;margin-top:3px;overflow:hidden;color:#71809a;font-size:8px;text-overflow:ellipsis;white-space:nowrap}.status{display:inline-flex;align-items:center;gap:5px;padding:3px 7px;border-radius:99px}.status>i{width:6px;height:6px;border-radius:50%;background:currentColor}.status.is-正常{background:#dcfae6;color:#067647}.status.is-异常{background:#fee4e2;color:#b42318}.status.is-停用{background:#eef1f5;color:#667085}.link{border:0;background:transparent;color:#165dff;font-size:10px;cursor:pointer}.empty{height:100px;color:#8290a7;text-align:center!important}.mask{position:fixed;z-index:40;inset:0;border:0;background:rgba(16,36,76,.24)}.detail-drawer{position:fixed;z-index:41;top:0;right:0;display:flex;width:min(500px,90vw);height:100vh;background:#f8fbff;box-shadow:-18px 0 46px rgba(28,58,107,.25);flex-direction:column}.detail-drawer>header,.create-dialog>header{display:flex;align-items:flex-start;justify-content:space-between;padding:18px;border-bottom:1px solid #dce8f8;background:#fff}.detail-drawer>header span,.create-dialog>header span{color:#165dff;font-size:9px}.detail-drawer h2,.create-dialog h2{margin:4px 0;font-size:18px}.detail-drawer>header button,.create-dialog>header button{width:29px;height:29px;border:0;border-radius:5px;background:#f0f4fa;font-size:19px;cursor:pointer}.health-card{display:grid;grid-template-columns:10px minmax(0,1fr) auto;align-items:center;gap:10px;margin:14px 16px 0;padding:12px;border:1px solid #cfe4d7;border-radius:7px;background:#fff}.health-card>i{width:9px;height:9px;border-radius:50%;background:#12b76a;box-shadow:0 0 0 4px rgba(18,183,106,.12)}.health-card>i.is-异常{background:#f04438;box-shadow:0 0 0 4px rgba(240,68,56,.12)}.health-card>i.is-停用{background:#98a2b3;box-shadow:none}.health-card>div{display:grid;gap:3px}.health-card strong{font-size:11px}.health-card span{color:#71809a;font-size:9px}.health-card button{height:29px;padding:0 10px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#165dff;font-size:9px;cursor:pointer}.detail-form,.dialog-form{display:grid;grid-template-columns:1fr 1fr;gap:11px;padding:16px}.detail-form label,.dialog-form label{display:grid;gap:5px}.detail-form label span,.dialog-form label span{color:#60708a;font-size:9px}.detail-form input,.detail-form textarea,.dialog-form input,.dialog-form select,.dialog-form textarea{box-sizing:border-box;width:100%;height:33px;padding:0 9px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#344766;font:10px inherit}.detail-form textarea,.dialog-form textarea{height:65px;padding-top:8px;resize:none}.wide{grid-column:1/-1}.reference-card{margin:0 16px;padding:12px;border:1px solid #d6e3f4;border-radius:7px;background:#fff}.reference-card header{display:flex;justify-content:space-between}.reference-card strong{font-size:10px}.reference-card span{color:#165dff;font-size:9px}.reference-card p{margin:5px 0 0;color:#71809a;font-size:9px;line-height:16px}.detail-drawer>footer,.create-dialog>footer{display:flex;justify-content:flex-end;gap:8px;margin-top:auto;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.detail-drawer>footer button,.create-dialog>footer button{height:33px;padding:0 13px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#40516d;cursor:pointer}.create-dialog{position:fixed;z-index:42;top:50%;left:50%;width:min(650px,calc(100vw - 40px));overflow:hidden;border-radius:10px;background:#f8fbff;box-shadow:0 24px 70px rgba(28,58,107,.3);transform:translate(-50%,-50%)}.create-dialog>footer{margin-top:0}.create-dialog button:disabled{opacity:.5;cursor:not-allowed}.default-tag{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:99px;background:#fff3d8;color:#b54708;font-size:8px;font-weight:600;font-style:normal}.checkbox{display:flex;flex-direction:row;align-items:center;gap:8px}.checkbox input{width:auto;height:14px}.checkbox span{color:#344766;font-size:10px}@media(max-width:1100px){.config-workbench{grid-template-columns:210px minmax(0,1fr)}}
+.configuration-page{display:flex;box-sizing:border-box;height:100%;min-height:0;overflow:hidden;color:#17233b;flex-direction:column}.page-header{display:flex;flex:0 0 auto;align-items:flex-end;justify-content:space-between;margin-bottom:12px}.page-header span{color:#165dff;font-size:9px;letter-spacing:.12em}.page-header h1{margin:3px 0 0;font-size:22px}.page-header p{margin:4px 0 0;color:#66758f;font-size:11px}.primary{border-color:#165dff!important;background:#165dff!important;color:#fff!important}.config-workbench{display:grid;flex:1;min-height:0;grid-template-columns:248px minmax(0,1fr);overflow:hidden;border:1px solid #bdd7ff;border-radius:9px;background:#fff}.category-nav{display:flex;min-height:0;border-right:1px solid #dce8f8;background:#f8fbff;flex-direction:column}.category-nav>header{display:grid;gap:3px;padding:14px;border-bottom:1px solid #dce8f8}.category-nav>header strong{font-size:13px}.category-nav>header span{color:#8290a7;font-size:9px}.category-nav>button{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:9px;width:100%;padding:11px 12px;border:0;border-bottom:1px solid #edf2f8;background:transparent;color:#344766;text-align:left;cursor:pointer}.category-nav>button.active{background:#eaf2ff;box-shadow:inset 3px 0 #165dff}.category-nav>button>span{display:grid;gap:3px}.category-nav>button strong{font-size:11px}.category-nav>button small{color:#8290a7;font-size:8px}.category-nav>button em{min-width:20px;padding:2px 6px;border-radius:99px;background:#e7eef8;color:#71809a;font-size:9px;font-style:normal;text-align:center}.config-list{display:flex;min-width:0;min-height:0;flex-direction:column}.config-list>header{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid #dce8f8;background:#fff}.config-list>header>div{display:flex;align-items:baseline;gap:8px}.config-list h2{margin:0;font-size:15px}.config-list>header span{color:#8290a7;font-size:9px}.config-list nav{display:flex;flex:1;min-width:0;flex-wrap:wrap;gap:8px;align-items:center}.config-list nav button{height:31px;padding:0 12px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#40516d;font-size:10px;cursor:pointer}.config-list input,.config-list select{height:31px;padding:0 9px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#344766;font-size:10px}.config-list input{width:210px}.table-wrap{flex:1;min-height:0;overflow:auto}.table-wrap table{width:100%;border-collapse:collapse;font-size:10px}.table-wrap thead{position:sticky;z-index:2;top:0}.table-wrap th,.table-wrap td{padding:10px 11px;border-bottom:1px solid #e7eef7;text-align:left;vertical-align:middle}.table-wrap th{background:#f2f7fd;color:#60708a;font-weight:600;white-space:nowrap}.table-wrap tbody tr{cursor:pointer}.table-wrap tbody tr:hover td{background:#f7faff}.config-name{display:flex;align-items:center;gap:9px;min-width:210px}.config-name>span{display:grid;gap:3px}.config-name strong{font-size:11px}.config-name small,.updated{display:block;color:#8290a7;font-size:8px}.type-name{display:block;color:#40516d;font-size:10px}.table-wrap code{display:block;max-width:210px;margin-top:3px;overflow:hidden;color:#71809a;font-size:8px;text-overflow:ellipsis;white-space:nowrap}.status{display:inline-flex;align-items:center;gap:5px;padding:3px 7px;border-radius:99px}.status>i{width:6px;height:6px;border-radius:50%;background:currentColor}.status.is-正常{background:#dcfae6;color:var(--status-success)}.status.is-异常{background:#fee4e2;color:var(--status-danger)}.status.is-停用{background:#eef1f5;color:var(--status-neutral)}.link{border:0;background:transparent;color:#165dff;font-size:10px;cursor:pointer}.empty{height:100px;color:#8290a7;text-align:center!important}.mask{position:fixed;z-index:40;inset:0;border:0;background:rgba(16,36,76,.24)}.detail-drawer{position:fixed;z-index:41;top:0;right:0;display:flex;width:min(500px,90vw);height:100vh;background:#f8fbff;box-shadow:-18px 0 46px rgba(28,58,107,.25);flex-direction:column}.detail-drawer>header,.create-dialog>header{display:flex;align-items:flex-start;justify-content:space-between;padding:18px;border-bottom:1px solid #dce8f8;background:#fff}.detail-drawer>header span,.create-dialog>header span{color:#165dff;font-size:9px}.detail-drawer h2,.create-dialog h2{margin:4px 0;font-size:18px}.detail-drawer>header button,.create-dialog>header button{width:29px;height:29px;border:0;border-radius:5px;background:#f0f4fa;font-size:19px;cursor:pointer}.health-card{display:grid;grid-template-columns:10px minmax(0,1fr) auto;align-items:center;gap:10px;margin:14px 16px 0;padding:12px;border:1px solid #cfe4d7;border-radius:7px;background:#fff}.health-card>i{width:9px;height:9px;border-radius:50%;background:var(--status-success);box-shadow:none}.health-card>i.is-异常{background:var(--status-danger);box-shadow:none}.health-card>i.is-停用{background:var(--status-neutral);box-shadow:none}.health-card>div{display:grid;gap:3px}.health-card strong{font-size:11px}.health-card span{color:#71809a;font-size:9px}.health-card button{height:29px;padding:0 10px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#165dff;font-size:9px;cursor:pointer}.detail-form,.dialog-form{display:grid;grid-template-columns:1fr 1fr;gap:11px;padding:16px}.detail-form label,.dialog-form label{display:grid;gap:5px}.detail-form label span,.dialog-form label span{color:#60708a;font-size:9px}.detail-form input,.detail-form textarea,.dialog-form input,.dialog-form select,.dialog-form textarea{box-sizing:border-box;width:100%;height:33px;padding:0 9px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#344766;font:10px inherit}.detail-form textarea,.dialog-form textarea{height:65px;padding-top:8px;resize:none}.wide{grid-column:1/-1}.reference-card{margin:0 16px;padding:12px;border:1px solid #d6e3f4;border-radius:7px;background:#fff}.reference-card header{display:flex;justify-content:space-between}.reference-card strong{font-size:10px}.reference-card span{color:#165dff;font-size:9px}.reference-card p{margin:5px 0 0;color:#71809a;font-size:9px;line-height:16px}.detail-drawer>footer,.create-dialog>footer{display:flex;justify-content:flex-end;gap:8px;margin-top:auto;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.detail-drawer>footer button,.create-dialog>footer button{height:33px;padding:0 13px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#40516d;cursor:pointer}.create-dialog{position:fixed;z-index:42;top:50%;left:50%;width:min(650px,calc(100vw - 40px));overflow:hidden;border-radius:10px;background:#f8fbff;box-shadow:0 24px 70px rgba(28,58,107,.3);transform:translate(-50%,-50%)}.create-dialog>footer{margin-top:0}.create-dialog button:disabled{opacity:.5;cursor:not-allowed}.default-tag{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:99px;background:#fff3d8;color:#b54708;font-size:8px;font-weight:600;font-style:normal}.checkbox{display:flex;flex-direction:row;align-items:center;gap:8px}.checkbox input{width:auto;height:14px}.checkbox span{color:#344766;font-size:10px}@media(max-width:1100px){.config-workbench{grid-template-columns:210px minmax(0,1fr)}}
 
+/* Compact fixed action column; free width belongs to data columns. */
+.config-table-wrap :is(th,td).config-action-col{width:152px;min-width:152px;max-width:152px}
+.config-usage-col :deep(.arco-switch){vertical-align:middle}
 </style>
 <style scoped>
 /* DESIGN_RULES: configuration management page contract. */
@@ -795,15 +896,19 @@ onMounted(() => {
    底部留缝），几何随外层布局漂移。Teleport 后 fixed 直接相对视口钉满全高 */
 .detail-drawer{display:flex;flex-direction:column;top:0;bottom:0;height:auto;overflow:hidden}
 .detail-drawer>header{flex:0 0 auto;box-sizing:border-box}
-.detail-drawer-body{flex:1 1 0;min-height:0;overflow-y:auto;padding-bottom:32px;box-sizing:border-box}
-.detail-drawer-body .detail-form{padding-bottom:0}
-.detail-drawer>footer{flex:0 0 auto;margin-top:0}
+.detail-drawer-body{display:flex;box-sizing:border-box;flex:1 1 0;min-height:0;gap:16px;overflow-y:auto;padding:16px 24px;flex-direction:column}
+.detail-drawer-body .health-card,.detail-drawer-body .reference-card{margin:0}
+.detail-drawer-body .detail-form{padding:0}
+.detail-form :deep(.arco-form-item){margin-bottom:0}
+.detail-form :deep(.arco-form-item-layout-vertical>.arco-form-item-label-col){margin-bottom:8px}
+.detail-drawer>footer{flex:0 0 auto;margin-top:0;align-items:center}
 /* 新建弹窗：限高 + 表单区内部滚动（原来 overflow:hidden 直接裁掉超高表单） */
 .create-dialog{display:flex;max-height:min(88vh,760px);flex-direction:column}
 .create-dialog .dialog-form{flex:1 1 auto;min-height:0;overflow:auto}
 .create-dialog>footer{margin-top:auto}
-/* 图空间分类 */
-.bind-nav{display:flex;width:100%;gap:16px;align-items:center}.bind-nav :deep(.arco-select){width:200px;min-width:200px}.bind-nav button{height:32px;padding:0 16px;border:1px solid #bdd0ea;border-radius:4px;font-size:14px;cursor:pointer}
+/* 图空间分类。select 宽度按最长占位符「绑定已有图数据空间」(9 个汉字)定：
+   扣除边框/内边距/下拉箭头后 input 需 ~160px+，200px 会把最后一个字裁掉(实测)。 */
+.bind-nav{display:flex;width:100%;gap:16px;align-items:center}.bind-nav :deep(.arco-select){width:240px;min-width:240px}.bind-nav button{height:32px;padding:0 16px;border:1px solid #bdd0ea;border-radius:4px;font-size:14px;cursor:pointer}
 .space-hint{margin:8px 16px;color:#86909c;font-size:12px;line-height:20px}
 .space-dialog-hint{grid-column:1/-1;margin:0;color:#86909c;font-size:12px;line-height:20px}
 /* 字段级校验提示（输入即校验，超长/异常字符/范围/必填） */
@@ -835,6 +940,12 @@ onMounted(() => {
 .row-actions{gap:8px}.default-tag{margin-left:8px;padding:0 4px;font-size:12px;line-height:20px;font-weight:500}
 .config-list nav :deep(.arco-select-view-value){line-height:22px}
 .detail-drawer>header button,.create-dialog>header button{width:32px;height:32px;border-radius:4px}
+/* 详情抽屉右上角关闭按钮：去掉灰色底块（与新建弹窗关闭按钮一致） */
+.detail-drawer>header>button{border:0;background:transparent;color:#4e5969;font-size:20px;line-height:1}
+.detail-drawer>header>button:hover{background:transparent;color:#165dff}
+/* 详情抽屉头部：黑色标题在上，蓝色唯一标识在标题下方 */
+.detail-drawer>header h2{margin:0}
+.detail-drawer>header .config-id{display:block;margin-top:2px;color:#165dff;font-size:12px;line-height:20px;font-weight:400}
 .health-card{grid-template-columns:8px minmax(0,1fr) auto;gap:16px;margin:16px 24px 0;padding:16px;border-color:#e5e6eb;border-radius:6px;box-shadow:none}.health-card>i{width:8px;height:8px}.health-card>div{gap:4px}.health-card strong{font-size:14px;line-height:22px;font-weight:600}.health-card span{font-size:12px;line-height:20px;font-weight:400}.health-card button{height:32px;padding:0 16px;border-color:#e5e6eb;border-radius:4px;font-size:14px;line-height:22px;font-weight:400}
 .detail-form,.dialog-form{gap:16px;padding:24px}.detail-form label,.dialog-form label{gap:8px}.detail-form label span,.dialog-form label span{font-size:14px;line-height:22px;font-weight:400}
 .reference-card{margin:0 24px;padding:16px;border-color:#e5e6eb;border-radius:6px;box-shadow:none}.reference-card strong{font-size:14px;line-height:22px;font-weight:600}.reference-card span,.reference-card p,.space-hint,.space-dialog-hint{font-size:12px;line-height:20px;font-weight:400}
@@ -842,7 +953,8 @@ onMounted(() => {
 
 /* 工作台留白与表格背景：操作区、数据行不使用额外底色，仅表头区分层级。 */
 .category-nav>header{box-sizing:border-box;min-height:56px;padding:16px}
-.config-list{background:transparent}
+/* 列表、固定操作列和分页条共用不透明底色，横向滚动时避免内容透出。 */
+.config-list{background:#fff}
 .config-list>header{min-height:64px;padding:16px;margin:0;border-bottom:0;background:transparent!important}
 .config-list-actions .create-entry{background:#165dff!important;color:#fff!important}
 .config-list-actions :deep(.arco-select-view),
@@ -855,8 +967,42 @@ onMounted(() => {
 .table-wrap tbody td,
 .table-wrap tbody tr:hover td{background:transparent}
 .table-wrap:not(.space-table) .config-action-col{box-sizing:border-box;overflow:visible;white-space:nowrap}
+/* 操作列与 Schema 管理表对齐：右侧固定列，横向滚动时操作不被遮挡。
+   thead 整体吸顶（z2）须高于固定列 td（z3），否则纵向滚动时被操作单元格盖住。 */
+.table-wrap:not(.space-table) thead{z-index:4}
+.table-wrap:not(.space-table) th.config-action-col{position:sticky;right:0;background:#f7f8fa}
+.table-wrap:not(.space-table) td.config-action-col{position:sticky;right:0;z-index:3;background:#fff}
+/* 固定列左侧向内容区渐隐的阴影（与 Schema 管理表同视觉提示） */
+.table-wrap.has-scroll-right :is(th,td).config-action-col::before{position:absolute;top:0;bottom:-1px;left:0;width:12px;content:"";pointer-events:none;transform:translateX(-100%);box-shadow:inset -10px 0 8px -8px rgba(78,89,105,.28)}
 .config-action-col .row-actions{display:inline-flex;width:auto;min-width:max-content;align-items:center;overflow:visible}
+.config-default-toggle{display:inline-flex;box-sizing:border-box;align-items:center;justify-content:center;gap:6px;min-width:88px;height:32px;padding:0 10px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;white-space:nowrap;cursor:pointer}
+.config-default-toggle__dot{width:6px;height:6px;flex:0 0 6px;border:1px solid currentColor;border-radius:50%}
+.config-default-toggle.is-default{border-color:#94bfff;background:#e8f3ff;color:#165dff;font-weight:500}
+.config-default-toggle.is-default .config-default-toggle__dot{background:currentColor}
+.config-default-toggle:hover:not(:disabled){border-color:#4080ff;color:#165dff}
+.config-default-toggle:focus-visible{outline:2px solid #165dff;outline-offset:2px}
+.config-default-toggle:disabled{border-color:#e5e6eb;background:#f7f8fa;color:#86909c;cursor:not-allowed}
 .table-wrap th,.table-wrap td{box-sizing:border-box;padding-right:16px;padding-left:16px}
+/* 配置列表在自身容器内横向滚动，内容按列单行展示，操作列仍固定。 */
+.config-table-wrap{scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:transparent transparent}
+.config-table-wrap:hover,.config-table-wrap.config-scroll--active{scrollbar-color:rgba(78,89,105,.55) transparent}
+.config-table-wrap::-webkit-scrollbar{width:8px;height:8px}
+.config-table-wrap::-webkit-scrollbar-track{background:transparent}
+.config-table-wrap::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background-color:transparent;background-clip:padding-box}
+.config-table-wrap:hover::-webkit-scrollbar-thumb,.config-table-wrap.config-scroll--active::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
+.config-table-wrap::-webkit-scrollbar-thumb:hover{background-color:rgba(78,89,105,.8)}
+.config-table-wrap table{width:max-content;min-width:max(100%,1350px)}
+.config-table-wrap :is(th,td){white-space:nowrap}
+.config-table-wrap tbody tr{cursor:default}
+.config-id-col{color:#4e5969}
+/* 筛选输入框固定为紧凑宽度；查询与新建使用同一主按钮。 */
+.config-search-form{display:flex;min-width:0;margin-left:auto;align-items:center;gap:16px}
+.config-list-actions .config-search-input.arco-input-wrapper{width:240px;max-width:240px;margin-left:0;flex:0 1 240px}
+.config-search-form .config-search-button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
+.config-search-form .config-search-button:hover{border-color:#4080ff!important;background:#4080ff!important}
+/* 自定义分页摘要由父组件定位，避免插槽内容在共享分页组件中靠左。 */
+.config-list :deep(.list-pagination){justify-content:flex-end}
+.config-list :deep(.config-page-summary){margin-left:auto;white-space:nowrap}
 @media (max-width: 767px) {
   .config-workbench {
     display: flex;
@@ -915,9 +1061,15 @@ onMounted(() => {
 }
 
 
+/* Compact fixed action column; free width belongs to data columns. */
+.config-table-wrap :is(th,td).config-action-col{width:152px;min-width:152px;max-width:152px}
+.config-usage-col :deep(.arco-switch){vertical-align:middle}
 </style>
 <style>
 /* The wrapper is the only visible shell; global native-input rules must not restyle Arco's inner field. */
 .app-workspace .configuration-page .config-list .config-search-input.arco-input-wrapper input.arco-input{box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
 .app-workspace .configuration-page .config-list .config-search-input.arco-input-wrapper input.arco-input:focus{border:0!important;background:transparent!important;box-shadow:none!important;outline:0!important}
+/* Compact fixed action column; free width belongs to data columns. */
+.config-table-wrap :is(th,td).config-action-col{width:152px;min-width:152px;max-width:152px}
+.config-usage-col :deep(.arco-switch){vertical-align:middle}
 </style>

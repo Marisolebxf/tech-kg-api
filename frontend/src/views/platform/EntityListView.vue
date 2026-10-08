@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Popover as APopover } from '@arco-design/web-vue'
 import { IconSearch } from '@arco-design/web-vue/es/icon'
 
@@ -18,6 +18,15 @@ import ListPagination from '../../components/list-pagination.vue'
 import { SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
 import { useToast } from '../../composables/use-toast'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
+
+const tableScrollActive = ref(false)
+let tableScrollTimer: ReturnType<typeof setTimeout> | undefined
+function handleTableScroll() {
+  tableScrollActive.value = true
+  clearTimeout(tableScrollTimer)
+  tableScrollTimer = setTimeout(() => { tableScrollActive.value = false }, 700)
+}
+onUnmounted(() => { clearTimeout(tableScrollTimer) })
 
 const { showToast } = useToast()
 
@@ -58,7 +67,7 @@ async function loadIndexInfo() {
     types.value = typeItems
     status.value = statusData
   } catch (error) {
-    showToast(entitySearchErrorMessage(error), 'warning')
+    showToast(entitySearchErrorMessage(error), 'error')
   }
 }
 
@@ -178,7 +187,7 @@ watch(
             <template #prefix><IconSearch /></template>
           </a-input>
           <button class="kg-button" type="button" :disabled="loading" @click="resetPagingAndSearch">
-            {{ loading ? '检索中...' : '搜索' }}
+            {{ loading ? '查询中...' : '查询' }}
           </button>
         </div>
       </div>
@@ -206,7 +215,7 @@ watch(
         </template>
       </div>
       <template v-else>
-        <div class="entity-table-wrap">
+        <div class="entity-table-wrap" :class="{ 'entity-scroll--active': tableScrollActive }" @scroll.passive="handleTableScroll">
           <table>
             <thead>
               <tr>
@@ -278,12 +287,15 @@ watch(
           :page="page"
           :page-size="pageSize"
           :disabled="loading"
+          :show-jumper="false"
+          :size-at-end="true"
           @change="goPage"
           @change-size="onPageSizeChange"
         >
           <template #summary>
             <span class="entity-pagination__info">
-              <template v-if="isBrowseMode && result?.total != null">共 {{ result.total }} 个实体 · </template>第 {{ page }} / {{ totalPages }} 页
+              <template v-if="isBrowseMode && result?.total != null">共 {{ result.total }} 个实体</template>
+              <template v-else>共 {{ paginationTotal }} 条</template>
             </span>
           </template>
         </ListPagination>
@@ -304,22 +316,33 @@ watch(
 .entity-toolbar__right{min-width:0;flex:1 1 320px;justify-content:flex-end}
 .entity-hint{margin:0;padding:8px 16px;border-top:1px dashed #ffe4ba;background:#fff7e8;color:#b54708;font-size:12px;line-height:20px}
 .entity-empty{flex:1;display:grid;place-items:center;padding:40px 16px;color:#86909c;font-size:13px;line-height:22px;text-align:center}
-.entity-table-wrap{flex:1;min-height:0;overflow:auto}
+.entity-table-wrap{flex:1;min-height:0;overflow:auto;scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:transparent transparent}
+.entity-table-wrap:hover,.entity-table-wrap.entity-scroll--active{scrollbar-color:rgba(78,89,105,.55) transparent}
+.entity-table-wrap::-webkit-scrollbar{width:8px;height:8px}
+.entity-table-wrap::-webkit-scrollbar-track{background:transparent}
+.entity-table-wrap::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background-color:transparent;background-clip:padding-box}
+.entity-table-wrap:hover::-webkit-scrollbar-thumb,.entity-table-wrap.entity-scroll--active::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
+.entity-table-wrap::-webkit-scrollbar-thumb:hover{background-color:rgba(78,89,105,.8)}
 .entity-table-wrap table{width:100%;border-collapse:collapse;font-size:14px;line-height:22px}
 .entity-table-wrap th{position:sticky;top:0;z-index:1;background:#f7f8fa;color:#1d2129;font-weight:500;text-align:left}
 .entity-table-wrap th,.entity-table-wrap td{padding:10px 16px;border-bottom:1px solid #f2f3f5;vertical-align:middle}
-.entity-table-wrap td code{padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:12px;word-break:normal;overflow-wrap:anywhere}
+.entity-table-wrap td{color:#344763}
+/* 名称列对齐 Schema 页：td b 压回常规字重（Schema 页 DESIGN_RULES 同款），避免加粗显黑显大 */
+.entity-table-wrap td b{font-weight:400}
+/* ID 列与其他列字号统一 14px（此前 13px 显小）；不加蓝色背景块，长 ID 允许换行 */
+.entity-table-wrap td code{color:inherit;font-family:inherit;font-size:14px;line-height:22px;font-weight:400;word-break:normal;overflow-wrap:anywhere}
 .entity-table-wrap td:first-child{min-width:160px}
 .entity-table-wrap td:nth-child(2){min-width:240px}
-.entity-type-chip{display:inline-flex;padding:1px 10px;border-radius:999px;background:#eef5ff;color:#165dff;font-size:12px;line-height:18px;white-space:nowrap}
+.entity-type-chip{display:inline-flex;padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:12px;line-height:18px;white-space:nowrap}
 .entity-props-cell{width:440px;min-width:360px;max-width:480px}
-.entity-props{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
-.entity-props__chip{display:flex;align-items:center;gap:4px;min-width:0;padding:4px 8px;border:1px solid #e5e6eb;border-radius:4px;background:#f7f8fa;font-size:12px;line-height:20px;white-space:nowrap}
+.entity-props{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;--entity-property-fill:#f2f3f5}
+.entity-props__chip{display:flex;align-items:center;gap:4px;min-width:0;box-sizing:border-box;height:28px;padding:4px 8px;border:0;border-radius:4px;background:var(--entity-property-fill);font-size:12px;line-height:20px;white-space:nowrap}
 .entity-props__chip b{flex:0 1 auto;min-width:0;overflow:hidden;color:#4e5969;font-weight:500;text-overflow:ellipsis}
 .entity-props__chip b::after{content:":"}
 .entity-props__chip em{flex:1;min-width:0;overflow:hidden;color:#1d2129;font-style:normal;text-overflow:ellipsis}
-.entity-props__more{justify-self:start;padding:4px 8px;border:1px solid #bcd4f7;border-radius:4px;background:#eaf2ff;color:#165dff;font-size:12px;line-height:20px;cursor:pointer}
-.entity-props__more:hover{background:#dcebff}
+.entity-props__more{box-sizing:border-box;justify-self:start;height:28px;min-height:28px!important;padding:4px 8px;border:0;border-radius:4px;background:var(--entity-property-fill);color:#165dff;font-size:12px!important;line-height:20px!important;cursor:pointer}
+.entity-props__more:hover{background:#e5e6eb}
+.entity-props__more:focus-visible{outline:0;box-shadow:0 0 0 2px rgba(22,93,255,.2)}
 .entity-props__empty{color:#c9cdd4;font-size:12px}
 .entity-pagination__info{min-width:0;overflow:hidden;margin-left:auto;color:#86909c;font-size:12px;line-height:20px;text-overflow:ellipsis;white-space:nowrap}
 </style>

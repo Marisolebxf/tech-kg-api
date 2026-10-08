@@ -4,6 +4,7 @@ import { RouterView, useRoute } from 'vue-router'
 
 import KgToast from './components/kg-toast.vue'
 import GraphSpaceSelector from './components/GraphSpaceSelector.vue'
+import AppBreadcrumb from './components/AppBreadcrumb.vue'
 import AppLayout from './layouts/AppLayout.vue'
 import { usePortalIntegration } from './portal/usePortalIntegration'
 
@@ -46,7 +47,8 @@ const showEmbeddedAuthState = computed(
           class="portal-embedded-title-row"
           :class="{ 'portal-embedded-title-row--with-select': isOverviewPage }"
         >
-          <div class="portal-embedded-page-title">{{ embeddedPageTitle }}</div>
+          <!-- 口径同 AppLayout 面包屑行：层级面包屑统一走 AppBreadcrumb（Arco 规范） -->
+          <AppBreadcrumb />
           <GraphSpaceSelector v-if="isOverviewPage" />
         </div>
         <section
@@ -152,14 +154,8 @@ const showEmbeddedAuthState = computed(
   pointer-events: none;
 }
 
-.portal-embedded-page-title {
+.portal-embedded-title-row > .app-breadcrumb {
   min-width: 0;
-  overflow: hidden;
-  color: #59636f;
-  font-size: 12px;
-  line-height: 22px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .portal-embedded-workspace::-webkit-scrollbar {

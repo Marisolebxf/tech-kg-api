@@ -9,6 +9,7 @@ import {
 import { RouterLink, useRouter } from 'vue-router'
 import { runNgql, type GraphConsoleResult } from '../../api/graphConsole'
 import { currentGraphSpace } from '../../api/currentGraphSpace'
+import AppAlert from '../../components/AppAlert.vue'
 import ListPagination from '../../components/list-pagination.vue'
 import { useClientPagination } from '../../composables/use-client-pagination'
 import { getErrorMessage } from '../../api/http'
@@ -39,12 +40,12 @@ import {
   Empty as AEmpty,
   Form as AForm,
   FormItem as AFormItem,
-  InputSearch as AInputSearch,
+  Input as AInput,
   Popover as APopover,
   Textarea as ATextarea,
 } from '@arco-design/web-vue'
 import QueryResultTable from './QueryResultTable.vue'
-import { IconInfoCircle, IconRefresh } from '@arco-design/web-vue/es/icon'
+import { IconInfoCircle, IconRefresh, IconSearch } from '@arco-design/web-vue/es/icon'
 import { useAuthStore } from '../../stores/auth'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
 import {
@@ -377,6 +378,11 @@ const algoResultColumns = computed<string[]>(() =>
 const ALGO_RESULT_DISPLAY_LIMIT = 200
 // 搜索和排序覆盖已返回的整个结果集，页面最多展示 200 条。
 const algoSearch = ref('')
+const submittedAlgoSearch = ref('')
+function queryAlgoResults(): void {
+  submittedAlgoSearch.value = algoSearch.value.trim()
+  resetAlgoPage()
+}
 const algoSortColumn = ref('')
 const algoSortDirection = ref<'asc' | 'desc'>('desc')
 const algorithmColumnLabels: Record<string, string> = {
@@ -390,7 +396,7 @@ function sortAlgoColumn(column: string, direction?: 'asc' | 'desc'): void {
   resetAlgoPage()
 }
 const filteredAndSortedAlgoRows = computed(() => {
-  const search = algoSearch.value.trim()
+  const search = submittedAlgoSearch.value
   const rows = search
     ? algoRows.value.filter((row) => String(row.vid ?? '').includes(search))
     : algoRows.value
@@ -415,9 +421,9 @@ const {
   changePageSize: changeAlgoPageSize,
 } = useClientPagination(visibleAlgoRows, 20)
 
-watch(algoSearch, () => resetAlgoPage())
 watch(algoResult, () => {
   algoSearch.value = ''
+  submittedAlgoSearch.value = ''
   algoSortColumn.value = algoResultColumns.value.find((column) => ['pagerank', 'degree', 'louvain', 'community'].includes(column)) ?? ''
   algoSortDirection.value = 'desc'
   resetAlgoPage()
@@ -589,7 +595,6 @@ const selectedAssetChange = ref<AssetOverviewKey | null>(null)
 const assetChangeRows = ref<Record<AssetOverviewKey, AssetChangeRow[]>>({
   entity: [],
   relation: [],
-  property: [],
 })
 // 昨日新增数值合计（Σwritten，与资产卡徽标同源）：抽屉明细行受单执行
 // 上限截断，行数 < 合计时页脚标注「共 N 条 · 展示前 n 条」
@@ -679,7 +684,9 @@ async function loadOverviewCards(): Promise<void> {
     overviewJobsState.value = 'error'
   }
   try {
-    const data = await getProductionReviews({ graphSpace: space || undefined, statusGroup: 'pending', page: 1, pageSize: 5 })
+    // 取 8 条：单行行高 44px 与左卡任务行对齐，8 行约与「图谱构建」卡等高；
+    // 更多的走底部「还有 N 条」与右上角「查看处理队列」进专门页
+    const data = await getProductionReviews({ graphSpace: space || undefined, statusGroup: 'pending', page: 1, pageSize: 8 })
     if (!isCurrent()) return
     overviewReviews.value = data.items
     overviewReviewsTotal.value = data.total
@@ -699,9 +706,14 @@ function reviewItemRoute(item: ProductionReviewCase): string | { path: string; q
   const keyword = (item.objectName || item.sourceRecordId || item.id).trim()
   return { path: '/manual-review', query: keyword ? { category: 'C', keyword } : { category: 'C' } }
 }
+
+/** 审核卡片类别文案：与人工审核页子页对齐——抽取失败重跑（T_EXTRACT_FAIL）同名，
+ *  其余（T_LINK 实体对齐裁决 / T_DIRECT 候选审核）统称「入库决策」，
+ *  不再透传后端 category 原文（T_DIRECT 会露出英文技术名）。 */
+function reviewItemCategory(item: ProductionReviewCase): string {
+  return item.templateId === 'T_EXTRACT_FAIL' ? '抽取失败重跑' : '入库决策'
+}
 const activeAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === selectedAssetChange.value))
-const entityAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === 'entity'))
-const relationAssetOverview = computed(() => assetOverviewGroups.value.find((item) => item.key === 'relation'))
 
 // 构成图饼图分段由图例数据驱动（pieSlices 纯函数，随图例 tone+ratio 生成扇形 path）；
 // 图上只标百分比。饼图扇区全部保留悬浮（外移放大 + 浮窗）；右侧图例只有「其他」
@@ -997,7 +1009,7 @@ async function pollAlgoJob(): Promise<void> {
     if (job.status === 'succeeded') {
       await fetchAlgoResult(state)
     } else if (job.status === 'failed') {
-      showToast('算法作业执行失败，详情见作业状态面板', 'warning')
+      showToast('算法作业执行失败，详情见作业状态面板', 'error')
     } else {
       scheduleAlgoPoll(state)
     }
@@ -1131,7 +1143,7 @@ async function handleAlgoSubmit(): Promise<void> {
     } else if (job.status === 'succeeded') {
       await fetchAlgoResult(state)
     } else {
-      showToast('算法作业执行失败，详情见作业状态面板', 'warning')
+      showToast('算法作业执行失败，详情见作业状态面板', 'error')
     }
   } catch (error) {
     if (context !== graphContextVersion) return
@@ -1199,15 +1211,14 @@ async function loadPlatformOverview(): Promise<void> {
       // 兜底：旧版本/异常载荷缺 warnings 时模板里 .join 会直接把页面炸掉
       warnings: data.warnings ?? [],
     }
-    // 属性值数据卡片（key=property）为占位统计（待接入），总览页不展示
-    assetOverviewGroups.value = data.assetOverviewGroups.filter((item) => item.key !== 'property')
+    assetOverviewGroups.value = data.assetOverviewGroups
     assetChangeRows.value = data.assetChangeRows
     assetChangeTotals.value = data.assetChangeTotals ?? {}
     entityStructure.value = data.entityStructure
     relationStructure.value = data.relationStructure
   } catch (error) {
     const message = error instanceof Error ? error.message : '未知错误'
-    showToast(`首页总览数据加载失败：${message}`, 'warning')
+    showToast(`首页总览数据加载失败：${message}`, 'error')
   }
 }
 
@@ -1295,13 +1306,13 @@ const pageMeta = computed(() => {
     <main v-if="activeTab === 'overview'" class="platform-content platform-overview">
       <section class="platform-summary-grid" aria-label="实体与关系数据总览">
         <article v-for="group in assetOverviewGroups" :key="group.key" :class="['kg-panel', 'platform-summary-card', `is-${group.key}`]">
-          <header><div><strong>{{ group.title }}</strong><span><i />数据已更新</span></div><button type="button" @click="selectedAssetChange = group.key">查看昨日新增 →</button></header>
+          <header><div><strong>{{ group.title }}</strong><span><i />数据已更新</span></div><button type="button" @click="selectedAssetChange = group.key">查看昨日新增</button></header>
           <div class="platform-summary-card__main"><section><strong>{{ group.total }}</strong><span>{{ group.totalLabel }}</span></section><section class="is-added"><strong>{{ group.added }}</strong><span>{{ group.addedLabel }}</span></section></div>
         </article>
       </section>
 
       <section class="kg-panel platform-structure-overview">
-        <div class="kg-panel__header"><div><h2 class="kg-panel__title">当前图谱资产</h2></div><span>实体 {{ entityAssetOverview?.total ?? '--' }} · 关系 {{ relationAssetOverview?.total ?? '--' }} · 数据截至 {{ overviewMeta.updatedAt }}</span></div>
+        <div class="kg-panel__header"><div><h2 class="kg-panel__title">当前图谱资产</h2></div></div>
         <div class="platform-structure-grid">
           <div class="platform-structure-chart"><header><strong>实体标签构成</strong></header><div class="platform-pie-layout"><div class="platform-pie-wrap"><svg class="platform-pie is-entity" viewBox="0 0 160 160" role="img" aria-label="实体标签构成饼图"><circle v-if="!entityPieSlices.length" cx="80" cy="80" r="64" fill="#e5edf8" /><g v-for="slice in entityPieSlices" :key="slice.item.label" class="platform-pie-slice" :class="{ 'is-other': slice.item.isOther }" :style="{ transform: pieHoverKey === `entity-${slice.item.label}` ? `translate(${slice.dx}px, ${slice.dy}px)` : undefined }" @mouseenter="showPieTip('entity', slice, $event)" @mousemove="movePieTip" @mouseleave="hidePieTip('entity')"><path :d="slice.path" :fill="slice.item.tone" /><text v-if="slice.showLabel" :x="slice.labelX" :y="slice.labelY">{{ slice.percent }}%</text></g></svg></div><div class="platform-structure-legend"><article v-for="item in entityStructure" :key="item.label"><span><i :style="{ background: item.tone }" /><a-tooltip v-if="item.isOther" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><span class="platform-legend-label">{{ item.label }}</span><template #content><div class="platform-legend-members"><template v-if="item.members?.length"><div v-for="m in item.members" :key="m.name">{{ m.name }} · {{ m.count.toLocaleString() }}</div></template><div v-else>暂无标签数据</div></div></template></a-tooltip><span v-else>{{ item.label }}</span></span><strong class="platform-legend-ratio">{{ item.ratio }}%</strong></article></div></div></div>
           <div class="platform-structure-chart"><header><strong>关系类型构成</strong></header><div class="platform-pie-layout"><div class="platform-pie-wrap"><svg class="platform-pie is-relation" viewBox="0 0 160 160" role="img" aria-label="关系类型构成饼图"><circle v-if="!relationPieSlices.length" cx="80" cy="80" r="64" fill="#e5edf8" /><g v-for="slice in relationPieSlices" :key="slice.item.label" class="platform-pie-slice" :class="{ 'is-other': slice.item.isOther }" :style="{ transform: pieHoverKey === `relation-${slice.item.label}` ? `translate(${slice.dx}px, ${slice.dy}px)` : undefined }" @mouseenter="showPieTip('relation', slice, $event)" @mousemove="movePieTip" @mouseleave="hidePieTip('relation')"><path :d="slice.path" :fill="slice.item.tone" /><text v-if="slice.showLabel" :x="slice.labelX" :y="slice.labelY">{{ slice.percent }}%</text></g></svg></div><div class="platform-structure-legend"><article v-for="item in relationStructure" :key="item.label"><span><i :style="{ background: item.tone }" /><a-tooltip v-if="item.isOther" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><span class="platform-legend-label">{{ item.label }}</span><template #content><div class="platform-legend-members"><template v-if="item.members?.length"><div v-for="m in item.members" :key="m.name">{{ m.name }} · {{ m.count.toLocaleString() }}</div></template><div v-else>暂无类型数据</div></div></template></a-tooltip><span v-else>{{ item.label }}</span></span><strong class="platform-legend-ratio">{{ item.ratio }}%</strong></article></div></div></div>
@@ -1316,7 +1327,7 @@ const pageMeta = computed(() => {
 
       <section v-if="canEnterAdminPages" class="platform-overview-main">
         <div class="kg-panel platform-jobs-panel">
-          <div class="kg-panel__header"><div><h2 class="kg-panel__title">图谱构建</h2></div><RouterLink to="/graph-build">查看全部任务 →</RouterLink></div>
+          <div class="kg-panel__header"><div><h2 class="kg-panel__title">图谱构建</h2></div><RouterLink to="/graph-build">查看全部任务</RouterLink></div>
           <template v-if="overviewJobsState === 'ready'">
             <div class="platform-jobs-stats">
               <article v-for="stat in overviewJobStats" :key="stat.label"><span :class="`is-${stat.tone}`">{{ stat.value }}</span><em>{{ stat.label }}</em></article>
@@ -1339,16 +1350,16 @@ const pageMeta = computed(() => {
         </div>
 
         <aside class="kg-panel platform-review-panel">
-          <div class="kg-panel__header"><div><h2 class="kg-panel__title">人工审核</h2></div><RouterLink to="/manual-review">查看处理队列 →</RouterLink></div>
+          <div class="kg-panel__header"><div><h2 class="kg-panel__title">人工审核</h2></div><RouterLink to="/manual-review">查看处理队列</RouterLink></div>
           <template v-if="overviewReviewsState === 'ready'">
             <div class="platform-review-count">待处理 <strong>{{ overviewReviewsTotal }}</strong> 条</div>
             <div class="platform-review-list">
               <RouterLink v-for="item in overviewReviews" :key="item.id" :to="reviewItemRoute(item)">
-                <strong>{{ item.objectName || item.objectId }}</strong>
-                <em>{{ item.category }}</em>
-                <span class="is-risk">风险 {{ item.riskLevel }}</span>
+                <strong :title="item.objectName || item.objectId">{{ item.objectName || item.objectId }}</strong>
+                <em :title="reviewItemCategory(item)">{{ reviewItemCategory(item) }}</em>
               </RouterLink>
             </div>
+            <RouterLink v-if="overviewReviewsTotal > overviewReviews.length" class="platform-review-more" to="/manual-review">还有 {{ overviewReviewsTotal - overviewReviews.length }} 条待处理</RouterLink>
           </template>
           <div v-else-if="overviewReviewsState === 'empty'" class="platform-card-empty">
             <strong>当前没有待审核任务</strong>
@@ -1445,14 +1456,11 @@ const pageMeta = computed(() => {
         </table>
       </section>
 
-      <section class="platform-review-notice is-warning" aria-label="数据处理异常提示">
-        <div class="platform-review-notice__icon" aria-hidden="true">!</div>
-        <div>
-          <strong>发现 385 条数据质量异常</strong>
-          <p>必填缺失 18 条 · 唯一性冲突 326 条 · 枚举异常 41 条</p>
-        </div>
+      <!-- 数据质量异常提醒：Arco Alert 警告态（需人工处理） -->
+      <AppAlert type="warning" class="platform-review-notice" title="发现 385 条数据质量异常" aria-label="数据处理异常提示">
+        <p>必填缺失 18 条 · 唯一性冲突 326 条 · 枚举异常 41 条</p>
         <div class="platform-review-notice__actions"><RouterLink to="/graph-build?module=图谱构建&amp;batch=UPD-20260714">查看处理实例</RouterLink><RouterLink to="/manual-review?batch=UPD-20260714">进入人工处理 →</RouterLink></div>
-      </section>
+      </AppAlert>
 
       <section class="kg-panel platform-task-list">
         <div class="kg-panel__header">
@@ -1542,21 +1550,18 @@ const pageMeta = computed(() => {
         </table>
       </section>
 
-      <section class="platform-review-notice" aria-label="图谱构建人工处理提示">
-        <div class="platform-review-notice__icon" aria-hidden="true">!</div>
-        <div>
-          <strong>326 个候选对象需要人工确认</strong>
-          <p>实体冲突 86 个 · 低置信度关系 198 条 · 属性异常 42 项</p>
-        </div>
+      <!-- 候选对象待确认提醒：Arco Alert 信息态（处理进度说明） -->
+      <AppAlert type="info" class="platform-review-notice" title="326 个候选对象需要人工确认" aria-label="图谱构建人工处理提示">
+        <p>实体冲突 86 个 · 低置信度关系 198 条 · 属性异常 42 项</p>
         <div class="platform-review-notice__actions"><RouterLink to="/graph-build?module=图谱构建&amp;batch=UPD-20260714">查看处理实例</RouterLink><RouterLink to="/manual-review?batch=UPD-20260714">进入人工处理 →</RouterLink></div>
-      </section>
+      </AppAlert>
 
     </main>
 
     <!-- 两种查询模式共用固定结果列表，表格内部滚动。 -->
     <main
       v-else-if="activeTab === 'query'"
-      :class="['platform-content', 'platform-query', 'platform-query--scrollbar-suppressed']"
+      class="platform-content platform-query"
     >
       <section class="kg-panel platform-query-form">
         <!-- 一级模式切换；算法页签和引擎状态位于下方独立一行。 -->
@@ -1606,19 +1611,20 @@ const pageMeta = computed(() => {
         <div v-else class="platform-query-algo__body">
           <div class="platform-query-algo__toolbar">
             <nav class="platform-query-algo__tabs" aria-label="算法切换">
-              <button
-                v-for="algo in GRAPH_ALGORITHMS"
-                :key="algo.id"
-                type="button"
-                :class="{ 'is-active': selectedAlgorithm === algo.id }"
-                @click="selectedAlgorithm = algo.id"
-              >{{ algo.label }}</button>
-              <APopover :key="selectedAlgorithm" trigger="click" :title="selectedAlgorithmDef.label" position="bottom">
-                <AButton type="text" shape="circle" class="platform-algorithm-info" aria-label="查看算法说明">
-                  <IconInfoCircle aria-hidden="true" />
-                </AButton>
-                <template #content><p class="platform-algorithm-description">{{ selectedAlgorithmDef.description }}</p></template>
-              </APopover>
+              <div v-for="algo in GRAPH_ALGORITHMS" :key="algo.id" class="platform-algorithm-tab" :class="{ 'is-active': selectedAlgorithm === algo.id }">
+                <button
+                  type="button"
+                  class="platform-algorithm-tab__select"
+                  :class="{ 'is-active': selectedAlgorithm === algo.id }"
+                  @click="selectedAlgorithm = algo.id"
+                >{{ algo.label }}</button>
+                <APopover trigger="click" :title="algo.label" position="bottom">
+                  <AButton type="text" shape="circle" class="platform-algorithm-info" :class="{ 'is-active': selectedAlgorithm === algo.id }" :aria-label="`查看${algo.label}说明`">
+                    <IconInfoCircle aria-hidden="true" />
+                  </AButton>
+                  <template #content><p class="platform-algorithm-description">{{ algo.description }}</p></template>
+                </APopover>
+              </div>
             </nav>
             <div class="platform-query-algo__engine">
               <span
@@ -1626,7 +1632,7 @@ const pageMeta = computed(() => {
                 :title="algoMetadata?.engine?.message ?? undefined"
               >算法引擎{{ algoEngineStatus.label }}</span>
               <button
-                class="kg-button kg-button--text"
+                class="kg-button kg-button--text platform-query-engine-refresh"
                 type="button"
                 :disabled="algoMetadataLoading || !algoSpace"
                 @click="refreshAlgoEngine"
@@ -1635,9 +1641,10 @@ const pageMeta = computed(() => {
               </button>
             </div>
           </div>
-          <p v-if="algoMetadata?.engine?.status === 'DOWN'" class="platform-query-algo__engine-hint" role="note">
+          <!-- 引擎不可用：错误态提示（提交可能失败） -->
+          <AppAlert v-if="algoMetadata?.engine?.status === 'DOWN'" type="error" class="platform-query-algo__engine-hint">
             算法引擎当前不可用（{{ algoMetadata.engine.message ?? 'Spark 运行器未就绪' }}），提交可能失败，可稍后重试
-          </p>
+          </AppAlert>
           <!-- 仅显示业务输入，算法调优参数使用默认值。 -->
           <div class="platform-query-algo__controls">
             <AForm :model="{ labels: algoLabels }" layout="vertical" class="platform-query-algo__form">
@@ -1778,9 +1785,13 @@ const pageMeta = computed(() => {
             :page="ngqlPage"
             :page-size="ngqlPageSize"
             :disabled="ngqlLoading"
+            :show-jumper="false"
+            :size-at-end="true"
             @change="changeNgqlPage"
             @change-size="changeNgqlPageSize"
-          />
+          >
+            <template #summary><span class="list-pagination__summary">共 {{ ngqlTotal }} 条</span></template>
+          </ListPagination>
         </div>
       </section>
 
@@ -1798,17 +1809,24 @@ const pageMeta = computed(() => {
           </h2>
         </header>
         <div v-if="algoResult" class="platform-algo-list-toolbar">
-          <AInputSearch v-model="algoSearch" class="platform-algo-search platform-algo-search--entity-style" :input-attrs="{ 'aria-label': '搜索图 VID' }" allow-clear placeholder="输入图 VID 筛选结果" />
+          <form class="platform-algo-search-form" @submit.prevent="queryAlgoResults">
+            <AInput v-model="algoSearch" class="platform-algo-search platform-algo-search--entity-style" :input-attrs="{ 'aria-label': '搜索图 VID' }" allow-clear placeholder="输入图 VID 筛选结果">
+              <template #prefix><IconSearch aria-hidden="true" /></template>
+            </AInput>
+            <AButton type="primary" html-type="submit">查询</AButton>
+          </form>
           <AButton type="primary" :disabled="!algoRows.length" @click="exportAlgoCsv">导出{{ algoResult.truncated ? '预览' : '当前结果' }} CSV</AButton>
         </div>
         <div class="platform-query-result__body">
           <div class="platform-query-result__table">
             <QueryResultTable v-if="algoTotal" aria-label="图算法执行结果" :rows="pagedAlgoRows" :columns="algoResultColumns" :labels="algorithmColumnLabels" :page="algoPage" :page-size="algoPageSize" sortable :sort-column="algoSortColumn" :sort-direction="algoSortDirection" @sort="sortAlgoColumn" />
             <div v-else class="platform-query-result__empty" role="status" aria-live="polite">
-              <AEmpty :description="algoSubmitLoading ? '正在提交作业，请稍候…' : isAlgoJobRunning ? '算法运行中，完成后自动展示结果' : algoResult ? (algoSearch ? '没有匹配的结果，请调整搜索条件' : '算法执行成功，无返回记录') : algoJob?.status === 'failed' ? '算法执行失败，请查看上方失败原因' : '暂无数据，提交算法作业后在此查看结果'" />
+              <AEmpty :description="algoSubmitLoading ? '正在提交作业，请稍候…' : isAlgoJobRunning ? '算法运行中，完成后自动展示结果' : algoResult ? (submittedAlgoSearch ? '没有匹配的结果，请调整搜索条件' : '算法执行成功，无返回记录') : algoJob?.status === 'failed' ? '算法执行失败，请查看上方失败原因' : '暂无数据，提交算法作业后在此查看结果'" />
             </div>
           </div>
-          <ListPagination v-if="algoTotal > 0" :total="algoTotal" :page="algoPage" :page-size="algoPageSize" :page-size-options="[20, 50, 100]" @change="changeAlgoPage" @change-size="changeAlgoPageSize" />
+          <ListPagination v-if="algoTotal > 0" :total="algoTotal" :page="algoPage" :page-size="algoPageSize" :page-size-options="[20, 50, 100]" :show-jumper="false" :size-at-end="true" @change="changeAlgoPage" @change-size="changeAlgoPageSize">
+            <template #summary><span class="list-pagination__summary">共 {{ algoTotal }} 条</span></template>
+          </ListPagination>
         </div>
       </section>
 
@@ -2004,7 +2022,9 @@ print(response.json())</pre>
   grid-template-rows: auto minmax(0, 1fr);
   gap: 16px;
   height: 100%;
+  min-height: 0;
   min-width: 0;
+  overflow: hidden;
   color: var(--text-primary);
   font-size: 16px;
 }
@@ -2130,7 +2150,9 @@ print(response.json())</pre>
      overflow:hidden 裁掉，饼图因此"看不见"）。flex 纵向堆叠高度纯内容驱动。 */
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
+  /* 外层 app-workspace 已提供 16px 底部间距，避免总览再次叠加。 */
+  padding-bottom: 0;
 }
 
 .platform-overview > * {
@@ -2232,38 +2254,46 @@ print(response.json())</pre>
 .platform-summary-card__items>a { display:grid;gap:3px;padding:2px 8px;border-right:1px solid #e1eaf5;color:inherit;text-decoration:none;transition:background-color .2s ease; }.platform-summary-card__items>a:last-child { border-right:0; }.platform-summary-card__items>a:hover { background:#eef5ff; }
 .platform-summary-card__items em { overflow:hidden;color:#8290a5;font-size:8px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }.platform-summary-card__items strong { overflow:hidden;color:#344861;font-size:10px;text-overflow:ellipsis;white-space:nowrap; }
 
-/* 同上：任务/审核面板加载中只占小高度，预留就绪高度防止布局跳动 */
-.platform-overview-main { display:grid;grid-template-columns:minmax(0,1.65fr) minmax(360px,.72fr);gap:14px;min-height:340px; }
-.platform-jobs-panel,.platform-review-panel { min-width:0;overflow:hidden; }
+/* 末尾两卡仍等高：面板吃满所在网格行，剩余高度由列表弹性行摊平（不留底部空白）；
+ * gap 统一 16px 与页头间距对齐。加载中/异常时由 min-height 预留就绪高度。 */
+.platform-overview-main { display:grid;flex-grow:1;grid-template-columns:minmax(0,1.65fr) minmax(360px,.72fr);gap:16px;min-height:340px; }
+/* 两卡同为 flex 列 + 列表区 1fr 弹性行：面板等高时行自动摊满，不再留底部空白 */
+.platform-jobs-panel,.platform-review-panel { display:flex;flex-direction:column;min-width:0;overflow:hidden; }
 .platform-jobs-panel .kg-panel__header>div,.platform-review-panel .kg-panel__header>div { display:grid;gap:2px; }
-.platform-jobs-panel .kg-panel__header span,.platform-review-panel .kg-panel__header span { color:#7b8aa1;font-size:10px; }
-.platform-jobs-panel .kg-panel__header>a,.platform-review-panel .kg-panel__header>a { color:#004ecc;font-size:11px;text-decoration:none; }
+.platform-jobs-panel .kg-panel__header span,.platform-review-panel .kg-panel__header span { color:#7b8aa1;font-size:12px;line-height:20px; }
+.platform-jobs-panel .kg-panel__header>a,.platform-review-panel .kg-panel__header>a { color:#004ecc;font-size:14px;line-height:22px;text-decoration:none; }
 .platform-jobs-stats { display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border-bottom:1px solid #e4ecf6; }
 .platform-jobs-stats article { display:grid;gap:2px;padding:12px 8px;text-align:center;border-right:1px solid #edf2f8; }
 .platform-jobs-stats article:last-child { border-right:0; }
 .platform-jobs-stats article span { font-size:18px;font-weight:600; }
-.platform-jobs-stats article span.is-run { color:#004ecc; }.platform-jobs-stats article span.is-ok { color:#067647; }.platform-jobs-stats article span.is-err { color:#b42318; }.platform-jobs-stats article span.is-warn { color:#b54708; }
-.platform-jobs-stats article em { color:#52627a;font-size:10px;font-style:normal; }
-.platform-jobs-list { display:grid; }
+.platform-jobs-stats article span.is-run { color:var(--status-info); }.platform-jobs-stats article span.is-ok { color:var(--status-success); }.platform-jobs-stats article span.is-err { color:var(--status-danger); }.platform-jobs-stats article span.is-warn { color:var(--status-warning); }.platform-jobs-stats article span.is-idle { color:var(--status-neutral); }
+.platform-jobs-stats article em { color:#52627a;font-size:12px;line-height:20px;font-style:normal; }
+.platform-jobs-list { display:grid;flex:1;grid-auto-rows:minmax(44px,1fr);overflow-y:auto; }
 .platform-jobs-list a { display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:10px;min-height:44px;padding:9px 14px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
 .platform-jobs-list a:last-child { border-bottom:0; }
 .platform-jobs-list a:hover { background:#f4f8ff; }
-.platform-jobs-list strong { overflow:hidden;color:#253752;font-size:11px;text-overflow:ellipsis;white-space:nowrap; }
-.platform-jobs-list a>span { padding:2px 8px;border-radius:999px;background:#eaf2ff;color:#004ecc;font-size:9px;white-space:nowrap; }
-.platform-jobs-list a>span.ok { color:#067647;background:#e9f8ef; }.platform-jobs-list a>span.err { color:#b42318;background:#fee4e2; }.platform-jobs-list a>span.warn { color:#b54708;background:#fff3df; }
-.platform-jobs-list em { color:#59636f;font-size:9px;font-style:normal;white-space:nowrap; }
-.platform-review-count { padding:11px 14px;border-bottom:1px solid #e4ecf6;color:#62728a;font-size:11px; }
-.platform-review-count strong { margin:0 4px;color:#10264c;font-size:18px; }
-.platform-review-list { display:grid; }
+.platform-jobs-list strong { overflow:hidden;color:#253752;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap; }
+.platform-jobs-list a>span { display:inline-flex;align-items:center;gap:6px;padding:0;border-radius:0;background:transparent;color:#004ecc;font-size:14px;line-height:22px;white-space:nowrap; }
+.platform-jobs-list a>span::before { flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor;content:""; }
+.platform-jobs-list a>span.ok { color:var(--status-success);background:transparent; }.platform-jobs-list a>span.err { color:var(--status-danger);background:transparent; }.platform-jobs-list a>span.warn { color:var(--status-warning);background:transparent; }
+.platform-jobs-list em { color:#59636f;font-size:12px;line-height:20px;font-style:normal;white-space:nowrap; }
+.platform-review-count { display:flex;align-items:baseline;gap:8px;padding:11px 14px;border-bottom:1px solid #e4ecf6;color:#62728a;font-size:14px;line-height:22px; }
+.platform-review-count strong { margin:0;color:#10264c;font-size:18px; }
+/* 行紧贴左侧任务行（44px 上下限 + 弹性摊高），类别列在行内右侧而非换行堆叠——
+ * 8 行与「图谱构建」卡等高，更多的走粘底「还有 N 条待处理」。 */
+.platform-review-list { display:grid;flex:1;grid-auto-rows:minmax(44px,1fr);overflow-y:auto; }
 .platform-review-list a { display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 10px;align-items:center;padding:9px 14px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
 .platform-review-list a:last-child { border-bottom:0; }
 .platform-review-list a:hover { background:#f4f8ff; }
-.platform-review-list strong { overflow:hidden;color:#253752;font-size:11px;text-overflow:ellipsis;white-space:nowrap; }
-.platform-review-list em { overflow:hidden;color:#8a97aa;font-size:9px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }
-.platform-review-list .is-risk { justify-self:end;color:#b54708;font-size:9px;white-space:nowrap; }
+.platform-review-list strong { min-width:0;overflow:hidden;color:#253752;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap; }
+.platform-review-list em { min-width:0;overflow:hidden;color:#8a97aa;font-size:12px;line-height:20px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }
+.platform-review-more { flex:0 0 auto;padding:10px 14px;border-top:1px solid #e4ecf6;color:#004ecc;font-size:12px;line-height:20px;text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+.platform-review-more:hover { background:#f4f8ff; }
+/* 加载/空态/错误卡同样吃满面板剩余高度（grid 居中已有），两卡视觉等高 */
+.platform-jobs-panel .platform-card-empty,.platform-review-panel .platform-card-empty { flex:1; }
 .platform-card-empty { display:grid;gap:6px;justify-items:center;align-content:center;min-height:170px;padding:20px;text-align:center; }
-.platform-card-empty strong { color:#253752;font-size:12px; }
-.platform-card-empty p { margin:0;color:#8a97aa;font-size:10px;line-height:16px; }
+.platform-card-empty strong { color:#253752;font-size:14px;line-height:22px; }
+.platform-card-empty p { margin:0;color:#8a97aa;font-size:12px;line-height:20px; }
 .platform-card-empty a.primary { margin-top:6px;padding:7px 14px;border-radius:5px;background:#004ecc;color:#fff;font-size:11px;text-decoration:none; }
 .platform-card-empty a:not(.primary) { margin-top:6px;color:#004ecc;font-size:11px;text-decoration:none; }
 
@@ -2317,11 +2347,12 @@ print(response.json())</pre>
 .platform-recent-tasks,.platform-alert-overview { min-width:0;overflow:hidden; }
 .platform-recent-tasks .kg-panel__header a,.platform-alert-overview .kg-panel__header a { color:#004ecc;font-size:12px;text-decoration:none; }
 .platform-recent-tasks td small { display:block;margin-top:2px;color:#52627a;font-size:10px; }
-.platform-status.is-阻断 { background:#fee4e2;color:#b42318; }
-.platform-status.is-成功,.platform-status.is-完成,.platform-status.is-正常 { background:#dcfae6;color:#067647; }
-.platform-status.is-运行中 { background:#eaf2ff;color:#004ecc; }
-.platform-status.is-异常,.platform-status.is-告警 { background:#fef0c7;color:#b54708; }
-.platform-status.is-更新中,.platform-status.is-排队 { background:#eaf2ff;color:#004ecc; }
+.platform-status.is-阻断 { background:#fee4e2;color:var(--status-danger); }
+.platform-status.is-成功,.platform-status.is-完成,.platform-status.is-正常 { background:#dcfae6;color:var(--status-success); }
+.platform-status.is-运行中 { background:#eaf2ff;color:var(--status-info); }
+.platform-status.is-异常 { background:transparent;color:var(--status-danger); }
+.platform-status.is-告警 { background:transparent;color:var(--status-warning); }
+.platform-status.is-更新中,.platform-status.is-排队 { background:#eaf2ff;color:var(--status-info); }
 .platform-alert-overview { display:grid;grid-template-rows:auto repeat(3,auto) 1fr; }
 .platform-alert-overview>button { display:grid;grid-template-columns:8px minmax(0,1fr) 14px;align-items:start;gap:10px;padding:12px 14px;border:0;border-bottom:1px solid #e3ebf7;background:rgba(255,255,255,.64);text-align:left;cursor:pointer; }
 .platform-alert-overview>button:hover { background:#f4f8ff; }
@@ -2585,6 +2616,13 @@ print(response.json())</pre>
   overflow: auto;
 }
 
+/* 操作列与 Schema 管理表对齐：右侧固定列（表头 z 高于数据行），横向滚动时操作不被遮挡。 */
+.platform-quality-log .platform-table th:last-child { position:sticky;right:0;z-index:4;box-shadow:-1px 0 #e5e6eb; }
+.platform-quality-log .platform-table td:last-child { position:sticky;right:0;z-index:3;background:#fff;box-shadow:-1px 0 #e5e6eb; }
+.platform-quality-log .platform-table tbody tr:hover td:last-child { background:#f0f6ff; }
+/* 固定列左侧向内容区渐隐的阴影（与 Schema 管理表同视觉提示） */
+.platform-quality-log .platform-table :is(th,td):last-child::before { position:absolute;top:0;bottom:-1px;left:0;width:12px;content:"";pointer-events:none;transform:translateX(-100%);box-shadow:inset -10px 0 8px -8px rgba(78,89,105,.28); }
+
 .platform-trace-link {
   padding: 0;
   border: 0;
@@ -2620,45 +2658,15 @@ print(response.json())</pre>
 }
 .platform-task-filters a { color:#004ecc;font-size:11px;text-decoration:none;white-space:nowrap; }
 
+/* 人工处理提醒卡：警告/信息态底色与提示符由 AppAlert 提供，这里只管网格占位与动作行 */
 .platform-review-notice {
   grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 14px;
-  min-height: 86px;
-  padding: 15px 18px;
-  border: 1px solid #b2ccff;
-  border-radius: 9px;
-  background: linear-gradient(90deg, #eff4ff, #f8fbff);
-  box-shadow: 0 8px 20px rgba(48, 105, 194, .08);
 }
 
-.platform-review-notice.is-warning {
-  border-color: #fedf89;
-  background: linear-gradient(90deg, #fffaeb, #fffdf7);
-}
-
-.platform-review-notice__icon {
-  display: inline-grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  background: #004ecc;
-  color: #fff;
-  font-size: 18px;
-  font-weight: 800;
-}
-
-.platform-review-notice.is-warning .platform-review-notice__icon { background: #f79009; }
-.platform-review-notice strong { color: #10264c; font-size: 15px; }
-.platform-review-notice p { margin: 5px 0 0; color: var(--text-secondary); font-size: 13px; line-height: 20px; }
-.platform-review-notice__actions { display: flex; align-items: center; gap: 8px; }
+.platform-review-notice p { margin: 0; }
+.platform-review-notice__actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 .platform-review-notice__actions button,.platform-review-notice__actions a { display: inline-flex; align-items: center; height: 34px; padding: 0 13px; border: 1px solid #004ecc; border-radius: 6px; background: #fff; color: #004ecc; font-size: 12px; font-weight: 600; text-decoration: none; white-space: nowrap; cursor: pointer; }
 .platform-review-notice__actions a { background: #004ecc; color: #fff; }
-.platform-review-notice.is-warning .platform-review-notice__actions button { border-color: #93370d; color: #b54708; }
-.platform-review-notice.is-warning .platform-review-notice__actions a { border-color: #93370d; background: #93370d; }
 
 .platform-processing-controls label {
   display: grid;
@@ -4517,13 +4525,7 @@ print(response.json())</pre>
   .platform-pie-layout { grid-template-columns:150px minmax(0,1fr);gap:12px; }
   .platform-pie-wrap { width:138px;height:138px; }
   .platform-pie { width:138px;height:138px; }
-  .platform-review-notice {
-    grid-template-columns: 34px minmax(0, 1fr);
-  }
-
   .platform-review-notice__actions {
-    grid-column: 2;
-    justify-self: start;
     flex-wrap: wrap;
   }
 
@@ -4680,8 +4682,7 @@ print(response.json())</pre>
 
 /* 综合图谱展示 / 查询结果：复用科技专家同事关系页的预览与详情布局。 */
 .platform-query{grid-row:1/-1;height:100%;min-height:0;align-self:stretch;overflow:auto}
-.platform-query.platform-query--scrollbar-suppressed{scrollbar-width:none!important;scrollbar-color:transparent transparent!important;scrollbar-gutter:auto!important;-ms-overflow-style:none}
-.platform-query.platform-query--scrollbar-suppressed::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}
+
 .platform-query .platform-status{display:inline-flex;align-items:center;gap:6px;min-height:22px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.platform-query .platform-status::before{display:block;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
 .platform-query .platform-table th,.platform-query .platform-table td{height:40px;padding:0 16px;font-size:14px;line-height:22px}.platform-query .platform-table th{background:#f7f8fa;font-weight:500}
 .platform-query-empty{gap:8px;padding:24px 16px}.platform-query-empty strong{font-size:16px;line-height:24px;font-weight:600}.platform-query-empty p{font-size:14px;line-height:22px}
@@ -4725,13 +4726,14 @@ print(response.json())</pre>
 .platform-query-algo__body .platform-form-grid{padding:0}
 /* 算法切换页签：二级工具栏内使用蓝色下划线标记当前算法。 */
 .platform-query-algo__tabs{display:flex;flex:0 1 auto;align-self:stretch;margin:0;min-width:0}
-.platform-query-algo__tabs button{position:relative;min-height:36px;padding:0 14px;border:0;background:transparent;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer;transition:color .2s cubic-bezier(0,0,1,1)}
-.platform-query-algo__tabs button::after{position:absolute;right:0;bottom:0;left:0;height:2px;background:#165dff;content:"";opacity:0;transform:scaleX(0);transition:opacity .2s cubic-bezier(0,0,1,1),transform .2s cubic-bezier(.34,.69,.1,1)}
-.platform-query-algo__tabs button:hover{color:#1d2129}
-.platform-query-algo__tabs button.is-active{color:#165dff;font-weight:500}
-.platform-query-algo__tabs button.is-active::after{opacity:1;transform:scaleX(1)}
-.platform-query-algo__tabs button:focus-visible{border-radius:2px;outline:2px solid rgba(22,93,255,.28);outline-offset:2px}
-.platform-query-algo__engine-hint{margin:0;padding:8px 12px;border:1px solid #ffd6c6;border-radius:4px;background:#fff3ea;color:#b42318;font-size:12px;line-height:20px}
+.platform-query-algo__tabs .platform-algorithm-tab__select{position:relative;min-height:36px;padding:0 14px;border:0;background:transparent;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer;transition:color .2s cubic-bezier(0,0,1,1)}
+.platform-query-algo__tabs .platform-algorithm-tab__select::after{position:absolute;right:0;bottom:0;left:0;height:2px;background:#165dff;content:"";opacity:0;transform:scaleX(0);transition:opacity .2s cubic-bezier(0,0,1,1),transform .2s cubic-bezier(.34,.69,.1,1)}
+.platform-query-algo__tabs .platform-algorithm-tab__select:hover{color:#1d2129}
+.platform-query-algo__tabs .platform-algorithm-tab__select.is-active{color:#165dff;font-weight:500}
+.platform-query-algo__tabs .platform-algorithm-tab__select.is-active::after{opacity:1;transform:scaleX(1)}
+.platform-query-algo__tabs .platform-algorithm-tab__select:focus-visible{border-radius:2px;outline:2px solid rgba(22,93,255,.28);outline-offset:2px}
+/* 引擎不可用：错误态底色与提示符由 AppAlert 提供 */
+.platform-query-algo__engine-hint{margin:0 0 8px}
 .platform-query-algo__desc{margin:0;color:#4e5969;font-size:12px;line-height:20px}
 .platform-query-algo__required{display:inline-block;margin:0 4px 0 0;color:#b42318;font-style:normal}
 .platform-query-algo__input{box-sizing:border-box;width:100%;height:32px;padding:0 12px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#1d2129;font-size:14px;line-height:22px;outline:0}
@@ -4769,7 +4771,6 @@ print(response.json())</pre>
   .platform-jobs-list a{grid-template-columns:minmax(0,1fr) auto}
   .platform-jobs-list em{display:none}
   .platform-review-list a{grid-template-columns:minmax(0,1fr)}
-  .platform-review-list .is-risk{justify-self:start}
 }
 .platform-query-form{flex:0 0 auto}
 .platform-query .platform-query-form{padding-bottom:24px;border-bottom:1px solid var(--color-border-2)!important}
@@ -4800,16 +4801,27 @@ print(response.json())</pre>
 .platform-query .platform-query-result--fill .platform-query-result__table{display:flex;min-height:0;flex:1 1 auto}
 .platform-query .platform-query-result--fill .platform-query-result__empty{width:100%;flex:1 1 auto}
 .platform-algo-list-toolbar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;color:var(--color-text-3);font-size:12px}
+.platform-algo-search-form{display:flex;align-items:center;gap:16px;max-width:100%}
 .platform-algo-search{width:320px;max-width:100%}
 .platform-query :deep(.platform-algo-search--entity-style.arco-input-wrapper){box-sizing:border-box;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important}
 .platform-query :deep(.platform-algo-search--entity-style.arco-input-wrapper:hover){border-color:#4080ff!important;background:#fff!important}
 .platform-query :deep(.platform-algo-search--entity-style.arco-input-wrapper:focus-within),.platform-query :deep(.platform-algo-search--entity-style.arco-input-focus){border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
 .platform-query :deep(.platform-algo-search--entity-style input.arco-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
 .platform-algo-list-toolbar>button{margin-left:auto}
-@media(max-width:768px){.platform-query-algo__controls{flex-direction:column;gap:12px}.platform-query-algo__form{width:100%}.platform-query-algo__actions{padding-top:0}.platform-algo-search{width:100%}.platform-algo-list-toolbar>button{margin-left:0}}
+@media(max-width:768px){.platform-query-algo__controls{flex-direction:column;gap:12px}.platform-query-algo__form{width:100%}.platform-query-algo__actions{padding-top:0}.platform-algo-search-form{width:100%}.platform-algo-search{width:100%;min-width:0;flex:1}.platform-algo-list-toolbar>button{margin-left:0}}
+.platform-query .platform-query-engine-refresh,.platform-query .platform-query-engine-refresh:hover,.platform-query .platform-query-engine-refresh:active{padding:0;border:0;background:transparent;color:#165dff;font-size:14px;box-shadow:none}
+.platform-query .platform-query-engine-refresh:disabled{color:#c9cdd4;cursor:not-allowed}
+.platform-query :deep(.platform-algo-search .arco-input-prefix){color:#86909c;margin-right:8px}
 .platform-ngql-input :deep(.arco-textarea::placeholder){color:#86909c!important;opacity:1}
 .platform-relation-label-hint{margin-left:4px;color:var(--color-text-3);font-size:12px;font-weight:400}
-.platform-query-algo__tabs .platform-algorithm-info{align-self:center;display:inline-flex;align-items:center;justify-content:center;min-height:32px;width:32px;height:32px;padding:0;margin-left:8px;color:var(--color-text-3)}
+.platform-query-algo__tabs .platform-algorithm-info{align-self:center;display:inline-flex;align-items:center;justify-content:center;min-height:32px;width:32px;height:32px;padding:0;margin-left:0;color:var(--color-text-3)}
+.platform-algorithm-tab{position:relative;display:flex;align-items:center;padding-right:8px}
+.platform-algorithm-tab.is-active::after{position:absolute;right:0;bottom:0;left:0;height:2px;background:#165dff;content:""}
+.platform-query-algo__tabs .platform-algorithm-tab__select.is-active::after{display:none}
+.platform-query-algo__tabs .platform-algorithm-info.is-active{color:#165dff}
+.platform-query :deep(.list-pagination){justify-content:flex-end}
+.platform-jobs-list a>span.run{color:var(--status-info)}
+.platform-jobs-list a>span.idle{color:var(--status-neutral);background:transparent}
 .platform-query-algo__tabs .platform-algorithm-info::after{display:none}
 .platform-query-algo__tabs .platform-algorithm-info :deep(svg){width:16px;height:16px}
 .platform-algorithm-description{max-width:320px;margin:0;color:var(--color-text-2);font-size:14px;line-height:22px;white-space:normal}
@@ -4830,4 +4842,15 @@ print(response.json())</pre>
 .platform-structure-legend .platform-legend-label{cursor:help}
 .platform-legend-tooltip{border:1px solid #e5e6eb;box-shadow:0 4px 10px rgba(31,35,41,.1)}
 .platform-legend-members{min-width:150px;max-height:224px;overflow-y:auto;font-size:12px;line-height:1.9;color:#1d2129}
+</style>
+<style scoped>
+.platform-query.platform-content{scrollbar-width:thin!important;scrollbar-color:transparent transparent!important}
+.platform-query.platform-content:hover,.platform-query.platform-content.kg-is-scrolling{scrollbar-color:rgba(78,89,105,.55) transparent!important}
+.platform-query :deep(pre),.platform-query :deep(textarea){scrollbar-width:thin;scrollbar-color:transparent transparent}
+.platform-query:hover,.platform-query.kg-is-scrolling,.platform-query :deep(pre:hover),.platform-query :deep(pre.kg-is-scrolling),.platform-query :deep(textarea:hover),.platform-query :deep(textarea.kg-is-scrolling){scrollbar-color:rgba(78,89,105,.55) transparent}
+.platform-query::-webkit-scrollbar,.platform-query :deep(pre::-webkit-scrollbar),.platform-query :deep(textarea::-webkit-scrollbar){width:8px!important;height:8px!important}
+.platform-query::-webkit-scrollbar-track,.platform-query :deep(pre::-webkit-scrollbar-track),.platform-query :deep(textarea::-webkit-scrollbar-track){background:transparent}
+.platform-query::-webkit-scrollbar-thumb,.platform-query :deep(pre::-webkit-scrollbar-thumb),.platform-query :deep(textarea::-webkit-scrollbar-thumb){border:2px solid transparent;border-radius:999px;background-color:transparent!important;background-clip:padding-box}
+.platform-query:hover::-webkit-scrollbar-thumb,.platform-query.kg-is-scrolling::-webkit-scrollbar-thumb,.platform-query :deep(pre:hover::-webkit-scrollbar-thumb),.platform-query :deep(pre.kg-is-scrolling::-webkit-scrollbar-thumb),.platform-query :deep(textarea:hover::-webkit-scrollbar-thumb),.platform-query :deep(textarea.kg-is-scrolling::-webkit-scrollbar-thumb){background-color:rgba(78,89,105,.55)!important}
+.platform-query::-webkit-scrollbar-thumb:hover,.platform-query :deep(pre::-webkit-scrollbar-thumb:hover),.platform-query :deep(textarea::-webkit-scrollbar-thumb:hover){background-color:rgba(78,89,105,.8)!important}
 </style>

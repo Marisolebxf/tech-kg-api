@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import DeleteConfirmDialog from '../../components/DeleteConfirmDialog.vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { IconInfoCircle, IconRefresh, IconSearch } from '@arco-design/web-vue/es/icon'
 import {
@@ -38,6 +39,7 @@ const createOpen = ref(false)
 const triggeringJobId = ref('')
 
 const filterName = ref('')
+const submittedName = ref('')
 const filterStatus = ref('')
 const filterTaskType = ref('')
 
@@ -103,7 +105,7 @@ const TASK_TYPE_LABELS: Record<string, string> = {
 }
 
 const filteredJobs = computed(() => {
-  const name = filterName.value.trim().toLowerCase()
+  const name = submittedName.value.toLowerCase()
   const space = spaceScope.value || graphSpaceStore.current
   return jobs.value.filter((job) => {
     if (space !== ALL_SPACES && jobSpace(job) !== space) return false
@@ -136,7 +138,34 @@ const {
   changePage: changeJobPage,
   changePageSize: changeJobPageSize,
 } = useClientPagination(filteredJobs, 10)
-watch([filterName, filterStatus, filterTaskType, spaceScope, () => graphSpaceStore.current], resetJobPage)
+watch([submittedName, filterStatus, filterTaskType, spaceScope, () => graphSpaceStore.current], resetJobPage)
+
+function submitJobSearch() {
+  submittedName.value = filterName.value.trim()
+  resetJobPage()
+}
+
+const taskTableRef = ref<HTMLElement | null>(null)
+const tableHasMoreToScroll = ref(false)
+const tableScrollActive = ref(false)
+let scrollIdleTimer: ReturnType<typeof setTimeout> | undefined
+
+function updateTaskTableScrollState() {
+  const table = taskTableRef.value
+  tableHasMoreToScroll.value = !!table && table.scrollWidth - table.clientWidth - table.scrollLeft > 1
+}
+
+function handleTaskTableScroll() {
+  updateTaskTableScrollState()
+  tableScrollActive.value = true
+  clearTimeout(scrollIdleTimer)
+  scrollIdleTimer = setTimeout(() => { tableScrollActive.value = false }, 700)
+}
+
+watch(pagedJobs, async () => {
+  await nextTick()
+  updateTaskTableScrollState()
+}, { flush: 'post' })
 
 async function loadData(silent = false) {
   // silent：轮询刷新用，不转 loading、失败不弹 toast（避免每几秒闪一次）
@@ -145,7 +174,7 @@ async function loadData(silent = false) {
     const jobList = await listJobs()
     jobs.value = jobList.items
   } catch (error) {
-    if (!silent) showToast(schemaErrorMessage(error), 'warning')
+    if (!silent) showToast(schemaErrorMessage(error), 'error')
   } finally {
     if (!silent) loading.value = false
   }
@@ -164,7 +193,7 @@ function announceFinished(prevJobs: WorkflowJob[]) {
     if (prev.get(job.id) !== '运行中') continue // 只报「运行中→终态」的翻转，历史终态不弹
     if (now === '已完成') showToast(`任务「${job.name}」执行完成`, 'success')
     else if (now === '运行异常') showToast(`任务「${job.name}」执行完成但含失败记录（已转人工审核），点任务名查看`, 'warning')
-    else if (now === '运行失败') showToast(`任务「${job.name}」执行失败，点任务名查看原因`, 'warning')
+    else if (now === '运行失败') showToast(`任务「${job.name}」执行失败，点任务名查看原因`, 'error')
   }
 }
 
@@ -176,6 +205,8 @@ async function reloadOnEvent(announce: boolean) {
 
 onUnmounted(() => {
   unsubscribeJobEvents?.()
+  window.removeEventListener('resize', updateTaskTableScrollState)
+  clearTimeout(scrollIdleTimer)
 })
 
 function openCreate() {
@@ -204,7 +235,7 @@ async function onTrigger(job: WorkflowJob) {
     showToast(`任务「${job.name}」已触发`, 'success')
     await loadData()
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
+    showToast(schemaErrorMessage(error), 'error')
   } finally {
     triggeringJobId.value = ''
   }
@@ -263,18 +294,34 @@ async function onToggleState(job: WorkflowJob) {
     await loadData()
   } catch (error) {
     delete pausingJobIds.value[job.id]
-    showToast(schemaErrorMessage(error), 'warning')
+    showToast(schemaErrorMessage(error), 'error')
   }
 }
 
-async function onDelete(job: WorkflowJob) {
-  if (!window.confirm(`确认删除任务「${job.name}」？执行历史将保留。`)) return
+const deleteTarget = ref<WorkflowJob>()
+const deleteVisible = ref(false)
+const deleteSubmitting = ref(false)
+const deleteError = ref('')
+function onDelete(job: WorkflowJob) {
+  deleteTarget.value = job
+  deleteError.value = ''
+  deleteVisible.value = true
+}
+async function confirmDeleteJob() {
+  const job = deleteTarget.value
+  if (!job || deleteSubmitting.value) return
+  deleteSubmitting.value = true
+  deleteError.value = ''
+
   try {
     await deleteJob(job.id)
+    deleteVisible.value = false
     showToast('任务已删除', 'success')
     await loadData()
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'warning')
+    deleteError.value = schemaErrorMessage(error)
+  } finally {
+    deleteSubmitting.value = false
   }
 }
 
@@ -282,15 +329,75 @@ function openJobDetail(job: WorkflowJob) {
   void router.push({ name: 'job-detail', params: { jobId: job.id } })
 }
 
+/** 任务行操作项（有序）：执行/重新执行、暂停/恢复、查看详情、删除。
+ *  运行中不可删：置灰而非隐藏（悬停说明原因），与其余操作列同口径。 */
+type JobAction = { key: string; label: string; danger?: boolean; disabled?: boolean; title?: string; run: () => void }
+
+function jobActions(job: WorkflowJob): JobAction[] {
+  const status = deriveJobUnifiedStatus(job)
+  const actions: JobAction[] = []
+  if (['未运行', '运行失败'].includes(status)) {
+    actions.push({
+      key: 'trigger',
+      label: status === '运行失败' ? '重新执行' : '执行',
+      disabled: triggeringJobId.value === job.id,
+      title: triggeringJobId.value === job.id ? '正在下发执行…' : undefined,
+      run: () => void onTrigger(job),
+    })
+  }
+  if (status !== '已暂停' && job.status !== '暂停' && (status === '运行中' || job.schedule.kind === 'cron')) {
+    actions.push({
+      key: 'pause',
+      label: pausingJobIds.value[job.id] ? '暂停中…' : '暂停',
+      disabled: Boolean(pausingJobIds.value[job.id]),
+      run: () => void onToggleState(job),
+    })
+  } else if (job.status === '暂停' || status === '已暂停') {
+    actions.push({
+      key: 'resume',
+      label: resumingJobIds.value[job.id] ? '恢复中…' : '恢复',
+      disabled: Boolean(resumingJobIds.value[job.id]),
+      run: () => void onToggleState(job),
+    })
+  }
+  actions.push({ key: 'detail', label: '查看详情', run: () => openJobDetail(job) })
+  actions.push({
+    key: 'delete',
+    label: '删除',
+    danger: true,
+    disabled: status === '运行中',
+    title: status === '运行中' ? '运行中：等待本次任务完成后再删除' : undefined,
+    run: () => void onDelete(job),
+  })
+  return actions
+}
+
+/** 平铺操作（与 Schema 管理表对齐）：≤3 个全部平铺；>3 个时只平铺前两个，第三个位置换成「···」。 */
+function flatJobActions(job: WorkflowJob): JobAction[] {
+  const actions = jobActions(job)
+  return actions.length <= 3 ? actions : actions.slice(0, 2)
+}
+
+/** 「···」菜单收纳的剩余操作（>3 个时的第 3 个起）。 */
+function overflowJobActions(job: WorkflowJob): JobAction[] {
+  const actions = jobActions(job)
+  return actions.length > 3 ? actions.slice(2) : []
+}
+
+/** 执行状态 → 五类语义色：完成=成功 / 异常=警告（含失败行转人工）/ 失败与超时=危险 /
+ *  取消与终止=中性（人为中断，非故障）/ 排队与未知等待=中性 / 其余（运行中）=信息。 */
 function executionStatusClass(status: string): string {
   const s = status.toUpperCase()
   if (s === 'COMPLETED') return 'ok'
-  if (s === 'FAILED' || s === 'CANCELED' || s === 'TERMINATED' || s === 'TIMED_OUT') return 'err'
-  if (s === 'ABNORMAL' || s === 'QUEUED') return 'warn'
+  if (s === 'FAILED' || s === 'TIMED_OUT') return 'err'
+  if (s === 'ABNORMAL') return 'warn'
+  if (s === 'CANCELED' || s === 'TERMINATED' || s === 'QUEUED') return 'idle'
   return 'run'
 }
 
 onMounted(() => {
+  window.addEventListener('resize', updateTaskTableScrollState)
+  void nextTick(updateTaskTableScrollState)
   void loadData()
   unsubscribeJobEvents = subscribeJobEvents(
     () => {
@@ -329,7 +436,7 @@ onMounted(() => {
     <section class="gb-jobs-section">
       <header class="gb-jobs-toolbar">
         <strong class="gb-section-title">任务列表</strong>
-        <div class="gb-filters">
+        <form class="gb-filters" role="search" @submit.prevent="submitJobSearch">
           <a-select
             v-model="spaceScopeSelect"
             class="gb-filter-select"
@@ -357,10 +464,11 @@ onMounted(() => {
             <a-option value="upload">上传脚本</a-option>
           </a-select>
           <a-input id="graph-build-filter-name" v-model="filterName" class="gb-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="按名称搜索" placeholder="按名称搜索"><template #prefix><IconSearch /></template></a-input>
-        </div>
+          <button class="gb-search-button" type="submit">查询</button>
+        </form>
       </header>
       <div class="gb-jobs-panel">
-      <div class="gb-task-table">
+      <div ref="taskTableRef" class="gb-task-table" :class="{ 'has-scroll-right': tableHasMoreToScroll, 'gb-scroll--active': tableScrollActive }" @scroll.passive="handleTaskTableScroll">
         <table>
           <thead>
             <tr><th>任务名</th><th>类型</th><th>脚本</th><th>图空间</th><th>调度</th><th>状态</th><th>最近任务 ID</th><th>最近执行</th><th>操作</th></tr>
@@ -379,8 +487,8 @@ onMounted(() => {
                 <span v-else>单次</span>
               </td>
               <td>
-                <span v-if="pausingJobIds[job.id]" class="warn">暂停中…</span>
-                <span v-else-if="resumingJobIds[job.id]" class="ok">恢复中…</span>
+                <span v-if="pausingJobIds[job.id]" class="run">暂停中…</span>
+                <span v-else-if="resumingJobIds[job.id]" class="run">恢复中…</span>
                 <span v-else :class="JOB_STATUS_TONE[deriveJobUnifiedStatus(job)]">{{ deriveJobUnifiedStatus(job) }}</span>
               </td>
               <td>
@@ -389,31 +497,36 @@ onMounted(() => {
               </td>
               <td>
                 <span v-if="job.lastExecutionStatus" :class="executionStatusClass(job.lastExecutionStatus)">{{ job.lastExecutionStatus }}</span>
-                <span v-else class="muted">未执行</span>
+                <span v-else class="idle">未执行</span>
                 <small v-if="job.lastRunAt" class="gb-last-run">{{ job.lastRunAt }}</small>
               </td>
               <td class="gb-job-actions">
+                <!-- 与 Schema 管理表对齐：≤3 个操作全部平铺；>3 个时平铺前两个，第三个位置换成「···」 -->
                 <div class="gb-job-actions__inner">
-                  <button v-if="['未运行', '运行失败'].includes(deriveJobUnifiedStatus(job))" type="button" class="primary" :disabled="triggeringJobId === job.id" @click="onTrigger(job)">{{ deriveJobUnifiedStatus(job) === '运行失败' ? '重新执行' : '执行' }}</button>
                   <button
-                    v-if="deriveJobUnifiedStatus(job) !== '已暂停' && job.status !== '暂停' && (deriveJobUnifiedStatus(job) === '运行中' || job.schedule.kind === 'cron')"
+                    v-for="action in flatJobActions(job)"
+                    :key="action.key"
                     type="button"
-                    :disabled="Boolean(pausingJobIds[job.id])"
-                    @click="onToggleState(job)"
-                  >
-                    {{ pausingJobIds[job.id] ? '暂停中…' : '暂停' }}
-                  </button>
-                  <button
-                    v-else-if="job.status === '暂停' || deriveJobUnifiedStatus(job) === '已暂停'"
-                    type="button"
-                    class="primary"
-                    :disabled="Boolean(resumingJobIds[job.id])"
-                    @click="onToggleState(job)"
-                  >
-                    {{ resumingJobIds[job.id] ? '恢复中…' : '恢复' }}
-                  </button>
-                  <button type="button" @click="openJobDetail(job)">查看详情</button>
-                  <button v-if="deriveJobUnifiedStatus(job) !== '运行中'" type="button" class="danger" @click="onDelete(job)">删除</button>
+                    class="gb-action-link"
+                    :class="{ 'is-danger': action.danger }"
+                    :disabled="action.disabled"
+                    :title="action.title"
+                    @click="action.run()"
+                  >{{ action.label }}</button>
+                  <a-dropdown v-if="overflowJobActions(job).length" trigger="click" position="bl">
+                    <button type="button" class="gb-action-link gb-action-more" :aria-label="`${job.name}更多操作`" title="更多操作">···</button>
+                    <template #content>
+                      <a-doption
+                        v-for="action in overflowJobActions(job)"
+                        :key="action.key"
+                        class="gb-action-menu-item"
+                        :class="{ 'gb-action-menu-item--danger': action.danger }"
+                        :disabled="action.disabled"
+                        :title="action.title"
+                        @click="action.run()"
+                      >{{ action.label }}</a-doption>
+                    </template>
+                  </a-dropdown>
                 </div>
               </td>
             </tr>
@@ -427,9 +540,11 @@ onMounted(() => {
         :page="jobPage"
         :page-size="jobPageSize"
         :disabled="loading"
+        :show-jumper="false"
+        :size-at-end="true"
         @change="changeJobPage"
         @change-size="changeJobPageSize"
-      />
+      ><template #summary><span class="list-pagination__summary">共 {{ jobTotal }} 条</span></template></ListPagination>
       </div>
     </section>
 
@@ -438,6 +553,7 @@ onMounted(() => {
       @close="createOpen = false"
       @created="loadData()"
     />
+    <DeleteConfirmDialog v-model:visible="deleteVisible" title="删除任务" :name="deleteTarget?.name || ''" :identifier="deleteTarget?.id" identifier-label="任务 ID" description="继续操作将删除该图谱构建任务，执行历史将保留。" :loading="deleteSubmitting" :error="deleteError" @confirm="confirmDeleteJob" />
   </main>
 </template>
 
@@ -445,44 +561,64 @@ onMounted(() => {
 .graph-build-page{display:flex;box-sizing:border-box;height:100%;min-height:0;overflow:hidden;padding:0;color:#1d2129;font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0;flex-direction:column}
 .graph-build-page :deep(*){font-family:inherit;letter-spacing:0}
 .gb-actions{display:flex;gap:8px;margin-bottom:12px}
-.gb-actions button{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
+.gb-actions button{height:32px;padding:0 16px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
 .gb-actions .primary{border-color:#165dff;background:#165dff;color:#fff}
 .gb-summary{display:grid;flex-shrink:0;grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr));gap:16px;margin-bottom:16px}
 .gb-summary article{display:flex;flex:1;min-height:80px;gap:8px;padding:12px 16px;border:1px solid #e5e6eb;border-radius:6px;background:#fff;flex-direction:column;justify-content:center}
-.gb-summary span{color:#1d2129;font-size:16px;line-height:24px;font-weight:600}
-.gb-summary strong{color:#1d2129;font-size:28px;line-height:32px;font-weight:600;letter-spacing:0}
+.gb-summary span{color:#4e5969;font-size:12px;line-height:20px;font-weight:400}
+.gb-summary strong{color:#1d2129;font-size:20px;line-height:28px;font-weight:600;letter-spacing:0}
 .gb-summary__label,.gb-summary__task-stats{display:flex;align-items:center;min-width:0}.gb-summary__label{gap:8px}.gb-summary__hint{display:inline-flex;align-items:center;justify-content:center;flex:0 0 24px;width:24px;height:24px;padding:0;border:0;border-radius:4px;background:transparent;color:#86909c;cursor:help}.gb-summary__hint:hover,.gb-summary__hint:focus-visible{background:#f2f3f5;color:#165dff}.gb-summary__hint svg{width:16px;height:16px}
 .gb-jobs-section{display:flex;flex:1;min-height:0;flex-direction:column;gap:16px}
 .gb-jobs-toolbar{display:flex;flex-direction:column;flex:0 0 auto;align-items:stretch;gap:12px;box-sizing:border-box;color:#1d2129}
 .gb-section-title{position:relative;padding-left:11px;font-size:16px;line-height:24px;font-weight:600}
 .gb-section-title::before{position:absolute;top:5px;left:0;width:3px;height:14px;border-radius:1px;background:#165dff;content:""}
 .gb-jobs-panel{display:flex;flex:1;min-height:0;overflow:hidden;border:1px solid #e5e6eb;border-radius:6px;background:#fff;box-shadow:none;flex-direction:column}
-/* 四个筛选控件同一行（图空间/状态/类型定宽 160px，搜索定宽 280px），间距与人工审核筛选行同口径 */
-.gb-filters{display:flex;flex:0 0 auto;min-width:0;flex-wrap:wrap;align-items:center;gap:16px;font-weight:400}
+.gb-jobs-panel :deep(.list-pagination){justify-content:flex-end}
+.gb-jobs-panel :deep(.list-pagination__summary){margin-left:auto}
+/* 筛选控件向右排列，窄屏时可换行。 */
+.gb-filters{display:flex;flex:0 0 auto;min-width:0;margin-left:auto;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:16px;font-weight:400}
+.gb-search-button{box-sizing:border-box;height:32px;padding:0 16px;border:1px solid #165dff;border-radius:4px;background:#165dff;color:#fff;font-size:14px;line-height:22px;cursor:pointer}
+.gb-search-button:hover{border-color:#4080ff;background:#4080ff}
+.gb-search-button:focus-visible{outline:2px solid rgba(22,93,255,.3);outline-offset:2px}
 /* 图空间下拉：跟随筛选条尺寸合同，不换行不被压缩 */
-.gb-task-table{flex:1;min-height:0;overflow:auto;padding:0}
+.gb-task-table{flex:1;min-height:0;overflow:auto;padding:0;scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:transparent transparent}
+.gb-task-table:hover,.gb-task-table.gb-scroll--active{scrollbar-color:rgba(78,89,105,.55) transparent}
+.gb-task-table::-webkit-scrollbar{width:8px;height:8px}
+.gb-task-table::-webkit-scrollbar-track{background:transparent}
+.gb-task-table::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background:transparent;background-clip:padding-box}
+.gb-task-table:hover::-webkit-scrollbar-thumb,.gb-task-table.gb-scroll--active::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
 /* 与 Schema 管理表一致：由内容语义自动分配列宽，空间不足时由表格容器承接横向滚动。 */
-.gb-task-table table{width:100%;margin:0;border-collapse:collapse;font-size:14px;line-height:22px}
+.gb-task-table table{width:max-content;min-width:100%;margin:0;border-collapse:collapse;font-size:14px;line-height:22px}
 .gb-task-table th{position:sticky;z-index:2;top:0;height:40px;padding:0 16px;background:#f7f8fa;color:#1d2129;font-size:14px;line-height:22px;font-weight:500;text-align:left;white-space:nowrap}
-.gb-task-table td{height:40px;padding:0 16px;border-bottom:1px solid #e5edf8;color:#344763;font-size:14px;line-height:22px;font-weight:400;vertical-align:middle}
-.gb-task-table tbody tr:hover td{background:#f4f8ff}
-.gb-task-table code{padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-family:inherit;font-size:14px;line-height:22px;font-weight:400;white-space:nowrap}
+.gb-task-table td{height:40px;padding:0 16px;border-bottom:1px solid #e5e6eb;color:#1d2129;font-size:14px;line-height:22px;font-weight:400;vertical-align:middle;white-space:nowrap}
+.gb-task-table tbody tr:hover td{background:#f2f3f5}
+.gb-task-table code{padding:2px 6px;border-radius:4px;background:#e8f3ff;color:#165dff;font-family:inherit;font-size:14px;line-height:22px;font-weight:400;white-space:nowrap}
 .gb-task-table b{color:#1d2129;font-weight:400}
-.gb-last-run{display:block;color:#8191aa;font-size:12px;line-height:20px;font-weight:400}
+.gb-last-run{display:block;color:#86909c;font-size:12px;line-height:20px;font-weight:400}
 .gb-job-actions{white-space:nowrap}
 .gb-job-actions__inner{display:flex;align-items:center;gap:8px}
-.gb-job-actions button{height:26px;padding:0 10px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
-.gb-job-actions button.primary{border-color:#165dff;background:#165dff;color:#fff}
-.gb-job-actions button.danger{border-color:#f6b9b4;color:#b42318}
-.gb-job-actions button:disabled{opacity:.45;cursor:not-allowed}
-.empty{padding:40px 14px;text-align:center;color:#8290a7;font-size:12px;line-height:20px;font-weight:400}
-.muted{color:#8191aa;font-size:12px;line-height:20px;font-weight:400}
-span.ok,span.err,span.warn,span.run{display:inline-flex;align-items:center;gap:6px;font-size:14px;line-height:22px;border-radius:0;background:transparent;padding:0;white-space:nowrap}
-span.ok::before,span.err::before,span.warn::before,span.run::before{display:block;flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
-span.ok{color:#067647}
-span.err{color:#b42318}
-span.warn{color:#b54708}
-span.run{color:#175cd3}
+/* 操作按钮与 Schema 管理表同款：无边框纯文字链接；删除红、其余蓝、禁用灰 */
+.gb-action-link{height:auto;padding:0;border:0;background:transparent;color:#165dff;font-size:14px;line-height:22px;font-weight:400;cursor:pointer;text-decoration:none}
+.gb-action-link:hover:not(:disabled){color:#4080ff;text-decoration:none}
+.gb-action-link:disabled{color:#c9cdd4;cursor:not-allowed;text-decoration:none}
+.gb-action-link.is-danger{color:#f53f3f}
+.gb-action-link.is-danger:hover:not(:disabled){color:#f53f3f;text-decoration:underline}
+.gb-action-more{min-width:24px;font-size:16px;line-height:22px;text-align:center}
+/* 操作列与 Schema 管理表对齐：右侧固定列（表头同时吸顶，z 高于数据行），横向滚动时操作不被遮挡 */
+.gb-task-table thead th:last-child{position:sticky;right:0;z-index:4;background:#f7f8fa;box-shadow:-1px 0 #e5e6eb}
+.gb-task-table td.gb-job-actions{position:sticky;right:0;z-index:3;background:#fff;box-shadow:-1px 0 #e5e6eb}
+.gb-task-table tbody tr:hover td.gb-job-actions{background:#f2f3f5}
+/* 固定列左侧向内容区渐隐的阴影（与 Schema 管理表同视觉提示） */
+.gb-task-table.has-scroll-right :is(thead th:last-child,td.gb-job-actions)::before{position:absolute;top:0;bottom:-1px;left:0;width:12px;content:"";pointer-events:none;transform:translateX(-100%);box-shadow:inset -10px 0 8px -8px rgba(78,89,105,.28)}
+.empty{padding:40px 14px;text-align:center;color:#86909c;font-size:12px;line-height:20px;font-weight:400}
+.muted{color:#86909c;font-size:12px;line-height:20px;font-weight:400}
+span.ok,span.err,span.warn,span.run,span.idle{display:inline-flex;align-items:center;gap:6px;font-size:14px;line-height:22px;border-radius:0;background:transparent;padding:0;white-space:nowrap}
+span.ok::before,span.err::before,span.warn::before,span.run::before,span.idle::before{display:block;flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
+span.idle{color:var(--status-neutral)}
+span.ok{color:var(--status-success)}
+span.err{color:var(--status-danger)}
+span.warn{color:var(--status-warning)}
+span.run{color:var(--status-info)}
 
 @media (max-width: 1024px) {
   .graph-build-page {
@@ -509,4 +645,12 @@ span.run{color:#175cd3}
 .app-workspace .gb-filters .gb-filter-select input.arco-select-view-input{box-sizing:border-box;width:100%;height:30px!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
 .app-workspace .gb-filters .gb-filter-select .arco-select-view-input-hidden{position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important}.app-workspace .gb-filters .gb-filter-select .arco-select-view-value{min-width:0;overflow:hidden;font-size:14px;line-height:22px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
 .app-workspace .gb-filters .gb-filter-select :is(.arco-select-view-input,.arco-select-view-value){background:transparent!important}
+/* 筛选下拉右侧的箭头/清除图标：Arco 默认仅 12px 且偏淡，肉眼几乎看不出有下拉符号——放大到 14px 并显式着色（与输入框前缀图标同灰度） */
+.app-workspace .gb-filters .gb-filter-select .arco-select-view-suffix svg{width:14px;height:14px;font-size:14px;color:#4e5969}
+/* 任务操作列「···」更多菜单（teleport 到 body，需全局控制；菜单项口径对齐 Schema 管理表） */
+.gb-action-menu-item.arco-dropdown-option{box-sizing:border-box;min-height:32px;padding:5px 16px;color:#165dff;font-size:14px;line-height:22px;font-weight:400;text-decoration:none}
+.gb-action-menu-item.arco-dropdown-option:hover{color:#4080ff;text-decoration:none}
+.gb-action-menu-item--danger.arco-dropdown-option:not(.arco-dropdown-option-disabled){color:#f53f3f}
+.gb-action-menu-item--danger.arco-dropdown-option:not(.arco-dropdown-option-disabled):hover{color:#f53f3f}
+.gb-action-menu-item.arco-dropdown-option-disabled{color:#c9cdd4}
 </style>

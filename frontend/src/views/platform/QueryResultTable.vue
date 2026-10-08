@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Button as AButton, Modal as AModal, Table as ATable } from '@arco-design/web-vue'
 import type { TableColumnData } from '@arco-design/web-vue/es/table/interface'
 
@@ -17,6 +17,27 @@ const props = withDefaults(defineProps<{
   labels: () => ({}), sortable: false, sortColumn: '', sortDirection: 'desc', loading: false,
 })
 const emit = defineEmits<{ sort: [column: string, direction: 'asc' | 'desc' | undefined] }>()
+const tableRoot = ref<HTMLElement | null>(null)
+const hasHiddenColumns = ref(false)
+let resizeObserver: ResizeObserver | undefined
+function updateColumnShadow(): void {
+  const scroller = tableRoot.value?.querySelector<HTMLElement>('.arco-table-content')
+  hasHiddenColumns.value = !!scroller && scroller.scrollWidth - scroller.clientWidth - scroller.scrollLeft > 1
+}
+onMounted(() => {
+  if (typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(updateColumnShadow)
+    if (tableRoot.value) resizeObserver.observe(tableRoot.value)
+    const table = tableRoot.value?.querySelector('.arco-table-element')
+    if (table) resizeObserver.observe(table)
+  }
+  updateColumnShadow()
+})
+onUnmounted(() => resizeObserver?.disconnect())
+watch(() => [props.rows, props.columns], async () => {
+  await nextTick()
+  updateColumnShadow()
+}, { flush: 'post' })
 const selectedRow = ref<Record<string, unknown> | null>(null)
 const detailsOpen = ref(false)
 watch(() => props.rows, () => { detailsOpen.value = false })
@@ -30,7 +51,7 @@ function isNumeric(column: string): boolean {
     || (props.rows.length > 0 && props.rows.every((row) => typeof row[column] === 'number' || row[column] == null))
 }
 const tableColumns = computed<TableColumnData[]>(() => [
-  { title: '序号', dataIndex: '__index', width: 76, fixed: 'left', align: 'center' },
+  { title: '序号', dataIndex: '__index', width: 76, align: 'center' },
   ...props.columns.map((column, index): TableColumnData => ({
     title: props.labels[column] ?? column,
     dataIndex: `cell_${index}`,
@@ -65,7 +86,7 @@ function showDetails(row: Record<string, unknown>): void {
 </script>
 
 <template>
-  <div class="query-result-table">
+  <div ref="tableRoot" class="query-result-table" :class="{ 'query-result-table--hidden-columns': hasHiddenColumns }" @scroll.capture="updateColumnShadow">
     <ATable
       :columns="tableColumns"
       :data="tableRows"
@@ -84,19 +105,33 @@ function showDetails(row: Record<string, unknown>): void {
         <AButton type="text" size="small" @click="showDetails(record.__raw)">详情</AButton>
       </template>
     </ATable>
-    <AModal v-model:visible="detailsOpen" title="记录详情" :footer="false" :width="640" :unmount-on-close="true">
+    <AModal v-model:visible="detailsOpen" modal-class="query-record-modal" title="记录详情" title-align="start" :width="640" :unmount-on-close="true">
       <dl class="query-record-details">
         <div v-for="column in columns" :key="column">
           <dt>{{ labels[column] ?? column }}</dt>
           <dd><pre>{{ formatCell(selectedRow?.[column]) }}</pre></dd>
         </div>
       </dl>
+      <template #footer>
+        <button type="button" class="query-record-cancel" @click="detailsOpen = false">取消</button>
+      </template>
     </AModal>
   </div>
 </template>
 
 <style scoped>
 .query-result-table{min-width:0;overflow:hidden}
+/* Horizontal overflow is indicated by the fixed action column only. */
+.query-result-table :deep(.arco-table-container::before){display:none;box-shadow:none}
+/* The fixed action column only signals data still hidden to its left. */
+.query-result-table:not(.query-result-table--hidden-columns) :deep(.arco-table-col-fixed-right-first::after){box-shadow:none}
+.query-result-table :deep(.arco-table-content),.query-record-details{scrollbar-width:thin;scrollbar-color:transparent transparent}
+.query-result-table:hover :deep(.arco-table-content),.query-result-table :deep(.arco-table-content.kg-is-scrolling),.query-record-details:hover,.query-record-details.kg-is-scrolling{scrollbar-color:rgba(78,89,105,.55) transparent}
+.query-result-table :deep(.arco-table-content::-webkit-scrollbar),.query-record-details::-webkit-scrollbar{width:8px;height:8px}
+.query-result-table :deep(.arco-table-content::-webkit-scrollbar-track),.query-record-details::-webkit-scrollbar-track{background:transparent}
+.query-result-table :deep(.arco-table-content::-webkit-scrollbar-thumb),.query-record-details::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background-color:transparent;background-clip:padding-box}
+.query-result-table:hover :deep(.arco-table-content::-webkit-scrollbar-thumb),.query-result-table :deep(.arco-table-content.kg-is-scrolling::-webkit-scrollbar-thumb),.query-record-details:hover::-webkit-scrollbar-thumb,.query-record-details.kg-is-scrolling::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
+.query-result-table :deep(.arco-table-content::-webkit-scrollbar-thumb:hover),.query-record-details::-webkit-scrollbar-thumb:hover{background-color:rgba(78,89,105,.8)}
 .query-result-table :deep(.arco-table){color:var(--color-text-1)}
 .query-result-table :deep(.arco-table-container){border:0;border-radius:0}
 .query-result-table :deep(.arco-table-th){background:#f7f8fa;color:var(--color-text-1);font-weight:500}
@@ -105,10 +140,18 @@ function showDetails(row: Record<string, unknown>): void {
 .query-result-table :deep(.arco-table-tr:hover .arco-table-td){background:var(--color-fill-1)}
 .query-result-table :deep(.query-cell-number){font-variant-numeric:tabular-nums;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
 .query-result-table :deep(.arco-table-cell){box-sizing:border-box;height:39px;white-space:nowrap;padding:0 16px!important}
-.query-record-details{margin:0;max-height:65vh;overflow:auto}
-.query-record-details>div{display:grid;grid-template-columns:140px minmax(0,1fr);gap:16px;padding:12px 0;border-bottom:1px solid var(--color-border-2)}
+.query-record-details{margin:0;max-height:65vh;overflow:auto;text-align:left}
+.query-record-details>div{display:grid;grid-template-columns:140px minmax(0,1fr);gap:16px;padding:12px 0}
 .query-record-details dt{color:var(--color-text-3);overflow-wrap:anywhere}
 .query-record-details dd{margin:0;min-width:0}
 .query-record-details pre{margin:0;color:var(--color-text-1);font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
 @media(max-width:600px){.query-record-details>div{grid-template-columns:1fr;gap:8px}}
+</style>
+<style>
+.query-record-modal{border-radius:8px}
+.query-record-modal .arco-modal-header{box-sizing:border-box;height:56px;padding:0 24px}
+.query-record-modal .arco-modal-title{justify-content:flex-start;text-align:left;font-size:16px;line-height:24px;font-weight:600}
+.query-record-modal .arco-modal-body{padding:24px}
+.query-record-modal .arco-modal-footer{box-sizing:border-box;min-height:64px;padding:16px 24px;border-top:1px solid #e5e6eb}
+.query-record-modal .query-record-cancel{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;cursor:pointer}
 </style>

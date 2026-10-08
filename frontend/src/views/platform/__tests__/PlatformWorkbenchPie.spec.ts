@@ -23,7 +23,7 @@ vi.mock('../../../api/workflowOperations', () => ({
   deriveJobUnifiedStatus: (job: { status?: string }) => job.status ?? '未运行',
   countJobUnifiedStatuses: () => ({ 未运行: 0, 运行中: 0, 已暂停: 0, 已完成: 0, 运行异常: 0, 运行失败: 0 }),
   jobGraphSpace: (job: { graphSpace?: string }, def: string, cur: string) => job.graphSpace || def || cur,
-  JOB_STATUS_TONE: { 未运行: 'warn', 运行中: 'run', 已暂停: 'warn', 已完成: 'ok', 运行异常: 'warn', 运行失败: 'err' },
+  JOB_STATUS_TONE: { 未运行: 'idle', 运行中: 'run', 已暂停: 'idle', 已完成: 'ok', 运行异常: 'warn', 运行失败: 'err' },
 }))
 vi.mock('../../../api/platformOverview', () => ({ getPlatformOverview: vi.fn() }))
 vi.mock('../../../composables/use-toast', () => ({ useToast: () => ({ showToast: vi.fn() }) }))
@@ -52,7 +52,7 @@ const baseOverview: PlatformOverviewData = {
   dataMode: 'partial',
   warnings: [],
   assetOverviewGroups: [],
-  assetChangeRows: { entity: [], relation: [], property: [] },
+  assetChangeRows: { entity: [], relation: [] },
   entityStructure: [],
   relationStructure: [],
   dataSources: {},
@@ -305,7 +305,6 @@ describe('平台总览构成饼图随数据驱动', () => {
           time: '11:57:41',
         })),
         relation: [],
-        property: [],
       },
     })
     wrapper = mountOverview()

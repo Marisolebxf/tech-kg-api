@@ -2782,7 +2782,7 @@ async function saveRelationAnnotation(edgeKey: string) {
     };
     showToast(annotation ? "关系标注已保存" : "关系标注已清空", "success");
   } catch (error) {
-    showToast(getErrorMessage(error, "关系标注保存失败"), "warning");
+    showToast(getErrorMessage(error, "关系标注保存失败"), "error");
   } finally {
     relationAnnotationSaving.value = {
       ...relationAnnotationSaving.value,
@@ -3651,7 +3651,7 @@ async function loadModuleDescribe() {
   } catch (error) {
     const message = error instanceof Error ? error.message : "模块描述接口失败";
     liveDescribe.value = { status: "error", msg: message };
-    showToast(`模块描述接口异常：${message}`, "warning");
+    showToast(`模块描述接口异常：${message}`, "error");
   }
 }
 
@@ -3839,7 +3839,7 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       const message = error instanceof Error ? error.message : String(error);
       panoramaError.value = message;
       panoramaResponse.value = null;
-      showToast(message, "warning");
+      showToast(message, "error");
     } finally {
       running.value = false;
     }
@@ -3897,7 +3897,7 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       const message = error instanceof Error ? error.message : String(error);
       expertDirectError.value = message;
       expertDirectResponse.value = null;
-      showToast(message, "warning");
+      showToast(message, "error");
     } finally {
       if (expertDirectAbortController === controller) {
         running.value = false;
@@ -3954,7 +3954,7 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       // 必填值不存在时留在结果详情页（实体/关系/溯源展示统一空态提示），
       // 不跳 API 页签；其他错误仍跳 API 页签查看原始报错。
       resultMode.value = isNotFoundMessage(message) ? "summary" : "api";
-      showToast(message, "warning");
+      showToast(message, isNotFoundMessage(message) ? "info" : "error");
     } finally {
       running.value = false;
     }
@@ -4024,7 +4024,7 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
           expertColleagueResponse.value = null;
           liveResponse.value = null;
           liveError.value = null;
-          showToast(res?.msg || "未查询到相关同事关系数据", "warning");
+          showToast(res?.msg || "未查询到相关同事关系数据", "info");
           resultMode.value = "summary";
           return;
         }
@@ -4032,7 +4032,7 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         liveResponse.value = res as unknown as Record<string, any>;
         liveApiPayload.value = { request: body, response: res };
         liveError.value = res?.msg || `业务码 ${res?.code}`;
-        showToast(liveError.value || "查询失败", "warning");
+      showToast(liveError.value || "查询失败", "error");
         resultMode.value = "summary";
       } else {
         const total = Number(res?.data?.total || 0);
@@ -4108,7 +4108,7 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       if (!resp.success || resp.code !== 200) {
         liveAlumniResult.value = null;
         liveError.value = resp.msg || `业务码 ${resp.code}`;
-        showToast(liveError.value, "warning");
+      showToast(liveError.value, isNotFoundMessage(liveError.value) ? "info" : "error");
         // 必填值不存在时留在结果详情页（实体/关系/溯源统一空态提示），不跳 API 页签。
         resultMode.value = isNotFoundMessage(liveError.value)
           ? "summary"
@@ -4234,7 +4234,7 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       if (!resp.success || resp.code !== 200) {
         liveCoopResult.value = null;
         liveError.value = resp.msg || `业务码 ${resp.code}`;
-        showToast(liveError.value, "warning");
+      showToast(liveError.value, isNotFoundMessage(liveError.value) ? "info" : "error");
         // 必填值不存在时留在结果详情页（实体/关系/溯源统一空态提示），不跳 API 页签。
         resultMode.value = isNotFoundMessage(liveError.value)
           ? "summary"
@@ -4300,7 +4300,7 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         (res?.code !== undefined && res.code !== 200)
       ) {
         liveError.value = (res?.msg as string) || `业务码 ${res?.code}`;
-        showToast(liveError.value, "warning");
+      showToast(liveError.value, isNotFoundMessage(liveError.value) ? "info" : "error");
         // 必填值不存在时留在结果详情页（实体/关系/溯源统一空态提示），不跳 API 页签。
         resultMode.value = isNotFoundMessage(liveError.value)
           ? "summary"
@@ -4392,7 +4392,7 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         (res?.code !== undefined && res.code !== 200)
       ) {
         liveError.value = (res?.msg as string) || `业务码 ${res?.code}`;
-        showToast(liveError.value, "warning");
+      showToast(liveError.value, isNotFoundMessage(liveError.value) ? "info" : "error");
         // 必填值不存在时留在结果详情页（实体/关系/溯源统一空态提示），不跳 API 页签。
         resultMode.value = isNotFoundMessage(liveError.value)
           ? "summary"
@@ -4487,7 +4487,7 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         (res?.code !== undefined && res.code !== 200)
       ) {
         liveError.value = (res?.msg as string) || `业务码 ${res?.code}`;
-        showToast(liveError.value, "warning");
+      showToast(liveError.value, isNotFoundMessage(liveError.value) ? "info" : "error");
         // 必填值不存在时留在结果详情页（实体/关系/溯源统一空态提示），不跳 API 页签。
         resultMode.value = isNotFoundMessage(liveError.value)
           ? "summary"
@@ -4525,7 +4525,7 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       request_params: parameterValues.value,
       error: message,
     };
-    showToast(message, "warning");
+    showToast(message, isNotFoundMessage(message) ? "info" : "error");
     resultMode.value = isNotFoundMessage(message) ? "summary" : "api";
   } finally {
     running.value = false;

@@ -1,7 +1,7 @@
 /* GKX production UI contract. Loaded last to reconcile legacy page styles. */
 :root {
   --control-height: 32px;
-  --gkx-brand: #004ecc;
+  --gkx-brand: #165dff;
   --gkx-brand-hover: #4080ff;
   --gkx-brand-active: #0e42d2;
   --gkx-brand-light: #e8f3ff;
@@ -195,6 +195,21 @@ body {
   color: var(--gkx-text-primary) !important;
   font-weight: 500 !important;
   white-space: nowrap;
+}
+
+/* Scroll containers with a reserved vertical gutter need the same header fill
+   behind that gutter. The table's own th cells cannot paint outside the table. */
+.app-workspace :is(
+  .platform-sticky-table,
+  .gb-task-table,
+  .schema-table-wrap,
+  .ops-review-table-scroll,
+  .config-table-wrap
+) {
+  background-image: linear-gradient(#f7f8fa, #f7f8fa);
+  background-position: top;
+  background-size: 100% 40px;
+  background-repeat: no-repeat;
 }
 
 .app-sidebar .app-nav__item,

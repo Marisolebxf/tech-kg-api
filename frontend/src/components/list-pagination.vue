@@ -16,12 +16,14 @@ const props = withDefaults(defineProps<{
   loading?: boolean
   showJumper?: boolean
   compactPages?: boolean
+  sizeAtEnd?: boolean
 }>(), {
   pageSizeOptions: () => PAGE_SIZE_OPTIONS,
   disabled: false,
   loading: false,
   showJumper: true,
   compactPages: false,
+  sizeAtEnd: false,
 })
 
 const emit = defineEmits<{ change: [page: number]; 'change-size': [size: number] }>()
@@ -39,7 +41,7 @@ function onSelectChange(value: unknown) {
 </script>
 
 <template>
-  <footer class="list-pagination" aria-label="列表分页">
+  <footer class="list-pagination" :class="{ 'list-pagination--size-at-end': sizeAtEnd }" aria-label="列表分页">
     <slot name="summary" :total-pages="totalPages">
       <span class="list-pagination__summary">共 {{ total }} 条 · 第 {{ page }} / {{ totalPages }} 页</span>
     </slot>
@@ -76,6 +78,7 @@ function onSelectChange(value: unknown) {
 /* 摘要（共 N 条 · 第 x / y 页）靠右，与每页条数、页码组成右下角分页区；自定义 summary 插槽自行 margin-left:auto 对齐 */
 .list-pagination .list-pagination__summary{margin-left:auto}
 .list-pagination .list-pagination__size{display:flex;align-items:center;gap:8px;white-space:nowrap}
+.list-pagination--size-at-end .list-pagination__size{order:1}
 .list-pagination :deep(.arco-select-view){box-sizing:border-box;width:88px;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;font-size:14px;line-height:22px}
 .list-pagination :deep(.list-pagination__size-select.arco-select-view:hover){border-color:#4080ff!important}
 .list-pagination :deep(.list-pagination__size-select.arco-select-view:focus-within),.list-pagination :deep(.list-pagination__size-select.arco-select-view-focus){border-color:#165dff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}

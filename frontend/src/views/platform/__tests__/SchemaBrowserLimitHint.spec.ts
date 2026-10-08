@@ -12,6 +12,7 @@ import {
   type SchemaDefinition,
 } from '../../../api/schemaManagement'
 import SchemaBrowserView from '../SchemaBrowserView.vue'
+import SourceBindings from '../schema-browser/sourceBindings.vue'
 
 vi.mock('../../../api/schemaManagement', () => ({
   addSchemaProperty: vi.fn(),
@@ -151,22 +152,40 @@ afterEach(() => {
   wrapper?.unmount()
 })
 
+it('仅在点击查询或提交表单时按输入词请求第一页', async () => {
+  const view = mountView()
+  await flushPromises()
+  expect(listSchemasPaged).toHaveBeenCalledTimes(1)
+
+  await view.get('.schema-toolbar__actions input').setValue('Gadget')
+  await flushPromises()
+  expect(listSchemasPaged).toHaveBeenCalledTimes(1)
+
+  await view.get('.schema-toolbar__actions').trigger('submit')
+  await flushPromises()
+  expect(listSchemasPaged).toHaveBeenCalledTimes(2)
+  expect(vi.mocked(listSchemasPaged).mock.lastCall?.[1]).toMatchObject({ keyword: 'Gadget', page: 1 })
+})
+
 describe('Schema 管理输入框达上限提示', () => {
-  it('操作列常显三项，更多菜单保留其余操作及权限状态', async () => {
+  it('操作 >3 个时只平铺前两个，第三个起收进「···」更多菜单（含权限状态）', async () => {
     vi.mocked(listSchemasPaged).mockResolvedValue({ items: [schemaFixture()], total: 1, page: 1, pageSize: 10 })
     const view = mountView()
     await flushPromises()
 
     const actions = view.get('.schema-actions')
-    expect(actions.findAll('.schema-action-link').map((button) => button.text())).toEqual(['更换脚本', '查看脚本', '来源表', '···'])
+    expect(actions.findAll('.schema-action-link').map((button) => button.text())).toEqual(['更换脚本', '查看脚本', '···'])
     expect(actions.find('.test-dropdown-menu').exists()).toBe(false)
     await actions.get('.schema-action-more').trigger('click')
     const options = actions.findAll('.test-dropdown-menu button')
-    expect(options.map((button) => button.text())).toEqual(['属性管理', '删除'])
+    expect(options.map((button) => button.text())).toEqual(['来源表', '属性管理', '删除'])
     expect(options[0].classes()).toContain('schema-action-menu-item')
-    expect(options[1].classes()).toContain('schema-action-menu-item--danger')
+    expect(options[1].classes()).toContain('schema-action-menu-item')
+    expect(options[2].classes()).toContain('schema-action-menu-item--danger')
+    // fixture：canManageProperties=true、canDelete=false → 来源表/属性管理可用，删除置灰
     expect(options[0].attributes('disabled')).toBeUndefined()
-    expect(options[1].attributes('disabled')).toBeDefined()
+    expect(options[1].attributes('disabled')).toBeUndefined()
+    expect(options[2].attributes('disabled')).toBeDefined()
 
     await view.get('.schema-topology-toggle').trigger('click')
     await flushPromises()
@@ -350,7 +369,7 @@ describe('Schema 属性与脚本弹窗样式', () => {
     expect(dropzone.find('button').exists()).toBe(false)
   })
 
-  it('Schema 删除弹窗展示警示摘要和删除影响区域', async () => {
+  it('Schema 删除弹窗展示警示摘要和无边框影响提示', async () => {
     const schema = schemaFixture({ canDelete: true, label: '部件', graphSpace: 'dev2' })
     vi.mocked(listSchemasPaged).mockResolvedValue({ items: [schema], total: 1, page: 1, pageSize: 10 })
     vi.mocked(getSchemaDeleteImpact).mockResolvedValue({
@@ -368,7 +387,7 @@ describe('Schema 属性与脚本弹窗样式', () => {
     const modal = view.get('.schema-delete-modal')
     expect(modal.get('.schema-delete-summary').text()).toContain('确认删除“部件”吗')
     expect(modal.get('.schema-delete-summary__icon').find('svg').exists()).toBe(true)
-    expect(modal.get('.schema-delete-impact--danger').text()).toContain('删除影响')
+    expect(modal.get('.schema-delete-impact--danger').text()).not.toContain('删除影响')
     expect(modal.get('.schema-delete-impact--danger').text()).toContain('dev2')
   })
 })
@@ -471,5 +490,61 @@ describe('Schema 新增弹窗必填提示文案', () => {
     const text = view.get('.schema-create-modal').text()
     expect(text).toContain('请输入实体名')
     expect(text).not.toContain('请输入名称')
+  })
+})
+
+
+describe('Create Schema incremental rows', () => {
+  it.each(['标准实体', '关系'])('requires existing property fields before adding another row in %s', async (tab) => {
+    const view = mountView()
+    await flushPromises()
+    if (tab === '关系') await view.findAll('.schema-tabs__items button').find((button) => button.text() === tab)!.trigger('click')
+    await view.get('.schema-tabs .primary').trigger('click')
+    const lockedCount = tab === '标准实体' ? 5 : 3
+    expect(view.find('.create-props__head .create-props__add').exists()).toBe(false)
+    const add = view.get('.create-props__add')
+    await add.trigger('click')
+    await add.trigger('click')
+    expect(view.findAll('.create-prop-row')).toHaveLength(lockedCount + 1)
+    expect(view.get('.create-props [role="alert"]').text()).toContain('请填写完')
+    await view.findAll('input.prop-name').at(-1)!.setValue('weight')
+    expect(view.find('.create-props [role="alert"]').exists()).toBe(false)
+    await view.get('select.prop-type').setValue('fixed_string')
+    await view.get('input.prop-len').setValue('')
+    await add.trigger('click')
+    expect(view.findAll('.create-prop-row')).toHaveLength(lockedCount + 1)
+    expect(view.get('.create-props [role="alert"]').text()).toContain('fixed_string 长度')
+    await view.get('input.prop-len').setValue('32')
+    await add.trigger('click')
+    expect(view.findAll('.create-prop-row')).toHaveLength(lockedCount + 2)
+    expect(view.find('.create-props [role="alert"]').exists()).toBe(false)
+  })
+
+  it('blocks incomplete source bindings, allows complete rows and clears errors when reopened', async () => {
+    const view = mountView()
+    await flushPromises()
+    await view.get('.schema-tabs .primary').trigger('click')
+    expect(view.find('.create-sources__head .create-sources__add').exists()).toBe(false)
+    const add = view.get('.create-sources__add')
+    await add.trigger('click')
+    await add.trigger('click')
+    const bindings = view.getComponent(SourceBindings)
+    expect(bindings.props('modelValue')).toHaveLength(1)
+    expect(view.get('.create-sources [role="alert"]').text()).toContain('数据源、数据库、表')
+    bindings.vm.$emit('update:modelValue', [{ datasourceId: 'ds', databaseName: 'db', tableName: '', pkColumn: 'id', timeColumn: 'update_time' }])
+    await flushPromises()
+    await add.trigger('click')
+    expect(bindings.props('modelValue')).toHaveLength(1)
+    bindings.vm.$emit('update:modelValue', [{ datasourceId: 'ds', databaseName: 'db', tableName: 'papers', pkColumn: 'id', timeColumn: 'update_time' }])
+    await flushPromises()
+    expect(view.find('.create-sources [role="alert"]').exists()).toBe(false)
+    await add.trigger('click')
+    expect(bindings.props('modelValue')).toHaveLength(2)
+    await add.trigger('click')
+    expect(view.find('.create-sources [role="alert"]').exists()).toBe(true)
+    await view.get('.schema-create-panel header button').trigger('click')
+    await view.get('.schema-tabs .primary').trigger('click')
+    expect(view.findAll('.create-add-error')).toHaveLength(0)
+    expect(view.getComponent(SourceBindings).props('modelValue')).toHaveLength(0)
   })
 })

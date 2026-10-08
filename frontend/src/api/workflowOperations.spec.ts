@@ -34,10 +34,13 @@ describe('deriveJobUnifiedStatus 统一状态推导', () => {
   it('ABNORMAL→运行异常：抽取完成但含行级失败记录，不占用「运行失败」（完全跑崩才叫失败）', () => {
     expect(deriveJobUnifiedStatus(job('启用', 'ABNORMAL'))).toBe('运行异常')
     expect(JOB_STATUS_TONE['运行异常']).toBe('warn')
+    expect(JOB_STATUS_TONE['运行失败']).toBe('err')
   })
 
   it('QUEUED 按未运行处理（本地待下发不自愈，可重新触发）', () => {
     expect(deriveJobUnifiedStatus(job('启用', 'QUEUED'))).toBe('未运行')
+    expect(JOB_STATUS_TONE['未运行']).toBe('idle')
+    expect(JOB_STATUS_TONE['已暂停']).toBe('idle')
   })
 
   it('CONTINUED_AS_NEW 落入未运行分支（后端声明本系统从不 continue-as-new）', () => {

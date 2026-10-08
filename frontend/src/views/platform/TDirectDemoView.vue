@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import AppAlert from '../../components/AppAlert.vue'
 
 interface DemoCase {
   id: string
@@ -318,14 +319,15 @@ const candidateFields = computed(() =>
 const isEntity = computed(() => currentCase.value.candidate._kind === 'entity')
 
 const note = ref('')
-const feedback = ref('')
+/** 决策反馈：与人工审核工作台同口径——通过/驳回都是已完成的操作，用成功态（Arco Alert 四态）。 */
+const feedback = ref<{ type: 'success' | 'error'; text: string } | null>(null)
 const submitting = ref(false)
 const decisionMade = ref<null | 'accept' | 'reject'>(null)
 
 const switchCase = (id: string) => {
   currentCaseId.value = id
   note.value = ''
-  feedback.value = ''
+  feedback.value = null
   decisionMade.value = null
 }
 
@@ -337,13 +339,13 @@ const handleDecide = (accepted: boolean) => {
     decisionMade.value = accepted ? 'accept' : 'reject'
     const c = currentCase.value.candidate
     if (isEntity.value) {
-      feedback.value = accepted
+      feedback.value = { type: 'success', text: accepted
         ? `已通过 · 创建 ${c._nodeLabel} 节点 ${c.id}`
-        : '已驳回 · 候选丢弃，不写图'
+        : '已驳回 · 候选丢弃，不写图' }
     } else {
-      feedback.value = accepted
+      feedback.value = { type: 'success', text: accepted
         ? `已通过 · 创建边 ${c._fromId} -[${c._edgeType}]-> ${c._toId}`
-        : '已驳回 · 候选丢弃，不写图'
+        : '已驳回 · 候选丢弃，不写图' }
     }
   }, 400)
 }
@@ -352,7 +354,6 @@ const handleDecide = (accepted: boolean) => {
 <template>
   <div class="direct-demo">
     <header class="dd-head">
-      <RouterLink to="/manual-review" class="dd-back">← 返回处理队列</RouterLink>
       <h1>人工审核 · 候选入库决策</h1>
       <div class="dd-meta">
         <code>{{ currentCase.id }}</code>
@@ -470,7 +471,7 @@ const handleDecide = (accepted: boolean) => {
     </section>
 
     <p v-else class="dd-done">已决策 · {{ decisionMade === 'accept' ? '通过·入库' : '驳回·丢弃' }}</p>
-    <p v-if="feedback" class="dd-feedback">{{ feedback }}</p>
+    <AppAlert v-if="feedback" :type="feedback.type" class="dd-feedback">{{ feedback.text }}</AppAlert>
   </div>
 </template>
 
@@ -488,12 +489,6 @@ const handleDecide = (accepted: boolean) => {
   margin-bottom: 20px;
   padding-bottom: 16px;
   border-bottom: 1px solid #e4ecf6;
-}
-
-.dd-back {
-  color: #165dff;
-  font-size: 12px;
-  text-decoration: none;
 }
 
 .dd-head h1 {
@@ -926,14 +921,9 @@ const handleDecide = (accepted: boolean) => {
   font-size: 14px;
 }
 
+/* 决策反馈条：成功态底色与提示符由 AppAlert（Arco Alert 规范）提供 */
 .dd-feedback {
   margin-top: 16px;
-  padding: 10px 14px;
-  border: 1px solid #a6f4c5;
-  border-radius: 6px;
-  background: #ecfdf3;
-  color: #067647;
-  font-size: 12px;
 }
 
 @media (max-width: 720px) {

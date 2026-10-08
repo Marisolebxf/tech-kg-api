@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import DeleteConfirmDialog from '../../components/DeleteConfirmDialog.vue'
+import AppAlert from '../../components/AppAlert.vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { IconRefresh, IconSearch } from '@arco-design/web-vue/es/icon'
 
-import { deleteProductionReview, getExecution, getProductionReview, getProductionReviews, getTask, rerunExtractFailures, TRIGGER_SOURCE_LABEL, type ProcessingInstance, type ProductionReviewCase, type WorkflowExecution } from '../../api/workflowOperations'
+import { deleteProductionReview, executionStatusLabel, getExecution, getProductionReview, getProductionReviews, getTask, rerunExtractFailures, TRIGGER_SOURCE_LABEL, type ProcessingInstance, type ProductionReviewCase, type WorkflowExecution } from '../../api/workflowOperations'
 import { currentGraphSpace } from '../../api/currentGraphSpace'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
 import { clampSearchKeyword, SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
@@ -48,6 +50,7 @@ function pickSnapshotOption<T extends string>(value: unknown, allowed: readonly 
 const queueSnapshot = readQueueSnapshot()
 
 const keyword = ref(clampSearchKeyword(String(route.query.keyword || queueSnapshot?.keyword || '')))
+const submittedKeyword = ref(keyword.value)
 /** 人工审核筛选：状态分组（待处理/已处理）与对象种类（实体/关系/都看）；C 类额外支持 重跑中 精确过滤。
  *  重跑仍失败的记录会重建为新待处理案（attempt+1），不存在「重跑失败」状态，故不提供该筛选项。
  *  undefined = 未选择（清空），语义等同「全部」。 */
@@ -103,7 +106,33 @@ const snapshotPageSize = Number(queueSnapshot?.pageSize)
 const reviewPage = ref(snapshotPage >= 1 ? snapshotPage : 1)
 const reviewPageSize = ref(PAGE_SIZE_OPTIONS.includes(snapshotPageSize) ? snapshotPageSize : 20)
 
-watch(() => route.query.keyword, (value) => { keyword.value = clampSearchKeyword(String(value || '')) })
+watch(() => route.query.keyword, (value) => {
+  keyword.value = clampSearchKeyword(String(value || ''))
+  submittedKeyword.value = keyword.value
+  void loadReviews()
+})
+
+const reviewTableRef = ref<HTMLElement | null>(null)
+const tableHasMoreToScroll = ref(false)
+const tableScrollActive = ref(false)
+let scrollIdleTimer: ReturnType<typeof setTimeout> | undefined
+
+function updateReviewTableScrollState() {
+  const table = reviewTableRef.value
+  tableHasMoreToScroll.value = !!table && table.scrollWidth - table.clientWidth - table.scrollLeft > 1
+}
+
+function handleReviewTableScroll() {
+  updateReviewTableScrollState()
+  tableScrollActive.value = true
+  clearTimeout(scrollIdleTimer)
+  scrollIdleTimer = setTimeout(() => { tableScrollActive.value = false }, 700)
+}
+
+function submitReviewSearch() {
+  submittedKeyword.value = keyword.value.trim()
+  void loadReviews()
+}
 
 /** 审核队列分类：A=入库决策（Tab 只筛 T_LINK 实体对齐，T_DIRECT 详情由工作台总览/实例详情直达）；C=抽取失败重跑（T_EXTRACT_FAIL）。
  *  支持 ?category=A|C 深链初始定位子页（工作台总览的「抽取失败重跑」卡片直达 C 子页），深链优先于快照恢复。 */
@@ -112,6 +141,10 @@ const reviewCategory = ref<'A' | 'C'>(
     ? route.query.category
     : queueSnapshot?.category === 'C' ? 'C' : 'A',
 )
+watch([reviewRows, reviewCategory], async () => {
+  await nextTick()
+  updateReviewTableScrollState()
+}, { flush: 'post' })
 // A 类没有「重跑中」筛选项：快照恢复后按当前分类收敛，避免 Select 挂着不属于该分类的选项
 if (reviewCategory.value === 'A' && reviewStatusFilter.value === '重跑中') reviewStatusFilter.value = '全部'
 /** C 类勾选的待重跑 case。 */
@@ -150,6 +183,7 @@ function toggleRerunPick(id: string, checked: boolean) {
 
 /** 表头全选/取消：只作用于当前页可重跑行（不可重跑行禁用不勾选）；跨页勾选保持，按钮数字展示总数。 */
 function toggleRerunPickAll(event: Event) {
+  if (!rerunPageEligibleIds.value.length || reviewLoading.value || rerunSubmitting.value) return
   const checked = (event.target as HTMLInputElement).checked
   for (const id of rerunPageEligibleIds.value) toggleRerunPick(id, checked)
 }
@@ -198,6 +232,17 @@ const logLoading = ref(false)
 const logError = ref('')
 const logCase = ref<ProductionReviewCase>()
 const logExecution = ref<WorkflowExecution | null>(null)
+/** 处理日志弹窗执行概要的状态色调（五类语义，与执行历史表同口径）：
+ *  完成=成功 / 异常=警告 / 失败与超时=危险 / 取消与终止=中性 / 运行=信息 / 其余等待=中性。 */
+const logExecutionTone = (status?: string | null) => {
+  const s = (status || '').toUpperCase()
+  if (s === 'COMPLETED') return 'ok'
+  if (s === 'ABNORMAL') return 'warn'
+  if (['FAILED', 'TIMED_OUT'].includes(s)) return 'err'
+  if (['CANCELED', 'TERMINATED'].includes(s)) return 'idle'
+  if (s === 'RUNNING') return 'run'
+  return 'idle'
+}
 const logTask = ref<ProcessingInstance | null>(null)
 const logExecutionMissing = ref(false)
 /** 当前展示哪个执行：rerun=重跑执行（最新一次处理）；original=原执行。 */
@@ -309,7 +354,8 @@ async function confirmDelete() {
 onUnmounted(() => {
   reviewDisposed = true
   reviewRequestId += 1
-  window.clearTimeout(reviewKeywordTimer)
+  window.removeEventListener('resize', updateReviewTableScrollState)
+  clearTimeout(scrollIdleTimer)
   window.clearTimeout(rerunFeedbackTimer)
 })
 
@@ -325,7 +371,7 @@ async function loadReviews() {
       kind: reviewKindFilter.value ?? '全部',
       time: reviewTimeFilter.value ?? '全部',
       sort: reviewTimeSort.value,
-      keyword: keyword.value,
+      keyword: submittedKeyword.value,
     } satisfies QueueSnapshot))
   } catch {
     /* 隐私模式等存储不可用：跳过快照，返回时退回默认第 1 页 */
@@ -342,7 +388,7 @@ async function loadReviews() {
       graphSpace: currentGraphSpace() || undefined,
       category: reviewCategory.value,
       templateId: reviewCategory.value === 'A' ? 'T_LINK' : undefined,
-      keyword: keyword.value || undefined,
+      keyword: submittedKeyword.value || undefined,
       statusGroup: reviewStatusFilter.value === '待处理' ? 'pending' : reviewStatusFilter.value === '已处理' ? 'processed' : undefined,
       status: reviewStatusFilter.value === '重跑中' ? 'RERUNNING' : undefined,
       kind: !reviewKindFilter.value || reviewKindFilter.value === '全部' ? undefined : reviewKindFilter.value === '实体' ? 'entity' : 'relation',
@@ -421,16 +467,11 @@ watch(() => graphSpaceStore.current, () => {
   void loadReviews()
 })
 
-/** 关键字输入防抖后走服务端检索（与分页/筛选同口径，避免页内客户端过滤与总数不一致）；页码同样保留+收敛。 */
-let reviewKeywordTimer: number | undefined
-watch(keyword, () => {
-  if (props.mode !== 'review') return
-  window.clearTimeout(reviewKeywordTimer)
-  reviewKeywordTimer = window.setTimeout(() => {
-    void loadReviews()
-  }, 300)
+onMounted(() => {
+  window.addEventListener('resize', updateReviewTableScrollState)
+  void nextTick(updateReviewTableScrollState)
+  void loadReviews()
 })
-onMounted(loadReviews)
 </script>
 
 <template>
@@ -441,15 +482,7 @@ onMounted(loadReviews)
         <button type="button" :class="{ active: reviewCategory === 'C' }" @click="switchReviewCategory('C')">抽取失败重跑</button>
       </nav>
       <div class="review-toolbar-actions">
-        <div class="ops-filter is-review review-filter-row">
-          <button
-            v-if="reviewCategory === 'C'"
-            class="rerun-batch-action review-filter-batch"
-            type="button"
-            :disabled="!rerunSelection.size || rerunSubmitting"
-            :title="!rerunSelection.size ? '先勾选列表左侧的失败记录（仅「待处理 / 重跑失败」可勾选），勾选后按钮点亮' : undefined"
-            @click="rerunSelected()"
-          >{{ rerunSubmitting ? '下发中…' : `批量重跑（${rerunSelection.size}）` }}</button>
+        <form class="ops-filter is-review review-filter-row" role="search" @submit.prevent="submitReviewSearch">
           <div class="review-filter-field">
             <span class="review-filter-label">状态</span>
             <a-select v-model="reviewStatusFilter" class="review-filter-select" :options="reviewStatusOptions" />
@@ -463,28 +496,35 @@ onMounted(loadReviews)
             <a-select v-model="reviewTimeFilter" class="review-filter-select" :options="reviewTimeOptions" />
           </div>
           <a-input v-model="keyword" class="review-search-input review-filter-search" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索处理实例 ID、对象或来源记录" placeholder="搜索处理实例 ID、对象或来源记录"><template #prefix><IconSearch /></template></a-input>
-        </div>
+          <button class="review-search-button" type="submit">查询</button>
+        </form>
       </div>
     </div>
 
     <!-- 查看档只读提示（开发维护切到共享生产空间）：整页不可操作 -->
-    <div v-if="reviewReadOnly" class="review-readonly-bar" role="note">
+    <AppAlert v-if="reviewReadOnly" type="warning" class="review-readonly-bar">
       当前图空间为共享生产空间：人工审核仅可查看，操作需管理员或本业务开发维护人员执行。
-    </div>
+    </AppAlert>
 
     <section class="ops-panel">
 
-      <div v-if="rerunFeedback" :class="['rerun-feedback', `is-${rerunFeedback.type}`]">
+      <!-- 批量重跑结果反馈：成功/警告/错误按 Arco Alert 四态规范展示（带提示符，可关闭） -->
+      <AppAlert
+        v-if="rerunFeedback"
+        :type="rerunFeedback.type"
+        class="rerun-feedback"
+        closable
+        @close="rerunFeedback = null"
+      >
         <span>{{ rerunFeedback.text }}</span>
         <span
           v-for="item in rerunFeedback.executions"
           :key="item.executionId"
           class="rerun-feedback-exec"
         >{{ item.schemaId }} · {{ item.cases }} 条</span>
-        <button class="rerun-feedback-close" type="button" @click="rerunFeedback = null">×</button>
-      </div>
+      </AppAlert>
 
-      <div class="ops-review-table-scroll" :aria-busy="reviewLoading"><table class="review-case-table" :class="{ 'review-case-table--selectable': reviewCategory === 'C' }">
+      <div ref="reviewTableRef" class="ops-review-table-scroll" :class="{ 'has-scroll-right': tableHasMoreToScroll, 'review-scroll--active': tableScrollActive }" :aria-busy="reviewLoading" @scroll.passive="handleReviewTableScroll"><table class="review-case-table" :class="{ 'review-case-table--selectable': reviewCategory === 'C' }">
         <!-- 固定列宽：有数据/无数据切换时表头列位不漂移（待处理对象列吃剩余宽度） -->
         <colgroup>
           <col v-if="reviewCategory === 'C'" class="col-pick" />
@@ -501,6 +541,7 @@ onMounted(loadReviews)
             <th v-if="reviewCategory === 'C'" class="pick-col"><input aria-label="checkbox-input"
               type="checkbox"
               title="全选当前页可重跑的失败记录（仅「待处理 / 重跑失败」状态可勾选）"
+              :disabled="!rerunPageEligibleIds.length || reviewLoading || rerunSubmitting"
               :checked="rerunAllChecked"
               :indeterminate="rerunSomeChecked"
               @change="toggleRerunPickAll"
@@ -563,11 +604,11 @@ onMounted(loadReviews)
           <tr v-if="!reviewRows.length">
             <td class="review-empty" :colspan="reviewCategory === 'C' ? 8 : 7">
               <span v-if="reviewLoading" role="status">正在加载人工审核记录…</span>
-              <div v-else-if="reviewLoadError" role="alert">
-                <p>{{ reviewLoadError }}</p>
+              <div v-else-if="reviewLoadError" role="alert" class="review-load-error">
+                <AppAlert type="error" class="review-load-error__alert">{{ reviewLoadError }}</AppAlert>
                 <button type="button" class="link" @click="loadReviews"><IconRefresh class="refresh-icon" />重新加载</button>
               </div>
-              <span v-else>{{ reviewStatusFilter === '全部' && reviewKindFilter === '全部' && reviewTimeFilter === '全部' && !keyword ? '暂无人工处理记录' : '暂无符合条件的记录' }}</span>
+              <span v-else>{{ reviewStatusFilter === '全部' && reviewKindFilter === '全部' && reviewTimeFilter === '全部' && !submittedKeyword ? '暂无人工处理记录' : '暂无符合条件的记录' }}</span>
             </td>
           </tr>
         </tbody>
@@ -579,21 +620,23 @@ onMounted(loadReviews)
         :total="reviewTotal"
         :page="reviewPage"
         :page-size="reviewPageSize"
+        :show-jumper="false"
+        :size-at-end="true"
         @change="changeReviewPage"
         @change-size="changeReviewPageSize"
       >
-        <template #summary="{ totalPages }">
-          <!-- 勾选后表格左下角出现重跑确认（与右侧分页信息同条） -->
+        <template #summary>
+          <!-- 选中可重跑记录后，在分页条左侧显示批量重跑入口。 -->
           <span v-if="reviewCategory === 'C' && rerunSelection.size" class="rerun-confirm-bar">
-            已选 {{ rerunSelection.size }} 条失败记录
+            <template v-if="rerunSelection.size">已选 {{ rerunSelection.size }} 条失败记录</template>
             <button
-              class="rerun-batch-action"
+              class="review-action-btn rerun-batch-action"
               type="button"
               :disabled="rerunSubmitting"
               @click="rerunSelected()"
-            >{{ rerunSubmitting ? '下发中…' : '确认重跑' }}</button>
+            >{{ rerunSubmitting ? '下发中…' : `批量重跑（${rerunSelection.size}）` }}</button>
           </span>
-          <span class="review-page-summary">共 {{ reviewTotal }} 条 · 第 {{ reviewPage }} / {{ totalPages }} 页</span>
+          <span class="review-page-summary">共 {{ reviewTotal }} 条</span>
         </template>
       </ListPagination>
     </section>
@@ -608,7 +651,7 @@ onMounted(loadReviews)
       :ok-loading="rerunSubmitting"
       @ok="rerunSelected(undefined, true)"
     >
-      <p class="rerun-confirm-text">即将对已勾选的 {{ rerunSelection.size }} 条失败记录下发重跑，按 schema 合并为新执行（类别=重新执行）。重跑成功的记录自动关闭，仍失败的会重新进入失败列表。</p>
+      <AppAlert type="warning" class="rerun-confirm-text">即将对已勾选的 {{ rerunSelection.size }} 条失败记录下发重跑，按 schema 合并为新执行（类别=重新执行）。重跑成功的记录自动关闭，仍失败的会重新进入失败列表。</AppAlert>
     </a-modal>
 
     <a-modal
@@ -616,24 +659,26 @@ onMounted(loadReviews)
       modal-class="case-log-modal"
       :title="`执行日志 · ${logCase?.id || ''}`"
       :width="760"
-      :footer="false"
+      title-align="start"
     >
       <p v-if="logLoading" class="case-log-loading">加载中…</p>
-      <p v-else-if="logError" class="case-log-error-text">{{ logError }}</p>
+      <AppAlert v-else-if="logError" type="error" class="case-log-error-block">
+        <pre class="case-log-error-text">{{ logError }}</pre>
+      </AppAlert>
       <template v-else-if="logCase">
         <!-- 原执行/重跑执行切换（两者都有时才显示；默认看重跑执行=最新一次处理） -->
         <div v-if="logRerunExecutionId && logOriginalExecutionId" class="case-log-switch">
           <button type="button" :class="{ active: logExecutionChoice === 'rerun' }" @click="switchLogExecution('rerun')">重跑执行</button>
           <button type="button" :class="{ active: logExecutionChoice === 'original' }" @click="switchLogExecution('original')">原执行</button>
         </div>
-        <p v-if="logExecutionMissing" class="case-log-missing">未找到关联的工作流执行记录（{{ logActiveExecutionId || '该记录未关联执行 ID' }}）——执行记录可能已随环境重置被清理。</p>
+        <AppAlert v-if="logExecutionMissing" type="warning" class="case-log-missing">未找到关联的工作流执行记录（{{ logActiveExecutionId || '该记录未关联执行 ID' }}）——执行记录可能已随环境重置被清理。</AppAlert>
         <template v-else-if="logExecution">
           <section class="case-log-sec">
             <h4>执行概要</h4>
             <dl class="case-log-dl">
               <div><dt>执行 ID</dt><dd><code>{{ logExecution.id }}</code></dd></div>
               <div><dt>触发方式</dt><dd>{{ TRIGGER_SOURCE_LABEL[logExecution.triggerSource || 'MANUAL'] || logExecution.triggerSource || '—' }}</dd></div>
-              <div><dt>状态</dt><dd>{{ logExecution.status }}</dd></div>
+              <div><dt>状态</dt><dd><span :class="['case-log-exec-status', logExecutionTone(logExecution.status)]">{{ executionStatusLabel(logExecution.status) }}</span></dd></div>
               <div><dt>开始时间</dt><dd>{{ logExecution.startedAt || '—' }}</dd></div>
               <div><dt>完成时间</dt><dd>{{ logExecution.completedAt || '—' }}</dd></div>
               <div v-if="logExtractSummary"><dt>抽取结果</dt><dd>写入 {{ logExtractSummary.written }} · 失败 {{ logExtractSummary.failed }}（{{ logExtractSummary.sourceCount }} 个来源）</dd></div>
@@ -654,30 +699,21 @@ onMounted(loadReviews)
             <p v-else class="case-log-empty">该执行暂无任务日志。</p>
           </section>
         </template>
-        <p v-else class="case-log-missing">该记录未关联工作流执行（无 executionId），无法展示执行日志。</p>
+        <AppAlert v-else type="warning" class="case-log-missing">该记录未关联工作流执行（无 executionId），无法展示执行日志。</AppAlert>
+      </template>
+      <template #footer>
+        <button type="button" class="case-log-close" @click="logVisible = false">关闭</button>
       </template>
     </a-modal>
 
-    <a-modal
-      v-model:visible="deleteVisible"
-      modal-class="rerun-confirm-modal"
-      title="确认删除"
-      :width="560"
-      ok-text="删除"
-      cancel-text="取消"
-      :ok-loading="deleteSubmitting"
-      @ok="confirmDelete"
-    >
-      <p class="rerun-confirm-text">即将物理删除失败记录 <code>{{ deleteTarget?.id }}</code>（{{ deleteTarget?.object }}），连同其草稿/决议/审计一并清除，不可恢复。仅未处理记录可删除。</p>
-      <p v-if="deleteError" class="case-log-error-text">{{ deleteError }}</p>
-    </a-modal>
+    <DeleteConfirmDialog v-model:visible="deleteVisible" title="删除失败记录" :name="deleteTarget?.object || deleteTarget?.id || ''" :identifier="deleteTarget?.id" identifier-label="处理实例 ID" description="继续操作将物理删除该失败记录，连同其草稿、决议和审计记录一并清除，不可恢复。仅未处理记录可删除。" :loading="deleteSubmitting" :error="deleteError" @confirm="confirmDelete" />
   </div>
 </template>
 
 <style scoped>
 .ops-page{height:100%;overflow:auto;padding-bottom:2px;color:#16233b}.ops-panel{overflow:hidden;border:1px solid #bdd7ff;border-radius:9px;background:rgba(255,255,255,.94);box-shadow:0 12px 28px rgba(48,105,194,.1)}.ops-filter{display:grid;grid-template-columns:minmax(260px,1fr) repeat(3,160px) auto;gap:10px;padding:14px;border-bottom:1px solid #dce9ff;background:#f7fbff}.ops-filter input,.ops-filter select{height:34px;padding:0 10px;border:1px solid #bdd7ff;border-radius:6px;background:#fff;color:#273957}table{width:100%;border-collapse:collapse;font-size:13px}th,td{height:52px;padding:10px 14px;border-bottom:1px solid #e5edf8;text-align:left;white-space:nowrap}th{position:sticky;z-index:2;top:0;background:#f4f8fd;color:#5a6c88;font-weight:600}td{color:#273957}td small{display:block;margin-top:4px;color:#7b89a1}.alert-actions{display:grid;gap:5px}.alert-tabs{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 14px;border-bottom:1px solid #dce9ff}.alert-tabs nav{display:flex;overflow:auto}.alert-tabs button{padding:13px 14px;border:0;border-bottom:2px solid transparent;background:transparent;color:#52647f;white-space:nowrap;cursor:pointer}.alert-tabs button.active{border-color:#165dff;color:#165dff;font-weight:600}.alert-tabs label{color:#5f6f88;font-size:12px;white-space:nowrap}.alert-tabs input{margin-right:6px}td a,.link{border:0;background:transparent;color:#165dff;cursor:pointer;text-decoration:none}@media(max-width:1100px){.ops-filter{grid-template-columns:1fr 1fr}.ops-panel{overflow:hidden}}
 .review-context{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:12px;padding:12px 14px;border:1px solid #b2ccff;border-radius:7px;background:#f0f5ff}.review-context div{display:grid;gap:3px}.review-context strong{font-size:13px}.review-context span{color:#65738b;font-size:11px}.review-context a{color:#165dff;font-size:12px;text-decoration:none;white-space:nowrap}
-.review-evidence{min-width:260px;max-width:360px;white-space:normal;line-height:19px}.review-status{display:inline-flex;padding:3px 8px;border-radius:10px;background:#edf2f7;color:#52647f}.review-status.is-待处理{background:#fff0e8;color:#c4320a}.review-status.is-已完成{background:#e9f8ef;color:#067647}
+.review-evidence{min-width:260px;max-width:360px;white-space:normal;line-height:19px}.review-status{display:inline-flex;padding:3px 8px;border-radius:10px;background:#edf2f7;color:#52647f}.review-status.is-待处理{background:#fff0e8;color:var(--status-warning)}.review-status.is-已完成{background:#e9f8ef;color:var(--status-success)}
 .link-disabled{color:#98a2b3;font-size:12px;cursor:default}
 .pick-col{width:36px;text-align:center}.pick-col input{cursor:pointer}
 .review-severity{min-width:230px;max-width:300px;white-space:normal}.review-severity small{margin:0 0 6px}.review-severity span{display:block;color:#65738b;font-size:11px;line-height:17px}
@@ -686,7 +722,7 @@ onMounted(loadReviews)
 .review-type-cell{min-width:170px}.review-type-cell>span{display:inline-flex;padding:3px 9px;border-radius:99px;background:#eaf2ff;color:#175cd3;font-size:11px}.review-type-cell>span.is-low-confidence{background:#fff3d8;color:#b54708}.review-type-cell>span.is-extraction{background:#fef3f2;color:#b42318}.review-type-cell>span.is-schema{background:#edf0ff;color:#444ce7}.review-type-cell>span.is-normalization{background:#ecfdf3;color:#067647}.review-type-cell>span.is-other{background:#f2f4f7;color:#475467}
 .ops-review-table-scroll table{min-width:1900px}.review-risk-explain{display:grid;flex:0 0 auto;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px}.review-risk-explain>div{display:grid;gap:3px;padding:11px 14px;border:1px solid #b9d2f4;border-radius:7px;background:#f7fbff}.review-risk-explain strong{color:#344861;font-size:11px}.review-risk-explain span{color:#6d7c93;font-size:9px;line-height:16px}.review-confidence-cell{min-width:190px;white-space:normal}.review-confidence-cell>b{display:inline-block;margin-right:7px;font-size:13px}.review-confidence-cell>small{display:inline;color:#718098}.review-confidence-cell>span{display:block;margin-top:4px;color:#78869b;font-size:9px;line-height:15px}@media(max-width:900px){.review-risk-explain{grid-template-columns:1fr}}
 .review-risk-explain{grid-template-columns:repeat(2,minmax(0,1fr))}.review-risk-explain>div:first-child{border-color:#f5b8b3;background:#fff5f4}.review-risk-explain>div:first-child strong{color:#d92d20}.review-risk-explain>div:nth-child(2){border-color:#f3d08a;background:#fffaf0}.review-risk-explain>div:nth-child(2) strong{color:#b54708}.review-type{min-width:150px}.review-confidence-cell{min-width:130px}.review-confidence-cell>em{display:block;width:max-content;margin-top:5px;padding:2px 7px;border-radius:9px;background:#fff3d8;color:#b54708;font-size:9px;font-style:normal}
-.ops-review-table-scroll table{min-width:1344px}
+.ops-review-table-scroll table{min-width:1288px}
 .review-id-cell{min-width:150px;white-space:nowrap}
 .review-id-cell .link{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
 .review-source-cell{min-width:160px}
@@ -701,8 +737,8 @@ onMounted(loadReviews)
 .review-question-cell small{margin-top:4px;color:#165dff}
 .scope-batch{color:#b42318!important}
 .scope-task{color:#175cd3!important}
-.review-status.is-已撤销{background:#f2f4f7;color:#475467}
-.review-status.is-已驳回{background:#f2f4f7;color:#b42318}
+.review-status.is-已撤销{background:#f2f4f7;color:var(--status-neutral)}
+.review-status.is-已驳回{background:#f2f4f7;color:var(--status-danger)}
 </style>
 <style scoped>
 /* DESIGN_RULES: manual review list contract. */
@@ -711,7 +747,7 @@ onMounted(loadReviews)
 .ops-filter,.ops-filter.is-review{box-sizing:border-box;width:100%;grid-template-columns:minmax(280px,1fr) minmax(160px,200px) minmax(160px,200px) auto;column-gap:16px!important;row-gap:16px!important;padding:16px!important;background:#fff}
 .alert-tabs nav button{height:36px;padding:0 16px;font-size:14px;line-height:22px}.alert-tabs nav button.active{font-weight:500}
 .ops-filter input,.ops-filter select,.ops-filter button{height:32px;padding:0 12px;border-color:#e5e6eb;border-radius:4px;font-size:14px;line-height:22px}.ops-filter button{padding:0 16px}
-.ops-review-table-scroll table{min-width:1344px;font-size:14px;line-height:22px}.ops-review-table-scroll th,.ops-review-table-scroll td{height:40px;padding:0 16px}.ops-review-table-scroll th{background:#f7f8fa;color:#1d2129;font-weight:500}
+.ops-review-table-scroll table{min-width:1288px;font-size:14px;line-height:22px}.ops-review-table-scroll th,.ops-review-table-scroll td{height:40px;padding:0 16px}.ops-review-table-scroll th{background:#f7f8fa;color:#1d2129;font-weight:500}
 .ops-review-table-scroll td small,.review-source-cell strong,.review-question-cell strong,.review-confidence-cell>b{font-size:12px;line-height:20px}
 .review-status{display:inline-flex;align-items:center;gap:6px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.review-status::before{display:block;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
 .review-status.is-待处理,.review-status.is-已完成,.review-status.is-已撤销,.review-status.is-已驳回{background:transparent}
@@ -742,35 +778,33 @@ onMounted(loadReviews)
 .review-tabs>nav button.active{border-left-color:transparent;background:#fff;color:#165dff;font-weight:500}
 .review-tabs>nav button.active+button{border-left-color:transparent}
 .review-tabs>nav button:hover:not(.active){background:#fff;color:#165dff}
-.review-toolbar-actions{display:flex;min-width:0;align-items:center;justify-content:flex-start;gap:16px;flex:0 0 auto;flex-wrap:nowrap}
-.review-tabs .ops-filter.is-review{display:flex;box-sizing:border-box;width:auto;min-width:0;align-items:center;grid-template-columns:none;gap:16px!important;padding:0!important;border:0;background:transparent;flex:0 0 auto;flex-wrap:nowrap}
+.review-toolbar-actions{display:flex;width:100%;min-width:0;align-items:center;justify-content:flex-end;gap:16px;flex:0 0 auto;flex-wrap:wrap}
+.review-tabs .ops-filter.is-review{display:flex;box-sizing:border-box;width:auto;min-width:0;margin-left:auto;align-items:center;justify-content:flex-end;grid-template-columns:none;gap:16px!important;padding:0!important;border:0;background:transparent;flex:0 1 auto;flex-wrap:wrap}
+.review-search-button{box-sizing:border-box;height:32px;padding:0 16px;border:1px solid #165dff!important;border-radius:4px;background:#165dff!important;color:#fff!important;font-size:14px;line-height:22px;cursor:pointer}
+.review-search-button:hover{border-color:#4080ff!important;background:#4080ff!important}
+.review-search-button:focus-visible{outline:2px solid rgba(22,93,255,.3);outline-offset:2px}
 .review-filter-row :deep(.review-filter-select.arco-select-view){flex:0 0 160px;width:160px}
 .review-filter-row :deep(.review-filter-search.arco-input-wrapper){flex:0 0 280px;width:280px}
 .review-tabs .ops-filter.is-review :deep(.arco-select-view-value){font-size:14px;line-height:22px;font-weight:400}
 .ops-review-table-scroll td{color:#344763;font-size:14px;line-height:22px;font-weight:400;vertical-align:middle}
 .ops-review-table-scroll td>b,.ops-review-table-scroll td>strong{font-weight:400}
 /* 抽取失败重跑：批量重跑按钮 / 重跑反馈条 / 状态徽标扩展 */
-/* 批量重跑按钮：筛选行最左侧；勾选后表格左下角出现重跑确认条（与右侧分页信息同条） */
-.review-filter-batch{flex:0 0 auto}
+/* 批量重跑沿用日志的文字链接样式。 */
 .rerun-confirm-bar{display:inline-flex;align-items:center;gap:8px;flex:0 0 auto;color:#4e5969;font-size:13px;line-height:22px;white-space:nowrap}
-.rerun-confirm-bar .rerun-batch-action{height:28px;padding:0 12px;font-size:13px;line-height:20px}
 .review-pagination .review-page-summary{margin-left:auto;white-space:nowrap}
-.rerun-batch-action{height:32px;padding:0 16px;border:1px solid #165dff;border-radius:4px;background:#165dff;color:#fff;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
-.rerun-batch-action:hover:not(:disabled){border-color:#4080ff;background:#4080ff}
-.rerun-batch-action:active:not(:disabled){border-color:#0e42d2;background:#0e42d2}
-.rerun-batch-action:disabled{border-color:#94bfff;background:#94bfff;color:#fff;cursor:not-allowed}
-.rerun-feedback{flex:0 0 auto;display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid #a6f4c5;background:#ecfdf3;color:#067647;font-size:12px;line-height:20px}
-.rerun-feedback.is-error{border-color:#f5b8b3;background:#fef3f2;color:#b42318}
-.rerun-feedback.is-warning{border-color:#fec84b;background:#fffaeb;color:#b54708}
-.rerun-feedback-close{margin-left:auto;width:22px;height:22px;border:0;border-radius:4px;background:transparent;color:inherit;font-size:14px;cursor:pointer}
-/* 查看档只读提示条（共享生产空间）：与 rerun-feedback.is-warning 同色系 */
-.review-readonly-bar{flex:0 0 auto;padding:9px 16px;border:1px solid #fec84b;border-radius:6px;background:#fffaeb;color:#b54708;font-size:12px;line-height:20px;margin-bottom:10px}
-.rerun-confirm-text{margin:0;color:#4e5969;font-size:13px;line-height:22px}
-.review-status.is-重跑中,.review-status.is-执行中{color:#175cd3}
-.review-status.is-重跑失败,.review-status.is-失败{color:#b42318}
-.review-status.is-已完成{color:#067647}
-.review-status.is-排队中{color:#b54708}
-.review-status.is-已取消{color:#86909c}
+/* 批量重跑反馈：四态底色/提示符/关闭按钮由 AppAlert（Arco Alert 规范）提供 */
+.rerun-feedback{flex:0 0 auto;margin:0 0 10px}
+/* 查看档只读提示条（共享生产空间）：警告态底色与提示符由 AppAlert 提供 */
+.review-readonly-bar{flex:0 0 auto;margin:0 0 10px}
+/* 队列加载失败态：错误态提示条 + 重新加载入口 */
+.review-load-error{display:flex;flex-direction:column;align-items:center;gap:8px}
+.review-load-error__alert{max-width:720px;text-align:left}
+.rerun-confirm-text{margin:0}
+.review-status.is-重跑中,.review-status.is-执行中{color:var(--status-info)}
+.review-status.is-重跑失败,.review-status.is-失败{color:var(--status-danger)}
+.review-status.is-已完成{color:var(--status-success)}
+.review-status.is-排队中{color:var(--status-neutral)}
+.review-status.is-已取消{color:var(--status-neutral)}
 
 /* 人工审核页排版、间距与控件合同。 */
 .ops-page,.ops-page :deep(*){font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;letter-spacing:0}
@@ -788,17 +822,16 @@ onMounted(loadReviews)
 /* 审核分页已迁移到共享 ListPagination 组件（样式随组件自带）；.review-pagination 仅保留 flex 布局占位。 */
 .ops-review-table-scroll .pick-col{vertical-align:middle;text-align:center}.ops-review-table-scroll .pick-col input[type="checkbox"]{display:block;width:14px;height:14px;margin:0 auto;vertical-align:middle;cursor:pointer}
 .rerun-batch-action:focus-visible{outline:0;box-shadow:0 0 0 2px rgba(22,93,255,.2)}
-.rerun-feedback{gap:8px;padding:8px 16px}.rerun-feedback-close{width:24px;height:24px}
-.rerun-confirm-text{font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
-/* 操作列撤销旧的右侧固定列实现；static 只作用 td——表头单元格要保留全局 th 的吸顶 */
-.ops-review-table-scroll td.review-action-col{position:static;box-sizing:border-box;width:auto;min-width:0;box-shadow:none;white-space:nowrap}
-/* 按钮组在列内水平居中（A 类单按钮不再贴左），表头同步居中 */
-.ops-review-table-scroll th.review-action-col{text-align:center}
-.review-action-col .alert-actions{display:flex;width:100%;min-width:0;align-items:center;justify-content:center;gap:8px}
+/* 操作列与 Schema 管理表对齐：右侧固定列（表头同时吸顶，z 高于数据行），横向滚动时操作不被遮挡 */
+.ops-review-table-scroll th.review-action-col{position:sticky;top:0;right:0;z-index:4;background:#f7f8fa;box-shadow:-1px 0 #e5e6eb;text-align:left}
+.ops-review-table-scroll td.review-action-col{position:sticky;right:0;z-index:3;box-sizing:border-box;background:#fff;box-shadow:-1px 0 #e5e6eb;white-space:nowrap}
+/* 固定列左侧向内容区渐隐的阴影（与 Schema 管理表同视觉提示） */
+.ops-review-table-scroll.has-scroll-right :is(th,td).review-action-col::before{position:absolute;top:0;bottom:-1px;left:0;width:12px;content:"";pointer-events:none;transform:translateX(-100%);box-shadow:inset -10px 0 8px -8px rgba(78,89,105,.28)}
+.review-action-col .alert-actions{display:flex;width:100%;min-width:0;align-items:center;justify-content:flex-start;gap:8px}
 .ops-review-table-scroll th,.ops-review-table-scroll td{box-sizing:border-box;padding-right:16px;padding-left:16px}
 /* 固定列合计 1076px，最小表宽为对象列保留 268px；勾选列额外占 52px。 */
-.ops-review-table-scroll table.review-case-table{width:100%;min-width:1344px;table-layout:fixed}
-.ops-review-table-scroll table.review-case-table--selectable{min-width:1396px}
+.ops-review-table-scroll table.review-case-table{width:100%;min-width:1288px;table-layout:fixed}
+.ops-review-table-scroll table.review-case-table--selectable{min-width:1340px}
 .ops-review-table-scroll .review-object-cell{padding-top:8px;padding-bottom:8px;overflow-wrap:anywhere;word-break:normal}
 .ops-review-table-scroll td{white-space:normal}
 .ops-review-table-scroll :is(code,.review-id-cell,.review-status){white-space:nowrap}
@@ -811,11 +844,17 @@ onMounted(loadReviews)
 .review-case-table col.col-source{width:220px}
 .review-case-table col.col-status{width:104px}
 .review-case-table col.col-time{width:200px}
-.review-case-table col.col-actions{width:200px}
+.review-case-table col.col-actions{width:144px}
 .ops-review-table-scroll .review-id-cell{overflow:hidden;text-overflow:ellipsis}
 .ops-review-table-scroll .review-id-cell :is(code,.link){display:inline-block;box-sizing:border-box;max-width:100%;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom}
 /* 滚动条出现/消失（数据多少切换）不挤动列宽 */
-.ops-review-table-scroll{scrollbar-gutter:stable}
+.ops-review-table-scroll{scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:transparent transparent}
+.ops-review-table-scroll:hover,.ops-review-table-scroll.review-scroll--active{scrollbar-color:rgba(78,89,105,.55) transparent}
+.ops-review-table-scroll::-webkit-scrollbar{width:8px;height:8px}
+.ops-review-table-scroll::-webkit-scrollbar-track{background:transparent}
+.ops-review-table-scroll::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background-color:transparent;background-clip:padding-box}
+.ops-review-table-scroll:hover::-webkit-scrollbar-thumb,.ops-review-table-scroll.review-scroll--active::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
+.ops-review-table-scroll::-webkit-scrollbar-thumb:hover{background-color:rgba(78,89,105,.8)}
 /* 筛选字段标签 / 类型徽标 / 勾选禁用态 / 删除按钮 */
 .review-filter-field{display:flex;flex:0 0 auto;align-items:center;gap:8px}
 .review-filter-label{color:#4e5969;font-size:14px;line-height:22px;white-space:nowrap}
@@ -825,36 +864,52 @@ onMounted(loadReviews)
 .review-kind-badge.is-实体{background:#eaf2ff;color:#175cd3}
 .review-kind-badge.is-关系{background:#fff3d8;color:#b54708}
 /* 操作列按钮化：查看记录（A 类）/ 日志、重跑、删除（C 类）统一为描边按钮，删除红色警示 */
-.review-action-btn{display:inline-flex;box-sizing:border-box;height:28px;min-width:0;align-items:center;justify-content:center;padding:0 10px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#1d2129;font-size:13px;line-height:26px;white-space:nowrap;text-decoration:none;cursor:pointer}
-.review-action-btn:hover{border-color:#165dff;color:#165dff}
-.review-action-btn.is-danger{border-color:#f6c1be;color:#b42318}
-.review-action-btn.is-danger:hover{border-color:#b42318;color:#b42318}
-.review-action-btn:disabled,.review-action-btn:disabled:hover{border-color:#e5e6eb;background:#f7f8fa;color:#c9cdd4;cursor:not-allowed}
+/* 操作按钮与 Schema 管理表同款：无边框纯文字链接；删除红、其余蓝、禁用灰 */
+.review-action-btn{height:auto;padding:0;border:0;background:transparent;color:#165dff;font-size:14px;line-height:22px;font-weight:400;white-space:nowrap;text-decoration:none;cursor:pointer}
+.review-action-btn:hover:not(:disabled){color:#4080ff;text-decoration:none}
+.review-action-btn:disabled{color:#a9b4c6;cursor:not-allowed;text-decoration:none}
+.review-action-btn.is-danger{color:#e5484d}
+.review-action-btn.is-danger:hover:not(:disabled){color:#b42318}
 .ops-review-table-scroll .pick-col input[type="checkbox"]:disabled{opacity:.35;cursor:not-allowed}
 /* 日志弹窗内容（弹体外壳样式在全局块） */
 .case-log-sec{margin:0 0 16px}
+.case-log-sec:last-child{margin-bottom:0}
 .case-log-sec h4{margin:0 0 8px;color:#1d2129;font-size:14px;line-height:22px;font-weight:600}
 /* dt/dd 两列网格下沉到行 div：dl 直接网格化会把整行 div 当格子，落在 88px 窄格的值被硬折行 */
 .case-log-dl{display:grid;gap:6px 0;margin:0}
 .case-log-dl>div{display:grid;grid-template-columns:88px 1fr;column-gap:12px}
 .case-log-dl dt{color:#86909c;font-size:12px;line-height:20px}
 .case-log-dl dd{margin:0;color:#1d2129;font-size:13px;line-height:20px;overflow-wrap:anywhere}
-.case-log-error-text{margin:0;padding:10px 12px;border:1px solid #f6c6b4;border-radius:4px;background:#fff8f5;color:#b42318;font:12px/19px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-all}
+.case-log-error-block{margin:0}
+.case-log-error-text{margin:0;font:12px/19px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-all}
 .case-log-loading{margin:0;padding:24px;color:#86909c;text-align:center}
 /* 执行日志弹窗：原执行/重跑执行切换 + 概要 + 阶段状态 + 日志终端 */
-.case-log-switch{display:flex;gap:8px;margin:0 0 12px}
-.case-log-switch button{height:28px;padding:0 14px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#4e5969;font-size:13px;line-height:20px;cursor:pointer}
-.case-log-switch button.active{border-color:#165dff;background:#165dff;color:#fff}
-.case-log-missing{margin:0;padding:14px;border:1px dashed #e5e6eb;border-radius:4px;background:#f7f8fa;color:#86909c;font-size:13px;line-height:20px;word-break:break-all}
+.case-log-switch{display:flex;box-sizing:border-box;width:max-content;height:40px;margin:0 0 16px;padding:4px;border-radius:4px;background:#f2f3f5;overflow:visible}
+.case-log-switch button{display:inline-flex;box-sizing:border-box;align-items:center;justify-content:center;width:120px;height:32px;padding:5px 16px;border:0;border-radius:4px;background:transparent;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
+.case-log-switch button+button{border-left:1px solid #c9cdd4}
+.case-log-switch button.active{border-left-color:transparent;background:#fff;color:#165dff;font-weight:500}
+.case-log-switch button.active+button{border-left-color:transparent}
+.case-log-switch button:hover:not(.active){background:#fff;color:#165dff}
+.case-log-missing{margin:0;word-break:break-all}
 .case-log-console{margin:0;max-height:280px;overflow:auto;padding:12px 14px;border:1px solid #e5e6eb;border-radius:4px;background:#f7f8fa;color:#1d2129;font:12px/20px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-all}
 .case-log-steps{display:flex;flex-wrap:wrap;gap:8px;margin:0;padding:0;list-style:none}
 .case-log-steps li{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;font-size:12px;line-height:20px}
 .case-log-step-name{color:#4e5969}
-.case-log-step-status{color:#165dff}
-.case-log-step-status.is-成功{color:#067647}
-.case-log-step-status.is-运行中{color:#175cd3}
-.case-log-step-status.is-需人工处理{color:#b54708}
-.case-log-step-status.is-待执行{color:#86909c}
+/* 阶段状态与执行概要状态：系统标准「6px 语义色圆点 + 文字」，五类语义色 */
+.case-log-step-status{display:inline-flex;align-items:center;gap:6px;color:var(--status-info)}
+.case-log-step-status::before{content:"";flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor}
+.case-log-step-status.is-成功{color:var(--status-success)}
+.case-log-step-status.is-运行中{color:var(--status-info)}
+.case-log-step-status.is-异常{color:var(--status-warning)}
+.case-log-step-status.is-需人工处理{color:var(--status-danger)}
+.case-log-step-status.is-待执行{color:var(--status-neutral)}
+.case-log-exec-status{display:inline-flex;align-items:center;gap:6px}
+.case-log-exec-status::before{content:"";flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor}
+.case-log-exec-status.ok{color:var(--status-success)}
+.case-log-exec-status.warn{color:var(--status-warning)}
+.case-log-exec-status.err{color:var(--status-danger)}
+.case-log-exec-status.run{color:var(--status-info)}
+.case-log-exec-status.idle{color:var(--status-neutral)}
 .case-log-empty{color:#86909c}
 /* 更新时间表头三态排序 */
 .th-time-sort{cursor:pointer;user-select:none}
@@ -875,7 +930,11 @@ onMounted(loadReviews)
 .app-workspace .ops-page .ops-filter.is-review .review-search-input.arco-input-wrapper input.arco-input:focus{border:0!important;background:transparent!important;box-shadow:none!important;outline:0!important}
 .rerun-confirm-modal{border-radius:8px;font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
 .rerun-confirm-modal .arco-modal-header{box-sizing:border-box;height:56px;padding:0 24px}.rerun-confirm-modal .arco-modal-title{font-size:16px;line-height:24px;font-weight:600;letter-spacing:0}.rerun-confirm-modal .arco-modal-body{padding:24px}.rerun-confirm-modal .arco-modal-footer{box-sizing:border-box;min-height:64px;padding:16px 24px}.rerun-confirm-modal .arco-btn{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}.rerun-confirm-modal .arco-btn+.arco-btn{margin-left:16px}
+/* 删除确认沿用短确认弹窗尺寸，标题左对齐，危险操作与 Schema 删除按钮同色。 */
+.delete-confirm-modal .arco-modal-title{justify-content:flex-start;text-align:left}
+.delete-confirm-modal .arco-modal-footer .arco-btn-primary{border-color:#e5484d;background:#e5484d;color:#fff}
+.delete-confirm-modal .arco-modal-footer .arco-btn-primary:hover:not(:disabled){border-color:#b42318;background:#b42318}
 /* 日志弹窗（teleport 到 body，需全局控制弹体） */
 .case-log-modal{border-radius:8px;font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
-.case-log-modal .arco-modal-header{box-sizing:border-box;height:56px;padding:0 24px}.case-log-modal .arco-modal-title{font-size:16px;line-height:24px;font-weight:600;letter-spacing:0}.case-log-modal .arco-modal-body{max-height:70vh;overflow:auto;padding:16px 24px}
+.case-log-modal .arco-modal-header{box-sizing:border-box;height:56px;padding:0 24px}.case-log-modal .arco-modal-title{justify-content:flex-start;text-align:left;font-size:16px;line-height:24px;font-weight:600;letter-spacing:0}.case-log-modal .arco-modal-body{max-height:70vh;overflow:auto;padding:16px 24px}.case-log-modal .arco-modal-footer{box-sizing:border-box;min-height:64px;padding:16px 24px;border-top:1px solid #e5e6eb}.case-log-modal .case-log-close{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;cursor:pointer}
 </style>

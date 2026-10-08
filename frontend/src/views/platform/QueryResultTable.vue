@@ -2,6 +2,9 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Button as AButton, Modal as AModal, Table as ATable } from '@arco-design/web-vue'
 import type { TableColumnData } from '@arco-design/web-vue/es/table/interface'
+import { getGraphNode, unwrapApiResponse, type ApiResponse, type GraphNode } from '../../api/graphSearch'
+import { getErrorMessage } from '../../api/http'
+import { collectQueryEntityReferences, queryEntityName, type QueryEntityReference } from '../../utils/queryRecordEntities'
 
 const props = withDefaults(defineProps<{
   rows: Array<Record<string, unknown>>
@@ -13,8 +16,13 @@ const props = withDefaults(defineProps<{
   sortColumn?: string
   sortDirection?: 'asc' | 'desc'
   loading?: boolean
+  space?: string
+  queryStatement?: string
+  algorithmName?: string
+  jobId?: string
 }>(), {
   labels: () => ({}), sortable: false, sortColumn: '', sortDirection: 'desc', loading: false,
+  space: '', queryStatement: '', algorithmName: '', jobId: '',
 })
 const emit = defineEmits<{ sort: [column: string, direction: 'asc' | 'desc' | undefined] }>()
 const tableRoot = ref<HTMLElement | null>(null)
@@ -40,7 +48,53 @@ watch(() => [props.rows, props.columns], async () => {
 }, { flush: 'post' })
 const selectedRow = ref<Record<string, unknown> | null>(null)
 const detailsOpen = ref(false)
-watch(() => props.rows, () => { detailsOpen.value = false })
+const selectedRecordNumber = ref(0)
+interface EntityDetail extends QueryEntityReference {
+  node?: GraphNode
+  loading: boolean
+  error: string
+}
+const entityDetails = ref<EntityDetail[]>([])
+const entityReferenceCount = ref(0)
+const entitiesLoading = computed(() => entityDetails.value.some((entity) => entity.loading))
+let detailVersion = 0
+watch(() => [props.rows, props.space, props.queryStatement, props.jobId, props.algorithmName], () => {
+  detailsOpen.value = false
+  detailVersion += 1
+})
+watch(detailsOpen, (open) => { if (!open) detailVersion += 1 })
+onUnmounted(() => { detailVersion += 1 })
+
+async function loadEntityDetail(entity: EntityDetail, version = detailVersion): Promise<void> {
+  if (!props.space) return
+  const space = props.space
+  entity.loading = true
+  entity.error = ''
+  try {
+    // The HTTP interceptor already unwraps Axios's response into the API envelope.
+    const response = await getGraphNode(entity.vid, space) as unknown as ApiResponse<GraphNode>
+    const node = unwrapApiResponse(response)
+    if (String(node?.id) !== entity.vid || !Array.isArray(node.labels) || !node.properties || typeof node.properties !== 'object' || Array.isArray(node.properties)) {
+      throw new Error('实体详情返回的数据不完整或 VID 不匹配')
+    }
+    if (version !== detailVersion || !detailsOpen.value) return
+    entity.node = node
+  } catch (error) {
+    if (version !== detailVersion || !detailsOpen.value) return
+    entity.error = getErrorMessage(error, '实体详情加载失败')
+  } finally {
+    if (version === detailVersion && detailsOpen.value) entity.loading = false
+  }
+}
+
+async function loadEntityDetails(version: number): Promise<void> {
+  // Fetch only on demand, at most two nodes concurrently; table rendering makes no node requests.
+  const entities = entityDetails.value
+  for (let index = 0; index < entities.length; index += 2) {
+    if (version !== detailVersion || !detailsOpen.value) return
+    await Promise.all(entities.slice(index, index + 2).map((entity) => loadEntityDetail(entity, version)))
+  }
+}
 
 function formatCell(value: unknown): string {
   if (value === null || value === undefined) return 'NULL'
@@ -79,9 +133,17 @@ function handleSort(field: string, direction: string): void {
   const column = props.columns[Number(field.replace('cell_', ''))]
   if (column) emit('sort', column, direction === 'ascend' ? 'asc' : direction === 'descend' ? 'desc' : undefined)
 }
-function showDetails(row: Record<string, unknown>): void {
+function showDetails(row: Record<string, unknown>, index: number): void {
+  const version = ++detailVersion
   selectedRow.value = row
+  selectedRecordNumber.value = index
+  const references = collectQueryEntityReferences(row)
+  entityReferenceCount.value = references.length
+  entityDetails.value = references.slice(0, 8).map((reference) => ({
+    ...reference, node: reference.embeddedNode, loading: !!props.space, error: '',
+  }))
   detailsOpen.value = true
+  if (props.space) void loadEntityDetails(version)
 }
 </script>
 
@@ -102,16 +164,55 @@ function showDetails(row: Record<string, unknown>): void {
       @sorter-change="handleSort"
     >
       <template #details="{ record }">
-        <AButton type="text" size="small" @click="showDetails(record.__raw)">详情</AButton>
+        <AButton type="text" size="small" @click="showDetails(record.__raw, record.__index)">详情</AButton>
       </template>
     </ATable>
     <AModal v-model:visible="detailsOpen" modal-class="query-record-modal" title="记录详情" title-align="start" :width="640" :unmount-on-close="true">
-      <dl class="query-record-details">
-        <div v-for="column in columns" :key="column">
-          <dt>{{ labels[column] ?? column }}</dt>
-          <dd><pre>{{ formatCell(selectedRow?.[column]) }}</pre></dd>
-        </div>
-      </dl>
+      <div class="query-record-details">
+        <section class="query-record-section">
+          <h3>{{ algorithmName ? '作业信息' : '查询信息' }}</h3>
+          <dl class="query-record-fields">
+            <div v-if="space"><dt>图空间</dt><dd>{{ space }}</dd></div>
+            <div><dt>结果序号</dt><dd>{{ selectedRecordNumber }}</dd></div>
+            <div v-if="queryStatement"><dt>执行语句</dt><dd><pre>{{ queryStatement }}</pre></dd></div>
+            <div v-if="algorithmName"><dt>算法</dt><dd>{{ algorithmName }}</dd></div>
+            <div v-if="jobId"><dt>作业 ID</dt><dd><pre>{{ jobId }}</pre></dd></div>
+          </dl>
+        </section>
+        <section class="query-record-section query-record-entities">
+          <h3>实体信息</h3>
+          <p v-if="entitiesLoading" class="query-record-hint" role="status">正在获取实体完整属性…</p>
+          <p v-if="!entityReferenceCount" class="query-record-hint">当前记录未包含可识别的图 VID，暂无可补充的实体信息。</p>
+          <p v-else-if="!space" class="query-record-hint">未选择图空间，仅展示查询返回的实体信息。</p>
+          <article v-for="entity in entityDetails" :key="entity.vid" class="query-record-entity">
+            <dl class="query-record-fields">
+              <div><dt>图 VID</dt><dd><pre>{{ entity.vid }}</pre></dd></div>
+              <template v-if="entity.node">
+                <div><dt>实体名称</dt><dd>{{ queryEntityName(entity.node) ?? '未提供实体名称' }}</dd></div>
+                <div><dt>实体类型</dt><dd>{{ entity.node.labels.join('、') || '未提供实体类型' }}</dd></div>
+              </template>
+            </dl>
+            <p v-if="entity.error" class="query-record-error" role="alert">
+              {{ entity.error }}<template v-if="entity.embeddedNode">；保留查询返回的实体属性。</template>
+              <button type="button" class="query-record-retry" :disabled="entity.loading" @click="loadEntityDetail(entity)">重试</button>
+            </p>
+            <template v-if="entity.node">
+              <h4>实体属性</h4>
+              <dl v-if="Object.keys(entity.node.properties).length" class="query-record-fields">
+                <div v-for="(value, key) in entity.node.properties" :key="key"><dt>{{ key }}</dt><dd><pre>{{ formatCell(value) }}</pre></dd></div>
+              </dl>
+              <p v-else class="query-record-hint">该实体未返回属性。</p>
+            </template>
+          </article>
+          <p v-if="entityReferenceCount > entityDetails.length" class="query-record-hint">本条记录包含 {{ entityReferenceCount }} 个实体，当前展示前 {{ entityDetails.length }} 个。</p>
+        </section>
+        <section class="query-record-section">
+          <h3>原始查询结果</h3>
+          <dl class="query-record-fields">
+            <div v-for="column in columns" :key="column"><dt>{{ labels[column] ?? column }}</dt><dd><pre>{{ formatCell(selectedRow?.[column]) }}</pre></dd></div>
+          </dl>
+        </section>
+      </div>
       <template #footer>
         <button type="button" class="query-record-cancel" @click="detailsOpen = false">取消</button>
       </template>
@@ -141,11 +242,20 @@ function showDetails(row: Record<string, unknown>): void {
 .query-result-table :deep(.query-cell-number){font-variant-numeric:tabular-nums;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
 .query-result-table :deep(.arco-table-cell){box-sizing:border-box;height:39px;white-space:nowrap;padding:0 16px!important}
 .query-record-details{margin:0;max-height:65vh;overflow:auto;text-align:left}
-.query-record-details>div{display:grid;grid-template-columns:140px minmax(0,1fr);gap:16px;padding:12px 0}
+.query-record-fields{margin:0}
+.query-record-fields>div{display:grid;grid-template-columns:140px minmax(0,1fr);gap:16px;padding:8px 0}
+.query-record-section+.query-record-section{margin-top:20px;padding-top:16px;border-top:1px solid var(--color-border-2)}
+.query-record-section h3{margin:0 0 8px;color:var(--color-text-1);font-size:14px;line-height:22px;font-weight:500}
+.query-record-entity+.query-record-entity{margin-top:12px;padding-top:12px;border-top:1px dashed var(--color-border-2)}
+.query-record-entity h4{margin:8px 0;color:var(--color-text-2);font-size:13px;line-height:20px;font-weight:500}
+.query-record-hint{margin:8px 0;color:var(--color-text-3);font-size:13px;line-height:20px}
+.query-record-error{margin:8px 0;color:#cb272d;font-size:13px;line-height:20px;overflow-wrap:anywhere}
+.query-record-retry{margin-left:8px;padding:0;border:0;background:transparent;color:#165dff;cursor:pointer}
+.query-record-retry:disabled{color:var(--color-text-4);cursor:not-allowed}
 .query-record-details dt{color:var(--color-text-3);overflow-wrap:anywhere}
 .query-record-details dd{margin:0;min-width:0}
 .query-record-details pre{margin:0;color:var(--color-text-1);font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
-@media(max-width:600px){.query-record-details>div{grid-template-columns:1fr;gap:8px}}
+@media(max-width:600px){.query-record-fields>div{grid-template-columns:1fr;gap:8px}}
 </style>
 <style>
 .query-record-modal{border-radius:8px}

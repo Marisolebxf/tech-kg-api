@@ -157,6 +157,16 @@ schema 属性（全可空口径）补建」，把「dev 口径」从隐含前提
 不宜反复执行。**建议**：图服务水位告警接入运维（当前无感知）；重建类长任务（reindex
 两遍流式读）考虑对水位 400 做批内退避重试而不是整体中止。
 
+> **⑫ r2 重现（同日晚间，比第一轮更紧）**：目录重建完成后的三链触发连续三轮被水位掐死
+> ——`write_records`/`resolve_entity_batch` 的 5 次 Temporal 重试全被
+> `use space failed: Used memory hits the high watermark(0.900000)` 拒绝，实体链 4–8 分钟即
+> 终态「运行失败」，空间落库 **0 点**（两轮失败后 SHOW STATS 全 0）。晚间宿主真实占用
+> 53G + page cache 3–5G，地板正好压在 0.9 线（56.5G）上下：单发顺序小写（探针 3/3、
+> SUBMIT JOB STATS）能过，链式并发批量写（多 activity 同时在飞、批语句更大）立刻顶破
+> 水位被整批弹回。`drop_caches` 开窗 ~1 分钟不够覆盖浏览器启动 + UI 触发的延迟，缓存
+> 分钟级回涨。环境性阻断与第一轮同源，晚间负载更重；改为「探针探窗（连续 3 次小写
+> 全过）→ 窗口即开即经 UI 触发」的研磨重试。
+
 ## 前端正常项（正向结论）
 
 - 建空间 → vid 默认 256 口径无需任何干预；
@@ -178,3 +188,116 @@ pnpm exec playwright test -c e2e/yft1/playwright.config.ts   # 全部串行
 
 注意：05 系列为 40–60 分钟长跑（三链串行等终态）；06 需阶段 7 离线 ETL 完成后再跑，
 且受 ⑫ 内存水位影响——控制台读数需抢窗口，S8b 走 SHOW STATS 快照 + 重试。
+
+---
+
+# 第二轮（r2）：目录全前端重建（2026-10-08 下午）
+
+与第一轮的差异：第一轮 CLI 预建全可空 DDL + Schema 目录沿用 09-30 旧绑定；本轮把目录
+49 个定义全部经前端**删掉重建**，建实体/关系、上传脚本、绑定来源、跑链全走 UI，前端
+做不到的记为问题并 CLI 兜底。e2e 用例 `frontend/e2e/yft1-r2/`（10 个 spec + fixtures +
+CLI 兜底脚本），证据截图 `artifacts/yft1-frontend-e2e-r2/`。清场（CLI clear_space.py：
+DROP SPACE + Milvus 库/映射 + 两套键型水位 162 行）与 01/02（基线、建空空间）先行通过。
+
+### ⑬ UI 建目录锁定必填行 → 图 DDL NOT NULL，与离线域整行 INSERT 冲突（第一轮预判，本轮真实踩中）
+
+新建 Schema 表单锁定必填行（实体 `id/name/create_time/update_time/source_table`，关系
+`create_time/update_time/source_table`）自动带出且不可取消必填 → 生成的 CREATE TAG/EDGE
+DDL 全部带 NOT NULL（DDL 预览截图取证 `r2-s4-1-ddl-preview-notnull.png` /
+`r2-s5-1-ddl-preview-notnull.png`）。平台喂数写图路径（kg.schema.extract 逐行 INSERT，
+平台感知补值）可以过；但 §6 离线域脚本对整行做 `INSERT VERTEX/EDGE`，缺列即
+`400 SemanticError`。处置：链前 CLI 归一化（`cli/normalize_ddl.py`：DROP 全部 TAG/EDGE
+索引与类型 → 按目录 `ddl_statement` 去 NOT NULL 重建 + `idx_{name}_name` 索引，此时图内
+无数据无损）——与手册 §4「预建全可空口径」一致。**建议**：要么表单允许取消锁定行的
+必填，要么 DDL 生成默认可空（NOT NULL 只约束平台写入路径能保证补值的列）。
+
+### ⑭ 来源绑定 querySql 完全无 UI 通道（比第一轮预期的更重）
+
+「来源表」弹窗只有 数据源/库/表/主键列/时间列 五项，无 querySql 字段；后端
+`PUT /schemas/{id}/sources` 本身接受 querySql（SchemaSourceInput.query_sql），纯 UI 缺
+入口。更重的是 47 条 querySql 绑定里大量 pk/time 是 **SQL 合成列**（`row_pk`/`wm_col`/
+`source_row_id`），不在物理表的列下拉里——连「UI 绑五项、CLI 只补 querySql」的折中都
+做不到。另 DataSource 的绑定 `tableName=placeholder` 是虚拟表，表下拉搜不到（取证
+`r2-s7-1-placeholder-table-not-listable.png`）。处置三档：16 个纯普通表 schema 全 UI 绑；
+12 个混合 schema UI 绑普通表部分；21 个（全 querySql / placeholder）CLI PUT 兜底
+（`cli/restore_querysql.py`，按清场前 dump 的原 sources 数组整体回写，随后做目录还原度
+对账：properties(name/dataType/required)、sources 六元组、script sha256 与清场前全等）。
+**建议**：来源绑定表单增加「自定义 SQL」高级模式（querySql + 合成列手填），或至少在
+表单里显式提示该绑定含 UI 不可表达的配置。
+
+> **⑭-2 追加（同日晚间实测）：来源表弹窗会把既有 querySql 绑定保存丢**。弹窗打开时
+> `openSourcesModal` 只回填 数据源/库/表/pk/time 五项（querySql 不在其中），行组件的
+> `toSourcePayload` 也没有 querySql 字段——对含 querySql 绑定的 schema 打开弹窗点一次
+> 「保存绑定」，这些绑定就被整体替换成「裸表 + 回填的 pk/time」的普通表绑定（合成列
+> pk 指向不存在的物理列，抽取语义直接坏掉），全程无任何提示。「UI 不能表达 querySql」
+> 因此升级为「UI 编辑会破坏既有 querySql」。连带表现：弹窗允许添加与已有行完全重复的
+> 绑定行，保存时 PUT 撞后端 `uk_kg_schema_source_table` 唯一键 500，前端只闪一条 error
+> toast（与⑰同款「toast 转瞬即逝、页面无残留提示」）。本轮 e2e 全量重绑即被此打断
+> （弹窗预填既有绑定 + 脚本再加一遍 = 全重复行，28 个 schema 全部保存失败），改为
+> 「先经 UI 逐行删除预填行再重加」的重绑语义后通过。**建议**：含 querySql 绑定的行
+> 打开弹窗时显式标记且保存前确认；重复行在前端拦截；保存失败常显错误。
+
+### ⑮ 关系类别 relationCategory 表单不可达「事实关系」；provenance 声明后回落 core
+
+UI 新建 33 个关系的 `relation_category` 控制库实查**全部 inferred**（dev / 旧目录口径为
+44 fact + 9 inferred）——表单没有该字段（或「事实关系」分支不可达）。另 provenance 类
+（is_core=false）声明保存后回落 core。均为展示层元数据，不影响抽取与 DDL，但目录还原
+度对账必须容忍该漂移（restore 脚本对账口径明确排除 category）。**建议**：表单补
+relationCategory 字段或后端默认 fact；provenance 保存链路回读一次确认值。
+
+### ⑯ 脚本上传 LLM 安全校验：判定不可复现 + LLM 服务不可用时上传通道整体不可用（本轮最重问题）
+
+三层叠加：
+
+1. **服务限流无降级**：45 个脚本连续上传，每个都过一次 LLM 安全校验 → 智谱 429
+   （1302 账户级速率限制 / 1305 glm-5.2 模型过载）→ 前端收「LLM 调用失败」→ **上传被拒
+   且不落盘**。LLM 服务不可用 = 脚本上传通道整体不可用，无 fail-open、无人工覆盖入口。
+2. **判定不可复现**：与上轮**逐字节一致**的 45 个脚本，上轮 45/45 全过；本轮大面积被拒
+   （一度 30/45），拒绝理由逐轮漂移（同一 Event 脚本三轮分别给「LLM 调用失败」「密码学
+   强度降低及潜在的编码注入风险」「LLM 调用失败」），措辞多为「潜在风险 / 建议审查」类
+   非确定性行为（DoS 风险、MD5 弱哈希、哈希截断、异常处理过宽……）。重试即重新抽样，
+   同一脚本时拒时过。
+3. **「LLM 返回格式异常」也判拒**：上游输出解析失败同样拦死上传（Patent/Person/
+   AUTHORED_BY 等多次出现）。
+
+处置：e2e 对被拒脚本循环「重新选择」重传抽样（限流类退避 30s、判定类 8s，至多 6 次），
+把通过率拉满；仍被拒的走 CLI 兜底直传 S3 + 目录脚本记录（等同绕过平台校验，记入问题）。
+最终通过率：**45/45 全部经前端 UI 上传成功**（第 1 轮仅 15/45，经 6 轮幂等续传补齐；
+LEADS 最后一例连续被 1305 模型过载拦截 3 轮，退避循环第 4 轮通过），未动用 CLI 兜底——
+但通过完全依赖「重试=对非确定性判定重新抽样」的运气，单人单次直传在当天环境下不可
+完成。**建议**：确定性校验（AST 规则）为主、LLM 为辅；LLM 拒绝提供人工复核/白名单
+通道；LLM 不可用时降级为「挂起待审」而非直接拒绝；批量上传对上游限流做平台侧排队/
+退避（客户端连发 45 次校验即触发账户级 1302）。
+
+### ⑰ 删除目录在 Nebula 内存水位线上被打断（⑫ 的延伸，删除路径专属表现）
+
+HAS_NEWS 实锤：删除时后端先 `SHOW EDGES` 探测类型是否存在 → 撞水位 500 → 探测函数返回
+None（无法判定）→ 不走「图库无此类型」快速路径，硬闯 `_delete_all_edges` →
+`GET /edges/type/HAS_NEWS` 又 500（`use space failed: Used memory hits the high
+watermark(0.900000)`）→ DELETE 502 → 前端弹窗滞留错误态（error toast 转瞬即逝，弹窗不
+关）。本空间是刚重建的空壳、EDGE 类型并不存在，本可零成本跳过。e2e 处置：关弹窗退避
+12s 后整删重试（至多 4 次）全部通过（水位是波动放行的）。**建议**：`SHOW TAGS/EDGES`
+探测失败时先重试再判「无法判定」；删除链路对水位类 400/500 做批内退避；错误态弹窗常显
+错误文案（当前 toast 消失后无任何提示）。
+
+### e2e 工程问题（附带记录，非产品缺陷）
+
+- **arco a-input 的 aria-label 落在包裹层** `span.arco-input-wrapper` 上而非内层
+  `<input>`（Schema 搜索框实锤），选择器须 `.schema-search-input input`；
+- **列表搜索是 contains 匹配**：搜 `Organization` 会连 `OrganizationBase` 一起返回，且
+  两行 code 列截断文本同为「Organizatio…」无法按单元格区分——用行内 `···` 按钮的
+  aria-label（`${中文名}更多操作`，中文名唯一）消歧；删除场景另按「名字长度降序」先删
+  长名兄弟；
+- **合法空结果**（空空间 SHOW EDGES、清空后的目录列表）不能用「行数>0」判完成——一律
+  以接口响应为完成信号；
+- Node 24 + frontend `type:module`：JSON 导入必须 `with { type: 'json' }` import
+  attribute；
+- **下拉选项 contains 匹配误选**：自动化按文本过滤选项时 `hasText`（contains）会在
+  列下拉搜「id」时先命中「logic_id」（CITES 的 dwd_en_paper_related 实际绑成 logic_id，
+  经 dump 逐字段对账发现）——选项匹配必须精确全等；同理「核验绑定」不能只核条数，
+  要核到 pk/time 列值。修复后以 CITES/Paper/HAS_KEYWORD（pk 均为 `id` 且列下拉存在
+  `logic_id` 前缀兄弟）经 UI 重绑验证通过，并对全量 49 schema 做来源四元组
+  （表/pk/time/querySql）逐字段对账全绿；
+- **重绑操作语义**：来源表弹窗打开即预填已保存绑定（非空表单），自动化重绑必须先经
+  UI 逐行删 `.source-binding-row__remove` 再重加，否则造出重复行、保存 500（见⑭-2）；
+  另外行组件「＋ 绑定来源表」在存在未填完整行时会被前端拦截（内联提示，非 toast）。

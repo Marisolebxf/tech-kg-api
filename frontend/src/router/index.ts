@@ -138,7 +138,9 @@ router.beforeEach(async (to) => {
     if (to.meta.public && !profile?.businessOnly) return true
     if (!profile) {
       if (!authStore.skipSilentLogin) notifySessionExpired('登录状态已失效或已超时，请重新登录')
-      return loginRedirect(to.fullPath, '登录状态已失效或已超时，请重新登录')
+      // 未登录与会话过期都会进入这里，不在登录页统一显示“已失效”提示。
+      // return loginRedirect(to.fullPath, '登录状态已失效或已超时，请重新登录')
+      return loginRedirect(to.fullPath)
     }
     if (profile.businessOnly && ![
       ...serviceRoutes.map((route) => route.path),

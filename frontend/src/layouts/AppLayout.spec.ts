@@ -181,6 +181,34 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
     expect(store.current).toBe('dev2')
     // 面包屑标题与选择器同行：选择器是面包屑行最后一个子元素
     expect(wrapper.get('.app-breadcrumb').text()).toContain('平台总览')
+    const actions = wrapper.get('.app-breadcrumb__actions')
+    const docs = actions.get('a.app-docs-link')
+    expect(docs.attributes('href')).toBe('/docs/')
+    expect(docs.attributes('target')).toBe('_blank')
+    expect(docs.element.nextElementSibling).toBe(selector.element)
+    expect(wrapper.find('.app-top-actions .app-docs-link').exists()).toBe(false)
+  })
+
+  it('账号菜单只保留退出入口并正常退出，消息通知组件不再渲染', async () => {
+    const { wrapper, auth } = await renderLayout(true, '/overview')
+    const logout = vi.spyOn(auth, 'logout').mockResolvedValue()
+    await wrapper.get('.app-top-actions__user').trigger('click')
+    const buttons = wrapper.findAll('.app-user-menu nav button')
+    expect(buttons.map((button) => button.text())).toEqual(['退出登录'])
+    expect(wrapper.find('.app-alert-entry').exists()).toBe(false)
+    expect(wrapper.find('.alert-drawer').exists()).toBe(false)
+    await buttons[0]!.trigger('click')
+    await flushPromises()
+    expect(logout).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('.app-user-menu').exists()).toBe(false)
+  })
+
+  it('文档入口在其他管理页面仍可访问，普通用户保持原有可见范围', async () => {
+    const admin = await renderLayout(true, '/manual-review')
+    expect(admin.wrapper.find('.app-breadcrumb .app-docs-link').exists()).toBe(true)
+    const viewer = await renderLayout(false, '/overview')
+    expect(viewer.wrapper.find('.app-docs-link').exists()).toBe(false)
+    expect(viewer.wrapper.find('.app-space-select').exists()).toBe(true)
   })
 
   it('图谱可视化入口默认隐藏，开关开启后出现在图谱查询组', async () => {

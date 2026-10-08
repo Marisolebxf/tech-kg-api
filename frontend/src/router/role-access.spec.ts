@@ -134,6 +134,7 @@ describe('角色控制与默认入口', () => {
     await router.push('/expert-direct')
     expect(router.currentRoute.value.path).toBe('/login')
     expect(router.currentRoute.value.query.redirect).toBe('/expert-direct')
+    expect(router.currentRoute.value.query.error).toBeUndefined()
   })
 
   it('iframe 内会话失效仍走现有门户登录提示', async () => {

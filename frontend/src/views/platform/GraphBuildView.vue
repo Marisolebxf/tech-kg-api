@@ -227,8 +227,9 @@ function jobScriptLabel(job: WorkflowJob): string {
 }
 
 async function onTrigger(job: WorkflowJob) {
-  // 未运行首启 + 运行失败重跑；已完成按产品决策不提供重复执行
-  if (!['未运行', '运行失败'].includes(deriveJobUnifiedStatus(job)) || triggeringJobId.value) return
+  // 未运行首启 + 运行失败/运行异常重跑（异常=行级失败已转审核，重跑按水位增量续抽）；
+  // 已完成按产品决策不提供重复执行
+  if (!['未运行', '运行失败', '运行异常'].includes(deriveJobUnifiedStatus(job)) || triggeringJobId.value) return
   triggeringJobId.value = job.id
   try {
     await triggerJob(job.id)
@@ -336,10 +337,10 @@ type JobAction = { key: string; label: string; danger?: boolean; disabled?: bool
 function jobActions(job: WorkflowJob): JobAction[] {
   const status = deriveJobUnifiedStatus(job)
   const actions: JobAction[] = []
-  if (['未运行', '运行失败'].includes(status)) {
+  if (['未运行', '运行失败', '运行异常'].includes(status)) {
     actions.push({
       key: 'trigger',
-      label: status === '运行失败' ? '重新执行' : '执行',
+      label: status === '未运行' ? '执行' : '重新执行',
       disabled: triggeringJobId.value === job.id,
       title: triggeringJobId.value === job.id ? '正在下发执行…' : undefined,
       run: () => void onTrigger(job),

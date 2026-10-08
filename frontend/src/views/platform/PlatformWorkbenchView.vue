@@ -49,6 +49,7 @@ import { IconInfoCircle, IconRefresh, IconSearch } from '@arco-design/web-vue/es
 import { useAuthStore } from '../../stores/auth'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
 import {
+  cancelAlgorithmJob,
   fetchGraphAlgorithmEngine,
   fetchGraphAlgorithmMetadata,
   getAlgorithmJob,
@@ -322,6 +323,8 @@ const selectedAlgorithm = ref(GRAPH_ALGORITHMS[0].id)
 interface AlgorithmState {
   labels: string[]
   submitting: boolean
+  cancelling: boolean
+  version: number
   job: AlgorithmJobSnapshot | null
   space: string
   result: AlgorithmResultPayload | null
@@ -329,7 +332,7 @@ interface AlgorithmState {
 }
 function createAlgorithmStates(): Record<string, AlgorithmState> {
   return Object.fromEntries(GRAPH_ALGORITHMS.map(({ id }) => [id, {
-    labels: [], submitting: false, job: null, space: '', result: null, pollFailures: 0,
+    labels: [], submitting: false, cancelling: false, version: 0, job: null, space: '', result: null, pollFailures: 0,
   }]))
 }
 const algorithmStates = ref(createAlgorithmStates())
@@ -353,6 +356,7 @@ const algoPartitionNum = ref(8)
 const algoMetadataLoading = ref(false)
 const algoMetadata = ref<GraphAlgorithmMetadata | null>(null)
 const algoSubmitLoading = computed(() => activeAlgorithmState.value.submitting)
+const algoCancelLoading = computed(() => activeAlgorithmState.value.cancelling)
 const algoJob = computed(() => activeAlgorithmState.value.job)
 const algoResult = computed(() => activeAlgorithmState.value.result)
 let algoPollTimer: number | undefined
@@ -435,7 +439,7 @@ function exportAlgoCsv(): void {
     const safe = /^[=+@\-\t\r]/.test(value) ? `'${value}` : value
     return `"${safe.replaceAll('"', '""')}"`
   }
-  const csv = [columns, ...algoRows.value.map((row) => columns.map((column) => String(row[column] ?? '')))]
+  const csv = [['序号', ...columns], ...algoRows.value.map((row, index) => [String(index + 1), ...columns.map((column) => String(row[column] ?? ''))])]
     .map((row) => row.map(escapeCell).join(',')).join('\r\n')
   const url = URL.createObjectURL(new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' }))
   const link = document.createElement('a')
@@ -459,8 +463,9 @@ const algoEngineStatus = computed(() => {
 const algoJobStatus = computed(() => {
   const job = algoJob.value
   if (!job) return null
-  if (job.status === 'running') return { label: '运行中', tone: 'is-运行中' }
+  if (job.status === 'running') return { label: activeAlgorithmState.value.cancelling ? '终止中' : '运行中', tone: 'is-运行中' }
   if (job.status === 'succeeded') return { label: '成功', tone: 'is-成功' }
+  if (job.status === 'cancelled') return { label: '已终止', tone: 'is-阻断' }
   return { label: '失败', tone: 'is-阻断' }
 })
 
@@ -1001,20 +1006,22 @@ async function pollAlgoJob(): Promise<void> {
   if (queryMode.value !== 'algo' || activeTab.value !== 'query') return
   const context = graphContextVersion
   const jobId = state.job.jobId
+  const version = state.version
   try {
     const job = await getAlgorithmJob(state.space, jobId)
-    if (context !== graphContextVersion || state.job?.jobId !== jobId) return
+    if (context !== graphContextVersion || state.job?.jobId !== jobId || version !== state.version) return
     state.job = job
+    if (job.status !== 'running') state.cancelling = false
     state.pollFailures = 0
     if (job.status === 'succeeded') {
       await fetchAlgoResult(state)
     } else if (job.status === 'failed') {
       showToast('算法作业执行失败，详情见作业状态面板', 'error')
-    } else {
+    } else if (job.status === 'running') {
       scheduleAlgoPoll(state)
     }
   } catch (error) {
-    if (context !== graphContextVersion || state.job?.jobId !== jobId) return
+    if (context !== graphContextVersion || state.job?.jobId !== jobId || version !== state.version) return
     showToast(getErrorMessage(error, '算法作业状态查询失败'), 'warning')
     // 连续 3 次轮询失败即停止，避免页面后台空转打接口
     state.pollFailures += 1
@@ -1026,13 +1033,14 @@ async function fetchAlgoResult(state = activeAlgorithmState.value): Promise<void
   if (!state.job || !state.space) return
   const context = graphContextVersion
   const jobId = state.job.jobId
+  const version = state.version
   try {
     const result = await getAlgorithmJobResult(state.space, jobId)
-    if (context !== graphContextVersion || state.job?.jobId !== jobId) return
+    if (context !== graphContextVersion || state.job?.jobId !== jobId || version !== state.version) return
     state.result = result
     if (state === activeAlgorithmState.value) resetAlgoPage()
   } catch (error) {
-    if (context !== graphContextVersion || state.job?.jobId !== jobId) return
+    if (context !== graphContextVersion || state.job?.jobId !== jobId || version !== state.version) return
     showToast(getErrorMessage(error, '算法结果获取失败'), 'warning')
   }
 }
@@ -1043,15 +1051,41 @@ async function refreshAlgoJob(): Promise<void> {
   if (!state.job || !state.space) return
   const context = graphContextVersion
   const jobId = state.job.jobId
+  const version = state.version
   try {
     const job = await getAlgorithmJob(state.space, jobId)
-    if (context !== graphContextVersion || state.job?.jobId !== jobId) return
+    if (context !== graphContextVersion || state.job?.jobId !== jobId || version !== state.version) return
     state.job = job
+    if (job.status !== 'running') state.cancelling = false
     if (job.status === 'succeeded') await fetchAlgoResult(state)
     else if (job.status === 'running') scheduleAlgoPoll(state)
   } catch (error) {
-    if (context !== graphContextVersion || state.job?.jobId !== jobId) return
+    if (context !== graphContextVersion || state.job?.jobId !== jobId || version !== state.version) return
     showToast(getErrorMessage(error, '算法作业状态查询失败'), 'warning')
+  }
+}
+
+async function handleAlgoCancel(): Promise<void> {
+  const state = activeAlgorithmState.value
+  if (!state.job || state.job.status !== 'running' || state.cancelling) return
+  const context = graphContextVersion
+  const jobId = state.job.jobId
+  const version = ++state.version
+  state.cancelling = true
+  stopAlgoPoll()
+  try {
+    const job = await cancelAlgorithmJob(state.space, jobId)
+    if (context !== graphContextVersion || state.job?.jobId !== jobId || version !== state.version) return
+    state.job = job
+    state.cancelling = job.status === 'running'
+    if (job.status === 'running') scheduleAlgoPoll(state)
+    else if (job.status === 'succeeded') await fetchAlgoResult(state)
+    else state.result = null
+  } catch (error) {
+    if (context !== graphContextVersion || state.job?.jobId !== jobId || version !== state.version) return
+    state.cancelling = false
+    showToast(getErrorMessage(error, '终止算法作业失败'), 'warning')
+    scheduleAlgoPoll(state)
   }
 }
 
@@ -1069,7 +1103,7 @@ function collectAlgoParams(): Record<string, number | string | boolean> {
 
 async function handleAlgoSubmit(): Promise<void> {
   const state = activeAlgorithmState.value
-  if (state.submitting) return
+  if (state.submitting || state.cancelling || state.job?.status === 'running') return
   if (!algoSpace.value) {
     showToast('请选择图空间', 'warning')
     return
@@ -1115,6 +1149,7 @@ async function handleAlgoSubmit(): Promise<void> {
   }
 
   state.submitting = true
+  state.version += 1
   stopAlgoPoll()
   const context = graphContextVersion
   const space = algoSpace.value
@@ -1728,6 +1763,14 @@ const pageMeta = computed(() => {
               >
                 提交算法作业
               </AButton>
+              <AButton
+                type="primary"
+                class="platform-query-algo-cancel"
+                :disabled="!isAlgoJobRunning || algoSubmitLoading || algoCancelLoading"
+                @click="handleAlgoCancel"
+              >
+                终止算法作业
+              </AButton>
             </div>
           </div>
           <div v-if="algoSubmitLoading && !algoJob" class="platform-query-algo__job platform-query-algo__job-running" role="status" aria-live="polite">
@@ -1742,7 +1785,7 @@ const pageMeta = computed(() => {
               <span v-if="algoJob.finishedAt">完成 {{ formatAlgoTime(algoJob.finishedAt) }}</span>
               <span v-if="algoJob.status !== 'running' && algoJobElapsedText">耗时 {{ algoJobElapsedText }}</span>
               <span v-if="algoJob.driverState">Spark Driver：{{ algoJob.driverState }}</span>
-              <button class="kg-button kg-button--text" type="button" @click="refreshAlgoJob"><IconRefresh class="refresh-icon" />刷新状态</button>
+              <button class="kg-button kg-button--text platform-query-engine-refresh" type="button" :disabled="algoCancelLoading" @click="refreshAlgoJob"><IconRefresh class="refresh-icon" />刷新状态</button>
             </div>
             <div v-if="algoJob.status === 'running'" class="platform-query-algo__job-running" role="status">
               <i class="platform-query-algo__job-spinner" aria-hidden="true"></i>
@@ -1821,7 +1864,7 @@ const pageMeta = computed(() => {
           <div class="platform-query-result__table">
             <QueryResultTable v-if="algoTotal" aria-label="图算法执行结果" :rows="pagedAlgoRows" :columns="algoResultColumns" :labels="algorithmColumnLabels" :page="algoPage" :page-size="algoPageSize" sortable :sort-column="algoSortColumn" :sort-direction="algoSortDirection" @sort="sortAlgoColumn" />
             <div v-else class="platform-query-result__empty" role="status" aria-live="polite">
-              <AEmpty :description="algoSubmitLoading ? '正在提交作业，请稍候…' : isAlgoJobRunning ? '算法运行中，完成后自动展示结果' : algoResult ? (submittedAlgoSearch ? '没有匹配的结果，请调整搜索条件' : '算法执行成功，无返回记录') : algoJob?.status === 'failed' ? '算法执行失败，请查看上方失败原因' : '暂无数据，提交算法作业后在此查看结果'" />
+              <AEmpty :description="algoSubmitLoading ? '正在提交作业，请稍候…' : isAlgoJobRunning ? '算法运行中，完成后自动展示结果' : algoResult ? (submittedAlgoSearch ? '没有匹配的结果，请调整搜索条件' : '算法执行成功，无返回记录') : algoJob?.status === 'cancelled' ? '算法作业已终止，可重新提交' : algoJob?.status === 'failed' ? '算法执行失败，请查看上方失败原因' : '暂无数据，提交算法作业后在此查看结果'" />
             </div>
           </div>
           <ListPagination v-if="algoTotal > 0" :total="algoTotal" :page="algoPage" :page-size="algoPageSize" :page-size-options="[20, 50, 100]" :show-jumper="false" :size-at-end="true" @change="changeAlgoPage" @change-size="changeAlgoPageSize">
@@ -4811,6 +4854,9 @@ print(response.json())</pre>
 @media(max-width:768px){.platform-query-algo__controls{flex-direction:column;gap:12px}.platform-query-algo__form{width:100%}.platform-query-algo__actions{padding-top:0}.platform-algo-search-form{width:100%}.platform-algo-search{width:100%;min-width:0;flex:1}.platform-algo-list-toolbar>button{margin-left:0}}
 .platform-query .platform-query-engine-refresh,.platform-query .platform-query-engine-refresh:hover,.platform-query .platform-query-engine-refresh:active{padding:0;border:0;background:transparent;color:#165dff;font-size:14px;box-shadow:none}
 .platform-query .platform-query-engine-refresh:disabled{color:#c9cdd4;cursor:not-allowed}
+.platform-query :deep(.platform-query-algo-cancel.arco-btn-primary){background:#ffece8;color:#f53f3f}
+.platform-query :deep(.platform-query-algo-cancel.arco-btn-primary:hover:not(:disabled)){background:#fdd8d1;color:#cb272d}
+.platform-query :deep(.platform-query-algo-cancel.arco-btn-primary:disabled){background:#fff3f0;color:#f7b3a9}
 .platform-query :deep(.platform-algo-search .arco-input-prefix){color:#86909c;margin-right:8px}
 .platform-ngql-input :deep(.arco-textarea::placeholder){color:#86909c!important;opacity:1}
 .platform-relation-label-hint{margin-left:4px;color:var(--color-text-3);font-size:12px;font-weight:400}

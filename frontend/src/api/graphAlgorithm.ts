@@ -6,7 +6,7 @@ const PREFIX = '/v1/graph-algorithms'
 /** 算法作业状态快照（提交/轮询共用）。 */
 export interface AlgorithmJobSnapshot {
   jobId: string
-  status: 'running' | 'succeeded' | 'failed'
+  status: 'running' | 'succeeded' | 'failed' | 'cancelled'
   createdAt?: string | null
   startedAt?: string | null
   finishedAt?: string | null
@@ -73,6 +73,13 @@ export async function submitAlgorithmJob(
 
 export async function getAlgorithmJob(space: string, jobId: string): Promise<AlgorithmJobSnapshot> {
   const body = (await http.get(`${PREFIX}/jobs/${jobId}`, {
+    params: { space },
+  })) as ApiResponse<AlgorithmJobSnapshot>
+  return unwrapApiResponse(body)
+}
+
+export async function cancelAlgorithmJob(space: string, jobId: string): Promise<AlgorithmJobSnapshot> {
+  const body = (await http.post(`${PREFIX}/jobs/${jobId}/cancel`, null, {
     params: { space },
   })) as ApiResponse<AlgorithmJobSnapshot>
   return unwrapApiResponse(body)

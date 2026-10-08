@@ -22,7 +22,7 @@ describe('Query result action column shadow', () => {
     wrapper = mount(QueryResultTable, {
       props: { rows: [{ name: 'node' }], columns: ['name'], page: 1, pageSize: 20 },
     })
-    const scroller = wrapper.get('.arco-table-content')
+    const scroller = wrapper.get('.arco-table-body')
     let width = 500
     let contentWidth = 500
     Object.defineProperties(scroller.element, {

@@ -41,7 +41,7 @@ test.describe.serial('S6b 三链执行', () => {
     await openBuild(page)
     const row = page.locator('table tbody tr', { hasText: CHAIN_NAMES[0] }).first()
     await expect(row.locator('td').nth(5)).toHaveText(/未运行/)
-    await row.locator('button.primary', { hasText: '执行' }).click()
+    await row.getByRole('button', { name: '执行', exact: true }).click()
     await expect(row.locator('td').nth(5)).toHaveText(/运行中/, { timeout: 60_000 })
     await shot(page, 's6-4-entity-chain-running')
 
@@ -59,7 +59,7 @@ test.describe.serial('S6b 三链执行', () => {
     test.setTimeout(50 * 60_000)
     await openBuild(page)
     const row = page.locator('table tbody tr', { hasText: CHAIN_NAMES[1] }).first()
-    await row.locator('button.primary', { hasText: '执行' }).click()
+    await row.getByRole('button', { name: '执行', exact: true }).click()
     await expect(row.locator('td').nth(5)).toHaveText(/运行中/, { timeout: 60_000 })
 
     const final = await waitTerminal(page, CHAIN_NAMES[1], 45 * 60_000)
@@ -71,7 +71,7 @@ test.describe.serial('S6b 三链执行', () => {
     test.setTimeout(50 * 60_000)
     await openBuild(page)
     const row = page.locator('table tbody tr', { hasText: CHAIN_NAMES[2] }).first()
-    await row.locator('button.primary', { hasText: '执行' }).click()
+    await row.getByRole('button', { name: '执行', exact: true }).click()
     await expect(row.locator('td').nth(5)).toHaveText(/运行中/, { timeout: 60_000 })
 
     const final = await waitTerminal(page, CHAIN_NAMES[2], 45 * 60_000)

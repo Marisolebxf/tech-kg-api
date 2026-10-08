@@ -35,7 +35,7 @@ test.describe.serial('S6b-修复 实体链重跑', () => {
     const name = `还原-实体@${SPACE}`
     const row = page.locator('table tbody tr', { hasText: name }).first()
     await expect(row.locator('td').nth(5)).toHaveText(/运行失败/)
-    await row.locator('button.primary', { hasText: '重新执行' }).click()
+    await row.getByRole('button', { name: '重新执行', exact: true }).click()
     await expect(row.locator('td').nth(5)).toHaveText(/运行中/, { timeout: 60_000 })
     await shot(page, 's6-4b-entity-rerun-running')
 
@@ -60,7 +60,7 @@ test.describe.serial('S6b-修复 实体链重跑', () => {
     const name = `还原-关系A@${SPACE}`
     const row = page.locator('table tbody tr', { hasText: name }).first()
     await expect(row.locator('td').nth(5)).toHaveText(/未运行/)
-    await row.locator('button.primary', { hasText: '执行' }).click()
+    await row.getByRole('button', { name: '执行', exact: true }).click()
     await expect(row.locator('td').nth(5)).toHaveText(/运行中/, { timeout: 60_000 })
 
     const final = await waitTerminal(page, name, 45 * 60_000)
@@ -79,7 +79,7 @@ test.describe.serial('S6b-修复 实体链重跑', () => {
     const name = `还原-关系B@${SPACE}`
     const row = page.locator('table tbody tr', { hasText: name }).first()
     await expect(row.locator('td').nth(5)).toHaveText(/未运行/)
-    await row.locator('button.primary', { hasText: '执行' }).click()
+    await row.getByRole('button', { name: '执行', exact: true }).click()
     await expect(row.locator('td').nth(5)).toHaveText(/运行中/, { timeout: 60_000 })
 
     const final = await waitTerminal(page, name, 45 * 60_000)

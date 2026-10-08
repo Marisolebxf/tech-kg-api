@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
-import { SPACE, autoAcceptConfirms, gotoRoute, shot, sleep, switchGraphSpace, waitFor } from './helpers'
+import { SPACE, gotoRoute, shot, sleep, switchGraphSpace, waitFor } from './helpers'
 
 // 阶段 6a：前端任务中心——删除旧三链（ABNORMAL 无重触发入口，是本流程发现的问题②）
 // 并经「新建任务」弹窗按手册 §5 顺序重建三条链（一次性、不立即执行——三链须串行等终态）。
@@ -41,18 +41,19 @@ async function addChainStep(page: Page, name: string): Promise<void> {
 
 test.describe.serial('S6a 任务中心：删旧链建新链', () => {
   test('删除旧三链 + 新建三条链（不立即执行）', async ({ page }) => {
-    autoAcceptConfirms(page)
     await page.goto('/overview')
     await page.waitForLoadState('networkidle')
     await switchGraphSpace(page, SPACE)
     await gotoRoute(page, '/graph-build')
     await page.locator('table tbody tr').first().waitFor()
 
-    // ① 删旧三链（行内 删除 按钮 + confirm；幂等——已被上轮跑删掉则跳过）
+    // ① 删旧三链（行内 删除 按钮 + 应用内确认弹窗；幂等——已被上轮跑删掉则跳过）
     for (const c of CHAINS) {
       const row = page.locator('table tbody tr', { hasText: c.name }).first()
       if (await row.isVisible().catch(() => false)) {
         await row.locator('button', { hasText: '删除' }).click()
+        await page.locator('.kg-delete-dialog').waitFor()
+        await page.locator('.kg-delete-dialog button', { hasText: '确认删除' }).click()
         await waitFor(
           async () => !(await row.isVisible().catch(() => false)),
           { timeout: 20_000, interval: 1_000, label: `旧任务行消失 ${c.name}` },

@@ -186,19 +186,26 @@ test.describe.serial('M. 图空间横切', () => {
     await page.goto('/graph-build')
     await page.waitForLoadState('networkidle')
 
-    // 全局切 e2e_verify_space → 弹窗按该空间拉可抽取 schema（该空间 schema 无脚本/来源）
+    // 全局切 e2e_verify_space → 弹窗按该空间拉可抽取 schema（该空间 schema 无脚本/来源）；
+    // 空间标签显式展示当前作用空间，空态提示指引用户核对全局选择器（2026-10-09 空间错配反馈）
     await switchGraphSpace(page, SPACE_B)
     await page.getByRole('button', { name: '＋ 新建任务' }).click()
     let dialog = page.locator('[class*="job-launch"]').filter({ hasText: '新建任务' }).first()
     await expect(dialog).toBeVisible()
-    await expect(dialog.getByText('暂无可抽取 Schema——请先在 Schema 管理页上传抽取脚本并绑定来源表')).toBeVisible({ timeout: 30_000 })
+    await expect(dialog.getByText(`图空间：${SPACE_B}`).first()).toBeVisible()
+    await expect(
+      dialog.getByText(
+        `暂无可抽取 Schema——请先在 Schema 管理页上传抽取脚本并绑定来源表；若已配置过，请检查 Schema 所在图空间与当前「${SPACE_B}」是否一致（顶部全局选择器可切换）`,
+      ),
+    ).toBeVisible({ timeout: 30_000 })
 
-    // 关弹窗切回 dev2 再开 → E2EWidget 出现（有脚本+来源）
+    // 关弹窗切回 dev2 再开 → 空间标签跟随 + E2EWidget 出现（有脚本+来源）
     await dialog.getByRole('button', { name: '取消' }).click()
     await switchGraphSpace(page, 'dev2')
     await page.getByRole('button', { name: '＋ 新建任务' }).click()
     dialog = page.locator('[class*="job-launch"]').filter({ hasText: '新建任务' }).first()
     await expect(dialog).toBeVisible()
+    await expect(dialog.getByText('图空间：dev2').first()).toBeVisible()
     await dialog.locator('input[placeholder="选择要抽取的实体/关系"]').click()
     const widgetOpt = page.locator('li.arco-select-option:visible', { hasText: 'E2EWidget' }).first()
     await waitFor(async () => (await widgetOpt.isVisible().catch(() => false)), { label: 'dev2 下拉出现 E2EWidget' })

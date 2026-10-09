@@ -122,7 +122,7 @@ const summaryItems = computed(() => {
   return [
     { label: '运行中', value: counts['运行中'], hint: '正在执行的任务' },
     { label: '已完成', value: counts['已完成'], hint: '最近一次执行成功' },
-    { label: '运行异常', value: counts['运行异常'], hint: '完成但含失败记录（已转人工审核）' },
+    { label: '运行异常', value: counts['运行异常'], hint: '完成但含失败记录（是否已转人工审核见执行详情）' },
     { label: '运行失败', value: counts['运行失败'], hint: '最近一次执行出错' },
     { label: '已暂停', value: counts['已暂停'], hint: '已暂停触发' },
   ]
@@ -192,7 +192,7 @@ function announceFinished(prevJobs: WorkflowJob[]) {
     const now = deriveJobUnifiedStatus(job)
     if (prev.get(job.id) !== '运行中') continue // 只报「运行中→终态」的翻转，历史终态不弹
     if (now === '已完成') showToast(`任务「${job.name}」执行完成`, 'success')
-    else if (now === '运行异常') showToast(`任务「${job.name}」执行完成但含失败记录（已转人工审核），点任务名查看`, 'warning')
+    else if (now === '运行异常') showToast(`任务「${job.name}」执行完成但含失败记录，点任务名查看`, 'warning')
     else if (now === '运行失败') showToast(`任务「${job.name}」执行失败，点任务名查看原因`, 'error')
   }
 }

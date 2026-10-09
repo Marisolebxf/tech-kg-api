@@ -46,7 +46,8 @@ def _extract_result_log_lines(execution: dict[str, Any]) -> list[str]:
     - 重跑范围来自 payload（下发时即有）；
     - 逐来源批次/读行/写入/失败/游标来自 output.sources（工作流结束回填）；
     - 失败汇总来自 output.failures——重跑模式 recorded 恒 0（仍失败记录由
-      resolve 重建为新审核 case），此时引导看失败队列而非 recorded。
+      resolve 重建为新审核 case），此时引导看失败队列而非 recorded；
+      缺记录 id 的失败行建不了 case（noRecordId），须如实说明未入队。
     """
     lines: list[str] = []
     scope = _rerun_scope_line(execution.get("payload"))
@@ -68,7 +69,15 @@ def _extract_result_log_lines(execution: dict[str, Any]) -> list[str]:
     failures = output.get("failures")
     if isinstance(failures, dict) and _safe_int(failures.get("count")):
         recorded = _safe_int(failures.get("recorded"))
-        detail = f"已落审核 case {recorded} 条" if recorded else "详见人工审核失败队列"
+        no_record_id = _safe_int(failures.get("noRecordId"))
+        if recorded:
+            detail = f"已落审核 case {recorded} 条"
+            if no_record_id:
+                detail += f"，{no_record_id} 条缺记录 id 未入队"
+        elif no_record_id:
+            detail = f"{no_record_id} 条缺记录 id 未入队，请检查脚本 failures 是否携带记录主键"
+        else:
+            detail = "详见人工审核失败队列"
         lines.append(f"失败汇总：{failures.get('count')} 条（{detail}）")
     return lines
 
@@ -348,8 +357,9 @@ class WorkflowOperationsService:
             new_task_status = "执行完成"
             new_status = "已完成"
         elif status == "ABNORMAL":
-            # 抽取完成但含行级失败记录（已转人工审核）：任务按「执行异常」，
-            # 不与完全跑崩的「执行出错」混同（2026-09-28 口径）
+            # 抽取完成但含行级失败记录（转 T_EXTRACT_FAIL 审核，缺记录 id 的
+            # 不入队、文案如实）：任务按「执行异常」，不与完全跑崩的「执行
+            # 出错」混同（2026-09-28 口径）
             new_task_status = "执行异常"
             new_status = "执行异常"
         elif status in {"FAILED", "CANCELED", "TERMINATED", "TIMED_OUT"}:

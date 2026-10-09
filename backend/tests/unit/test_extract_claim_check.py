@@ -546,7 +546,7 @@ class TestFailureRefs:
                 "name": "Widget",
             }
         )
-        assert result == {"recorded": 4}
+        assert result == {"recorded": 4, "skippedNoRecordId": 0}
         # 内联条目先于 refs 展开，cap 截断发生在展开后的清单上
         assert [c["source_record_id"] for c in created] == ["inline-1", "a0", "a1", "a2"]
 
@@ -567,5 +567,5 @@ class TestFailureRefs:
                 "kind": "entity",
             }
         )
-        assert result == {"recorded": 1}
+        assert result == {"recorded": 1, "skippedNoRecordId": 0}
         assert created[0]["object_name"] == "gkx.t#x"

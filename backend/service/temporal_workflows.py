@@ -209,7 +209,9 @@ def _source_table_label(source: dict[str, Any]) -> str:
 def _shape_step_failures(
     raw_failures: Any, *, source_binding_id: Any, table_label: str
 ) -> list[dict[str, Any]]:
-    """脚本 ``failures`` 整形为平台失败记录（无 recordId 的条目丢弃，error 不截断）。"""
+    """脚本 ``failures`` 整形为平台失败记录（recordId 缺键的条目丢弃；空串保留、
+    count 如实——缺 id 无法建 case/重跑，由建 case 环节计数为 noRecordId 汇报；
+    error 不截断）。"""
     return [
         {
             "sourceBindingId": source_binding_id,
@@ -2083,6 +2085,11 @@ async def record_extract_failures(request: dict[str, Any]) -> dict[str, Any]:
     失败条目双来源：``failures``（内联清单，旧路径/重跑合成）+ ``failureRefs``
     （S3 中转的 failuresKey 引用，activity 内下载展开）；``cap``>0 时截前 cap 条
     建 case（「超 cap 不建 case 但 count 如实」语义与原 workflow 侧截断一致）。
+
+    缺 ``recordId`` 的条目建不了 case（审核展示与失败重跑都按记录 id 定位），
+    如实计数为 ``skippedNoRecordId`` 上抛——执行消息/任务日志据此说明「未入
+    审核队列」，不再一律宣称已转人工审核（2026-10-09 用例：脚本找错列名致
+    88 条失败全无 id，队列空但文案谎报已转审）。
     """
     info = _activity_info_safe()
     try:
@@ -2107,11 +2114,13 @@ async def record_extract_failures(request: dict[str, Any]) -> dict[str, Any]:
     if cap > 0 and len(items) > cap:
         items = items[:cap]
     recorded = 0
+    skipped_no_id = 0
     for item in items:
         if not isinstance(item, dict):
             continue
         record_id = str(item.get("recordId") or "")
         if not record_id:
+            skipped_no_id += 1
             continue
         source_table = item.get("sourceTable") or ""
         error = str(item.get("error") or "")[:1000]
@@ -2148,7 +2157,12 @@ async def record_extract_failures(request: dict[str, Any]) -> dict[str, Any]:
             recorded += 1
         except Exception as exc:  # noqa: BLE001
             logger.warning("抽取失败 case 创建失败 record=%s: %s", record_id, exc)
-    return {"recorded": recorded}
+    if skipped_no_id:
+        logger.warning(
+            "%d 条失败记录缺 recordId 未建审核 case（脚本 failures 须携带记录主键）",
+            skipped_no_id,
+        )
+    return {"recorded": recorded, "skippedNoRecordId": skipped_no_id}
 
 
 @activity.defn
@@ -2486,7 +2500,7 @@ class SchemaExtractWorkflow:
 
     async def _run_chain(self, request: dict[str, Any], schema_ids: list[str]) -> dict[str, Any]:
         """多 Schema 严格串行：任一环失败即置 FAILED 并中止（恢复走 reset 回放）。"""
-        failures_total = {"count": 0, "recorded": 0, "truncated": False}
+        failures_total = {"count": 0, "recorded": 0, "noRecordId": 0, "truncated": False}
         for pos, schema_id in enumerate(schema_ids):
             # 步间暂停挂起点：当前环正常结束后、下一环开始前等待恢复
             await self._wait_if_paused()
@@ -2530,6 +2544,7 @@ class SchemaExtractWorkflow:
             fail = result.get("failures") or {}
             failures_total["count"] += int(fail.get("count", 0))
             failures_total["recorded"] += int(fail.get("recorded", 0))
+            failures_total["noRecordId"] += int(fail.get("noRecordId", 0))
             failures_total["truncated"] = failures_total["truncated"] or bool(fail.get("truncated"))
             self._chain_steps[step_key] = {
                 **self._chain_steps[step_key],
@@ -3130,6 +3145,8 @@ class SchemaExtractWorkflow:
         failures_total = _failure_entries_count(failure_refs) + len(inline_failures)
         truncated = failures_total > failure_cap
         recorded_count = 0
+        # 缺记录 id 未入审核队列的条数（record_extract_failures 回报；重跑/无失败恒 0）
+        no_record_id_count = 0
         index_summary: Any = None
         if rerun_mode:
             # 重跑：resolve 必调且拿全量失败键（未截断），仍失败记录由服务端重建 case
@@ -3190,6 +3207,7 @@ class SchemaExtractWorkflow:
                     retry_policy=ACTIVITY_RETRY_POLICY,
                 )
                 recorded_count = int((fail_resp or {}).get("recorded") or 0)
+                no_record_id_count = int((fail_resp or {}).get("skippedNoRecordId") or 0)
         if sum(int(r.get("written") or 0) for r in results):
             # 写图后触发图库 stats job：SHOW STATS（平台总览实体/关系总量的数据源）
             # 只反映最近一次 SUBMIT JOB STATS 预计算，不触发则总览不随抽取更新（00918）。
@@ -3254,6 +3272,7 @@ class SchemaExtractWorkflow:
             "failures": {
                 "count": failures_total,
                 "recorded": recorded_count,
+                "noRecordId": no_record_id_count,
                 "truncated": truncated,
             },
             "rerun": (

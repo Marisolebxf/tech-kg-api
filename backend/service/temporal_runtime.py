@@ -53,20 +53,34 @@ def _apply_output_failure_status(refreshed: dict[str, Any], output: Any) -> dict
     2026-09-28 口径调整：只有完全跑崩（Temporal workflow FAILED）才叫失败，
     「抽取完成但含行级失败记录」标 ABNORMAL（异常），不再占用 FAILED。
     映射在 refresh 侧完成且幂等：重复 refresh 读到同一 output，仍得到 ABNORMAL。
+
+    文案如实：缺记录 id 的失败行建不了 case（2026-10-09 用例：脚本找错列名，
+    88 条失败全无 recordId，队列空但文案谎报已转审）——``noRecordId``>0 时
+    拆开说明已转审/未入队；重跑执行 recorded 恒 0（仍失败记录由 resolve 重建
+    case），无 noRecordId 不受影响。
     """
     failures = output.get("failures") if isinstance(output, dict) else None
     if not isinstance(failures, dict):
         return refreshed
     try:
         count = int(failures.get("count") or 0)
+        recorded = int(failures.get("recorded") or 0)
+        no_record_id = int(failures.get("noRecordId") or 0)
     except (TypeError, ValueError):
         return refreshed
     if count <= 0:
         return refreshed
+    if no_record_id > 0:
+        message = (
+            f"抽取完成，含 {count} 条失败记录（{recorded} 条已转人工审核，"
+            f"{no_record_id} 条缺记录 id 无法转审，请检查脚本 failures 是否携带记录主键）"
+        )
+    else:
+        message = f"抽取完成，含 {count} 条失败记录（已转人工审核）"
     return {
         **refreshed,
         "status": "ABNORMAL",
-        "message": f"抽取完成，含 {count} 条失败记录（已转人工审核）",
+        "message": message,
     }
 
 

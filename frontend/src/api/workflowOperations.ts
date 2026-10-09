@@ -1,7 +1,7 @@
 import { http } from './http'
 import { unwrapApiResponse, type ApiResponse } from './graphSearch'
 
-/** 执行异常 = 抽取完成但含行级失败记录（已转人工审核）；执行出错 = 完全跑崩。 */
+/** 执行异常 = 抽取完成但含行级失败记录（按记录 id 转人工审核，缺 id 的不入队、文案如实）；执行出错 = 完全跑崩。 */
 export type TaskStatus = '执行中' | '执行出错' | '执行异常' | '执行完成'
 
 export interface UpdateBatch {
@@ -350,7 +350,7 @@ export const listJobs = (
   unwrap(http.get('/v1/workflow-system/jobs', { params: filters })) as Promise<{ items: WorkflowJob[]; total: number }>
 
 /** 任务统一状态：列表页/总览卡共用同一派生口径。
- *  运行异常 = 抽取完成但含行级失败记录（已转人工审核）；只有完全跑崩才是运行失败。 */
+ *  运行异常 = 抽取完成但含行级失败记录（按记录 id 转人工审核，缺 id 的不入队）；只有完全跑崩才是运行失败。 */
 export type JobUnifiedStatus = '未运行' | '运行中' | '已暂停' | '已完成' | '运行异常' | '运行失败'
 
 const JOB_RUNNING_STATUSES = new Set(['RUNNING'])
@@ -369,7 +369,7 @@ export function deriveJobUnifiedStatus(job: Pick<WorkflowJob, 'status' | 'lastEx
 }
 
 /** 统一状态 → 状态点色调（五类语义色，对应 GraphBuildView/总览卡的 span.ok/.err/.warn/.run/.idle）：
- *  运行异常=完成但含失败行（已转人工审核），属「警告」而非「危险」，与运行失败（真跑崩）区分。 */
+ *  运行异常=完成但含失败行（转人工审核，缺 id 的不入队），属「警告」而非「危险」，与运行失败（真跑崩）区分。 */
 export const JOB_STATUS_TONE: Record<JobUnifiedStatus, 'ok' | 'err' | 'warn' | 'run' | 'idle'> = {
   未运行: 'idle',
   运行中: 'run',

@@ -432,7 +432,7 @@ const isTaskRunning = computed(() => {
  *  全绿流程卡，看不出为何。 */
 const executionFailureNotice = computed(() => {
   const execution = selectedExecution.value as
-    | { status?: string; message?: string; output?: { failures?: { count?: number } } }
+    | { status?: string; message?: string; output?: { failures?: { count?: number; recorded?: number; noRecordId?: number } } }
     | null
   if (!execution || !execution.message) return null
   const status = (execution.status || '').toUpperCase()
@@ -441,6 +441,8 @@ const executionFailureNotice = computed(() => {
     abnormal: status === 'ABNORMAL',
     message: execution.message,
     count: Number(execution.output?.failures?.count ?? 0),
+    recorded: Number(execution.output?.failures?.recorded ?? 0),
+    noRecordId: Number(execution.output?.failures?.noRecordId ?? 0),
   }
 })
 // === 数据溯源：只展示真实可查证的对象（Schema 来源绑定 / 抽取脚本 / 任务参数 /
@@ -721,7 +723,9 @@ onMounted(async () => {
       class="exec-failure-alert"
       :title="`${executionFailureNotice.abnormal ? '本次执行标记为异常' : '本次执行标记为失败'}：${executionFailureNotice.message}`"
     >
-      <span v-if="executionFailureNotice.count > 0">逐行失败记录已转人工审核：到「人工审核」的处理中心可查看并勾选重跑；左下流程卡片的橙色警告图标与「N 异常」是对应环节的失败行数——环节本身执行成功，失败的是单条数据转换。</span>
+      <span v-if="executionFailureNotice.count > 0 && executionFailureNotice.noRecordId > 0 && executionFailureNotice.recorded === 0">逐行失败记录均缺记录 id，未进入人工审核队列（审核展示与失败重跑都按记录 id 定位）——请检查抽取脚本的 failures 是否携带来源主键，修复脚本后重新执行即可重抽这些行；左下流程卡片的橙色警告图标与「N 异常」是对应环节的失败行数——环节本身执行成功，失败的是单条数据转换。</span>
+      <span v-else-if="executionFailureNotice.count > 0 && executionFailureNotice.noRecordId > 0">其中 {{ executionFailureNotice.recorded }} 条已转人工审核（到「人工审核」的处理中心可查看并勾选重跑），{{ executionFailureNotice.noRecordId }} 条缺记录 id 未入队——请检查抽取脚本的 failures 是否携带来源主键；左下流程卡片的橙色警告图标与「N 异常」是对应环节的失败行数。</span>
+      <span v-else-if="executionFailureNotice.count > 0">逐行失败记录已转人工审核：到「人工审核」的处理中心可查看并勾选重跑；左下流程卡片的橙色警告图标与「N 异常」是对应环节的失败行数——环节本身执行成功，失败的是单条数据转换。</span>
       <span v-else>左下流程卡片展示各环节执行状态；在「执行历史」中点选其他执行可查看当时的过程。</span>
     </AppAlert>
 

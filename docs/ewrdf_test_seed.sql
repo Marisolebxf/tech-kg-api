@@ -1,7 +1,10 @@
--- ewrdf 图空间全链路测试专用库:把 gkx_element 数仓的白名单行搬进独立小库(共 101 行,可重复执行,先 DROP 重建)。
+-- ewrdf 图空间全链路测试专用库:v5 实测快照(mysqldump,2026-10-09/10 扩容后 7 表 254 行,可重复执行,先 DROP 重建)。
+-- 来源:实测库 ewrdf_test 的快照 dump;基础簇 + wave-1 扩容(同名/失败素材)+ wave-2 链素材全部物化在内。
+-- 按设计**排除 wave-3 周期素材 2 行**(冯俊新 c9632ffa55b557b04d01df813472059d / 王艳 15c704db084383208f85c740a39358d8):
+--   重放后按手册 §6.3 第 3 步在建好 cron 任务**之后**再插入(INSERT 语句见该节),时序才与实测一致。
 -- 执行(必须带 --default-character-set=utf8mb4,缺省字符集会把中文比较/中文数据弄坏,实测中文全变 ??):
 --   docker exec -i tech-kg-mysql mysql --default-character-set=utf8mb4 -uroot -pgkx_element < docs/ewrdf_test_seed.sql
--- 核对行数(预期 t_org 12 / t_executive 23 / t_expert 25 / t_paper 10 / t_journal 4 / t_author_paper 20 / t_shareholder 6):
+-- 核对行数(预期 t_org 19 / t_executive 46 / t_expert 99 / t_paper 40 / t_journal 4 / t_author_paper 40 / t_shareholder 6,共 254):
 --   docker exec tech-kg-mysql mysql --default-character-set=utf8mb4 -uroot -pgkx_element -N -e "
 --     SELECT 't_org',COUNT(*) FROM ewrdf_test.t_org UNION ALL SELECT 't_executive',COUNT(*) FROM ewrdf_test.t_executive
 --     UNION ALL SELECT 't_expert',COUNT(*) FROM ewrdf_test.t_expert UNION ALL SELECT 't_paper',COUNT(*) FROM ewrdf_test.t_paper
@@ -13,157 +16,94 @@ DROP DATABASE IF EXISTS ewrdf_test;
 CREATE DATABASE IF NOT EXISTS ewrdf_test DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 USE ewrdf_test;
 
--- ---------- 实体源表 ----------
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `t_journal` (
+  `row_id` varchar(64) NOT NULL,
+  `publication_id` bigint NOT NULL,
+  `zh_name` varchar(1024) DEFAULT NULL,
+  `issn` varchar(16) DEFAULT NULL,
+  `update_time` datetime DEFAULT NULL,
+  PRIMARY KEY (`row_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+INSERT INTO `t_journal` VALUES ('1004427__journal',1004427,'电力系统保护与控制','1674-3415','2026-09-15 07:09:59'),('1004798__journal',1004798,'电网技术','1000-3673','2026-09-15 07:09:59'),('1006062__journal',1006062,'中国科学院院刊','1000-3045','2026-09-15 07:09:59'),('1009219__journal',1009219,'经济地理','1000-8462','2026-09-15 07:09:59');
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `t_org` (
+  `org_id` varchar(255) NOT NULL,
+  `name_cn` varchar(255) NOT NULL,
+  `province` varchar(255) DEFAULT NULL,
+  `city` varchar(255) DEFAULT NULL,
+  `industry_l1_name` varchar(255) DEFAULT NULL,
+  `reg_status` varchar(255) DEFAULT NULL,
+  `registered_capital_value` decimal(20,2) DEFAULT NULL,
+  `update_time` datetime DEFAULT NULL,
+  PRIMARY KEY (`org_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+INSERT INTO `t_org` VALUES ('0a14fdb97eb7d2892654ee2ef180b527','深圳市计量质量检测研究院(集团)有限责任公司','广东省','深圳市',NULL,NULL,200000000.00,'2026-05-15 00:00:00'),('2eaae7fa1c9812cfe939bef11b9ea878','深圳国实检测技术有限公司','广东省','深圳市',NULL,NULL,6000000.00,'2026-10-09 20:02:50'),('309d73d677e8269c0b200221680cb48b','深圳华因康基因科技有限公司','广东省','深圳市',NULL,NULL,101000000.00,'2026-10-09 17:49:37'),('3d9ba778337dba72db8cc12a1bbb92be','深圳市腾云物联有限公司','广东省','深圳市',NULL,NULL,11246111.11,'2026-05-15 00:00:00'),('6316ee16a50a0a093a5859d8b5cc67a8','深圳市迈岭信息技术有限公司','广东省','深圳市',NULL,NULL,2000000.00,'2026-05-15 00:00:00'),('69c0d92da4105991cedee6335fb44412','深圳先进技术研究院','广东省','深圳市',NULL,NULL,10000000.00,'2026-05-15 00:00:00'),('6c25d2e2c852ba5a81d733cefaf5fe7b','中科绿谷(深圳)医疗科技有限公司','广东省','深圳市',NULL,NULL,150000000.00,'2026-05-15 00:00:00'),('6ed1fec4b9de17f467edc5dd0af0c89a','深圳市玖合鑫科技发展有限公司','广东省','深圳市',NULL,NULL,39000000.00,'2026-05-15 00:00:00'),('71aa92091eda2d2b872ca903d05d6d5d','深圳市电子商务安全证书管理有限公司','广东省','深圳市',NULL,NULL,543500000.00,'2026-05-15 00:00:00'),('8e04394509161ebbdf63c1813b948955','平安壹账通云科技(深圳)有限公司','广东省','深圳市',NULL,NULL,1000000000.00,'2026-05-15 00:00:00'),('9513273195cfb8c2c0ffe0df543938d0','深圳市惠车智能科技有限公司','广东省','深圳市',NULL,NULL,24000000.00,'2026-10-09 17:49:37'),('95ce4077b7418ece0f8fd44676a26d55','深圳绿大地光电有限公司','广东省','深圳市',NULL,NULL,2000000.00,'2026-10-09 17:49:37'),('98e68fdf64b81709249dc23816a89c66','深圳市富视康智能股份有限公司','广东省','深圳市',NULL,NULL,5847953.00,'2026-05-15 00:00:00'),('a60dc5fcd1fe4248faa13978b35bd310','深圳市豪元电子科技有限公司','广东省','深圳市',NULL,NULL,5000000.00,'2026-10-09 17:49:37'),('b0cf3aac95d0efdc61eda9a6e990cc90','深圳宸元网信科技有限公司','广东省','深圳市',NULL,NULL,9000000.00,'2026-10-09 17:49:37'),('cbeac662cf32b19dcdb872790e4df8da','深圳市计量质量检测研究院','广东省','深圳市',NULL,NULL,252480000.00,'2026-05-15 00:00:00'),('e21e3f2f10f13692225648f93f9b8e0c','深圳市彩虹云宝网络有限公司','广东省','深圳市',NULL,NULL,5000000.00,'2026-10-09 17:49:37'),('e9f6a720f02bb2143dd0f926b82f07f3','深圳市玖合鑫通讯技术有限公司','广东省','深圳市',NULL,NULL,28459095.63,'2026-05-15 00:00:00'),('f21c867cb7a12e7f175c422de0e939a4','深圳市三本软件有限公司','广东省','深圳市',NULL,NULL,10204080.00,'2026-05-15 00:00:00');
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `t_shareholder` (
+  `row_id` varchar(600) NOT NULL,
+  `org_id` varchar(255) NOT NULL,
+  `inv_org_id` varchar(255) NOT NULL,
+  `owners_name` varchar(255) DEFAULT NULL,
+  `ownership_percentage` decimal(20,2) DEFAULT NULL,
+  `update_time` datetime DEFAULT NULL,
+  PRIMARY KEY (`row_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+INSERT INTO `t_shareholder` VALUES ('0a14fdb97eb7d2892654ee2ef180b527__cbeac662cf32b19dcdb872790e4df8da','0a14fdb97eb7d2892654ee2ef180b527','cbeac662cf32b19dcdb872790e4df8da','深圳市计量质量检测研究院',100.00,'2026-05-15 00:00:00'),('6316ee16a50a0a093a5859d8b5cc67a8__98e68fdf64b81709249dc23816a89c66','6316ee16a50a0a093a5859d8b5cc67a8','98e68fdf64b81709249dc23816a89c66','深圳市富视康智能股份有限公司',100.00,'2026-05-15 00:00:00'),('6c25d2e2c852ba5a81d733cefaf5fe7b__69c0d92da4105991cedee6335fb44412','6c25d2e2c852ba5a81d733cefaf5fe7b','69c0d92da4105991cedee6335fb44412','深圳先进技术研究院',16.67,'2026-05-15 00:00:00'),('8e04394509161ebbdf63c1813b948955__71aa92091eda2d2b872ca903d05d6d5d','8e04394509161ebbdf63c1813b948955','71aa92091eda2d2b872ca903d05d6d5d','深圳市电子商务安全证书管理有限公司',100.00,'2026-05-15 00:00:00'),('e9f6a720f02bb2143dd0f926b82f07f3__6ed1fec4b9de17f467edc5dd0af0c89a','e9f6a720f02bb2143dd0f926b82f07f3','6ed1fec4b9de17f467edc5dd0af0c89a','深圳市玖合鑫科技发展有限公司',100.00,'2026-05-15 00:00:00'),('f21c867cb7a12e7f175c422de0e939a4__3d9ba778337dba72db8cc12a1bbb92be','f21c867cb7a12e7f175c422de0e939a4','3d9ba778337dba72db8cc12a1bbb92be','深圳市腾云物联有限公司',98.00,'2026-05-15 00:00:00');
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `t_paper` (
+  `id` varchar(64) NOT NULL,
+  `zh_name` varchar(1024) DEFAULT NULL,
+  `doi` varchar(512) DEFAULT NULL,
+  `cover_year_start` varchar(4) DEFAULT NULL,
+  `publication_id` bigint DEFAULT NULL,
+  `update_time` datetime DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+INSERT INTO `t_paper` VALUES ('1002153099575427075','土地流转和社会化服务对农业全要素生产率的影响实证分析','10.15957/j.cnki.jjdl.2024.04.019','2024',1009219,'2026-07-19 08:11:22'),('1002153099575427078','江苏省宅基地退出影响因素及其分区治理','10.15957/j.cnki.jjdl.2024.04.018','2024',1009219,'2026-07-19 08:11:22'),('1002153099575427082','三大城市群数字技术专利创新网络演化比较研究','10.15957/j.cnki.jjdl.2024.04.011','2024',1009219,'2026-07-19 08:11:22'),('1002153099575427088','中国省域共同富裕水平测度、时空分异与障碍因素','10.15957/j.cnki.jjdl.2024.04.002','2024',1009219,'2026-07-19 08:11:22'),('1002153099575427093','数字基础设施与中国城市的空间重构','10.15957/j.cnki.jjdl.2024.04.006','2024',1009219,'2026-07-19 08:11:22'),('1002613259049631753','新药研发发展态势分析','10.16418/j.issn.1000-3045.20240312002','2024',1006062,'2026-07-19 08:11:22'),('1005773515376295936','面向新型电力系统的输电网与分布式变速抽水蓄能联合规划','10.19783/j.cnki.pspc.231044','2024',1004427,'2026-07-19 08:11:22'),('1005773515376295942','含换流器型分布式电源配电网的不对称短路电流计算方法','10.19783/j.cnki.pspc.231050','2024',1004427,'2026-07-19 08:11:22'),('1012001490740445188','基于非零和博弈的互联异构多微网系统电-热-碳优化调度策略','10.13335/j.1000-3673.pst.2023.1355','2024',1004798,'2026-07-19 08:11:22'),('1012001490740445198','面向构网逆变器的虚拟振荡器控制技术:统一设计框架与关键问题探讨','10.13335/j.1000-3673.pst.2023.1194','2024',1004798,'2026-07-19 08:11:22'),('1012001490740445201','适应能源转型发展的输配电价动态激励机制研究','10.13335/j.1000-3673.pst.2023.1196','2024',1004798,'2026-10-09 20:02:50'),('1012001490740445202','基于临界超标样本扩充的数据驱动短路电流超标精准校验方法','10.13335/j.1000-3673.pst.2023.0611','2024',1004798,'2026-10-09 20:02:50'),('1012001490740445208','构网型下垂控制中虚拟阻抗的作用、改进及研究前景分析','10.13335/j.1000-3673.pst.2024.0189','2024',1004798,'2026-10-09 18:05:45'),('1012001490740445217','基于云模型的新型配电系统灵活性评估方法','10.13335/j.1000-3673.pst.2023.0793','2024',1004798,'2026-10-09 18:05:45'),('1012001490740445218','基于分层有向图与动态时空相关性的小区域光伏超短期预测方法','10.13335/j.1000-3673.pst.2023.1932','2024',1004798,'2026-10-09 18:05:45'),('1012001490740445219','接入换流站的新能源交流汇集系统低电压穿越方法','10.13335/j.1000-3673.pst.2023.0819','2024',1004798,'2026-10-09 18:05:45'),('1012001490740445226','计及拓扑相似性的含分散式风电配网双层优化重构方法','10.13335/j.1000-3673.pst.2023.0843','2024',1004798,'2026-10-09 18:05:45'),('1012004841645408265','基于改进FCM和最小互信息算法的户变关系辨识方法','10.19783/j.cnki.pspc.231575','2024',1004427,'2026-10-09 18:05:45'),('998688951071932438','电力系统摇摆方程的侵入式谐波解及分析','10.13335/j.1000-3673.pst.2023.1007','2024',1004798,'2026-10-09 18:10:30'),('999652415420497924','基于改进Q学习算法和组合模型的超短期电力负荷预测','10.19783/j.cnki.pspc.231357','2024',1004427,'2026-10-09 18:10:30'),('bad000pp',NULL,'','',1004798,'2026-10-09 19:42:29'),('bad001pp',NULL,'','',1004798,'2026-10-09 19:42:29'),('bad002pp',NULL,'','',1004798,'2026-10-09 19:42:29'),('bad003pp',NULL,'','',1004798,'2026-10-09 19:42:29'),('bad004pp',NULL,'','',1004798,'2026-10-09 19:42:29'),('bad005pp','','','',1004798,'2026-10-09 19:42:29'),('bad006pp','','','',1004798,'2026-10-09 19:42:29'),('bad007pp','','','',1004798,'2026-10-09 19:42:29'),('dup000pp','土地流转和社会化服务对农业全要素生产率的影响实证分析','','',1004798,'2026-10-09 17:49:37'),('dup001pp','江苏省宅基地退出影响因素及其分区治理','','',1004427,'2026-10-09 17:49:37'),('dup002pp','三大城市群数字技术专利创新网络演化比较研究','','',1009219,'2026-10-09 17:49:37'),('dup003pp','中国省域共同富裕水平测度、时空分异与障碍因素','','',1006062,'2026-10-09 17:49:37'),('dup004pp','数字基础设施与中国城市的空间重构','','',1004798,'2026-10-09 17:49:37'),('dup005pp','新药研发发展态势分析','','',1004427,'2026-10-09 17:49:37'),('dup006pp','面向新型电力系统的输电网与分布式变速抽水蓄能联合规划','','',1009219,'2026-10-09 17:49:37'),('dup007pp','含换流器型分布式电源配电网的不对称短路电流计算方法','','',1006062,'2026-10-09 17:49:37'),('dup008pp','基于非零和博弈的互联异构多微网系统电-热-碳优化调度策略','','',1004798,'2026-10-09 17:49:37'),('dup009pp','面向构网逆变器的虚拟振荡器控制技术:统一设计框架与关键问题探讨','','',1004427,'2026-10-09 17:49:37'),('dup010pp','土地流转和社会化服务对农业全要素生产率的影响实证分析','','',1009219,'2026-10-09 17:49:37'),('dup011pp','江苏省宅基地退出影响因素及其分区治理','','',1006062,'2026-10-09 17:49:37');
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `t_executive` (
+  `row_id` varchar(600) NOT NULL,
+  `org_id` varchar(255) NOT NULL,
+  `executives_name` varchar(255) NOT NULL,
+  `executives_position` varchar(255) DEFAULT NULL,
+  `update_time` datetime DEFAULT NULL,
+  PRIMARY KEY (`row_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+INSERT INTO `t_executive` VALUES ('0a14fdb97eb7d2892654ee2ef180b527__刘晖','0a14fdb97eb7d2892654ee2ef180b527','刘晖','董事长','2026-05-15 00:00:00'),('0a14fdb97eb7d2892654ee2ef180b527__孙学明','0a14fdb97eb7d2892654ee2ef180b527','孙学明','董事','2026-05-15 00:00:00'),('0a14fdb97eb7d2892654ee2ef180b527__孙雪萌','0a14fdb97eb7d2892654ee2ef180b527','孙雪萌','监事','2026-05-15 00:00:00'),('0a14fdb97eb7d2892654ee2ef180b527__林长虹','0a14fdb97eb7d2892654ee2ef180b527','林长虹','董事','2026-05-15 00:00:00'),('0a14fdb97eb7d2892654ee2ef180b527__罗静','0a14fdb97eb7d2892654ee2ef180b527','罗静','董事','2026-05-15 00:00:00'),('0a14fdb97eb7d2892654ee2ef180b527__黄小龙','0a14fdb97eb7d2892654ee2ef180b527','黄小龙','经理,董事','2026-05-15 00:00:00'),('0a14fdb97eb7d2892654ee2ef180b527__龙四维','0a14fdb97eb7d2892654ee2ef180b527','龙四维','董事','2026-05-15 00:00:00'),('2eaae7fa1c9812cfe939bef11b9ea878__宫俊','2eaae7fa1c9812cfe939bef11b9ea878','宫俊','董事','2026-10-09 20:02:50'),('2eaae7fa1c9812cfe939bef11b9ea878__常林','2eaae7fa1c9812cfe939bef11b9ea878','常林','经理','2026-10-09 20:02:50'),('2eaae7fa1c9812cfe939bef11b9ea878__曹文','2eaae7fa1c9812cfe939bef11b9ea878','曹文','监事','2026-10-09 20:02:50'),('309d73d677e8269c0b200221680cb48b__盛司潼','309d73d677e8269c0b200221680cb48b','盛司潼','总经理,执行董事','2026-10-09 17:49:37'),('309d73d677e8269c0b200221680cb48b__陈忠立','309d73d677e8269c0b200221680cb48b','陈忠立','监事','2026-10-09 17:49:37'),('6316ee16a50a0a093a5859d8b5cc67a8__程治永','6316ee16a50a0a093a5859d8b5cc67a8','程治永','执行董事','2026-05-15 00:00:00'),('6316ee16a50a0a093a5859d8b5cc67a8__罗小林','6316ee16a50a0a093a5859d8b5cc67a8','罗小林','监事','2026-05-15 00:00:00'),('6316ee16a50a0a093a5859d8b5cc67a8__谢勇','6316ee16a50a0a093a5859d8b5cc67a8','谢勇','总经理','2026-05-15 00:00:00'),('6c25d2e2c852ba5a81d733cefaf5fe7b__吕松涛','6c25d2e2c852ba5a81d733cefaf5fe7b','吕松涛','董事','2026-05-15 00:00:00'),('6c25d2e2c852ba5a81d733cefaf5fe7b__孟德','6c25d2e2c852ba5a81d733cefaf5fe7b','孟德','董事','2026-05-15 00:00:00'),('6c25d2e2c852ba5a81d733cefaf5fe7b__赵纯梅','6c25d2e2c852ba5a81d733cefaf5fe7b','赵纯梅','监事','2026-05-15 00:00:00'),('6c25d2e2c852ba5a81d733cefaf5fe7b__隆晓菁','6c25d2e2c852ba5a81d733cefaf5fe7b','隆晓菁','总经理,董事长','2026-05-15 00:00:00'),('8e04394509161ebbdf63c1813b948955__姚石','8e04394509161ebbdf63c1813b948955','姚石','监事','2026-05-15 00:00:00'),('8e04394509161ebbdf63c1813b948955__林伟','8e04394509161ebbdf63c1813b948955','林伟','经理,董事长','2026-05-15 00:00:00'),('8e04394509161ebbdf63c1813b948955__汪滔','8e04394509161ebbdf63c1813b948955','汪滔','董事','2026-05-15 00:00:00'),('8e04394509161ebbdf63c1813b948955__黄伟星','8e04394509161ebbdf63c1813b948955','黄伟星','董事','2026-05-15 00:00:00'),('9513273195cfb8c2c0ffe0df543938d0__刘瑞','9513273195cfb8c2c0ffe0df543938d0','刘瑞','监事','2026-10-09 17:49:37'),('9513273195cfb8c2c0ffe0df543938d0__邓忠军','9513273195cfb8c2c0ffe0df543938d0','邓忠军','总经理,执行董事','2026-10-09 17:49:37'),('95ce4077b7418ece0f8fd44676a26d55__殷凤玲','95ce4077b7418ece0f8fd44676a26d55','殷凤玲','监事','2026-10-09 17:49:37'),('95ce4077b7418ece0f8fd44676a26d55__殷雄','95ce4077b7418ece0f8fd44676a26d55','殷雄','经理,董事','2026-10-09 17:49:37'),('a60dc5fcd1fe4248faa13978b35bd310__兰运双','a60dc5fcd1fe4248faa13978b35bd310','兰运双','监事','2026-10-09 17:49:37'),('a60dc5fcd1fe4248faa13978b35bd310__王晓英','a60dc5fcd1fe4248faa13978b35bd310','王晓英','经理,董事','2026-10-09 17:49:37'),('b0cf3aac95d0efdc61eda9a6e990cc90__李娜','b0cf3aac95d0efdc61eda9a6e990cc90','李娜','监事','2026-10-09 17:49:37'),('b0cf3aac95d0efdc61eda9a6e990cc90__雷果','b0cf3aac95d0efdc61eda9a6e990cc90','雷果','总经理,执行董事','2026-10-09 17:49:37'),('dup000of','b0cf3aac95d0efdc61eda9a6e990cc90','隆晓菁','测试同名高管','2026-10-09 17:49:37'),('dup001of','a60dc5fcd1fe4248faa13978b35bd310','孟德','测试同名高管','2026-10-09 17:49:37'),('dup002of','9513273195cfb8c2c0ffe0df543938d0','汪滔','测试同名高管','2026-10-09 17:49:37'),('dup003of','e21e3f2f10f13692225648f93f9b8e0c','罗小林','测试同名高管','2026-10-09 17:49:37'),('dup004of','309d73d677e8269c0b200221680cb48b','孙雪萌','测试同名高管','2026-10-09 17:49:37'),('dup005of','95ce4077b7418ece0f8fd44676a26d55','林伟','测试同名高管','2026-10-09 17:49:37'),('dup006of','b0cf3aac95d0efdc61eda9a6e990cc90','谢勇','测试同名高管','2026-10-09 17:49:37'),('dup007of','a60dc5fcd1fe4248faa13978b35bd310','黄伟星','测试同名高管','2026-10-09 17:49:37'),('e21e3f2f10f13692225648f93f9b8e0c__刘涛','e21e3f2f10f13692225648f93f9b8e0c','刘涛','监事','2026-10-09 17:49:37'),('e21e3f2f10f13692225648f93f9b8e0c__周郁华','e21e3f2f10f13692225648f93f9b8e0c','周郁华','总经理,执行董事','2026-10-09 17:49:37'),('e9f6a720f02bb2143dd0f926b82f07f3__王宇','e9f6a720f02bb2143dd0f926b82f07f3','王宇','经理','2026-05-15 00:00:00'),('e9f6a720f02bb2143dd0f926b82f07f3__王岳','e9f6a720f02bb2143dd0f926b82f07f3','王岳','执行董事','2026-05-15 00:00:00'),('e9f6a720f02bb2143dd0f926b82f07f3__陈静','e9f6a720f02bb2143dd0f926b82f07f3','陈静','监事','2026-05-15 00:00:00'),('f21c867cb7a12e7f175c422de0e939a4__司新杰','f21c867cb7a12e7f175c422de0e939a4','司新杰','监事','2026-05-15 00:00:00'),('f21c867cb7a12e7f175c422de0e939a4__尹忠民','f21c867cb7a12e7f175c422de0e939a4','尹忠民','总经理,执行董事','2026-05-15 00:00:00');
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `t_author_paper` (
+  `row_id` varchar(160) NOT NULL,
+  `paper_id` varchar(64) NOT NULL,
+  `author_id` varchar(32) NOT NULL,
+  `author_sequence` int DEFAULT NULL,
+  `zh_name` varchar(255) DEFAULT NULL,
+  `update_time` datetime DEFAULT NULL,
+  PRIMARY KEY (`row_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+INSERT INTO `t_author_paper` VALUES ('1002153099575427075__36e40fcc42d2bec87f7c423211213dfb','1002153099575427075','36e40fcc42d2bec87f7c423211213dfb',2,'冷浪平','2026-07-19 08:11:25'),('1002153099575427075__cafb9c466b2d74de158d995bef134639','1002153099575427075','cafb9c466b2d74de158d995bef134639',1,'张利国','2026-07-19 08:11:25'),('1002153099575427078__134066be56583f1327557f7898825a18','1002153099575427078','134066be56583f1327557f7898825a18',2,'郭贯成','2026-07-19 08:11:25'),('1002153099575427078__59dce19adb29701688a1ce9a63069aea','1002153099575427078','59dce19adb29701688a1ce9a63069aea',1,'韩述','2026-07-19 08:11:25'),('1002153099575427082__50ef5f551c4a7fad56dcd82b2bdf6da2','1002153099575427082','50ef5f551c4a7fad56dcd82b2bdf6da2',1,'滕堂伟','2026-07-19 08:11:25'),('1002153099575427082__d2b9bda08f8130b8dab54e1aa6ae6b98','1002153099575427082','d2b9bda08f8130b8dab54e1aa6ae6b98',2,'史磊','2026-07-19 08:11:25'),('1002153099575427088__0f2f8f6e8903effb92ff99d39f936787','1002153099575427088','0f2f8f6e8903effb92ff99d39f936787',1,'何昀','2026-07-19 08:11:25'),('1002153099575427088__a7b0e09a0ff6d3337a5fee9ba4434844','1002153099575427088','a7b0e09a0ff6d3337a5fee9ba4434844',2,'王帅尧','2026-07-19 08:11:25'),('1002153099575427093__fb9e2948f22da487fb3338ba1f4e072a','1002153099575427093','fb9e2948f22da487fb3338ba1f4e072a',2,'王雨昕','2026-07-19 08:11:25'),('1002153099575427093__ff60369aa3eb6daad43d30000fa43e4b','1002153099575427093','ff60369aa3eb6daad43d30000fa43e4b',1,'刘修岩','2026-07-19 08:11:25'),('1002613259049631753__53e7d89bd0f34628b6ef2f7055d8eec4','1002613259049631753','53e7d89bd0f34628b6ef2f7055d8eec4',2,'许丽','2026-07-19 08:11:25'),('1002613259049631753__73fdfa939f5bc499b86582316981b1db','1002613259049631753','73fdfa939f5bc499b86582316981b1db',1,'徐萍','2026-07-19 08:11:25'),('1005773515376295936__24db008db3d0781a7bd6cd35a4f3922c','1005773515376295936','24db008db3d0781a7bd6cd35a4f3922c',1,'徐秋实','2026-07-19 08:11:25'),('1005773515376295936__47330a8c229cc0b1f03129685eaa4763','1005773515376295936','47330a8c229cc0b1f03129685eaa4763',2,'施通勤','2026-07-19 08:11:25'),('1005773515376295942__717546ccc349b6d95a2050122c6a7664','1005773515376295942','717546ccc349b6d95a2050122c6a7664',1,'杨杉','2026-07-19 08:11:25'),('1005773515376295942__eb01531ab783e0f19a7fe36aad02c5cc','1005773515376295942','eb01531ab783e0f19a7fe36aad02c5cc',2,'喻希','2026-07-19 08:11:25'),('1012001490740445188__264fb2e63afff07020233920a4d7a11b','1012001490740445188','264fb2e63afff07020233920a4d7a11b',1,'初壮','2026-07-19 08:11:25'),('1012001490740445188__8f7a5550dc2be9517d371be0448804f2','1012001490740445188','8f7a5550dc2be9517d371be0448804f2',2,'李秋雨','2026-07-19 08:11:25'),('1012001490740445198__12aea370e3b46b1dc7e6570a6cd639b9','1012001490740445198','12aea370e3b46b1dc7e6570a6cd639b9',1,'史亚帆','2026-07-19 08:11:25'),('1012001490740445198__eb7e28ffc6a0edf21580dddc0aced796','1012001490740445198','eb7e28ffc6a0edf21580dddc0aced796',2,'许寅','2026-07-19 08:11:25'),('1012001490740445201__47340d0f286c628ce0179093a418e353','1012001490740445201','47340d0f286c628ce0179093a418e353',1,'周静涵','2026-10-09 17:49:37'),('1012001490740445201__ba8a6f72ee75695dd2388cc6edf9bd94','1012001490740445201','ba8a6f72ee75695dd2388cc6edf9bd94',2,'何永秀','2026-10-09 17:49:37'),('1012001490740445202__a0cc47b1eec4bae4927de45571df6356','1012001490740445202','a0cc47b1eec4bae4927de45571df6356',2,'汪涛','2026-10-09 17:49:37'),('1012001490740445202__bc9a9b0557f0bb1d6facf7bf6532d50c','1012001490740445202','bc9a9b0557f0bb1d6facf7bf6532d50c',1,'黄梓欣','2026-10-09 17:49:37'),('1012001490740445208__6af98c6522a894c6cdebb7e0c7b80376','1012001490740445208','6af98c6522a894c6cdebb7e0c7b80376',2,'秦晓辉','2026-10-09 17:49:37'),('1012001490740445208__81dc6da5681e64d348e8ce29187c8883','1012001490740445208','81dc6da5681e64d348e8ce29187c8883',1,'范宸珲','2026-10-09 17:49:37'),('1012001490740445217__6d3ab59bd84753acf4171da25c829ae4','1012001490740445217','6d3ab59bd84753acf4171da25c829ae4',1,'米伟铭','2026-10-09 17:49:37'),('1012001490740445217__8523ada7e9b94b4696c4d04526c40758','1012001490740445217','8523ada7e9b94b4696c4d04526c40758',2,'叶鹏','2026-10-09 17:49:37'),('1012001490740445218__72d47b8b41f1adadebe39ed1f6d42623','1012001490740445218','72d47b8b41f1adadebe39ed1f6d42623',2,'缪希仁','2026-10-09 17:49:37'),('1012001490740445218__cee563163627b491a49d4ab47e59facf','1012001490740445218','cee563163627b491a49d4ab47e59facf',1,'欧阳永健','2026-10-09 17:49:37'),('1012001490740445219__6491608b1cf6c64fbc83294506b0fb8a','1012001490740445219','6491608b1cf6c64fbc83294506b0fb8a',1,'贾科','2026-10-09 17:49:37'),('1012001490740445219__715b2ffde43efa6ac79488d8a4e8aee7','1012001490740445219','715b2ffde43efa6ac79488d8a4e8aee7',2,'董学正','2026-10-09 17:49:37'),('1012001490740445226__4bedbd0030cc9c5e8e9a97e8e7ca6038','1012001490740445226','4bedbd0030cc9c5e8e9a97e8e7ca6038',1,'张泽坤','2026-10-09 17:49:37'),('1012001490740445226__b619824e7f25eb52f6ae57630ffa0a76','1012001490740445226','b619824e7f25eb52f6ae57630ffa0a76',2,'杨洁','2026-10-09 17:49:37'),('1012004841645408265__4e2bc322b165be26cb591b84b7905eb9','1012004841645408265','4e2bc322b165be26cb591b84b7905eb9',1,'李彦伦','2026-10-09 17:49:37'),('1012004841645408265__cb3c8c338fd8c443c390265207360053','1012004841645408265','cb3c8c338fd8c443c390265207360053',2,'窦晓波','2026-10-09 17:49:37'),('998688951071932438__70531b787f3c054331f7416aee4679dd','998688951071932438','70531b787f3c054331f7416aee4679dd',1,'李京','2026-10-09 20:02:50'),('998688951071932438__afc136f79b5c5ea10bd1038c2b6cd132','998688951071932438','afc136f79b5c5ea10bd1038c2b6cd132',2,'甘德强','2026-10-09 20:02:50'),('999652415420497924__370230de7f4fdaa3602af1bb77e313c8','999652415420497924','370230de7f4fdaa3602af1bb77e313c8',1,'张丽','2026-10-09 20:02:50'),('999652415420497924__8cfdb839b116e80687f48373f1d19dd6','999652415420497924','8cfdb839b116e80687f48373f1d19dd6',2,'李世情','2026-10-09 20:02:50');
 
--- 机构(12 行)→ 绑定给 Organization
--- 列名与抽取脚本读取字段同名;主键列放第一列(UI 自动选中),时间列命名 update_time(UI 自动选中)
-CREATE TABLE t_org (
-  org_id varchar(255) NOT NULL,
-  name_cn varchar(255) NOT NULL,
-  province varchar(255) DEFAULT NULL,
-  city varchar(255) DEFAULT NULL,
-  industry_l1_name varchar(255) DEFAULT NULL,
-  reg_status varchar(255) DEFAULT NULL,
-  registered_capital_value decimal(20,2) DEFAULT NULL,
-  update_time datetime DEFAULT NULL,
-  PRIMARY KEY (org_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `t_expert` (
+  `author_id` varchar(32) NOT NULL,
+  `zh_name` varchar(255) DEFAULT NULL,
+  `institution` text,
+  `update_time` datetime DEFAULT NULL,
+  PRIMARY KEY (`author_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
 
-INSERT INTO t_org
-SELECT org_id, name_cn, province, city, industry_l1_name, reg_status, registered_capital_value, updated_time
-FROM gkx_element.dwd_org_base_info
-WHERE org_id IN ('6316ee16a50a0a093a5859d8b5cc67a8','98e68fdf64b81709249dc23816a89c66',
- '6c25d2e2c852ba5a81d733cefaf5fe7b','69c0d92da4105991cedee6335fb44412',
- '0a14fdb97eb7d2892654ee2ef180b527','cbeac662cf32b19dcdb872790e4df8da',
- '8e04394509161ebbdf63c1813b948955','71aa92091eda2d2b872ca903d05d6d5d',
- 'f21c867cb7a12e7f175c422de0e939a4','3d9ba778337dba72db8cc12a1bbb92be',
- 'e9f6a720f02bb2143dd0f926b82f07f3','6ed1fec4b9de17f467edc5dd0af0c89a');
-
--- 高管(23 行)→ 绑定给 Officer、EXECUTIVE_OF(两 schema 共用此表)
--- row_id 已物化(原表 org_id+executives_name 复合才唯一),主键列真实唯一
--- 真实数据现象:4 人在同一机构身兼两职(黄小龙 经理/董事、隆晓菁 总经理/董事长、林伟 经理/董事长、
--- 尹忠民 总经理/执行董事)——按 (org_id, executives_name) GROUP BY 合并为一人一行,职位 GROUP_CONCAT
--- 保留双职;若不合并直接搬原表,这 4 人是两行进链路、同 vid 覆盖写,position 只留最后一行的值(信息丢失)
-CREATE TABLE t_executive (
-  row_id varchar(600) NOT NULL,
-  org_id varchar(255) NOT NULL,
-  executives_name varchar(255) NOT NULL,
-  executives_position varchar(255) DEFAULT NULL,
-  update_time datetime DEFAULT NULL,
-  PRIMARY KEY (row_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
-INSERT INTO t_executive
-SELECT CONCAT(org_id,'__',executives_name), org_id, executives_name,
-       GROUP_CONCAT(DISTINCT executives_position ORDER BY executives_position), MAX(updated_time)
-FROM gkx_element.dwd_org_executive_info
-WHERE org_id IN ('6316ee16a50a0a093a5859d8b5cc67a8','6c25d2e2c852ba5a81d733cefaf5fe7b',
- '0a14fdb97eb7d2892654ee2ef180b527','8e04394509161ebbdf63c1813b948955',
- 'f21c867cb7a12e7f175c422de0e939a4','e9f6a720f02bb2143dd0f926b82f07f3')
-GROUP BY org_id, executives_name;
-
--- 专家(25 行)→ 绑定给 Expert
--- 含樊杰同名组(消歧灰区素材)与 2 条空名行(抽取失败素材)
-CREATE TABLE t_expert (
-  author_id varchar(32) NOT NULL,
-  zh_name varchar(255) DEFAULT NULL,
-  institution text,
-  update_time datetime DEFAULT NULL,
-  PRIMARY KEY (author_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
-INSERT INTO t_expert
-SELECT author_id, zh_name, institution, updated_time
-FROM gkx_element.dwd_zh_author
-WHERE author_id IN ('cafb9c466b2d74de158d995bef134639','36e40fcc42d2bec87f7c423211213dfb',
- '59dce19adb29701688a1ce9a63069aea','134066be56583f1327557f7898825a18',
- '50ef5f551c4a7fad56dcd82b2bdf6da2','d2b9bda08f8130b8dab54e1aa6ae6b98',
- '0f2f8f6e8903effb92ff99d39f936787','a7b0e09a0ff6d3337a5fee9ba4434844',
- 'ff60369aa3eb6daad43d30000fa43e4b','fb9e2948f22da487fb3338ba1f4e072a',
- '73fdfa939f5bc499b86582316981b1db','53e7d89bd0f34628b6ef2f7055d8eec4',
- '24db008db3d0781a7bd6cd35a4f3922c','47330a8c229cc0b1f03129685eaa4763',
- '717546ccc349b6d95a2050122c6a7664','eb01531ab783e0f19a7fe36aad02c5cc',
- '264fb2e63afff07020233920a4d7a11b','8f7a5550dc2be9517d371be0448804f2',
- '12aea370e3b46b1dc7e6570a6cd639b9','eb7e28ffc6a0edf21580dddc0aced796',
- '2c3dfa15fa2b0f1adac5b7c835ca00dc','170795a90339520c3673f72508b5ba6f',
- 'da151fbcb5e621d9b2ce6754a0859f63',
- '80960999b7bfd9f089b86c88796b3bcb','792f74d99a0bd137118b239fac5047ef');
-
--- 论文(10 行)→ 绑定给 Paper、PUBLISHED_IN(两 schema 共用此表)
-CREATE TABLE t_paper (
-  id varchar(64) NOT NULL,
-  zh_name varchar(1024) DEFAULT NULL,
-  doi varchar(512) DEFAULT NULL,
-  cover_year_start varchar(4) DEFAULT NULL,
-  publication_id bigint DEFAULT NULL,
-  update_time datetime DEFAULT NULL,
-  PRIMARY KEY (id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
-INSERT INTO t_paper
-SELECT id, zh_name, doi, cover_year_start, publication_id, updated_time
-FROM gkx_element.dwd_zh_paper
-WHERE id IN ('1002153099575427075','1002153099575427078','1002153099575427082','1002153099575427088',
- '1002153099575427093','1002613259049631753','1005773515376295936','1005773515376295942',
- '1012001490740445188','1012001490740445198');
-
--- 期刊(4 行,已按 publication_id 预去重)→ 绑定给 Journal
--- 源表 dwd_zh_journal 按论文一行(4 刊合计 2000 行),这里 GROUP BY 物化去重,
--- 免去抽取时翻 2000 行(原库直绑的量控瑕疵在此根治);脚本内按 publication_id 去重逻辑变为空转,兼容
-CREATE TABLE t_journal (
-  row_id varchar(64) NOT NULL,
-  publication_id bigint NOT NULL,
-  zh_name varchar(1024) DEFAULT NULL,
-  issn varchar(16) DEFAULT NULL,
-  update_time datetime DEFAULT NULL,
-  PRIMARY KEY (row_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
-INSERT INTO t_journal
-SELECT CONCAT(publication_id,'__journal'), publication_id,
-       MAX(NULLIF(zh_name,'')), MAX(NULLIF(issn,'')), MAX(updated_time)
-FROM gkx_element.dwd_zh_journal
-WHERE publication_id IN ('1009219','1006062','1004427','1004798')
-GROUP BY publication_id;
-
--- ---------- 关系源表 ----------
-
--- 论文-作者对(20 行,前 2 作者)→ 绑定给 AUTHORED_BY、COAUTHOR_WITH(两 schema 共用此表)
-CREATE TABLE t_author_paper (
-  row_id varchar(160) NOT NULL,
-  paper_id varchar(64) NOT NULL,
-  author_id varchar(32) NOT NULL,
-  author_sequence int DEFAULT NULL,
-  zh_name varchar(255) DEFAULT NULL,
-  update_time datetime DEFAULT NULL,
-  PRIMARY KEY (row_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
-INSERT INTO t_author_paper
-SELECT CONCAT(paper_id,'__',author_id), paper_id, author_id, author_sequence, zh_name, updated_time
-FROM gkx_element.dwd_zh_author
-WHERE author_sequence<=2 AND paper_id IN ('1002153099575427075','1002153099575427078','1002153099575427082',
- '1002153099575427088','1002153099575427093','1002613259049631753','1005773515376295936',
- '1005773515376295942','1012001490740445188','1012001490740445198');
-
--- 单位持股对(6 行,双端均在 t_org 内的闭合对)→ 绑定给 SHAREHOLDER_OF
-CREATE TABLE t_shareholder (
-  row_id varchar(600) NOT NULL,
-  org_id varchar(255) NOT NULL,
-  inv_org_id varchar(255) NOT NULL,
-  owners_name varchar(255) DEFAULT NULL,
-  ownership_percentage decimal(20,2) DEFAULT NULL,
-  update_time datetime DEFAULT NULL,
-  PRIMARY KEY (row_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
-INSERT INTO t_shareholder
-SELECT CONCAT(org_id,'__',inv_org_id), org_id, inv_org_id, owners_name, ownership_percentage, updated_time
-FROM gkx_element.dwd_org_shareholder_info
-WHERE owners_type='单位'
-  AND org_id IN ('6316ee16a50a0a093a5859d8b5cc67a8','6c25d2e2c852ba5a81d733cefaf5fe7b',
-   '0a14fdb97eb7d2892654ee2ef180b527','8e04394509161ebbdf63c1813b948955',
-   'f21c867cb7a12e7f175c422de0e939a4','e9f6a720f02bb2143dd0f926b82f07f3')
-  AND inv_org_id IN ('98e68fdf64b81709249dc23816a89c66','69c0d92da4105991cedee6335fb44412',
-   'cbeac662cf32b19dcdb872790e4df8da','71aa92091eda2d2b872ca903d05d6d5d',
-   '3d9ba778337dba72db8cc12a1bbb92be','6ed1fec4b9de17f467edc5dd0af0c89a');
+INSERT INTO `t_expert` VALUES ('0f2f8f6e8903effb92ff99d39f936787','何昀',NULL,'2026-07-19 08:11:25'),('12aea370e3b46b1dc7e6570a6cd639b9','史亚帆',NULL,'2026-07-19 08:11:25'),('134066be56583f1327557f7898825a18','郭贯成',NULL,'2026-07-19 08:11:25'),('170795a90339520c3673f72508b5ba6f','樊杰',NULL,'2026-07-19 08:11:26'),('24db008db3d0781a7bd6cd35a4f3922c','徐秋实',NULL,'2026-07-19 08:11:25'),('264fb2e63afff07020233920a4d7a11b','初壮',NULL,'2026-07-19 08:11:25'),('2c3dfa15fa2b0f1adac5b7c835ca00dc','樊杰',NULL,'2026-07-19 08:11:25'),('36e40fcc42d2bec87f7c423211213dfb','冷浪平',NULL,'2026-07-19 08:11:25'),('370230de7f4fdaa3602af1bb77e313c8','张丽',NULL,'2026-10-09 20:02:50'),('47330a8c229cc0b1f03129685eaa4763','施通勤',NULL,'2026-07-19 08:11:25'),('47340d0f286c628ce0179093a418e353','周静涵',NULL,'2026-10-09 17:49:37'),('4bedbd0030cc9c5e8e9a97e8e7ca6038','张泽坤',NULL,'2026-10-09 17:49:37'),('4e2bc322b165be26cb591b84b7905eb9','李彦伦',NULL,'2026-10-09 17:49:37'),('50ef5f551c4a7fad56dcd82b2bdf6da2','滕堂伟',NULL,'2026-07-19 08:11:25'),('53e7d89bd0f34628b6ef2f7055d8eec4','许丽',NULL,'2026-07-19 08:11:25'),('59dce19adb29701688a1ce9a63069aea','韩述',NULL,'2026-07-19 08:11:25'),('6491608b1cf6c64fbc83294506b0fb8a','贾科',NULL,'2026-10-09 17:49:37'),('6af98c6522a894c6cdebb7e0c7b80376','秦晓辉',NULL,'2026-10-09 17:49:37'),('6d3ab59bd84753acf4171da25c829ae4','米伟铭',NULL,'2026-10-09 17:49:37'),('70531b787f3c054331f7416aee4679dd','李京',NULL,'2026-10-09 20:02:50'),('715b2ffde43efa6ac79488d8a4e8aee7','董学正',NULL,'2026-10-09 17:49:37'),('717546ccc349b6d95a2050122c6a7664','杨杉',NULL,'2026-07-19 08:11:25'),('72d47b8b41f1adadebe39ed1f6d42623','缪希仁',NULL,'2026-10-09 17:49:37'),('73fdfa939f5bc499b86582316981b1db','徐萍',NULL,'2026-07-19 08:11:25'),('792f74d99a0bd137118b239fac5047ef',NULL,NULL,'2026-07-19 08:11:26'),('80960999b7bfd9f089b86c88796b3bcb',NULL,NULL,'2026-07-19 08:11:26'),('81dc6da5681e64d348e8ce29187c8883','范宸珲',NULL,'2026-10-09 17:49:37'),('8523ada7e9b94b4696c4d04526c40758','叶鹏',NULL,'2026-10-09 17:49:37'),('8cfdb839b116e80687f48373f1d19dd6','李世情',NULL,'2026-10-09 20:02:50'),('8f7a5550dc2be9517d371be0448804f2','李秋雨',NULL,'2026-07-19 08:11:25'),('a0cc47b1eec4bae4927de45571df6356','汪涛',NULL,'2026-10-09 17:49:37'),('a7b0e09a0ff6d3337a5fee9ba4434844','王帅尧',NULL,'2026-07-19 08:11:25'),('afc136f79b5c5ea10bd1038c2b6cd132','甘德强',NULL,'2026-10-09 20:02:50'),('b619824e7f25eb52f6ae57630ffa0a76','杨洁',NULL,'2026-10-09 17:49:37'),('ba8a6f72ee75695dd2388cc6edf9bd94','何永秀',NULL,'2026-10-09 17:49:37'),('bad000ea',NULL,NULL,'2026-10-09 17:49:37'),('bad001ea',NULL,NULL,'2026-10-09 17:49:37'),('bad002ea',NULL,NULL,'2026-10-09 17:49:37'),('bad003ea',NULL,NULL,'2026-10-09 17:49:37'),('bad004ea',NULL,NULL,'2026-10-09 17:49:37'),('bad005ea',NULL,NULL,'2026-10-09 17:49:37'),('bad006ea',NULL,NULL,'2026-10-09 17:49:37'),('bad007ea',NULL,NULL,'2026-10-09 17:49:37'),('bad008ea',NULL,NULL,'2026-10-09 17:49:37'),('bad009ea',NULL,NULL,'2026-10-09 17:49:37'),('bad010ea','',NULL,'2026-10-09 17:49:37'),('bad011ea','',NULL,'2026-10-09 17:49:37'),('bad012ea','',NULL,'2026-10-09 17:49:37'),('bad013ea','',NULL,'2026-10-09 17:49:37'),('bad014ea','',NULL,'2026-10-09 17:49:37'),('bad015ea','',NULL,'2026-10-09 17:49:37'),('bad016ea','',NULL,'2026-10-09 17:49:37'),('bad017ea','',NULL,'2026-10-09 17:49:37'),('bc9a9b0557f0bb1d6facf7bf6532d50c','黄梓欣',NULL,'2026-10-09 17:49:37'),('cafb9c466b2d74de158d995bef134639','张利国',NULL,'2026-07-19 08:11:25'),('cb3c8c338fd8c443c390265207360053','窦晓波',NULL,'2026-10-09 17:49:37'),('cee563163627b491a49d4ab47e59facf','欧阳永健',NULL,'2026-10-09 17:49:37'),('d2b9bda08f8130b8dab54e1aa6ae6b98','史磊',NULL,'2026-07-19 08:11:25'),('da151fbcb5e621d9b2ce6754a0859f63','樊杰',NULL,'2026-07-19 08:11:26'),('dup000ea','徐秋实',NULL,'2026-10-09 17:49:37'),('dup001ea','张利国',NULL,'2026-10-09 17:49:37'),('dup002ea','史亚帆',NULL,'2026-10-09 17:49:37'),('dup003ea','徐萍',NULL,'2026-10-09 17:49:37'),('dup004ea','王帅尧',NULL,'2026-10-09 17:49:37'),('dup005ea','冷浪平',NULL,'2026-10-09 17:49:37'),('dup006ea','王雨昕',NULL,'2026-10-09 17:49:37'),('dup007ea','李秋雨',NULL,'2026-10-09 17:49:37'),('dup008ea','初壮',NULL,'2026-10-09 17:49:37'),('dup009ea','史磊',NULL,'2026-10-09 17:49:37'),('dup010ea','施通勤',NULL,'2026-10-09 17:49:37'),('dup011ea','滕堂伟',NULL,'2026-10-09 17:49:37'),('dup012ea','刘修岩',NULL,'2026-10-09 17:49:37'),('dup013ea','樊杰',NULL,'2026-10-09 17:49:37'),('dup014ea','杨杉',NULL,'2026-10-09 17:49:37'),('dup015ea','许寅',NULL,'2026-10-09 17:49:37'),('dup016ea','韩述',NULL,'2026-10-09 17:49:37'),('dup017ea','许丽',NULL,'2026-10-09 17:49:37'),('dup018ea','郭贯成',NULL,'2026-10-09 17:49:37'),('dup019ea','何昀',NULL,'2026-10-09 17:49:37'),('dup020ea','喻希',NULL,'2026-10-09 17:49:37'),('dup021ea','徐秋实',NULL,'2026-10-09 17:49:37'),('dup022ea','张利国',NULL,'2026-10-09 17:49:37'),('dup023ea','史亚帆',NULL,'2026-10-09 17:49:37'),('dup024ea','徐萍','测试比对机构(异地同名)','2026-10-09 17:49:37'),('dup025ea','王帅尧','测试比对机构(异地同名)','2026-10-09 17:49:37'),('dup026ea','冷浪平','测试比对机构(异地同名)','2026-10-09 17:49:37'),('dup027ea','王雨昕','测试比对机构(异地同名)','2026-10-09 17:49:37'),('dup028ea','李秋雨','测试比对机构(异地同名)','2026-10-09 17:49:37'),('dup029ea','初壮','测试比对机构(异地同名)','2026-10-09 17:49:37'),('dup030ea','史磊','测试比对机构(异地同名)','2026-10-09 17:49:37'),('dup031ea','施通勤','测试比对机构(异地同名)','2026-10-09 17:49:37'),('dup032ea','滕堂伟','测试比对机构(异地同名)','2026-10-09 17:49:37'),('dup033ea','刘修岩','测试比对机构(异地同名)','2026-10-09 17:49:37'),('dup034ea','樊杰','测试比对机构(异地同名)','2026-10-09 17:49:37'),('dup035ea','杨杉','测试比对机构(异地同名)','2026-10-09 17:49:37'),('eb01531ab783e0f19a7fe36aad02c5cc','喻希',NULL,'2026-07-19 08:11:25'),('eb7e28ffc6a0edf21580dddc0aced796','许寅',NULL,'2026-07-19 08:11:25'),('fb9e2948f22da487fb3338ba1f4e072a','王雨昕',NULL,'2026-07-19 08:11:25'),('ff60369aa3eb6daad43d30000fa43e4b','刘修岩',NULL,'2026-07-19 08:11:25');

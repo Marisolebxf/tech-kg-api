@@ -70,7 +70,9 @@ const route = useRoute()
 const router = useRouter()
 const jobId = computed(() => String(route.params.jobId || ''))
 const job = ref<WorkflowJob | null>(null)
-const taskId = computed(() => String(route.params.taskId || route.params.instanceId || 'UPD-20260714'))
+/** job/周期任务路由没有任务参数：任务 ID 以最新执行回写的 processingInstance 为准，
+ *  不再回落演示常量 UPD-20260714（此前 job 详情页的重试会拿它去调接口，必 404）。 */
+const taskId = computed(() => String(route.params.taskId || route.params.instanceId || processingInstance.value?.id || ''))
 const processingInstance = ref<ProcessingInstance>()
 const fallbackBatch: UpdateBatch = { id: '-', name: '任务详情', updateDate: '-', dataWindow: '-', source: '-', trigger: '-', input: 0, entities: 0, relations: 0, completed: 0, abnormal: 0, progress: 0, status: '处理中', startedAt: '-', completedAt: '-' }
 const batch = computed(() => processingInstance.value?.batch ?? fallbackBatch)
@@ -308,6 +310,14 @@ const selectedStep = computed<Step>(() => {
 const visiblePhase = computed<'数据处理' | '图谱构建'>(() => steps.value[0]?.phase ?? (isConstructionTask.value ? '图谱构建' : '数据处理'))
 const visibleSteps = computed(() => steps.value)
 const needsReview = computed(() => needsTaskReview.value && selectedStep.value.abnormal !== '0' && selectedStep.value.abnormal !== '-')
+/** 「进入人工处理」入口：平台喂数抽取（含 chain）的逐行失败落「抽取失败重跑」
+ *  C 类队列（category 深链直达）；其余待复核任务落人工审核处理中心首页。
+ *  旧实现跳 /manual-review/task/<任务ID>——该路由只认审核案 MR- ID，任务/作业
+ *  详情页拿不到（job 路由下 taskId 曾回落演示常量），点击必 404 空白页。 */
+const reviewEntryTarget = computed(() =>
+  processingInstance.value?.workflowType === 'kg.schema.extract' || isChainTask.value
+    ? '/manual-review?category=C'
+    : '/manual-review')
 const attentionLabel = computed(() => selectedStep.value.risk === '高风险' ? '重点关注' : selectedStep.value.risk === '中风险' ? '一般关注' : '常规节点')
 const isProcessLevelIncident = computed(() => ['模型批量输出异常', 'Schema 批量映射失败', '公共字典配置异常'].includes(processingInstance.value?.reviewType ?? ''))
 const isTaskExecutionFailure = computed(() => processingInstance.value?.reviewType === '单任务执行失败')
@@ -638,8 +648,9 @@ watch(() => route.query.activity, (value) => {
   // 深链带 activity 时确保对应脚本 step 处于展开状态
   if (value && isChainTask.value) expandedScriptId.value = String(route.query.step || expandedScriptId.value)
 })
-watch(taskId, () => {
-  void loadTaskDetail()
+watch(taskId, (id) => {
+  // job 详情页 taskId 由 processingInstance 回填而来：同一任务不重复拉取
+  if (id && processingInstance.value?.id !== id) void loadTaskDetail()
 })
 onMounted(async () => {
   if (jobId.value) {
@@ -750,7 +761,7 @@ onMounted(async () => {
       </aside>
 
       <main class="step-detail">
-        <header class="step-head"><div><h2>{{ selectedStep.name }}</h2><p>{{ selectedStep.description }}</p></div><div class="step-head-actions"><button v-if="isChainTask && selectedActivityId" type="button" class="step-head-back" @click="clearActivitySelection()">← 返回脚本级信息</button><button v-if="isPipelineTask && isPipelineFailed" type="button" class="step-head-retry" :disabled="retrySubmitting" @click="handlePipelineRetry">{{ retrySubmitting ? '提交中…' : '重试（reset 回放）' }}</button><RouterLink v-else-if="!isPipelineTask && needsReview" :to="`/manual-review/task/${taskId}`">进入人工处理 →</RouterLink></div></header>
+        <header class="step-head"><div><h2>{{ selectedStep.name }}</h2><p>{{ selectedStep.description }}</p></div><div class="step-head-actions"><button v-if="isChainTask && selectedActivityId" type="button" class="step-head-back" @click="clearActivitySelection()">← 返回脚本级信息</button><button v-if="isPipelineTask && isPipelineFailed" type="button" class="step-head-retry" :disabled="retrySubmitting" @click="handlePipelineRetry">{{ retrySubmitting ? '提交中…' : '重试（reset 回放）' }}</button><RouterLink v-else-if="!isPipelineTask && needsReview" :to="reviewEntryTarget">进入人工处理 →</RouterLink></div></header>
         <nav class="detail-tabs"><button v-for="tab in ([['overview','概况与结果'],['io','输入输出'],['logs','异常与日志'],['lineage','数据溯源']] as const)" :key="tab[0]" type="button" :class="{ active: activeTab === tab[0] }" @click="activeTab = tab[0]">{{ tab[1] }}</button></nav>
 
         <div v-if="activeTab === 'overview'" class="overview-content">

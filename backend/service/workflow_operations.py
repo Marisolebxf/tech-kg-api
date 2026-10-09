@@ -46,7 +46,8 @@ def _extract_result_log_lines(execution: dict[str, Any]) -> list[str]:
     - 重跑范围来自 payload（下发时即有）；
     - 逐来源批次/读行/写入/失败/游标来自 output.sources（工作流结束回填）；
     - 失败汇总来自 output.failures——重跑模式 recorded 恒 0（仍失败记录由
-      resolve 重建为新审核 case），此时引导看失败队列而非 recorded。
+      resolve 重建为新审核 case），此时引导看失败队列而非 recorded；普通模式
+      recorded=0 是失败行缺记录主键、未建任何 case，如实说明而非引导翻空队列。
     """
     lines: list[str] = []
     scope = _rerun_scope_line(execution.get("payload"))
@@ -68,7 +69,14 @@ def _extract_result_log_lines(execution: dict[str, Any]) -> list[str]:
     failures = output.get("failures")
     if isinstance(failures, dict) and _safe_int(failures.get("count")):
         recorded = _safe_int(failures.get("recorded"))
-        detail = f"已落审核 case {recorded} 条" if recorded else "详见人工审核失败队列"
+        payload = execution.get("payload")
+        rerun = isinstance(payload, dict) and bool(payload.get("recordIdsBySource"))
+        if recorded:
+            detail = f"已落审核 case {recorded} 条"
+        elif rerun:
+            detail = "详见人工审核失败队列"
+        else:
+            detail = "未转人工审核：失败行缺少记录主键"
         lines.append(f"失败汇总：{failures.get('count')} 条（{detail}）")
     return lines
 

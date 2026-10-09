@@ -109,8 +109,13 @@ const TASK_TYPE_LABELS: Record<string, string> = {
 const filteredJobs = computed(() => {
   const name = submittedName.value.toLowerCase()
   const space = spaceScope.value || graphSpaceStore.current
+  // 可视域：默认空间 + 本人绑定（与顶栏选择器一致）。「全部空间」也只在可视域内
+  // 展示——已解绑/未绑定的空间任务不因选「全部」越界露出（连带其重跑入口）
+  const visible = new Set(graphSpaceStore.spaces)
   return jobs.value.filter((job) => {
-    if (space !== ALL_SPACES && jobSpace(job) !== space) return false
+    const spaceName = jobSpace(job)
+    if (!visible.has(spaceName)) return false
+    if (space !== ALL_SPACES && spaceName !== space) return false
     if (name && !job.name.toLowerCase().includes(name)) return false
     if (filterStatus.value && deriveJobUnifiedStatus(job) !== filterStatus.value) return false
     if (filterTaskType.value && job.taskType !== filterTaskType.value) return false
@@ -457,7 +462,7 @@ onMounted(() => {
             :title="spaceScope || '按图空间筛选任务（清空即跟随总览页全局选择器的当前空间）'"
             :trigger-props="{ contentClass: 'gb-space-select-popup' }"
           >
-            <a-option :value="ALL_SPACES">全部空间</a-option>
+            <a-option :value="ALL_SPACES" title="全部空间 = 可视域内的全部空间（默认空间 + 本人绑定）">全部空间</a-option>
             <a-option v-for="space in graphSpaceStore.spaces" :key="space" :value="space" :title="space">{{ space }}</a-option>
           </a-select>
           <a-select id="graph-build-filter-status" v-model="filterStatusSelect" class="gb-filter-select" placeholder="状态" allow-clear>

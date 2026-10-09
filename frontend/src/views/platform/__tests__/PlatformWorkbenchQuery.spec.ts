@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 
 import { runNgql, type GraphConsoleResult } from '../../../api/graphConsole'
 import {
+  cancelAlgorithmJob,
   fetchGraphAlgorithmMetadata,
   getAlgorithmJob,
   getAlgorithmJobResult,
@@ -21,6 +22,7 @@ const { showToast } = vi.hoisted(() => ({ showToast: vi.fn() }))
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }), RouterLink: { template: '<a><slot /></a>' } }))
 vi.mock('../../../api/graphConsole', () => ({ runNgql: vi.fn() }))
 vi.mock('../../../api/graphAlgorithm', () => ({
+  cancelAlgorithmJob: vi.fn(),
   fetchGraphAlgorithmMetadata: vi.fn(),
   fetchGraphAlgorithmEngine: vi.fn(),
   getAlgorithmJob: vi.fn(),
@@ -581,6 +583,9 @@ describe('Algorithm result lists', () => {
     await exportButton!.trigger('click')
     const csv = blobParts[0]!.join('')
     expect(csv.split('\r\n')).toHaveLength(202)
+    expect(csv.split('\r\n')[0]).toBe('\uFEFF"序号","vid","degree"')
+    expect(csv.split('\r\n')[1]).toBe('"1","node-0","0"')
+    expect(csv.split('\r\n')[201]).toBe('"201","node-200","200"')
     expect(csv).toContain('node-0')
     expect(csv).toContain('node-200')
     anchorClick.mockRestore()
@@ -716,5 +721,79 @@ describe('Per-algorithm help', () => {
         expect(tab.classes().includes('is-active')).toBe(labels[index] === label)
       }
     }
+  })
+})
+
+describe('Algorithm job cancellation', () => {
+  it.each(['PageRank算法', 'Louvain算法', 'Degree算法'])('terminates only the current %s job and allows a new submission', async (label) => {
+    vi.mocked(cancelAlgorithmJob).mockResolvedValue({ jobId: 'job-a', status: 'cancelled' })
+    await enterAlgorithms()
+    await clickButton(label)
+    expect(wrapper.get('.platform-query-algo-cancel').attributes('disabled')).toBeDefined()
+    await submitAlgorithm()
+    expect(wrapper.get('.platform-query-algo-cancel').attributes('disabled')).toBeUndefined()
+    await clickButton('终止算法作业')
+    await flushPromises()
+    expect(cancelAlgorithmJob).toHaveBeenCalledWith('space-a', 'job-a')
+    expect(wrapper.text()).toContain('算法作业已终止，可重新提交')
+    expect(wrapper.get('.platform-query-algo-cancel').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('.platform-query-algo__actions button').attributes('disabled')).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(getAlgorithmJob).not.toHaveBeenCalled()
+  })
+
+  it('keeps polling when the engine has accepted but not finished cancellation', async () => {
+    vi.mocked(cancelAlgorithmJob).mockResolvedValue({ jobId: 'job-a', status: 'running' })
+    vi.mocked(getAlgorithmJob).mockResolvedValue({ jobId: 'job-a', status: 'cancelled' })
+    await enterAlgorithms()
+    await submitAlgorithm()
+    await clickButton('终止算法作业')
+    await flushPromises()
+    expect(wrapper.get('.platform-query-algo__job-meta').text()).toContain('终止中')
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+    expect(wrapper.text()).toContain('已终止')
+    expect(getAlgorithmJobResult).not.toHaveBeenCalled()
+  })
+
+  it('resumes polling after a cancellation error', async () => {
+    vi.mocked(cancelAlgorithmJob).mockRejectedValue(new Error('Spark unavailable'))
+    await enterAlgorithms()
+    await submitAlgorithm()
+    await clickButton('终止算法作业')
+    await flushPromises()
+    expect(showToast).toHaveBeenCalledWith('Spark unavailable', 'warning')
+    expect(wrapper.get('.platform-query-algo-cancel').attributes('disabled')).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(getAlgorithmJob).toHaveBeenCalledWith('space-a', 'job-a')
+  })
+
+  it('ignores a status response started before cancellation', async () => {
+    const pendingStatus = deferred<AlgorithmJobSnapshot>()
+    vi.mocked(getAlgorithmJob).mockReturnValue(pendingStatus.promise)
+    vi.mocked(cancelAlgorithmJob).mockResolvedValue({ jobId: 'job-a', status: 'cancelled' })
+    await enterAlgorithms()
+    await submitAlgorithm()
+    await clickButton('刷新状态')
+    await clickButton('终止算法作业')
+    await flushPromises()
+    pendingStatus.resolve({ jobId: 'job-a', status: 'succeeded' })
+    await flushPromises()
+    expect(wrapper.text()).toContain('已终止')
+    expect(getAlgorithmJobResult).not.toHaveBeenCalled()
+  })
+
+  it('keeps a pending cancellation in its original algorithm tab', async () => {
+    const pending = deferred<AlgorithmJobSnapshot>()
+    vi.mocked(cancelAlgorithmJob).mockReturnValue(pending.promise)
+    await enterAlgorithms()
+    await submitAlgorithm()
+    await clickButton('终止算法作业')
+    await clickButton('Degree算法')
+    pending.resolve({ jobId: 'job-a', status: 'cancelled' })
+    await flushPromises()
+    expect(wrapper.find('.platform-query-algo__job-meta').exists()).toBe(false)
+    await clickButton('PageRank算法')
+    expect(wrapper.text()).toContain('已终止')
   })
 })

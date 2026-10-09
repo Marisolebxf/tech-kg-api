@@ -5,7 +5,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { IconRefresh, IconSearch } from '@arco-design/web-vue/es/icon'
 
-import { deleteProductionReview, executionStatusLabel, getExecution, getProductionReview, getProductionReviews, getTask, rerunExtractFailures, TRIGGER_SOURCE_LABEL, type ProcessingInstance, type ProductionReviewCase, type WorkflowExecution } from '../../api/workflowOperations'
+import { deleteProductionReview, getExecution, getProductionReview, getProductionReviews, getTask, rerunExtractFailures, TRIGGER_SOURCE_LABEL, type ProcessingInstance, type ProcessStep, type ProductionReviewCase, type WorkflowExecution } from '../../api/workflowOperations'
 import { currentGraphSpace } from '../../api/currentGraphSpace'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
 import { clampSearchKeyword, SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
@@ -232,17 +232,6 @@ const logLoading = ref(false)
 const logError = ref('')
 const logCase = ref<ProductionReviewCase>()
 const logExecution = ref<WorkflowExecution | null>(null)
-/** 处理日志弹窗执行概要的状态色调（五类语义，与执行历史表同口径）：
- *  完成=成功 / 异常=警告 / 失败与超时=危险 / 取消与终止=中性 / 运行=信息 / 其余等待=中性。 */
-const logExecutionTone = (status?: string | null) => {
-  const s = (status || '').toUpperCase()
-  if (s === 'COMPLETED') return 'ok'
-  if (s === 'ABNORMAL') return 'warn'
-  if (['FAILED', 'TIMED_OUT'].includes(s)) return 'err'
-  if (['CANCELED', 'TERMINATED'].includes(s)) return 'idle'
-  if (s === 'RUNNING') return 'run'
-  return 'idle'
-}
 const logTask = ref<ProcessingInstance | null>(null)
 const logExecutionMissing = ref(false)
 /** 当前展示哪个执行：rerun=重跑执行（最新一次处理）；original=原执行。 */
@@ -273,6 +262,30 @@ const logLines = computed<string[]>(() => {
   const message = logExecution.value?.message
   return message ? [message] : []
 })
+
+/** 口径对齐任务详情页（ProcessInstanceDetailView）：环节跑完但含失败行 = 异常，
+ *  非成功也非失败；行级失败数在 step.abnormal（kg.schema.extract 的 failed 计数）。 */
+function stepDisplayStatus(step: ProcessStep): string {
+  if (step.status === '成功' && step.abnormal !== '0' && step.abnormal !== '-') return '异常'
+  return step.status
+}
+
+/** 执行概要状态三选一：成功（COMPLETED 零失败行）/ 异常（ABNORMAL 含行级失败）/
+ *  失败（FAILED 等跑崩类）；运行中为在途执行的瞬时态。 */
+function executionDisplayStatus(status?: string | null): string {
+  switch ((status || '').toUpperCase()) {
+    case 'COMPLETED': return '成功'
+    case 'ABNORMAL': return '异常'
+    case 'FAILED': case 'CANCELED': case 'TERMINATED': case 'TIMED_OUT': return '失败'
+    default: return '运行中'
+  }
+}
+
+/** 状态圆点配色 tone（对齐 8093 现网 case-log-exec-status 口径）：成功绿/异常橙/失败红/运行中蓝。 */
+function executionStatusTone(status?: string | null): string {
+  const label = executionDisplayStatus(status)
+  return ({ 成功: 'ok', 异常: 'warn', 失败: 'err' } as Record<string, string>)[label] ?? 'run'
+}
 
 async function loadExecutionLog(executionId: string) {
   logExecution.value = null
@@ -678,7 +691,7 @@ onMounted(() => {
             <dl class="case-log-dl">
               <div><dt>执行 ID</dt><dd><code>{{ logExecution.id }}</code></dd></div>
               <div><dt>触发方式</dt><dd>{{ TRIGGER_SOURCE_LABEL[logExecution.triggerSource || 'MANUAL'] || logExecution.triggerSource || '—' }}</dd></div>
-              <div><dt>状态</dt><dd><span :class="['case-log-exec-status', logExecutionTone(logExecution.status)]">{{ executionStatusLabel(logExecution.status) }}</span></dd></div>
+              <div><dt>状态</dt><dd><span :class="['case-log-exec-status', executionStatusTone(logExecution.status)]">{{ executionDisplayStatus(logExecution.status) }}</span></dd></div>
               <div><dt>开始时间</dt><dd>{{ logExecution.startedAt || '—' }}</dd></div>
               <div><dt>完成时间</dt><dd>{{ logExecution.completedAt || '—' }}</dd></div>
               <div v-if="logExtractSummary"><dt>抽取结果</dt><dd>写入 {{ logExtractSummary.written }} · 失败 {{ logExtractSummary.failed }}（{{ logExtractSummary.sourceCount }} 个来源）</dd></div>
@@ -689,7 +702,10 @@ onMounted(() => {
             <ul class="case-log-steps">
               <li v-for="step in logTask.steps" :key="step.id">
                 <span class="case-log-step-name">{{ step.name }}</span>
-                <span :class="['case-log-step-status', `is-${step.status}`]">{{ step.status }}</span>
+                <a-tooltip v-if="stepDisplayStatus(step) === '异常'" :content="`处理 ${step.count} · 异常 ${step.abnormal}`" position="top">
+                  <span :class="['case-log-step-status', `is-${stepDisplayStatus(step)}`]">{{ stepDisplayStatus(step) }}</span>
+                </a-tooltip>
+                <span v-else :class="['case-log-step-status', `is-${stepDisplayStatus(step)}`]">{{ stepDisplayStatus(step) }}</span>
               </li>
             </ul>
           </section>

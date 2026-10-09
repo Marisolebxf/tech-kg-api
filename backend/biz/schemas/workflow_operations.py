@@ -152,7 +152,7 @@ class JobScheduleSpec(BaseModel):
 
 
 class JobCreateRequest(BaseModel):
-    """任务中心新建任务：extract 数据抽取 / chain 多脚本串行（串联 Schema 抽取脚本）。"""
+    """任务中心新建任务：extract 单脚本抽取 / chain 多脚本串行（串联 Schema 抽取脚本）。"""
 
     name: str = Field(min_length=1, max_length=128)
     task_type: Literal["extract", "chain"] = Field(default="extract", alias="taskType")

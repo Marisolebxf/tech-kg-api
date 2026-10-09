@@ -54,6 +54,17 @@ async def _run_correction_dispatcher() -> None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """初始化各子系统的后台任务，并在退出时释放基础设施资源。"""
     correction_dispatcher = None
+    execution_reconciler = None
+    if os.getenv("EXECUTION_RECONCILE_ENABLED", "true").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        # 执行状态对账：周期核实控制库 RUNNING 陈旧行（调度执行无收尾回写时的兜底）
+        from service.execution_reconciler import run_execution_reconciler
+
+        execution_reconciler = asyncio.create_task(run_execution_reconciler())
     if os.getenv("CORRECTION_SYNC_WORKER_ENABLED", "false").lower() in {
         "1",
         "true",
@@ -125,6 +136,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         asyncio.get_running_loop().create_task(prewarm_entity_browse())
         yield
     finally:
+        if execution_reconciler is not None:
+            execution_reconciler.cancel()
+            with suppress(asyncio.CancelledError):
+                await execution_reconciler
         if correction_dispatcher is not None:
             correction_dispatcher.cancel()
             with suppress(asyncio.CancelledError):

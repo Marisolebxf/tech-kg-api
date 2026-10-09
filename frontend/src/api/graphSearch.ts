@@ -148,18 +148,49 @@ export interface GraphStatsData {
 const GRAPH_SEARCH_PREFIX = '/v1/graph-search'
 
 
+/** 后端 422 校验明细的单条形状（main.py validation_error_handler 落进 data 的项） */
+export interface ApiValidationErrorItem {
+  loc?: unknown[]
+  msg?: string
+}
+
+/**
+ * 422 明细拼接为「字段: 信息；字段: 信息」（剔除 loc 的 body 前缀）。
+ * 各 API 模块共用，保证任何被后端拦下的参数错误都带字段级细节，
+ * 而不是只有一句「请求参数校验失败」。
+ */
+export function formatValidationErrors(items: ApiValidationErrorItem[]): string {
+  return items
+    .map((item) => {
+      const field = Array.isArray(item.loc)
+        ? item.loc.filter((part) => part !== 'body').join('.')
+        : ''
+      const message = item.msg || '校验失败'
+      return field ? `${field}: ${message}` : message
+    })
+    .filter(Boolean)
+    .join('；')
+}
+
 /**
  * 处理后端统一响应。
  *
  * 后端即使发生参数校验错误，也可能返回 HTTP 200，
- * 因此前端必须继续检查 code 和 success。
+ * 因此前端必须继续检查 code 和 success。code=422 且 data 为
+ * 校验明细数组时，拼接字段级错误透出（与 Schema 管理同口径）。
  */
 export function unwrapApiResponse<T>(
   response: ApiResponse<T>,
+  fallbackMessage = '图谱接口请求失败',
 ): T {
   if (!response.success || response.code !== 200) {
+    if (response.code === 422 && Array.isArray(response.data)) {
+      const fieldErrors = formatValidationErrors(response.data as ApiValidationErrorItem[])
+      const base = response.msg || '请求参数校验失败'
+      throw new Error(fieldErrors ? `${base}：${fieldErrors}` : base)
+    }
     throw new Error(
-      response.msg || `图谱接口请求失败，错误码：${response.code}`,
+      response.msg || `${fallbackMessage}，错误码：${response.code}`,
     )
   }
 

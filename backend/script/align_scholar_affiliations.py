@@ -139,6 +139,27 @@ def _get_bm25_encoder(client: Any):
     return bm25
 
 
+def _as_sparse_row(sparse_vec):
+    """单条稀疏查询向量规整为带 ``.indices/.data`` 的 2-D (1, n) csr。
+
+    BM25 ``encode_queries`` 按行整数索引（``q[i]``）取出的是 1-D ``coo_array``，
+    1-D coo 的 ``.tocsr()`` 仍返回 coo（无 ``.indices``），pymilvus 稀疏占位符
+    序列化会报 "coo_array object has no attribute 'indices'"；显式用
+    (data, indices, indptr) 三元组重组成 csr_matrix（恒 2-D、必有 ``.indices``）。
+    """
+    import numpy as np
+    from scipy.sparse import csr_matrix, issparse
+
+    if not issparse(sparse_vec):
+        return sparse_vec
+    if sparse_vec.ndim == 2:
+        return sparse_vec if hasattr(sparse_vec, "indices") else csr_matrix(sparse_vec)
+    coo = sparse_vec.tocoo()
+    idx = coo.coords[0] if hasattr(coo, "coords") else coo.col
+    indptr = np.array([0, len(coo.data)], dtype=np.int32)
+    return csr_matrix((coo.data, idx, indptr), shape=(1, sparse_vec.shape[0]))
+
+
 def _hybrid_search(
     milvus: Any,
     dense_query: list[float],
@@ -155,7 +176,7 @@ def _hybrid_search(
         limit=top_k,
     )
     sparse_req = AnnSearchRequest(
-        data=[sparse_query],
+        data=[_as_sparse_row(sparse_query)],
         anns_field="sparse_vec",
         param={"metric_type": "IP", "params": {"drop_ratio_search": 0.2}},
         limit=top_k,
@@ -170,21 +191,32 @@ def _hybrid_search(
     out: list[dict] = []
     if not resp or not resp[0]:
         return out
+
+    def _get(entity_ref, key, default=None):
+        if hasattr(entity_ref, "get"):
+            return entity_ref.get(key, default)
+        return getattr(entity_ref, key, default)
+
     for hit in resp[0]:
-        entity = getattr(hit, "entity", None) or {}
-
-        def _get(entity_ref, key, default=None):
-            if hasattr(entity_ref, "get"):
-                return entity_ref.get(key, default)
-            return getattr(entity_ref, key, default)
-
+        # 新版 pymilvus 的 hybrid_search 直接返回 dict 行（分数在 "distance" 键），
+        # 旧版返回 Hit 对象（.entity 属性 + .distance/.score）——两种形态都兼容。
+        if isinstance(hit, dict):
+            entity = hit.get("entity") or {}
+            fallback_id = hit.get("id", "")
+            raw_score = hit.get("distance", 0.0)
+        else:
+            entity = getattr(hit, "entity", None) or {}
+            fallback_id = getattr(hit, "id", "")
+            raw_score = getattr(hit, "distance", None)
+            if raw_score is None:
+                raw_score = getattr(hit, "score", 0.0)
         out.append(
             {
-                "vid": _get(entity, "vid") or _get(entity, "org_id") or getattr(hit, "id", ""),
+                "vid": _get(entity, "vid") or _get(entity, "org_id") or fallback_id,
                 "org_id": _get(entity, "org_id"),
                 "name_cn": _get(entity, "name_cn"),
                 "name_en": _get(entity, "name_en"),
-                "score": float(getattr(hit, "score", 0.0) or 0.0),
+                "score": float(raw_score or 0.0),
             }
         )
     return out

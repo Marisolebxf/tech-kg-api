@@ -190,6 +190,28 @@ def _get_bm25_fitted(corpus: list[str]):
 # ---------------------------------------------------------------------------
 # Milvus 混合检索
 # ---------------------------------------------------------------------------
+def _as_sparse_array(sparse_vec):
+    """单条稀疏查询向量规整为带 ``.indices/.data`` 的 2-D (1, n) csr。
+
+    BM25 ``encode_queries`` 返回 csr_array，但按行整数索引（``q[i]``）取出的是
+    1-D ``coo_array``；1-D coo 的 ``.tocsr()`` 仍返回 coo（没有 ``.indices``），
+    pymilvus ``sparse_rows_to_proto`` 取 ``row_data.indices`` 直接 AttributeError
+    （"coo_array object has no attribute 'indices'"）。显式用 (data, indices,
+    indptr) 三元组重组成 csr_matrix（spmatrix 恒 2-D、必有 ``.indices``）。
+    """
+    import numpy as np
+    from scipy.sparse import csr_matrix, issparse
+
+    if not issparse(sparse_vec):
+        return sparse_vec
+    if sparse_vec.ndim == 2:
+        return sparse_vec if hasattr(sparse_vec, "indices") else csr_matrix(sparse_vec)
+    coo = sparse_vec.tocoo()
+    idx = coo.coords[0] if hasattr(coo, "coords") else coo.col
+    indptr = np.array([0, len(coo.data)], dtype=np.int32)
+    return csr_matrix((coo.data, idx, indptr), shape=(1, sparse_vec.shape[0]))
+
+
 def _hybrid_search(milvus: Any, dense_vec, sparse_vec, top_k: int) -> list[dict]:
     from pymilvus import AnnSearchRequest, RRFRanker  # type: ignore
 
@@ -200,7 +222,9 @@ def _hybrid_search(milvus: Any, dense_vec, sparse_vec, top_k: int) -> list[dict]
         limit=top_k,
     )
     sparse_req = AnnSearchRequest(
-        data=[sparse_vec],
+        # BM25 编码返回 scipy 稀疏矩阵（spmatrix 无 __len__，pymilvus 推断 nq 时报
+        # "sparse array length is ambiguous"）；归一成稀疏数组 csr_array 后语义不变
+        data=[_as_sparse_array(sparse_vec)],
         anns_field="sparse_vec",
         param={"metric_type": "IP", "params": {"drop_ratio_search": 0.2}},
         limit=top_k,
@@ -215,22 +239,34 @@ def _hybrid_search(milvus: Any, dense_vec, sparse_vec, top_k: int) -> list[dict]
     out: list[dict] = []
     if not resp or not resp[0]:
         return out
+
+    def _g(entity_ref, k, d=None):
+        if hasattr(entity_ref, "get"):
+            return entity_ref.get(k, d)
+        return getattr(entity_ref, k, d)
+
     for hit in resp[0]:
-        entity = getattr(hit, "entity", None) or {}
-
-        def _g(entity_ref, k, d=None):
-            if hasattr(entity_ref, "get"):
-                return entity_ref.get(k, d)
-            return getattr(entity_ref, k, d)
-
+        # 新版 pymilvus 的 hybrid_search 直接返回 dict 行（分数在 "distance" 键），
+        # 旧版返回 Hit 对象（.entity 属性 + .distance/.score）。只按对象属性取值会把
+        # vid/分数全读成空，候选被整批过滤成 0。
+        if isinstance(hit, dict):
+            entity = hit.get("entity") or {}
+            fallback_id = hit.get("id", "")
+            raw_score = hit.get("distance", 0.0)
+        else:
+            entity = getattr(hit, "entity", None) or {}
+            fallback_id = getattr(hit, "id", "")
+            raw_score = getattr(hit, "distance", None)
+            if raw_score is None:
+                raw_score = getattr(hit, "score", 0.0)
         out.append(
             {
-                "vid": _g(entity, "vid") or getattr(hit, "id", ""),
+                "vid": _g(entity, "vid") or fallback_id,
                 "name_zh": _g(entity, "name_zh") or "",
                 "name_en": _g(entity, "name_en") or "",
                 "scholar_org": _g(entity, "scholar_org") or "",
                 "research_fields": _g(entity, "research_fields") or "",
-                "milvus_score": float(getattr(hit, "score", 0.0) or 0.0),
+                "milvus_score": float(raw_score or 0.0),
             }
         )
     return out

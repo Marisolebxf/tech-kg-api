@@ -3,6 +3,7 @@ import type { AxiosError } from 'axios'
 import { fetchEventSource } from '@microsoft/fetch-event-source'
 
 import { apiBase } from '../config'
+import { unwrapApiResponse } from './graphSearch'
 import { http } from './http'
 
 export interface ApiResponse<T> {
@@ -143,34 +144,10 @@ function headers(userId: string) {
   return { 'X-User-Id': userId }
 }
 
-interface ValidationErrorItem {
-  loc?: unknown[]
-  msg?: string
-}
-
-function formatValidationErrors(items: ValidationErrorItem[]): string {
-  return items
-    .map((item) => {
-      const field = Array.isArray(item.loc)
-        ? item.loc.filter((part) => part !== 'body').join('.')
-        : ''
-      const message = item.msg || '校验失败'
-      return field ? `${field}: ${message}` : message
-    })
-    .filter(Boolean)
-    .join('；')
-}
-
 function unwrap<T>(response: ApiResponse<T>): T {
-  if (!response.success || response.code !== 200) {
-    if (response.code === 422 && Array.isArray(response.data)) {
-      const fieldErrors = formatValidationErrors(response.data as ValidationErrorItem[])
-      const base = response.msg || '请求参数校验失败'
-      throw new Error(fieldErrors ? `${base}：${fieldErrors}` : base)
-    }
-    throw new Error(response.msg || `Schema 接口请求失败：${response.code}`)
-  }
-  return response.data
+  // 422 字段级明细的拼接与各 API 模块共用（graphSearch 的共享实现），本文件
+  // 只保留自己的兜底文案；行为与原本地实现逐字一致（spec 断言该格式）
+  return unwrapApiResponse(response, 'Schema 接口请求失败')
 }
 
 function asApiPromise<T>(request: unknown): Promise<ApiResponse<T>> {

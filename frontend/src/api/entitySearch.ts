@@ -4,6 +4,7 @@
  * 后端接口前缀：/api/v1/entity-search
  */
 
+import { unwrapApiResponse } from './graphSearch'
 import { http } from './http'
 
 export interface ApiResponse<T> {
@@ -59,10 +60,8 @@ export interface EntityIndexStatus {
 const PREFIX = '/v1/entity-search'
 
 function unwrap<T>(response: ApiResponse<T>): T {
-  if (!response.success || response.code !== 200) {
-    throw new Error(response.msg || `实体检索接口请求失败：${response.code}`)
-  }
-  return response.data
+  // 422 字段级明细走共享解包（graphSearch.unwrapApiResponse），本文件只留兜底文案
+  return unwrapApiResponse(response, '实体检索接口请求失败')
 }
 
 function asApiPromise<T>(request: unknown): Promise<ApiResponse<T>> {

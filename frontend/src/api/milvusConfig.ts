@@ -1,4 +1,5 @@
 import type { ApiResponse } from './schemaManagement'
+import { unwrapApiResponse } from './graphSearch'
 import { http } from './http'
 import { currentUserId } from './llmConfig'
 
@@ -52,10 +53,8 @@ function headers(userId: string) {
 }
 
 function unwrap<T>(response: ApiResponse<T>): T {
-  if (!response.success || response.code !== 200) {
-    throw new Error(response.msg || `Milvus 配置接口请求失败：${response.code}`)
-  }
-  return response.data
+  // 422 字段级明细走共享解包（graphSearch.unwrapApiResponse），本文件只留兜底文案
+  return unwrapApiResponse(response, 'Milvus 配置接口请求失败')
 }
 
 function asApiPromise<T>(request: unknown): Promise<ApiResponse<T>> {

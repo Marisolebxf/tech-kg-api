@@ -688,7 +688,7 @@ onBeforeUnmount(() => {
               >
                 <img :src="iconBook" alt="" aria-hidden="true" />
               </a>
-              <GraphSpaceSelector v-if="isOverviewPage" />
+              <GraphSpaceSelector />
             </div>
           </AppBreadcrumb>
           <section class="app-workspace" :aria-label="pageTitle">

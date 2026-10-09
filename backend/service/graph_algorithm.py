@@ -921,9 +921,24 @@ def cancel_job(actor: PlatformActor, space: str, job_id: str) -> dict:
         job = client.get_job(job_id)
         if job.status != "running":
             return _job_to_data(job)
+        runner_url = os.getenv("TRSGRAPH_ALGORITHM_RUNNER_URL", "").strip()
+        if runner_url:
+            # 单机 all-in-one 部署：算法经 trsgraph-algorithm-runner 以 Spark
+            # local 模式执行（无 standalone master，作业快照无 submissionId），
+            # 直接让 runner 终止 spark-submit 子进程，终态为 cancelled。
+            from infra.graph_db.algorithm_client import kill_runner_job
+
+            kill_runner_job(job_id, runner_url)
+            # Runner acceptance is not completion: polling confirms "cancelled".
+            return _job_to_data(client.get_job(job_id))
         rest_url = os.getenv("GRAPH_ALGO_SPARK_REST_URL", "").strip()
         if not rest_url:
-            raise GraphAlgorithmError("未配置 Spark 终止服务地址，请配置 GRAPH_ALGO_SPARK_REST_URL", 503)
+            raise GraphAlgorithmError(
+                "未配置算法作业终止通道：单机部署请配置 TRSGRAPH_ALGORITHM_RUNNER_URL"
+                "（图算法 runner 地址，如 http://trsgraph:8091），"
+                "Spark Standalone 部署请配置 GRAPH_ALGO_SPARK_REST_URL",
+                503,
+            )
         if not job.submission_id:
             raise GraphAlgorithmError("算法引擎尚未返回 Spark 作业标识，请刷新状态后重试", 409)
         client.kill_submission(job.submission_id, rest_url)

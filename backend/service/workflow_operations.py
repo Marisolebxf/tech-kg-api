@@ -47,7 +47,9 @@ def _extract_result_log_lines(execution: dict[str, Any]) -> list[str]:
     - 逐来源批次/读行/写入/失败/游标来自 output.sources（工作流结束回填）；
     - 失败汇总来自 output.failures——重跑模式 recorded 恒 0（仍失败记录由
       resolve 重建为新审核 case），此时引导看失败队列而非 recorded；
-      缺记录 id 的失败行建不了 case（noRecordId），须如实说明未入队。
+      缺记录 id 的失败行建不了 case（noRecordId），须如实说明未入队；
+      普通模式 recorded=0 且无 noRecordId 明细时，未建任何 case，如实说明
+      而非引导翻空队列。
     """
     lines: list[str] = []
     scope = _rerun_scope_line(execution.get("payload"))
@@ -70,14 +72,18 @@ def _extract_result_log_lines(execution: dict[str, Any]) -> list[str]:
     if isinstance(failures, dict) and _safe_int(failures.get("count")):
         recorded = _safe_int(failures.get("recorded"))
         no_record_id = _safe_int(failures.get("noRecordId"))
+        payload = execution.get("payload")
+        rerun = isinstance(payload, dict) and bool(payload.get("recordIdsBySource"))
         if recorded:
             detail = f"已落审核 case {recorded} 条"
             if no_record_id:
                 detail += f"，{no_record_id} 条缺记录 id 未入队"
-        elif no_record_id:
-            detail = f"{no_record_id} 条缺记录 id 未入队，请检查脚本 failures 是否携带记录主键"
-        else:
+        elif rerun:
             detail = "详见人工审核失败队列"
+        elif no_record_id:
+            detail = f"未转人工审核：{no_record_id} 条缺记录 id 无法转审，请检查脚本 failures 是否携带记录主键"
+        else:
+            detail = "未转人工审核：失败行缺少记录主键"
         lines.append(f"失败汇总：{failures.get('count')} 条（{detail}）")
     return lines
 

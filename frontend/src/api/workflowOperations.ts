@@ -194,6 +194,14 @@ export const getProductionReviewAuditLogs = (id: string) =>
 export const deleteProductionReview = (id: string) =>
   unwrap(http.delete(`/v1/manual-reviews/production/${id}`)) as Promise<{ id: string; deleted: boolean }>
 
+/** 批量物理删除未处理 case：逐条复用单删门控，已处理/不存在/无权限的按条跳过不阻断整批。 */
+export const batchDeleteProductionReviews = (data: { caseIds: string[] }) =>
+  unwrap(http.post('/v1/manual-reviews/production/batch-delete', data)) as Promise<{
+    requested: number
+    deleted: number
+    skipped: Array<{ id: string; reason: string }>
+  }>
+
 /** T_EXTRACT_FAIL 抽取失败记录重跑：所选 case 按 schema 合并为新执行（triggerSource=RERUN）。
  *  skipped = 校验失败被跳过的 schema 组（已删/不在当前控制面/缺来源绑定），不阻断其余重跑。 */
 export const rerunExtractFailures = (data: { caseIds?: string[]; executionId?: string; batchSize?: number }) =>

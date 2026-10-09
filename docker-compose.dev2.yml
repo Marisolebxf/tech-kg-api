@@ -38,6 +38,7 @@ services:
       # 容器名 mysql/trs-graph-service 在本栈解析不到；宿主机已发布 3306/8090 端口）===
       TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://host.docker.internal:8090}
       GRAPH_ALGO_SPARK_REST_URL: ${GRAPH_ALGO_SPARK_REST_URL:-}
+      TRSGRAPH_ALGORITHM_RUNNER_URL: ${TRSGRAPH_ALGORITHM_RUNNER_URL:-}
       TRS_GRAPH_SPACE: dev
       TRS_GRAPH_API_KEY: ${TRS_GRAPH_API_KEY:-ysukeg}
       TRS_GRAPH_TIMEOUT: ${TRS_GRAPH_TIMEOUT:-30}
@@ -154,6 +155,7 @@ services:
       - patent-index-state-dev2:/app/var/patent_indexes
     networks:
       - app
+      - trsgraph-runner
     depends_on:
       temporal-dev2:
         condition: service_started
@@ -170,6 +172,7 @@ services:
       PLATFORM_BUSINESS_ONLY_USER_IDS: ${PLATFORM_BUSINESS_ONLY_USER_IDS:-}
       TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://host.docker.internal:8090}
       GRAPH_ALGO_SPARK_REST_URL: ${GRAPH_ALGO_SPARK_REST_URL:-}
+      TRSGRAPH_ALGORITHM_RUNNER_URL: ${TRSGRAPH_ALGORITHM_RUNNER_URL:-}
       TRS_GRAPH_SPACE: dev2
       TRS_GRAPH_API_KEY: ${TRS_GRAPH_API_KEY:-ysukeg}
       TRS_GRAPH_TIMEOUT: ${TRS_GRAPH_TIMEOUT:-30}
@@ -330,3 +333,8 @@ networks:
   app:
     external: true
     name: tech-kg-api_app
+  # 图算法 runner 终止通道：runner 未发布宿主机端口，api 需接入 tech-kg-db
+  # 网络才能直达 http://trsgraph:8091（POST /jobs/{id}/kill）
+  trsgraph-runner:
+    external: true
+    name: tech-kg-db_default

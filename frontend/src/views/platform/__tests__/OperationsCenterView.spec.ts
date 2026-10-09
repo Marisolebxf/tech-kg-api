@@ -57,7 +57,7 @@ const renderReview = () => {
         AInput: {
           name: 'AInput',
           props: ['modelValue'],
-          emits: ['update:modelValue'],
+          emits: ['update:modelValue', 'clear'],
           setup: (props: { modelValue?: string }, { emit }: { emit: (event: string, value: string) => void }) =>
             () => h('input', { value: props.modelValue, onInput: (event: Event) => emit('update:modelValue', (event.target as HTMLInputElement).value) }),
         },
@@ -180,6 +180,60 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     await wrapper.get('.review-filter-row').trigger('submit')
     await flushPromises()
     expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: undefined }))
+  })
+
+  it('搜索框带清空（×）：点清空连已提交关键词一起复位并重新拉取', async () => {
+    const wrapper = renderReview()
+    await flushPromises()
+    const input = wrapper.get('.review-filter-search')
+    expect(input.attributes('allow-clear')).toBeDefined()
+    await input.setValue('MR-2')
+    await wrapper.get('.review-filter-row').trigger('submit')
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: 'MR-2' }))
+
+    // 点 ×（Arco 清空输入并触发 clear 事件）：不点「查询」也应立即按无关键词重拉
+    wrapper.findComponent({ name: 'AInput' }).vm.$emit('clear')
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: undefined }))
+  })
+
+  it('Tab 切换不影响筛选条件：A/C 各自独立记忆，切回原样恢复', async () => {
+    const wrapper = renderReview()
+    await flushPromises()
+    // A 页（入库决策）设筛选：状态=已处理 + 关键词「对齐」
+    wrapper.findAllComponents({ name: 'ASelect' })[0].vm.$emit('update:modelValue', '已处理')
+    await wrapper.get('.review-filter-search').setValue('对齐')
+    await wrapper.get('.review-filter-row').trigger('submit')
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
+      expect.objectContaining({ category: 'A', statusGroup: 'processed', keyword: '对齐' }),
+    )
+
+    // 切到 C：用 C 自己的默认筛选（不携带 A 的已处理/关键词，避免「重跑中」类错位），再设「重跑中」
+    await switchToCategoryC(wrapper)
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
+      expect.objectContaining({ category: 'C', statusGroup: undefined, keyword: undefined }),
+    )
+    wrapper.findAllComponents({ name: 'ASelect' })[0].vm.$emit('update:modelValue', '重跑中')
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
+      expect.objectContaining({ category: 'C', status: 'RERUNNING' }),
+    )
+
+    // 切回 A：已处理 + 关键词原样恢复（含输入框文本）
+    await wrapper.findAll('.review-tabs nav button')[0].trigger('click')
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
+      expect.objectContaining({ category: 'A', templateId: 'T_LINK', statusGroup: 'processed', keyword: '对齐' }),
+    )
+    expect((wrapper.get('.review-filter-search').element as HTMLInputElement).value).toBe('对齐')
+
+    // 再切回 C：「重跑中」还在
+    await switchToCategoryC(wrapper)
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
+      expect.objectContaining({ category: 'C', status: 'RERUNNING' }),
+    )
   })
 
   it('操作列阴影只在右侧仍有可滚动内容时出现', async () => {

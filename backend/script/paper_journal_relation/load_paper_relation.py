@@ -183,14 +183,43 @@ def batch_insert_vertex(
         return False
 
 
+def _edge_first_column(client: TRSGraphClient, edge: str) -> str | None:
+    """边的首个属性列（进程内缓存）。共享空间里边类型可能由平台/其它域先建且带属性，
+    无属性 INSERT（``src->dst:()``）会被 Nebula 以 "Column count doesn't match value
+    count" 拒绝——此时退化为对该列写 NULL，语义仍是无属性，置信度等由
+    backfill_edge_confidence 后置回填。"""
+    col = _EDGE_FIRST_COLUMN.get(edge)
+    if col is not None:
+        return col or None
+    try:
+        rs = client.execute_read(f"USE {SPACE}; DESCRIBE EDGE {edge};").records
+        cols = [r.get("Field") for r in rs if isinstance(r, dict) and r.get("Field")]
+    except Exception:
+        cols = []
+    _EDGE_FIRST_COLUMN[edge] = cols[0] if cols else ""
+    return cols[0] if cols else None
+
+
+_EDGE_FIRST_COLUMN: dict[str, str] = {}
+
+
 def batch_insert_edge(
     client: TRSGraphClient, edge: str, fields: list[str], rows: list[tuple]
 ) -> bool:
     """多值 INSERT EDGE（rank@0，幂等）。rows=[(src, dst, *vals)]。"""
     if not rows:
         return True
+    null_fallback_col = None
+    if not fields:
+        # 边 schema 带属性时空值元组会被拒，改写 (首列)=NULL
+        col = _edge_first_column(client, edge)
+        if col:
+            fields = [col]
+            null_fallback_col = col
     field_part = f"({','.join(fields)})" if fields else ""
-    if fields:
+    if null_fallback_col:
+        values = ",".join(f"{esc(src)}->{esc(dst)}:(NULL)" for src, dst, *_ in rows)
+    elif fields:
         values = ",".join(
             f"{esc(src)}->{esc(dst)}:({','.join(esc(v) for v in vals)})" for src, dst, *vals in rows
         )

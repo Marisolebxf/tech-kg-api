@@ -330,7 +330,7 @@ class WorkflowJobService:
         if task_type not in {"extract", "chain"}:
             # single/upload 已随 D2 下线：脚本唯一通道是 Schema 管理。chain 为
             # 多 Schema 串行（kg.schema.extract.chain），串联对象同样是 Schema 脚本。
-            raise WorkflowJobError("任务类型必须是 extract（数据抽取）或 chain（多脚本串行）")
+            raise WorkflowJobError("任务类型必须是 extract（单脚本抽取）或 chain（多脚本串行）")
         name = (request.get("name") or "").strip()
         if not name:
             raise WorkflowJobError("任务名称不能为空")
@@ -339,7 +339,7 @@ class WorkflowJobService:
         if task_type == "extract":
             schema_id = request.get("schemaId")
             if not schema_id:
-                raise WorkflowJobError("数据抽取任务必须选择 Schema")
+                raise WorkflowJobError("单脚本抽取任务必须选择 Schema")
             from service.schema_extraction import (
                 build_extract_definition,
                 ensure_extract_script_ready,

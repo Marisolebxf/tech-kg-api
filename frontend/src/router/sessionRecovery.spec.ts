@@ -58,12 +58,24 @@ afterEach(() => {
 })
 
 describe('business request authentication recovery', () => {
+  it('does not classify a first unauthenticated business request as an expired session', async () => {
+    bridgeState.embedded = true
+    const { store, replace } = await setup()
+    store.profile = null
+    store.initialized = false
+    await http.get('/v1/graph-query').catch(() => {})
+    expect(store.sessionExpired).toBe(false)
+    expect(replace).not.toHaveBeenCalled()
+    expect(portalBridge.send).not.toHaveBeenCalled()
+  })
+
   it('clears the profile and preserves the safe page for one recovery after parallel 401s', async () => {
     const { store, router, replace } = await setup()
     await Promise.allSettled([http.get('/v1/graph-query'), http.get('/v1/options')])
     await flushPromises()
     notifySessionExpired('登录状态已失效或已超时，请重新登录')
     expect(store.profile).toBeNull()
+    expect(store.sessionExpired).toBe(true)
     expect(replace).toHaveBeenCalledTimes(1)
     expect(router.currentRoute.value.name).toBe('login')
     expect(router.currentRoute.value.query.redirect).toBe('/overview?search=paper#results')

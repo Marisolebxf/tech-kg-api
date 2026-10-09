@@ -26,6 +26,7 @@ services:
       - ./backend/.env
     environment:
       TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://host.docker.internal:8090}
+      GRAPH_ALGO_SPARK_REST_URL: ${GRAPH_ALGO_SPARK_REST_URL:-}
       TRS_GRAPH_SPACE: dev2
       TRS_GRAPH_API_KEY: ${TRS_GRAPH_API_KEY:-ysukeg}
       TRS_GRAPH_TIMEOUT: ${TRS_GRAPH_TIMEOUT:-30}
@@ -94,6 +95,7 @@ services:
       - ./backend/.env
     environment:
       TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://host.docker.internal:8090}
+      GRAPH_ALGO_SPARK_REST_URL: ${GRAPH_ALGO_SPARK_REST_URL:-}
       TRS_GRAPH_SPACE: dev2
       TRS_GRAPH_API_KEY: ${TRS_GRAPH_API_KEY:-ysukeg}
       TRS_GRAPH_TIMEOUT: ${TRS_GRAPH_TIMEOUT:-30}

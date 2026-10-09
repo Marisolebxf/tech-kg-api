@@ -1,0 +1,5317 @@
+{
+ "entities": [
+  {
+   "name": "DataSource",
+   "label": "数据来源",
+   "description": "yunfei_test 还原：复刻 dev 空间 DataSource（e2e 创建）",
+   "props": [
+    {
+     "name": "table_cn_name",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "tier",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "library",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "placeholder",
+     "pkColumn": "id",
+     "timeColumn": "wm_col",
+     "querySql": "SELECT 1 AS id, '1970-01-01 00:00:01' AS wm_col"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "DataSource.py",
+   "provenanceNamedProps": [
+    "vid",
+    "confidence",
+    "match_method",
+    "match_evidence"
+   ]
+  },
+  {
+   "name": "Event",
+   "label": "事件",
+   "description": "yunfei_test 还原：复刻 dev 空间 Event（e2e 创建）",
+   "props": [
+    {
+     "name": "event_type",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "raw_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "title",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "content",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "case_no",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "case_cause",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "occur_date",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "amount",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "currency",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_annual_financial_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_changerecord_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_financing_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_recruit_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_stock_finance_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_company_abnormal",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_company_punish",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_company_illegal",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_risk_tax_punish",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_opt_judicial_case",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_risk_shixin",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_risk_zhixing",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_bankruptcy_public_cases",
+     "pkColumn": "case_no",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_bid_base_out",
+     "pkColumn": "u_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_bid_target_item_out",
+     "pkColumn": "u_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_forg_stock_fin_info",
+     "pkColumn": "org_id",
+     "timeColumn": "wm_col",
+     "querySql": "SELECT t.*, '1970-01-01 00:00:01' AS wm_col FROM `dwd_forg_stock_fin_info` t"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "Event.py",
+   "provenanceNamedProps": [
+    "vid",
+    "match_method",
+    "match_evidence"
+   ]
+  },
+  {
+   "name": "IndustryChain",
+   "label": "产业链",
+   "description": "yunfei_test 还原：复刻 dev 空间 IndustryChain（e2e 创建）",
+   "props": [
+    {
+     "name": "chain_code",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "chain_name",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_industry_chain_info",
+     "pkColumn": "chain_code",
+     "timeColumn": "updated_time",
+     "querySql": null
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "IndustryChain.py",
+   "provenanceNamedProps": [
+    "vid",
+    "source_system",
+    "source_record_id",
+    "source_url",
+    "source_update_time",
+    "confidence",
+    "match_method",
+    "match_evidence"
+   ]
+  },
+  {
+   "name": "IndustryNode",
+   "label": "产业链节点",
+   "description": "yunfei_test 还原：复刻 dev 空间 IndustryNode（e2e 创建）",
+   "props": [
+    {
+     "name": "node_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "node_name",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "node_type",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "level",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "node_seq",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "node_imp_level",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "node_stage",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "node_path",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_industry_chain_info",
+     "pkColumn": "chain_code",
+     "timeColumn": "updated_time",
+     "querySql": null
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "IndustryNode.py",
+   "provenanceNamedProps": [
+    "vid",
+    "source_system",
+    "source_record_id",
+    "source_url",
+    "source_update_time",
+    "match_method",
+    "match_evidence"
+   ]
+  },
+  {
+   "name": "Journal",
+   "label": "期刊",
+   "description": "yunfei_test 还原：复刻 dev 空间 Journal（e2e 创建）",
+   "props": [
+    {
+     "name": "name_zh",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "name_en",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "name_abbr",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "issn",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "eissn",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "country",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "founding_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "impact_factor",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "is_sci",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "jcr_zone",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "cite_nums",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "annual_publication",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "publication_cycle",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "zh_core",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "sub_quartile",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "top",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "scope_zone",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_zh_journal",
+     "pkColumn": "paper_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_en_journal",
+     "pkColumn": "publication_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "Journal.py",
+   "provenanceNamedProps": [
+    "vid",
+    "source_system",
+    "source_record_id",
+    "source_url",
+    "ingest_batch",
+    "ingest_time",
+    "source_update_time",
+    "confidence",
+    "match_method",
+    "match_evidence"
+   ]
+  },
+  {
+   "name": "Keyword",
+   "label": "技术主题",
+   "description": "yunfei_test 还原：复刻 dev 空间 Keyword（e2e 创建）",
+   "props": [
+    {
+     "name": "keyword",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "organization_base",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_scholar_research_direction",
+     "pkColumn": "scholar_id",
+     "timeColumn": "update_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_zh_paper_classification",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_en_paper_classification",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_zh_project",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_en_project",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_patent",
+     "pkColumn": "source_row_id",
+     "timeColumn": "update_time",
+     "querySql": "SELECT\n  p.id AS source_row_id, p.patent_id, p.publication_number,\n  JSON_UNQUOTE(JSON_EXTRACT(p.application_reference, '$.apno')) AS application_number,\n  p.application_kind, p.country_code, p.country,\n  JSON_UNQUOTE(JSON_EXTRACT(p.publication_reference, '$.pbdt')) AS publication_date,\n  JSON_UNQUOTE(JSON_EXTRACT(p.application_reference, '$.apdt')) AS application_date,\n  p.granted_number,\n  JSON_UNQUOTE(JSON_EXTRACT(l.dates_of_public_availability, '$.date')) AS grant_date,\n  l.status, l.anticipated_expiration, t.titles,\n  t.title_localized AS title_en, t.title_zh, a.abstract_zh, p.language,\n  p.main_classification_ipcr AS main_ipcr,\n  p.further_classification_ipcr AS further_ipcr,\n  p.main_classification_cpc AS main_cpc,\n  p.further_classification_cpc AS further_cpc,\n  p.keywords, c.reference_cited AS citation_nums, c.cited_by_nums,\n  p.value AS patent_value, f.simple_family_number,\n  p.db_source, p.create_time, p.update_time\nFROM dwd_patent p\nLEFT JOIN (\n  SELECT patent_id, MAX(titles) AS titles, MAX(title_localized) AS title_localized,\n         MAX(title_zh) AS title_zh\n  FROM dwd_patent_title\n  GROUP BY patent_id\n) t ON t.patent_id = p.patent_id\nLEFT JOIN (\n  SELECT patent_id, MAX(abstract_zh) AS abstract_zh\n  FROM dwd_patent_abstract\n  GROUP BY patent_id\n) a ON a.patent_id = p.patent_id\nLEFT JOIN (\n  SELECT patent_id, MAX(dates_of_public_availability) AS dates_of_public_availability,\n         MAX(status) AS status, MAX(anticipated_expiration) AS anticipated_expiration\n  FROM dwd_patent_legal\n  GROUP BY patent_id\n) l ON l.patent_id = p.patent_id\nLEFT JOIN (\n  SELECT patent_id, MAX(reference_cited) AS reference_cited,\n         MAX(cited_by_nums) AS cited_by_nums\n  FROM dwd_patent_cited\n  GROUP BY patent_id\n) c ON c.patent_id = p.patent_id\nLEFT JOIN (\n  SELECT patent_id, MAX(simple_family_number) AS simple_family_number\n  FROM dwd_patent_family\n  GROUP BY patent_id\n) f ON f.patent_id = p.patent_id\nWHERE p.id REGEXP '^[0-9]+$'"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "Keyword.py",
+   "provenanceNamedProps": [
+    "vid",
+    "match_method",
+    "match_evidence"
+   ]
+  },
+  {
+   "name": "News",
+   "label": "新闻资讯",
+   "description": "yunfei_test 还原：复刻 dev 空间 News（e2e 创建）",
+   "props": [
+    {
+     "name": "title",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "content",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "release_date",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "original_url",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_important_news_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_industry_chain_news_info",
+     "pkColumn": "news_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "News.py",
+   "provenanceNamedProps": [
+    "vid",
+    "match_method",
+    "match_evidence"
+   ]
+  },
+  {
+   "name": "Organization",
+   "label": "机构",
+   "description": "yunfei_test 还原：复刻 dev 空间 Organization（e2e 创建）",
+   "props": [
+    {
+     "name": "name_cn",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "name_en",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "org_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "external_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "province",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "city",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "area",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "country_code",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "country",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "address",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "postal_code",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "phone",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "email",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "legal_rep",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "org_type",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "org_size",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "founded_year",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "listing_status",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "listed_date",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "registered_capital",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "capital_currency",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "industry_class",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "stock_code",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "stock_noun",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "stock_type",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "org_kind",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "description",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "main_products",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_base",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "manual_disabled",
+     "dataType": "bool",
+     "required": false
+    },
+    {
+     "name": "correction_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "corrected_at",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_base_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_org_product_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_heis_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_stock_base",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_special_hongkong_company",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_special_taiwan_company",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_special_aomen_company",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_research_institute_base_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_forg_base_info",
+     "pkColumn": "org_id",
+     "timeColumn": "wm_col",
+     "querySql": "SELECT t.*, '1970-01-01 00:00:01' AS wm_col FROM `dwd_forg_base_info` t"
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_forg_product_info",
+     "pkColumn": "org_id",
+     "timeColumn": "wm_col",
+     "querySql": "SELECT t.*, '1970-01-01 00:00:01' AS wm_col FROM `dwd_forg_product_info` t"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "Organization.py",
+   "provenanceNamedProps": [
+    "vid",
+    "match_method",
+    "match_evidence"
+   ]
+  },
+  {
+   "name": "OrganizationBase",
+   "label": "机构基础信息",
+   "description": "yunfei_test 还原：复刻 dev 空间 organization_base（e2e 创建）",
+   "props": [
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_zh_paper",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_en_paper",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_zh_author",
+     "pkColumn": "paper_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_en_author",
+     "pkColumn": "paper_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_zh_journal",
+     "pkColumn": "paper_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_en_journal",
+     "pkColumn": "publication_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_zh_report",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_en_report",
+     "pkColumn": "row_pk",
+     "timeColumn": "wm_col",
+     "querySql": "SELECT t.*, IFNULL(t.`updated_time`, '1970-01-01 00:00:01') AS wm_col, ROW_NUMBER() OVER (ORDER BY t.`abstract_en`, t.`authors`, t.`authors_id`, t.`content`, t.`contract_number`, t.`corporate_author`, t.`document_type`, t.`file_path`, t.`keywords_en`, t.`literature_id`, t.`org_id`, t.`page_count`, t.`publication_date`, t.`related_literature`, t.`related_scholars`, t.`report_id`, t.`report_number`, t.`scholar_id`, t.`source_agency`, t.`source_url`, t.`title_en`, t.`updated_time`) AS row_pk FROM `dwd_en_report` t"
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_scholar_research_direction",
+     "pkColumn": "scholar_id",
+     "timeColumn": "update_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_zh_paper_classification",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_en_paper_classification",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_zh_project",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_en_project",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_patent",
+     "pkColumn": "source_row_id",
+     "timeColumn": "update_time",
+     "querySql": "SELECT\n  p.id AS source_row_id, p.patent_id, p.publication_number,\n  JSON_UNQUOTE(JSON_EXTRACT(p.application_reference, '$.apno')) AS application_number,\n  p.application_kind, p.country_code, p.country,\n  JSON_UNQUOTE(JSON_EXTRACT(p.publication_reference, '$.pbdt')) AS publication_date,\n  JSON_UNQUOTE(JSON_EXTRACT(p.application_reference, '$.apdt')) AS application_date,\n  p.granted_number,\n  JSON_UNQUOTE(JSON_EXTRACT(l.dates_of_public_availability, '$.date')) AS grant_date,\n  l.status, l.anticipated_expiration, t.titles,\n  t.title_localized AS title_en, t.title_zh, a.abstract_zh, p.language,\n  p.main_classification_ipcr AS main_ipcr,\n  p.further_classification_ipcr AS further_ipcr,\n  p.main_classification_cpc AS main_cpc,\n  p.further_classification_cpc AS further_cpc,\n  p.keywords, c.reference_cited AS citation_nums, c.cited_by_nums,\n  p.value AS patent_value, f.simple_family_number,\n  p.db_source, p.create_time, p.update_time\nFROM dwd_patent p\nLEFT JOIN (\n  SELECT patent_id, MAX(titles) AS titles, MAX(title_localized) AS title_localized,\n         MAX(title_zh) AS title_zh\n  FROM dwd_patent_title\n  GROUP BY patent_id\n) t ON t.patent_id = p.patent_id\nLEFT JOIN (\n  SELECT patent_id, MAX(abstract_zh) AS abstract_zh\n  FROM dwd_patent_abstract\n  GROUP BY patent_id\n) a ON a.patent_id = p.patent_id\nLEFT JOIN (\n  SELECT patent_id, MAX(dates_of_public_availability) AS dates_of_public_availability,\n         MAX(status) AS status, MAX(anticipated_expiration) AS anticipated_expiration\n  FROM dwd_patent_legal\n  GROUP BY patent_id\n) l ON l.patent_id = p.patent_id\nLEFT JOIN (\n  SELECT patent_id, MAX(reference_cited) AS reference_cited,\n         MAX(cited_by_nums) AS cited_by_nums\n  FROM dwd_patent_cited\n  GROUP BY patent_id\n) c ON c.patent_id = p.patent_id\nLEFT JOIN (\n  SELECT patent_id, MAX(simple_family_number) AS simple_family_number\n  FROM dwd_patent_family\n  GROUP BY patent_id\n) f ON f.patent_id = p.patent_id\nWHERE p.id REGEXP '^[0-9]+$'"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "OrganizationBase.py",
+   "provenanceNamedProps": [
+    "vid",
+    "match_method",
+    "match_evidence"
+   ]
+  },
+  {
+   "name": "Paper",
+   "label": "论文",
+   "description": "yunfei_test 还原：复刻 dev 空间 Paper（e2e 创建）",
+   "props": [
+    {
+     "name": "title_en",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "title_zh",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "doi",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "publication_year",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "publication_date",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "language",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "document_type",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "publication_type",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "volume",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "issue",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "start_page",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "end_page",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "is_oa",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "created_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "updated_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "output_awards",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_zh_paper",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_en_paper",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "Paper.py",
+   "provenanceNamedProps": [
+    "vid",
+    "source_system",
+    "source_record_id",
+    "ingest_batch",
+    "ingest_time",
+    "source_update_time",
+    "confidence",
+    "match_method",
+    "match_evidence"
+   ]
+  },
+  {
+   "name": "Patent",
+   "label": "专利",
+   "description": "yunfei_test 还原：复刻 dev 空间 Patent（e2e 创建）",
+   "props": [
+    {
+     "name": "patent_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "publication_number",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "application_number",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "application_kind",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "country_code",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "country",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "publication_date",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "application_date",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "granted_number",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "grant_date",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "status",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "anticipated_expiration",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "title_original",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "title_en",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "title_zh",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "abstract_zh",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "language",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "main_ipcr",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "further_ipcr",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "main_cpc",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "further_cpc",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "keywords",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "citation_nums",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "cited_by_nums",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "patent_value",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "simple_family_number",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "db_source",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "title",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "organization_base",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "output_awards",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "evaluation",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_patent",
+     "pkColumn": "source_row_id",
+     "timeColumn": "update_time",
+     "querySql": "SELECT\n  p.id AS source_row_id, p.patent_id, p.publication_number,\n  JSON_UNQUOTE(JSON_EXTRACT(p.application_reference, '$.apno')) AS application_number,\n  p.application_kind, p.country_code, p.country,\n  JSON_UNQUOTE(JSON_EXTRACT(p.publication_reference, '$.pbdt')) AS publication_date,\n  JSON_UNQUOTE(JSON_EXTRACT(p.application_reference, '$.apdt')) AS application_date,\n  p.granted_number,\n  JSON_UNQUOTE(JSON_EXTRACT(l.dates_of_public_availability, '$.date')) AS grant_date,\n  l.status, l.anticipated_expiration, t.titles,\n  t.title_localized AS title_en, t.title_zh, a.abstract_zh, p.language,\n  p.main_classification_ipcr AS main_ipcr,\n  p.further_classification_ipcr AS further_ipcr,\n  p.main_classification_cpc AS main_cpc,\n  p.further_classification_cpc AS further_cpc,\n  p.keywords, c.reference_cited AS citation_nums, c.cited_by_nums,\n  p.value AS patent_value, f.simple_family_number,\n  p.db_source, p.create_time, p.update_time\nFROM dwd_patent p\nLEFT JOIN (\n  SELECT patent_id, MAX(titles) AS titles, MAX(title_localized) AS title_localized,\n         MAX(title_zh) AS title_zh\n  FROM dwd_patent_title\n  GROUP BY patent_id\n) t ON t.patent_id = p.patent_id\nLEFT JOIN (\n  SELECT patent_id, MAX(abstract_zh) AS abstract_zh\n  FROM dwd_patent_abstract\n  GROUP BY patent_id\n) a ON a.patent_id = p.patent_id\nLEFT JOIN (\n  SELECT patent_id, MAX(dates_of_public_availability) AS dates_of_public_availability,\n         MAX(status) AS status, MAX(anticipated_expiration) AS anticipated_expiration\n  FROM dwd_patent_legal\n  GROUP BY patent_id\n) l ON l.patent_id = p.patent_id\nLEFT JOIN (\n  SELECT patent_id, MAX(reference_cited) AS reference_cited,\n         MAX(cited_by_nums) AS cited_by_nums\n  FROM dwd_patent_cited\n  GROUP BY patent_id\n) c ON c.patent_id = p.patent_id\nLEFT JOIN (\n  SELECT patent_id, MAX(simple_family_number) AS simple_family_number\n  FROM dwd_patent_family\n  GROUP BY patent_id\n) f ON f.patent_id = p.patent_id\nWHERE p.id REGEXP '^[0-9]+$'"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "Patent.py",
+   "provenanceNamedProps": [
+    "vid",
+    "match_method",
+    "match_evidence"
+   ]
+  },
+  {
+   "name": "PatentFamily",
+   "label": "专利同族",
+   "description": "yunfei_test 还原：复刻 dev 空间 PatentFamily（e2e 创建）",
+   "props": [
+    {
+     "name": "family_number",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "organization_base",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_patent",
+     "pkColumn": "source_row_id",
+     "timeColumn": "update_time",
+     "querySql": "SELECT\n  p.id AS source_row_id, p.patent_id, p.publication_number,\n  JSON_UNQUOTE(JSON_EXTRACT(p.application_reference, '$.apno')) AS application_number,\n  p.application_kind, p.country_code, p.country,\n  JSON_UNQUOTE(JSON_EXTRACT(p.publication_reference, '$.pbdt')) AS publication_date,\n  JSON_UNQUOTE(JSON_EXTRACT(p.application_reference, '$.apdt')) AS application_date,\n  p.granted_number,\n  JSON_UNQUOTE(JSON_EXTRACT(l.dates_of_public_availability, '$.date')) AS grant_date,\n  l.status, l.anticipated_expiration, t.titles,\n  t.title_localized AS title_en, t.title_zh, a.abstract_zh, p.language,\n  p.main_classification_ipcr AS main_ipcr,\n  p.further_classification_ipcr AS further_ipcr,\n  p.main_classification_cpc AS main_cpc,\n  p.further_classification_cpc AS further_cpc,\n  p.keywords, c.reference_cited AS citation_nums, c.cited_by_nums,\n  p.value AS patent_value, f.simple_family_number,\n  p.db_source, p.create_time, p.update_time\nFROM dwd_patent p\nLEFT JOIN (\n  SELECT patent_id, MAX(titles) AS titles, MAX(title_localized) AS title_localized,\n         MAX(title_zh) AS title_zh\n  FROM dwd_patent_title\n  GROUP BY patent_id\n) t ON t.patent_id = p.patent_id\nLEFT JOIN (\n  SELECT patent_id, MAX(abstract_zh) AS abstract_zh\n  FROM dwd_patent_abstract\n  GROUP BY patent_id\n) a ON a.patent_id = p.patent_id\nLEFT JOIN (\n  SELECT patent_id, MAX(dates_of_public_availability) AS dates_of_public_availability,\n         MAX(status) AS status, MAX(anticipated_expiration) AS anticipated_expiration\n  FROM dwd_patent_legal\n  GROUP BY patent_id\n) l ON l.patent_id = p.patent_id\nLEFT JOIN (\n  SELECT patent_id, MAX(reference_cited) AS reference_cited,\n         MAX(cited_by_nums) AS cited_by_nums\n  FROM dwd_patent_cited\n  GROUP BY patent_id\n) c ON c.patent_id = p.patent_id\nLEFT JOIN (\n  SELECT patent_id, MAX(simple_family_number) AS simple_family_number\n  FROM dwd_patent_family\n  GROUP BY patent_id\n) f ON f.patent_id = p.patent_id\nWHERE p.id REGEXP '^[0-9]+$'"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "PatentFamily.py",
+   "provenanceNamedProps": [
+    "vid",
+    "source_system",
+    "source_record_id",
+    "source_url",
+    "ingest_batch",
+    "ingest_time",
+    "source_update_time",
+    "match_method",
+    "match_evidence"
+   ]
+  },
+  {
+   "name": "Person",
+   "label": "科技专家",
+   "description": "yunfei_test 还原：复刻 dev 空间 Person（e2e 创建）",
+   "props": [
+    {
+     "name": "name_en",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "name_zh",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "email",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "name_cn",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "person_kind",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "country_code",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "country",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "birth_date",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "gender",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "biography",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "avatar",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "scholar_org",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "bio_zh",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "paper_nums",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "citation_nums",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "h_index",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "scholar_status",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "is_academician",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "research_fields",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "work_experience_date",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "work_experience_institution_en",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "work_experience_department_en",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "work_experience_position_en",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "work_experience_institution_zh",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "work_experience_department_zh",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "work_experience_position_zh",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "education_background_date",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "education_background_institution_en",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "education_background_degree_en",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "education_background_institution_zh",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "education_background_degree_zh",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_base",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_scholar",
+     "pkColumn": "scholar_id",
+     "timeColumn": "update_time",
+     "querySql": "SELECT s.*,\n       (SELECT tf.academician FROM dwd_scholar_talent_flag tf\n          WHERE tf.scholar_id = s.scholar_id ORDER BY tf.update_time DESC LIMIT 1) AS academician,\n       (SELECT GROUP_CONCAT(rd.fields ORDER BY rd.create_time SEPARATOR '；')\n          FROM dwd_scholar_research_direction rd WHERE rd.scholar_id = s.scholar_id)\n         AS research_fields\nFROM dwd_scholar s\nWHERE s.status = 1"
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_zh_author",
+     "pkColumn": "paper_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_en_author",
+     "pkColumn": "paper_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_shareholder_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_executive_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_forg_executive_info",
+     "pkColumn": "row_pk",
+     "timeColumn": "wm_col",
+     "querySql": "SELECT t.*, '1970-01-01 00:00:01' AS wm_col, ROW_NUMBER() OVER (ORDER BY t.`dm_biography`, t.`dm_birthdate`, t.`dm_nationalities`, t.`executives_name`, t.`executives_position`, t.`org_id`) AS row_pk FROM `dwd_forg_executive_info` t"
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_forg_beneficiary_info",
+     "pkColumn": "row_pk",
+     "timeColumn": "wm_col",
+     "querySql": "SELECT t.*, '1970-01-01 00:00:01' AS wm_col, ROW_NUMBER() OVER (ORDER BY t.`bo_birthdate`, t.`bo_country_code`, t.`bo_gender`, t.`bo_manager`, t.`bo_name`, t.`direct_percent`, t.`indirect_percent`, t.`org_id`, t.`path`, t.`total_percent`) AS row_pk FROM `dwd_forg_beneficiary_info` t"
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_forg_act_contro_info",
+     "pkColumn": "row_pk",
+     "timeColumn": "wm_col",
+     "querySql": "SELECT t.*, '1970-01-01 00:00:01' AS wm_col, ROW_NUMBER() OVER (ORDER BY t.`country_code`, t.`direct_pct`, t.`direct_pct_num`, t.`entity_country_code`, t.`entity_eid`, t.`entity_name`, t.`entity_type`, t.`org_id`, t.`path`, t.`total_pct`, t.`total_pct_num`) AS row_pk FROM `dwd_forg_act_contro_info` t"
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_base_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_org_product_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_heis_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_stock_base",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_special_hongkong_company",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_special_taiwan_company",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_special_aomen_company",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_research_institute_base_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_forg_base_info",
+     "pkColumn": "org_id",
+     "timeColumn": "wm_col",
+     "querySql": "SELECT t.*, '1970-01-01 00:00:01' AS wm_col FROM `dwd_forg_base_info` t"
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_forg_product_info",
+     "pkColumn": "org_id",
+     "timeColumn": "wm_col",
+     "querySql": "SELECT t.*, '1970-01-01 00:00:01' AS wm_col FROM `dwd_forg_product_info` t"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "Person.py",
+   "provenanceNamedProps": [
+    "vid"
+   ]
+  },
+  {
+   "name": "Product",
+   "label": "产品",
+   "description": "yunfei_test 还原：复刻 dev 空间 Product（e2e 创建）",
+   "props": [
+    {
+     "name": "category",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "description",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_base_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_org_product_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_heis_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_stock_base",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_special_hongkong_company",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_special_taiwan_company",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_special_aomen_company",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_research_institute_base_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_forg_base_info",
+     "pkColumn": "org_id",
+     "timeColumn": "wm_col",
+     "querySql": "SELECT t.*, '1970-01-01 00:00:01' AS wm_col FROM `dwd_forg_base_info` t"
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_forg_product_info",
+     "pkColumn": "org_id",
+     "timeColumn": "wm_col",
+     "querySql": "SELECT t.*, '1970-01-01 00:00:01' AS wm_col FROM `dwd_forg_product_info` t"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "Product.py",
+   "provenanceNamedProps": [
+    "vid",
+    "match_method",
+    "match_evidence"
+   ]
+  },
+  {
+   "name": "Project",
+   "label": "项目",
+   "description": "yunfei_test 还原：复刻 dev 空间 Project（e2e 创建）",
+   "props": [
+    {
+     "name": "project_number",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "title",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "project_source",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "project_level",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "funded_amount",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "discipline",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "discipline_code",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "fund_category",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "funded_region",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "approval_year",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "approval_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "research_period",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "abstract",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "final_report_abstract",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "project_page_url",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "total_outputs",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "journal_articles_count",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "conference_papers_count",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "books_count",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "degree_papers_count",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "patents_count",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "clinical_trials_count",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "products_count",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "awards_count",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "reports_count",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "other_outputs_count",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "output_awards",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "keywords",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "evaluation",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_zh_project",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": "SELECT p.*, o.total_outputs, o.journal_articles_count, o.conference_papers_count,\n               o.books_count, o.degree_papers_count, o.patents_count, 0 AS clinical_trials_count,\n               0 AS products_count, o.awards_count, o.output_awards, o.reports_count,\n               o.other_outputs_count\n        FROM dwd_zh_project p\n        LEFT JOIN dwd_zh_project_output o ON o.id = p.id"
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_en_project",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": "SELECT p.*, o.total_outputs, o.journal_articles_count, o.conference_papers_count,\n               o.books_count, o.degree_papers_count, o.patents_count, o.clinical_trials_count,\n               0 AS products_count, o.awards_count, o.output_awards, o.reports_count,\n               o.other_outputs_count\n        FROM dwd_en_project p\n        LEFT JOIN dwd_en_project_output o ON o.id = p.id"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "Project.py",
+   "provenanceNamedProps": [
+    "vid",
+    "match_method",
+    "match_evidence"
+   ]
+  },
+  {
+   "name": "Report",
+   "label": "科技成果",
+   "description": "yunfei_test 还原：复刻 dev 空间 Report（e2e 创建）",
+   "props": [
+    {
+     "name": "title_cn",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "title_en",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "report_category",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "report_type",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "abstract",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "keywords",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "page_count",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "publication_date",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_zh_report",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_en_report",
+     "pkColumn": "row_pk",
+     "timeColumn": "wm_col",
+     "querySql": "SELECT t.*, IFNULL(t.`updated_time`, '1970-01-01 00:00:01') AS wm_col, ROW_NUMBER() OVER (ORDER BY t.`abstract_en`, t.`authors`, t.`authors_id`, t.`content`, t.`contract_number`, t.`corporate_author`, t.`document_type`, t.`file_path`, t.`keywords_en`, t.`literature_id`, t.`org_id`, t.`page_count`, t.`publication_date`, t.`related_literature`, t.`related_scholars`, t.`report_id`, t.`report_number`, t.`scholar_id`, t.`source_agency`, t.`source_url`, t.`title_en`, t.`updated_time`) AS row_pk FROM `dwd_en_report` t"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "Report.py",
+   "provenanceNamedProps": [
+    "vid",
+    "source_system",
+    "source_record_id",
+    "ingest_batch",
+    "ingest_time",
+    "source_update_time",
+    "confidence",
+    "match_method",
+    "match_evidence"
+   ]
+  }
+ ],
+ "relations": [
+  {
+   "name": "ACQUIRES",
+   "label": "收购",
+   "description": "yunfei_test 还原：复刻 dev 空间 ACQUIRES（e2e 创建）",
+   "props": [
+    {
+     "name": "ma_amount",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "currency_code",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_merger_acquisition_info",
+     "pkColumn": "acquiring_org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "ACQUIRES.py",
+   "provenanceNamedProps": [
+    "match_method",
+    "match_evidence"
+   ],
+   "sourceSchemaName": "Organization",
+   "targetSchemaName": "Organization",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "ACTUAL_CONTROLLER_OF",
+   "label": "实际控制关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 ACTUAL_CONTROLLER_OF（e2e 创建）",
+   "props": [
+    {
+     "name": "direct_pct",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "total_pct",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_forg_act_contro_info",
+     "pkColumn": "row_pk",
+     "timeColumn": "wm_col",
+     "querySql": "SELECT t.*, '1970-01-01 00:00:01' AS wm_col, ROW_NUMBER() OVER (ORDER BY t.`country_code`, t.`direct_pct`, t.`direct_pct_num`, t.`entity_country_code`, t.`entity_eid`, t.`entity_name`, t.`entity_type`, t.`org_id`, t.`path`, t.`total_pct`, t.`total_pct_num`) AS row_pk FROM `dwd_forg_act_contro_info` t"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "ACTUAL_CONTROLLER_OF.py",
+   "provenanceNamedProps": [
+    "match_method",
+    "match_evidence"
+   ],
+   "sourceSchemaName": "Organization",
+   "targetSchemaName": "Organization",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "AFFILIATED_WITH",
+   "label": "任职关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 AFFILIATED_WITH（e2e 创建）",
+   "props": [
+    {
+     "name": "affiliation_name",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_base",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "work_experience_date",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "work_experience_department_zh",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "work_experience_position_zh",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_scholar",
+     "pkColumn": "scholar_id",
+     "timeColumn": "update_time",
+     "querySql": "SELECT s.*, NULL AS scholar_org_id FROM dwd_scholar s WHERE status = 1"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "AFFILIATED_WITH.py",
+   "provenanceNamedProps": [],
+   "sourceSchemaName": "Person",
+   "targetSchemaName": "Organization",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "APPLIED_BY",
+   "label": "专利申请方",
+   "description": "yunfei_test 还原：复刻 dev 空间 APPLIED_BY（e2e 创建）",
+   "props": [
+    {
+     "name": "sequence",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "role",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_name",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "subject_type",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "resolution_status",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_patent",
+     "pkColumn": "id",
+     "timeColumn": "update_time",
+     "querySql": null
+    }
+   ],
+   "hasScript": false,
+   "scriptFile": null,
+   "provenanceNamedProps": [
+    "ingest_batch",
+    "ingest_time"
+   ],
+   "sourceSchemaName": "Patent",
+   "targetSchemaName": "Person",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "AUTHORED_BY",
+   "label": "论文署名关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 AUTHORED_BY（e2e 创建）",
+   "props": [
+    {
+     "name": "author_order",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "is_corresponding",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "citations",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_zh_author",
+     "pkColumn": "row_id",
+     "timeColumn": "updated_time",
+     "querySql": "SELECT *, CONCAT(paper_id, '__', author_id) AS row_id FROM dwd_zh_author"
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_en_author",
+     "pkColumn": "row_id",
+     "timeColumn": "updated_time",
+     "querySql": "SELECT *, CONCAT(paper_id, '__', author_id) AS row_id FROM dwd_en_author"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "AUTHORED_BY.py",
+   "provenanceNamedProps": [],
+   "sourceSchemaName": "Paper",
+   "targetSchemaName": "Person",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "BELONGS_TO_NODE",
+   "label": "企业归属产业链节点",
+   "description": "yunfei_test 还原：复刻 dev 空间 BELONGS_TO_NODE（e2e 创建）",
+   "props": [
+    {
+     "name": "chain_score",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_industry_chain_dtl",
+     "pkColumn": "row_id",
+     "timeColumn": "updated_time",
+     "querySql": "SELECT *, CONCAT(antitypic, '__', node_id) AS row_id FROM dwd_org_industry_chain_dtl"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "BELONGS_TO_NODE.py",
+   "provenanceNamedProps": [
+    "confidence",
+    "match_method",
+    "match_evidence"
+   ],
+   "sourceSchemaName": "Organization",
+   "targetSchemaName": "IndustryNode",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "BENEFICIAL_OWNER_OF",
+   "label": "最终受益关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 BENEFICIAL_OWNER_OF（e2e 创建）",
+   "props": [
+    {
+     "name": "direct_percent",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "indirect_percent",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "total_percent",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_forg_beneficiary_info",
+     "pkColumn": "row_pk",
+     "timeColumn": "wm_col",
+     "querySql": "SELECT t.*, '1970-01-01 00:00:01' AS wm_col, ROW_NUMBER() OVER (ORDER BY t.`bo_birthdate`, t.`bo_country_code`, t.`bo_gender`, t.`bo_manager`, t.`bo_name`, t.`direct_percent`, t.`indirect_percent`, t.`org_id`, t.`path`, t.`total_percent`) AS row_pk FROM `dwd_forg_beneficiary_info` t"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "BENEFICIAL_OWNER_OF.py",
+   "provenanceNamedProps": [
+    "match_method",
+    "match_evidence"
+   ],
+   "sourceSchemaName": "Person",
+   "targetSchemaName": "Organization",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "CHILD_OF",
+   "label": "产业节点上下级",
+   "description": "yunfei_test 还原：复刻 dev 空间 CHILD_OF（e2e 创建）",
+   "props": [
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_industry_chain_info",
+     "pkColumn": "row_id",
+     "timeColumn": "updated_time",
+     "querySql": "SELECT *, CONCAT(chain_code, '__', node_id) AS row_id FROM dwd_industry_chain_info"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "CHILD_OF.py",
+   "provenanceNamedProps": [
+    "source_record_id",
+    "ingest_batch",
+    "ingest_time",
+    "confidence",
+    "match_method",
+    "match_evidence"
+   ],
+   "sourceSchemaName": "IndustryNode",
+   "targetSchemaName": "IndustryNode",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "CITES",
+   "label": "论文引用关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 CITES（e2e 创建）",
+   "props": [
+    {
+     "name": "reference_identifier",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "sequence",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_zh_paper_reference",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_en_paper_reference",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_zh_paper_citation",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_en_paper_citation",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_zh_paper_related",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_en_paper_related",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "CITES.py",
+   "provenanceNamedProps": [],
+   "sourceSchemaName": "Paper",
+   "targetSchemaName": "Paper",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "COAUTHOR_WITH",
+   "label": "专家合著关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 COAUTHOR_WITH（e2e 创建）",
+   "props": [
+    {
+     "name": "co_paper_count",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "relation_time",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_scholar_coauthor",
+     "pkColumn": "row_id",
+     "timeColumn": "update_time",
+     "querySql": "SELECT *, CONCAT(scholar_id, '__', co_scholar_id) AS row_id FROM dwd_scholar_coauthor WHERE status = 1"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "COAUTHOR_WITH.py",
+   "provenanceNamedProps": [],
+   "sourceSchemaName": "Person",
+   "targetSchemaName": "Person",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "COVERS_CHAIN",
+   "label": "产业资讯报道产业链",
+   "description": "yunfei_test 还原：复刻 dev 空间 COVERS_CHAIN（e2e 创建）",
+   "props": [
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_industry_chain_news_info",
+     "pkColumn": "news_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "COVERS_CHAIN.py",
+   "provenanceNamedProps": [
+    "source_record_id",
+    "confidence",
+    "match_method",
+    "match_evidence"
+   ],
+   "sourceSchemaName": "News",
+   "targetSchemaName": "IndustryChain",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "DOWNSTREAM_OF",
+   "label": "产业上下游",
+   "description": "yunfei_test 还原：复刻 dev 空间 DOWNSTREAM_OF（e2e 创建）",
+   "props": [
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_industry_chain_info",
+     "pkColumn": "row_id",
+     "timeColumn": "updated_time",
+     "querySql": "SELECT *, CONCAT(chain_code, '__', node_id) AS row_id FROM dwd_industry_chain_info"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "DOWNSTREAM_OF.py",
+   "provenanceNamedProps": [
+    "source_record_id",
+    "ingest_batch",
+    "ingest_time",
+    "confidence",
+    "match_method",
+    "match_evidence"
+   ],
+   "sourceSchemaName": "IndustryNode",
+   "targetSchemaName": "IndustryNode",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "EXECUTIVE_OF",
+   "label": "高管任职关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 EXECUTIVE_OF（e2e 创建）",
+   "props": [
+    {
+     "name": "position",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_executive_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_forg_executive_info",
+     "pkColumn": "row_pk",
+     "timeColumn": "wm_col",
+     "querySql": "SELECT t.*, '1970-01-01 00:00:01' AS wm_col, ROW_NUMBER() OVER (ORDER BY t.`dm_biography`, t.`dm_birthdate`, t.`dm_nationalities`, t.`executives_name`, t.`executives_position`, t.`org_id`) AS row_pk FROM `dwd_forg_executive_info` t"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "EXECUTIVE_OF.py",
+   "provenanceNamedProps": [
+    "match_method",
+    "match_evidence"
+   ],
+   "sourceSchemaName": "Person",
+   "targetSchemaName": "Organization",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "FUNDED_BY",
+   "label": "项目资助方",
+   "description": "yunfei_test 还原：复刻 dev 空间 FUNDED_BY（e2e 创建）",
+   "props": [
+    {
+     "name": "funded_amount",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "fund_category",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_source_table",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_zh_project",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": "SELECT * FROM dwd_zh_project"
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_en_project",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": "SELECT * FROM dwd_en_project"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "FUNDED_BY.py",
+   "provenanceNamedProps": [],
+   "sourceSchemaName": "Project",
+   "targetSchemaName": "Organization",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "HAS_KEYWORD",
+   "label": "论文主题",
+   "description": "yunfei_test 还原：复刻 dev 空间 HAS_KEYWORD（e2e 创建）",
+   "props": [
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_zh_paper_classification",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_en_paper_classification",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "HAS_KEYWORD.py",
+   "provenanceNamedProps": [
+    "match_method",
+    "match_evidence"
+   ],
+   "sourceSchemaName": "Paper",
+   "targetSchemaName": "Keyword",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "HAS_NEWS",
+   "label": "企业关联资讯",
+   "description": "yunfei_test 还原：复刻 dev 空间 HAS_NEWS（e2e 创建）",
+   "props": [
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_important_news_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "HAS_NEWS.py",
+   "provenanceNamedProps": [
+    "match_method",
+    "match_evidence"
+   ],
+   "sourceSchemaName": "News",
+   "targetSchemaName": "Organization",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "HAS_NODE",
+   "label": "产业链包含产业节点",
+   "description": "yunfei_test 还原：复刻 dev 空间 HAS_NODE（e2e 创建）",
+   "props": [
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_industry_chain_info",
+     "pkColumn": "row_id",
+     "timeColumn": "updated_time",
+     "querySql": "SELECT *, CONCAT(chain_code, '__', node_id) AS row_id FROM dwd_industry_chain_info"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "HAS_NODE.py",
+   "provenanceNamedProps": [
+    "source_record_id",
+    "ingest_batch",
+    "ingest_time",
+    "confidence",
+    "match_method",
+    "match_evidence"
+   ],
+   "sourceSchemaName": "IndustryChain",
+   "targetSchemaName": "IndustryNode",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "HAS_OUTPUT",
+   "label": "成果产出关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 HAS_OUTPUT（e2e 创建）",
+   "props": [
+    {
+     "name": "output_type",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "output_title",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "output_identifier",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_zh_project_output",
+     "pkColumn": "id",
+     "timeColumn": "wm_col",
+     "querySql": "SELECT o.id, '1970-01-01 00:00:01' AS wm_col FROM dwd_zh_project_output o JOIN (SELECT id FROM dwd_zh_project UNION ALL SELECT id FROM dwd_en_project) p ON p.id = o.id"
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_en_project_output",
+     "pkColumn": "id",
+     "timeColumn": "wm_col",
+     "querySql": "SELECT o.id, '1970-01-01 00:00:01' AS wm_col FROM dwd_en_project_output o JOIN (SELECT id FROM dwd_zh_project UNION ALL SELECT id FROM dwd_en_project) p ON p.id = o.id"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "HAS_OUTPUT.py",
+   "provenanceNamedProps": [],
+   "sourceSchemaName": "Project",
+   "targetSchemaName": "Paper",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "HAS_PARTICIPANT",
+   "label": "项目参加人",
+   "description": "yunfei_test 还原：复刻 dev 空间 HAS_PARTICIPANT（e2e 创建）",
+   "props": [
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_zh_project",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": "SELECT * FROM dwd_zh_project"
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_en_project",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": "SELECT * FROM dwd_en_project"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "HAS_PARTICIPANT.py",
+   "provenanceNamedProps": [],
+   "sourceSchemaName": "Project",
+   "targetSchemaName": "Person",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "INVENTED_BY",
+   "label": "专利发明人",
+   "description": "yunfei_test 还原：复刻 dev 空间 INVENTED_BY（e2e 创建）",
+   "props": [
+    {
+     "name": "sequence",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "source_name",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "subject_type",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "resolution_status",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_patent",
+     "pkColumn": "id",
+     "timeColumn": "update_time",
+     "querySql": null
+    }
+   ],
+   "hasScript": false,
+   "scriptFile": null,
+   "provenanceNamedProps": [],
+   "sourceSchemaName": "Patent",
+   "targetSchemaName": "Person",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "INVESTS_IN",
+   "label": "投资关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 INVESTS_IN（e2e 创建）",
+   "props": [
+    {
+     "name": "investment_amount",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "investment_ratio",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_invest_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "INVESTS_IN.py",
+   "provenanceNamedProps": [
+    "match_method",
+    "match_evidence"
+   ],
+   "sourceSchemaName": "Organization",
+   "targetSchemaName": "Organization",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "INVOLVED_IN",
+   "label": "涉及风险事件关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 INVOLVED_IN（e2e 创建）",
+   "props": [
+    {
+     "name": "role",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_annual_financial_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_stock_finance_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_forg_stock_fin_info",
+     "pkColumn": "org_id",
+     "timeColumn": "wm_col",
+     "querySql": "SELECT t.*, '1970-01-01 00:00:01' AS wm_col FROM `dwd_forg_stock_fin_info` t"
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_changerecord_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_financing_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_recruit_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_company_abnormal",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_company_punish",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_company_illegal",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_risk_tax_punish",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_opt_judicial_case",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_risk_shixin",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_risk_zhixing",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_bankruptcy_public_cases_list",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_bankruptcy_public_cases",
+     "pkColumn": "case_no",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_bid_win_candidate_out",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_bid_purchase_agency_out",
+     "pkColumn": "u_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "INVOLVED_IN.py",
+   "provenanceNamedProps": [
+    "match_method",
+    "match_evidence"
+   ],
+   "sourceSchemaName": "Event",
+   "targetSchemaName": "Organization",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "LEADS",
+   "label": "项目负责人",
+   "description": "yunfei_test 还原：复刻 dev 空间 LEADS（e2e 创建）",
+   "props": [
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_zh_project",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": "SELECT * FROM dwd_zh_project"
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_en_project",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": "SELECT * FROM dwd_en_project"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "LEADS.py",
+   "provenanceNamedProps": [],
+   "sourceSchemaName": "Project",
+   "targetSchemaName": "Person",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "LEGAL_REP_OF",
+   "label": "法定代表关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 LEGAL_REP_OF（e2e 创建）",
+   "props": [
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_base_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_research_institute_base_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_special_taiwan_company",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "LEGAL_REP_OF.py",
+   "provenanceNamedProps": [
+    "match_method",
+    "match_evidence"
+   ],
+   "sourceSchemaName": "Person",
+   "targetSchemaName": "Organization",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "MEMBER_OF_FAMILY",
+   "label": "家族成员关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 MEMBER_OF_FAMILY（e2e 创建）",
+   "props": [
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_patent",
+     "pkColumn": "source_row_id",
+     "timeColumn": "update_time",
+     "querySql": "SELECT\n  p.id AS source_row_id, p.patent_id, p.publication_number,\n  JSON_UNQUOTE(JSON_EXTRACT(p.application_reference, '$.apno')) AS application_number,\n  p.application_kind, p.country_code, p.country,\n  JSON_UNQUOTE(JSON_EXTRACT(p.publication_reference, '$.pbdt')) AS publication_date,\n  JSON_UNQUOTE(JSON_EXTRACT(p.application_reference, '$.apdt')) AS application_date,\n  p.granted_number,\n  JSON_UNQUOTE(JSON_EXTRACT(l.dates_of_public_availability, '$.date')) AS grant_date,\n  l.status, l.anticipated_expiration, t.titles,\n  t.title_localized AS title_en, t.title_zh, a.abstract_zh, p.language,\n  p.main_classification_ipcr AS main_ipcr,\n  p.further_classification_ipcr AS further_ipcr,\n  p.main_classification_cpc AS main_cpc,\n  p.further_classification_cpc AS further_cpc,\n  p.keywords, c.reference_cited AS citation_nums, c.cited_by_nums,\n  p.value AS patent_value, f.simple_family_number,\n  p.db_source, p.create_time, p.update_time\nFROM dwd_patent p\nLEFT JOIN (\n  SELECT patent_id, MAX(titles) AS titles, MAX(title_localized) AS title_localized,\n         MAX(title_zh) AS title_zh\n  FROM dwd_patent_title\n  GROUP BY patent_id\n) t ON t.patent_id = p.patent_id\nLEFT JOIN (\n  SELECT patent_id, MAX(abstract_zh) AS abstract_zh\n  FROM dwd_patent_abstract\n  GROUP BY patent_id\n) a ON a.patent_id = p.patent_id\nLEFT JOIN (\n  SELECT patent_id, MAX(dates_of_public_availability) AS dates_of_public_availability,\n         MAX(status) AS status, MAX(anticipated_expiration) AS anticipated_expiration\n  FROM dwd_patent_legal\n  GROUP BY patent_id\n) l ON l.patent_id = p.patent_id\nLEFT JOIN (\n  SELECT patent_id, MAX(reference_cited) AS reference_cited,\n         MAX(cited_by_nums) AS cited_by_nums\n  FROM dwd_patent_cited\n  GROUP BY patent_id\n) c ON c.patent_id = p.patent_id\nLEFT JOIN (\n  SELECT patent_id, MAX(simple_family_number) AS simple_family_number\n  FROM dwd_patent_family\n  GROUP BY patent_id\n) f ON f.patent_id = p.patent_id\nWHERE p.id REGEXP '^[0-9]+$'"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "MEMBER_OF_FAMILY.py",
+   "provenanceNamedProps": [
+    "ingest_batch",
+    "ingest_time"
+   ],
+   "sourceSchemaName": "Patent",
+   "targetSchemaName": "PatentFamily",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "OUTPUT_OF",
+   "label": "成果归属关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 OUTPUT_OF（e2e 创建）",
+   "props": [
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_zh_project_output",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_en_project_output",
+     "pkColumn": "id",
+     "timeColumn": "wm_col",
+     "querySql": "SELECT t.*, '1970-01-01 00:00:01' AS wm_col FROM `dwd_en_project_output` t"
+    }
+   ],
+   "hasScript": false,
+   "scriptFile": null,
+   "provenanceNamedProps": [],
+   "sourceSchemaName": "OrganizationBase",
+   "targetSchemaName": "Project",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "OWNED_BY",
+   "label": "专利权利人",
+   "description": "yunfei_test 还原：复刻 dev 空间 OWNED_BY（e2e 创建）",
+   "props": [
+    {
+     "name": "sequence",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "role",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "is_current",
+     "dataType": "bool",
+     "required": false
+    },
+    {
+     "name": "source_name",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "subject_type",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "resolution_status",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_patent",
+     "pkColumn": "id",
+     "timeColumn": "update_time",
+     "querySql": null
+    }
+   ],
+   "hasScript": false,
+   "scriptFile": null,
+   "provenanceNamedProps": [
+    "ingest_batch",
+    "ingest_time"
+   ],
+   "sourceSchemaName": "Patent",
+   "targetSchemaName": "Organization",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "PRODUCES",
+   "label": "企业生产产品",
+   "description": "yunfei_test 还原：复刻 dev 空间 PRODUCES（e2e 创建）",
+   "props": [
+    {
+     "name": "tech_product_seq",
+     "dataType": "int64",
+     "required": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_org_product_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_forg_product_info",
+     "pkColumn": "org_id",
+     "timeColumn": "wm_col",
+     "querySql": "SELECT t.*, '1970-01-01 00:00:01' AS wm_col FROM `dwd_forg_product_info` t"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "PRODUCES.py",
+   "provenanceNamedProps": [
+    "match_method",
+    "match_evidence"
+   ],
+   "sourceSchemaName": "Organization",
+   "targetSchemaName": "Product",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "PUBLISHED_IN",
+   "label": "论文发表关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 PUBLISHED_IN（e2e 创建）",
+   "props": [
+    {
+     "name": "volume",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "issue",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "start_page",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "end_page",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "publication_year",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_zh_paper",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_en_paper",
+     "pkColumn": "id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "PUBLISHED_IN.py",
+   "provenanceNamedProps": [
+    "source_record_id",
+    "match_method",
+    "match_evidence"
+   ],
+   "sourceSchemaName": "Paper",
+   "targetSchemaName": "Journal",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "REFERENCED_BY",
+   "label": "被参考",
+   "description": "yunfei_test 还原：复刻 dev 空间 REFERENCED_BY（e2e 创建）",
+   "props": [
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_zh_report_paper",
+     "pkColumn": "row_id",
+     "timeColumn": "wm_col",
+     "querySql": "SELECT *, '1970-01-01 00:00:01' AS wm_col, CONCAT(paper_id, '__', report_id) AS row_id FROM dwd_zh_report_paper"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "REFERENCED_BY.py",
+   "provenanceNamedProps": [
+    "source_record_id",
+    "ingest_batch",
+    "ingest_time",
+    "match_method",
+    "match_evidence"
+   ],
+   "sourceSchemaName": "Paper",
+   "targetSchemaName": "Report",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "SHAREHOLDER_OF",
+   "label": "股东持股关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 SHAREHOLDER_OF（e2e 创建）",
+   "props": [
+    {
+     "name": "ownership_percentage",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_org_shareholder_info",
+     "pkColumn": "org_id",
+     "timeColumn": "updated_time",
+     "querySql": null
+    },
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_forg_shareholder_info",
+     "pkColumn": "row_pk",
+     "timeColumn": "wm_col",
+     "querySql": "SELECT t.*, '1970-01-01 00:00:01' AS wm_col, ROW_NUMBER() OVER (ORDER BY t.`org_id`, t.`owners_country`, t.`owners_country_code`, t.`owners_name`, t.`ownership_percentage`) AS row_pk FROM `dwd_forg_shareholder_info` t"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "SHAREHOLDER_OF.py",
+   "provenanceNamedProps": [
+    "match_method",
+    "match_evidence"
+   ],
+   "sourceSchemaName": "Organization",
+   "targetSchemaName": "Organization",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "STUDIED_AT",
+   "label": "就读所属院校",
+   "description": "yunfei_test 还原：复刻 dev 空间 STUDIED_AT（e2e 创建）",
+   "props": [
+    {
+     "name": "degree_zh",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "degree_en",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "education_date",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "institution_zh",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "institution_en",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_scholar",
+     "pkColumn": "scholar_id",
+     "timeColumn": "wm_col",
+     "querySql": "SELECT s.scholar_id, s.education_background_institution_zh, s.education_background_institution_en, s.education_background_degree_zh, s.education_background_degree_en, s.education_background_date, s.scholar_id AS row_id, '1970-01-01 00:00:01' AS wm_col FROM dwd_scholar s WHERE s.status = 1 AND s.scholar_id IS NOT NULL"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "STUDIED_AT.py",
+   "provenanceNamedProps": [],
+   "sourceSchemaName": "Person",
+   "targetSchemaName": "Organization",
+   "relationCategory": "fact"
+  },
+  {
+   "name": "SUBSIDIARY_OF",
+   "label": "子公司关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 SUBSIDIARY_OF（e2e 创建）",
+   "props": [
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false
+    }
+   ],
+   "sources": [
+    {
+     "databaseName": "gkx_element_yft1",
+     "tableName": "dwd_forg_subsidiary_info",
+     "pkColumn": "row_pk",
+     "timeColumn": "wm_col",
+     "querySql": "SELECT t.*, '1970-01-01 00:00:01' AS wm_col, ROW_NUMBER() OVER (ORDER BY t.`affiliate`, t.`affiliates_company_id`, t.`affiliates_country`, t.`affiliates_country_code`, t.`affiliates_name`, t.`org_id`) AS row_pk FROM `dwd_forg_subsidiary_info` t"
+    }
+   ],
+   "hasScript": true,
+   "scriptFile": "SUBSIDIARY_OF.py",
+   "provenanceNamedProps": [
+    "match_method",
+    "match_evidence"
+   ],
+   "sourceSchemaName": "Organization",
+   "targetSchemaName": "Organization",
+   "relationCategory": "fact"
+  }
+ ]
+}

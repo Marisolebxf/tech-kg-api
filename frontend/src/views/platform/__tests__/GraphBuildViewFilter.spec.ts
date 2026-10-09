@@ -173,3 +173,41 @@ describe('图谱构建任务筛选「未选择」伪选项（00843/00847）', ()
     expect(rowCount()).toBe(1) // j9
   })
 })
+
+describe('重新执行入口的状态口径（问题②：运行异常也提供重跑）', () => {
+  const rowOf = (id: string) =>
+    wrapper.findAll('tbody tr').filter((row) => row.text().includes(`任务${id}`))[0]
+
+  it('运行异常行平铺「重新执行」，点击调用触发接口', async () => {
+    wrapper.unmount()
+    mocks.listJobs.mockResolvedValue({ items: [jobFixture('j9', { lastExecutionStatus: 'ABNORMAL' })], total: 1 })
+    mocks.triggerJob.mockResolvedValue({ id: 'exec-1' })
+    mountView()
+    await flushPromises()
+    const trigger = rowOf('j9').findAll('button').find((b) => b.text() === '重新执行')
+    expect(trigger).toBeTruthy()
+    await trigger!.trigger('click')
+    await flushPromises()
+    expect(mocks.triggerJob).toHaveBeenCalledWith('j9')
+  })
+
+  it('已完成行不出现执行/重新执行（产品决策：不提供重复执行）', async () => {
+    wrapper.unmount()
+    mocks.listJobs.mockResolvedValue({ items: [jobFixture('j1', { lastExecutionStatus: 'COMPLETED' })], total: 1 })
+    mountView()
+    await flushPromises()
+    const labels = rowOf('j1').findAll('button').map((b) => b.text())
+    expect(labels).not.toContain('执行')
+    expect(labels).not.toContain('重新执行')
+  })
+
+  it('未运行行仍显示「执行」而非「重新执行」', async () => {
+    wrapper.unmount()
+    mocks.listJobs.mockResolvedValue({ items: [jobFixture('j11', {})], total: 1 })
+    mountView()
+    await flushPromises()
+    const labels = rowOf('j11').findAll('button').map((b) => b.text())
+    expect(labels).toContain('执行')
+    expect(labels).not.toContain('重新执行')
+  })
+})

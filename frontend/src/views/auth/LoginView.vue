@@ -12,6 +12,8 @@ const authStore = useAuthStore();
 const submitting = ref(false);
 function normalizeLoginFeedback(value: unknown): string {
   if (typeof value !== "string") return "";
+  // 未建立本系统会话也是正常登录入口；兼容旧书签中的过期提示，避免误报。
+  if (value === "登录状态已失效或已超时，请重新登录") return "";
   if (/request failed|network error|status code 5\d\d|failed to fetch/i.test(value)) {
     return "登录服务暂时不可用，请确认后端服务已启动后重试";
   }

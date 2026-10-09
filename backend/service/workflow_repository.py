@@ -313,6 +313,24 @@ class WorkflowRepository:
                 items = [item for item in items if item.get("triggerSource") == trigger_source]
             return items[:limit]
 
+    def list_stale_running_executions(
+        self, started_before: str, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        """RUNNING 且 started_at 早于阈值的行（执行状态对账协程用，走 status/started_at 索引）。
+
+        控制库 RUNNING 行可能早已在 Temporal 结束（调度执行无收尾回写时的陈旧记录）；
+        只挑旧的，避免刚起步的执行被过早核实。
+        """
+        with workflow_session_scope() as session:
+            stmt = (
+                select(WorkflowExecution)
+                .where(WorkflowExecution.status == "RUNNING")
+                .where(WorkflowExecution.started_at < started_before)
+                .order_by(WorkflowExecution.started_at.asc())
+                .limit(limit)
+            )
+            return [json.loads(row.payload) for row in session.scalars(stmt).all()]
+
     def save_job(self, job: dict[str, Any]) -> None:
         with workflow_session_scope() as session:
             session.merge(

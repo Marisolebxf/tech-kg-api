@@ -30,7 +30,7 @@ const taskType = ref<TaskType>('extract')
 const name = ref('')
 const runNow = ref(true)
 
-// 数据抽取任务：选 Schema（须已传脚本且绑定来源表），平台分批并发喂数转换
+// 单脚本抽取任务：选 Schema（须已传脚本且绑定来源表），平台分批并发喂数转换
 const extractSchemaId = ref('')
 // 字符串绑定：Vue 的 vModelText 对 type="number" 无条件 parseFloat（castToNumber 不看
 // .number 修饰符），v-model 会把纯数字输入变成 number 存进 ref——提交链 .trim() 即炸、
@@ -81,7 +81,10 @@ function applySchemaBindingDefaults(schemas: SchemaDefinition[]) {
     void loadMysqlResources(bound.datasourceId, bound.databaseName || undefined)
   }
 }
-// 多脚本串行任务：按序串联多个 Schema 抽取脚本（kg.schema.extract.chain）
+// 多脚本串行任务：按序串联多个 Schema 抽取脚本（kg.schema.extract.chain）。
+// 串联上限对齐后端 JobCreateRequest.schema_ids max_length=20：前端直接拦，
+// 不留「加得进去、提交才被 422 拒」的缝（输入即校验规范）
+const CHAIN_SCHEMA_LIMIT = 20
 const chainPick = ref('')
 const chainSteps = ref<Array<{ id: string; name: string }>>([])
 const since = ref('')
@@ -102,13 +105,16 @@ const nameError = computed(() => validateText('任务名称', name.value, JOB_NA
 const sinceError = computed(() =>
   since.value.trim() ? validateText('增量游标', since.value, SINCE_RULE) : null,
 )
-// 批大小可空（默认 500）；填了则须为 ≥1 的整数（FUNC-00872：65 位数字触发位数校验）
-const batchSizeError = computed(() => validateNumericField(extractBatchSize.value, { label: '批大小', min: 1 }))
+// 批大小可空（默认 500）；填了则须为 1～5000 的整数（上限对齐后端 le=5000，输入即报，
+// 不再等到点创建任务才被 422 拦下；FUNC-00872：65 位数字触发位数校验）
+const batchSizeError = computed(() => validateNumericField(extractBatchSize.value, { label: '批大小', min: 1, max: 5000 }))
 
 const canSubmit = computed(() => {
   if (!name.value.trim()) return false
   if (nameError.value || sinceError.value || batchSizeError.value) return false
-  if (taskType.value === 'chain') return chainSteps.value.length >= 2
+  if (taskType.value === 'chain') {
+    return chainSteps.value.length >= 2 && chainSteps.value.length <= CHAIN_SCHEMA_LIMIT
+  }
   return Boolean(extractSchemaId.value)
 })
 
@@ -175,6 +181,10 @@ function schemaOptionLabel(s: SchemaDefinition) {
 function addChainStep(value: string | number | boolean | Record<string, any> | undefined) {
   const id = String(value ?? '')
   if (!id) return
+  if (chainSteps.value.length >= CHAIN_SCHEMA_LIMIT) {
+    showToast(`多脚本串行任务最多串联 ${CHAIN_SCHEMA_LIMIT} 个 Schema`, 'warning')
+    return
+  }
   if (chainSteps.value.some((s) => s.id === id)) {
     showToast('该 Schema 已在队列中', 'warning')
     return
@@ -252,7 +262,7 @@ async function submit() {
             </div>
             <!-- label 会把点击转发给 a-select 内部 input 造成"开→关"双切换，包 a-select 的字段一律用 div -->
             <a-select v-model="taskType" class="job-select" aria-label="任务类型">
-              <a-option value="extract">数据抽取</a-option>
+              <a-option value="extract">单脚本抽取</a-option>
               <a-option value="chain">多脚本串行</a-option>
             </a-select>
           </div>
@@ -288,6 +298,7 @@ async function submit() {
               </li>
             </ol>
             <small v-if="chainSteps.length === 1" class="muted-warn">多脚本串行任务至少选择 2 个 Schema</small>
+            <small v-else-if="chainSteps.length >= CHAIN_SCHEMA_LIMIT" class="muted-warn">已达串联上限 {{ CHAIN_SCHEMA_LIMIT }} 个 Schema，无法继续添加</small>
           </div>
           <div class="job-row">
             <label class="job-field">
@@ -315,7 +326,12 @@ async function submit() {
         <p class="resource-hint">MySQL 数据源/库默认跟随所选 Schema 的来源绑定（可改），仅注入脚本运行上下文供查找表等使用；抽取读取源仍按各 Schema 的来源绑定执行。</p>
 
         <label class="job-field">
-          <span>增量游标 since（可空，对每个 Schema 生效）</span>
+          <div class="job-field__label-row">
+            <span>增量游标 since（可空，对每个 Schema 生效）</span>
+            <a-tooltip position="top" content="抽取按来源水位增量读取：每轮只处理上次成功水位之后的新数据，来源全部批次成功后平台自动推进游标。此处填写首轮读取的起始水位（如 2026-08-01 00:00:00），仅对无历史水位的来源生效；留空则首轮从全量开始。失败重跑按记录 id 定向重读，不受水位影响。">
+              <span class="field-help" tabindex="0" role="note" aria-label="增量游标说明">?</span>
+            </a-tooltip>
+          </div>
           <input aria-label="如 2026-08-01 00:00:00" v-model="since" :maxlength="SINCE_RULE.max" placeholder="如 2026-08-01 00:00:00" />
           <small v-if="sinceError" class="field-error">{{ sinceError }}</small>
         </label>
@@ -410,6 +426,8 @@ async function submit() {
 .muted-warn{margin:0;color:#ff7d00;font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
 .schedule-preview{margin:0;color:#4e5969;font-size:12px;line-height:20px}
 .field-error{color:#e4322d;font-size:12px;line-height:18px}
+.job-launch-dialog .field-help{display:grid;flex:0 0 auto;width:16px;height:16px;place-items:center;border:1px solid #c9cdd4;border-radius:50%;background:#fff;color:#86909c;cursor:help;font-size:11px;line-height:14px}
+.job-launch-dialog .field-help:hover,.job-launch-dialog .field-help:focus-visible{border-color:#4080ff;color:#165dff;outline:0}
 .resource-hint{margin:0;color:#86909c;font-size:12px;line-height:20px}
 .schedule-preview strong{color:#004ecc;font-weight:600}
 .schedule-preview .cron-hint{color:#86909c}

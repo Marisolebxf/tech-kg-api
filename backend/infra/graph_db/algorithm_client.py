@@ -1065,6 +1065,30 @@ class TRSAlgorithmClient:
         resp = self._request("GET", f"{_ALGORITHMS_BASE}/jobs/{job_id}")
         return _parse_job(resp.json())
 
+    def kill_submission(self, submission_id: str, rest_url: str) -> None:
+        """Ask the configured Spark standalone master to kill one driver.
+
+        rest_url is server configuration, never a URL provided by an API caller.
+        An accepted kill still needs job polling to confirm the terminal state.
+        """
+        from urllib.parse import quote, urlsplit
+
+        parsed = urlsplit(rest_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.query or parsed.fragment:
+            raise ValueError("Spark REST 地址必须是 http(s) 服务地址")
+        if not submission_id:
+            raise ValueError("Spark submissionId 不能为空")
+        path = f"/v1/submissions/kill/{quote(submission_id, safe='')}"
+        try:
+            with httpx.Client(timeout=self._settings.timeout, transport=self._transport) as client:
+                response = client.post(f"{rest_url.rstrip('/')}{path}")
+                response.raise_for_status()
+                body = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise GraphConnectionError("Spark 终止请求失败") from exc
+        if not isinstance(body, dict) or body.get("success") is not True or body.get("submissionId") != submission_id:
+            raise GraphRequestError("Spark 未接受该作业的终止请求", status_code=502, body=response.text)
+
     def get_result(self, job_id: str) -> AlgorithmResult:
         """Fetch a succeeded job's result.
 

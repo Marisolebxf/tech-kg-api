@@ -41,7 +41,7 @@ async function setup(initialPath = '/overview?embedded=1') {
   })
   await router.push(initialPath)
   wrapper = mount(defineComponent({
-    setup() { usePortalIntegration(); return () => null },
+    setup() { const integration = usePortalIntegration(); return () => integration.portalStatusText.value },
   }), { global: { plugins: [router] } })
   await flushPromises()
   return router
@@ -55,6 +55,14 @@ beforeEach(() => {
 afterEach(() => { wrapper?.unmount(); wrapper = undefined })
 
 describe('portal route integration', () => {
+  it.each([
+    ['login-required', '尚未登录，请从统一门户进入。'],
+    ['session-expired', '登录状态已失效，已通知统一门户处理。'],
+    ['logout', '已退出登录，请从统一门户重新进入。'],
+  ])('distinguishes portal authentication state %s', async (state, text) => {
+    await setup('/login?embedded=1&portalState=' + state)
+    expect(wrapper?.text()).toBe(text)
+  })
   it('waits for the initial router navigation before announcing readiness', async () => {
     let allowNavigation: () => void = () => undefined
     const pendingGuard = new Promise<void>((resolve) => { allowNavigation = resolve })

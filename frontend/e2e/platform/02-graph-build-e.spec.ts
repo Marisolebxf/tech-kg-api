@@ -91,7 +91,7 @@ test.describe.serial('E. 任务中心', () => {
     // 应清空筛选（值标签隐藏、框体回到 placeholder 空态），列表不再按该维度过滤
     for (const [sel, realOpt] of [
       ['#graph-build-filter-status', '已完成'],
-      ['#graph-build-filter-type', '数据抽取'],
+      ['#graph-build-filter-type', '单脚本抽取'],
     ] as const) {
       const box = page.locator(sel)
       await box.click()
@@ -114,7 +114,7 @@ test.describe.serial('E. 任务中心', () => {
     )
   })
 
-  test('E2 新建一次性「数据抽取」任务并立即执行', async ({ page, request }) => {
+  test('E2 新建一次性「单脚本抽取」任务并立即执行', async ({ page, request }) => {
     test.setTimeout(300_000)
     const jobName = `e2e任务-抽取-${suffix}`
     // 推水位（幂等重跑也保证本次执行有新行可写）；实体 upsert 语义下图 count 不
@@ -133,7 +133,7 @@ test.describe.serial('E. 任务中心', () => {
     await expect(dialog).toBeVisible()
 
     await dialog.locator('input[placeholder="如：论文-专家抽取"]').fill(jobName)
-    // 任务类型已是静态「数据抽取」（D2/D4 下线其余通道后弹窗只建抽取任务），无需选择
+    // 任务类型已是静态「单脚本抽取」（D2/D4 下线其余通道后弹窗只建抽取任务），无需选择
     await dialog.locator('input[placeholder="选择要抽取的实体/关系"]').click()
     const widgetOpt = page.locator('li.arco-select-option:visible', { hasText: 'E2EWidget' }).first()
     await waitFor(async () => (await widgetOpt.isVisible().catch(() => false)), { label: 'E2EWidget 选项出现' })

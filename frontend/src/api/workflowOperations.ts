@@ -326,7 +326,7 @@ export interface WorkflowJob {
 
 export interface JobCreateInput {
   name: string
-  /** extract 数据抽取（单 Schema）/ chain 多脚本串行（≥2 个 Schema 按序串联） */
+  /** extract 单脚本抽取（单 Schema）/ chain 多脚本串行（≥2 个 Schema 按序串联） */
   taskType: 'extract' | 'chain'
   schemaId?: string
   /** chain：按序串联的 Schema 列表（≥2，顺序即执行顺序）。 */

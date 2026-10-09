@@ -74,6 +74,14 @@ const taskId = computed(() => String(route.params.taskId || route.params.instanc
 const processingInstance = ref<ProcessingInstance>()
 const fallbackBatch: UpdateBatch = { id: '-', name: '任务详情', updateDate: '-', dataWindow: '-', source: '-', trigger: '-', input: 0, entities: 0, relations: 0, completed: 0, abnormal: 0, progress: 0, status: '处理中', startedAt: '-', completedAt: '-' }
 const batch = computed(() => processingInstance.value?.batch ?? fallbackBatch)
+/** 标题副行 = 动作 · 来源表。任务行不带来源表（sourceTable 恒空）时不再悬摆「· -」，
+ *  只显示动作；历史回退值 '-' 一律视为缺失。 */
+const headerSubtitle = computed(() => {
+  const action = processingInstance.value?.action || batch.value.trigger
+  const rawSource = processingInstance.value?.sourceTable || batch.value.source
+  const source = rawSource && rawSource !== '-' ? rawSource : ''
+  return [action && action !== '-' ? action : '', source].filter(Boolean).join(' · ')
+})
 const isConstructionTask = computed(() => processingInstance.value?.stage === '图谱构建' || String(route.params.area) === 'construction')
 const needsTaskReview = computed(() => ['执行出错', '执行异常'].includes(processingInstance.value?.taskStatus ?? ''))
 const activeTab = ref<DetailTab>('overview')
@@ -652,7 +660,7 @@ onMounted(async () => {
 <template>
   <div class="task-detail-page">
     <header class="detail-head">
-      <div><h1>{{ job?.name || processingInstance?.objectName || `${visiblePhase}任务详情` }}</h1><p>{{ processingInstance?.action || batch.trigger }} · {{ processingInstance?.sourceTable || batch.source }}</p></div>
+      <div><h1>{{ job?.name || processingInstance?.objectName || `${visiblePhase}任务详情` }}</h1><p>{{ headerSubtitle }}</p></div>
     </header>
 
     <section v-if="job" class="job-config-panel">

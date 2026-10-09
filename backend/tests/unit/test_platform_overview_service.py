@@ -528,8 +528,9 @@ def test_parse_execution_records_aggregates_day_by_kind_and_space() -> None:
                 trigger="RERUN",
                 completed_at="2026-09-22 11:00:00",
             ),
-            # 前一日完成：不计入统计日
-            _execution_record(written=99, completed_at="2026-09-21 23:59:59"),
+            # 前一日完成：不计入统计日（北京口径：UTC 16:00 后完成=北京次日，
+            # 用 05:00 保证两套日历都属 09-21）
+            _execution_record(written=99, completed_at="2026-09-21 05:00:00"),
             # 其他空间：不计入
             _execution_record(payload_space="other_space"),
             # 写入 0：不产生明细行也不计数
@@ -554,7 +555,7 @@ def test_parse_execution_records_aggregates_day_by_kind_and_space() -> None:
     assert row.object == "审测挂件 · 5 条"
     assert row.change == "新增 review-widget-64d0d5"
     assert row.source == "techkg_e2e_liz.review_widgets"
-    assert row.time == "09-22 10:30:00"  # 识别时间带月日（跨天歧义）
+    assert row.time == "09-22 18:30:00"  # 完成时刻按北京展示（UTC+8），带月日（跨天歧义）
     assert len(snapshot.relation_rows) == 1
     assert snapshot.relation_rows[0].source == "techkg_e2e_liz.review_widgets"
 
@@ -592,17 +593,20 @@ def test_parse_execution_records_space_key_variants_and_default_bucket() -> None
 
 
 def test_parse_execution_records_sorts_rows_by_completion_desc() -> None:
+    """北京日窗口：完成时刻（UTC）折算北京后归属统计日，展示也按北京时刻。"""
     snapshot = parse_execution_records(
         [
-            _execution_record(written=1, completed_at="2026-09-22 09:00:00"),
-            _execution_record(written=2, completed_at="2026-09-22 18:00:00"),
+            _execution_record(written=1, completed_at="2026-09-22 09:00:00"),  # 北京 17:00
+            _execution_record(written=2, completed_at="2026-09-22 07:00:00"),  # 北京 15:00
+            # UTC 16:00 后完成 = 北京次日，不属统计日 2026-09-22
+            _execution_record(written=99, completed_at="2026-09-22 18:00:00"),
         ],
         day="2026-09-22",
         target_space="dev2",
         default_space="dev2",
     )
 
-    assert [row.time for row in snapshot.entity_rows] == ["09-22 18:00:00", "09-22 09:00:00"]
+    assert [row.time for row in snapshot.entity_rows] == ["09-22 17:00:00", "09-22 15:00:00"]
 
 
 def test_parse_execution_records_splits_rows_by_source() -> None:
@@ -631,7 +635,7 @@ def test_parse_execution_records_splits_rows_by_source() -> None:
     ]
     # 变更内容与识别时间在同一执行的各行保持一致
     assert {row.change for row in snapshot.entity_rows} == {"新增 review-widget-64d0d5"}
-    assert {row.time for row in snapshot.entity_rows} == {"09-22 10:30:00"}
+    assert {row.time for row in snapshot.entity_rows} == {"09-22 18:30:00"}
 
 
 def test_parse_execution_records_change_falls_back_without_schema_key() -> None:
@@ -870,7 +874,7 @@ def test_enrich_day_rows_lists_graph_objects_per_vertex() -> None:
         ("审测挂件", "总览造数-实体02", "新增 审测挂件"),
     ]
     assert result.entity_rows[0].source == "techkg_e2e_liz.review_widgets"
-    assert result.entity_rows[0].time == "09-23 03:00:35"
+    assert result.entity_rows[0].time == "09-23 11:00:35"  # 图侧 UTC 时间戳折算北京展示
     # 关系行：边类型无索引 LOOKUP 失败 → GO FROM 当日实体 vid 兜底，无序对去重后 2 条
     assert [(row.type, row.object) for row in result.relation_rows] == [
         ("审测关联", "总览造数-实体01 → 总览造数-实体02"),
@@ -878,7 +882,7 @@ def test_enrich_day_rows_lists_graph_objects_per_vertex() -> None:
     ]
     assert result.relation_rows[0].change == "新增 审测关联"
     assert result.relation_rows[0].source == "techkg_e2e_liz.review_widgets"
-    assert result.relation_rows[0].time == "09-23 03:44:48"
+    assert result.relation_rows[0].time == "09-23 11:44:48"
     # 徽标计数不变（仍按执行 written 聚合，与明细行数解耦）
     assert result.entity_added == 3
     assert result.relation_added == 3
@@ -953,7 +957,7 @@ def test_graph_time_prop_skips_datetime_columns() -> None:
     assert "`Patent`.`update_time`" not in lookup  # datetime 型 update_time 被跳过
     row = result.entity_rows[0]
     assert (row.type, row.object, row.change) == ("专利", "一种数据处理方法", "新增 专利")
-    assert row.time == "09-24 02:05:30"  # 逐对象写入时间取自 source_update_time
+    assert row.time == "09-24 10:05:30"  # 逐对象写入时间取自 source_update_time（北京展示）
 
 
 def test_vertex_display_name_falls_back_to_title() -> None:

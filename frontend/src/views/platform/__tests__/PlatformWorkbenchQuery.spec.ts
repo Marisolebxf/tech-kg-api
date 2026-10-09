@@ -1,5 +1,6 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
+import { Popover } from '@arco-design/web-vue'
 import { defineComponent, nextTick } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 
@@ -717,6 +718,8 @@ describe('Per-algorithm help', () => {
       for (const [index, tab] of tabs.entries()) {
         const info = tab.get('.platform-algorithm-info')
         expect(info.attributes('aria-label')).toBe(`查看${labels[index]}说明`)
+        expect(tab.findComponent(Popover).props('trigger')).toEqual(['hover', 'focus'])
+        expect(tab.findComponent(Popover).props('position')).toBe('bl')
         expect(info.classes().includes('is-active')).toBe(labels[index] === label)
         expect(tab.classes().includes('is-active')).toBe(labels[index] === label)
       }

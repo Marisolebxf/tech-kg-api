@@ -305,6 +305,7 @@ const queryMode = ref<'ngql' | 'algo'>('ngql')
 const ngqlStatement = ref('')
 const ngqlLoading = ref(false)
 const ngqlResult = ref<GraphConsoleResult | null>(null)
+const executedNgqlStatement = ref('')
 // nGQL 结果客户端分页：后端不限制返回行数，大结果集翻页展示（表头徽标仍显示总行数）
 const ngqlRecords = computed(() => ngqlResult.value?.records ?? [])
 const {
@@ -919,6 +920,7 @@ async function handleNgqlQuery(): Promise<void> {
 
   ngqlLoading.value = true
   ngqlResult.value = null
+  executedNgqlStatement.value = ''
   resetNgqlPage()
 
   try {
@@ -926,6 +928,7 @@ async function handleNgqlQuery(): Promise<void> {
     const result = await runNgql(space, statement)
     if (context !== graphContextVersion) return
     ngqlResult.value = result
+    executedNgqlStatement.value = statement
   } catch (error) {
     if (context !== graphContextVersion) return
     // 完整错误进控制台便于排查；右上角提示只保留单行短文案
@@ -1214,6 +1217,7 @@ watch(algoSpace, () => {
   graphContextVersion += 1
   stopAlgoPoll()
   ngqlResult.value = null
+  executedNgqlStatement.value = ''
   ngqlLoading.value = false
   resetNgqlPage()
   algoLabels.value = []
@@ -1653,7 +1657,7 @@ const pageMeta = computed(() => {
                   :class="{ 'is-active': selectedAlgorithm === algo.id }"
                   @click="selectedAlgorithm = algo.id"
                 >{{ algo.label }}</button>
-                <APopover trigger="click" :title="algo.label" position="bottom">
+                <APopover :trigger="['hover', 'focus']" :title="algo.label" position="bl">
                   <AButton type="text" shape="circle" class="platform-algorithm-info" :class="{ 'is-active': selectedAlgorithm === algo.id }" :aria-label="`查看${algo.label}说明`">
                     <IconInfoCircle aria-hidden="true" />
                   </AButton>
@@ -1817,7 +1821,7 @@ const pageMeta = computed(() => {
         </header>
         <div class="platform-query-result__body">
           <div class="platform-query-result__table">
-            <QueryResultTable v-if="ngqlTotal" aria-label="nGQL 查询结果" :rows="pagedNgqlRecords" :columns="ngqlResult?.columns ?? []" :page="ngqlPage" :page-size="ngqlPageSize" :loading="ngqlLoading" />
+            <QueryResultTable v-if="ngqlTotal" aria-label="nGQL 查询结果" :rows="pagedNgqlRecords" :columns="ngqlResult?.columns ?? []" :page="ngqlPage" :page-size="ngqlPageSize" :loading="ngqlLoading" :space="algoSpace" :query-statement="executedNgqlStatement" />
             <div v-else class="platform-query-result__empty" role="status" aria-live="polite">
               <AEmpty :description="ngqlLoading ? '查询执行中，请稍候…' : ngqlResult ? '语句执行成功，无返回记录' : '暂无数据，执行 nGQL 语句后在此查看结果'" />
             </div>
@@ -1862,7 +1866,7 @@ const pageMeta = computed(() => {
         </div>
         <div class="platform-query-result__body">
           <div class="platform-query-result__table">
-            <QueryResultTable v-if="algoTotal" aria-label="图算法执行结果" :rows="pagedAlgoRows" :columns="algoResultColumns" :labels="algorithmColumnLabels" :page="algoPage" :page-size="algoPageSize" sortable :sort-column="algoSortColumn" :sort-direction="algoSortDirection" @sort="sortAlgoColumn" />
+            <QueryResultTable v-if="algoTotal" aria-label="图算法执行结果" :rows="pagedAlgoRows" :columns="algoResultColumns" :labels="algorithmColumnLabels" :page="algoPage" :page-size="algoPageSize" sortable :sort-column="algoSortColumn" :sort-direction="algoSortDirection" :space="activeAlgorithmState.space" :algorithm-name="selectedAlgorithmDef.label" :job-id="algoJob?.jobId" @sort="sortAlgoColumn" />
             <div v-else class="platform-query-result__empty" role="status" aria-live="polite">
               <AEmpty :description="algoSubmitLoading ? '正在提交作业，请稍候…' : isAlgoJobRunning ? '算法运行中，完成后自动展示结果' : algoResult ? (submittedAlgoSearch ? '没有匹配的结果，请调整搜索条件' : '算法执行成功，无返回记录') : algoJob?.status === 'cancelled' ? '算法作业已终止，可重新提交' : algoJob?.status === 'failed' ? '算法执行失败，请查看上方失败原因' : '暂无数据，提交算法作业后在此查看结果'" />
             </div>

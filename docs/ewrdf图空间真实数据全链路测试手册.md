@@ -88,7 +88,50 @@
 
 ## 4. 第二步:源绑定(复制即用,id 白名单已填好)
 
-每个 schema 配一个来源绑定。**必须用 querySql 模式**(普通表绑定走 LIMIT/OFFSET 全表翻页,控不住量);querySql 里带合成 `row_id` 的,pkColumn 填 `row_id`,其余 pkColumn/timeColumn 见表。数据源选平台已有 mysql 数据源(gkx_element)。
+### 4.0 UI 来源绑定表单操作细则(先读,有三个坑)
+
+来源绑定表单是**五个下拉框**:数据源 → 库 → 表 → 主键列 → 时间列(水位)。各绑定的选值:
+
+| 绑定给 | 数据源 | 库 | 表 | 主键列 | 时间列 |
+|---|---|---|---|---|---|
+| Organization | dev2-default | gkx_element | dwd_org_base_info | org_id | updated_time |
+| Officer、EXECUTIVE_OF | dev2-default | gkx_element | dwd_org_executive_info | org_id(占位) | updated_time |
+| Expert | dev2-default | gkx_element | dwd_zh_author | author_id | updated_time |
+| Paper、PUBLISHED_IN | dev2-default | gkx_element | dwd_zh_paper | id | updated_time |
+| Journal | dev2-default | gkx_element | dwd_zh_journal | publication_id(占位) | updated_time |
+| AUTHORED_BY、COAUTHOR_WITH | dev2-default | gkx_element | dwd_zh_author | paper_id(占位) | updated_time |
+| SHAREHOLDER_OF | dev2-default | gkx_element | dwd_org_shareholder_info | org_id(占位) | updated_time |
+
+- 数据源选 **dev2-default(host.docker.internal)**——默认数据源(id `MYSQL-430EAF90`,指向 gkx_element@30306),下拉里同名杂源很多,认准这个;
+- **时间列不会自动选对**:前端自动偏好只认 update_time/updated_at/modified_at/gmt_modified,本手册的表全是 `updated_time`,必须手动在下拉里搜索选 `updated_time`;
+- **"占位"主键列**:需要合成 row_id 的四个绑定(Officer/EXECUTIVE_OF、Journal、AUTHORED_BY/COAUTHOR_WITH、SHAREHOLDER_OF),正确 pkColumn 是 querySql 里的 `row_id`,UI 下拉只列物理表列选不到——先按表选真实列占位,第 4.1 步 API 覆盖时改成 `row_id`。
+
+**⚠ UI 表单填不了 querySql(前端 SchemaSourceInput 无此字段),只支持整表绑定——整表绑定抽取走 LIMIT/OFFSET 全表翻页,控量即失效(Expert 源表 7906 行会被全读)。因此 UI 保存骨架后,必须按 4.1 用 API 覆盖补 querySql。**
+
+### 4.1 API 覆盖补 querySql(UI 保存后执行,缺这步控量失效)
+
+在门户页面按 F12 → Console 执行(同源自动带登录态;内网 8091 root 实例把前缀换成 `/api`):
+
+```js
+await fetch('/bkg_zpt/api/v1/schema-management/schemas/<schemaId>/sources', {
+  method: 'PUT',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ sources: [{
+    datasourceId: 'MYSQL-430EAF90',   // dev2-default
+    databaseName: 'gkx_element',
+    tableName: 'dwd_org_base_info',   // 按绑定换
+    pkColumn: 'org_id',               // 合成 row_id 的绑定此处改 'row_id'
+    timeColumn: 'updated_time',
+    querySql: '<贴下方对应 SQL,单行,去掉换行或保留均可>'
+  }]})
+}).then(r => r.json())
+```
+
+schemaId 在 schema 管理页该 schema 的详情里取。共需覆盖 **8 次**(10 个 schema 中 Officer/EXECUTIVE_OF、Paper/PUBLISHED_IN、AUTHORED_BY/COAUTHOR_WITH 各共用同一段 SQL,但每个 schema 都要各自覆盖一次)。验证覆盖成功:schema 详情源绑定里能看到自定义 SQL,或 `GET /api/v1/schema-management/schemas/<id>/sources` 返回的 querySql 非空。
+
+### 4.2 各绑定的 querySql(id 白名单已填好)
+
+每个 schema 配一个来源绑定。**必须用 querySql 模式**(普通表绑定走 LIMIT/OFFSET 全表翻页,控不住量);querySql 里带合成 `row_id` 的,pkColumn 填 `row_id`,其余 pkColumn/timeColumn 见表。
 
 ### Organization
 ```sql

@@ -1,186 +1,574 @@
-# ewrdf 图空间真实数据全链路测试手册
+# ewrdf 图空间真实数据全链路验证手册(物料级)
 
-> 2026-10-09 整理。目标:在公网门户 `https://edu.itic-sci.com/bkg_zpt` 所在的部署栈上,用独立的 `ewrdf` 图空间跑通「建 schema → 抽取 → 写图 → 人工审核 → 总览/检索可见」完整链路,不污染 dev2 等既有空间数据。
-> 环境事实均为 2026-10-09 只读实测(SHOW SPACES / DESCRIBE / SELECT / docker inspect / bundle 指纹比对)。
-
----
-
-## 0. 两个决定性前提
-
-### 0.1 公网门户的实际承载是 dev2 栈,不是 8088"主栈"
-
-| 项 | 公网 `/bkg_zpt` 实际承载(dev2 栈) | 容器名意义上的"主栈"(勿用) |
-|---|---|---|
-| web | `tech-kg-web-dev2`(8089 / 8091) | `tech-kg-web`(8088) |
-| api | `tech-kg-api-dev2`(8002) | `tech-kg-api`(8001) |
-| Temporal | `temporal-dev2:7233` | `temporal:7233`(独立实例) |
-| 控制库 | `techkg_control@temporal-mysql-dev2` | `techkg_control@temporal-mysql` |
-| worker | `tech-kg-temporal-worker-dev2`(队列 `tech-kg-workflows`) | **无任何 poller** |
-
-- 证据:公网首页 bundle `index-3RRcFgqS.css` / `index-gGZtg9pL.js` 与 8089/8091 完全一致;8088 主栈的 `tech-kg-workflows` 队列经其 temporal-ui(8233)API 查询无 poller。
-- **结论:全链路测试一律走公网门户(浏览器)或本机 8002 API。在 8088 栈下发抽取任务会永久挂起。**
-
-### 0.2 ewrdf 空间已建好、已授权,不需要新建
-
-- Nebula 实测:`ewrdf` 存在(SPACE ID 189),**0 tag / 0 edge 全空**,`vid_type=FIXED_STRING(64)`、partition=100、replica=1、utf8_bin —— vid 规格与 dev2 一致(注意 vid 上限 64 字符)。
-- 2026-09-19 经平台 `POST /api/v1/graph-spaces` 正式创建(该接口 admin-only,请求体只有 `name`);`kg_graph_space_vector_db` 登记 `status=ready`。
-- 控制库无任何 ewrdf 的 schema(`kg_schema_definition` 该空间 0 行)——是"已建未用"的干净空间。
-- **user 241(`642903148@qq.com`)已于 2026-10-08 授权绑定 ewrdf**:用该账号登录门户即可直接切换,无需管理员操作。
+> 2026-10-09 v2。目标:在公网门户 `https://edu.itic-sci.com/bkg_zpt` 的部署栈上,用独立 `ewrdf` 图空间跑通**真实数据**全链路,使 **schema 管理、图谱构建、人工审核、平台总览、图谱查询**五个页面全部出现可核验的真实数据。
+> 本手册自带全部物料:10 个 schema 定义、10 个可直接粘贴的抽取脚本、全部源绑定 SQL(真实 id 白名单已填好)、2 个串行任务、五页面验证矩阵。
+> 所有源数据均为 `gkx_element` 库 `dwd_*` 数仓真实业务数据(真实工商机构/持股/高管、真实论文/作者/期刊),无 mock、无演示造数。
 
 ---
 
-## 1. 操作步骤(九步)
+## 0. 前提(已实测确认,勿重复排查)
 
-### ① 切换全局图空间到 ewrdf
+| 事实 | 结论 |
+|---|---|
+| 公网 `/bkg_zpt` 承载栈 | **dev2 栈**(web 8089/8091、api 8002、worker `tech-kg-temporal-worker-dev2`);8088"主栈"队列无 poller,下发必挂,**勿用** |
+| ewrdf 空间 | 已存在(2026-09-19 平台正式创建),0 tag/0 edge,vid=FIXED_STRING(64) |
+| 账号 | `642903148@qq.com`(user 241)已授权 ewrdf,登录即可切换 |
+| 执行链 | 图谱库 trsgraph 共享、控制库 techkg_control@temporal-mysql-dev2、业务库 gkx_element@tech-kg-mysql(30306)、S3 operator-rustfs 共享、m3e embedding 可用 |
+| 抽取空间解析优先级 | **job graphSpace > schema 绑定空间 > worker 默认 dev2** —— 触发时必须显式带 `graphSpace:"ewrdf"` |
 
-登录 `https://edu.itic-sci.com/bkg_zpt/`,右上/顶部的全局图空间切换器选 `ewrdf`。
-看不到该空间 = 登录账号没有授权,先到 `/configurations`(平台管理员)给账号绑定 ewrdf。
+**数据量预算(资源红线内)**:每 schema 源行 ≤ 30,总计约 **68 个实体 + 64 条边**,任务数 **2 个**(chain 类型,内部严格串行,同一时刻只有一个 schema 在写图)。单 schema 抽取 + 自动建索引预计分钟级;若逢共享图过载波可能拉长到几十分钟,属环境现象非故障。
 
-### ② 建 schema(当前空间必须是 ewrdf)
+---
 
-schema 管理 → 在 ewrdf 空间下分别建实体、关系 schema:
+## 1. 总体验证矩阵(做完后逐页核对)
 
-- **实体 schema 的属性表必须包含 `name`(string)**。建 TAG 时会自动建原生索引 `idx_{tag}_name`(string → `name(64)`)并 REBUILD:
-  - CREATE INDEX 失败 = 建 schema 整体失败(会报错,修属性后重试);
-  - REBUILD 失败仅告警,不影响(新写入自动进索引)。
-  - 这个 name 索引是后续消歧同名召回、实体检索按名精确查找的**命脉**——没有它会出现"图里有但搜不到"。
-- 关系 schema 只执行 `CREATE EDGE`,无索引,属正常,不需要处理。
-- 建完空间后紧接着建 schema 偶发 DDL 传播延迟导致的 500,直接重试即可(内置 3 次重试)。
+| # | 页面 | 验证点 | 预期 |
+|---|---|---|---|
+| 1 | Schema 管理 | 目录列表(空间=ewrdf) | 10 个 schema:5 实体 + 5 关系,中文标签正确 |
+| 2 | 图谱构建 | 任务列表 + 执行详情 | 2 个 chain 任务 COMPLETED;每 schema 一个抽屉,转换步有真实行数 |
+| 3 | 人工审核 | 队列(空间=ewrdf) | **约 4 个真实案**:樊杰同名 T_LINK 2-3 案 + 空名作者 T_EXTRACT_FAIL 2 案;裁决后 RESOLVED |
+| 4 | 平台总览 | 资产卡/今日新增/审核卡/任务卡 | 实体 ≈68、关系 ≈64;今日新增明细有真实机构名/论文题名/人名;审核卡 top5=ewrdf 案;任务卡 2 条 |
+| 5 | 图谱查询 | 图控制台 nGQL + 实体检索 | 按 tag 查到点;两跳查询(高管→机构→股东、论文→作者→合著)出真实路径;实体检索能搜到"樊杰"/机构名 |
 
-### ③ 上传抽取脚本(@step 风格)
+---
 
-两个 schema 各配脚本。**单步 transform 入口已下线**,必须:
+## 2. 数据设计(5 实体 + 5 关系,两个真实数据簇)
 
+### 簇 A:机构域(真实工商数据)
+
+- **6 个闭合持股对**(股东机构与被持股机构都在机构表内,保证 SHAREHOLDER_OF 两端都是实体):
+  迈岭信息←富视康(100%)、中科绿谷←深圳先进技术研究院(16.67%)、计量质检院集团←计量质检研究院、平安壹账通云←深圳电商安全证书管理、三本软件←腾云物联(98%)、玖合鑫通讯←玖合鑫科技(100%)
+- 机构簇 = 6 被持股方 + 6 持股方 = **12 家**;高管取 6 家被持股方的真实任职行。
+
+### 簇 B:学者域(真实论文数据)
+
+- **10 篇真实中文论文**(经济地理/药学/电力系统类期刊),每篇取前 2 作者 = **20 位真实作者**;
+- **消歧组:樊杰 ×3**——同一姓名、3 个不同 author_id、institution 全 NULL(真实重名数据;同名无可比属性评分 0.80,必进 T_LINK 灰区);
+- **失败组:空名作者 ×2**——真实数据质量缺陷行(zh_name 为空),进 T_EXTRACT_FAIL;
+- 期刊 4 个:经济地理(1009219)、1006062、1004427、1004798(期刊名在 `dwd_zh_journal`,论文表该列全空,别用错表)。
+
+### Schema 清单
+
+| schema(kind) | 中文名 | 源表 | identity/vid | name 来源 | 关键属性 |
+|---|---|---|---|---|---|
+| Organization(entity) | 机构 | dwd_org_base_info | org_id | name_cn | province/city/industry/regStatus |
+| Officer(entity) | 高管 | dwd_org_executive_info | org_id__姓名 | executives_name | position |
+| Expert(entity) | 专家 | dwd_zh_author | author_id | zh_name | institution |
+| Paper(entity) | 论文 | dwd_zh_paper | id | zh_name | doi/pubYear |
+| Journal(entity) | 期刊 | dwd_zh_journal | publication_id | zh_name | issn |
+| EXECUTIVE_OF(relation) | 高管任职 | dwd_org_executive_info | Officer→Organization | — | position |
+| SHAREHOLDER_OF(relation) | 股东持股 | dwd_org_shareholder_info | Organization→Organization | — | percentage/ownerName |
+| AUTHORED_BY(relation) | 论文署名 | dwd_zh_author | Paper→Expert | — | sequence |
+| PUBLISHED_IN(relation) | 发表于 | dwd_zh_paper | Paper→Journal | — | — |
+| COAUTHOR_WITH(relation) | 合著 | dwd_zh_author | Expert↔Expert | — | paperId |
+
+> 实体 schema 属性表**必须含 `name`(string)**:建 TAG 时自动建原生索引 `idx_{tag}_name` 并 REBUILD——这是消歧同名召回与实体检索按名查找的命脉。关系 schema 只建 EDGE 无索引,属正常。
+
+---
+
+## 3. 第一步:建 10 个 schema(全局空间切到 ewrdf)
+
+在 Schema 管理页逐个创建(实体建"实体 schema"、关系建"关系 schema",关系需选源/目标实体 schema)。属性定义如下(name 列均为 string、required 建议勾选 name):
+
+**Organization 机构**:name(必需)、province、city、industry、regStatus、capital
+**Officer 高管**:name(必需)、position
+**Expert 专家**:name(必需)、institution
+**Paper 论文**:name(必需)、doi、pubYear
+**Journal 期刊**:name(必需)、issn
+
+**EXECUTIVE_OF 任职**:源=Officer,目标=Organization;属性 position
+**SHAREHOLDER_OF 股东持股**:源=Organization,目标=Organization;属性 percentage、ownerName
+**AUTHORED_BY 论文署名**:源=Paper,目标=Expert;属性 sequence
+**PUBLISHED_IN 发表于**:源=Paper,目标=Journal
+**COAUTHOR_WITH 合著**:源=Expert,目标=Expert;属性 paperId
+
+> 建完 schema 立即建源绑定并上传脚本(见下),再触发任务——三件套齐全的 schema 才能抽取。
+
+---
+
+## 4. 第二步:源绑定(复制即用,id 白名单已填好)
+
+每个 schema 配一个来源绑定。**必须用 querySql 模式**(普通表绑定走 LIMIT/OFFSET 全表翻页,控不住量);querySql 里带合成 `row_id` 的,pkColumn 填 `row_id`,其余 pkColumn/timeColumn 见表。数据源选平台已有 mysql 数据源(gkx_element)。
+
+### Organization
+```sql
+SELECT org_id, name_cn, province, city, industry_l1_name, reg_status, registered_capital_value, updated_time
+FROM gkx_element.dwd_org_base_info
+WHERE org_id IN ('6316ee16a50a0a093a5859d8b5cc67a8','98e68fdf64b81709249dc23816a89c66',
+ '6c25d2e2c852ba5a81d733cefaf5fe7b','69c0d92da4105991cedee6335fb44412',
+ '0a14fdb97eb7d2892654ee2ef180b527','cbeac662cf32b19dcdb872790e4df8da',
+ '8e04394509161ebbdf63c1813b948955','71aa92091eda2d2b872ca903d05d6d5d',
+ 'f21c867cb7a12e7f175c422de0e939a4','3d9ba778337dba72db8cc12a1bbb92be',
+ 'e9f6a720f02bb2143dd0f926b82f07f3','6ed1fec4b9de17f467edc5dd0af0c89a')
+```
+pkColumn=`org_id`,timeColumn=`updated_time`
+
+### Officer 与 EXECUTIVE_OF(同一 SQL,分别绑到两个 schema)
+```sql
+SELECT CONCAT(org_id,'__',executives_name) AS row_id, org_id, executives_name, executives_position, updated_time
+FROM gkx_element.dwd_org_executive_info
+WHERE org_id IN ('6316ee16a50a0a093a5859d8b5cc67a8','6c25d2e2c852ba5a81d733cefaf5fe7b',
+ '0a14fdb97eb7d2892654ee2ef180b527','8e04394509161ebbdf63c1813b948955',
+ 'f21c867cb7a12e7f175c422de0e939a4','e9f6a720f02bb2143dd0f926b82f07f3')
+```
+pkColumn=`row_id`,timeColumn=`updated_time`
+
+### Expert
+```sql
+SELECT author_id, zh_name, institution, updated_time
+FROM gkx_element.dwd_zh_author
+WHERE author_id IN ('cafb9c466b2d74de158d995bef134639','36e40fcc42d2bec87f7c423211213dfb',
+ '59dce19adb29701688a1ce9a63069aea','134066be56583f1327557f7898825a18',
+ '50ef5f551c4a7fad56dcd82b2bdf6da2','d2b9bda08f8130b8dab54e1aa6ae6b98',
+ '0f2f8f6e8903effb92ff99d39f936787','a7b0e09a0ff6d3337a5fee9ba4434844',
+ 'ff60369aa3eb6daad43d30000fa43e4b','fb9e2948f22da487fb3338ba1f4e072a',
+ '73fdfa939f5bc499b86582316981b1db','53e7d89bd0f34628b6ef2f7055d8eec4',
+ '24db008db3d0781a7bd6cd35a4f3922c','47330a8c229cc0b1f03129685eaa4763',
+ '717546ccc349b6d95a2050122c6a7664','eb01531ab783e0f19a7fe36aad02c5cc',
+ '264fb2e63afff07020233920a4d7a11b','8f7a5550dc2be9517d371be0448804f2',
+ '12aea370e3b46b1dc7e6570a6cd639b9','eb7e28ffc6a0edf21580dddc0aced796',
+ '2c3dfa15fa2b0f1adac5b7c835ca00dc','170795a90339520c3673f72508b5ba6f',
+ 'da151fbcb5e621d9b2ce6754a0859f63',
+ '80960999b7bfd9f089b86c88796b3bcb','792f74d99a0bd137118b239fac5047ef')
+```
+pkColumn=`author_id`,timeColumn=`updated_time`
+(前 20 = 论文簇作者;末 3 = 樊杰×3(消歧组);最后 2 = 空名行(失败组))
+
+### Paper 与 PUBLISHED_IN(同一 SQL 分别绑)
+```sql
+SELECT id, zh_name, doi, cover_year_start, publication_id, updated_time
+FROM gkx_element.dwd_zh_paper
+WHERE id IN ('1002153099575427075','1002153099575427078','1002153099575427082','1002153099575427088',
+ '1002153099575427093','1002613259049631753','1005773515376295936','1005773515376295942',
+ '1012001490740445188','1012001490740445198')
+```
+pkColumn=`id`,timeColumn=`updated_time`
+
+### Journal
+```sql
+SELECT CONCAT(publication_id,'__',paper_id) AS row_id, publication_id, zh_name, issn, updated_time
+FROM gkx_element.dwd_zh_journal
+WHERE publication_id IN ('1009219','1006062','1004427','1004798')
+```
+pkColumn=`row_id`,timeColumn=`updated_time`(同一期刊多行,脚本内按 publication_id 去重)
+
+### AUTHORED_BY 与 COAUTHOR_WITH(同一 SQL 分别绑)
+```sql
+SELECT CONCAT(paper_id,'__',author_id) AS row_id, paper_id, author_id, author_sequence, zh_name, updated_time
+FROM gkx_element.dwd_zh_author
+WHERE author_sequence<=2 AND paper_id IN ('1002153099575427075','1002153099575427078','1002153099575427082',
+ '1002153099575427088','1002153099575427093','1002613259049631753','1005773515376295936',
+ '1005773515376295942','1012001490740445188','1012001490740445198')
+```
+pkColumn=`row_id`,timeColumn=`updated_time`
+
+### SHAREHOLDER_OF
+```sql
+SELECT CONCAT(org_id,'__',inv_org_id) AS row_id, org_id, inv_org_id, owners_name, ownership_percentage, updated_time
+FROM gkx_element.dwd_org_shareholder_info
+WHERE owners_type='单位'
+  AND org_id IN ('6316ee16a50a0a093a5859d8b5cc67a8','6c25d2e2c852ba5a81d733cefaf5fe7b',
+   '0a14fdb97eb7d2892654ee2ef180b527','8e04394509161ebbdf63c1813b948955',
+   'f21c867cb7a12e7f175c422de0e939a4','e9f6a720f02bb2143dd0f926b82f07f3')
+  AND inv_org_id IN ('98e68fdf64b81709249dc23816a89c66','69c0d92da4105991cedee6335fb44412',
+   'cbeac662cf32b19dcdb872790e4df8da','71aa92091eda2d2b872ca903d05d6d5d',
+   '3d9ba778337dba72db8cc12a1bbb92be','6ed1fec4b9de17f467edc5dd0af0c89a')
+```
+pkColumn=`row_id`,timeColumn=`updated_time`
+
+---
+
+## 5. 第三步:上传抽取脚本(10 个,直接粘贴)
+
+脚本契约:`from kg_sdk import step` + `@step def extract(payload)`,吃 `payload["rows"]`,输出实体 `{"entities":[{"id":vid,"props":{...}}],"failures":[{"recordId","error"}]}` / 边 `{"edges":[{"fromId","toId","props":{...}}],"failures":[...]}`。逐行异常进 failures(毒行隔离),不抛出。函数名不得叫 transform/workflow。
+
+### 5.1 Organization
 ```python
+"""Organization(机构)抽取:dwd_org_base_info 行 → 机构实体。"""
 from kg_sdk import step
 
+
 @step
-def extract(payload):          # 函数名不能叫 transform / workflow
-    rows = payload["rows"]     # 首步吃 rows
-    return {
-        "entities": [...], "edges": [...],
-        "failures": [...], "pendingReview": [...],
-    }
+def extract(payload):
+    entities, failures = [], []
+    for row in payload.get("rows") or []:
+        try:
+            name = (row.get("name_cn") or "").strip()
+            if not name:
+                raise ValueError("缺少必需名称字段 name_cn")
+            entities.append({
+                "id": str(row["org_id"]),
+                "props": {
+                    "name": name,
+                    "province": row.get("province") or "",
+                    "city": row.get("city") or "",
+                    "industry": row.get("industry_l1_name") or "",
+                    "regStatus": row.get("reg_status") or "",
+                    "capital": str(row.get("registered_capital_value") or ""),
+                },
+            })
+        except Exception as exc:
+            failures.append({"recordId": str(row.get("org_id") or ""), "error": f"{type(exc).__name__}: {exc}"[:1000]})
+    return {"entities": entities, "failures": failures}
 ```
 
-脚本经 API 上传后落共享 operator-rustfs 桶 `tech-kg-schema-scripts`,dev2 worker 取得到(2026-09-20 跨栈 S3 不一致已修复)。
+### 5.2 Officer
+```python
+"""Officer(高管)抽取:dwd_org_executive_info 行 → 高管实体(vid=org_id__姓名)。"""
+from kg_sdk import step
 
-### ④ 配真实数据源(`PUT /schema-management/schemas/{id}/sources`)
 
-带 `pkColumn` / `timeColumn`。两条路:
-
-1. **已有真实业务表**:注意时间水位与批量,避免全量扫共享库;
-2. **最小真实造数**(推荐先跑通链路):共享测试表 `techkg_e2e_liz.review_widgets`,只插**自己前缀**的行:
-   - 实体行:memo **不含** EDGE/POISON/PENDING;
-   - 边行:memo **必须含 "EDGE"**(关系脚本只对含 EDGE 的行出边,漏了就 written=0 白跑);`from_id`/`to_id` 指向实体行 id;`update_time=NOW()` 过水位;
-   - 经 docker mysql 操作中文必须 `--default-character-set=utf8mb4`,否则中文往返损坏;
-   - 想触发 T_LINK 灰区审核案:同批插**同名多行**(同名无可比属性评分 = 0.80,恰落灰区 [0.65, 0.85)),一次可产多个案。
-
-### ⑤ 触发抽取 job(graphSpace 必须显式带 ewrdf)
-
-- UI:图谱构建页,单 schema 建 once job 触发;
-- API:`POST /api/v1/workflow-system/jobs` body `{"taskType":"extract","schemaId":"...","graphSpace":"ewrdf"}` → `POST /api/v1/workflow-system/jobs/{id}/trigger`。
-
-**为什么要显式带**:抽取写图空间解析优先级 = **job 的 graphSpace > schema 行绑定的 graph_space > worker 环境默认(dev2)**。不带参数时不报错,最坏情况静默写进 dev2。也**不要用** `/task-center/trigger` 全量扫(会触发别人的 schema)。
-
-时间预期:共享图有负载波动波峰,小批量也可能跑几十分钟;dev2 worker 是单队列共享,遇到在飞任务需排队。
-
-### ⑥ 验证执行与写图
-
-- 执行状态以任务详情页/执行日志为准(控制库列表是懒刷新,别只看列表态;真实现态可看 Temporal)。
-- 写图验证(只读,经图网关):
-
-```bash
-# SHOW SPACES / 统计
-curl -s -X POST http://localhost:8090/api/v1/query \
-  -H 'X-API-Key: ysukeg' -H 'X-Graph-Space: ewrdf' -H 'Content-Type: application/json' \
-  -d '{"query":"SHOW STATS"}'
-
-# 按 tag 查点(替换为你的 tag)
-... -d '{"query":"MATCH (v:`YourTag`) RETURN v LIMIT 10"}'
+@step
+def extract(payload):
+    entities, failures, seen = [], [], set()
+    for row in payload.get("rows") or []:
+        try:
+            name = (row.get("executives_name") or "").strip()
+            if not name:
+                raise ValueError("缺少必需名称字段 executives_name")
+            vid = f"{row['org_id']}__{name}"
+            if vid in seen:  # 同一人在同一机构多行(多职位),合并为一个实体
+                continue
+            seen.add(vid)
+            entities.append({
+                "id": vid,
+                "props": {"name": name, "position": row.get("executives_position") or ""},
+            })
+        except Exception as exc:
+            failures.append({"recordId": str(row.get("row_id") or ""), "error": f"{type(exc).__name__}: {exc}"[:1000]})
+    return {"entities": entities, "failures": failures}
 ```
 
-- 写图后链路会自动 `SUBMIT JOB STATS`(空间级;失败仅告警 → 总览统计可能滞后一步,重进页面/等下次触发即恢复)。
+### 5.3 Expert
+```python
+"""Expert(专家)抽取:dwd_zh_author 行 → 专家实体。空名行进 failures(真实数据质量缺陷→T_EXTRACT_FAIL)。"""
+from kg_sdk import step
 
-### ⑦ 实体检索索引
 
-- 实体检索是**全局单 collection `kg_entity`(default 库)按 `graph_space` 字段分区**,主键 `空间::vid`;不是每空间一个 collection。
-- 新空间首次检索会报 **"图空间 ewrdf 尚未构建实体索引,请先在页面触发「重建索引」"** —— 属预期:
-  - 正常路径:实体抽取收尾自动 `build_entity_index`(默认开启;依赖 m3e embedding 服务可用,否则整个执行会 FAILED);
-  - 兜底:实体检索页面手动触发重建索引。ewrdf 从空起步,量小是秒级~分钟级,不是 dev2 全量那种 1-2 小时。
-- 注意:建空间时自动建的同名 Milvus database 只是给脚本 milvus 选择器用的,与实体检索无关。
+@step
+def extract(payload):
+    entities, failures, seen = [], [], set()
+    for row in payload.get("rows") or []:
+        rid = str(row.get("author_id") or "")
+        try:
+            name = (row.get("zh_name") or "").strip()
+            if not name:
+                raise ValueError("缺少必需名称字段 zh_name(源行数据质量缺陷)")
+            if rid in seen:  # 同一作者多行(多篇论文),合并
+                continue
+            seen.add(rid)
+            entities.append({
+                "id": rid,
+                "props": {"name": name, "institution": row.get("institution") or ""},
+            })
+        except Exception as exc:
+            failures.append({"recordId": rid, "error": f"{type(exc).__name__}: {exc}"[:1000]})
+    return {"entities": entities, "failures": failures}
+```
 
-### ⑧ 人工审核与裁决
+### 5.4 Paper
+```python
+"""Paper(论文)抽取:dwd_zh_paper 行 → 论文实体。"""
+from kg_sdk import step
 
-- 运营中心 → 人工审核队列,空间过滤 = ewrdf(队列已跟随全局空间切换;写图/重跑始终按 case 建案时烙定的空间,不受当前切换影响)。
-- 预期出现两类案:
-  - **实体对齐裁决(T_LINK)**:同名灰区/碰撞产生;
-  - **抽取失败重跑(T_EXTRACT_FAIL)**:脚本 failures 逐行产生。
-- 裁决(production submit,任何 action 终态都是 RESOLVED;REJECTED 仅废弃的旧直审通道):
-  - `entityVerdict=merge`:真改目标节点属性;
-  - `create`:按 `_incoming.vid` 落图 + 补写 `_pendingRelations` 暂存边;
-  - `reject`:图零写入(驳回证据在 `GET /manual-reviews/production/{id}/audit-logs`)。
-- C 类重跑:`rerun-extract-failures`,重跑工作流带原 case 空间;失败回滚 OPEN 的修复已在 dev2 栈镜像(2026-09-21 起不再卡 RERUNNING)。
-- 裁决后该空间实体检索会自动做 Milvus 增量 upsert,无需手动重建。
 
-### ⑨ 总览收口
+@step
+def extract(payload):
+    entities, failures = [], []
+    for row in payload.get("rows") or []:
+        try:
+            name = (row.get("zh_name") or "").strip()
+            if not name:
+                raise ValueError("缺少必需名称字段 zh_name")
+            entities.append({
+                "id": str(row["id"]),
+                "props": {
+                    "name": name,
+                    "doi": row.get("doi") or "",
+                    "pubYear": str(row.get("cover_year_start") or ""),
+                },
+            })
+        except Exception as exc:
+            failures.append({"recordId": str(row.get("id") or ""), "error": f"{type(exc).__name__}: {exc}"[:1000]})
+    return {"entities": entities, "failures": failures}
+```
 
-`/bkg_zpt/overview` 切 ewrdf 空间核对:
+### 5.5 Journal
+```python
+"""Journal(期刊)抽取:dwd_zh_journal 行(一论文一行)按 publication_id 去重 → 期刊实体。"""
+from kg_sdk import step
 
-- 图谱资产:实体/关系总量(去重口径);
-- 今日新增:抽取出真实行(对象=名字或"起点 → 终点",来源=源表);
-- 人工审核卡:top5 应显示 ewrdf 自己的案(不再被 dev2 的审测案霸占);
-- 图谱构建任务卡:按空间过滤,只统计 ewrdf 的任务。
+
+@step
+def extract(payload):
+    entities, failures, seen = [], [], set()
+    for row in payload.get("rows") or []:
+        try:
+            pid = str(row.get("publication_id") or "")
+            name = (row.get("zh_name") or "").strip()
+            if not name:
+                raise ValueError("缺少必需名称字段 zh_name")
+            if pid in seen:
+                continue
+            seen.add(pid)
+            entities.append({
+                "id": pid,
+                "props": {"name": name, "issn": row.get("issn") or ""},
+            })
+        except Exception as exc:
+            failures.append({"recordId": str(row.get("row_id") or ""), "error": f"{type(exc).__name__}: {exc}"[:1000]})
+    return {"entities": entities, "failures": failures}
+```
+
+### 5.6 EXECUTIVE_OF
+```python
+"""EXECUTIVE_OF(高管任职)边:Officer→Organization,一人一机构一条(position 取首行)。"""
+from kg_sdk import step
+
+
+@step
+def extract(payload):
+    edges, failures, seen = [], [], set()
+    for row in payload.get("rows") or []:
+        try:
+            name = (row.get("executives_name") or "").strip()
+            if not name:
+                raise ValueError("缺少必需名称字段 executives_name")
+            officer_vid = f"{row['org_id']}__{name}"
+            if officer_vid in seen:
+                continue
+            seen.add(officer_vid)
+            edges.append({
+                "fromId": officer_vid,
+                "toId": str(row["org_id"]),
+                "props": {"position": row.get("executives_position") or ""},
+            })
+        except Exception as exc:
+            failures.append({"recordId": str(row.get("row_id") or ""), "error": f"{type(exc).__name__}: {exc}"[:1000]})
+    return {"edges": edges, "failures": failures}
+```
+
+### 5.7 SHAREHOLDER_OF
+```python
+"""SHAREHOLDER_OF(股东持股)边:股东机构→被持股机构(单位股东,两端都是 Organization 实体)。"""
+from kg_sdk import step
+
+
+@step
+def extract(payload):
+    edges, failures = [], []
+    for row in payload.get("rows") or []:
+        try:
+            if not (row.get("inv_org_id") and row.get("org_id")):
+                raise ValueError("缺少端点机构 id")
+            edges.append({
+                "fromId": str(row["inv_org_id"]),
+                "toId": str(row["org_id"]),
+                "props": {
+                    "percentage": str(row.get("ownership_percentage") or ""),
+                    "ownerName": row.get("owners_name") or "",
+                },
+            })
+        except Exception as exc:
+            failures.append({"recordId": str(row.get("row_id") or ""), "error": f"{type(exc).__name__}: {exc}"[:1000]})
+    return {"edges": edges, "failures": failures}
+```
+
+### 5.8 AUTHORED_BY
+```python
+"""AUTHORED_BY(论文署名)边:Paper→Expert。"""
+from kg_sdk import step
+
+
+@step
+def extract(payload):
+    edges, failures = [], []
+    for row in payload.get("rows") or []:
+        try:
+            if not (row.get("paper_id") and row.get("author_id")):
+                raise ValueError("缺少 paper_id/author_id")
+            edges.append({
+                "fromId": str(row["paper_id"]),
+                "toId": str(row["author_id"]),
+                "props": {"sequence": str(row.get("author_sequence") or "")},
+            })
+        except Exception as exc:
+            failures.append({"recordId": str(row.get("row_id") or ""), "error": f"{type(exc).__name__}: {exc}"[:1000]})
+    return {"edges": edges, "failures": failures}
+```
+
+### 5.9 PUBLISHED_IN
+```python
+"""PUBLISHED_IN(发表于)边:Paper→Journal。"""
+from kg_sdk import step
+
+
+@step
+def extract(payload):
+    edges, failures = [], []
+    for row in payload.get("rows") or []:
+        try:
+            if not (row.get("id") and row.get("publication_id")):
+                raise ValueError("缺少论文 id/期刊 publication_id")
+            edges.append({
+                "fromId": str(row["id"]),
+                "toId": str(row["publication_id"]),
+                "props": {},
+            })
+        except Exception as exc:
+            failures.append({"recordId": str(row.get("id") or ""), "error": f"{type(exc).__name__}: {exc}"[:1000]})
+    return {"edges": edges, "failures": failures}
+```
+
+### 5.10 COAUTHOR_WITH
+```python
+"""COAUTHOR_WITH(合著)边:Expert↔Expert,同一论文的前 2 作者两两成对(脚本内派生)。"""
+from collections import defaultdict
+
+from kg_sdk import step
+
+
+@step
+def extract(payload):
+    edges, failures = [], []
+    by_paper = defaultdict(list)
+    for row in payload.get("rows") or []:
+        if row.get("paper_id") and row.get("author_id"):
+            by_paper[str(row["paper_id"])].append(str(row["author_id"]))
+    for paper_id, authors in by_paper.items():
+        unique = list(dict.fromkeys(authors))
+        for i in range(len(unique)):
+            for j in range(i + 1, len(unique)):
+                a, b = sorted([unique[i], unique[j]])
+                edges.append({"fromId": a, "toId": b, "props": {"paperId": paper_id}})
+    return {"edges": edges, "failures": failures}
+```
 
 ---
 
-## 2. 风险与注意事项
+## 6. 第四步:建 2 个任务并触发(chain 串行,资源压力最小)
 
-| 风险 | 说明 | 对策 |
+图谱构建页建任务,类型选 **chain(多 Schema 串行)**,`graphSpace` 显式 `ewrdf`,`batchSize=10`(每批 10 行,小批慢写保护图服务):
+
+1. **任务 1「ewrdf-实体链」**:schemaIds 顺序 = `[Organization, Officer, Expert, Paper, Journal]`
+2. **任务 2「ewrdf-关系链」**:schemaIds 顺序 = `[EXECUTIVE_OF, SHAREHOLDER_OF, AUTHORED_BY, PUBLISHED_IN, COAUTHOR_WITH]`
+
+**先触发任务 1,等它 COMPLETED 再触发任务 2**(边端点依赖实体先落图)。chain 内部严格串行:同一时刻只有一个 schema 在写图;任一环执行级失败整链 FAILED(逐行 failures 不算失败,只进审核)。执行详情页每个 schema 一个抽屉,可看各环节真实行数。
+
+API 等价操作(可选):
+```bash
+curl -X POST http://localhost:8002/api/v1/workflow-system/jobs -H 'Content-Type: application/json' -d \
+'{"taskType":"chain","name":"ewrdf-实体链","graphSpace":"ewrdf","batchSize":10,
+  "schemaIds":["<Organization的schemaId>","<Officer的schemaId>","<Expert的schemaId>","<Paper的schemaId>","<Journal的schemaId>"]}'
+curl -X POST http://localhost:8002/api/v1/workflow-system/jobs/<jobId>/trigger
+```
+(schemaId 在 schema 管理页每个 schema 的详情里;勿用 /task-center/trigger 全量扫)
+
+---
+
+## 7. 第五步:人工审核(预期 ~4 个真实案)
+
+任务 1 完成后,运营中心 → 人工审核队列(空间=ewrdf),应出现:
+
+| 案件 | 来源 | 预期 |
 |---|---|---|
-| 共享控制库未知清理者 | 2026-09-23 曾有演示 schema 13 分钟内被硬删、运行中 job 被取消(直连库操作,日志无痕) | 记好 schemaId/jobId;被删属环境问题,非链路问题 |
-| 共享业务库 | `manual_review_case`、`review_widgets` 全栈共享,别人切到 ewrdf 也看得到你的案 | 造数只动自己前缀的行;别人(vb/vc/ex 等)的行别碰 |
-| 图负载波动 | 共享 Nebula 有过载波,小批量抽取曾跑 41~53 分钟;波峰期总览诚实降级(卡片占位)属设计 | 错峰;验证部署/链路别拿波峰窗口的慢当故障 |
-| vid 上限 | ewrdf vid=FIXED_STRING(64),超长 vid 写入会失败 | 造数行 id/vid 控制在 64 字符内 |
-| 静默写错空间 | 抽取不带 graphSpace 时最坏落 worker 默认 dev2 | 触发时**永远显式带** `graphSpace:"ewrdf"` |
-| T_DIRECT 写默认空间 | 旧通道 T_DIRECT 的 accept 在非 RBAC 部署下写 env 默认空间 | 现行抽取链不再产生 T_DIRECT,无需处理;遇到存量 T_DIRECT 案别在新空间测 accept |
+| 实体对齐裁决(T_LINK)×2~3 | 樊杰 ×3:第 1 个直接落图;第 2、3 个与已落"樊杰"同名比较,institution 全 NULL 无可比属性,评分 0.80 落灰区 [0.65,0.85) | 每个扣留行各自成案,案内可见候选"樊杰"与待判实体 |
+| 抽取失败重跑(T_EXTRACT_FAIL)×2 | 2 条空名作者行进 failures(recordId=author_id) | 失败记录列可查源行 |
+
+**裁决操作**(production submit,任何 action 终态 RESOLVED):
+- T_LINK 任选其一体验:`entityVerdict=merge`(真改目标节点属性,两樊杰并一个点)、`create`(按 _incoming.vid 落图)、`reject`(图零写入);驳回证据在 `GET /api/v1/manual-reviews/production/{id}/audit-logs`;
+- T_EXTRACT_FAIL:点「重跑」(`rerun-extract-failures`)→ 新执行 triggerSource=RERUN;**注意这两行是真实空名行,重跑仍会失败**(数据本身缺陷),失败回滚 OPEN 属正常,正好验证重跑链路。
+
+> 裁决写图按 case 建案时烙定的 ewrdf 空间,不受当前空间切换影响;但审完前别切走空间,防误操作。
 
 ---
 
-## 3. 关键机制速查(代码依据,backend/ 相对路径)
+## 8. 第六步:五页面验证
 
-- **建空间**:`POST /api/v1/graph-spaces`(admin 组,`biz/handler/graph_space.py`);后端 `CREATE SPACE IF NOT EXISTS`(vid_type=FIXED_STRING(64),partition/replica 取环境变量)+ 轮询等传播 + 写 `kg_user_graph_space` / `kg_graph_space_vector_db`。前端入口 `/configurations`(ConfigurationManagementView,仅 admin)。管理员空间列表读 Nebula SHOW SPACES(30s 缓存),普通用户读授权表。
-- **抽取空间解析**:`service/temporal_workflows.py` `_extract_schema`:job payload `graphSpace` → schema 行 `graph_space`(经 `load_schema_extract_plan` 兜底)→ 都无则 `write_records` 落 env 默认空间。索引重建/失败建案/统计收尾均用同一空间。
-- **schema DDL**:`service/schema_ddl.py`——实体建 TAG + `idx_{tag}_name`(仅当有 `name` 属性);关系只 CREATE EDGE;删 schema 先 DROP 索引再 DROP TAG。
-- **实体检索**:`service/entity_search.py`——单 collection `kg_entity` 按 `graph_space` 分区;未建索引的空间首次检索报"尚未构建";reindex 优先 LOOKUP(吃标签原生索引),无索引标签回退 REST 全扫。
-- **消歧召回**:`service/entity_disambiguation.py` `recall_same_name` 走 Nebula MATCH(tag 限定 `name IN [...]`),不是 Milvus;依赖 name 原生索引。
-- **审核空间绑定**:`service/manual_review_production.py`——case 建案烙 `graph_space`(抽取运行的空间);队列 `graphSpace` 仅为查询过滤;T_LINK 裁决写图按 case/snapshot 的 `_graphSpace`。
+### 8.1 Schema 管理页
+空间=ewrdf:10 个 schema(机构/高管/专家/论文/期刊 + 5 关系),中文名、属性、脚本、源绑定齐全。
 
----
+### 8.2 图谱构建页
+2 个 chain 任务 COMPLETED;点开执行详情,每个 schema 抽屉显示真实转换行数(如 Organization 12 行、Expert 25 行/2 失败)。
 
-## 4. 只读验证命令备查(本机执行)
+### 8.3 人工审核页
+裁决后队列状态 RESOLVED;审计日志可查 DECISION_SUBMITTED。
 
+### 8.4 平台总览页(空间=ewrdf)
+- 资产卡:实体 ≈68、关系 ≈64(以实际为准;SUBMIT JOB STATS 空间级异步,数字滞后一步就刷新页面);
+- 今日新增:明细行应有真实机构名(深圳市迈岭信息技术有限公司等)、论文题名(土地流转和社会化服务对农业全要素生产率的影响实证分析等)、人名(张利国/樊杰等);
+- 人工审核卡:top5 显示 ewrdf 自己的案;图谱构建任务卡:2 条。
+
+### 8.5 图谱查询(图控制台,只读)
 ```bash
-# 图空间现状
-curl -s -X POST http://localhost:8090/api/v1/query -H 'X-API-Key: ysukeg' \
-  -H 'Content-Type: application/json' -d '{"query":"SHOW SPACES"}'
+# 以下经图网关执行(X-Graph-Space: ewrdf),浏览器图控制台等价
+# 1) 按标签查点
+MATCH (v:`Organization`) RETURN v.name, v.province LIMIT 12
+# 2) 两跳:高管 → 任职机构 → 股东
+MATCH (o:Officer)-[:EXECUTIVE_OF]->(g:Organization)<-[:SHAREHOLDER_OF]-(s:Organization)
+RETURN o.name, o.position, g.name, s.name, s.percentage? LIMIT 10
+# 实际用 GO 更稳:
+GO 1 TO 2 STEPS FROM '<某高管vid>' OVER EXECUTIVE_OF REVERSELY, SHAREHOLDER_OF YIELD DISTINCT id($$) AS endpoint
+# 3) 论文 → 作者 / 期刊
+MATCH (p:Paper)-[:AUTHORED_BY]->(e:Expert) RETURN p.name, e.name LIMIT 20
+MATCH (p:Paper)-[:PUBLISHED_IN]->(j:Journal) RETURN p.name, j.name LIMIT 10
+# 4) 同名实体(消歧现场)
+MATCH (v:`Expert`) WHERE v.Expert.name == '樊杰' RETURN id(v), v.institution
+```
+- **实体检索页**:先确认 ewrdf 索引已建(任务 1 收尾自动建,`kg_entity` 集合按空间分区;若提示"尚未构建实体索引"则页面点一次重建,ewrdf 量小秒级);搜"樊杰"、"深圳先进技术研究院"、"经济地理"应出真实结果。
 
-# ewrdf 内 tag/edge/统计
-for q in 'SHOW TAGS' 'SHOW EDGES' 'SHOW STATS'; do
-  curl -s -X POST http://localhost:8090/api/v1/query -H 'X-API-Key: ysukeg' \
-    -H 'X-Graph-Space: ewrdf' -H 'Content-Type: application/json' -d "{\"query\":\"$q\"}"
-done
+---
 
-# 控制库:ewrdf 的 schema(建完后应有行)
-docker exec tech-kg-temporal-mysql-dev2 mysql -uroot -ptemporal \
-  -e "SELECT id,name,kind,graph_space FROM techkg_control.kg_schema_definition WHERE graph_space='ewrdf';"
+## 9. 风险与红线
 
-# 业务库:ewrdf 的审核案
-docker exec tech-kg-mysql mysql -uroot -pgkx_element --default-character-set=utf8mb4 \
-  -e "SELECT status,category,COUNT(*) FROM gkx_element.manual_review_case WHERE graph_space='ewrdf' GROUP BY status,category;"
+| 项 | 说明 |
+|---|---|
+| 资源红线 | 只用本手册的 id 白名单 querySql(总量 ~130 行),batchSize=10,chain 串行,**勿改全表绑定**;共享图过载波时抽取变慢属正常,勿反复重启 |
+| 静默写错空间 | 触发任务必须显式 `graphSpace:"ewrdf"`;不带时最坏写进 worker 默认空间 dev2 |
+| 共享环境 | 控制库曾有未知清理者删 schema(2026-09-23);业务库全栈共享——**只动本手册 id 白名单内的行**,别人的数据(尤其 review_widgets 等)不碰 |
+| vid 上限 | ewrdf vid=FIXED_STRING(64):机构/作者 32 位、论文 19 位、Officer 复合 vid ~44 字节,均安全;自增字段别超 64 |
+| T_DIRECT | 现行抽取链不产生 T_DIRECT;若在库里看到存量 T_DIRECT 案,勿在 ewrdf 测 accept(非 RBAC 下会写默认空间) |
+| 幂等重跑 | querySql 按 (time, pk) keyset 水位增量:首次跑读白名单全集,重跑只读变更行,天然幂等;想全量重灌需先删 watermark(schema 源绑定保存处) |
 
-# dev2 worker 健康/队列消费
-docker ps --filter name=tech-kg-temporal-worker-dev2 --format '{{.Status}}'
+---
+
+## 10. 附录
+
+### A. id 白名单的选簇 SQL(想换一批数据时用)
+```sql
+-- 机构簇:6 个闭合持股对(两端都在机构表,且被持股方有高管行)
+SELECT s.org_id, s.inv_org_id, o1.name_cn, o2.name_cn, s.ownership_percentage
+FROM gkx_element.dwd_org_shareholder_info s
+JOIN gkx_element.dwd_org_base_info o1 ON o1.org_id = s.org_id
+JOIN gkx_element.dwd_org_base_info o2 ON o2.org_id = s.inv_org_id
+WHERE s.owners_type = '单位'
+  AND EXISTS (SELECT 1 FROM gkx_element.dwd_org_executive_info e WHERE e.org_id = s.org_id)
+LIMIT 6;
+
+-- 论文簇:有≥2署名的论文 10 篇(期刊信息要 JOIN dwd_zh_journal 取,论文表 publication_zh_name 全空)
+SELECT a.paper_id, p.zh_name FROM
+ (SELECT paper_id FROM gkx_element.dwd_zh_author WHERE zh_name<>''
+   GROUP BY paper_id HAVING COUNT(DISTINCT author_id)>=2 ORDER BY paper_id LIMIT 10) a
+JOIN gkx_element.dwd_zh_paper p ON p.id = a.paper_id;
+
+-- 消歧组:真实重名作者(institution 为 NULL → 评分 0.80 进灰区)
+SELECT zh_name, COUNT(DISTINCT author_id) ids FROM gkx_element.dwd_zh_author
+WHERE institution IS NULL AND zh_name<>'' GROUP BY zh_name HAVING ids>=3 ORDER BY ids DESC LIMIT 5;
+
+-- 失败组:真实空名行
+SELECT author_id, paper_id FROM gkx_element.dwd_zh_author WHERE zh_name IS NULL OR zh_name='' LIMIT 2;
 ```
 
-> 安全边界:以上全部为只读查询。建 schema、传脚本、插数、触发 job、裁决均属写操作,在公网门户用账号操作,不通过脚本直写共享库。
+### B. 真实性凭证(2026-10-09 实测)
+- dwd_org_base_info 1,674 行(真实工商机构)、dwd_org_executive_info 5,600 行、dwd_org_shareholder_info 含真实持股比例;
+- dwd_zh_paper 2,000 行、dwd_zh_author 7,906 行(真实论文/作者/机构署名);
+- 樊杰 14 个不同 author_id(institution 全 NULL)、空名作者 6 行——均为库中真实存在的数据。
+
+### C. 机制依据(代码相对路径)
+- 脚本契约:`backend/script/extract_transform_common.py`(entities/edges/failures 项格式、毒行隔离);
+- @step 唯一入口、chain 任务类型、querySql 水位/pk keyset、T_EXTRACT_FAIL 逐行建案:`CLAUDE.md` 平台喂数批次抽取节;
+- 抽取空间解析(job graphSpace > schema 行 > env 默认):`backend/service/temporal_workflows.py` `_extract_schema`;
+- 实体 TAG 自动 name 索引 `idx_{tag}_name`:`backend/service/schema_ddl.py`;
+- 实体检索单集合 kg_entity 按空间分区、新空间首检需建索引:`backend/service/entity_search.py`;
+- 消歧同名召回(Nebula MATCH 非 Milvus):`backend/service/entity_disambiguation.py`;
+- 审核 case 空间烙定 + 队列 graphSpace 过滤:`backend/service/manual_review_production.py`。

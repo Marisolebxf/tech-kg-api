@@ -5,7 +5,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { IconRefresh, IconSearch } from '@arco-design/web-vue/es/icon'
 
-import { deleteProductionReview, getExecution, getProductionReview, getProductionReviews, getTask, rerunExtractFailures, TRIGGER_SOURCE_LABEL, type ProcessingInstance, type ProcessStep, type ProductionReviewCase, type WorkflowExecution } from '../../api/workflowOperations'
+import { batchDeleteProductionReviews, deleteProductionReview, getExecution, getProductionReview, getProductionReviews, getTask, rerunExtractFailures, TRIGGER_SOURCE_LABEL, type ProcessingInstance, type ProcessStep, type ProductionReviewCase, type WorkflowExecution } from '../../api/workflowOperations'
 import { currentGraphSpace } from '../../api/currentGraphSpace'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
 import { clampSearchKeyword, SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
@@ -134,6 +134,14 @@ function submitReviewSearch() {
   void loadReviews()
 }
 
+/** 搜索框清空（×）：连已提交关键词一并复位并重新拉取，避免「框已空、列表仍按旧关键词过滤」的假清空。 */
+function clearReviewSearch() {
+  if (!keyword.value && !submittedKeyword.value) return
+  keyword.value = ''
+  submittedKeyword.value = ''
+  void loadReviews()
+}
+
 /** 审核队列分类：A=入库决策（Tab 只筛 T_LINK 实体对齐，T_DIRECT 详情由工作台总览/实例详情直达）；C=抽取失败重跑（T_EXTRACT_FAIL）。
  *  支持 ?category=A|C 深链初始定位子页（工作台总览的「抽取失败重跑」卡片直达 C 子页），深链优先于快照恢复。 */
 const reviewCategory = ref<'A' | 'C'>(
@@ -147,6 +155,55 @@ watch([reviewRows, reviewCategory], async () => {
 }, { flush: 'post' })
 // A 类没有「重跑中」筛选项：快照恢复后按当前分类收敛，避免 Select 挂着不属于该分类的选项
 if (reviewCategory.value === 'A' && reviewStatusFilter.value === '重跑中') reviewStatusFilter.value = '全部'
+/** Tab 切换不携带筛选条件：入库决策（A）/抽取失败重跑（C）各自独立记忆
+ *  状态/类型/时间/排序/关键词/页码，切走再切回按原样恢复（C 的「重跑中」不会带到 A，
+ *  A 的筛选也不会带到 C）。页大小与勾选不拆分：页大小是全局偏好，勾选跨 Tab 无意义（切换即清）。 */
+type ReviewTabFilters = {
+  status: '全部' | '待处理' | '已处理' | '重跑中'
+  kind: '全部' | '实体' | '关系'
+  time: '全部' | '近1小时' | '近24小时' | '近7天' | '近30天'
+  sort: 'default' | 'desc' | 'asc'
+  /** keyword=输入框文本（未提交的草稿也保留）；submitted=已作用于当前列表的关键词。 */
+  keyword: string
+  submitted: string
+  page: number
+}
+const REVIEW_TAB_FILTERS_DEFAULT: ReviewTabFilters = {
+  status: '全部', kind: '全部', time: '全部', sort: 'default', keyword: '', submitted: '', page: 1,
+}
+const reviewTabFilters: Record<'A' | 'C', ReviewTabFilters> = {
+  A: { ...REVIEW_TAB_FILTERS_DEFAULT },
+  C: { ...REVIEW_TAB_FILTERS_DEFAULT },
+}
+/** 切走前把当前分类的筛选状态存回（undefined 与「全部」语义等同，落默认值防脏）。 */
+function stashReviewTabFilters(category: 'A' | 'C') {
+  reviewTabFilters[category] = {
+    status: reviewStatusFilter.value ?? '全部',
+    kind: reviewKindFilter.value ?? '全部',
+    time: reviewTimeFilter.value ?? '全部',
+    sort: reviewTimeSort.value,
+    keyword: keyword.value,
+    submitted: submittedKeyword.value,
+    page: reviewPage.value,
+  }
+}
+/** Tab 切换应用筛选时抑制「筛选变化即重拉」的 watch（switchReviewCategory 末尾统一拉取一次）。 */
+let applyingTabFilters = false
+/** 切入时按该分类上次离开时的状态恢复（含输入框草稿与已提交关键词）。 */
+function applyReviewTabFilters(category: 'A' | 'C') {
+  const state = reviewTabFilters[category]
+  applyingTabFilters = true
+  reviewStatusFilter.value = state.status
+  reviewKindFilter.value = state.kind
+  reviewTimeFilter.value = state.time
+  reviewTimeSort.value = state.sort
+  keyword.value = state.keyword
+  submittedKeyword.value = state.submitted
+  reviewPage.value = state.page
+  void nextTick(() => { applyingTabFilters = false })
+}
+// 初始分类沿用快照/深链初始化出的当前 refs；另一分类保持默认值
+stashReviewTabFilters(reviewCategory.value)
 /** C 类勾选的待重跑 case。 */
 const rerunSelection = ref<Set<string>>(new Set())
 const rerunSubmitting = ref(false)
@@ -170,9 +227,11 @@ const rerunSomeChecked = computed(() => !rerunAllChecked.value && rerunPageEligi
 
 function switchReviewCategory(category: 'A' | 'C') {
   if (reviewCategory.value === category) return
+  // 切走先存回当前分类的筛选状态，切入恢复对方自己的（Tab 互不影响，页码随各自状态恢复）
+  stashReviewTabFilters(reviewCategory.value)
   reviewCategory.value = category
   rerunSelection.value = new Set()
-  reviewPage.value = 1
+  applyReviewTabFilters(category)
   void loadReviews()
 }
 
@@ -183,7 +242,7 @@ function toggleRerunPick(id: string, checked: boolean) {
 
 /** 表头全选/取消：只作用于当前页可重跑行（不可重跑行禁用不勾选）；跨页勾选保持，按钮数字展示总数。 */
 function toggleRerunPickAll(event: Event) {
-  if (!rerunPageEligibleIds.value.length || reviewLoading.value || rerunSubmitting.value) return
+  if (!rerunPageEligibleIds.value.length || reviewLoading.value || rerunSubmitting.value || batchDeleteSubmitting.value) return
   const checked = (event.target as HTMLInputElement).checked
   for (const id of rerunPageEligibleIds.value) toggleRerunPick(id, checked)
 }
@@ -234,6 +293,20 @@ const logCase = ref<ProductionReviewCase>()
 const logExecution = ref<WorkflowExecution | null>(null)
 const logTask = ref<ProcessingInstance | null>(null)
 const logExecutionMissing = ref(false)
+const logExecutionLoading = ref(false)
+let logRequestId = 0
+type ExecutionLogSnapshot = { execution: WorkflowExecution | null; task: ProcessingInstance | null }
+const logCache = new Map<string, ExecutionLogSnapshot>()
+const terminalExecutionStatuses = new Set(['COMPLETED', 'ABNORMAL', 'FAILED', 'CANCELED', 'TERMINATED', 'TIMED_OUT'])
+
+// 关闭弹窗后使在途请求失效；再次打开时重新获取，避免跨记录复用日志。
+watch(logVisible, (visible) => {
+  if (!visible) {
+    logRequestId += 1
+    logExecutionLoading.value = false
+    logCache.clear()
+  }
+}, { flush: 'sync' })
 /** 当前展示哪个执行：rerun=重跑执行（最新一次处理）；original=原执行。 */
 const logExecutionChoice = ref<'rerun' | 'original'>('rerun')
 
@@ -287,44 +360,64 @@ function executionStatusTone(status?: string | null): string {
   return ({ 成功: 'ok', 异常: 'warn', 失败: 'err' } as Record<string, string>)[label] ?? 'run'
 }
 
-async function loadExecutionLog(executionId: string) {
-  logExecution.value = null
-  logTask.value = null
-  logExecutionMissing.value = false
-  if (!executionId) {
-    logExecutionMissing.value = true
-    return
-  }
+async function loadExecutionLog(executionId: string, requestId: number) {
+  logExecutionLoading.value = true
+  const isCurrent = () => logVisible.value && requestId === logRequestId
   try {
-    const execution = await getExecution(executionId)
-    logExecution.value = execution ?? null
-    if (!execution) logExecutionMissing.value = true
-    else if (execution.taskId) {
-      // 任务（PI-）记录携带工作流执行日志数组与阶段回写 steps
-      try { logTask.value = await getTask(execution.taskId) } catch { logTask.value = null }
+    let snapshot = logCache.get(executionId)
+    if (!snapshot) {
+      let execution: WorkflowExecution | null = null
+      let task: ProcessingInstance | null = null
+      let taskLoaded = false
+      try {
+        execution = executionId ? (await getExecution(executionId) ?? null) : null
+        if (!isCurrent()) return
+        if (execution?.taskId) {
+          // 执行与任务日志都就绪后再一起回填，避免概要/阶段/日志分次跳动。
+          try { task = await getTask(execution.taskId); taskLoaded = true } catch { /* 保留执行 message 回退 */ }
+        } else {
+          taskLoaded = true
+        }
+      } catch { /* 沿用关联执行缺失提示 */ }
+      if (!isCurrent()) return
+      snapshot = { execution, task }
+      // 只缓存已结束执行；运行中的执行或任务日志加载失败仍允许切换后重试。
+      if (execution && taskLoaded && terminalExecutionStatuses.has(execution.status.toUpperCase())) {
+        logCache.set(executionId, snapshot)
+      }
     }
-  } catch {
-    logExecution.value = null
-    logExecutionMissing.value = true
+    if (!isCurrent()) return
+    logExecution.value = snapshot.execution
+    logTask.value = snapshot.task
+    logExecutionMissing.value = !snapshot.execution
+  } finally {
+    if (isCurrent()) logExecutionLoading.value = false
   }
 }
 
 async function openLog(row: ReviewRow) {
+  const requestId = ++logRequestId
+  logCache.clear()
   logVisible.value = true
   logLoading.value = true
   logError.value = ''
   logCase.value = undefined
   logExecution.value = null
   logTask.value = null
+  logExecutionMissing.value = false
   try {
-    logCase.value = await getProductionReview(row.id)
+    const reviewCase = await getProductionReview(row.id)
+    if (!logVisible.value || requestId !== logRequestId) return
+    logCase.value = reviewCase
     // 重跑执行优先展示（最新一次对该记录的处理）；无重跑则展示原执行
     logExecutionChoice.value = logRerunExecutionId.value ? 'rerun' : 'original'
-    await loadExecutionLog(logActiveExecutionId.value)
+    await loadExecutionLog(logActiveExecutionId.value, requestId)
   } catch (error) {
-    logError.value = error instanceof Error ? error.message : '日志加载失败'
+    if (logVisible.value && requestId === logRequestId) {
+      logError.value = error instanceof Error ? error.message : '日志加载失败'
+    }
   } finally {
-    logLoading.value = false
+    if (logVisible.value && requestId === logRequestId) logLoading.value = false
   }
 }
 
@@ -332,7 +425,7 @@ async function openLog(row: ReviewRow) {
 function switchLogExecution(choice: 'rerun' | 'original') {
   if (choice === logExecutionChoice.value) return
   logExecutionChoice.value = choice
-  void loadExecutionLog(logActiveExecutionId.value)
+  void loadExecutionLog(logActiveExecutionId.value, ++logRequestId)
 }
 
 /** 删除：二次确认后物理删除（仅未处理可删，与重跑同门控）。 */
@@ -364,7 +457,52 @@ async function confirmDelete() {
   }
 }
 
+// ---- C 类批量删除：与批量重跑共用勾选集合，二次确认后逐条物理删除 ----
+
+/** 批量删除确认弹窗与提交态（>N 条与重跑同栏展示，勾选集即删除集）。 */
+const batchDeleteVisible = ref(false)
+const batchDeleteSubmitting = ref(false)
+
+/** 跳过原因摘要：按原因聚合计数，至多列 3 类防刷屏。 */
+function summarizeBatchSkipReasons(skipped: Array<{ id: string; reason: string }>): string {
+  const groups = new Map<string, number>()
+  for (const item of skipped) groups.set(item.reason, (groups.get(item.reason) ?? 0) + 1)
+  const parts = [...groups.entries()].map(([reason, count]) => `${reason}×${count}`)
+  return parts.length > 3 ? `${parts.slice(0, 3).join('、')} 等 ${parts.length} 类` : parts.join('、')
+}
+
+function askBatchDelete() {
+  if (!rerunSelection.value.size || batchDeleteSubmitting.value) return
+  batchDeleteVisible.value = true
+}
+
+/** 确认批量删除：已处理的/不存在的按条跳过不中断整批，结果经反馈条展示（有跳过转警告态）。 */
+async function confirmBatchDelete() {
+  const ids = [...rerunSelection.value]
+  if (!ids.length || batchDeleteSubmitting.value) return
+  batchDeleteSubmitting.value = true
+  try {
+    const result = await batchDeleteProductionReviews({ caseIds: ids })
+    const skipped = result.skipped ?? []
+    const skippedText = skipped.length ? `；跳过 ${skipped.length} 条（${summarizeBatchSkipReasons(skipped)}）` : ''
+    showRerunFeedback(
+      skipped.length ? 'warning' : 'success',
+      `已删除失败记录 ${result.deleted} 条${skippedText}`,
+      [],
+    )
+    batchDeleteVisible.value = false
+    rerunSelection.value = new Set()
+    void loadReviews()
+  } catch (error) {
+    showRerunFeedback('error', error instanceof Error ? error.message : '批量删除失败', [])
+  } finally {
+    batchDeleteSubmitting.value = false
+  }
+}
+
 onUnmounted(() => {
+  logRequestId += 1
+  logCache.clear()
   reviewDisposed = true
   reviewRequestId += 1
   window.removeEventListener('resize', updateReviewTableScrollState)
@@ -456,9 +594,10 @@ function toggleReviewTimeSort() {
   void loadReviews()
 }
 
-/** 筛选条件变化：保留当前页重新加载；总页数收缩、当前页超出时由 loadReviews 收敛到最后有效页（FUNC-00781）。 */
+/** 筛选条件变化：保留当前页重新加载；总页数收缩、当前页超出时由 loadReviews 收敛到最后有效页（FUNC-00781）。
+ *  Tab 切换恢复各自筛选状态时的变更不在此触发（applyingTabFilters 抑制，由切换处统一拉取一次）。 */
 watch([reviewStatusFilter, reviewKindFilter, reviewTimeFilter], () => {
-  if (props.mode !== 'review') return
+  if (props.mode !== 'review' || applyingTabFilters) return
   void loadReviews()
 })
 
@@ -508,7 +647,7 @@ onMounted(() => {
             <span class="review-filter-label">时间</span>
             <a-select v-model="reviewTimeFilter" class="review-filter-select" :options="reviewTimeOptions" />
           </div>
-          <a-input v-model="keyword" class="review-search-input review-filter-search" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索处理实例 ID、对象或来源记录" placeholder="搜索处理实例 ID、对象或来源记录"><template #prefix><IconSearch /></template></a-input>
+          <a-input v-model="keyword" class="review-search-input review-filter-search" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索处理实例 ID、对象或来源记录" placeholder="搜索处理实例 ID、对象或来源记录" allow-clear @clear="clearReviewSearch"><template #prefix><IconSearch /></template></a-input>
           <button class="review-search-button" type="submit">查询</button>
         </form>
       </div>
@@ -554,7 +693,7 @@ onMounted(() => {
             <th v-if="reviewCategory === 'C'" class="pick-col"><input aria-label="checkbox-input"
               type="checkbox"
               title="全选当前页可重跑的失败记录（仅「待处理 / 重跑失败」状态可勾选）"
-              :disabled="!rerunPageEligibleIds.length || reviewLoading || rerunSubmitting"
+              :disabled="!rerunPageEligibleIds.length || reviewLoading || rerunSubmitting || batchDeleteSubmitting"
               :checked="rerunAllChecked"
               :indeterminate="rerunSomeChecked"
               @change="toggleRerunPickAll"
@@ -645,9 +784,15 @@ onMounted(() => {
             <button
               class="review-action-btn rerun-batch-action"
               type="button"
-              :disabled="rerunSubmitting"
+              :disabled="rerunSubmitting || batchDeleteSubmitting"
               @click="rerunSelected()"
             >{{ rerunSubmitting ? '下发中…' : `批量重跑（${rerunSelection.size}）` }}</button>
+            <button
+              class="review-action-btn rerun-batch-action is-danger"
+              type="button"
+              :disabled="rerunSubmitting || batchDeleteSubmitting"
+              @click="askBatchDelete"
+            >{{ batchDeleteSubmitting ? '删除中…' : `批量删除（${rerunSelection.size}）` }}</button>
           </span>
           <span class="review-page-summary">共 {{ reviewTotal }} 条</span>
         </template>
@@ -668,6 +813,19 @@ onMounted(() => {
     </a-modal>
 
     <a-modal
+      v-model:visible="batchDeleteVisible"
+      modal-class="rerun-confirm-modal"
+      title="确认批量删除"
+      :width="560"
+      ok-text="删除"
+      cancel-text="取消"
+      :ok-loading="batchDeleteSubmitting"
+      @ok="confirmBatchDelete"
+    >
+      <AppAlert type="warning" class="rerun-confirm-text">即将物理删除已勾选的 {{ rerunSelection.size }} 条失败记录，连同草稿、决议、附件与审计记录一并清除，不可恢复。仅未处理记录可删除，已处理或不存在的会自动跳过。</AppAlert>
+    </a-modal>
+
+    <a-modal
       v-model:visible="logVisible"
       modal-class="case-log-modal"
       :title="`执行日志 · ${logCase?.id || ''}`"
@@ -684,38 +842,41 @@ onMounted(() => {
           <button type="button" :class="{ active: logExecutionChoice === 'rerun' }" @click="switchLogExecution('rerun')">重跑执行</button>
           <button type="button" :class="{ active: logExecutionChoice === 'original' }" @click="switchLogExecution('original')">原执行</button>
         </div>
-        <AppAlert v-if="logExecutionMissing" type="warning" class="case-log-missing">未找到关联的工作流执行记录（{{ logActiveExecutionId || '该记录未关联执行 ID' }}）——执行记录可能已随环境重置被清理。</AppAlert>
-        <template v-else-if="logExecution">
-          <section class="case-log-sec">
-            <h4>执行概要</h4>
-            <dl class="case-log-dl">
-              <div><dt>执行 ID</dt><dd><code>{{ logExecution.id }}</code></dd></div>
-              <div><dt>触发方式</dt><dd>{{ TRIGGER_SOURCE_LABEL[logExecution.triggerSource || 'MANUAL'] || logExecution.triggerSource || '—' }}</dd></div>
-              <div><dt>状态</dt><dd><span :class="['case-log-exec-status', executionStatusTone(logExecution.status)]">{{ executionDisplayStatus(logExecution.status) }}</span></dd></div>
-              <div><dt>开始时间</dt><dd>{{ logExecution.startedAt || '—' }}</dd></div>
-              <div><dt>完成时间</dt><dd>{{ logExecution.completedAt || '—' }}</dd></div>
-              <div v-if="logExtractSummary"><dt>抽取结果</dt><dd>写入 {{ logExtractSummary.written }} · 失败 {{ logExtractSummary.failed }}（{{ logExtractSummary.sourceCount }} 个来源）</dd></div>
-            </dl>
-          </section>
-          <section v-if="logTask && logTask.steps.length" class="case-log-sec">
-            <h4>阶段状态</h4>
-            <ul class="case-log-steps">
-              <li v-for="step in logTask.steps" :key="step.id">
-                <span class="case-log-step-name">{{ step.name }}</span>
-                <a-tooltip v-if="stepDisplayStatus(step) === '异常'" :content="`处理 ${step.count} · 异常 ${step.abnormal}`" position="top">
-                  <span :class="['case-log-step-status', `is-${stepDisplayStatus(step)}`]">{{ stepDisplayStatus(step) }}</span>
-                </a-tooltip>
-                <span v-else :class="['case-log-step-status', `is-${stepDisplayStatus(step)}`]">{{ stepDisplayStatus(step) }}</span>
-              </li>
-            </ul>
-          </section>
-          <section class="case-log-sec">
-            <h4>执行日志</h4>
-            <pre v-if="logLines.length" class="case-log-console">{{ logLines.join('\n') }}</pre>
-            <p v-else class="case-log-empty">该执行暂无任务日志。</p>
-          </section>
-        </template>
-        <AppAlert v-else type="warning" class="case-log-missing">该记录未关联工作流执行（无 executionId），无法展示执行日志。</AppAlert>
+        <div class="case-log-content" :aria-busy="logExecutionLoading">
+          <span v-if="logExecutionLoading" class="case-log-refreshing" role="status">加载执行日志中…</span>
+          <AppAlert v-if="logExecutionMissing" type="warning" class="case-log-missing">未找到关联的工作流执行记录（{{ logActiveExecutionId || '该记录未关联执行 ID' }}）——执行记录可能已随环境重置被清理。</AppAlert>
+          <template v-else-if="logExecution">
+            <section class="case-log-sec">
+              <h4>执行概要</h4>
+              <dl class="case-log-dl">
+                <div><dt>执行 ID</dt><dd><code>{{ logExecution.id }}</code></dd></div>
+                <div><dt>触发方式</dt><dd>{{ TRIGGER_SOURCE_LABEL[logExecution.triggerSource || 'MANUAL'] || logExecution.triggerSource || '—' }}</dd></div>
+                <div><dt>状态</dt><dd><span :class="['case-log-exec-status', executionStatusTone(logExecution.status)]">{{ executionDisplayStatus(logExecution.status) }}</span></dd></div>
+                <div><dt>开始时间</dt><dd>{{ logExecution.startedAt || '—' }}</dd></div>
+                <div><dt>完成时间</dt><dd>{{ logExecution.completedAt || '—' }}</dd></div>
+                <div v-if="logExtractSummary"><dt>抽取结果</dt><dd>写入 {{ logExtractSummary.written }} · 失败 {{ logExtractSummary.failed }}（{{ logExtractSummary.sourceCount }} 个来源）</dd></div>
+              </dl>
+            </section>
+            <section v-if="logTask && logTask.steps.length" class="case-log-sec">
+              <h4>阶段状态</h4>
+              <ul class="case-log-steps">
+                <li v-for="step in logTask.steps" :key="step.id">
+                  <span class="case-log-step-name">{{ step.name }}</span>
+                  <a-tooltip v-if="stepDisplayStatus(step) === '异常'" :content="`处理 ${step.count} · 异常 ${step.abnormal}`" position="top">
+                    <span :class="['case-log-step-status', `is-${stepDisplayStatus(step)}`]">{{ stepDisplayStatus(step) }}</span>
+                  </a-tooltip>
+                  <span v-else :class="['case-log-step-status', `is-${stepDisplayStatus(step)}`]">{{ stepDisplayStatus(step) }}</span>
+                </li>
+              </ul>
+            </section>
+            <section class="case-log-sec">
+              <h4>执行日志</h4>
+              <pre v-if="logLines.length" class="case-log-console">{{ logLines.join('\n') }}</pre>
+              <p v-else class="case-log-empty">该执行暂无任务日志。</p>
+            </section>
+          </template>
+          <AppAlert v-else type="warning" class="case-log-missing">该记录未关联工作流执行（无 executionId），无法展示执行日志。</AppAlert>
+        </div>
       </template>
       <template #footer>
         <button type="button" class="case-log-close" @click="logVisible = false">关闭</button>
@@ -899,6 +1060,8 @@ onMounted(() => {
 .case-log-error-block{margin:0}
 .case-log-error-text{margin:0;font:12px/19px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-all}
 .case-log-loading{margin:0;padding:24px;color:#86909c;text-align:center}
+.case-log-content{position:relative}
+.case-log-refreshing{position:absolute;top:0;right:0;padding:0 8px;border-radius:4px;background:#f2f3f5;color:#86909c;font-size:12px;line-height:22px}
 /* 执行日志弹窗：原执行/重跑执行切换 + 概要 + 阶段状态 + 日志终端 */
 .case-log-switch{display:flex;box-sizing:border-box;width:max-content;height:40px;margin:0 0 16px;padding:4px;border-radius:4px;background:#f2f3f5;overflow:visible}
 .case-log-switch button{display:inline-flex;box-sizing:border-box;align-items:center;justify-content:center;width:120px;height:32px;padding:5px 16px;border:0;border-radius:4px;background:transparent;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
@@ -952,5 +1115,5 @@ onMounted(() => {
 .delete-confirm-modal .arco-modal-footer .arco-btn-primary:hover:not(:disabled){border-color:#b42318;background:#b42318}
 /* 日志弹窗（teleport 到 body，需全局控制弹体） */
 .case-log-modal{border-radius:8px;font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
-.case-log-modal .arco-modal-header{box-sizing:border-box;height:56px;padding:0 24px}.case-log-modal .arco-modal-title{justify-content:flex-start;text-align:left;font-size:16px;line-height:24px;font-weight:600;letter-spacing:0}.case-log-modal .arco-modal-body{max-height:70vh;overflow:auto;padding:16px 24px}.case-log-modal .arco-modal-footer{box-sizing:border-box;min-height:64px;padding:16px 24px;border-top:1px solid #e5e6eb}.case-log-modal .case-log-close{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;cursor:pointer}
+.case-log-modal .arco-modal-header{box-sizing:border-box;height:56px;padding:0 24px}.case-log-modal .arco-modal-title{justify-content:flex-start;text-align:left;font-size:16px;line-height:24px;font-weight:600;letter-spacing:0}.case-log-modal .arco-modal-body{box-sizing:border-box;height:min(70vh,560px);overflow:auto;scrollbar-gutter:stable;padding:16px 24px}.case-log-modal .arco-modal-footer{box-sizing:border-box;min-height:64px;padding:16px 24px;border-top:1px solid #e5e6eb}.case-log-modal .case-log-close{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;cursor:pointer}
 </style>

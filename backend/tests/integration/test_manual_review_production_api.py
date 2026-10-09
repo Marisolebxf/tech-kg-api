@@ -158,6 +158,86 @@ async def test_http_delete_open_case_and_queue_exposes_execution_id(async_client
 
 
 @pytest.mark.anyio
+async def test_http_batch_delete_mixed_results(async_client, production_api):
+    """批量删除：可删的删、终态/不存在/重复 id 按条跳过互不影响，聚合返回计数与原因。"""
+    app, service = production_api
+
+    def as_admin():
+        return identity("admin-1", ("review_admin",))
+
+    open_1 = service.create_direct_case(**_link_kwargs(task_id="TASK-BD-1"))["reviewId"]
+    open_2 = service.create_direct_case(
+        **_link_kwargs(
+            task_id="TASK-BD-2",
+            execution_id="EXEC-BD-2",
+            object_id="S-BD-2",
+            candidate={
+                "scholar_id": "S-BD-2",
+                "name_zh": "测试专家二号",
+                "existingCandidates": [{"id": "E-1"}],
+            },
+        )
+    )["reviewId"]
+    # 终态：直审 submit 即 RESOLVED
+    resolved_id = service.create_direct_case(
+        **_link_kwargs(
+            task_id="TASK-BD-3",
+            execution_id="EXEC-BD-3",
+            object_id="S-BD-3",
+            candidate={
+                "scholar_id": "S-BD-3",
+                "name_zh": "测试专家三号",
+                "existingCandidates": [{"id": "E-1"}],
+            },
+        )
+    )["reviewId"]
+    service.submit(resolved_id, 1, "entity-confirm", {"entityVerdict": "create"}, "", identity())
+
+    app.dependency_overrides[get_review_identity] = as_admin
+    try:
+        res = await async_client.post(
+            "/api/v1/manual-reviews/production/batch-delete",
+            json={"caseIds": [open_1, "MR-404", open_2, resolved_id, open_1]},
+        )
+        assert res.status_code == 200
+        data = res.json()["data"]
+        # 重复 id 去重后按 4 条计：2 条删除 + 不存在/已处理各跳过 1 条
+        assert data["requested"] == 4
+        assert data["deleted"] == 2
+        assert {item["id"]: item["reason"] for item in data["skipped"]} == {
+            "MR-404": "人工处理任务不存在",
+            resolved_id: "已处理的记录不可删除",
+        }
+        assert (
+            await async_client.get(f"/api/v1/manual-reviews/production/{open_1}")
+        ).status_code == 404
+    finally:
+        app.dependency_overrides[get_review_identity] = lambda: identity()
+
+
+@pytest.mark.anyio
+async def test_http_batch_delete_requires_review_admin_per_case(async_client, production_api):
+    """批量删除无 review_admin 身份：不整批 403，逐条跳过并带回无权原因（与单删 403 口径对应）。"""
+    _, service = production_api
+    case_id = service.create_direct_case(**_link_kwargs(task_id="TASK-BD-403"))["reviewId"]
+
+    # 默认 identity 只有 reviewer：单删会 403；批量路径把拒绝落到每条的 skipped 里
+    res = await async_client.post(
+        "/api/v1/manual-reviews/production/batch-delete",
+        json={"caseIds": [case_id]},
+    )
+    assert res.status_code == 200
+    data = res.json()["data"]
+    assert data["deleted"] == 0
+    assert [item["id"] for item in data["skipped"]] == [case_id]
+    assert "无权" in data["skipped"][0]["reason"]
+    # case 未被删掉
+    assert (
+        await async_client.get(f"/api/v1/manual-reviews/production/{case_id}")
+    ).status_code == 200
+
+
+@pytest.mark.anyio
 async def test_http_queue_follows_graph_space_param(async_client, production_api):
     """队列跟随图空间：graphSpace 查询参数过滤 + 响应缓存按空间分键（连续查不同空间不得命中彼此缓存）。"""
     from biz.handler import manual_review as handler_module

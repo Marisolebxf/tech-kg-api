@@ -70,7 +70,9 @@ const route = useRoute()
 const router = useRouter()
 const jobId = computed(() => String(route.params.jobId || ''))
 const job = ref<WorkflowJob | null>(null)
-const taskId = computed(() => String(route.params.taskId || route.params.instanceId || 'UPD-20260714'))
+/** job/周期任务路由没有任务参数：任务 ID 以最新执行回写的 processingInstance 为准，
+ *  不再回落演示常量 UPD-20260714（此前 job 详情页的重试会拿它去调接口，必 404）。 */
+const taskId = computed(() => String(route.params.taskId || route.params.instanceId || processingInstance.value?.id || ''))
 const processingInstance = ref<ProcessingInstance>()
 const fallbackBatch: UpdateBatch = { id: '-', name: '任务详情', updateDate: '-', dataWindow: '-', source: '-', trigger: '-', input: 0, entities: 0, relations: 0, completed: 0, abnormal: 0, progress: 0, status: '处理中', startedAt: '-', completedAt: '-' }
 const batch = computed(() => processingInstance.value?.batch ?? fallbackBatch)
@@ -308,6 +310,14 @@ const selectedStep = computed<Step>(() => {
 const visiblePhase = computed<'数据处理' | '图谱构建'>(() => steps.value[0]?.phase ?? (isConstructionTask.value ? '图谱构建' : '数据处理'))
 const visibleSteps = computed(() => steps.value)
 const needsReview = computed(() => needsTaskReview.value && selectedStep.value.abnormal !== '0' && selectedStep.value.abnormal !== '-')
+/** 「进入人工处理」入口：平台喂数抽取（含 chain）的逐行失败落「抽取失败重跑」
+ *  C 类队列（category 深链直达）；其余待复核任务落人工审核处理中心首页。
+ *  旧实现跳 /manual-review/task/<任务ID>——该路由只认审核案 MR- ID，任务/作业
+ *  详情页拿不到（job 路由下 taskId 曾回落演示常量），点击必 404 空白页。 */
+const reviewEntryTarget = computed(() =>
+  processingInstance.value?.workflowType === 'kg.schema.extract' || isChainTask.value
+    ? '/manual-review?category=C'
+    : '/manual-review')
 const attentionLabel = computed(() => selectedStep.value.risk === '高风险' ? '重点关注' : selectedStep.value.risk === '中风险' ? '一般关注' : '常规节点')
 const isProcessLevelIncident = computed(() => ['模型批量输出异常', 'Schema 批量映射失败', '公共字典配置异常'].includes(processingInstance.value?.reviewType ?? ''))
 const isTaskExecutionFailure = computed(() => processingInstance.value?.reviewType === '单任务执行失败')
@@ -432,7 +442,7 @@ const isTaskRunning = computed(() => {
  *  全绿流程卡，看不出为何。 */
 const executionFailureNotice = computed(() => {
   const execution = selectedExecution.value as
-    | { status?: string; message?: string; output?: { failures?: { count?: number } } }
+    | { status?: string; message?: string; output?: { failures?: { count?: number; recorded?: number; noRecordId?: number } } }
     | null
   if (!execution || !execution.message) return null
   const status = (execution.status || '').toUpperCase()
@@ -441,6 +451,8 @@ const executionFailureNotice = computed(() => {
     abnormal: status === 'ABNORMAL',
     message: execution.message,
     count: Number(execution.output?.failures?.count ?? 0),
+    recorded: Number(execution.output?.failures?.recorded ?? 0),
+    noRecordId: Number(execution.output?.failures?.noRecordId ?? 0),
   }
 })
 // === 数据溯源：只展示真实可查证的对象（Schema 来源绑定 / 抽取脚本 / 任务参数 /
@@ -638,8 +650,9 @@ watch(() => route.query.activity, (value) => {
   // 深链带 activity 时确保对应脚本 step 处于展开状态
   if (value && isChainTask.value) expandedScriptId.value = String(route.query.step || expandedScriptId.value)
 })
-watch(taskId, () => {
-  void loadTaskDetail()
+watch(taskId, (id) => {
+  // job 详情页 taskId 由 processingInstance 回填而来：同一任务不重复拉取
+  if (id && processingInstance.value?.id !== id) void loadTaskDetail()
 })
 onMounted(async () => {
   if (jobId.value) {
@@ -721,7 +734,9 @@ onMounted(async () => {
       class="exec-failure-alert"
       :title="`${executionFailureNotice.abnormal ? '本次执行标记为异常' : '本次执行标记为失败'}：${executionFailureNotice.message}`"
     >
-      <span v-if="executionFailureNotice.count > 0">逐行失败记录已转人工审核：到「人工审核」的处理中心可查看并勾选重跑；左下流程卡片的橙色警告图标与「N 异常」是对应环节的失败行数——环节本身执行成功，失败的是单条数据转换。</span>
+      <span v-if="executionFailureNotice.count > 0 && executionFailureNotice.noRecordId > 0 && executionFailureNotice.recorded === 0">逐行失败记录均缺记录 id，未进入人工审核队列（审核展示与失败重跑都按记录 id 定位）——请检查抽取脚本的 failures 是否携带来源主键，修复脚本后重新执行即可重抽这些行；左下流程卡片的橙色警告图标与「N 异常」是对应环节的失败行数——环节本身执行成功，失败的是单条数据转换。</span>
+      <span v-else-if="executionFailureNotice.count > 0 && executionFailureNotice.noRecordId > 0">其中 {{ executionFailureNotice.recorded }} 条已转人工审核（到「人工审核」的处理中心可查看并勾选重跑），{{ executionFailureNotice.noRecordId }} 条缺记录 id 未入队——请检查抽取脚本的 failures 是否携带来源主键；左下流程卡片的橙色警告图标与「N 异常」是对应环节的失败行数。</span>
+      <span v-else-if="executionFailureNotice.count > 0">逐行失败记录已转人工审核：到「人工审核」的处理中心可查看并勾选重跑；左下流程卡片的橙色警告图标与「N 异常」是对应环节的失败行数——环节本身执行成功，失败的是单条数据转换。</span>
       <span v-else>左下流程卡片展示各环节执行状态；在「执行历史」中点选其他执行可查看当时的过程。</span>
     </AppAlert>
 
@@ -750,7 +765,7 @@ onMounted(async () => {
       </aside>
 
       <main class="step-detail">
-        <header class="step-head"><div><h2>{{ selectedStep.name }}</h2><p>{{ selectedStep.description }}</p></div><div class="step-head-actions"><button v-if="isChainTask && selectedActivityId" type="button" class="step-head-back" @click="clearActivitySelection()">← 返回脚本级信息</button><button v-if="isPipelineTask && isPipelineFailed" type="button" class="step-head-retry" :disabled="retrySubmitting" @click="handlePipelineRetry">{{ retrySubmitting ? '提交中…' : '重试（reset 回放）' }}</button><RouterLink v-else-if="!isPipelineTask && needsReview" :to="`/manual-review/task/${taskId}`">进入人工处理 →</RouterLink></div></header>
+        <header class="step-head"><div><h2>{{ selectedStep.name }}</h2><p>{{ selectedStep.description }}</p></div><div class="step-head-actions"><button v-if="isChainTask && selectedActivityId" type="button" class="step-head-back" @click="clearActivitySelection()">← 返回脚本级信息</button><button v-if="isPipelineTask && isPipelineFailed" type="button" class="step-head-retry" :disabled="retrySubmitting" @click="handlePipelineRetry">{{ retrySubmitting ? '提交中…' : '重试（reset 回放）' }}</button><RouterLink v-else-if="!isPipelineTask && needsReview" :to="reviewEntryTarget">进入人工处理 →</RouterLink></div></header>
         <nav class="detail-tabs"><button v-for="tab in ([['overview','概况与结果'],['io','输入输出'],['logs','异常与日志'],['lineage','数据溯源']] as const)" :key="tab[0]" type="button" :class="{ active: activeTab === tab[0] }" @click="activeTab = tab[0]">{{ tab[1] }}</button></nav>
 
         <div v-if="activeTab === 'overview'" class="overview-content">

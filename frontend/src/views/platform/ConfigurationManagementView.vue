@@ -106,6 +106,7 @@ const isAdmin = computed(() => currentUserIsAdmin())
 const graphSpaces = ref<GraphSpaceItem[]>([])
 const spaceDialogOpen = ref(false)
 const newSpaceName = ref('')
+const spaceSubmitAttempted = ref(false)
 const spaceWorking = ref(false)
 
 const items = ref<ConfigItem[]>([])
@@ -187,7 +188,12 @@ const detailFieldErrors = computed<ConfigFieldErrors>(() =>
     ? validateConfigFields(selected.value.kind, selected.value, 'detail')
     : {})
 const hasDetailErrors = computed(() => Object.keys(detailFieldErrors.value).length > 0)
-const spaceNameError = computed(() => (spaceDialogOpen.value ? validateGraphSpaceName(newSpaceName.value) : null))
+const spaceNameError = computed(() => {
+  if (!spaceDialogOpen.value) return null
+  // 空名称在点击创建后提示；非空输入仍保留即时格式/长度校验。
+  if (!spaceSubmitAttempted.value && !newSpaceName.value.trim()) return null
+  return validateGraphSpaceName(newSpaceName.value)
+})
 
 const isModelKind = computed(() => activeCategory.value === '语言模型' || activeCategory.value === '向量模型')
 const canVerifyForm = computed(() =>
@@ -355,6 +361,7 @@ async function createSpace() {
     showToast('请线下向管理员申请创建图空间。', 'info')
     return
   }
+  spaceSubmitAttempted.value = true
   if (spaceNameError.value) return
   const name = newSpaceName.value.trim()
   spaceWorking.value = true
@@ -438,6 +445,7 @@ function emptyForm(kind: ConfigKind): ConfigForm {
 function openCreate() {
   if (isGraphSpaceCategory.value) {
     newSpaceName.value = ''
+    spaceSubmitAttempted.value = false
     spaceDialogOpen.value = true
     return
   }
@@ -839,8 +847,10 @@ onUnmounted(() => {
         <header><div><h2>新建图数据空间</h2></div><button type="button" @click="spaceDialogOpen=false">×</button></header>
         <a-form class="dialog-form" layout="vertical" :model="{}">
           <a-form-item class="wide" label="图数据空间名称" required>
-            <input aria-label="仅字母、数字、下划线，以字母或下划线开头" v-model="newSpaceName" placeholder="仅字母、数字、下划线，以字母或下划线开头" />
-            <small v-if="spaceNameError" class="field-error">{{ spaceNameError }}</small>
+            <div class="space-name-field">
+              <input aria-label="仅字母、数字、下划线，以字母或下划线开头" v-model="newSpaceName" placeholder="仅字母、数字、下划线，以字母或下划线开头" :aria-invalid="Boolean(spaceNameError)" :aria-describedby="spaceNameError ? 'space-name-error' : undefined" />
+              <small v-if="spaceNameError" id="space-name-error" class="field-error" role="alert">{{ spaceNameError }}</small>
+            </div>
           </a-form-item>
           <p class="space-dialog-hint">将真实执行 CREATE SPACE 并自动绑定到你的账号；空间创建后有秒级传播延迟。</p>
         </a-form>
@@ -963,6 +973,7 @@ onUnmounted(() => {
 .create-dialog .dialog-form{flex:1 1 auto;min-height:0;overflow:auto}
 .create-dialog>footer{margin-top:auto}
 .space-dialog-hint{grid-column:1/-1;margin:0;color:#86909c;font-size:12px;line-height:20px}
+.space-name-field{display:flex;width:100%;min-width:0;flex-direction:column;gap:4px}
 /* 字段级校验提示（输入即校验，超长/异常字符/范围/必填） */
 .dialog-form .field-error,.detail-form .field-error{display:block;color:#e4322d;font-size:12px;line-height:18px}
 

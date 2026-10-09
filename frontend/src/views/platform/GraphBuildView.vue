@@ -78,7 +78,9 @@ function readStoredSpaceScope(): string {
 
 const spaceScope = ref(readStoredSpaceScope())
 const spaceScopeSelect = computed({
-  get: () => spaceScope.value || graphSpaceStore.current || graphSpaceStore.spaces[0],
+  // 清空态显示占位「图空间」而非回填全局当前空间——回填会让 × 看起来「没清空、
+  // 跳去别的空间」（筛选仍按 spaceScope||current 跟随全局，语义见 tooltip）
+  get: () => spaceScope.value || undefined,
   set: (value: string | undefined) => {
     spaceScope.value = value ?? ''
   },
@@ -107,8 +109,13 @@ const TASK_TYPE_LABELS: Record<string, string> = {
 const filteredJobs = computed(() => {
   const name = submittedName.value.toLowerCase()
   const space = spaceScope.value || graphSpaceStore.current
+  // 可视域：默认空间 + 本人绑定（与顶栏选择器一致）。「全部空间」也只在可视域内
+  // 展示——已解绑/未绑定的空间任务不因选「全部」越界露出（连带其重跑入口）
+  const visible = new Set(graphSpaceStore.spaces)
   return jobs.value.filter((job) => {
-    if (space !== ALL_SPACES && jobSpace(job) !== space) return false
+    const spaceName = jobSpace(job)
+    if (!visible.has(spaceName)) return false
+    if (space !== ALL_SPACES && spaceName !== space) return false
     if (name && !job.name.toLowerCase().includes(name)) return false
     if (filterStatus.value && deriveJobUnifiedStatus(job) !== filterStatus.value) return false
     if (filterTaskType.value && job.taskType !== filterTaskType.value) return false
@@ -122,7 +129,7 @@ const summaryItems = computed(() => {
   return [
     { label: '运行中', value: counts['运行中'], hint: '正在执行的任务' },
     { label: '已完成', value: counts['已完成'], hint: '最近一次执行成功' },
-    { label: '运行异常', value: counts['运行异常'], hint: '完成但含失败记录（已转人工审核）' },
+    { label: '运行异常', value: counts['运行异常'], hint: '完成但含失败记录（是否已转人工审核见执行详情）' },
     { label: '运行失败', value: counts['运行失败'], hint: '最近一次执行出错' },
     { label: '已暂停', value: counts['已暂停'], hint: '已暂停触发' },
   ]
@@ -192,7 +199,7 @@ function announceFinished(prevJobs: WorkflowJob[]) {
     const now = deriveJobUnifiedStatus(job)
     if (prev.get(job.id) !== '运行中') continue // 只报「运行中→终态」的翻转，历史终态不弹
     if (now === '已完成') showToast(`任务「${job.name}」执行完成`, 'success')
-    else if (now === '运行异常') showToast(`任务「${job.name}」执行完成但含失败记录（已转人工审核），点任务名查看`, 'warning')
+    else if (now === '运行异常') showToast(`任务「${job.name}」执行完成但含失败记录，点任务名查看`, 'warning')
     else if (now === '运行失败') showToast(`任务「${job.name}」执行失败，点任务名查看原因`, 'error')
   }
 }
@@ -224,6 +231,15 @@ function jobScriptLabel(job: WorkflowJob): string {
     return job.definitionIds.length > 1 ? `${first} +${job.definitionIds.length - 1}` : first
   }
   return job.definitionName || job.definitionId
+}
+
+/** 脚本列「脚本名 +N」悬停展开：chain 逐行列出全部脚本（按执行顺序）；
+ *  单脚本与展示文本一致，不设 title。 */
+function jobScriptTitle(job: WorkflowJob): string | undefined {
+  if (job.taskType !== 'chain') return undefined
+  const labels = job.schemaLabels?.length ? job.schemaLabels : job.definitionIds
+  if (labels.length < 2) return undefined
+  return [`共 ${labels.length} 个脚本（按执行顺序）：`, ...labels.map((label, i) => `${i + 1}. ${label}`)].join('\n')
 }
 
 async function onTrigger(job: WorkflowJob) {
@@ -443,10 +459,11 @@ onMounted(() => {
             class="gb-filter-select"
             placeholder="图空间"
             allow-clear
-            title="按图空间筛选任务（清空即跟随总览页全局选择器的当前空间）"
+            :title="spaceScope || '按图空间筛选任务（清空即跟随总览页全局选择器的当前空间）'"
+            :trigger-props="{ contentClass: 'gb-space-select-popup' }"
           >
-            <a-option :value="ALL_SPACES">全部空间</a-option>
-            <a-option v-for="space in graphSpaceStore.spaces" :key="space" :value="space">{{ space }}</a-option>
+            <a-option :value="ALL_SPACES" title="全部空间 = 可视域内的全部空间（默认空间 + 本人绑定）">全部空间</a-option>
+            <a-option v-for="space in graphSpaceStore.spaces" :key="space" :value="space" :title="space">{{ space }}</a-option>
           </a-select>
           <a-select id="graph-build-filter-status" v-model="filterStatusSelect" class="gb-filter-select" placeholder="状态" allow-clear>
             <a-option value="">未选择</a-option>
@@ -464,7 +481,7 @@ onMounted(() => {
             <a-option value="chain">多脚本串行</a-option>
             <a-option value="upload">上传脚本</a-option>
           </a-select>
-          <a-input id="graph-build-filter-name" v-model="filterName" class="gb-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="按名称搜索" placeholder="按名称搜索"><template #prefix><IconSearch /></template></a-input>
+          <a-input id="graph-build-filter-name" v-model="filterName" class="gb-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="按名称搜索" placeholder="按名称搜索" allow-clear @clear="submitJobSearch"><template #prefix><IconSearch /></template></a-input>
           <button class="gb-search-button" type="submit">查询</button>
         </form>
       </header>
@@ -478,7 +495,7 @@ onMounted(() => {
             <tr v-for="job in pagedJobs" :key="job.id">
               <td><b>{{ job.name }}</b></td>
               <td>{{ TASK_TYPE_LABELS[job.taskType] || job.taskType }}</td>
-              <td><code>{{ jobScriptLabel(job) }}</code></td>
+              <td><code :title="jobScriptTitle(job)">{{ jobScriptLabel(job) }}</code></td>
               <td>{{ job.graphSpace || '默认' }}</td>
               <td>
                 <span
@@ -638,6 +655,8 @@ span.run{color:var(--status-info)}
 .app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-wrapper:hover{border-color:#4080ff!important;background:#fff!important}
 .app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-wrapper:focus-within,.app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
 .app-workspace .gb-filters #graph-build-filter-name .arco-input-prefix{padding-right:8px;color:#4e5969}.app-workspace .gb-filters #graph-build-filter-name.arco-input-focus .arco-input-prefix{color:#165dff}.app-workspace .gb-filters #graph-build-filter-name .arco-input-prefix svg{width:16px;height:16px;font-size:16px}
+/* 名称搜索清空图标：与下拉箭头同口径放大着色（Arco 默认 12px 偏淡几乎看不见） */
+.app-workspace .gb-filters #graph-build-filter-name .arco-input-clear-btn svg{width:14px;height:14px;font-size:14px;color:#4e5969}
 .app-workspace .gb-filters #graph-build-filter-name input.arco-input{box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
 /* 筛选下拉统一按类命中（状态/类型/图空间同一边框与尺寸合同），不再绑死控件 id */
 .app-workspace .gb-filters .gb-filter-select.arco-select-view{display:inline-flex;box-sizing:border-box;align-items:center;width:160px;min-width:0;max-width:100%;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:0 0 160px}
@@ -648,6 +667,12 @@ span.run{color:var(--status-info)}
 .app-workspace .gb-filters .gb-filter-select :is(.arco-select-view-input,.arco-select-view-value){background:transparent!important}
 /* 筛选下拉右侧的箭头/清除图标：Arco 默认仅 12px 且偏淡，肉眼几乎看不出有下拉符号——放大到 14px 并显式着色（与输入框前缀图标同灰度） */
 .app-workspace .gb-filters .gb-filter-select .arco-select-view-suffix svg{width:14px;height:14px;font-size:14px;color:#4e5969}
+/* 图空间筛选弹层（teleport 到 body，经 triggerProps contentClass 打标）：超长空间名与
+   顶栏选择器（GraphSpaceSelector）同配方——选项按内容自然宽撑开不省略、面板横向滚动，
+   悬停选项 title 看全名；触发栏选中长名时省略号 + 动态 title 悬停显示全名。 */
+.gb-space-select-popup .arco-select-dropdown-list-wrapper{overflow-x:auto}
+.gb-space-select-popup .arco-select-option{width:max-content;min-width:100%}
+.gb-space-select-popup .arco-select-option-content{overflow:visible}
 /* 任务操作列「···」更多菜单（teleport 到 body，需全局控制；菜单项口径对齐 Schema 管理表） */
 .gb-action-menu-item.arco-dropdown-option{box-sizing:border-box;min-height:32px;padding:5px 16px;color:#165dff;font-size:14px;line-height:22px;font-weight:400;text-decoration:none}
 .gb-action-menu-item.arco-dropdown-option:hover{color:#4080ff;text-decoration:none}

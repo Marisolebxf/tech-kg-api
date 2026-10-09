@@ -440,6 +440,21 @@ def test_apply_output_failure_status_maps_completed_with_failures():
     assert mapped_trunc["status"] == "ABNORMAL"
     assert "2500" in mapped_trunc["message"]
 
+    # 普通模式 recorded=0（失败行缺记录主键，未建任何 case）：不声称已转人工
+    norecord = {"failures": {"count": 88, "recorded": 0, "truncated": False}}
+    mapped_norec = _apply_output_failure_status(base(norecord), norecord)
+    assert mapped_norec["status"] == "ABNORMAL"
+    assert "未转人工审核" in mapped_norec["message"] and "88" in mapped_norec["message"]
+
+    # 重跑模式（output.rerun）recorded 恒 0 由 resolve 重建新案：维持「已转人工审核」
+    rerun = {
+        "failures": {"count": 3, "recorded": 0, "truncated": False},
+        "rerun": {"ofExecutionId": "EXEC-O"},
+    }
+    mapped_rerun = _apply_output_failure_status(base(rerun), rerun)
+    assert mapped_rerun["status"] == "ABNORMAL"
+    assert mapped_rerun["message"].endswith("（已转人工审核）")
+
     # 无失败 / 非 extract 输出形状 / 计数非法：保持 COMPLETED
     clean = {"failures": {"count": 0, "recorded": 0, "truncated": False}}
     assert _apply_output_failure_status(base(clean), clean)["status"] == "COMPLETED"

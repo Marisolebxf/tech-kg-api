@@ -672,8 +672,8 @@ onBeforeUnmount(() => {
         </div>
         <section class="app-stage">
           <!-- 面包屑统一走 AppBreadcrumb（Arco 规范：首项图标回首页、/ 分隔、末项当前页） -->
-          <AppBreadcrumb :class="{ 'app-breadcrumb--with-actions': isOverviewPage || isAdminUser }">
-            <div v-if="isOverviewPage || isAdminUser" class="app-breadcrumb__actions">
+          <AppBreadcrumb :class="{ 'app-breadcrumb--with-actions': isOverviewPage }">
+            <div v-if="isOverviewPage" class="app-breadcrumb__actions">
               <a
                 v-if="isAdminUser"
                 class="app-docs-link"
@@ -685,7 +685,7 @@ onBeforeUnmount(() => {
               >
                 <img :src="iconBook" alt="" aria-hidden="true" />
               </a>
-              <GraphSpaceSelector v-if="isOverviewPage" />
+              <GraphSpaceSelector />
             </div>
           </AppBreadcrumb>
           <section class="app-workspace" :aria-label="pageTitle">

@@ -8,6 +8,7 @@ jobId 关联回 Job，详情页据此列出执行历史。
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -17,6 +18,8 @@ from fastapi import HTTPException
 from service.business_access_control import (
     ensure_space_access,
     rbac_enabled,
+    space_registration,
+    with_memberships,
 )
 from service.platform_access import PlatformActor
 from service.temporal_runtime import temporal_runtime
@@ -47,12 +50,11 @@ _SELECTOR_PAYLOAD_KEYS = {
 
 
 def authorize_workflow_resource(actor, resource, action="read"):
-    """Check persisted target spaces, including every schema in a chain.
-
-    Missing scope in legacy records is deliberately administrator-only.
-    """
+    """校验持久化目标空间及链中所有 Schema；无归属的历史记录仅管理员可访问。"""
     if not rbac_enabled():
         return
+    if actor.context_graph_space and not workflow_resource_matches_space(actor, resource):
+        raise HTTPException(403, "任务不属于当前图空间")
     if actor.business_only:
         raise HTTPException(status_code=403, detail="测试账号仅允许九大业务")
     if actor.is_admin and action == "read":
@@ -68,13 +70,9 @@ def authorize_workflow_resource(actor, resource, action="read"):
         for key in ("owner", "taskType", "workflowId", "payload", "input", "actorUserId", "jobId")
     )
     client_ids = {value.get("clientId") for value in values if value.get("clientId")}
-    if not actor.is_admin and persistent_record and client_ids != {actor.business_id}:
-        raise HTTPException(status_code=403, detail="任务尚未登记本业务归属，请由管理员重新保存")
     spaces = set()
     schema_ids = set()
     for value in values:
-        if not actor.is_admin and value.get("clientId") and value["clientId"] != actor.business_id:
-            raise HTTPException(status_code=403, detail="无权访问其他业务任务")
         for key in ("graphSpace", "graph_space"):
             if value.get(key):
                 spaces.add(value[key])
@@ -84,6 +82,42 @@ def authorize_workflow_resource(actor, resource, action="read"):
         for step in value.get("steps") or []:
             if isinstance(step, dict) and step.get("schemaId"):
                 schema_ids.add(step["schemaId"])
+    explicit_spaces = set(spaces)
+    if schema_ids:
+        from dao.schema_management import SchemaManagementDAO
+        from infra.workflow_mysql import workflow_session_scope
+
+        with workflow_session_scope() as session:
+            dao = SchemaManagementDAO(session)
+            for schema_id in schema_ids:
+                row = dao.get(schema_id)
+                if row is None:
+                    raise HTTPException(status_code=404, detail="任务关联 Schema 不存在")
+                if action != "read" and explicit_spaces and explicit_spaces != {row.graph_space}:
+                    raise HTTPException(403, "目标空间必须与 Schema 所属空间一致，请选择目标空间的 Schema")
+                spaces.add(row.graph_space)
+    if not spaces and not actor.is_admin:
+        raise HTTPException(status_code=403, detail="历史任务尚未登记图空间归属")
+    for space in spaces:
+        ensure_space_access(actor, space, action)
+    if not actor.is_admin:
+        from infra.mysql import session_scope
+
+        with session_scope() as session:
+            registrations = [space_registration(session, space) for space in spaces]
+        public_read = action == "read" and bool(registrations) and all(
+            row and row.is_shared_production for row in registrations)
+        private_clients = {row.client_id for row in registrations if row and not row.is_shared_production and row.client_id}
+        if not public_read:
+            if persistent_record and (not client_ids or client_ids != private_clients):
+                raise HTTPException(403, "任务业务归属与目标空间不一致，请由管理员核实")
+            if not client_ids.issubset(set(actor.developer_business_ids)):
+                raise HTTPException(403, "无权访问其他业务任务")
+            if action != "read" and len(private_clients) != 1:
+                raise HTTPException(403, "一个构建任务只能归属一个业务")
+        # 配置访问固定为该任务业务，不能借用户的其他业务授权跨业务取配置。
+        if len(private_clients) == 1:
+            actor = replace(actor, context_business_id=next(iter(private_clients)), context_graph_space="")
     if action != "read" and not actor.is_admin:
         from biz.dependencies.resources import ensure_owner_access
         from dao.embedding_config import EmbeddingConfigDAO
@@ -106,33 +140,11 @@ def authorize_workflow_resource(actor, resource, action="read"):
                         if row is None:
                             raise HTTPException(status_code=403, detail="任务配置不存在或不可访问")
                         ensure_owner_access(actor, row.owner or "")
-    explicit_spaces = set(spaces)
-    if schema_ids:
-        from dao.schema_management import SchemaManagementDAO
-        from infra.workflow_mysql import workflow_session_scope
-
-        with workflow_session_scope() as session:
-            dao = SchemaManagementDAO(session)
-            for schema_id in schema_ids:
-                row = dao.get(schema_id)
-                if row is None:
-                    raise HTTPException(status_code=404, detail="任务关联 Schema 不存在")
-                if action != "read" and explicit_spaces and explicit_spaces != {row.graph_space}:
-                    raise HTTPException(
-                        status_code=403,
-                        detail="目标空间必须与 Schema 所属空间一致，请选择目标空间的 Schema",
-                    )
-                spaces.add(row.graph_space)
-    if not spaces and not actor.is_admin:
-        raise HTTPException(status_code=403, detail="历史任务尚未登记图空间归属")
-    for space in spaces:
-        ensure_space_access(actor, space, action)
 
 
 def _job_business(actor, resource):
-    """Persist ownership from actual private spaces, never from creator membership."""
+    """按实际业务空间持久化归属，不从创建人的业务列表猜测。"""
     from dao.schema_management import SchemaManagementDAO
-    from db_model.business_access import BusinessGraphSpace
     from infra.mysql import session_scope
     from infra.workflow_mysql import workflow_session_scope
 
@@ -150,7 +162,7 @@ def _job_business(actor, resource):
     unknown_space = False
     with session_scope() as session:
         for space in spaces:
-            row = session.get(BusinessGraphSpace, space)
+            row = space_registration(session, space)
             if row is None or (not row.is_shared_production and not row.client_id):
                 unknown_space = True
             if row and not row.is_shared_production and row.client_id:
@@ -159,7 +171,7 @@ def _job_business(actor, resource):
         raise HTTPException(403, "一个构建任务不能跨多个业务的私有空间")
     if unknown_space:
         return None
-    return next(iter(private_clients)) if private_clients else actor.business_id or None
+    return next(iter(private_clients)) if private_clients else None
 
 
 def authorize_background_execution(payload):
@@ -171,7 +183,6 @@ def authorize_background_execution(payload):
     from config.auth import AuthSettings
     from db_model.platform_governance import PlatformUser, PlatformUserRole
     from infra.mysql import session_scope
-    from service.business_access_control import resolve_membership
     from service.platform_access import ADMIN_ROLE
 
     user_id = str(payload.get("actorUserId") or "")
@@ -198,21 +209,67 @@ def authorize_background_execution(payload):
             is_admin=local_admin or user_id in settings.initial_admin_user_ids,
             business_only=user_id in settings.business_only_user_ids,
         )
-    from dataclasses import replace
-
-    client_id, role = resolve_membership(user_id)
-    actor = replace(actor, business_id=client_id, business_role=role)
+    actor = with_memberships(actor)
+    client_id = payload.get("clientId") or ""
+    actor = replace(actor, context_business_id=client_id,
+                    context_graph_space=payload.get("graphSpace") or payload.get("graph_space") or "")
     if not actor.can_develop:
         raise HTTPException(
             403, "执行账号缺少本地开发维护或管理员授权，请管理员核实业务成员及本地角色绑定"
         )
-    if not actor.is_admin and payload.get("clientId") != client_id:
+    if not actor.is_admin and client_id not in actor.developer_business_ids:
         raise HTTPException(status_code=403, detail="任务所属业务已变更，请重新保存任务")
     authorize_workflow_resource(actor, payload, "write")
     return actor
 
 
+def workflow_resource_spaces(resource):
+    values = [resource] + [resource[key] for key in ("payload", "input") if isinstance(resource.get(key), dict)]
+    spaces = {value.get(key) for value in values for key in ("graphSpace", "graph_space")} - {None, ""}
+    schema_ids = set()
+    for value in values:
+        if value.get("schemaId"):
+            schema_ids.add(value["schemaId"])
+        schema_ids.update(value.get("schemaIds") or [])
+        schema_ids.update(step["schemaId"] for step in value.get("steps") or [] if isinstance(step, dict) and step.get("schemaId"))
+    if schema_ids:
+        from dao.schema_management import SchemaManagementDAO
+        from infra.workflow_mysql import workflow_session_scope
+
+        with workflow_session_scope() as session:
+            for schema_id in schema_ids:
+                row = SchemaManagementDAO(session).get(schema_id)
+                if row:
+                    spaces.add(row.graph_space)
+                else:
+                    return set()
+    return spaces
+
+
+def workflow_resource_matches_space(actor, resource):
+    if not actor.context_graph_space:
+        return True
+    spaces = workflow_resource_spaces(resource)
+    return spaces == {actor.context_graph_space}
+
+
+def workflow_resource_capabilities(actor, resource):
+    spaces = workflow_resource_spaces(resource)
+    space = next(iter(spaces)) if len(spaces) == 1 else None
+    can_operate = bool(space and (actor.can_develop if rbac_enabled() else actor.is_admin))
+    if can_operate:
+        try:
+            authorize_workflow_resource(actor, resource, "write")
+        except HTTPException as exc:
+            if exc.status_code not in (403, 404):
+                raise
+            can_operate = False
+    return {**resource, "graphSpace": space, "canOperate": can_operate, "writeAllowed": can_operate}
+
+
 def workflow_resource_visible(actor, resource):
+    if not workflow_resource_matches_space(actor, resource):
+        return False
     try:
         authorize_workflow_resource(actor, resource)
         return True
@@ -260,7 +317,7 @@ class WorkflowJobService:
     ) -> list[dict[str, Any]]:
         owner = None if actor.is_admin or rbac_enabled() else actor.user_id
         jobs = self.repo.list_jobs(name=name, status=status, task_type=task_type, owner=owner)
-        if rbac_enabled():
+        if rbac_enabled() or actor.context_graph_space:
             jobs = [job for job in jobs if workflow_resource_visible(actor, job)]
         await self._refresh_running_jobs(jobs)
         return jobs
@@ -318,7 +375,9 @@ class WorkflowJobService:
                     self.repo.save_job(job)
             except Exception:  # noqa: BLE001
                 pass
-        return {"job": job, "executions": executions}
+        return {"job": workflow_resource_capabilities(actor, job), "executions": [
+            workflow_resource_capabilities(actor, execution) for execution in executions
+        ]}
 
     # ---------- 创建 / 编辑 / 删除 ----------
 

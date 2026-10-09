@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useGraphSpaceStore } from "./stores/graphSpace"
+const spaceContext = useGraphSpaceStore()
+
 import { computed, onErrorCaptured, ref } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
 
@@ -59,7 +62,7 @@ const showEmbeddedAuthState = computed(
             <strong>页面渲染异常</strong>
             <span>{{ routeError }}</span>
           </div>
-          <RouterView v-else />
+          <RouterView v-else :key="spaceContext.contextKey" />
         </section>
       </section>
     </main>

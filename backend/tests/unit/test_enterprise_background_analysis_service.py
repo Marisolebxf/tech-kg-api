@@ -86,7 +86,8 @@ def test_analyze_uses_llm_conclusion_and_falls_back(monkeypatch):
     fin.research_development_amount = Decimal("20")
     fin.employees_number = 200
     org_dao.get_stock_finance.return_value = [fin]
-    pat_dao.count_by_cpc_section.return_value = [{"cpcSection": "G", "count": 5}]
+    pat_dao.list_by_assignee.return_value = [MagicMock(patent_id=f"P{i}") for i in range(5)]
+    pat_dao._cpc_codes.return_value = ["G06N"]
     resp = EnterpriseBackgroundAnalysisService().analyze(
         {"enterpriseId": "E001", "analysisDimensions": ["financial"], "patentCPC": []}
     )
@@ -150,3 +151,8 @@ def test_analyze_core_tech_and_industry_status_dimensions(monkeypatch):
     assert "AI芯片" in resp["dimensions"]["core_tech"]["conclusion"]
     # core_tech 模板小结
     assert "AI芯片" in resp["coreTechLayout"]
+
+
+@pytest.fixture(autouse=True)
+def graph_entity_present(monkeypatch):
+    monkeypatch.setattr("service.enterprise_background_analysis.has_graph_entity", lambda *args: True)

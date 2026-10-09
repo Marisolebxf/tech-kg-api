@@ -7,7 +7,7 @@ import { useGraphSpaceStore } from '../stores/graphSpace'
 const graphSpaceStore = useGraphSpaceStore()
 const authStore = useAuthStore()
 
-const options = computed(() => graphSpaceStore.spaces)
+const options = computed(() => graphSpaceStore.groups)
 const showEmpty = computed(
   () =>
     !graphSpaceStore.loading &&
@@ -22,7 +22,7 @@ onMounted(() => {
 
 // 换号后空间可见集变化：重拉列表并归一当前值（越权访问另有后端 403 防线）
 watch(
-  () => [authStore.profile?.user?.id, authStore.profile?.businessId, authStore.profile?.platformRole, authStore.profile?.businessRbacEnabled].join('|'),
+  () => [authStore.profile?.user?.id, authStore.profile?.businessIds?.join(','), authStore.profile?.platformRole, authStore.profile?.businessRbacEnabled].join('|'),
   () => {
     if (!authStore.profile) return
     graphSpaceStore.bindUser(String(authStore.profile.user?.id ?? ''))
@@ -34,23 +34,21 @@ watch(
 <template>
   <div
     class="app-space-select"
-    :title="graphSpaceStore.loadError ? `图空间列表加载失败，当前使用默认空间 ${graphSpaceStore.current}` : '切换当前工作图空间'"
+    :title="graphSpaceStore.loadError ? '图空间列表加载失败，请重试' : '切换当前工作图空间'"
   >
     <span class="app-space-select__label">图空间</span>
-    <a-select
+    <a-cascader
       class="app-space-select__input"
       aria-label="图空间"
       :model-value="graphSpaceStore.current"
-      placeholder="图空间"
+      :options="options"
+      :placeholder="showEmpty ? '暂无可用图空间' : '图空间'"
       :loading="graphSpaceStore.loading"
-      :scrollbar="false"
       :disabled="graphSpaceStore.loading"
+      :show-path="false"
       :trigger-props="{ contentClass: 'app-space-select-popup' }"
       @change="(value: unknown) => graphSpaceStore.setCurrent(String(value ?? ''))"
-    >
-      <a-option v-if="showEmpty" disabled>暂无可用图空间</a-option>
-      <a-option v-for="item in options" :key="item" :value="item" :title="item">{{ item }}</a-option>
-    </a-select>
+    />
   </div>
 </template>
 

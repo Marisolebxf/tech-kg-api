@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import BusinessAccessPanel from "../../components/BusinessAccessPanel.vue"
+
 import DeleteConfirmDialog from '../../components/DeleteConfirmDialog.vue'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useAuthStore } from '../../stores/auth'
@@ -93,16 +95,25 @@ type ConfigItem = {
 const { showToast } = useToast()
 const graphSpaceStore = useGraphSpaceStore()
 
-const categories = [
+const categories = computed(() => [
   { key: '语言模型', label: '语言模型', hint: 'LLM 语言模型配置' },
   { key: '向量模型', label: '向量模型', hint: 'embedding 向量模型配置' },
   { key: 'MySQL 数据源', label: 'MySQL 数据源', hint: 'MySQL 关系库连接' },
   { key: '图数据空间', label: '图数据空间', hint: '我的图空间绑定' },
-]
+  ...(isAdmin.value && useAuthStore().profile?.businessRbacEnabled ? [{ key: '业务权限', label: '业务权限', hint: '成员与图空间归属' }] : []),
+])
 
 // 响应式跟随 auth store（profile 异步加载，一次性赋值会把 admin 恒判 false——
 // 免登录部署下绑定入口/新建空间入口不渲染）
 const isAdmin = computed(() => currentUserIsAdmin())
+const businessRbac = computed(() => !!useAuthStore().profile?.businessRbacEnabled)
+const configBusinesses = computed(() => graphSpaceStore.businesses.filter(b => isAdmin.value || b.role === 'developer'))
+const configContextReady = computed(() => !businessRbac.value || !!graphSpaceStore.businessId || isAdmin.value)
+const canCreateConfig = computed(() => !businessRbac.value || !!graphSpaceStore.businessId)
+const configBusiness = computed({
+  get: () => graphSpaceStore.businessId,
+  set: (value: string) => { graphSpaceStore.setBusiness(value || '') },
+})
 const graphSpaces = ref<GraphSpaceItem[]>([])
 const spaceDialogOpen = ref(false)
 const newSpaceName = ref('')
@@ -285,6 +296,7 @@ function toConfigItem(kind: ConfigKind, cfg: LlmConfig | MysqlDatasource | Embed
 }
 
 async function loadByCategory(key: string) {
+  if (key === '业务权限' || !configContextReady.value) return
   if (key === '图数据空间') {
     await loadGraphSpaces()
     return
@@ -357,7 +369,7 @@ async function bindSpace() {
 
 function canChangeLegacyBinding(): boolean {
   if (!isAdmin.value || useAuthStore().profile?.businessRbacEnabled) {
-    showToast('图空间业务归属由管理员通过 SQL 配置。', 'info')
+    showToast('请在「业务权限」中维护图空间归属。', 'info')
     return false
   }
   return true
@@ -396,6 +408,7 @@ function emptyForm(kind: ConfigKind): ConfigForm {
 }
 
 function openCreate() {
+  if (!isGraphSpaceCategory.value && !canCreateConfig.value) return
   if (isGraphSpaceCategory.value) {
     newSpaceName.value = ''
     spaceDialogOpen.value = true
@@ -436,6 +449,7 @@ async function verifyForm() {
 }
 
 async function saveConfig() {
+  if (!canCreateConfig.value) return
   if (hasCreateErrors.value) return
   const kind = formKind.value
   if (!kind) return
@@ -469,7 +483,7 @@ async function saveConfig() {
         defaultDatabase: String(form.value.defaultDatabase || '').trim(),
         username: String(form.value.username).trim(),
         password: String(form.value.password || ''),
-        owner: String(form.value.owner || '').trim(),
+        owner: businessRbac.value ? `business:${graphSpaceStore.businessId}` : String(form.value.owner || '').trim(),
         description: String(form.value.description || '').trim(),
         isDefault: Boolean(form.value.isDefault),
       }, currentUserId())
@@ -641,6 +655,7 @@ async function confirmDeleteConfig() {
 
 /** 首屏并行加载全部三类，让分类计数固定展示（loadByCategory 是替换式合并，并发会互相覆盖）。 */
 async function loadAllCategories() {
+  if (!configContextReady.value) return
   const [llm, embedding, mysql] = await Promise.allSettled([
     listLlmConfigs(currentUserId()),
     listEmbeddingConfigs(currentUserId()),
@@ -672,6 +687,13 @@ onUnmounted(() => {
 
 <template>
   <div class="configuration-page">
+    <div v-if="businessRbac" class="config-business-context">
+      <span>配置所属业务</span>
+      <a-select v-model="configBusiness" :disabled="graphSpaceStore.currentItem?.groupKind === 'business'" :allow-clear="isAdmin" aria-label="配置所属业务" :placeholder="isAdmin ? '全部业务及待核实配置' : '请选择配置所属业务'">
+        <a-option v-for="business in configBusinesses" :key="business.clientId" :value="business.clientId">{{ business.name }}</a-option>
+      </a-select>
+      <span v-if="!canCreateConfig">新建配置前请选择业务</span>
+    </div>
     <section class="config-workbench">
       <aside class="category-nav">
         <header><strong>配置分类</strong></header>
@@ -680,8 +702,9 @@ onUnmounted(() => {
         </button>
       </aside>
 
-      <main class="config-list">
-        <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilter" allow-clear placeholder="全部状态"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><form class="config-search-form" role="search" @submit.prevent="submitConfigSearch"><a-input v-model="keyword" class="config-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识或地址" placeholder="搜索名称、标识或地址"><template #prefix><IconSearch /></template></a-input><button class="primary config-search-button" type="submit">查询</button></form></nav><nav v-else class="bind-nav"><button class="primary" type="button" @click="spaceDialogOpen = true">＋ 新建图数据空间</button><a-select v-if="isAdmin && bindableSpaces.length" v-model="bindTarget" placeholder="绑定已有图数据空间" allow-clear><a-option v-for="space in bindableSpaces" :key="space.name" :value="space.name">{{ space.name }}</a-option></a-select><button v-if="isAdmin && bindableSpaces.length" type="button" :disabled="spaceWorking" @click="bindSpace">绑定</button></nav></header>
+      <BusinessAccessPanel v-if="activeCategory === '业务权限' && isAdmin" />
+      <main v-else class="config-list">
+        <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" :disabled="!canCreateConfig" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilter" allow-clear placeholder="全部状态"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><form class="config-search-form" role="search" @submit.prevent="submitConfigSearch"><a-input v-model="keyword" class="config-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识或地址" placeholder="搜索名称、标识或地址"><template #prefix><IconSearch /></template></a-input><button class="primary config-search-button" type="submit">查询</button></form></nav><nav v-else class="bind-nav"><button class="primary" type="button" :disabled="!isAdmin" @click="spaceDialogOpen = true">＋ 新建图数据空间</button><a-select v-if="isAdmin && !businessRbac && bindableSpaces.length" v-model="bindTarget" placeholder="绑定已有图数据空间" allow-clear><a-option v-for="space in bindableSpaces" :key="space.name" :value="space.name">{{ space.name }}</a-option></a-select><button v-if="isAdmin && !businessRbac && bindableSpaces.length" type="button" :disabled="spaceWorking" @click="bindSpace">绑定</button></nav></header>
         <div v-if="isGraphSpaceCategory" class="table-wrap space-table">
           <table>
             <thead><tr><th>图数据空间</th><th>绑定状态</th></tr></thead>
@@ -690,7 +713,7 @@ onUnmounted(() => {
                 <td><div class="config-name"><span><strong>{{ space.name }}</strong><small>NebulaGraph 图空间</small></span></div></td>
                 <td><span class="status is-正常"><i />已绑定</span></td>
               </tr>
-              <tr v-if="!mySpaces.length"><td class="empty" colspan="2">还没有绑定的图数据空间，点击右上角“新建图数据空间”创建一个</td></tr>
+              <tr v-if="!mySpaces.length"><td class="empty" colspan="2">{{ isAdmin ? '还没有绑定的图数据空间，可点击右上角创建' : '暂无可用图数据空间，请联系管理员分配' }}</td></tr>
             </tbody>
           </table>
           <p class="space-hint">新建图数据空间会真实执行 CREATE SPACE（创建后有秒级传播延迟）；解除绑定请找管理员处理。</p>
@@ -751,6 +774,9 @@ onUnmounted(() => {
         <section class="health-card"><i :class="`is-${selected.status}`" /><div><strong>{{ selected.status === '正常' ? '配置可用' : selected.status === '异常' ? '连接存在异常' : '配置已停用' }}</strong><span>后端真实探活</span></div><button type="button" :disabled="testingId === selected.id" @click="testConnection(selected)">{{ testingId === selected.id ? '测试中…' : '测试连接' }}</button></section>
         <a-form :model="selected" class="detail-form" layout="vertical">
           <a-form-item field="name" label="配置名称" required><input aria-label="name" v-model="selected.name" /><small v-if="detailFieldErrors.name" class="field-error">{{ detailFieldErrors.name }}</small></a-form-item>
+          <a-form-item v-if="isAdmin && businessRbac" label="配置归属业务">
+            <a-select v-model="selected.owner" aria-label="配置归属业务" placeholder="核实后选择业务"><a-option :value="selected.owner" disabled>{{ selected.owner }}</a-option><a-option v-for="business in configBusinesses" :key="business.clientId" :value="`business:${business.clientId}`">{{ business.name }}</a-option></a-select>
+          </a-form-item>
           <a-form-item label="服务类型"><input aria-label="input-field" :value="selected.type" readonly /></a-form-item>
           <template v-if="selected.kind === 'llm' || selected.kind === 'embedding'">
             <a-form-item class="wide" field="baseUrl" label="Base URL" required><input aria-label="baseUrl" v-model="selected.baseUrl" /><small v-if="detailFieldErrors.baseUrl" class="field-error">{{ detailFieldErrors.baseUrl }}</small></a-form-item>
@@ -788,7 +814,7 @@ onUnmounted(() => {
           </a-form-item>
           <p class="space-dialog-hint">将真实执行 CREATE SPACE 并自动绑定到你的账号；空间创建后有秒级传播延迟。</p>
         </a-form>
-        <footer><button type="button" @click="spaceDialogOpen=false">取消</button><button class="primary" type="button" :disabled="spaceWorking" @click="createSpace">{{ spaceWorking ? '创建中…' : '创建' }}</button></footer>
+        <footer><button type="button" @click="spaceDialogOpen=false">取消</button><button class="primary" type="button" :disabled="!isAdmin || spaceWorking" @click="createSpace">{{ spaceWorking ? '创建中…' : '创建' }}</button></footer>
       </aside>
       <button v-if="dialogOpen" class="mask create-dialog-mask" type="button" aria-label="关闭新建配置弹窗" @click="dialogOpen=false" />
       <aside v-if="dialogOpen" class="create-dialog config-create-dialog">
@@ -827,6 +853,8 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.config-business-context{display:flex;align-items:center;gap:12px;padding:8px 0 16px}.config-business-context :deep(.arco-select-view){width:280px}.config-business-context span{font-size:14px;color:#4e5969}
+
 .configuration-page{display:flex;box-sizing:border-box;height:100%;min-height:0;overflow:hidden;color:#17233b;flex-direction:column}.page-header{display:flex;flex:0 0 auto;align-items:flex-end;justify-content:space-between;margin-bottom:12px}.page-header span{color:#165dff;font-size:9px;letter-spacing:.12em}.page-header h1{margin:3px 0 0;font-size:22px}.page-header p{margin:4px 0 0;color:#66758f;font-size:11px}.primary{border-color:#165dff!important;background:#165dff!important;color:#fff!important}.config-workbench{display:grid;flex:1;min-height:0;grid-template-columns:248px minmax(0,1fr);overflow:hidden;border:1px solid #bdd7ff;border-radius:9px;background:#fff}.category-nav{display:flex;min-height:0;border-right:1px solid #dce8f8;background:#f8fbff;flex-direction:column}.category-nav>header{display:grid;gap:3px;padding:14px;border-bottom:1px solid #dce8f8}.category-nav>header strong{font-size:13px}.category-nav>header span{color:#8290a7;font-size:9px}.category-nav>button{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:9px;width:100%;padding:11px 12px;border:0;border-bottom:1px solid #edf2f8;background:transparent;color:#344766;text-align:left;cursor:pointer}.category-nav>button.active{background:#eaf2ff;box-shadow:inset 3px 0 #165dff}.category-nav>button>span{display:grid;gap:3px}.category-nav>button strong{font-size:11px}.category-nav>button small{color:#8290a7;font-size:8px}.category-nav>button em{min-width:20px;padding:2px 6px;border-radius:99px;background:#e7eef8;color:#71809a;font-size:9px;font-style:normal;text-align:center}.config-list{display:flex;min-width:0;min-height:0;flex-direction:column}.config-list>header{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid #dce8f8;background:#fff}.config-list>header>div{display:flex;align-items:baseline;gap:8px}.config-list h2{margin:0;font-size:15px}.config-list>header span{color:#8290a7;font-size:9px}.config-list nav{display:flex;flex:1;min-width:0;flex-wrap:wrap;gap:8px;align-items:center}.config-list nav button{height:31px;padding:0 12px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#40516d;font-size:10px;cursor:pointer}.config-list input,.config-list select{height:31px;padding:0 9px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#344766;font-size:10px}.config-list input{width:210px}.table-wrap{flex:1;min-height:0;overflow:auto}.table-wrap table{width:100%;border-collapse:collapse;font-size:10px}.table-wrap thead{position:sticky;z-index:2;top:0}.table-wrap th,.table-wrap td{padding:10px 11px;border-bottom:1px solid #e7eef7;text-align:left;vertical-align:middle}.table-wrap th{background:#f2f7fd;color:#60708a;font-weight:600;white-space:nowrap}.table-wrap tbody tr{cursor:pointer}.table-wrap tbody tr:hover td{background:#f7faff}.config-name{display:flex;align-items:center;gap:9px;min-width:210px}.config-name>span{display:grid;gap:3px}.config-name strong{font-size:11px}.config-name small,.updated{display:block;color:#8290a7;font-size:8px}.type-name{display:block;color:#40516d;font-size:10px}.table-wrap code{display:block;max-width:210px;margin-top:3px;overflow:hidden;color:#71809a;font-size:8px;text-overflow:ellipsis;white-space:nowrap}.status{display:inline-flex;align-items:center;gap:5px;padding:3px 7px;border-radius:99px}.status>i{width:6px;height:6px;border-radius:50%;background:currentColor}.status.is-正常{background:#dcfae6;color:var(--status-success)}.status.is-异常{background:#fee4e2;color:var(--status-danger)}.status.is-停用{background:#eef1f5;color:var(--status-neutral)}.link{border:0;background:transparent;color:#165dff;font-size:10px;cursor:pointer}.empty{height:100px;color:#8290a7;text-align:center!important}.mask{position:fixed;z-index:40;inset:0;border:0;background:rgba(16,36,76,.24)}.detail-drawer{position:fixed;z-index:41;top:0;right:0;display:flex;width:min(500px,90vw);height:100vh;background:#f8fbff;box-shadow:-18px 0 46px rgba(28,58,107,.25);flex-direction:column}.detail-drawer>header,.create-dialog>header{display:flex;align-items:flex-start;justify-content:space-between;padding:18px;border-bottom:1px solid #dce8f8;background:#fff}.detail-drawer>header span,.create-dialog>header span{color:#165dff;font-size:9px}.detail-drawer h2,.create-dialog h2{margin:4px 0;font-size:18px}.detail-drawer>header button,.create-dialog>header button{width:29px;height:29px;border:0;border-radius:5px;background:#f0f4fa;font-size:19px;cursor:pointer}.health-card{display:grid;grid-template-columns:10px minmax(0,1fr) auto;align-items:center;gap:10px;margin:14px 16px 0;padding:12px;border:1px solid #cfe4d7;border-radius:7px;background:#fff}.health-card>i{width:9px;height:9px;border-radius:50%;background:var(--status-success);box-shadow:none}.health-card>i.is-异常{background:var(--status-danger);box-shadow:none}.health-card>i.is-停用{background:var(--status-neutral);box-shadow:none}.health-card>div{display:grid;gap:3px}.health-card strong{font-size:11px}.health-card span{color:#71809a;font-size:9px}.health-card button{height:29px;padding:0 10px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#165dff;font-size:9px;cursor:pointer}.detail-form,.dialog-form{display:grid;grid-template-columns:1fr 1fr;gap:11px;padding:16px}.detail-form label,.dialog-form label{display:grid;gap:5px}.detail-form label span,.dialog-form label span{color:#60708a;font-size:9px}.detail-form input,.detail-form textarea,.dialog-form input,.dialog-form select,.dialog-form textarea{box-sizing:border-box;width:100%;height:33px;padding:0 9px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#344766;font:10px inherit}.detail-form textarea,.dialog-form textarea{height:65px;padding-top:8px;resize:none}.wide{grid-column:1/-1}.reference-card{margin:0 16px;padding:12px;border:1px solid #d6e3f4;border-radius:7px;background:#fff}.reference-card header{display:flex;justify-content:space-between}.reference-card strong{font-size:10px}.reference-card span{color:#165dff;font-size:9px}.reference-card p{margin:5px 0 0;color:#71809a;font-size:9px;line-height:16px}.detail-drawer>footer,.create-dialog>footer{display:flex;justify-content:flex-end;gap:8px;margin-top:auto;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.detail-drawer>footer button,.create-dialog>footer button{height:33px;padding:0 13px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#40516d;cursor:pointer}.create-dialog{position:fixed;z-index:42;top:50%;left:50%;width:min(650px,calc(100vw - 40px));overflow:hidden;border-radius:10px;background:#f8fbff;box-shadow:0 24px 70px rgba(28,58,107,.3);transform:translate(-50%,-50%)}.create-dialog>footer{margin-top:0}.create-dialog button:disabled{opacity:.5;cursor:not-allowed}.default-tag{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:99px;background:#fff3d8;color:#b54708;font-size:8px;font-weight:600;font-style:normal}.checkbox{display:flex;flex-direction:row;align-items:center;gap:8px}.checkbox input{width:auto;height:14px}.checkbox span{color:#344766;font-size:10px}@media(max-width:1100px){.config-workbench{grid-template-columns:210px minmax(0,1fr)}}
 
 /* Compact fixed action column; free width belongs to data columns. */
@@ -1072,4 +1100,5 @@ onUnmounted(() => {
 /* Compact fixed action column; free width belongs to data columns. */
 .config-table-wrap :is(th,td).config-action-col{width:152px;min-width:152px;max-width:152px}
 .config-usage-col :deep(.arco-switch){vertical-align:middle}
+.config-list .primary:disabled{background:#f2f3f5!important;border-color:#e5e6eb!important;color:#a9aeb8!important;cursor:not-allowed}
 </style>

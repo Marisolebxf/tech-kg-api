@@ -1,3 +1,4 @@
+import { useGraphSpaceStore } from '../../../stores/graphSpace'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { defineComponent } from 'vue'
@@ -146,6 +147,7 @@ beforeEach(() => {
   vi.mocked(getSchemaOverview).mockResolvedValue(overviewFixture)
   vi.mocked(listSchemasPaged).mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 10 })
   setActivePinia(createPinia())
+  useGraphSpaceStore().$patch({ current: 'dev2', spaces: ['dev2'], items: [{name: 'dev2', bound: true, mine: true, writeAllowed: true, reviewAllowed: true}] })
 })
 
 afterEach(() => {

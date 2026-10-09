@@ -70,7 +70,7 @@ _SUPPORT_FIELDS = (
     "credit_no",
 )
 
-_altered_tags: set[str] = set()
+_altered_tags: set[tuple[str, str]] = set()
 
 
 def reset_persist_state() -> None:
@@ -168,21 +168,23 @@ def persist_entity_confidence(client: Any, vid: str, tag: str, value: float) -> 
     """把计算出的置信度写回顶点。列不存在时 ALTER 一次再重试；失败不影响查询。"""
     if client is None or not vid or not tag:
         return False
+    from service.graph_space_context import get_current_space
+    alter_key = (get_current_space(), tag)
     query = f"UPDATE VERTEX ON `{tag}` {_ngql_vid(vid)} SET `{tag}`.`confidence` = {value:.4f};"
     try:
         client.execute_write(query)
         return True
     except Exception as exc:
-        if tag in _altered_tags:
+        if alter_key in _altered_tags:
             logger.warning("写回实体置信度失败 vid=%s tag=%s: %s", vid, tag, exc)
             return False
         try:
             client.execute_write(f"ALTER TAG `{tag}` ADD (`confidence` double NULL);")
-            _altered_tags.add(tag)
+            _altered_tags.add(alter_key)
             client.execute_write(query)
             return True
         except Exception as alter_exc:
-            _altered_tags.add(tag)
+            _altered_tags.add(alter_key)
             logger.warning(
                 "补 confidence 列或写回失败 vid=%s tag=%s: %s",
                 vid,
@@ -204,7 +206,8 @@ def fill_entity_confidence(
     existing = parse_confidence(props.get("confidence"))
     value = resolve_entity_confidence(props, labels)
     props["confidence"] = value
-    if existing is None and client is not None and vid:
+    from service.graph_space_context import request_can_write
+    if existing is None and client is not None and vid and request_can_write.get():
         tag = primary_tag(labels)
         if tag:
             persist_entity_confidence(client, vid, tag, value)

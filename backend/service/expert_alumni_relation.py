@@ -12,13 +12,13 @@ import unicodedata
 from typing import Any
 
 from infra.graph_db import GraphNotFoundError, TRSGraphClient, get_trs_graph_client
-from infra.graph_db.config import TRSGraphSettings
 from service.base_module import KGModuleScaffoldService
 from service.confidence_scoring import (
     achievement_entity_confidence,
     confidence_result,
     edge_confidence,
 )
+from service.graph_space_context import get_current_space
 from service.provenance_recorder import record_node_source
 
 STUDIED_AT_EDGE = "STUDIED_AT"
@@ -119,6 +119,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             raise ValueError("expertId 与 targetExpertId 不能相同")
 
         cache_key = (
+            f"{get_current_space()}|"
             f"{expert_id}|{target_expert_id or ''}|{school or ''}|{education_stage or ''}|{limit}"
         )
         cached = _cache_get(_result_cache, cache_key)
@@ -191,7 +192,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
 
         space = (
             getattr(getattr(graph, "_settings", None), "space", None)
-            or TRSGraphSettings.from_env().space
+            or get_current_space()
         )
         expert = {
             "id": expert_id,
@@ -397,7 +398,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
     def _org_name_index(self, graph: TRSGraphClient) -> dict[str, str]:
         space = (
             getattr(getattr(graph, "_settings", None), "space", None)
-            or TRSGraphSettings.from_env().space
+            or get_current_space()
         )
         with _cache_lock:
             cached = _org_name_index_cache.get(space)
@@ -798,7 +799,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                     tuple(str(item) for item in (getattr(node, "labels", None) or [])),
                     space=(
                         getattr(getattr(graph, "_settings", None), "space", None)
-                        or TRSGraphSettings.from_env().space
+                        or get_current_space()
                     ),
                 )
                 label = next(

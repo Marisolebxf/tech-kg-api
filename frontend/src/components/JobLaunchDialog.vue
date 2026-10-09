@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useSpacePermissions } from "../composables/use-space-permissions"
+const { canWrite } = useSpacePermissions()
+
 import { computed, ref, watch } from 'vue'
 import { createJob } from '../api/workflowOperations'
 import { listAllSchemas, type SchemaDefinition } from '../api/schemaManagement'
@@ -207,7 +210,7 @@ function moveChainStep(index: number, delta: -1 | 1) {
 }
 
 async function submit() {
-  if (!canSubmit.value || submitting.value) return
+  if (!canWrite.value || !canSubmit.value || submitting.value) return
   submitting.value = true
   try {
     const job = await createJob({
@@ -378,7 +381,7 @@ async function submit() {
       </div>
       <footer>
         <button type="button" @click="emit('close')">取消</button>
-        <button type="button" class="primary" :disabled="!canSubmit || submitting" @click="submit">{{ submitting ? '创建中…' : '创建任务' }}</button>
+        <button type="button" class="primary" :disabled="!canWrite || !canSubmit || submitting" @click="submit">{{ submitting ? '创建中…' : '创建任务' }}</button>
       </footer>
     </aside>
   </Teleport>

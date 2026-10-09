@@ -28,3 +28,15 @@ class IndirectRelationAnnotation(Base):
     update_time: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
+
+class SpaceIndirectRelationAnnotation(Base):
+    """Space-scoped annotations; legacy unscoped rows remain in the old table."""
+    __tablename__ = "kg_space_indirect_relation_annotation"
+
+    graph_space: Mapped[str] = mapped_column(String(128), primary_key=True)
+    source_vid: Mapped[str] = mapped_column(String(256), primary_key=True)
+    target_vid: Mapped[str] = mapped_column(String(256), primary_key=True)
+    annotation: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())

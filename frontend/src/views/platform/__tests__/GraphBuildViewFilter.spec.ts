@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import GraphBuildView from '../GraphBuildView.vue'
 import type { WorkflowJob } from '../../../api/workflowOperations'
 
+const permission = vi.hoisted(() => ({ writable: true }))
+
 const mocks = vi.hoisted(() => ({
   listJobs: vi.fn(),
   createJob: vi.fn(),
@@ -23,7 +25,7 @@ vi.mock('../../../api/workflowOperations', async (importOriginal) => ({
 vi.mock('../../../api/schemaManagement', () => ({ schemaErrorMessage: vi.fn((e: unknown) => String(e)) }))
 vi.mock('../../../api/jobEvents', () => ({ subscribeJobEvents: vi.fn(() => () => {}) }))
 vi.mock('../../../stores/graphSpace', () => ({
-  useGraphSpaceStore: () => ({ spaces: ['dev2'], current: 'dev2' }),
+  useGraphSpaceStore: () => ({ spaces: ['dev2'], current: 'dev2', canWrite: () => permission.writable, canReview: () => permission.writable }),
 }))
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
 vi.mock('../../../composables/use-toast', () => ({ useToast: () => ({ showToast: vi.fn() }) }))
@@ -86,6 +88,7 @@ function mountView() {
 const rowCount = () => wrapper.findAll('tbody tr').filter((row) => !row.text().includes('暂无任务')).length
 
 beforeEach(async () => {
+  permission.writable = true
   mocks.listJobs.mockResolvedValue({ items: JOBS, total: JOBS.length })
   mountView()
   await flushPromises()
@@ -210,4 +213,24 @@ describe('重新执行入口的状态口径（问题②：运行异常也提供�
     expect(labels).toContain('执行')
     expect(labels).not.toContain('重新执行')
   })
+})
+
+it('公共只读时保留任务查看、查询与刷新，执行和删除置灰', async () => {
+  wrapper.unmount()
+  permission.writable = false
+  localStorage.setItem('tech-kg-graph-build-space-scope', '__all__')
+  mocks.listJobs.mockResolvedValue({ items: [...JOBS, jobFixture('other', { graphSpace: 'private-other' })] })
+  mountView()
+  await flushPromises()
+  expect(wrapper.text()).not.toContain('任务other')
+  expect(wrapper.find('[title*="按图空间筛选"]').exists()).toBe(false)
+  const create = wrapper.findAll('button').find(button => button.text().includes('新建任务'))!
+  expect(create.attributes()).toHaveProperty('disabled')
+  const execute = wrapper.findAll('button').find(button => button.text() === '重新执行')!
+  expect(execute.attributes()).toHaveProperty('disabled')
+  const detail = wrapper.findAll('button').find(button => button.text() === '查看详情')!
+  expect(detail.attributes('disabled')).toBeUndefined()
+  const refresh = wrapper.findAll('button').find(button => button.text().includes('刷新'))!
+  expect(refresh.attributes('disabled')).toBeUndefined()
+  localStorage.removeItem('tech-kg-graph-build-space-scope')
 })

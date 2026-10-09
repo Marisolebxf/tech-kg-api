@@ -31,6 +31,7 @@ _READ_DEPENDENCIES = {
     "/auth/security",
     "/auth/operation-logs",
     "/graph-search/spaces",
+    "/graph-spaces",
     "/kg-construction/options",
     "/kg-construction/expert-direct-relations",
     "/kg-construction/expert-indirect-relations",

@@ -26,7 +26,7 @@ vi.mock('@arco-design/web-vue/es/icon', () => ({
 // 全局图空间 store：reactive 包装（Vue 对同一 target 缓存同一代理），
 // 用例经 graphSpaceMock.state 改 current 才能触发组件的切空间重拉 watch
 const graphSpaceMock = vi.hoisted(() => {
-  const raw = { current: 'dev' }
+  const raw = { current: 'dev', writable: true, canWrite: () => raw.writable, canReview: () => raw.writable }
   return { raw, state: null as { current: string } | null }
 })
 vi.mock('../../../stores/graphSpace', async () => {
@@ -90,6 +90,7 @@ beforeEach(() => {
   routeState.query = {}
   // 图空间复位默认 dev（经 raw 写：组件未挂载，无需触发响应式）
   graphSpaceMock.raw.current = 'dev'
+  graphSpaceMock.raw.writable = true
   mocks.getProductionReviews.mockReset().mockResolvedValue({ items: C_ROWS, total: 4, page: 1, pageSize: 10 })
   mocks.rerunExtractFailures.mockReset().mockResolvedValue({ executions: [], cases: 2 })
   mocks.getProductionReview.mockReset()
@@ -628,4 +629,17 @@ describe('队列跟随图空间切换', () => {
       expect.objectContaining({ graphSpace: 'dev2', page: 1 }),
     )
   })
+})
+
+it('空间只读即使记录旧快照允许操作，也禁用重跑删除且允许看日志', async () => {
+  graphSpaceMock.raw.writable = false
+  const wrapper = renderReview()
+  await flushPromises()
+  await switchToCategoryC(wrapper)
+  const buttons = wrapper.findAll('tbody tr')[0].findAll('.review-action-btn')
+  expect(buttons.map(button => button.text())).toEqual(['日志', '重跑', '删除'])
+  expect(buttons[0].attributes('disabled')).toBeUndefined()
+  expect(buttons[1].attributes()).toHaveProperty('disabled')
+  expect(buttons[2].attributes()).toHaveProperty('disabled')
+  expect(mocks.rerunExtractFailures).not.toHaveBeenCalled()
 })

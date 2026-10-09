@@ -347,15 +347,14 @@ class ManualReviewService:
     def transfer(self, i, v, uid, name, a):
         require_role(a, "reviewer" if a.platform_actor else "review_admin")
         if a.platform_actor:
-            from service.business_access_control import ensure_space_access, resolve_membership
+            from service.business_access_control import ensure_space_access
 
             with self.sf() as session:
                 review_case = self.need(session, i)
                 self.require_case_access(a, review_case)
                 space = review_case.graph_space
-            from service.workflow_jobs import authorize_background_execution
-
-            client_id, _ = resolve_membership(uid)
+            from service.workflow_jobs import _job_business, authorize_background_execution
+            client_id = _job_business(a.platform_actor, {"graphSpace": space})
             target = authorize_background_execution(
                 {"actorUserId": uid, "clientId": client_id, "graphSpace": space}
             )

@@ -28,8 +28,8 @@ from collections.abc import Mapping
 from typing import Any
 
 from infra.graph_api_client import GraphAPIClient, GraphAPIError, graph_api
-from infra.graph_db.config import TRSGraphSettings
 from service.base_module import KGModuleScaffoldService
+from service.graph_space_context import get_current_space
 from service.provenance_recorder import record_node_source
 
 logger = logging.getLogger(__name__)
@@ -111,8 +111,8 @@ _GRAPH_API_CONCURRENCY = 6
 _graph_api_semaphore = asyncio.Semaphore(_GRAPH_API_CONCURRENCY)
 _PANORAMA_CACHE_TTL_SECONDS = 600.0
 # 缓存键：产业关键词 / 锚点 VID / 展开层级 / topK / 关系筛选（逗号拼接的边类型）
-_panorama_cache: dict[tuple[str, str, int, int, str], tuple[float, dict[str, Any]]] = {}
-_panorama_rebuilding: set[tuple[str, str, int, int, str]] = set()
+_panorama_cache: dict[tuple[str, str, str, int, int, str], tuple[float, dict[str, Any]]] = {}
+_panorama_rebuilding: set[tuple[str, str, str, int, int, str]] = set()
 
 
 def _note_graph_query_error(diagnostics: dict[str, int] | None) -> None:
@@ -192,7 +192,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         top_k = max(1, min(int(top_k or 5), MAX_TOP_K))
         depth = max(1, min(int(depth or 2), 3))
         rel_types = self._normalize_relation_types(relation_types)
-        cache_key = (industry_kw or "", anchor or "", depth, top_k, ",".join(rel_types))
+        cache_key = (get_current_space(), industry_kw or "", anchor or "", depth, top_k, ",".join(rel_types))
         if refresh:
             # 页面「刷新图谱」：丢掉缓存直接实时重组，保证拿到最新入图数据。
             _panorama_cache.pop(cache_key, None)
@@ -674,7 +674,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
 
     def _rebuild_in_background(
         self,
-        cache_key: tuple[str, str, int, int, str],
+        cache_key: tuple[str, str, str, int, int, str],
         *,
         industry: str | None,
         anchor_id: str | None,
@@ -1245,7 +1245,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             ``{sourceDatabase, summary, evidences[]}``；降级时如实说明数据来自内置样例。
         """
         fallback = bool(source.get("fallback"))
-        space = TRSGraphSettings.from_env().space or "dev"
+        space = get_current_space() or "dev"
         source_database = f"trs-graph / space={space}"
         if fallback or source.get("reason"):
             reason = str(source.get("reason") or "unknown")
@@ -1343,7 +1343,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
 
     @staticmethod
     def _graph_space() -> str:
-        return TRSGraphSettings.from_env().space or "dev"
+        return get_current_space() or "dev"
 
     def _node_to_graph_node(self, node: dict[str, Any]) -> dict[str, Any]:
         props = node.get("properties") or {}

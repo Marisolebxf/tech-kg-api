@@ -1,4 +1,5 @@
 import { mount } from '@vue/test-utils'
+import { defineComponent } from 'vue'
 import { describe, expect, it } from 'vitest'
 
 import { useToast } from '../composables/use-toast'
@@ -11,6 +12,15 @@ function resetToasts() {
 }
 
 describe('全局提示（kg-toast）：四态划分与提示符', () => {
+  it('已卸载页面的迟到请求不再向当前页面发提示', () => {
+    resetToasts()
+    let send!: ReturnType<typeof useToast>['showToast']
+    const page = mount(defineComponent({ setup() { send = useToast().showToast; return () => null } }))
+    send('当前页面提示')
+    page.unmount()
+    send('旧请求迟到提示', 'error')
+    expect(useToast().toasts.value.map(item => item.message)).toEqual(['当前页面提示'])
+  })
   it('info/success/warning/error 各渲染对应状态类与前置提示符图标', () => {
     resetToasts()
     const { showToast } = useToast()

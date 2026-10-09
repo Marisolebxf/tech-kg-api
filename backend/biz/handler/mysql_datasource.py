@@ -16,6 +16,7 @@ from biz.dependencies.resources import (
     assigned_resource_owner,
     ensure_owner_access,
     resource_owner_filter,
+    validate_owner_update,
 )
 from biz.schemas.common import ApiResponse
 from biz.schemas.mysql_datasource import MysqlDatasourceCreate, MysqlDatasourceUpdate
@@ -122,8 +123,9 @@ def update_mysql_datasource(
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
     _config_cache_clear()
-    _owned_config(_application(session), actor, datasource_id)
+    existing = _owned_config(_application(session), actor, datasource_id)
     data = payload.model_dump(exclude_unset=True)
+    validate_owner_update(actor, data, current_owner=existing.get("owner", ""))
     if not actor.is_admin:
         data.pop("owner", None)
     updated = _application(session).update_config(

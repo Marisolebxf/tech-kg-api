@@ -281,6 +281,8 @@ async def get_execution(execution_id: str, actor: CurrentActor) -> Response:
     if execution is None:
         raise HTTPException(status_code=404, detail="工作流执行记录不存在")
     authorize_workflow_resource(actor, execution)
+    from service.workflow_jobs import workflow_resource_capabilities
+    execution = workflow_resource_capabilities(actor, execution)
     payload = json.dumps(
         {"code": 200, "success": True, "data": execution, "msg": "success"},
         ensure_ascii=False,
@@ -412,7 +414,7 @@ async def list_jobs(
     status: str | None = Query(None, pattern="^(启用|暂停)$"),
     task_type: Annotated[str | None, Query(alias="taskType")] = None,
 ) -> Response:
-    cache_key = f"jobs:{actor.user_id}:{actor.is_admin}:{name}:{status}:{task_type}"
+    cache_key = f"jobs:{actor.user_id}:{actor.is_admin}:{actor.context_graph_space}:{name}:{status}:{task_type}"
     cached = _jobs_cache_get(cache_key)
     if cached is not None:
         return Response(cached, media_type="application/json")
@@ -439,12 +441,18 @@ _SSE_HEARTBEAT_SECONDS = 15.0
 
 
 @router.get("/jobs/events")
-async def stream_job_events(actor: CurrentActor) -> StreamingResponse:
+async def stream_job_events(
+    actor: CurrentActor,
+    graph_space: Annotated[str | None, Query(alias="graphSpace", max_length=64)] = None,
+) -> StreamingResponse:
     """任务/执行变更推送（SSE）：控制面表变化即下发 jobs-changed 事件。
 
     鉴权沿用路由组依赖（cookie 会话同源自动携带，EventSource 无法自定义头）。
     客户端断开由生成器取消触发 finally 退订；无订阅者时后端监视协程停转。
     """
+    selected_space = graph_space or actor.context_graph_space
+    if selected_space:
+        ensure_space_access(actor, selected_space, "read")
     queue = job_event_hub.subscribe()
 
     async def event_stream():
@@ -456,8 +464,12 @@ async def stream_job_events(actor: CurrentActor) -> StreamingResponse:
                 except TimeoutError:
                     yield ": keep-alive\n\n"
                     continue
-                if rbac_enabled() and not actor.is_admin:
-                    event = {}  # Invalidation only; never publish other businesses resource IDs.
+                if rbac_enabled() or selected_space:
+                    # This stream only invalidates the selected space's subsequent list.
+                    # Global watcher IDs are never a data source or an authorization scope.
+                    if selected_space:
+                        ensure_space_access(actor, selected_space, "read")
+                    event = {"graphSpace": selected_space} if selected_space else {}
                 data = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
                 yield f"event: jobs-changed\ndata: {data}\n\n"
         finally:

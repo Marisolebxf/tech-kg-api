@@ -22,11 +22,11 @@ from service.confidence_scoring import (
     expert_entity_confidence,
 )
 from service.entity_confidence import fill_entity_confidence
+from service.graph_space_context import get_current_space
 from service.provenance_recorder import record_node_source
 
 MAX_SHARED_PAPERS = 1000
 GRAPH_PAGE_SIZE = 200
-GRAPH_SPACE = os.getenv("KG_GRAPH_SPACE") or os.getenv("TRS_GRAPH_SPACE") or "dev"
 
 # 60s 进程内结果缓存：同参数请求复用，避免高并发打爆 graph-search/trs-graph。
 _RESULT_CACHE_TTL = float(os.getenv("RESULT_CACHE_TTL", "60"))
@@ -184,7 +184,7 @@ class ExpertPaperCooperationApiService(KGModuleScaffoldService):
         auth_headers: Mapping[str, str] | None = None,
         app: Any = None,
     ) -> dict[str, Any]:
-        cache_key = f"{body.expertAId}|{body.expertBId}|{body.startTime or ''}|{body.endTime or ''}"
+        cache_key = f"{get_current_space()}|{body.expertAId}|{body.expertBId}|{body.startTime or ''}|{body.endTime or ''}"
         with _result_cache_lock:
             entry = _result_cache.get(cache_key)
         if entry and entry[0] > time.monotonic():
@@ -210,19 +210,23 @@ class ExpertPaperCooperationApiService(KGModuleScaffoldService):
 def _person_vid(expert_id: str) -> str:
     # techkg 空间 Scholar 节点 ID 不带 person_ 前缀（如 4P566No1），
     # dev 空间则带 person_ 前缀；根据图空间自动选择。
-    space = os.getenv("KG_GRAPH_SPACE") or os.getenv("TRS_GRAPH_SPACE") or "dev"
+    space = get_current_space()
     if space == "techkg":
         return expert_id.removeprefix("person_")
     return expert_id if expert_id.startswith("person_") else f"person_{expert_id}"
 
 
 # techkg 空间用 AUTHORED/Scholar/Paper；dev 空间用 AUTHORED_BY/Person/Paper。
-_AUTHORED_EDGE = "AUTHORED" if GRAPH_SPACE == "techkg" else "AUTHORED_BY"
-_SCHOLAR_LABEL = "Scholar" if GRAPH_SPACE == "techkg" else "Person"
+def _authored_edge():
+    return "AUTHORED" if get_current_space() == "techkg" else "AUTHORED_BY"
+def _scholar_label():
+    return "Scholar" if get_current_space() == "techkg" else "Person"
 # techkg: Scholar -[AUTHORED]-> Paper
 # dev:    Paper -[AUTHORED_BY]-> Person
-_PERSON_TO_PAPER_DIRECTION = "out" if GRAPH_SPACE == "techkg" else "in"
-_PAPER_TO_PERSON_DIRECTION = "in" if GRAPH_SPACE == "techkg" else "out"
+def _person_to_paper_direction():
+    return "out" if get_current_space() == "techkg" else "in"
+def _paper_to_person_direction():
+    return "in" if get_current_space() == "techkg" else "out"
 
 
 def _display_name(node: dict[str, Any], fallback: str) -> str:
@@ -259,7 +263,7 @@ def _affiliation_text(raw: Any) -> str:
 
 # 论文作者机构兜底缓存：author_id → (过期时间, 机构名或 None)，10 分钟。
 _AUTHOR_ORG_CACHE_TTL = 600.0
-_author_org_cache: dict[str, tuple[float, str | None]] = {}
+_author_org_cache: dict[tuple[str, str], tuple[float, str | None]] = {}
 
 
 def _author_orgs_from_mysql(author_ids: list[str]) -> dict[str, str]:
@@ -272,7 +276,7 @@ def _author_orgs_from_mysql(author_ids: list[str]) -> dict[str, str]:
     result: dict[str, str] = {}
     pending: list[str] = []
     for author_id in author_ids:
-        cached = _author_org_cache.get(author_id)
+        cached = _author_org_cache.get((get_current_space(), author_id))
         if cached and cached[0] > now:
             if cached[1]:
                 result[author_id] = cached[1]
@@ -302,7 +306,7 @@ def _author_orgs_from_mysql(author_ids: list[str]) -> dict[str, str]:
                 if org:
                     found[author_id] = org
     for author_id in pending:
-        _author_org_cache[author_id] = (
+        _author_org_cache[(get_current_space(), author_id)] = (
             now + _AUTHOR_ORG_CACHE_TTL,
             found.get(author_id),
         )
@@ -382,22 +386,22 @@ def _path_request(
         "targetId": _person_vid(body.expertBId),
         "steps": [
             {
-                "edgeType": _AUTHORED_EDGE,
-                "direction": _PERSON_TO_PAPER_DIRECTION,
+                "edgeType": _authored_edge(),
+                "direction": _person_to_paper_direction(),
                 "targetLabel": "Paper",
                 "targetFilters": _year_filters(body),
             },
             {
-                "edgeType": _AUTHORED_EDGE,
-                "direction": _PAPER_TO_PERSON_DIRECTION,
-                "targetLabel": _SCHOLAR_LABEL,
+                "edgeType": _authored_edge(),
+                "direction": _paper_to_person_direction(),
+                "targetLabel": _scholar_label(),
                 "targetFilters": [],
             },
         ],
         "limit": GRAPH_PAGE_SIZE,
         "offset": offset,
         "countTotal": count_total,
-        "space": GRAPH_SPACE,
+        "space": get_current_space(),
     }
 
 
@@ -434,7 +438,7 @@ def _coauthor_request(
             {
                 "edgeType": "COAUTHOR_WITH",
                 "direction": direction,
-                "targetLabel": _SCHOLAR_LABEL,
+                "targetLabel": _scholar_label(),
                 "targetFilters": [],
             }
             for direction in directions
@@ -443,7 +447,7 @@ def _coauthor_request(
         "offset": 0,
         # 单页即止、不读 total：省掉服务端最重的全量 count 聚合
         "countTotal": False,
-        "space": GRAPH_SPACE,
+        "space": get_current_space(),
     }
 
 
@@ -527,11 +531,12 @@ _EMPTY_SUBGRAPH: dict[str, Any] = {"nodes": [], "edges": []}
 
 # 上下文三类边 (字段, 边类型, 原单类型调用的方向)：techkg 的 AUTHORED 为
 # Scholar→Paper（in）；dev 的 AUTHORED_BY 为 Paper→Person（out）。
-_CONTEXT_EDGE_SPECS: list[tuple[str, str, str]] = [
-    ("authored", _AUTHORED_EDGE, _PAPER_TO_PERSON_DIRECTION),
-    ("published", "PUBLISHED_IN", "out"),
-    ("keywords", "HAS_KEYWORD", "out"),
-]
+def _context_edge_specs() -> list[tuple[str, str, str]]:
+    return [
+        ("authored", _authored_edge(), _paper_to_person_direction()),
+        ("published", "PUBLISHED_IN", "out"),
+        ("keywords", "HAS_KEYWORD", "out"),
+    ]
 
 
 def _split_context_subgraph(merged: dict[str, Any], center_id: str) -> dict[str, dict[str, Any]]:
@@ -545,15 +550,15 @@ def _split_context_subgraph(merged: dict[str, Any], center_id: str) -> dict[str,
     """
     nodes = merged.get("nodes") or []
     center = next((n for n in nodes if str(n.get("id") or "") == center_id), None)
-    neighbors: dict[str, set[str]] = {field: set() for field, _t, _d in _CONTEXT_EDGE_SPECS}
+    neighbors: dict[str, set[str]] = {field: set() for field, _t, _d in _context_edge_specs()}
     edges_by_field: dict[str, list[dict[str, Any]]] = {
-        field: [] for field, _t, _d in _CONTEXT_EDGE_SPECS
+        field: [] for field, _t, _d in _context_edge_specs()
     }
     for edge in merged.get("edges") or []:
         src = str(edge.get("source") or "")
         tgt = str(edge.get("target") or "")
         etype = str(edge.get("type") or "")
-        for field, spec_type, direction in _CONTEXT_EDGE_SPECS:
+        for field, spec_type, direction in _context_edge_specs():
             if etype != spec_type:
                 continue
             if direction == "out" and src != center_id:
@@ -563,7 +568,7 @@ def _split_context_subgraph(merged: dict[str, Any], center_id: str) -> dict[str,
             edges_by_field[field].append(edge)
             neighbors[field].add(tgt if src == center_id else src)
     result: dict[str, dict[str, Any]] = {}
-    for field, _t, _d in _CONTEXT_EDGE_SPECS:
+    for field, _t, _d in _context_edge_specs():
         field_nodes = [n for n in nodes if str(n.get("id") or "") in neighbors[field]]
         if center is not None:
             field_nodes = [center, *field_nodes]
@@ -619,7 +624,7 @@ async def _fetch_paper_context(
             try:
                 return await graph_api.get_filtered_subgraph(
                     paper_id,
-                    edge_types=[spec_type for _f, spec_type, _d in _CONTEXT_EDGE_SPECS],
+                    edge_types=[spec_type for _f, spec_type, _d in _context_edge_specs()],
                     direction="both",
                     space=space,
                 )
@@ -634,7 +639,7 @@ async def _fetch_paper_context(
         # 斜杠 VID（DOI 类）走不了 filtered-subgraph 的单段路径参数，保持旧的
         # 逐类型调用（/subgraph 路由带 :path 转换器，可承载斜杠）。
         tasks = [
-            guarded(_AUTHORED_EDGE, _PAPER_TO_PERSON_DIRECTION),
+            guarded(_authored_edge(), _paper_to_person_direction()),
             guarded("PUBLISHED_IN", "out"),
             guarded("HAS_KEYWORD", "out"),
         ]
@@ -788,7 +793,7 @@ def _node_source(node: dict[str, Any]) -> tuple[str, str]:
     recorded = record_node_source(
         node.get("properties") or {},
         node.get("labels") or [],
-        space=GRAPH_SPACE,
+        space=get_current_space(),
     )
     return recorded["sourceTable"], recorded["sourceField"]
 
@@ -823,7 +828,7 @@ def _build_provenance(
             or properties.get("keyword")
             or node_id
         )
-        recorded = record_node_source(properties, node.get("labels") or [], space=GRAPH_SPACE)
+        recorded = record_node_source(properties, node.get("labels") or [], space=get_current_space())
         if recorded["sourceKind"] == "mysql":
             source_note = f"入库批次：{recorded['ingestBatch']}；入库时间：{recorded['ingestTime']}"
         else:
@@ -857,7 +862,7 @@ def _build_provenance(
 
     evidence_scope = "专家、论文及逐篇上下文实体" if contexts else "专家实体"
     return {
-        "sourceDatabase": f"trs-graph / space={GRAPH_SPACE}",
+        "sourceDatabase": f"trs-graph / space={get_current_space()}",
         "summary": f"两位专家命中 {paper_count} 篇合作论文；证据来自{evidence_scope}。",
         "evidences": evidences,
     }
@@ -1135,8 +1140,8 @@ async def _build_structured_result(
     # get_node×2 与 _fetch_shared_paths 互不依赖（paths 只用 body），并行拉取。
     # return_exceptions + 节点不存在(ValueError→404)优先抛，保留原串行的错误码语义。
     expert_a_r, expert_b_r, paths_r = await asyncio.gather(
-        graph_api.get_node(expert_a_vid, space=GRAPH_SPACE),
-        graph_api.get_node(expert_b_vid, space=GRAPH_SPACE),
+        graph_api.get_node(expert_a_vid, space=get_current_space()),
+        graph_api.get_node(expert_b_vid, space=get_current_space()),
         _fetch_shared_paths(graph_api, body),
         return_exceptions=True,
     )
@@ -1171,7 +1176,7 @@ async def _build_structured_result(
             _fetch_paper_context(
                 graph_api,
                 paper,
-                space=GRAPH_SPACE,
+                space=get_current_space(),
                 semaphore=semaphore,
             )
             for paper in papers
@@ -1241,7 +1246,7 @@ async def _build_structured_result(
                 expert_a_vid,
                 edge_type="PAPER_COOPERATED_WITH",
                 direction="both",
-                space=GRAPH_SPACE,
+                space=get_current_space(),
             )
             for edge in coop_sub.get("edges") or []:
                 src, tgt = str(edge.get("source") or ""), str(edge.get("target") or "")

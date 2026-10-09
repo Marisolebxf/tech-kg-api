@@ -26,9 +26,7 @@ class ExpertEnterpriseRelationService(KGModuleScaffoldService):
         self._graph: TRSGraphClient | None = None
 
     def _client(self) -> TRSGraphClient:
-        if self._graph is None:
-            self._graph = get_trs_graph_client()
-        return self._graph
+        return self._graph if self._graph is not None else get_trs_graph_client()
 
     @staticmethod
     def _parse_rank(eid: Any) -> int:

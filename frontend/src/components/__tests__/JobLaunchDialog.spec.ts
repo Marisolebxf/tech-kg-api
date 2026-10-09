@@ -1,6 +1,8 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 
+vi.mock('../../composables/use-space-permissions', () => ({ useSpacePermissions: () => ({ canWrite: { value: true } }) }))
+
 import JobLaunchDialog from '../JobLaunchDialog.vue'
 
 // 批大小字符串绑定回归（复测捉虫：填了批大小提交报 c.value.trim is not a function）：

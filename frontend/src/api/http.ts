@@ -1,4 +1,6 @@
-import axios from 'axios'
+import axios, { CanceledError } from 'axios'
+import { getActivePinia } from 'pinia'
+import { useGraphSpaceStore } from '../stores/graphSpace'
 
 import { apiBase } from '../config'
 import { currentSessionVersion } from '../auth/sessionVersion'
@@ -7,6 +9,12 @@ import { PortalAction, portalBridge } from '../portal/iframeBridge'
 type SessionExpiredHandler = (message: string) => void | Promise<unknown>
 let sessionExpiredHandler: SessionExpiredHandler | undefined
 const requestVersions = new WeakMap<object, number>()
+const requestSpaces = new WeakMap<object, string>()
+const CONTEXT_FREE_REQUEST = /\/v1\/(?:auth(?:\/|$)|graph-spaces(?:\/|$)|graph-search\/spaces|business-access(?:\/|$))/
+
+function activeContext() {
+  return getActivePinia() ? useGraphSpaceStore() : undefined
+}
 const AUTH_CONTROL_REQUEST = /\/v1\/auth\/(?:me|login-url|callback|logout)(?:[/?#]|$)/
 
 export function setSessionExpiredHandler(handler: SessionExpiredHandler): void {
@@ -52,16 +60,36 @@ export const http = axios.create({
 
 http.interceptors.request.use((config) => {
   requestVersions.set(config, currentSessionVersion())
+  const spaces = activeContext()
+  if (spaces && !CONTEXT_FREE_REQUEST.test(config.url || '')) {
+    if (!spaces.current && (spaces.initialized || spaces.loadError)) {
+      throw new CanceledError('当前没有可用图空间，请先选择图空间')
+    }
+    requestSpaces.set(config, spaces.contextKey)
+    if (spaces.current) config.headers.set('X-Graph-Space', spaces.current)
+    if (spaces.businessId) config.headers.set('X-Business-Id', spaces.businessId)
+  }
   return config
 })
 
 http.interceptors.response.use(
-  (response) => response.data,
+  (response) => {
+    const sentContext = requestSpaces.get(response.config)
+    if (sentContext !== undefined && sentContext !== activeContext()?.contextKey) {
+      throw new CanceledError('图空间已切换，已忽略旧请求')
+    }
+    return response.data
+  },
   (error: unknown) => {
+    if (axios.isCancel(error)) return Promise.reject(error)
     if (typeof error === 'object' && error !== null && 'response' in error) {
       const { response, config } = error as {
         response?: { status?: number; data?: unknown }
         config?: { url?: string }
+      }
+      const sentContext = config && requestSpaces.get(config)
+      if (sentContext !== undefined && sentContext !== activeContext()?.contextKey) {
+        return Promise.reject(new CanceledError('图空间已切换，已忽略旧请求'))
       }
       const detail = responseDetail(response?.data)
       if (

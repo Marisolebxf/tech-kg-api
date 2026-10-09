@@ -1,0 +1,8 @@
+{
+  "memberships": [],
+  "spaces": [
+    {"name": "dev", "visibility": "public", "clientId": null},
+    {"name": "dev2", "visibility": "public", "clientId": null},
+    {"name": "gaoxing_test", "visibility": "business", "clientId": "billion-scale-kg-engine"}
+  ]
+}

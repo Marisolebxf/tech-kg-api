@@ -54,6 +54,9 @@ export interface PermissionSetSummary {
 export interface AuthProfile {
   businessRbacEnabled?: boolean
   businessId?: string
+  businessIds?: string[]
+  developerBusinessIds?: string[]
+  businesses?: Array<{ clientId: string; name: string; role: string }>
   platformRole?: 'user' | 'developer' | 'admin'
   canDevelop?: boolean
   businessOnly?: boolean

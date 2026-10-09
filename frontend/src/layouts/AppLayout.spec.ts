@@ -203,9 +203,9 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
     expect(wrapper.find('.app-user-menu').exists()).toBe(false)
   })
 
-  it('文档入口在其他管理页面仍可访问，普通用户保持原有可见范围', async () => {
+  it('文档入口只在总览显示，其他管理页面和普通用户隐藏', async () => {
     const admin = await renderLayout(true, '/manual-review')
-    expect(admin.wrapper.find('.app-breadcrumb .app-docs-link').exists()).toBe(true)
+    expect(admin.wrapper.find('.app-breadcrumb .app-docs-link').exists()).toBe(false)
     const viewer = await renderLayout(false, '/overview')
     expect(viewer.wrapper.find('.app-docs-link').exists()).toBe(false)
     expect(viewer.wrapper.find('.app-space-select').exists()).toBe(true)

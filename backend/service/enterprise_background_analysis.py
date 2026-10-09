@@ -13,6 +13,7 @@ from dao.patent import PatentDAO
 from infra.gkx import get_gkx_session
 from infra.llm import get_llm_client
 from service.base_module import KGModuleScaffoldService
+from service.graph_space_context import has_graph_entity
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,8 @@ class EnterpriseBackgroundAnalysisService(KGModuleScaffoldService):
 
     def analyze(self, payload: dict[str, Any], session: Session | None = None) -> dict[str, Any]:
         enterprise_id = payload.get("enterpriseId", "")
+        if not has_graph_entity(enterprise_id, ("Organization",), ("org_", "organization_")):
+            raise KeyError(f"当前图空间不存在企业: {enterprise_id}")
         dimensions = payload.get("analysisDimensions", []) or []
         patent_cpc = payload.get("patentCPC", []) or []
 
@@ -122,7 +125,8 @@ class EnterpriseBackgroundAnalysisService(KGModuleScaffoldService):
     ) -> dict[str, Any]:
         prod = org_dao.get_products(org_id)
         try:
-            patents = pat_dao.list_by_assignee(name_cn, cpc_prefixes)
+            patents = [p for p in pat_dao.list_by_assignee(name_cn, cpc_prefixes)
+                       if has_graph_entity(str(p.patent_id), ("Patent",), ("patent_",))]
         except Exception as exc:  # noqa: BLE001  gkx 无 dwd_patent 表等
             logger.warning("patent list failed: %s", exc)
             patents = []
@@ -174,7 +178,12 @@ class EnterpriseBackgroundAnalysisService(KGModuleScaffoldService):
 
     def _patent_distribution(self, pat_dao: PatentDAO, name_cn: str) -> list[dict[str, object]]:
         try:
-            return pat_dao.count_by_cpc_section(name_cn)
+            from collections import Counter
+            counts = Counter()
+            for patent in pat_dao.list_by_assignee(name_cn):
+                if has_graph_entity(str(patent.patent_id), ("Patent",), ("patent_",)):
+                    counts.update({code[:1].upper() for code in pat_dao._cpc_codes(patent) if code})
+            return [{"cpcSection": key, "count": value} for key, value in sorted(counts.items())]
         except Exception as exc:  # noqa: BLE001
             logger.warning("patent distribution failed: %s", exc)
             return []

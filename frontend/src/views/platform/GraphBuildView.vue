@@ -78,7 +78,9 @@ function readStoredSpaceScope(): string {
 
 const spaceScope = ref(readStoredSpaceScope())
 const spaceScopeSelect = computed({
-  get: () => spaceScope.value || graphSpaceStore.current || graphSpaceStore.spaces[0],
+  // 清空态显示占位「图空间」而非回填全局当前空间——回填会让 × 看起来「没清空、
+  // 跳去别的空间」（筛选仍按 spaceScope||current 跟随全局，语义见 tooltip）
+  get: () => spaceScope.value || undefined,
   set: (value: string | undefined) => {
     spaceScope.value = value ?? ''
   },

@@ -43,7 +43,7 @@ WHERE org_id IN ('6316ee16a50a0a093a5859d8b5cc67a8','98e68fdf64b81709249dc23816a
 -- row_id 已物化(原表 org_id+executives_name 复合才唯一),主键列真实唯一
 -- 真实数据现象:4 人在同一机构身兼两职(黄小龙 经理/董事、隆晓菁 总经理/董事长、林伟 经理/董事长、
 -- 尹忠民 总经理/执行董事)——按 (org_id, executives_name) GROUP BY 合并为一人一行,职位 GROUP_CONCAT
--- 保留双职;方案 A 的 querySql 模式下这 4 人是两行覆盖写、position 只留最后一行的值(信息丢失)
+-- 保留双职;若不合并直接搬原表,这 4 人是两行进链路、同 vid 覆盖写,position 只留最后一行的值(信息丢失)
 CREATE TABLE t_executive (
   row_id varchar(600) NOT NULL,
   org_id varchar(255) NOT NULL,
@@ -63,7 +63,7 @@ WHERE org_id IN ('6316ee16a50a0a093a5859d8b5cc67a8','6c25d2e2c852ba5a81d733cefaf
 GROUP BY org_id, executives_name;
 
 -- 专家(25 行)→ 绑定给 Expert
--- 含樊杰同名组(消歧灰区素材)与 2 条空名行(抽取失败素材),与手册方案 A 同一白名单
+-- 含樊杰同名组(消歧灰区素材)与 2 条空名行(抽取失败素材)
 CREATE TABLE t_expert (
   author_id varchar(32) NOT NULL,
   zh_name varchar(255) DEFAULT NULL,
@@ -109,7 +109,7 @@ WHERE id IN ('1002153099575427075','1002153099575427078','1002153099575427082','
 
 -- 期刊(4 行,已按 publication_id 预去重)→ 绑定给 Journal
 -- 源表 dwd_zh_journal 按论文一行(4 刊合计 2000 行),这里 GROUP BY 物化去重,
--- 免去抽取时翻 2000 行(方案 A 的量控瑕疵在此根治);脚本内按 publication_id 去重逻辑变为空转,兼容
+-- 免去抽取时翻 2000 行(原库直绑的量控瑕疵在此根治);脚本内按 publication_id 去重逻辑变为空转,兼容
 CREATE TABLE t_journal (
   row_id varchar(64) NOT NULL,
   publication_id bigint NOT NULL,

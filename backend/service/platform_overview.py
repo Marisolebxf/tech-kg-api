@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from biz.schemas.platform_overview import (
     AssetChangeRow,
@@ -166,6 +167,25 @@ def _written_of(output: dict[str, Any]) -> int:
     return sum(max(0, int(source.get("written") or 0)) for source in output.get("sources") or [])
 
 
+# 「昨日新增」日窗口时区：按北京自然日 00:00 翻日（2026-10-10 用户口径），
+# 不再随 api 容器 UTC 时钟到北京 08:00 才翻日。completedAt 记 api 进程本地钟
+# （dev2 容器为 UTC），归属统计日前先按系统时区解读、折算到本时区再比日期；
+# 图反查窗口（window_lo/completed_at 上界比较图侧时间戳）仍用原字符串，不吃 8h 位移。
+_DAY_TZ = ZoneInfo(os.getenv("PLATFORM_OVERVIEW_DAY_TIMEZONE", "Asia/Shanghai"))
+
+
+def _completed_in_day_tz(completed_at: str) -> datetime | None:
+    """完成时刻字符串（api 进程本地钟）→ 日窗口时区时刻；空/坏格式返回 None。"""
+    try:
+        return (
+            datetime.strptime(completed_at[:19], "%Y-%m-%d %H:%M:%S")
+            .astimezone()
+            .astimezone(_DAY_TZ)
+        )
+    except ValueError:
+        return None
+
+
 def parse_execution_records(
     payloads: list[str],
     *,
@@ -204,7 +224,8 @@ def parse_execution_records(
             # ABNORMAL = 抽取完成但含行级失败记录：图已写入，昨日新增必须计入
             continue
         completed_at = str(record.get("completedAt") or "")
-        if completed_at[:10] != day:
+        completed_local = _completed_in_day_tz(completed_at)
+        if completed_local is None or completed_local.strftime("%Y-%m-%d") != day:
             continue
         output = record.get("output") or {}
         kind = str(output.get("kind") or "")
@@ -221,7 +242,8 @@ def parse_execution_records(
         )
         display_label = schema_label or ("实体 Schema" if kind == "entity" else "关系 Schema")
         change = f"新增 {schema_key}"
-        completed_time = completed_at[5:19] or "-"
+        # 明细时间列与日窗口同时区：北京时刻展示（完成串是进程本地钟，折算后展示）
+        completed_time = completed_local.strftime("%m-%d %H:%M:%S")
         target_rows = entity_rows if kind == "entity" else relation_rows
         # 一次执行绑定多个来源表时按表拆行（来源列各自取本表名），只出 written>0 的表
         exec_rows: list[AssetChangeRow] = []
@@ -294,8 +316,8 @@ class WorkflowControlDayChangesProvider:
         self._cached: dict[str | None, DayChangesSnapshot] = {}
 
     def _current_day(self) -> str:
-        """统计日 = 容器本地日期的昨天（独立方法便于单测冻结日期）。"""
-        return (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        """统计日 = 日窗口时区（默认北京）自然日的昨天；北京 00:00 翻日。"""
+        return (datetime.now(_DAY_TZ) - timedelta(days=1)).strftime("%Y-%m-%d")
 
     def get_day_changes(self, space: str | None = None) -> DayChangesSnapshot:
         day = self._current_day()
@@ -405,8 +427,20 @@ def _vertex_display_name(props: dict[str, Any], vid: str) -> str:
 
 
 def _time_short(value: Any, fallback: str) -> str:
-    """识别时间带月日（MM-DD HH:MM:SS）：昨日窗口跨天后只剩时分秒有歧义。"""
-    return str(value or "")[5:19] or fallback
+    """识别时间带月日（MM-DD HH:MM:SS）：昨日窗口跨天后只剩时分秒有歧义。
+    图侧时间戳按 api 进程钟（UTC）写入，展示前折算到日窗口时区（北京），
+    与明细完成时刻同口径；解析失败退原串切片。"""
+    raw = str(value or "")
+    local = _completed_in_day_tz(raw)
+    if local is not None:
+        return local.strftime("%m-%d %H:%M:%S")
+    return raw[5:19] or fallback
+
+
+def _utc_slice_local(utc_str: str) -> str:
+    """UTC 完成串 → 日窗口时区的展示串；解析失败退原切片。"""
+    local = _completed_in_day_tz(utc_str)
+    return local.strftime("%m-%d %H:%M:%S") if local else utc_str[5:19]
 
 
 def _flatten_vertex_props(vertex: Any) -> dict[str, Any]:
@@ -509,7 +543,7 @@ def _entity_object_rows(
                 object=_vertex_display_name(props, vid),
                 change=f"新增 {type_label}",
                 source=str(props.get("source_table") or fallback_source),
-                time=_time_short(props.get(time_prop), execution.completed_at[5:19]),
+                time=_time_short(props.get(time_prop), _utc_slice_local(execution.completed_at)),
             )
         )
         vids.append(vid)
@@ -628,7 +662,7 @@ def _relation_object_rows(
     # 查不到目录名时退原边类型名
     type_label = schema_labels.get(edge_type) or edge_type
     fallback_source = execution.fallback_rows[0].source if execution.fallback_rows else "-"
-    fallback_time = execution.completed_at[5:19]
+    fallback_time = _utc_slice_local(execution.completed_at)
     rows: list[AssetChangeRow] = []
     for src, dst, edge_props in edges[:_OBJECT_ROW_CAP]:
         rows.append(

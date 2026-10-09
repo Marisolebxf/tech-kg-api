@@ -21,6 +21,7 @@ from typing import Any
 import redis as redis_lib
 
 from service.platform_access import PlatformActor
+from utils.time_display import utc_to_cst_str
 
 logger = logging.getLogger(__name__)
 
@@ -121,9 +122,9 @@ def _job_to_data(job: Any) -> dict:
     return {
         "jobId": job.job_id,
         "status": "cancelled" if job.driver_state == "KILLED" else job.status,
-        "createdAt": job.created_at,
-        "startedAt": job.started_at,
-        "finishedAt": job.finished_at,
+        "createdAt": utc_to_cst_str(job.created_at),
+        "startedAt": utc_to_cst_str(job.started_at),
+        "finishedAt": utc_to_cst_str(job.finished_at),
         "submissionId": job.submission_id,
         "driverState": job.driver_state,
         "error": job.error,
@@ -340,9 +341,9 @@ def _local_job_to_data(job: dict[str, Any]) -> dict:
     return {
         "jobId": job["job_id"],
         "status": job["status"],
-        "createdAt": job["created_at"],
-        "startedAt": job["created_at"],
-        "finishedAt": job["finished_at"],
+        "createdAt": utc_to_cst_str(job["created_at"]),
+        "startedAt": utc_to_cst_str(job["created_at"]),
+        "finishedAt": utc_to_cst_str(job["finished_at"]),
         "submissionId": None,
         "driverState": None,
         "error": job["error"],

@@ -21,6 +21,7 @@ from db_model.platform_governance import (
 )
 from infra.graph_db import TRSGraphClient, get_trs_graph_client
 from service.platform_access import PlatformActor
+from utils.time_display import utc_to_cst_str
 
 PENDING_REVIEW = "PENDING_REVIEW"
 PENDING_SYNC = "PENDING_SYNC"
@@ -39,7 +40,7 @@ def _now() -> datetime:
 
 
 def _iso(value: datetime | None) -> str | None:
-    return value.isoformat() if value else None
+    return utc_to_cst_str(value) if value else None
 
 
 class CorrectionService:

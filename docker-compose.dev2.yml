@@ -36,6 +36,7 @@ services:
       # === 与 docker-compose.yml api.environment 基本一致；差异：TRS_GRAPH_SPACE 锁死 dev2，
       # 且 MySQL/trs-graph 默认走 host.docker.internal（dev2 不在生产 engine/trs-graph 网络上，
       # 容器名 mysql/trs-graph-service 在本栈解析不到；宿主机已发布 3306/8090 端口）===
+      TZ: UTC
       TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://host.docker.internal:8090}
       GRAPH_ALGO_SPARK_REST_URL: ${GRAPH_ALGO_SPARK_REST_URL:-}
       TRSGRAPH_ALGORITHM_RUNNER_URL: ${TRSGRAPH_ALGORITHM_RUNNER_URL:-}
@@ -168,6 +169,9 @@ services:
     env_file:
       - ./backend/.env
     environment:
+      # 时间显示约定（utils/time_display.py）：存储/内部逻辑固定 UTC，API 出口转北京。
+      # 显式钉死 TZ，防止未来改容器时区让 astimezone()/datetime.now() 写出北京时间造成二次偏移
+      TZ: UTC
       PLATFORM_INITIAL_ADMIN_USER_IDS: ${PLATFORM_INITIAL_ADMIN_USER_IDS:-}
       PLATFORM_BUSINESS_ONLY_USER_IDS: ${PLATFORM_BUSINESS_ONLY_USER_IDS:-}
       TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://host.docker.internal:8090}

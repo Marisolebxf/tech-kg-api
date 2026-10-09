@@ -106,6 +106,14 @@ def test_extract_result_log_lines_failure_summary_variants():
     assert _extract_result_log_lines(execution)[-1] == "失败汇总：2 条（详见人工审核失败队列）"
     execution["output"]["failures"] = {"count": 2, "recorded": 2, "truncated": False}
     assert _extract_result_log_lines(execution)[-1] == "失败汇总：2 条（已落审核 case 2 条）"
+    # 普通执行（非重跑）recorded=0：失败行缺记录主键、未建任何 case，如实说明
+    plain = _rerun_execution()
+    plain["payload"] = {"schemaId": "x", "triggerSource": "MANUAL"}
+    plain["output"]["failures"] = {"count": 88, "recorded": 0, "truncated": False}
+    assert (
+        _extract_result_log_lines(plain)[-1]
+        == "失败汇总：88 条（未转人工审核：失败行缺少记录主键）"
+    )
     # count=0 不产出失败汇总行
     assert not any("失败汇总" in line for line in _extract_result_log_lines(_rerun_execution()))
 

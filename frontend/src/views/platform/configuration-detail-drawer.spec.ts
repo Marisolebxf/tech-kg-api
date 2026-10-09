@@ -161,7 +161,7 @@ describe('配置管理 · 管理抽屉编辑隔离', () => {
     wrapper.unmount()
   })
 
-  it('引用情况使用清晰的默认状态按钮并保留取消默认操作', async () => {
+  it('引用情况使用清晰的默认状态按钮；默认必须恒有一条，当前默认不可取消', async () => {
     setActivePinia(createPinia())
     const { updateLlmConfig } = await import('../../api/llmConfig')
     const previous = { ...state.current }
@@ -170,10 +170,40 @@ describe('配置管理 · 管理抽屉编辑隔离', () => {
     const control = wrapper.get('.config-usage-col .config-default-toggle')
     expect(control.text()).toBe('默认')
     expect(control.attributes('aria-pressed')).toBe('true')
+    // 全都不是默认就没有可用大模型：当前默认的开关禁用，点击无副作用
+    expect(control.attributes('disabled')).toBeDefined()
     await control.trigger('click')
     await flushPromises()
-    expect(updateLlmConfig).toHaveBeenCalledWith('LLM-E2E', { isDefault: false }, 'user-e2e')
-    expect(wrapper.get('.config-usage-col .config-default-toggle').text()).toBe('设为默认')
+    expect(updateLlmConfig).not.toHaveBeenCalled()
+    expect(wrapper.get('.config-usage-col .config-default-toggle').text()).toBe('默认')
+    wrapper.unmount()
+    state.current = previous
+  })
+
+  it('非默认项「设为默认」走 set-default 转移接口，原默认自动取消', async () => {
+    setActivePinia(createPinia())
+    const { listLlmConfigs, setDefaultLlmConfig, updateLlmConfig } = await import('../../api/llmConfig')
+    const previous = { ...state.current }
+    const other = { ...previous, id: 'LLM-2', name: '备用模型', isDefault: false }
+    vi.mocked(listLlmConfigs).mockResolvedValueOnce([previous, other])
+    // set-default 返回服务端视角：新默认开启，原默认已被 clear_other_defaults 关闭
+    vi.mocked(setDefaultLlmConfig).mockImplementationOnce(async (id: string) => {
+      state.current = { ...state.current, isDefault: false }
+      return { ...other, isDefault: id === 'LLM-2' }
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    const candidate = wrapper.findAll('.config-usage-col .config-default-toggle')
+      .find((t) => t.text() === '设为默认')
+    expect(candidate?.attributes('disabled')).toBeUndefined()
+    await candidate?.trigger('click')
+    await flushPromises()
+    expect(setDefaultLlmConfig).toHaveBeenCalledWith('LLM-2', 'user-e2e')
+    expect(updateLlmConfig).not.toHaveBeenCalled()
+    // 列表就地更新：新默认置顶显示「默认」，原默认变「设为默认」
+    const toggles = wrapper.findAll('.config-usage-col .config-default-toggle').map((t) => t.text())
+    expect(toggles[0]).toBe('默认')
+    expect(toggles).toContain('设为默认')
     wrapper.unmount()
     state.current = previous
   })

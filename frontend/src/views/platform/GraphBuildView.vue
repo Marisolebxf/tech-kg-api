@@ -228,6 +228,15 @@ function jobScriptLabel(job: WorkflowJob): string {
   return job.definitionName || job.definitionId
 }
 
+/** 脚本列「脚本名 +N」悬停展开：chain 逐行列出全部脚本（按执行顺序）；
+ *  单脚本与展示文本一致，不设 title。 */
+function jobScriptTitle(job: WorkflowJob): string | undefined {
+  if (job.taskType !== 'chain') return undefined
+  const labels = job.schemaLabels?.length ? job.schemaLabels : job.definitionIds
+  if (labels.length < 2) return undefined
+  return [`共 ${labels.length} 个脚本（按执行顺序）：`, ...labels.map((label, i) => `${i + 1}. ${label}`)].join('\n')
+}
+
 async function onTrigger(job: WorkflowJob) {
   // 未运行首启 + 运行失败/运行异常重跑（异常=行级失败已转审核，重跑按水位增量续抽）；
   // 已完成按产品决策不提供重复执行
@@ -481,7 +490,7 @@ onMounted(() => {
             <tr v-for="job in pagedJobs" :key="job.id">
               <td><b>{{ job.name }}</b></td>
               <td>{{ TASK_TYPE_LABELS[job.taskType] || job.taskType }}</td>
-              <td><code>{{ jobScriptLabel(job) }}</code></td>
+              <td><code :title="jobScriptTitle(job)">{{ jobScriptLabel(job) }}</code></td>
               <td>{{ job.graphSpace || '默认' }}</td>
               <td>
                 <span

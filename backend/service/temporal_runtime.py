@@ -56,8 +56,10 @@ def _apply_output_failure_status(refreshed: dict[str, Any], output: Any) -> dict
 
     文案如实：缺记录 id 的失败行建不了 case（2026-10-09 用例：脚本找错列名，
     88 条失败全无 recordId，队列空但文案谎报已转审）——``noRecordId``>0 时
-    拆开说明已转审/未入队；重跑执行 recorded 恒 0（仍失败记录由 resolve 重建
-    case），无 noRecordId 不受影响。
+    拆开说明已转审/未入队；重跑模式（output.rerun）recorded 恒 0（仍失败记录
+    由 resolve 重建新案），维持「已转人工审核」；普通模式 recorded=0 且无
+    noRecordId 明细时，队列里实际没有任何 case，如实标「未转人工审核」而非
+    误导用户翻空列表。
     """
     failures = output.get("failures") if isinstance(output, dict) else None
     if not isinstance(failures, dict):
@@ -70,17 +72,21 @@ def _apply_output_failure_status(refreshed: dict[str, Any], output: Any) -> dict
         return refreshed
     if count <= 0:
         return refreshed
-    if no_record_id > 0:
-        message = (
-            f"抽取完成，含 {count} 条失败记录（{recorded} 条已转人工审核，"
-            f"{no_record_id} 条缺记录 id 无法转审，请检查脚本 failures 是否携带记录主键）"
+    if output.get("rerun"):
+        detail = "已转人工审核"
+    elif no_record_id > 0:
+        detail = (
+            f"{recorded} 条已转人工审核，{no_record_id} 条缺记录 id 无法转审，"
+            "请检查脚本 failures 是否携带记录主键"
         )
+    elif recorded:
+        detail = "已转人工审核"
     else:
-        message = f"抽取完成，含 {count} 条失败记录（已转人工审核）"
+        detail = "未转人工审核：失败行缺少记录主键"
     return {
         **refreshed,
         "status": "ABNORMAL",
-        "message": message,
+        "message": f"抽取完成，含 {count} 条失败记录（{detail}）",
     }
 
 

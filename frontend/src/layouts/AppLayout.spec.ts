@@ -70,7 +70,7 @@ async function renderLayout(isAdmin: boolean, path = '/expert-direct', collapsed
   const wrapper = mount(AppLayout, { global: { plugins: [pinia, router] } })
   wrappers.push(wrapper)
   await flushPromises()
-  return { wrapper, auth }
+  return { wrapper, auth, router }
 }
 
 describe('既有侧边栏按有效管理员身份显隐', () => {
@@ -203,9 +203,21 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
     expect(wrapper.find('.app-user-menu').exists()).toBe(false)
   })
 
-  it('文档入口在其他管理页面仍可访问，普通用户保持原有可见范围', async () => {
-    const admin = await renderLayout(true, '/manual-review')
-    expect(admin.wrapper.find('.app-breadcrumb .app-docs-link').exists()).toBe(true)
+  it('文档入口仅保留在总览，其他页面隐藏，返回总览时恢复', async () => {
+    const { wrapper, router } = await renderLayout(true, '/overview')
+    expect(wrapper.find('.app-docs-link').exists()).toBe(true)
+    for (const path of [...managementPaths, ...queryPaths, ...sharedPaths, '/user-center', '/account-security', '/operation-logs', '/graph-build/jobs/preview', '/manual-review/task/preview']) {
+      await router.push(path)
+      await flushPromises()
+      expect(wrapper.find('.app-docs-link').exists(), path).toBe(false)
+      expect(wrapper.find('.app-breadcrumb__actions').exists(), path).toBe(false)
+    }
+    await router.push('/overview')
+    await flushPromises()
+    expect(wrapper.find('.app-breadcrumb .app-docs-link').exists()).toBe(true)
+  })
+
+  it('总览页保持普通用户原有可见范围', async () => {
     const viewer = await renderLayout(false, '/overview')
     expect(viewer.wrapper.find('.app-docs-link').exists()).toBe(false)
     expect(viewer.wrapper.find('.app-space-select').exists()).toBe(true)

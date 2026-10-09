@@ -30,7 +30,6 @@ vi.mock('../../../api/schemaManagement', () => ({
   listSchemasPaged: vi.fn(),
   replaceSchemaSources: vi.fn(),
   schemaErrorMessage: vi.fn((error: unknown) => String(error)),
-  triggerSchemaExtraction: vi.fn(),
   verifyAndSaveScript: vi.fn(),
 }))
 vi.mock('../../../api/currentUser', () => ({ currentUserId: vi.fn(() => 'user-1') }))

@@ -451,24 +451,6 @@ export async function backfillSchemaHistory(
   )
 }
 
-export async function triggerSchemaExtraction(
-  schemaId: string,
-  userId: string,
-  options?: { graphSpace?: string; batchSize?: number },
-): Promise<SchemaExtractTriggerResult> {
-  return unwrap(
-    await asApiPromise<SchemaExtractTriggerResult>(
-      http.post(
-        `${PREFIX}/schemas/${schemaId}/extract`,
-        options?.graphSpace || options?.batchSize
-          ? { graphSpace: options.graphSpace, batchSize: options.batchSize }
-          : {},
-        { headers: headers(userId) },
-      ),
-    ),
-  )
-}
-
 export async function deleteSchema(
   schemaId: string,
   userId: string,

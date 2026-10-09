@@ -265,7 +265,7 @@ test.describe.serial('M. 图空间横切', () => {
       "UPDATE techkg_e2e.widgets SET name='挂件一号', update_time=NOW() WHERE id='w1'; " +
         "UPDATE techkg_e2e.widgets SET name='挂件二号', update_time=NOW() WHERE id='w2';",
     )
-    // 触发抽取（graphSpace=e2e_verify_space，走 API 与 UI 同端点）
+    // 触发抽取（graphSpace=e2e_verify_space；Schema 页触发按钮已下线，e2e 直接走 API）
     const schemas = await apiMust<any>(request, 'GET', '/schema-management/schemas?graphSpace=dev2&pageSize=100', undefined, '列 schema')
     const widget = (schemas.items ?? []).find((s: any) => s.name === 'E2EWidget')
     test.skip(!widget, '无 E2EWidget schema')

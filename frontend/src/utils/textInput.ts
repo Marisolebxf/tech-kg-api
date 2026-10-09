@@ -73,8 +73,14 @@ export const SCHEMA_RELATION_NAME_RULE: TextRule = {
 /** Schema 中文名：label max_length=128 */
 export const SCHEMA_LABEL_RULE: TextRule = { max: 128 }
 
-/** Schema 说明：description max_length=4000 */
-export const SCHEMA_DESC_RULE: TextRule = { max: 4000 }
+/** Schema 说明：description max_length=4000；字符集与后端 PROSE_TEXT_PATTERN 对齐——
+ *  在关键词字符集之上放行书名号/引号/感叹号/省略号/破折号等常规中文标点
+ *  （2026-10-09 测试反馈：规范说明文本被后端判「异常字符」，前端同步口径输入即提示） */
+export const SCHEMA_DESC_RULE: TextRule = {
+  max: 4000,
+  pattern: /^[\w一-鿿·.\-()（）【】《》〈〉“”‘’！？…—～、，,。；;：:/\s]+$/,
+  patternHint: '说明不能包含 !@#￥%& 等异常字符',
+}
 
 /** 属性名：nGQL 属性列标识符，SchemaPropertyInput.name max_length=128 */
 export const PROP_NAME_RULE: TextRule = {

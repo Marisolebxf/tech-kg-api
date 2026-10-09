@@ -1,7 +1,8 @@
 # ewrdf 图空间真实数据全链路验证手册(物料级)
 
-> 2026-10-09 v2。目标:在公网门户 `https://edu.itic-sci.com/bkg_zpt` 的部署栈上,用独立 `ewrdf` 图空间跑通**真实数据**全链路,使 **schema 管理、图谱构建、人工审核、平台总览、图谱查询**五个页面全部出现可核验的真实数据。
-> 本手册自带全部物料:10 个 schema 定义、10 个可直接粘贴的抽取脚本、全部源绑定 SQL(真实 id 白名单已填好)、2 个串行任务、五页面验证矩阵。
+> 2026-10-09 v3(= v2 + 方案 B)。目标:在公网门户 `https://edu.itic-sci.com/bkg_zpt` 的部署栈上,用独立 `ewrdf` 图空间跑通**真实数据**全链路,使 **schema 管理、图谱构建、人工审核、平台总览、图谱查询**五个页面全部出现可核验的真实数据。
+> v3 变更:源绑定新增**方案 B(推荐)**——一次性建专用小库 `ewrdf_test`(7 张表共 104 行,物料 `docs/ewrdf_test_seed.sql`),五个下拉全部自动选对、免 API 覆盖、脚本零改动;v2 的原库 querySql + API 覆盖路径保留为方案 A(备选)。
+> 本手册自带全部物料:10 个 schema 定义、10 个可直接粘贴的抽取脚本、两案源绑定 SQL(真实 id 白名单已填好)、建库脚本、2 个串行任务、五页面验证矩阵。
 > 所有源数据均为 `gkx_element` 库 `dwd_*` 数仓真实业务数据(真实工商机构/持股/高管、真实论文/作者/期刊),无 mock、无演示造数。
 
 ---
@@ -86,7 +87,77 @@
 
 ---
 
-## 4. 第二步:源绑定(复制即用,id 白名单已填好)
+## 4. 第二步:源绑定(两案任选,推荐 B)
+
+| | **方案 B:专用测试库(推荐)** | 方案 A:原库 querySql(备选) |
+|---|---|---|
+| 前置动作 | 一次性建库搬数(4.B.0,共 104 行) | 无 |
+| UI 五下拉 | **全部自动选对,纯点选保存** | 时间列必须手选;4 个绑定的主键列只是占位 |
+| 额外 API 调用 | **零** | 每个 schema 一次浏览器 console fetch(4.1) |
+| 抽取读取量 | 每表 ≤27 行 | Journal 绑定实际翻 2000 行(见 4.A 警示) |
+| 数据 | 真实数仓行快照(同源同内容,非 mock) | 原库实时行 |
+| 测后清理 | `DROP DATABASE ewrdf_test;` | 无 |
+
+### 4.B 方案 B(推荐):专用测试库 ewrdf_test
+
+在同一个 MySQL 实例(30306)上新建库 `ewrdf_test`,把白名单行搬进去,再按**普通表**绑定。为什么可行且更省事:
+
+- **数据源不用新建**:dev2-default 的账号是 root,库下拉 = 实例级 `SHOW DATABASES`(`backend/service/mysql_datasource.py:list_databases`),新库自动出现在下拉里,数据源仍选 dev2-default;
+- **五个下拉全自动选对**:每张表把真实唯一主键放在第一列(前端 pk 自动偏好 = 有 `id` 列选 `id`,否则选第一列),时间列统一命名 `update_time`(前端时间列自动偏好只认 update_time/updated_at/modified_at/gmt_modified)——选中表后主键列/时间列自动带出,核对一眼即可保存,4.0 的三个坑全部消失;
+- **普通表绑定的 LIMIT/OFFSET 全表翻页在这里无害**:最大的表也只有 27 行;
+- **抽取脚本零改动**:测试表列名与脚本读取字段完全同名(row_id 等合成列已物化为真实列);Journal 表已预去重到 4 行,脚本内按 publication_id 去重的逻辑变空转但完全兼容;
+- 普通表模式无水位,每次执行重读全表(几十行,秒级),重跑 = 重复抽取(INSERT VERTEX 覆盖语义),幂等可接受。
+
+#### 4.B.0 建库搬数(一次性,只写新库,不动 gkx_element)
+
+物料文件:**`docs/ewrdf_test_seed.sql`**(与本手册同分支)。宿主机执行:
+
+```bash
+cd <仓库检出目录>
+docker exec -i tech-kg-mysql mysql --default-character-set=utf8mb4 -uroot -pgkx_element < docs/ewrdf_test_seed.sql
+```
+
+⚠ `--default-character-set=utf8mb4` 不能省:实测缺省字符集下 `owners_type='单位'` 这类中文比较命中 0 行、中文字面量输出全变 `??`(6 条持股对会直接丢)。
+
+执行后核对行数(种子脚本头注释里有同款一行命令),预期:
+
+| 表 | 绑定给 | 行数 |
+|---|---|---|
+| t_org | Organization | 12 |
+| t_executive | Officer、EXECUTIVE_OF | 27 |
+| t_expert | Expert | 25 |
+| t_paper | Paper、PUBLISHED_IN | 10 |
+| t_journal | Journal | 4(按 publication_id 预去重) |
+| t_author_paper | AUTHORED_BY、COAUTHOR_WITH | 20 |
+| t_shareholder | SHAREHOLDER_OF | 6 |
+
+共 **104 行**。真实内容抽查:机构为真实工商主体(深圳市迈岭信息技术有限公司等);期刊为《经济地理》《电网技术》《电力系统保护与控制》《中国科学院院刊》;专家含樊杰同名组(消歧灰区素材)与 2 条空名行(抽取失败素材)。
+
+#### 4.B.1 UI 五下拉选值(选完表后主键列/时间列自动带出,核对即可)
+
+| 绑定给 | 数据源 | 库 | 表 | 主键列(自动) | 时间列(自动) |
+|---|---|---|---|---|---|
+| Organization | dev2-default | **ewrdf_test** | t_org | org_id | update_time |
+| Officer、EXECUTIVE_OF | dev2-default | **ewrdf_test** | t_executive | row_id | update_time |
+| Expert | dev2-default | **ewrdf_test** | t_expert | author_id | update_time |
+| Paper、PUBLISHED_IN | dev2-default | **ewrdf_test** | t_paper | id | update_time |
+| Journal | dev2-default | **ewrdf_test** | t_journal | row_id | update_time |
+| AUTHORED_BY、COAUTHOR_WITH | dev2-default | **ewrdf_test** | t_author_paper | row_id | update_time |
+| SHAREHOLDER_OF | dev2-default | **ewrdf_test** | t_shareholder | row_id | update_time |
+
+7 张表覆盖 10 个 schema(共用表的各自绑一次,同方案 A 的共用 SQL 逻辑)。保存后**直接跳到第 5 节上传脚本**(脚本零改动),跳过 4.0~4.2 的全部步骤。
+
+#### 4.B.2 测后清理(可选)
+
+```sql
+DROP DATABASE IF EXISTS ewrdf_test;
+```
+
+注意:清理前确认不再触发抽取(schema 源绑定仍指向该库,库没了再触发会读失败)。新库建在共享实例上同事可见,命名 ewrdf_test 已表明归属;控制库里的 schema 定义/绑定/任务记录不受 DROP 影响,想彻底清场再按平台页面删除 schema/任务即可。
+
+### 4.A 方案 A(备选):原库 gkx_element + API 覆盖 querySql
+
+> 不建测试库时的 v2 原路径。⚠ 已知量控瑕疵:Journal 的 querySql 按 4 个 publication_id 过滤,但 `dwd_zh_journal` 全表 2081 行只有 8 个刊、这 4 刊占 2000 行——该绑定每次抽取要翻 2000 行(脚本去重后仍只产出 4 个实体);方案 B 预去重后只读 4 行,已根治。
 
 ### 4.0 UI 来源绑定表单操作细则(先读,有三个坑)
 
@@ -566,12 +637,12 @@ MATCH (v:`Expert`) WHERE v.Expert.name == '樊杰' RETURN id(v), v.institution
 
 | 项 | 说明 |
 |---|---|
-| 资源红线 | 只用本手册的 id 白名单 querySql(总量 ~130 行),batchSize=10,chain 串行,**勿改全表绑定**;共享图过载波时抽取变慢属正常,勿反复重启 |
+| 资源红线 | 方案 B 只绑 `ewrdf_test` 的 7 张小表(共 104 行);方案 A 只用本手册的 id 白名单 querySql(总量 ~130 行)。batchSize=10,chain 串行,**勿对 gkx_element 的 dwd_* 大表做全表绑定**;共享图过载波时抽取变慢属正常,勿反复重启 |
 | 静默写错空间 | 触发任务必须显式 `graphSpace:"ewrdf"`;不带时最坏写进 worker 默认空间 dev2 |
-| 共享环境 | 控制库曾有未知清理者删 schema(2026-09-23);业务库全栈共享——**只动本手册 id 白名单内的行**,别人的数据(尤其 review_widgets 等)不碰 |
+| 共享环境 | 控制库曾有未知清理者删 schema(2026-09-23);业务库全栈共享——方案 A **只读** gkx_element 白名单行,方案 B 的写只落在新建 `ewrdf_test` 库;别人的数据(尤其 review_widgets 等)不碰 |
 | vid 上限 | ewrdf vid=FIXED_STRING(64):机构/作者 32 位、论文 19 位、Officer 复合 vid ~44 字节,均安全;自增字段别超 64 |
 | T_DIRECT | 现行抽取链不产生 T_DIRECT;若在库里看到存量 T_DIRECT 案,勿在 ewrdf 测 accept(非 RBAC 下会写默认空间) |
-| 幂等重跑 | querySql 按 (time, pk) keyset 水位增量:首次跑读白名单全集,重跑只读变更行,天然幂等;想全量重灌需先删 watermark(schema 源绑定保存处) |
+| 幂等重跑 | 方案 A:querySql 按 (time, pk) keyset 水位增量,首次跑读白名单全集、重跑只读变更行;想全量重灌需先删 watermark(schema 源绑定保存处)。方案 B:普通表绑定无水位,每次执行重读全表 104 行(秒级),重跑 = 重复抽取覆盖写,天然幂等 |
 
 ---
 

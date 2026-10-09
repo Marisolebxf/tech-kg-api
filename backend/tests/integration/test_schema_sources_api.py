@@ -158,6 +158,27 @@ async def test_replace_sources_full_flow(sources_api) -> None:
         assert detail["sources"][0]["pkColumn"] == "org_id"
         assert detail["sources"][0]["timeColumn"] == "modified_at"
 
+        # timeColumn 空串 = 显式「无时间列」（抽取走 pk keyset 增量），须原样
+        # 保存不被强转成默认值（2026-10-09：绑定显示 id、保存变 u_id 的配套修复）
+        no_time = await client.put(
+            f"/api/v1/schema-management/schemas/{entity['id']}/sources",
+            json={
+                "sources": [
+                    {
+                        "datasourceId": "MYSQL-1",
+                        "databaseName": "gkx",
+                        "tableName": "dwd_bid_base_out",
+                        "pkColumn": "u_id",
+                        "timeColumn": "",
+                    }
+                ]
+            },
+        )
+        assert no_time.status_code == 200
+        saved = no_time.json()["data"]["sources"][0]
+        assert saved["pkColumn"] == "u_id"
+        assert saved["timeColumn"] == ""
+
         # 空列表清空绑定
         cleared = await client.put(
             f"/api/v1/schema-management/schemas/{entity['id']}/sources",

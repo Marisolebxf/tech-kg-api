@@ -126,15 +126,21 @@ watch(
 function applyColumnDefaults() {
   if (!columns.value.length) return
   const names = columns.value.map((column) => column.name)
+  // pk/时间列的默认纠正合并成一次 patch：两次连续 patch 都基于同一份
+  // props.modelValue（props 异步更新），第二次 emit 会把第一次的改动整个
+  // 覆盖掉——主键列停留在表中不存在的 'id'、时间列退回 'update_time'，
+  // 即「绑定显示 id、保存后变 u_id」的错位来源
+  const update: Partial<SourceBindingRow> = {}
   if (!names.includes(row.value.pkColumn)) {
-    patch({ pkColumn: names.includes('id') ? 'id' : names[0] })
+    update.pkColumn = names.includes('id') ? 'id' : names[0]
   }
   if (!names.includes(row.value.timeColumn)) {
     const preferred = ['update_time', 'updated_at', 'modified_at', 'gmt_modified'].find((name) =>
       names.includes(name),
     )
-    patch({ timeColumn: preferred || '' })
+    update.timeColumn = preferred || ''
   }
+  if (Object.keys(update).length) patch(update)
 }
 </script>
 
@@ -196,13 +202,15 @@ function applyColumnDefaults() {
     <a-select
       :model-value="row.timeColumn"
       class="source-binding-row__select source-binding-row__col"
-      placeholder="时间列（水位）"
+      placeholder="时间列（可空）"
       allow-search
+      allow-clear
       :loading="loadingColumns"
       :disabled="!row.tableName"
       popup-container=".schema-modal"
       :trigger-props="{ contentClass: 'source-binding-popup' }"
       @change="(value) => patch({ timeColumn: asString(value) })"
+      @clear="() => patch({ timeColumn: '' })"
     >
       <a-option v-for="c in columns" :key="c.name" :value="c.name" :title="c.name">{{ c.name }}</a-option>
     </a-select>

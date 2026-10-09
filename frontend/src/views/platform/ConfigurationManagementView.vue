@@ -39,6 +39,7 @@ import {
   bindGraphSpace,
   createGraphSpace,
   listGraphSpaceItems,
+  unbindGraphSpace,
   type GraphSpaceItem,
 } from '../../api/graphSpace'
 import { currentUserIsAdmin } from '../../api/currentUser'
@@ -363,6 +364,38 @@ function canChangeLegacyBinding(): boolean {
   return true
 }
 
+const unbindTarget = ref<GraphSpaceItem>()
+const unbindVisible = ref(false)
+const unbindSubmitting = ref(false)
+const unbindError = ref('')
+/** 解绑仅删当前用户本人的绑定行：图数据/向量库/已建任务全保留，其他用户的绑定
+ *  不受影响；空间随即出现在「绑定已有图数据空间」下拉里，可随时绑回。 */
+function removeSpaceBinding(space: GraphSpaceItem) {
+  if (!canChangeLegacyBinding()) return
+  unbindTarget.value = space
+  unbindError.value = ''
+  unbindVisible.value = true
+}
+async function confirmUnbindSpace() {
+  const space = unbindTarget.value
+  if (!space || unbindSubmitting.value) return
+  unbindSubmitting.value = true
+  unbindError.value = ''
+  try {
+    await unbindGraphSpace(space.name)
+    unbindVisible.value = false
+    showToast(`图数据空间“${space.name}”已解除绑定（图数据与任务保留，可随时重新绑定）。`, 'success')
+    await loadGraphSpaces()
+    // 可工作空间按用户隔离：全局选择器同步收敛；若解绑的正是当前所选空间，
+    // store 归一会自动回退默认空间
+    void graphSpaceStore.ensureLoaded(true)
+  } catch (err) {
+    unbindError.value = `解绑失败：${(err as Error).message}`
+  } finally {
+    unbindSubmitting.value = false
+  }
+}
+
 /** 打开管理抽屉：编辑副本隔离列表项。直接绑列表项（共享引用）会把未保存的输入
  * （含非法值）实时串进页面卡片，关抽屉不保存后卡片残留脏值直到刷新。保存成功
  * 由 saveDetail 的 loadByCategory 用服务端数据回填列表。 */
@@ -684,16 +717,17 @@ onUnmounted(() => {
         <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilter" allow-clear placeholder="全部状态"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><form class="config-search-form" role="search" @submit.prevent="submitConfigSearch"><a-input v-model="keyword" class="config-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识或地址" placeholder="搜索名称、标识或地址"><template #prefix><IconSearch /></template></a-input><button class="primary config-search-button" type="submit">查询</button></form></nav><nav v-else class="bind-nav"><button class="primary" type="button" @click="spaceDialogOpen = true">＋ 新建图数据空间</button><a-select v-if="isAdmin && bindableSpaces.length" v-model="bindTarget" placeholder="绑定已有图数据空间" allow-clear><a-option v-for="space in bindableSpaces" :key="space.name" :value="space.name">{{ space.name }}</a-option></a-select><button v-if="isAdmin && bindableSpaces.length" type="button" :disabled="spaceWorking" @click="bindSpace">绑定</button></nav></header>
         <div v-if="isGraphSpaceCategory" class="table-wrap space-table">
           <table>
-            <thead><tr><th>图数据空间</th><th>绑定状态</th></tr></thead>
+            <thead><tr><th>图数据空间</th><th>绑定状态</th><th v-if="isAdmin">操作</th></tr></thead>
             <tbody>
               <tr v-for="space in mySpaces" :key="space.name">
                 <td><div class="config-name"><span><strong>{{ space.name }}</strong><small>NebulaGraph 图空间</small></span></div></td>
                 <td><span class="status is-正常"><i />已绑定</span></td>
+                <td v-if="isAdmin"><div class="row-actions"><button class="link danger" type="button" :disabled="spaceWorking" @click="removeSpaceBinding(space)">解绑</button></div></td>
               </tr>
-              <tr v-if="!mySpaces.length"><td class="empty" colspan="2">还没有绑定的图数据空间，点击右上角“新建图数据空间”创建一个</td></tr>
+              <tr v-if="!mySpaces.length"><td class="empty" :colspan="isAdmin ? 3 : 2">还没有绑定的图数据空间，点击右上角“新建图数据空间”创建一个</td></tr>
             </tbody>
           </table>
-          <p class="space-hint">新建图数据空间会真实执行 CREATE SPACE（创建后有秒级传播延迟）；解除绑定请找管理员处理。</p>
+          <p class="space-hint">{{ isAdmin ? '新建图数据空间会真实执行 CREATE SPACE（创建后有秒级传播延迟）；解绑仅移除本人的绑定关系（图数据与任务保留、其他用户不受影响），重新绑定用右上角“绑定已有图数据空间”。' : '新建图数据空间会真实执行 CREATE SPACE（创建后有秒级传播延迟）；绑定与解绑请联系管理员处理。' }}</p>
         </div>
         <div v-else ref="configTableRef" class="table-wrap config-table-wrap" :class="{ 'has-scroll-right': tableHasMoreToScroll, 'config-scroll--active': tableScrollActive }" @scroll.passive="handleConfigTableScroll">
           <table>
@@ -823,6 +857,7 @@ onUnmounted(() => {
       </aside>
     </Teleport>
     <DeleteConfirmDialog v-model:visible="deleteVisible" title="删除配置" :name="deleteTarget?.name || ''" :identifier="deleteTarget?.id" identifier-label="配置 ID" description="继续操作将永久删除该配置。请确认相关任务不再依赖此配置。" :loading="deleteSubmitting" :error="deleteError" @confirm="confirmDeleteConfig" />
+    <DeleteConfirmDialog v-model:visible="unbindVisible" title="解除绑定" verb="解绑" warning="解绑不会删除任何图数据，可随时重新绑定。" :name="unbindTarget?.name || ''" description="仅解除你本人与该图数据空间的绑定关系：解绑后它不再出现在你的图空间选择器中；图数据、向量库、已建任务及其他用户的绑定均保留。" :loading="unbindSubmitting" :error="unbindError" @confirm="confirmUnbindSpace" />
   </div>
 </template>
 

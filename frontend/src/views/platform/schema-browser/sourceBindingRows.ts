@@ -29,7 +29,9 @@ export function toSourcePayload(row: SourceBindingRow): {
     databaseName: row.databaseName,
     tableName: row.tableName,
     pkColumn: row.pkColumn || 'id',
-    timeColumn: row.timeColumn || 'update_time',
+    // 时间列按用户实际选择提交（可为空 = 无时间列，后端走 pk keyset 增量）；
+    // 此前空值被强转为 'update_time'，表里没有该列的绑定到运行时才炸 SQL
+    timeColumn: row.timeColumn,
   }
 }
 

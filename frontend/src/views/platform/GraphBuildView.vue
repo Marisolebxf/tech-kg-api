@@ -78,7 +78,9 @@ function readStoredSpaceScope(): string {
 
 const spaceScope = ref(readStoredSpaceScope())
 const spaceScopeSelect = computed({
-  get: () => spaceScope.value || graphSpaceStore.current || graphSpaceStore.spaces[0],
+  // 清空态显示占位「图空间」而非回填全局当前空间——回填会让 × 看起来「没清空、
+  // 跳去别的空间」（筛选仍按 spaceScope||current 跟随全局，语义见 tooltip）
+  get: () => spaceScope.value || undefined,
   set: (value: string | undefined) => {
     spaceScope.value = value ?? ''
   },
@@ -107,8 +109,13 @@ const TASK_TYPE_LABELS: Record<string, string> = {
 const filteredJobs = computed(() => {
   const name = submittedName.value.toLowerCase()
   const space = spaceScope.value || graphSpaceStore.current
+  // 可视域：默认空间 + 本人绑定（与顶栏选择器一致）。「全部空间」也只在可视域内
+  // 展示——已解绑/未绑定的空间任务不因选「全部」越界露出（连带其重跑入口）
+  const visible = new Set(graphSpaceStore.spaces)
   return jobs.value.filter((job) => {
-    if (space !== ALL_SPACES && jobSpace(job) !== space) return false
+    const spaceName = jobSpace(job)
+    if (!visible.has(spaceName)) return false
+    if (space !== ALL_SPACES && spaceName !== space) return false
     if (name && !job.name.toLowerCase().includes(name)) return false
     if (filterStatus.value && deriveJobUnifiedStatus(job) !== filterStatus.value) return false
     if (filterTaskType.value && job.taskType !== filterTaskType.value) return false
@@ -224,6 +231,15 @@ function jobScriptLabel(job: WorkflowJob): string {
     return job.definitionIds.length > 1 ? `${first} +${job.definitionIds.length - 1}` : first
   }
   return job.definitionName || job.definitionId
+}
+
+/** 脚本列「脚本名 +N」悬停展开：chain 逐行列出全部脚本（按执行顺序）；
+ *  单脚本与展示文本一致，不设 title。 */
+function jobScriptTitle(job: WorkflowJob): string | undefined {
+  if (job.taskType !== 'chain') return undefined
+  const labels = job.schemaLabels?.length ? job.schemaLabels : job.definitionIds
+  if (labels.length < 2) return undefined
+  return [`共 ${labels.length} 个脚本（按执行顺序）：`, ...labels.map((label, i) => `${i + 1}. ${label}`)].join('\n')
 }
 
 async function onTrigger(job: WorkflowJob) {
@@ -443,10 +459,11 @@ onMounted(() => {
             class="gb-filter-select"
             placeholder="图空间"
             allow-clear
-            title="按图空间筛选任务（清空即跟随总览页全局选择器的当前空间）"
+            :title="spaceScope || '按图空间筛选任务（清空即跟随总览页全局选择器的当前空间）'"
+            :trigger-props="{ contentClass: 'gb-space-select-popup' }"
           >
-            <a-option :value="ALL_SPACES">全部空间</a-option>
-            <a-option v-for="space in graphSpaceStore.spaces" :key="space" :value="space">{{ space }}</a-option>
+            <a-option :value="ALL_SPACES" title="全部空间 = 可视域内的全部空间（默认空间 + 本人绑定）">全部空间</a-option>
+            <a-option v-for="space in graphSpaceStore.spaces" :key="space" :value="space" :title="space">{{ space }}</a-option>
           </a-select>
           <a-select id="graph-build-filter-status" v-model="filterStatusSelect" class="gb-filter-select" placeholder="状态" allow-clear>
             <a-option value="">未选择</a-option>
@@ -478,7 +495,7 @@ onMounted(() => {
             <tr v-for="job in pagedJobs" :key="job.id">
               <td><b>{{ job.name }}</b></td>
               <td>{{ TASK_TYPE_LABELS[job.taskType] || job.taskType }}</td>
-              <td><code>{{ jobScriptLabel(job) }}</code></td>
+              <td><code :title="jobScriptTitle(job)">{{ jobScriptLabel(job) }}</code></td>
               <td>{{ job.graphSpace || '默认' }}</td>
               <td>
                 <span
@@ -650,6 +667,12 @@ span.run{color:var(--status-info)}
 .app-workspace .gb-filters .gb-filter-select :is(.arco-select-view-input,.arco-select-view-value){background:transparent!important}
 /* 筛选下拉右侧的箭头/清除图标：Arco 默认仅 12px 且偏淡，肉眼几乎看不出有下拉符号——放大到 14px 并显式着色（与输入框前缀图标同灰度） */
 .app-workspace .gb-filters .gb-filter-select .arco-select-view-suffix svg{width:14px;height:14px;font-size:14px;color:#4e5969}
+/* 图空间筛选弹层（teleport 到 body，经 triggerProps contentClass 打标）：超长空间名与
+   顶栏选择器（GraphSpaceSelector）同配方——选项按内容自然宽撑开不省略、面板横向滚动，
+   悬停选项 title 看全名；触发栏选中长名时省略号 + 动态 title 悬停显示全名。 */
+.gb-space-select-popup .arco-select-dropdown-list-wrapper{overflow-x:auto}
+.gb-space-select-popup .arco-select-option{width:max-content;min-width:100%}
+.gb-space-select-popup .arco-select-option-content{overflow:visible}
 /* 任务操作列「···」更多菜单（teleport 到 body，需全局控制；菜单项口径对齐 Schema 管理表） */
 .gb-action-menu-item.arco-dropdown-option{box-sizing:border-box;min-height:32px;padding:5px 16px;color:#165dff;font-size:14px;line-height:22px;font-weight:400;text-decoration:none}
 .gb-action-menu-item.arco-dropdown-option:hover{color:#4080ff;text-decoration:none}

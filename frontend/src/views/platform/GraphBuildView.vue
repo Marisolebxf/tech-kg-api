@@ -98,8 +98,8 @@ function jobSpace(job: WorkflowJob): string {
 
 /** extract/chain 可新建；single/upload 为历史键（D2 停止新建），存量行仍需中文展示 */
 const TASK_TYPE_LABELS: Record<string, string> = {
-  extract: '数据抽取',
-  single: '单脚本抽取',
+  extract: '单脚本抽取',
+  single: '单脚本（历史）',
   chain: '多脚本串行',
   upload: '上传脚本',
 }
@@ -459,8 +459,8 @@ onMounted(() => {
           </a-select>
           <a-select id="graph-build-filter-type" v-model="filterTaskTypeSelect" class="gb-filter-select" placeholder="类型" allow-clear>
             <a-option value="">未选择</a-option>
-            <a-option value="extract">数据抽取</a-option>
-            <a-option value="single">单脚本抽取</a-option>
+            <a-option value="extract">单脚本抽取</a-option>
+            <a-option value="single">单脚本（历史）</a-option>
             <a-option value="chain">多脚本串行</a-option>
             <a-option value="upload">上传脚本</a-option>
           </a-select>

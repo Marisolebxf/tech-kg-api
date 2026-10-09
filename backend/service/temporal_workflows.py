@@ -1084,6 +1084,22 @@ def _unknown_column_name(exc: Exception) -> str | None:
     return match.group(1) if match else None
 
 
+def _since_seed(request: dict[str, Any]) -> str | None:
+    """触发请求携带的 since 作为首轮水位种子（仅来源无持久化水位时生效）。
+
+    只接受可解析的时间串（与前端 SINCE_RULE 同口径），坏值忽略回落全量——
+    job 建链只查长度，垃圾串不能炸读取 SQL。keyset（pk 游标）来源不适用。
+    """
+    raw = request.get("since")
+    if not raw:
+        return None
+    try:
+        datetime.fromisoformat(str(raw).replace(" ", "T"))
+    except ValueError:
+        return None
+    return str(raw)
+
+
 @activity.defn
 async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
     """按来源绑定读一批行（连接参数由 activity 内按 datasourceId 解析，密钥不进 workflow 状态）。
@@ -1163,7 +1179,9 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
             watermark = request.get("watermark")
             if watermark is None and not request.get("chained"):
                 wm_row = read_watermark(request.get("definitionId"), request.get("stepId") or "")
-                watermark = (wm_row or {}).get("watermark") or "1970-01-01 00:00:00"
+                watermark = (
+                    (wm_row or {}).get("watermark") or _since_seed(request) or "1970-01-01 00:00:00"
+                )
             if watermark is not None:
                 binds["wm"] = str(watermark)
     elif cursor_kind == "watermark":
@@ -1171,7 +1189,9 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
         pk_cursor = request.get("pkCursor")
         if watermark is None:
             wm_row = read_watermark(request.get("definitionId"), request.get("stepId") or "")
-            watermark = (wm_row or {}).get("watermark") or "1970-01-01 00:00:00"
+            watermark = (
+                (wm_row or {}).get("watermark") or _since_seed(request) or "1970-01-01 00:00:00"
+            )
             # 跨执行续跑：持久化 checkpoint 的 pkCursor 与水位同进组合条件，
             # 否则上次执行同秒尾行永久丢失
             pk_cursor = pk_cursor or ((wm_row or {}).get("checkpoint") or {}).get("pkCursor")
@@ -2673,6 +2693,8 @@ class SchemaExtractWorkflow:
                     "batchSize": batch_size,
                     "definitionId": definition_id,
                     "stepId": step_id,
+                    # 触发时填的增量游标：无持久化水位的来源首轮从这读起（_since_seed）
+                    "since": selectors.get("since"),
                 }
                 if workflow.patched("business-source-sandbox-v1"):
                     read_base.update(

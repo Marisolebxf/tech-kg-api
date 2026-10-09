@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   rerunExtractFailures: vi.fn(),
   getProductionReview: vi.fn(),
   deleteProductionReview: vi.fn(),
+  batchDeleteProductionReviews: vi.fn(),
   getExecution: vi.fn(),
   getTask: vi.fn(),
   TRIGGER_SOURCE_LABEL: { MANUAL: '手动触发', SCHEDULE: '定期触发', RERUN: '重新执行' },
@@ -94,6 +95,7 @@ beforeEach(() => {
   mocks.rerunExtractFailures.mockReset().mockResolvedValue({ executions: [], cases: 2 })
   mocks.getProductionReview.mockReset()
   mocks.deleteProductionReview.mockReset()
+  mocks.batchDeleteProductionReviews.mockReset().mockResolvedValue({ requested: 0, deleted: 0, skipped: [] })
   mocks.getExecution.mockReset()
   mocks.getTask.mockReset()
 })
@@ -413,6 +415,64 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     // 执行信息是纯文本，不再提供跳执行详情的链接
     expect(bar.findAll('router-link-stub')).toHaveLength(0)
     expect(bar.text()).toContain('schema-paper · 2 条')
+  })
+
+  it('批量删除按钮在批量重跑右侧：勾选后出现，确认弹窗通过后才下发', async () => {
+    mocks.batchDeleteProductionReviews.mockResolvedValueOnce({ requested: 2, deleted: 2, skipped: [] })
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+
+    expect(wrapper.findAll('.rerun-batch-action')).toHaveLength(0)
+    const header = headerCheckbox(wrapper)
+    ;(header.element as HTMLInputElement).checked = true
+    await header.trigger('change')
+
+    const buttons = wrapper.findAll('.rerun-batch-action')
+    expect(buttons).toHaveLength(2)
+    expect(buttons[0].text()).toBe('批量重跑（2）')
+    expect(buttons[1].text()).toBe('批量删除（2）')
+    expect(buttons[1].classes()).toContain('is-danger')
+
+    // 点击批量删除只弹二次确认，不直接调 API；确认（弹窗 ok）才下发
+    await buttons[1].trigger('click')
+    expect(mocks.batchDeleteProductionReviews).not.toHaveBeenCalled()
+    // 模板里第 2 个 a-modal 是批量删除确认框（1=批量重跑确认、3=日志弹窗）
+    wrapper.findAllComponents({ name: 'AModal' })[1].vm.$emit('ok')
+    await flushPromises()
+
+    expect(mocks.batchDeleteProductionReviews).toHaveBeenCalledWith({ caseIds: ['MR-1', 'MR-2'] })
+    const bar = wrapper.get('.rerun-feedback')
+    expect(bar.classes()).toContain('app-alert--success')
+    expect(bar.text()).toContain('已删除失败记录 2 条')
+    // 删除完成：清空勾选并刷新列表
+    expect(rowCheckboxes(wrapper).every((input) => !(input.element as HTMLInputElement).checked)).toBe(true)
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ category: 'C' }))
+  })
+
+  it('批量删除部分被跳过：反馈条转黄并聚合跳过原因', async () => {
+    mocks.batchDeleteProductionReviews.mockResolvedValueOnce({
+      requested: 2,
+      deleted: 1,
+      skipped: [{ id: 'MR-2', reason: '已处理的记录不可删除' }],
+    })
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+
+    const header = headerCheckbox(wrapper)
+    ;(header.element as HTMLInputElement).checked = true
+    await header.trigger('change')
+
+    await wrapper.findAll('.rerun-batch-action')[1].trigger('click')
+    wrapper.findAllComponents({ name: 'AModal' })[1].vm.$emit('ok')
+    await flushPromises()
+
+    const bar = wrapper.get('.rerun-feedback')
+    expect(bar.classes()).toContain('app-alert--warning')
+    expect(bar.text()).toContain('已删除失败记录 1 条')
+    expect(bar.text()).toContain('跳过 1 条')
+    expect(bar.text()).toContain('已处理的记录不可删除×1')
   })
 
   it('更新时间表头三态排序：默认 → 新→旧 → 旧→新 → 默认，请求带对应 sort 参数', async () => {

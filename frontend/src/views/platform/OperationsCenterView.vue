@@ -5,7 +5,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { IconRefresh, IconSearch } from '@arco-design/web-vue/es/icon'
 
-import { deleteProductionReview, getExecution, getProductionReview, getProductionReviews, getTask, rerunExtractFailures, TRIGGER_SOURCE_LABEL, type ProcessingInstance, type ProcessStep, type ProductionReviewCase, type WorkflowExecution } from '../../api/workflowOperations'
+import { batchDeleteProductionReviews, deleteProductionReview, getExecution, getProductionReview, getProductionReviews, getTask, rerunExtractFailures, TRIGGER_SOURCE_LABEL, type ProcessingInstance, type ProcessStep, type ProductionReviewCase, type WorkflowExecution } from '../../api/workflowOperations'
 import { currentGraphSpace } from '../../api/currentGraphSpace'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
 import { clampSearchKeyword, SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
@@ -242,7 +242,7 @@ function toggleRerunPick(id: string, checked: boolean) {
 
 /** 表头全选/取消：只作用于当前页可重跑行（不可重跑行禁用不勾选）；跨页勾选保持，按钮数字展示总数。 */
 function toggleRerunPickAll(event: Event) {
-  if (!rerunPageEligibleIds.value.length || reviewLoading.value || rerunSubmitting.value) return
+  if (!rerunPageEligibleIds.value.length || reviewLoading.value || rerunSubmitting.value || batchDeleteSubmitting.value) return
   const checked = (event.target as HTMLInputElement).checked
   for (const id of rerunPageEligibleIds.value) toggleRerunPick(id, checked)
 }
@@ -420,6 +420,49 @@ async function confirmDelete() {
     deleteError.value = error instanceof Error ? error.message : '删除失败'
   } finally {
     deleteSubmitting.value = false
+  }
+}
+
+// ---- C 类批量删除：与批量重跑共用勾选集合，二次确认后逐条物理删除 ----
+
+/** 批量删除确认弹窗与提交态（>N 条与重跑同栏展示，勾选集即删除集）。 */
+const batchDeleteVisible = ref(false)
+const batchDeleteSubmitting = ref(false)
+
+/** 跳过原因摘要：按原因聚合计数，至多列 3 类防刷屏。 */
+function summarizeBatchSkipReasons(skipped: Array<{ id: string; reason: string }>): string {
+  const groups = new Map<string, number>()
+  for (const item of skipped) groups.set(item.reason, (groups.get(item.reason) ?? 0) + 1)
+  const parts = [...groups.entries()].map(([reason, count]) => `${reason}×${count}`)
+  return parts.length > 3 ? `${parts.slice(0, 3).join('、')} 等 ${parts.length} 类` : parts.join('、')
+}
+
+function askBatchDelete() {
+  if (!rerunSelection.value.size || batchDeleteSubmitting.value) return
+  batchDeleteVisible.value = true
+}
+
+/** 确认批量删除：已处理的/不存在的按条跳过不中断整批，结果经反馈条展示（有跳过转警告态）。 */
+async function confirmBatchDelete() {
+  const ids = [...rerunSelection.value]
+  if (!ids.length || batchDeleteSubmitting.value) return
+  batchDeleteSubmitting.value = true
+  try {
+    const result = await batchDeleteProductionReviews({ caseIds: ids })
+    const skipped = result.skipped ?? []
+    const skippedText = skipped.length ? `；跳过 ${skipped.length} 条（${summarizeBatchSkipReasons(skipped)}）` : ''
+    showRerunFeedback(
+      skipped.length ? 'warning' : 'success',
+      `已删除失败记录 ${result.deleted} 条${skippedText}`,
+      [],
+    )
+    batchDeleteVisible.value = false
+    rerunSelection.value = new Set()
+    void loadReviews()
+  } catch (error) {
+    showRerunFeedback('error', error instanceof Error ? error.message : '批量删除失败', [])
+  } finally {
+    batchDeleteSubmitting.value = false
   }
 }
 
@@ -614,7 +657,7 @@ onMounted(() => {
             <th v-if="reviewCategory === 'C'" class="pick-col"><input aria-label="checkbox-input"
               type="checkbox"
               title="全选当前页可重跑的失败记录（仅「待处理 / 重跑失败」状态可勾选）"
-              :disabled="!rerunPageEligibleIds.length || reviewLoading || rerunSubmitting"
+              :disabled="!rerunPageEligibleIds.length || reviewLoading || rerunSubmitting || batchDeleteSubmitting"
               :checked="rerunAllChecked"
               :indeterminate="rerunSomeChecked"
               @change="toggleRerunPickAll"
@@ -705,9 +748,15 @@ onMounted(() => {
             <button
               class="review-action-btn rerun-batch-action"
               type="button"
-              :disabled="rerunSubmitting"
+              :disabled="rerunSubmitting || batchDeleteSubmitting"
               @click="rerunSelected()"
             >{{ rerunSubmitting ? '下发中…' : `批量重跑（${rerunSelection.size}）` }}</button>
+            <button
+              class="review-action-btn rerun-batch-action is-danger"
+              type="button"
+              :disabled="rerunSubmitting || batchDeleteSubmitting"
+              @click="askBatchDelete"
+            >{{ batchDeleteSubmitting ? '删除中…' : `批量删除（${rerunSelection.size}）` }}</button>
           </span>
           <span class="review-page-summary">共 {{ reviewTotal }} 条</span>
         </template>
@@ -725,6 +774,19 @@ onMounted(() => {
       @ok="rerunSelected(undefined, true)"
     >
       <AppAlert type="warning" class="rerun-confirm-text">即将对已勾选的 {{ rerunSelection.size }} 条失败记录下发重跑，按 schema 合并为新执行（类别=重新执行）。重跑成功的记录自动关闭，仍失败的会重新进入失败列表。</AppAlert>
+    </a-modal>
+
+    <a-modal
+      v-model:visible="batchDeleteVisible"
+      modal-class="rerun-confirm-modal"
+      title="确认批量删除"
+      :width="560"
+      ok-text="删除"
+      cancel-text="取消"
+      :ok-loading="batchDeleteSubmitting"
+      @ok="confirmBatchDelete"
+    >
+      <AppAlert type="warning" class="rerun-confirm-text">即将物理删除已勾选的 {{ rerunSelection.size }} 条失败记录，连同草稿、决议、附件与审计记录一并清除，不可恢复。仅未处理记录可删除，已处理或不存在的会自动跳过。</AppAlert>
     </a-modal>
 
     <a-modal

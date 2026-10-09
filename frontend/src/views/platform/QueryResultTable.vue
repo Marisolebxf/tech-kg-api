@@ -245,6 +245,18 @@ function showDetails(row: Record<string, unknown>, index: number): void {
 
 <style scoped>
 .query-result-table{min-width:0;overflow:hidden}
+/* Arco reserves a vertical scrollbar gutter in the split header to align it
+   with the body. Keep that gutter and horizontal scroll synchronization, but
+   override the global scrollbar reveal styles so the header stays invisible. */
+.query-result-table :deep(.arco-table:not(.arco-table-empty) .arco-table-container .arco-table-content .arco-table-header){scrollbar-color:transparent transparent!important}
+.query-result-table :deep(.arco-table:not(.arco-table-empty) .arco-table-container .arco-table-content .arco-table-header::-webkit-scrollbar){height:0!important;background:transparent!important}
+.query-result-table :deep(.arco-table:not(.arco-table-empty) .arco-table-container .arco-table-content .arco-table-header::-webkit-scrollbar-thumb),
+.query-result-table :deep(.arco-table:not(.arco-table-empty) .arco-table-container .arco-table-content .arco-table-header::-webkit-scrollbar-track),
+.query-result-table :deep(.arco-table:not(.arco-table-empty) .arco-table-container .arco-table-content .arco-table-header::-webkit-scrollbar-button){background:transparent!important;border-color:transparent!important}
+@supports selector(::-webkit-scrollbar){
+  /* Chromium must use the same custom gutter width as the body. */
+  .query-result-table :deep(.arco-table:not(.arco-table-empty) .arco-table-container .arco-table-content .arco-table-header){scrollbar-color:auto!important}
+}
 .query-details-button{height:auto;padding:0;border:0;background:transparent;color:#165dff;font-size:14px;line-height:22px;font-weight:400;white-space:nowrap;cursor:pointer}
 .query-details-button:hover,.query-details-button:active{background:transparent;color:#4080ff}
 /* Horizontal overflow is indicated by the fixed action column only. */

@@ -526,6 +526,119 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
   })
 })
 
+describe('执行日志标签切换', () => {
+  const execution = (id: string, status = 'COMPLETED') => ({
+    id, status, taskId: `PI-${id}`, definitionId: 'schema:paper', workflowId: `wf-${id}`,
+    startedAt: '2026-09-17 10:00:00', message: `${id} 执行消息`,
+  })
+  const task = (id: string) => ({ id: `PI-${id}`, steps: [], logs: [`${id} 任务日志`] })
+  const deferred = <T,>() => {
+    let resolve!: (value: T) => void
+    let reject!: (reason: Error) => void
+    const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej })
+    return { promise, resolve, reject }
+  }
+  beforeEach(() => {
+    mocks.getProductionReview.mockResolvedValue({
+      ...caseRow('MR-1', 'RESOLVED'),
+      data: { input: { executionId: 'EXEC-ORIGINAL', rerunExecutionId: 'EXEC-RERUN' } },
+    })
+    mocks.getExecution.mockImplementation(async (id: string) => execution(id))
+    mocks.getTask.mockImplementation(async (id: string) => task(id.slice(3)))
+  })
+  async function openLog() {
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+    await wrapper.findAll('tbody .review-action-btn')[0].trigger('click')
+    await flushPromises()
+    return wrapper
+  }
+
+  it('慢请求期间保留内容，概要与任务日志一次更新，已结束执行再次切换无需请求', async () => {
+    const wrapper = await openLog()
+    const pendingExecution = deferred<ReturnType<typeof execution>>()
+    const pendingTask = deferred<ReturnType<typeof task>>()
+    mocks.getExecution.mockReturnValueOnce(pendingExecution.promise)
+    mocks.getTask.mockReturnValueOnce(pendingTask.promise)
+    const content = () => wrapper.get('.case-log-content')
+    await wrapper.get('.case-log-switch button:nth-child(2)').trigger('click')
+    expect(content().attributes('aria-busy')).toBe('true')
+    expect(content().text()).toContain('EXEC-RERUN 任务日志')
+    expect(wrapper.find('.case-log-missing').exists()).toBe(false)
+    pendingExecution.resolve(execution('EXEC-ORIGINAL'))
+    await flushPromises()
+    expect(content().text()).toContain('EXEC-RERUN 任务日志')
+    expect(wrapper.get('.case-log-dl').text()).not.toContain('EXEC-ORIGINAL')
+    pendingTask.resolve(task('EXEC-ORIGINAL'))
+    await flushPromises()
+    expect(content().attributes('aria-busy')).toBe('false')
+    expect(wrapper.get('.case-log-dl').text()).toContain('EXEC-ORIGINAL')
+    expect(content().text()).toContain('EXEC-ORIGINAL 任务日志')
+    await wrapper.get('.case-log-switch button:first-child').trigger('click')
+    await wrapper.get('.case-log-switch button:nth-child(2)').trigger('click')
+    expect(content().text()).toContain('EXEC-ORIGINAL 任务日志')
+    expect(content().attributes('aria-busy')).toBe('false')
+    expect(mocks.getExecution).toHaveBeenCalledTimes(2)
+    expect(mocks.getTask).toHaveBeenCalledTimes(2)
+  })
+
+  it('快速切回重跑执行后，原执行的迟到任务响应不能覆盖当前日志', async () => {
+    const wrapper = await openLog()
+    const pendingTask = deferred<ReturnType<typeof task>>()
+    mocks.getTask.mockReturnValueOnce(pendingTask.promise)
+    await wrapper.get('.case-log-switch button:nth-child(2)').trigger('click')
+    await flushPromises()
+    await wrapper.get('.case-log-switch button:first-child').trigger('click')
+    pendingTask.resolve(task('EXEC-ORIGINAL'))
+    await flushPromises()
+    expect(wrapper.get('.case-log-dl').text()).toContain('EXEC-RERUN')
+    expect(wrapper.get('.case-log-console').text()).toBe('EXEC-RERUN 任务日志')
+    expect(wrapper.get('.case-log-content').attributes('aria-busy')).toBe('false')
+  })
+
+  it('过期请求失败不会把当前已加载日志替换为缺失警告', async () => {
+    const wrapper = await openLog()
+    const pending = deferred<ReturnType<typeof execution>>()
+    mocks.getExecution.mockReturnValueOnce(pending.promise)
+    await wrapper.get('.case-log-switch button:nth-child(2)').trigger('click')
+    await wrapper.get('.case-log-switch button:first-child').trigger('click')
+    pending.reject(new Error('原执行请求失败'))
+    await flushPromises()
+    expect(wrapper.find('.case-log-missing').exists()).toBe(false)
+    expect(wrapper.get('.case-log-console').text()).toBe('EXEC-RERUN 任务日志')
+  })
+
+  it('关闭重开会刷新数据并使上一次弹窗的在途响应失效', async () => {
+    const wrapper = await openLog()
+    const pendingTask = deferred<ReturnType<typeof task>>()
+    mocks.getTask.mockReturnValueOnce(pendingTask.promise)
+    await wrapper.get('.case-log-switch button:nth-child(2)').trigger('click')
+    await flushPromises()
+    await wrapper.get('.case-log-close').trigger('click')
+    mocks.getTask.mockResolvedValueOnce({ ...task('EXEC-RERUN'), logs: ['重开后新日志'] })
+    await wrapper.findAll('tbody .review-action-btn')[0].trigger('click')
+    await flushPromises()
+    pendingTask.resolve(task('EXEC-ORIGINAL'))
+    await flushPromises()
+    expect(mocks.getExecution.mock.calls.filter(([id]) => id === 'EXEC-RERUN')).toHaveLength(2)
+    expect(wrapper.get('.case-log-dl').text()).toContain('EXEC-RERUN')
+    expect(wrapper.get('.case-log-console').text()).toBe('重开后新日志')
+  })
+
+  it('运行中执行切回时重新加载，不复用旧的运行状态和日志', async () => {
+    mocks.getExecution.mockImplementation(async (id: string) => execution(id, id === 'EXEC-RERUN' ? 'RUNNING' : 'COMPLETED'))
+    const wrapper = await openLog()
+    await wrapper.get('.case-log-switch button:nth-child(2)').trigger('click')
+    await flushPromises()
+    mocks.getTask.mockResolvedValueOnce({ ...task('EXEC-RERUN'), logs: ['运行中新增日志'] })
+    await wrapper.get('.case-log-switch button:first-child').trigger('click')
+    await flushPromises()
+    expect(mocks.getExecution.mock.calls.filter(([id]) => id === 'EXEC-RERUN')).toHaveLength(2)
+    expect(wrapper.get('.case-log-console').text()).toBe('运行中新增日志')
+  })
+})
+
 describe('查看档只读（开发维护 × 共享生产空间）', () => {
   it('canOperate=false 的行不可勾选/重跑/删除，整页出现只读提示条', async () => {
     mocks.getProductionReviews.mockReset().mockResolvedValue({

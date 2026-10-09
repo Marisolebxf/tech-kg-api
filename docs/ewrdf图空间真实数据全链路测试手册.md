@@ -1,7 +1,7 @@
 # ewrdf 图空间真实数据全链路验证手册(物料级)
 
 > 2026-10-09 v3(= v2 + 方案 B)。目标:在公网门户 `https://edu.itic-sci.com/bkg_zpt` 的部署栈上,用独立 `ewrdf` 图空间跑通**真实数据**全链路,使 **schema 管理、图谱构建、人工审核、平台总览、图谱查询**五个页面全部出现可核验的真实数据。
-> v3 变更:源绑定新增**方案 B(推荐)**——一次性建专用小库 `ewrdf_test`(7 张表共 104 行,物料 `docs/ewrdf_test_seed.sql`),五个下拉全部自动选对、免 API 覆盖、脚本零改动;v2 的原库 querySql + API 覆盖路径保留为方案 A(备选)。
+> v3 变更:源绑定新增**方案 B(推荐)**——一次性建专用小库 `ewrdf_test`(7 张表共 101 行,物料 `docs/ewrdf_test_seed.sql`),五个下拉全部自动选对、免 API 覆盖、脚本零改动;v2 的原库 querySql + API 覆盖路径保留为方案 A(备选)。
 > 本手册自带全部物料:10 个 schema 定义、10 个可直接粘贴的抽取脚本、两案源绑定 SQL(真实 id 白名单已填好)、建库脚本、2 个串行任务、五页面验证矩阵。
 > 所有源数据均为 `gkx_element` 库 `dwd_*` 数仓真实业务数据(真实工商机构/持股/高管、真实论文/作者/期刊),无 mock、无演示造数。
 
@@ -91,7 +91,7 @@
 
 | | **方案 B:专用测试库(推荐)** | 方案 A:原库 querySql(备选) |
 |---|---|---|
-| 前置动作 | 一次性建库搬数(4.B.0,共 104 行) | 无 |
+| 前置动作 | 一次性建库搬数(4.B.0,共 101 行) | 无 |
 | UI 五下拉 | **全部自动选对,纯点选保存** | 时间列必须手选;4 个绑定的主键列只是占位 |
 | 额外 API 调用 | **零** | 每个 schema 一次浏览器 console fetch(4.1) |
 | 抽取读取量 | 每表 ≤27 行 | Journal 绑定实际翻 2000 行(见 4.A 警示) |
@@ -110,7 +110,9 @@
 
 #### 4.B.0 建库搬数(一次性,只写新库,不动 gkx_element)
 
-物料文件:**`docs/ewrdf_test_seed.sql`**(与本手册同分支)。宿主机执行:
+> ✅ **2026-10-09 已执行,库已建好并核对**(101 行/中文无损/樊杰组与空名行在位)——本节命令只在需要重建时才用。
+
+物料文件:**`docs/ewrdf_test_seed.sql`**(与本手册同分支;脚本可重复执行,自带 `DROP DATABASE IF EXISTS` 重建)。宿主机执行:
 
 ```bash
 cd <仓库检出目录>
@@ -119,19 +121,21 @@ docker exec -i tech-kg-mysql mysql --default-character-set=utf8mb4 -uroot -pgkx_
 
 ⚠ `--default-character-set=utf8mb4` 不能省:实测缺省字符集下 `owners_type='单位'` 这类中文比较命中 0 行、中文字面量输出全变 `??`(6 条持股对会直接丢)。
 
-执行后核对行数(种子脚本头注释里有同款一行命令),预期:
+建好后核对行数(种子脚本头注释里有同款一行命令),预期:
 
 | 表 | 绑定给 | 行数 |
 |---|---|---|
 | t_org | Organization | 12 |
-| t_executive | Officer、EXECUTIVE_OF | 27 |
+| t_executive | Officer、EXECUTIVE_OF | 23(4 组同人双职位已合并) |
 | t_expert | Expert | 25 |
 | t_paper | Paper、PUBLISHED_IN | 10 |
 | t_journal | Journal | 4(按 publication_id 预去重) |
 | t_author_paper | AUTHORED_BY、COAUTHOR_WITH | 20 |
 | t_shareholder | SHAREHOLDER_OF | 6 |
 
-共 **104 行**。真实内容抽查:机构为真实工商主体(深圳市迈岭信息技术有限公司等);期刊为《经济地理》《电网技术》《电力系统保护与控制》《中国科学院院刊》;专家含樊杰同名组(消歧灰区素材)与 2 条空名行(抽取失败素材)。
+共 **101 行**。真实内容抽查:机构为真实工商主体(深圳市迈岭信息技术有限公司等);期刊为《经济地理》《电网技术》《电力系统保护与控制》《中国科学院院刊》;专家含樊杰同名组(消歧灰区素材)与 2 条空名行(抽取失败素材)。
+
+**真实数据发现(高管同人双职位)**:白名单 6 机构里有 4 人身兼两职(黄小龙 经理/董事、隆晓菁 总经理/董事长、林伟 经理/董事长、尹忠民 总经理/执行董事)。种子脚本按 `(org_id, executives_name)` GROUP BY 合并为一人一行、职位 `GROUP_CONCAT` 保双职(如「经理,董事」)。对比:方案 A 的 querySql 模式没有唯一约束,这 4 人会以两行进链路、Officer 实体同 vid 覆盖写,position 只留最后一行的值——方案 B 反而把真实双职位保住了。这也是物化 row_id 做主键的额外收益:源数据的复合键不唯一在建表时就会暴露,而不是悄悄混进图里。
 
 #### 4.B.1 UI 五下拉选值(选完表后主键列/时间列自动带出,核对即可)
 
@@ -637,12 +641,12 @@ MATCH (v:`Expert`) WHERE v.Expert.name == '樊杰' RETURN id(v), v.institution
 
 | 项 | 说明 |
 |---|---|
-| 资源红线 | 方案 B 只绑 `ewrdf_test` 的 7 张小表(共 104 行);方案 A 只用本手册的 id 白名单 querySql(总量 ~130 行)。batchSize=10,chain 串行,**勿对 gkx_element 的 dwd_* 大表做全表绑定**;共享图过载波时抽取变慢属正常,勿反复重启 |
+| 资源红线 | 方案 B 只绑 `ewrdf_test` 的 7 张小表(共 101 行);方案 A 只用本手册的 id 白名单 querySql(总量 ~130 行)。batchSize=10,chain 串行,**勿对 gkx_element 的 dwd_* 大表做全表绑定**;共享图过载波时抽取变慢属正常,勿反复重启 |
 | 静默写错空间 | 触发任务必须显式 `graphSpace:"ewrdf"`;不带时最坏写进 worker 默认空间 dev2 |
 | 共享环境 | 控制库曾有未知清理者删 schema(2026-09-23);业务库全栈共享——方案 A **只读** gkx_element 白名单行,方案 B 的写只落在新建 `ewrdf_test` 库;别人的数据(尤其 review_widgets 等)不碰 |
 | vid 上限 | ewrdf vid=FIXED_STRING(64):机构/作者 32 位、论文 19 位、Officer 复合 vid ~44 字节,均安全;自增字段别超 64 |
 | T_DIRECT | 现行抽取链不产生 T_DIRECT;若在库里看到存量 T_DIRECT 案,勿在 ewrdf 测 accept(非 RBAC 下会写默认空间) |
-| 幂等重跑 | 方案 A:querySql 按 (time, pk) keyset 水位增量,首次跑读白名单全集、重跑只读变更行;想全量重灌需先删 watermark(schema 源绑定保存处)。方案 B:普通表绑定无水位,每次执行重读全表 104 行(秒级),重跑 = 重复抽取覆盖写,天然幂等 |
+| 幂等重跑 | 方案 A:querySql 按 (time, pk) keyset 水位增量,首次跑读白名单全集、重跑只读变更行;想全量重灌需先删 watermark(schema 源绑定保存处)。方案 B:普通表绑定无水位,每次执行重读全表 101 行(秒级),重跑 = 重复抽取覆盖写,天然幂等 |
 
 ---
 

@@ -1,7 +1,7 @@
--- ewrdf 图空间全链路测试专用库:把 gkx_element 数仓的白名单行搬进独立小库(共 104 行)。
+-- ewrdf 图空间全链路测试专用库:把 gkx_element 数仓的白名单行搬进独立小库(共 101 行,可重复执行,先 DROP 重建)。
 -- 执行(必须带 --default-character-set=utf8mb4,缺省字符集会把中文比较/中文数据弄坏,实测中文全变 ??):
 --   docker exec -i tech-kg-mysql mysql --default-character-set=utf8mb4 -uroot -pgkx_element < docs/ewrdf_test_seed.sql
--- 核对行数(预期 t_org 12 / t_executive 27 / t_expert 25 / t_paper 10 / t_journal 4 / t_author_paper 20 / t_shareholder 6):
+-- 核对行数(预期 t_org 12 / t_executive 23 / t_expert 25 / t_paper 10 / t_journal 4 / t_author_paper 20 / t_shareholder 6):
 --   docker exec tech-kg-mysql mysql --default-character-set=utf8mb4 -uroot -pgkx_element -N -e "
 --     SELECT 't_org',COUNT(*) FROM ewrdf_test.t_org UNION ALL SELECT 't_executive',COUNT(*) FROM ewrdf_test.t_executive
 --     UNION ALL SELECT 't_expert',COUNT(*) FROM ewrdf_test.t_expert UNION ALL SELECT 't_paper',COUNT(*) FROM ewrdf_test.t_paper
@@ -9,6 +9,7 @@
 --     UNION ALL SELECT 't_shareholder',COUNT(*) FROM ewrdf_test.t_shareholder;"
 -- 清理:DROP DATABASE IF EXISTS ewrdf_test;
 
+DROP DATABASE IF EXISTS ewrdf_test;
 CREATE DATABASE IF NOT EXISTS ewrdf_test DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 USE ewrdf_test;
 
@@ -38,8 +39,11 @@ WHERE org_id IN ('6316ee16a50a0a093a5859d8b5cc67a8','98e68fdf64b81709249dc23816a
  'f21c867cb7a12e7f175c422de0e939a4','3d9ba778337dba72db8cc12a1bbb92be',
  'e9f6a720f02bb2143dd0f926b82f07f3','6ed1fec4b9de17f467edc5dd0af0c89a');
 
--- 高管(27 行)→ 绑定给 Officer、EXECUTIVE_OF(两 schema 共用此表)
+-- 高管(23 行)→ 绑定给 Officer、EXECUTIVE_OF(两 schema 共用此表)
 -- row_id 已物化(原表 org_id+executives_name 复合才唯一),主键列真实唯一
+-- 真实数据现象:4 人在同一机构身兼两职(黄小龙 经理/董事、隆晓菁 总经理/董事长、林伟 经理/董事长、
+-- 尹忠民 总经理/执行董事)——按 (org_id, executives_name) GROUP BY 合并为一人一行,职位 GROUP_CONCAT
+-- 保留双职;方案 A 的 querySql 模式下这 4 人是两行覆盖写、position 只留最后一行的值(信息丢失)
 CREATE TABLE t_executive (
   row_id varchar(600) NOT NULL,
   org_id varchar(255) NOT NULL,
@@ -50,11 +54,13 @@ CREATE TABLE t_executive (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 INSERT INTO t_executive
-SELECT CONCAT(org_id,'__',executives_name), org_id, executives_name, executives_position, updated_time
+SELECT CONCAT(org_id,'__',executives_name), org_id, executives_name,
+       GROUP_CONCAT(DISTINCT executives_position ORDER BY executives_position), MAX(updated_time)
 FROM gkx_element.dwd_org_executive_info
 WHERE org_id IN ('6316ee16a50a0a093a5859d8b5cc67a8','6c25d2e2c852ba5a81d733cefaf5fe7b',
  '0a14fdb97eb7d2892654ee2ef180b527','8e04394509161ebbdf63c1813b948955',
- 'f21c867cb7a12e7f175c422de0e939a4','e9f6a720f02bb2143dd0f926b82f07f3');
+ 'f21c867cb7a12e7f175c422de0e939a4','e9f6a720f02bb2143dd0f926b82f07f3')
+GROUP BY org_id, executives_name;
 
 -- 专家(25 行)→ 绑定给 Expert
 -- 含樊杰同名组(消歧灰区素材)与 2 条空名行(抽取失败素材),与手册方案 A 同一白名单

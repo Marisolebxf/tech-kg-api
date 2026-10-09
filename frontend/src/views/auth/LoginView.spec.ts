@@ -16,7 +16,7 @@ const profile = { user: { id: 1 }, isAdmin: false, permissions: [] } as AuthProf
 const unauthorized = { response: { status: 401 } }
 let wrapper: VueWrapper | undefined
 
-async function setup(initialProfile: AuthProfile | null = null) {
+async function setup(initialProfile: AuthProfile | null = null, error?: string) {
   const pinia = createPinia()
   setActivePinia(pinia)
   if (initialProfile) vi.mocked(getCurrentProfile).mockResolvedValue(initialProfile)
@@ -28,7 +28,7 @@ async function setup(initialProfile: AuthProfile | null = null) {
       { path: '/overview', name: 'overview', component: {} },
     ],
   })
-  await router.push('/login')
+  await router.push({ path: '/login', query: error ? { error } : {} })
   wrapper = mount(LoginView, { global: { plugins: [pinia, router] } })
   await flushPromises()
   const store = useAuthStore()
@@ -40,6 +40,19 @@ beforeEach(() => vi.resetAllMocks())
 afterEach(() => { wrapper?.unmount(); wrapper = undefined })
 
 describe('login navigation recovery', () => {
+  it('hides the legacy session-expired query feedback while explicit login still works', async () => {
+    const { button, startLogin } = await setup(null, '登录状态已失效或已超时，请重新登录')
+    expect(wrapper?.find('[role="alert"]').exists()).toBe(false)
+    await button.trigger('click')
+    await flushPromises()
+    expect(startLogin).toHaveBeenCalledExactlyOnceWith('/overview')
+  })
+
+  it('retains real authentication errors from the login redirect', async () => {
+    await setup(null, '登录服务暂时不可用，请稍后重试')
+    expect(wrapper?.get('[role="alert"]').text()).toBe('登录服务暂时不可用，请稍后重试')
+  })
+
   it('checks the server at click time instead of trusting the mounted profile', async () => {
     const { button, startLogin } = await setup(profile)
     vi.mocked(getCurrentProfile).mockRejectedValueOnce(unauthorized)

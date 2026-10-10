@@ -114,7 +114,7 @@ describe('实体搜索结果', () => {
     const blob = new Blob(['实体名称,ID\r\n张三,1'])
     vi.mocked(exportEntitiesCsv).mockResolvedValue(blob)
     const wrapper = await setup()
-    const button = wrapper.findAll('button').find(item => item.text() === '导出 CSV')!
+    const button = wrapper.findAll('button').find(item => item.text() === '导出当前实体CSV')!
     expect(button.element.previousElementSibling?.id).toBe('entity-filter-type')
     await button.trigger('click')
     await flushPromises()
@@ -134,13 +134,13 @@ describe('实体搜索结果', () => {
     let rejectExport!: (error: Error) => void
     vi.mocked(exportEntitiesCsv).mockReturnValue(new Promise((_resolve, reject) => { rejectExport = reject }))
     const wrapper = await setup()
-    const button = wrapper.findAll('button').find(item => item.text() === '导出 CSV')!
+    const button = wrapper.findAll('button').find(item => item.text() === '导出当前实体CSV')!
     await button.trigger('click')
     expect(button.text()).toBe('导出中...')
     expect(button.attributes('disabled')).toBeDefined()
     rejectExport(new Error('图服务不可用'))
     await flushPromises()
-    expect(button.text()).toBe('导出 CSV')
+    expect(button.text()).toBe('导出当前实体CSV')
     expect(button.attributes('disabled')).toBeUndefined()
     wrapper.unmount()
   })

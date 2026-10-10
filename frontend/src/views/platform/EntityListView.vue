@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Popover as APopover } from '@arco-design/web-vue'
-import { IconSearch } from '@arco-design/web-vue/es/icon'
+import { IconInfoCircle, IconSearch } from '@arco-design/web-vue/es/icon'
 
 import {
   browseEntities,
@@ -225,7 +225,7 @@ watch(
             </a-option>
           </a-select>
           <button class="kg-button" type="button" :disabled="exporting" :aria-busy="exporting" title="导出当前图空间所选类型的全部实体，不受列表上限和关键词限制" @click="onExport">
-            {{ exporting ? '导出中...' : '导出 CSV' }}
+            {{ exporting ? '导出中...' : '导出当前实体CSV' }}
           </button>
         </div>
         <div class="entity-toolbar__right">
@@ -245,7 +245,10 @@ watch(
           </button>
         </div>
       </div>
-      <p class="entity-preview-hint">列表和搜索仅覆盖最多 {{ ENTITY_PREVIEW_LIMIT }} 个实体，不足时按实际数量；完整数据可通过导出 CSV 获取。</p>
+      <div class="entity-preview-hint" role="note">
+        <IconInfoCircle aria-hidden="true" />
+        <span>列表和搜索仅覆盖最多 {{ ENTITY_PREVIEW_LIMIT }} 个实体，不足时按实际数量；完整数据可通过导出当前实体CSV获取。</span>
+      </div>
     </section>
 
     <section class="entity-shell entity-result-shell" aria-label="实体列表">
@@ -359,7 +362,9 @@ watch(
 .entity-toolbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px 16px}
 .entity-toolbar__left,.entity-toolbar__right{display:flex;min-width:0;align-items:center;gap:8px}
 .entity-toolbar__left{flex-wrap:wrap}
-.entity-preview-hint{margin:8px 0 0;color:#86909c;font-size:12px;line-height:20px}
+.entity-preview-hint{display:flex;min-width:0;align-items:center;gap:4px 8px;margin:8px 0 0;color:#86909c;font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
+.entity-preview-hint>span{min-width:0}
+.entity-preview-hint>svg{width:16px;height:16px;color:#86909c;font-size:16px;flex:0 0 auto}
 .entity-toolbar button{flex-shrink:0;white-space:nowrap}
 .entity-toolbar__right{min-width:0;flex:1 1 320px;justify-content:flex-end}
 .entity-empty{flex:1;display:grid;place-items:center;padding:40px 16px;color:#86909c;font-size:13px;line-height:22px;text-align:center}

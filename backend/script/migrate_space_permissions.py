@@ -62,6 +62,8 @@ def apply_plan(session: Session, plan: dict, *, apply: bool = False) -> dict:
         users_seen.add(uid)
         if not isinstance(member["businesses"], list):
             raise ValueError("businesses must be a list")
+        if len(member["businesses"]) > 1:
+            raise ValueError("A developer may belong to only one business")
         ids = set()
         for grant in member["businesses"]:
             if not isinstance(grant, dict) or set(grant) != {"clientId", "role"}:
@@ -83,7 +85,7 @@ def apply_plan(session: Session, plan: dict, *, apply: bool = False) -> dict:
         ):
             raise ValueError("Invalid or duplicate space name")
         spaces_seen.add(name)
-        if space["visibility"] not in {"public", "business", "unassigned"}:
+        if space["visibility"] not in {"public", "business"}:
             raise ValueError("Invalid visibility")
         if space["visibility"] == "business":
             business = session.get(BusinessClient, space["clientId"])

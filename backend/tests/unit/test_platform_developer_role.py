@@ -198,10 +198,8 @@ def test_admin_creation_does_not_require_online_approval(scope, monkeypatch):
     assert result.data == {"name": "new_space"}
 
 
-def test_domain_creation_rejects_developer_before_graph_call(scope):
+def test_domain_creation_rejects_ordinary_user_before_graph_call(scope):
     with scope() as session:
         with pytest.raises(HTTPException) as caught:
-            GraphSpaceService(session, client=object()).create_space(
-                resolve("developer"), "new_space"
-            )
+            GraphSpaceService(session, client=object()).create_space(resolve("user"), "new_space")
     assert caught.value.status_code == 403

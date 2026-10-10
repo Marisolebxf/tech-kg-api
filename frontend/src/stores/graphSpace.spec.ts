@@ -237,3 +237,13 @@ describe('两级目录与空间能力', () => {
     expect(store.businessId).toBe('business-a')
   })
 })
+
+it('下拉目录不展示缺失归属的空间，也不将其自动公开', () => {
+  const store = useGraphSpaceStore()
+  store.items = [
+    { name: 'unknown', mine: true, bound: true, groupKind: 'unassigned' },
+    { name: 'public', mine: true, bound: true, groupKind: 'public' },
+  ]
+  expect(store.groups.map(group => group.label)).toEqual(['公共图空间'])
+  expect(store.groups[0]!.children.map(item => item.value)).toEqual(['public'])
+})

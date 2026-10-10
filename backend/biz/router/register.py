@@ -177,6 +177,7 @@ def register_routers(app: FastAPI) -> None:
         Depends(require_platform_maintainer),
     ]
     maintainer_routers = (
+        graph_space_router,
         business_access_router,
         task_center_router,
         workflow_system_router,
@@ -189,5 +190,5 @@ def register_routers(app: FastAPI) -> None:
     )
     for router in maintainer_routers:
         app.include_router(router, prefix=API_V1_PREFIX, dependencies=maintainer_dependencies)
-    for router in (admin_member_router, graph_space_router):
+    for router in (admin_member_router,):
         app.include_router(router, prefix=API_V1_PREFIX, dependencies=admin_dependencies)

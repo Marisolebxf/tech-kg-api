@@ -41,6 +41,7 @@ import {
   unbindGraphSpace,
   type GraphSpaceItem,
 } from '../../api/graphSpace'
+import { useAuthStore } from '../../stores/auth'
 import { currentUserIsAdmin } from '../../api/currentUser'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
 import { useToast } from '../../composables/use-toast'
@@ -104,6 +105,8 @@ const categories = [
 // 响应式跟随 auth store（profile 异步加载，一次性赋值会把 admin 恒判 false——
 // 免登录部署下绑定入口/新建空间入口不渲染）
 const isAdmin = computed(() => currentUserIsAdmin())
+const auth = useAuthStore()
+const canManageSpaces = computed(() => isAdmin.value || auth.canDevelop)
 const graphSpaces = ref<GraphSpaceItem[]>([])
 const spaceDialogOpen = ref(false)
 const newSpaceName = ref('')
@@ -361,7 +364,7 @@ async function loadGraphSpaces() {
 }
 
 async function createSpace() {
-  if (!isAdmin.value) {
+  if (!canManageSpaces.value) {
     showToast('请线下向管理员申请创建图空间。', 'info')
     return
   }
@@ -389,7 +392,7 @@ async function createSpace() {
 /** 行级绑定/解绑：解绑只删当前用户与空间的绑定关系（平台总览的图空间筛选不再显示该空间），
  * 图数据库中的空间与数据原样保留；重新绑定后照常使用之前的数据。 */
 async function toggleSpaceBinding(space: GraphSpaceItem) {
-  if (spaceWorkingName.value) return
+  if (!canManageSpaces.value || spaceWorkingName.value) return
   const unbinding = space.mine
   spaceWorkingName.value = space.name
   try {
@@ -449,6 +452,7 @@ function emptyForm(kind: ConfigKind): ConfigForm {
 }
 
 function openCreate() {
+  if (!isAdmin.value) return
   if (isGraphSpaceCategory.value) {
     newSpaceName.value = ''
     newSpaceDescription.value = ''
@@ -491,6 +495,7 @@ async function verifyForm() {
 }
 
 async function saveConfig() {
+  if (!isAdmin.value) return
   if (hasCreateErrors.value) return
   const kind = formKind.value
   if (!kind) return
@@ -540,6 +545,7 @@ async function saveConfig() {
 }
 
 async function saveDetail() {
+  if (!isAdmin.value) return
   if (!selected.value) return
   if (hasDetailErrors.value) return
   const item = selected.value
@@ -575,6 +581,7 @@ async function saveDetail() {
 }
 
 async function testConnection(item: ConfigItem) {
+  if (!isAdmin.value) return
   testingId.value = item.id
   try {
     let result: { ok: boolean; latencyMs: number | null; error: string | null }
@@ -603,6 +610,7 @@ async function testConnection(item: ConfigItem) {
 }
 
 async function toggleItem(item: ConfigItem) {
+  if (!isAdmin.value) return
   const nextStatus: ConfigStatus = item.status === '停用' ? '正常' : '停用'
   try {
     if (item.kind === 'llm') {
@@ -623,7 +631,7 @@ const defaultUpdating = ref(false)
 const hasCategoryDefault = computed(() => items.value.some(item => item.category === activeCategory.value && item.isDefault))
 function defaultSwitchDisabled(item: ConfigItem) {
   // 默认必须恒有一条：当前默认不可取消（只能被"设为默认"替换），非默认随时可直接切换
-  return defaultUpdating.value || item.isDefault
+  return !isAdmin.value || defaultUpdating.value || item.isDefault
 }
 async function toggleDefault(item: ConfigItem, value: unknown) {
   const enabled = value === true
@@ -660,6 +668,7 @@ const deleteVisible = ref(false)
 const deleteSubmitting = ref(false)
 const deleteError = ref('')
 function removeConfig(item: ConfigItem) {
+  if (!isAdmin.value) return
   if ((item.kind === 'llm' || item.kind === 'embedding') && item.isDefault) {
     showToast('默认配置不能删除：请先将其他配置设为默认。', 'info')
     return
@@ -669,6 +678,7 @@ function removeConfig(item: ConfigItem) {
   deleteVisible.value = true
 }
 async function confirmDeleteConfig() {
+  if (!isAdmin.value) return
   const item = deleteTarget.value
   if (!item || deleteSubmitting.value) return
   deleteSubmitting.value = true
@@ -732,7 +742,7 @@ onUnmounted(() => {
       </aside>
 
       <main class="config-list">
-        <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilter" allow-clear placeholder="全部状态"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><form class="config-search-form" role="search" @submit.prevent="submitConfigSearch"><a-input v-model="keyword" class="config-search-input" allow-clear :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识、类型或地址" placeholder="搜索名称、标识、类型或地址"><template #prefix><IconSearch /></template></a-input><button class="primary config-search-button" type="submit">查询</button></form></nav><nav v-else class="config-list-actions"><button class="primary create-entry" type="button" @click="spaceDialogOpen = true">＋ 新建图数据空间</button><form class="config-search-form" role="search" @submit.prevent="submitSpaceSearch"><a-input v-model="spaceKeyword" class="config-search-input" allow-clear :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索图空间名称" placeholder="搜索图空间名称"><template #prefix><IconSearch /></template></a-input><button class="primary config-search-button" type="submit">查询</button></form></nav></header>
+        <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" :disabled="!isAdmin" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilter" allow-clear placeholder="全部状态"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><form class="config-search-form" role="search" @submit.prevent="submitConfigSearch"><a-input v-model="keyword" class="config-search-input" allow-clear :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识、类型或地址" placeholder="搜索名称、标识、类型或地址"><template #prefix><IconSearch /></template></a-input><button class="primary config-search-button" type="submit">查询</button></form></nav><nav v-else class="config-list-actions"><button class="primary create-entry" type="button" :disabled="!canManageSpaces" @click="spaceDialogOpen = true">＋ 新建图数据空间</button><form class="config-search-form" role="search" @submit.prevent="submitSpaceSearch"><a-input v-model="spaceKeyword" class="config-search-input" allow-clear :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索图空间名称" placeholder="搜索图空间名称"><template #prefix><IconSearch /></template></a-input><button class="primary config-search-button" type="submit">查询</button></form></nav></header>
         <div v-if="isGraphSpaceCategory" class="table-wrap space-table">
           <table>
             <thead><tr><th>图空间名称 / 说明</th><th class="config-status-col">绑定状态</th><th class="config-action-col">操作</th></tr></thead>
@@ -745,7 +755,7 @@ onUnmounted(() => {
                     <button
                       :class="space.mine ? 'link danger' : 'link'"
                       type="button"
-                      :disabled="spaceWorkingName === space.name"
+                      :disabled="!canManageSpaces || spaceWorkingName === space.name"
                       :title="space.mine ? '解绑仅从我的图空间列表移除（平台总览筛选不再显示），图数据保留，重新绑定后照常使用' : '绑定到我的图空间列表'"
                       @click.stop="toggleSpaceBinding(space)"
                     >{{ spaceWorkingName === space.name ? '处理中…' : space.mine ? '解绑' : '绑定' }}</button>
@@ -781,9 +791,9 @@ onUnmounted(() => {
                 <td class="config-time-col"><small class="updated">{{ item.updatedAt }}</small></td>
                 <td class="config-action-col">
                   <div class="row-actions">
-                    <button class="link" type="button" @click.stop="openDetail(item)">管理</button>
-                    <button class="link" type="button" :disabled="isModelKind && item.isDefault && item.status !== '停用'" :title="isModelKind && item.isDefault && item.status !== '停用' ? '默认配置不能停用' : ''" @click.stop="toggleItem(item)">{{ item.status === '停用' ? '启用' : '停用' }}</button>
-                    <button class="link danger" type="button" :disabled="isModelKind && item.isDefault" :title="isModelKind && item.isDefault ? '默认配置不能删除，请先将其他配置设为默认' : ''" @click.stop="removeConfig(item)">删除</button>
+                    <button class="link" type="button" @click.stop="openDetail(item)">{{ isAdmin ? '管理' : '查看' }}</button>
+                    <button class="link" type="button" :disabled="!isAdmin || isModelKind && item.isDefault && item.status !== '停用'" :title="isModelKind && item.isDefault && item.status !== '停用' ? '默认配置不能停用' : ''" @click.stop="toggleItem(item)">{{ item.status === '停用' ? '启用' : '停用' }}</button>
+                    <button class="link danger" type="button" :disabled="!isAdmin || isModelKind && item.isDefault" :title="isModelKind && item.isDefault ? '默认配置不能删除，请先将其他配置设为默认' : ''" @click.stop="removeConfig(item)">删除</button>
                   </div>
                 </td>
               </tr>
@@ -819,31 +829,31 @@ onUnmounted(() => {
       <aside v-if="selected" class="detail-drawer">
       <header><div><h2>{{ selected.name }}<b v-if="selected.isDefault" class="default-tag">默认</b></h2><span class="config-id">{{ selected.id }}</span></div><button type="button" @click="selected=null">×</button></header>
       <div class="detail-drawer-body">
-        <section class="health-card"><i :class="`is-${selected.status}`" /><div><strong>{{ selected.status === '正常' ? '配置可用' : selected.status === '异常' ? '连接存在异常' : '配置已停用' }}</strong><span>后端真实探活</span></div><button type="button" :disabled="testingId === selected.id" @click="testConnection(selected)">{{ testingId === selected.id ? '测试中…' : '测试连接' }}</button></section>
+        <section class="health-card"><i :class="`is-${selected.status}`" /><div><strong>{{ selected.status === '正常' ? '配置可用' : selected.status === '异常' ? '连接存在异常' : '配置已停用' }}</strong><span>后端真实探活</span></div><button type="button" :disabled="!isAdmin || testingId === selected.id" @click="testConnection(selected)">{{ testingId === selected.id ? '测试中…' : '测试连接' }}</button></section>
         <a-form :model="selected" class="detail-form" layout="vertical">
-          <a-form-item field="name" label="配置名称" required><input aria-label="name" v-model="selected.name" /><small v-if="detailFieldErrors.name" class="field-error">{{ detailFieldErrors.name }}</small></a-form-item>
-          <a-form-item label="服务类型"><input aria-label="input-field" :value="selected.type" readonly /></a-form-item>
+          <a-form-item field="name" label="配置名称" required><input :disabled="!isAdmin" aria-label="name" v-model="selected.name" /><small v-if="detailFieldErrors.name" class="field-error">{{ detailFieldErrors.name }}</small></a-form-item>
+          <a-form-item label="服务类型"><input :disabled="!isAdmin" aria-label="input-field" :value="selected.type" readonly /></a-form-item>
           <template v-if="selected.kind === 'llm' || selected.kind === 'embedding'">
-            <a-form-item class="wide" field="baseUrl" label="Base URL" required><input aria-label="baseUrl" v-model="selected.baseUrl" /><small v-if="detailFieldErrors.baseUrl" class="field-error">{{ detailFieldErrors.baseUrl }}</small></a-form-item>
-            <a-form-item field="model" label="模型" required><input aria-label="model" v-model="selected.model" /><small v-if="detailFieldErrors.model" class="field-error">{{ detailFieldErrors.model }}</small></a-form-item>
-            <a-form-item v-if="selected.kind === 'embedding'" label="维度"><input aria-label="number-input" :value="selected.dimensions ?? ''" type="number" @input="selected.dimensions = ($event.target as HTMLInputElement).value" /><small v-if="detailFieldErrors.dimensions" class="field-error">{{ detailFieldErrors.dimensions }}</small></a-form-item>
-            <a-form-item label="访问凭据"><input aria-label="input-field" :value="selected.apiKeyMasked || (selected.hasApiKey ? '••••••••' : '未设置')" readonly /></a-form-item>
-            <a-form-item class="wide" label="更新 API Key（留空保留原值）"><input aria-label="输入新 Key 覆盖原值" v-model="selected.apiKey" type="password" placeholder="输入新 Key 覆盖原值" /><small v-if="detailFieldErrors.apiKey" class="field-error">{{ detailFieldErrors.apiKey }}</small></a-form-item>
+            <a-form-item class="wide" field="baseUrl" label="Base URL" required><input :disabled="!isAdmin" aria-label="baseUrl" v-model="selected.baseUrl" /><small v-if="detailFieldErrors.baseUrl" class="field-error">{{ detailFieldErrors.baseUrl }}</small></a-form-item>
+            <a-form-item field="model" label="模型" required><input :disabled="!isAdmin" aria-label="model" v-model="selected.model" /><small v-if="detailFieldErrors.model" class="field-error">{{ detailFieldErrors.model }}</small></a-form-item>
+            <a-form-item v-if="selected.kind === 'embedding'" label="维度"><input :disabled="!isAdmin" aria-label="number-input" :value="selected.dimensions ?? ''" type="number" @input="selected.dimensions = ($event.target as HTMLInputElement).value" /><small v-if="detailFieldErrors.dimensions" class="field-error">{{ detailFieldErrors.dimensions }}</small></a-form-item>
+            <a-form-item label="访问凭据"><input :disabled="!isAdmin" aria-label="input-field" :value="selected.apiKeyMasked || (selected.hasApiKey ? '••••••••' : '未设置')" readonly /></a-form-item>
+            <a-form-item class="wide" label="更新 API Key（留空保留原值）"><input :disabled="!isAdmin" aria-label="输入新 Key 覆盖原值" v-model="selected.apiKey" type="password" placeholder="输入新 Key 覆盖原值" /><small v-if="detailFieldErrors.apiKey" class="field-error">{{ detailFieldErrors.apiKey }}</small></a-form-item>
           </template>
           <template v-else>
-            <a-form-item field="host" label="主机" required><input aria-label="host" v-model="selected.host" /><small v-if="detailFieldErrors.host" class="field-error">{{ detailFieldErrors.host }}</small></a-form-item>
-            <a-form-item label="端口"><input aria-label="number-input" :value="selected.port ?? ''" type="number" @input="selected.port = ($event.target as HTMLInputElement).value" /><small v-if="detailFieldErrors.port" class="field-error">{{ detailFieldErrors.port }}</small></a-form-item>
-            <a-form-item label="默认库"><input aria-label="defaultDatabase" v-model="selected.defaultDatabase" /><small v-if="detailFieldErrors.defaultDatabase" class="field-error">{{ detailFieldErrors.defaultDatabase }}</small></a-form-item>
-            <a-form-item field="username" label="用户名" required><input aria-label="username" v-model="selected.username" /><small v-if="detailFieldErrors.username" class="field-error">{{ detailFieldErrors.username }}</small></a-form-item>
-            <a-form-item label="访问凭据"><input aria-label="input-field" :value="selected.passwordMasked || (selected.hasPassword ? '••••••••' : '未设置')" readonly /></a-form-item>
-            <a-form-item class="wide" label="更新密码（留空保留原值）"><input aria-label="输入新密码覆盖原值" v-model="selected.password" type="password" placeholder="输入新密码覆盖原值" /><small v-if="detailFieldErrors.password" class="field-error">{{ detailFieldErrors.password }}</small></a-form-item>
+            <a-form-item field="host" label="主机" required><input :disabled="!isAdmin" aria-label="host" v-model="selected.host" /><small v-if="detailFieldErrors.host" class="field-error">{{ detailFieldErrors.host }}</small></a-form-item>
+            <a-form-item label="端口"><input :disabled="!isAdmin" aria-label="number-input" :value="selected.port ?? ''" type="number" @input="selected.port = ($event.target as HTMLInputElement).value" /><small v-if="detailFieldErrors.port" class="field-error">{{ detailFieldErrors.port }}</small></a-form-item>
+            <a-form-item label="默认库"><input :disabled="!isAdmin" aria-label="defaultDatabase" v-model="selected.defaultDatabase" /><small v-if="detailFieldErrors.defaultDatabase" class="field-error">{{ detailFieldErrors.defaultDatabase }}</small></a-form-item>
+            <a-form-item field="username" label="用户名" required><input :disabled="!isAdmin" aria-label="username" v-model="selected.username" /><small v-if="detailFieldErrors.username" class="field-error">{{ detailFieldErrors.username }}</small></a-form-item>
+            <a-form-item label="访问凭据"><input :disabled="!isAdmin" aria-label="input-field" :value="selected.passwordMasked || (selected.hasPassword ? '••••••••' : '未设置')" readonly /></a-form-item>
+            <a-form-item class="wide" label="更新密码（留空保留原值）"><input :disabled="!isAdmin" aria-label="输入新密码覆盖原值" v-model="selected.password" type="password" placeholder="输入新密码覆盖原值" /><small v-if="detailFieldErrors.password" class="field-error">{{ detailFieldErrors.password }}</small></a-form-item>
           </template>
-          <a-form-item class="wide" label="配置说明"><a-textarea v-model="selected.description" class="config-description-textarea" :max-length="configDescriptionMaxLength(selected.kind, 'detail')" show-word-limit :auto-size="{ minRows: 3, maxRows: 5 }" /><small v-if="detailFieldErrors.description" class="field-error">{{ detailFieldErrors.description }}</small></a-form-item>
+          <a-form-item class="wide" label="配置说明"><a-textarea :disabled="!isAdmin" v-model="selected.description" class="config-description-textarea" :max-length="configDescriptionMaxLength(selected.kind, 'detail')" show-word-limit :auto-size="{ minRows: 3, maxRows: 5 }" /><small v-if="detailFieldErrors.description" class="field-error">{{ detailFieldErrors.description }}</small></a-form-item>
         </a-form>
         <section class="reference-card"><header><strong>引用关系</strong><span>{{ selected.usage }}</span></header><p>配置变更将在下次脚本调用时生效（context 按触发时所选数据源 / 图空间 / LLM / embedding 注入；向量库随图空间自动同名创建）。</p></section>
       </div>
       <footer>
-        <button class="primary" type="button" :disabled="saving || hasDetailErrors" @click="saveDetail">{{ saving ? '保存中…' : '保存修改' }}</button>
+        <button class="primary" type="button" :disabled="!isAdmin || saving || hasDetailErrors" @click="saveDetail">{{ saving ? '保存中…' : '保存修改' }}</button>
       </footer>
       </aside>
     </Teleport>
@@ -903,6 +913,9 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.configuration-page button:disabled,.detail-drawer button:disabled{cursor:not-allowed;opacity:.5}
+.detail-form input:disabled{background:#f2f3f5;color:#86909c;cursor:not-allowed}
+
 .configuration-page{display:flex;box-sizing:border-box;height:100%;min-height:0;overflow:hidden;color:#17233b;flex-direction:column}.page-header{display:flex;flex:0 0 auto;align-items:flex-end;justify-content:space-between;margin-bottom:12px}.page-header span{color:#165dff;font-size:9px;letter-spacing:.12em}.page-header h1{margin:3px 0 0;font-size:22px}.page-header p{margin:4px 0 0;color:#66758f;font-size:11px}.primary{border-color:#165dff!important;background:#165dff!important;color:#fff!important}.config-workbench{display:grid;flex:1;min-height:0;grid-template-columns:248px minmax(0,1fr);overflow:hidden;border:1px solid #bdd7ff;border-radius:9px;background:#fff}.category-nav{display:flex;min-height:0;border-right:1px solid #dce8f8;background:#f8fbff;flex-direction:column}.category-nav>header{display:grid;gap:3px;padding:14px;border-bottom:1px solid #dce8f8}.category-nav>header strong{font-size:13px}.category-nav>header span{color:#8290a7;font-size:9px}.category-nav>button{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:9px;width:100%;padding:11px 12px;border:0;border-bottom:1px solid #edf2f8;background:transparent;color:#344766;text-align:left;cursor:pointer}.category-nav>button.active{background:#eaf2ff;box-shadow:inset 3px 0 #165dff}.category-nav>button>span{display:grid;gap:3px}.category-nav>button strong{font-size:11px}.category-nav>button small{color:#8290a7;font-size:8px}.category-nav>button em{min-width:20px;padding:2px 6px;border-radius:99px;background:#e7eef8;color:#71809a;font-size:9px;font-style:normal;text-align:center}.config-list{display:flex;min-width:0;min-height:0;flex-direction:column}.config-list>header{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid #dce8f8;background:#fff}.config-list>header>div{display:flex;align-items:baseline;gap:8px}.config-list h2{margin:0;font-size:15px}.config-list>header span{color:#8290a7;font-size:9px}.config-list nav{display:flex;flex:1;min-width:0;flex-wrap:wrap;gap:8px;align-items:center}.config-list nav button{height:31px;padding:0 12px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#40516d;font-size:10px;cursor:pointer}.config-list input,.config-list select{height:31px;padding:0 9px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#344766;font-size:10px}.config-list input{width:210px}.table-wrap{flex:1;min-height:0;overflow:auto}.table-wrap table{width:100%;border-collapse:collapse;font-size:10px}.table-wrap thead{position:sticky;z-index:2;top:0}.table-wrap th,.table-wrap td{padding:10px 11px;border-bottom:1px solid #e7eef7;text-align:left;vertical-align:middle}.table-wrap th{background:#f2f7fd;color:#60708a;font-weight:600;white-space:nowrap}.table-wrap tbody tr{cursor:pointer}.table-wrap tbody tr:hover td{background:#f7faff}.config-name{display:flex;align-items:center;gap:9px;min-width:210px}.config-name>span{display:grid;gap:3px}.config-name strong{font-size:11px}.config-name small,.updated{display:block;color:#8290a7;font-size:8px}.type-name{display:block;color:#40516d;font-size:10px}.table-wrap code{display:block;max-width:210px;margin-top:3px;overflow:hidden;color:#71809a;font-size:8px;text-overflow:ellipsis;white-space:nowrap}.status{display:inline-flex;align-items:center;gap:5px;padding:3px 7px;border-radius:99px}.status>i{width:6px;height:6px;border-radius:50%;background:currentColor}.status.is-正常{background:#dcfae6;color:var(--status-success)}.status.is-异常{background:#fee4e2;color:var(--status-danger)}.status.is-停用{background:#eef1f5;color:var(--status-neutral)}.link{border:0;background:transparent;color:#165dff;font-size:10px;cursor:pointer}.empty{height:100px;color:#8290a7;text-align:center!important}.mask{position:fixed;z-index:40;inset:0;border:0;background:rgba(16,36,76,.24)}.detail-drawer{position:fixed;z-index:41;top:0;right:0;display:flex;width:min(500px,90vw);height:100vh;background:#f8fbff;box-shadow:-18px 0 46px rgba(28,58,107,.25);flex-direction:column}.detail-drawer>header,.create-dialog>header{display:flex;align-items:flex-start;justify-content:space-between;padding:18px;border-bottom:1px solid #dce8f8;background:#fff}.detail-drawer>header span,.create-dialog>header span{color:#165dff;font-size:9px}.detail-drawer h2,.create-dialog h2{margin:4px 0;font-size:18px}.detail-drawer>header button,.create-dialog>header button{width:29px;height:29px;border:0;border-radius:5px;background:#f0f4fa;font-size:19px;cursor:pointer}.health-card{display:grid;grid-template-columns:10px minmax(0,1fr) auto;align-items:center;gap:10px;margin:14px 16px 0;padding:12px;border:1px solid #cfe4d7;border-radius:7px;background:#fff}.health-card>i{width:9px;height:9px;border-radius:50%;background:var(--status-success);box-shadow:none}.health-card>i.is-异常{background:var(--status-danger);box-shadow:none}.health-card>i.is-停用{background:var(--status-neutral);box-shadow:none}.health-card>div{display:grid;gap:3px}.health-card strong{font-size:11px}.health-card span{color:#71809a;font-size:9px}.health-card button{height:29px;padding:0 10px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#165dff;font-size:9px;cursor:pointer}.detail-form,.dialog-form{display:grid;grid-template-columns:1fr 1fr;gap:11px;padding:16px}.detail-form label,.dialog-form label{display:grid;gap:5px}.detail-form label span,.dialog-form label span{color:#60708a;font-size:9px}.detail-form input,.detail-form textarea,.dialog-form input,.dialog-form select,.dialog-form textarea{box-sizing:border-box;width:100%;height:33px;padding:0 9px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#344766;font:10px inherit}.detail-form textarea,.dialog-form textarea{height:65px;padding-top:8px;resize:none}.wide{grid-column:1/-1}.reference-card{margin:0 16px;padding:12px;border:1px solid #d6e3f4;border-radius:7px;background:#fff}.reference-card header{display:flex;justify-content:space-between}.reference-card strong{font-size:10px}.reference-card span{color:#165dff;font-size:9px}.reference-card p{margin:5px 0 0;color:#71809a;font-size:9px;line-height:16px}.detail-drawer>footer,.create-dialog>footer{display:flex;justify-content:flex-end;gap:8px;margin-top:auto;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.detail-drawer>footer button,.create-dialog>footer button{height:33px;padding:0 13px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#40516d;cursor:pointer}.create-dialog{position:fixed;z-index:42;top:50%;left:50%;width:min(650px,calc(100vw - 40px));overflow:hidden;border-radius:10px;background:#f8fbff;box-shadow:0 24px 70px rgba(28,58,107,.3);transform:translate(-50%,-50%)}.create-dialog>footer{margin-top:0}.create-dialog button:disabled{opacity:.5;cursor:not-allowed}.default-tag{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:99px;background:#fff3d8;color:#b54708;font-size:8px;font-weight:600;font-style:normal}.checkbox{display:flex;flex-direction:row;align-items:center;gap:8px}.checkbox input{width:auto;height:14px}.checkbox span{color:#344766;font-size:10px}@media(max-width:1100px){.config-workbench{grid-template-columns:210px minmax(0,1fr)}}
 
 /* Compact fixed action column; free width belongs to data columns. */
@@ -910,6 +923,9 @@ onUnmounted(() => {
 .config-usage-col :deep(.arco-switch){vertical-align:middle}
 </style>
 <style scoped>
+.configuration-page button:disabled,.detail-drawer button:disabled{cursor:not-allowed;opacity:.5}
+.detail-form input:disabled{background:#f2f3f5;color:#86909c;cursor:not-allowed}
+
 /* DESIGN_RULES: configuration management page contract. */
 .configuration-page{padding:0;color:#1d2129}.page-header{align-items:center;margin-bottom:16px}.page-header>div{display:none}.page-header button{height:32px;margin-right:auto;margin-left:0;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
 .config-workbench{grid-template-columns:240px minmax(0,1fr);gap:0;border:0;border-radius:0;background:transparent}.category-nav{border:0;border-right:1px solid #e5e6eb;background:transparent}.config-list{overflow:hidden;border:0;border-radius:0;background:#fff}

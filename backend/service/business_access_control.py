@@ -189,20 +189,33 @@ def allowed_space_names(actor: PlatformActor, action: str = "read") -> list[str]
 
 
 def space_items(actor: PlatformActor) -> list[dict]:
+    from service.graph_space import GraphSpaceService
+
     names = allowed_space_names(actor)
     with session_scope() as session:
+        existing = set(GraphSpaceService(session)._all_spaces())
         rows = space_registrations(session)
         # 用户主动解绑（隐藏）的空间：mine/bound 为 False，工作空间下拉过滤掉
-        hidden = set(
-            session.scalars(
-                select(UserGraphSpaceHidden.space_name).where(
-                    UserGraphSpaceHidden.user_id == actor.user_id
+        hidden = (
+            set(
+                session.scalars(
+                    select(UserGraphSpaceHidden.space_name).where(
+                        UserGraphSpaceHidden.user_id == actor.user_id
+                    )
                 )
             )
+            if actor.can_develop
+            else set()
         )
         result = []
         for name in names:
             row = rows.get(name)
+            if (
+                name not in existing
+                or row is None
+                or not (row.is_shared_production or row.client_id)
+            ):
+                continue
             admin = actor.is_admin and not actor.business_only
             result.append(
                 {

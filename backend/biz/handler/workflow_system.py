@@ -135,7 +135,7 @@ async def get_definition(definition_id: str, actor: CurrentActor) -> ApiResponse
 
 
 def _validate_resource_selectors(actor: PlatformActor, selectors: dict) -> None:
-    """非管理员触发时校验：所选配置的 owner 必须是自己，图空间必须已绑定。
+    """校验共享配置可用、其他资源归属和图空间写权限。
 
     selectors 为 snake_case 键的字典（llm_config_id / embedding_config_id /
     mysql_datasource_id / milvus_config_id / graph_space 等）。
@@ -163,6 +163,13 @@ def _validate_resource_selectors(actor: PlatformActor, selectors: dict) -> None:
             if not config_id:
                 continue
             row = dao.get(config_id)
+            if isinstance(dao, (LlmConfigDAO, MysqlDatasourceDAO)):
+                from biz.dependencies.shared_configs import ensure_shared_config_read
+
+                ensure_shared_config_read(actor)
+                if row is None:
+                    raise HTTPException(404, "共享配置不存在")
+                continue
             if rbac_enabled() and row is not None:
                 from biz.dependencies.resources import ensure_owner_access
 

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from biz.dependencies.auth import CurrentActor, CurrentAdmin
+from biz.dependencies.auth import CurrentActor, CurrentMaintainer
 from biz.schemas.common import ApiResponse
 from infra.mysql import get_session
 from service.graph_space import GraphSpaceError, GraphSpaceService
@@ -49,7 +49,7 @@ readonly_router.get("", response_model=ApiResponse)(list_graph_spaces)
 @router.post("", response_model=ApiResponse)
 def create_graph_space(
     payload: GraphSpaceCreateRequest,
-    actor: CurrentAdmin,
+    actor: CurrentMaintainer,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
     try:
@@ -62,7 +62,7 @@ def create_graph_space(
 @router.post("/{space_name}/bind", response_model=ApiResponse)
 def bind_graph_space(
     space_name: str,
-    actor: CurrentAdmin,
+    actor: CurrentMaintainer,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
     try:
@@ -75,7 +75,7 @@ def bind_graph_space(
 @router.delete("/{space_name}", response_model=ApiResponse)
 def unbind_graph_space(
     space_name: str,
-    actor: CurrentAdmin,
+    actor: CurrentMaintainer,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
     if not _service(session).unbind(actor, space_name):

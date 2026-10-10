@@ -74,7 +74,12 @@ def _sqlite_scope(session: Session):
 def _stub_rbac_lists(monkeypatch, session, names: list[str]) -> None:
     """space_items 依赖的三件套替换为 sqlite 本地实现（无业务授权表）。"""
     monkeypatch.setattr(bac, "allowed_space_names", lambda actor, action="read": list(names))
-    monkeypatch.setattr(bac, "space_registrations", lambda session: {})
+    monkeypatch.setattr(
+        bac,
+        "space_registrations",
+        lambda session: {name: bac.SpaceRegistration(name, None, True) for name in names},
+    )
+    monkeypatch.setattr(GraphSpaceService, "_all_spaces", lambda self: list(names))
     monkeypatch.setattr(bac, "session_scope", lambda: _sqlite_scope(session))
 
 

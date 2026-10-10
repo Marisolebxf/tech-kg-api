@@ -866,7 +866,7 @@ async def load_schema_extract_plan(schema_id: str | dict[str, Any]) -> dict[str,
     """读控制库组装抽取计划：kind/name/activeProps（目录属性全集）/sources/脚本（S3 下载到临时文件）。"""
     from sqlalchemy.orm import Session as OrmSession
 
-    from biz.dependencies.resources import ensure_owner_access
+    from biz.dependencies.shared_configs import ensure_shared_config_read
     from db_model.schema_management import GraphSchemaDefinition
     from infra.s3 import get_schema_s3_storage
     from infra.workflow_mysql import get_workflow_engine
@@ -907,7 +907,7 @@ async def load_schema_extract_plan(schema_id: str | dict[str, Any]) -> dict[str,
                     source_row = MysqlDatasourceDAO(source_session).get(source.datasource_id)
                     if source_row is None:
                         raise ApplicationError("来源配置不存在", non_retryable=True)
-                    ensure_owner_access(actor, source_row.owner or "")
+                    ensure_shared_config_read(actor)
         kind = definition.kind
         name = definition.name
         label = definition.label

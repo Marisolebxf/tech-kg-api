@@ -244,3 +244,21 @@ def test_admin_new_job_uses_private_space_business(monkeypatch):
         lambda: nullcontext(SimpleNamespace(get=lambda model, name: row)),
     )
     assert jobs._job_business(actor(admin=True, business=""), {"graphSpace": "a-space"}) == "a"
+
+
+@pytest.mark.parametrize(
+    "space, shared, writable",
+    [
+        ("production", True, False),
+        ("a-space", False, False),
+    ],
+)
+def test_task_capabilities_report_actual_space_independent_of_selected_space(
+    space, shared, writable
+):
+    from dataclasses import replace
+
+    current = replace(actor(), context_graph_space="some-other-space")
+    result = jobs.workflow_resource_capabilities(current, {"graphSpace": space})
+    assert result["isSharedProduction"] is shared
+    assert result["writeAllowed"] is writable

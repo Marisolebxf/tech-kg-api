@@ -77,7 +77,7 @@ const isRerunnable = (row: ReviewRow) =>
 
 /** 置灰按钮的悬停说明：按记录状态给出不可操作的原因。 */
 function rerunDisabledReason(row: ReviewRow): string {
-  if (row.canOperate === false) return '共享生产空间：仅可查看，操作需管理员或本业务开发维护人员'
+  if (row.canOperate === false) return '共享生产空间：仅可查看，操作需管理员'
   if (row.rawStatus === 'RERUNNING') return '重跑中：等待本次重跑完成后再操作'
   return '已处理：仅「待处理 / 重跑失败」的记录可重跑或删除'
 }
@@ -673,7 +673,7 @@ onMounted(() => {
 
     <!-- 查看档只读提示（开发维护切到共享生产空间）：整页不可操作 -->
     <AppAlert v-if="reviewReadOnly" type="warning" class="review-readonly-bar">
-      当前图空间为共享生产空间：人工审核仅可查看，操作需管理员或本业务开发维护人员执行。
+      当前图空间为共享生产空间：人工审核仅可查看，操作需管理员执行。
     </AppAlert>
 
     <section class="ops-panel">

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppAlert from '../../components/AppAlert.vue'
 import { useSpacePermissions } from "../../composables/use-space-permissions"
 const { canWrite, spaces } = useSpacePermissions()
 
@@ -390,6 +391,7 @@ onMounted(() => {
     },
   )
 })
+const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces.currentItem.groupKind === 'public' || spaces.currentItem.isSharedProduction) && !canWrite.value))
 </script>
 
 <template>
@@ -439,6 +441,7 @@ onMounted(() => {
           <button class="gb-search-button" type="submit">查询</button>
         </form>
       </header>
+      <AppAlert v-if="publicSpaceReadOnly" type="warning" class="space-readonly-bar">当前图空间为共享生产空间：图谱构建仅可查看，操作需管理员执行。</AppAlert>
       <div class="gb-jobs-panel">
       <div ref="taskTableRef" class="gb-task-table" :class="{ 'has-scroll-right': tableHasMoreToScroll, 'gb-scroll--active': tableScrollActive }" @scroll.passive="handleTaskTableScroll">
         <table>
@@ -530,6 +533,8 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.space-readonly-bar{flex:0 0 auto;margin:0}
+
 .graph-build-page{display:flex;box-sizing:border-box;height:100%;min-height:0;overflow:hidden;padding:0;color:#1d2129;font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0;flex-direction:column}
 .graph-build-page :deep(*){font-family:inherit;letter-spacing:0}
 .gb-actions{display:flex;gap:8px;margin-bottom:12px}

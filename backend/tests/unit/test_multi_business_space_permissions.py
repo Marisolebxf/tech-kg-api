@@ -77,14 +77,13 @@ def developer():
     return acl.with_memberships(PlatformActor("dev", "dev", "Dev", "", False))
 
 
-def two_business_plan():
+def single_business_plan():
     return {
         "memberships": [
             {
                 "userId": "dev",
                 "businesses": [
                     {"clientId": "a", "role": "developer"},
-                    {"clientId": "b", "role": "developer"},
                 ],
             }
         ],
@@ -98,14 +97,15 @@ def test_additive_migration_preserves_legacy_authority_and_requires_explicit_ass
         "user_id"
     ]
     assert developer().developer_business_ids == ("a",)
-    migration.migrate(engine, apply=True, plan=two_business_plan())
-    assert developer().developer_business_ids == ("a", "b")
+    migration.migrate(engine, apply=True, plan=single_business_plan())
+    assert developer().developer_business_ids == ("a",)
     with scope() as session:
         assert session.get(BusinessMember, "dev").client_id == "a"
         assert session.get(BusinessGraphSpace, "dev2").client_id == "a"
         assert session.get(BusinessGraphSpace, "dev").shared_key == "production"
-    for space in ("a_space", "b_space"):
-        acl.ensure_space_access(developer(), space, "write")
+    acl.ensure_space_access(developer(), "a_space", "write")
+    with pytest.raises(HTTPException):
+        acl.ensure_space_access(developer(), "b_space", "write")
     for space in ("dev", "dev2"):
         acl.ensure_space_access(developer(), space, "read")
         acl.ensure_space_access(developer(), space, "review_view")
@@ -127,9 +127,9 @@ def test_explicit_empty_memberships_do_not_resurrect_legacy_grant(database):
 
 def test_plan_check_is_readonly_and_invalid_plan_does_not_partially_grant(database):
     engine, scope = database
-    migration.migrate(engine, plan=two_business_plan())
+    migration.migrate(engine, plan=single_business_plan())
     assert developer().developer_business_ids == ("a",)
-    bad = two_business_plan()
+    bad = single_business_plan()
     bad["spaces"].append({"name": "bad", "visibility": "business", "clientId": "missing"})
     with pytest.raises(ValueError):
         migration.migrate(engine, apply=True, plan=bad)
@@ -138,7 +138,48 @@ def test_plan_check_is_readonly_and_invalid_plan_does_not_partially_grant(databa
         assert not session.scalars(select(BusinessSpacePolicy)).all()
 
 
-def test_multibusiness_configuration_context_is_explicit_and_cannot_cross_task_business(database):
+def test_multi_business_assignment_is_rejected_without_changing_existing_grant(database):
+    from biz.handler import business_access as api
+
+    engine, scope = database
+    plan = single_business_plan()
+    plan["memberships"][0]["businesses"].append({"clientId": "b", "role": "developer"})
+    with pytest.raises(ValueError, match="only one"):
+        migration.migrate(engine, apply=True, plan=plan)
+    admin = PlatformActor("admin", "admin", "Admin", "", True)
+    for ids in ([], ["a", "b"]):
+        with scope() as session, pytest.raises(HTTPException) as error:
+            api.save_member(
+                "dev", api.MemberPayload(role="developer", clientIds=ids), admin, session, None
+            )
+        assert error.value.status_code == 400
+    assert developer().developer_business_ids == ("a",)
+
+
+def test_single_business_assignment_replaces_previous_membership(database, monkeypatch):
+    from types import SimpleNamespace
+
+    from biz.handler import business_access as api
+
+    _, scope = database
+    monkeypatch.setattr(api, "set_admin_role", lambda *args, **kwargs: None)
+    monkeypatch.setattr(api, "_audit", lambda *args, **kwargs: None)
+    app = SimpleNamespace(settings=SimpleNamespace(initial_admin_user_ids=()))
+    with scope() as session:
+        api.save_member(
+            "dev",
+            api.MemberPayload(role="developer", clientIds=["b"]),
+            PlatformActor("admin", "admin", "Admin", "", True),
+            session,
+            app,
+        )
+    assert developer().developer_business_ids == ("b",)
+    with pytest.raises(HTTPException):
+        acl.ensure_space_access(developer(), "a_space", "write")
+    acl.ensure_space_access(developer(), "b_space", "write")
+
+
+def test_nonshared_configuration_context_cannot_cross_business(database):
     from biz.dependencies.resources import (
         assigned_resource_owner,
         ensure_owner_access,
@@ -146,30 +187,29 @@ def test_multibusiness_configuration_context_is_explicit_and_cannot_cross_task_b
     )
 
     engine, _ = database
-    migration.migrate(engine, apply=True, plan=two_business_plan())
+    migration.migrate(engine, apply=True, plan=single_business_plan())
     actor = developer()
+    assert assigned_resource_owner(replace(actor, context_graph_space="dev")) == "business:a"
+    selected = replace(actor, context_graph_space="a_space")
+    assert resource_owner_filter(selected) == "business:a"
+    assert assigned_resource_owner(selected, "business:b") == "business:a"
     with pytest.raises(HTTPException):
-        assigned_resource_owner(replace(actor, context_graph_space="dev"))
-    selected = replace(actor, context_graph_space="b_space")
-    assert resource_owner_filter(selected) == "business:b"
-    assert assigned_resource_owner(selected, "business:a") == "business:b"
+        ensure_owner_access(selected, "business:b")
     with pytest.raises(HTTPException):
-        ensure_owner_access(selected, "business:a")
-    with pytest.raises(HTTPException):
-        resource_owner_filter(replace(selected, context_business_id="a"))
+        resource_owner_filter(replace(selected, context_business_id="b"))
 
 
 def test_public_task_read_does_not_require_creator_business_but_write_is_denied(database):
     from service.workflow_jobs import authorize_workflow_resource
 
     engine, _ = database
-    migration.migrate(engine, apply=True, plan=two_business_plan())
+    migration.migrate(engine, apply=True, plan=single_business_plan())
     actor = developer()
     task = {"owner": "admin", "clientId": "old-business", "graphSpace": "dev2"}
     authorize_workflow_resource(actor, task, "read")
     with pytest.raises(HTTPException):
         authorize_workflow_resource(actor, task, "write")
-    for client in ("a", "b"):
+    for client in ("a",):
         authorize_workflow_resource(
             actor, {"owner": "admin", "clientId": client, "graphSpace": f"{client}_space"}, "read"
         )
@@ -187,8 +227,8 @@ def test_admin_business_directory_and_unassigned_space_are_explicit(database, mo
         GraphSpaceService, "_all_spaces", lambda self: ["dev", "a_space", "unknown"]
     )
     assert [item["clientId"] for item in acl.business_summaries(admin)] == ["a", "b"]
-    unknown = next(item for item in acl.space_items(admin) if item["name"] == "unknown")
-    assert unknown["groupKind"] == "unassigned" and unknown["writeAllowed"]
+    assert all(item["groupKind"] in {"public", "business"} for item in acl.space_items(admin))
+    assert "unknown" not in {item["name"] for item in acl.space_items(admin)}
     assert "unknown" not in acl.allowed_space_names(developer())
 
 
@@ -248,7 +288,7 @@ def test_source_binding_without_request_header_still_uses_schema_business(databa
     from biz.schemas.schema_management import SchemaSourcesReplace
 
     engine, _ = database
-    migration.migrate(engine, apply=True, plan=two_business_plan())
+    migration.migrate(engine, apply=True, plan=single_business_plan())
     monkeypatch.setattr(
         schema_management.SchemaManagementDAO,
         "get",

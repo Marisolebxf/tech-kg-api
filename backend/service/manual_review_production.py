@@ -92,6 +92,73 @@ def resolve_job_ids(execution_ids: list[str | None]) -> dict[str, str]:
         return {}
 
 
+# T_EXTRACT_FAIL 只读口径（2026-10-10）：「已完成」以执行概要成功为准——
+# 重跑执行终态里只有 COMPLETED 算成功；FAILED/ABNORMAL（异常=抽取完成但含
+# 行级失败记录）/CANCELED/TERMINATED/TIMED_OUT 都不算，执行记录缺失
+# （控制库被清理）同样不算。概要非成功的案按「重跑失败」展示并可一直重跑。
+_EXEC_NON_SUCCESS_TERMINAL = {"FAILED", "ABNORMAL", "CANCELED", "TERMINATED", "TIMED_OUT"}
+
+
+def resolve_execution_statuses(execution_ids: list[str | None]) -> dict[str, str] | None:
+    """按执行 ID 批量取控制面执行状态（T_EXTRACT_FAIL 只读口径推导用）。
+
+    返回 None 表示控制面不可达——此时**跳过推导**、保留库内状态，避免把
+    正常队列整体误判成「重跑失败」；返回 dict 时，缺失的 key = 执行记录
+    已不存在，调用方按「无成功凭证」处理。
+    """
+    ids = [i for i in execution_ids if i]
+    if not ids:
+        return {}
+    try:
+        from service.workflow_repository import repository
+
+        return repository.execution_statuses_by_ids(execution_ids)
+    except Exception:  # noqa: BLE001
+        logger.warning("resolve execution status for review cases failed", exc_info=True)
+        return None
+
+
+def effective_extract_fail_status(
+    stored: str, rerun_execution_id: str | None, exec_statuses: dict[str, str] | None
+) -> str:
+    """T_EXTRACT_FAIL 案的有效状态（只读推导，不回写库）。
+
+    - RESOLVED：绑定重跑执行 COMPLETED → 维持「已完成」（只读）；执行非成功
+      终态或记录缺失 → RERUN_FAILED（重跑失败，可再次重跑，不冒认完成）。
+    - RERUNNING：执行仍在跑 → 维持「重跑中」；执行已终态但案未回写（回滚
+      失败滞留）或记录缺失 → RERUN_FAILED，避免永久卡成不可操作行。
+    - 其余状态原样返回；exec_statuses 为 None（控制面不可达）时不推导。
+    """
+    if exec_statuses is None:
+        return stored
+    if stored == "RESOLVED":
+        if not rerun_execution_id:
+            return stored
+        return (
+            "RESOLVED" if exec_statuses.get(rerun_execution_id) == "COMPLETED" else "RERUN_FAILED"
+        )
+    if stored == "RERUNNING":
+        status = exec_statuses.get(rerun_execution_id or "")
+        return "RERUNNING" if status == "RUNNING" else "RERUN_FAILED"
+    return stored
+
+
+def extract_fail_rerunnable(snapshot: dict[str, Any], exec_statuses: dict[str, str] | None) -> bool:
+    """写侧门控（重跑/删除）与只读口径对齐。
+
+    RESOLVED/RERUNNING 的 T_EXTRACT_FAIL 案，绑定重跑执行为非成功终态或
+    记录缺失时仍放行——「重跑异常/失败的记录可以一直重跑」；执行仍在跑
+    （RUNNING）或已成功（COMPLETED）则维持原禁用。控制面不可达时保守不放行。
+    """
+    if exec_statuses is None:
+        return False
+    rerun_id = str(snapshot.get("rerunExecutionId") or "")
+    if not rerun_id:
+        return False
+    status = exec_statuses.get(rerun_id)
+    return status is None or status in _EXEC_NON_SUCCESS_TERMINAL
+
+
 logger = logging.getLogger("service.manual_review")
 
 
@@ -139,13 +206,24 @@ class ManualReviewService:
                 rows = s.scalars(
                     select(ReviewCase).where(
                         ReviewCase.template_id == "T_EXTRACT_FAIL",
-                        ReviewCase.status.in_(("OPEN", "RERUN_FAILED")),
+                        ReviewCase.status.in_(("OPEN", "RERUN_FAILED", "RESOLVED", "RERUNNING")),
                     )
                 ).all()
                 rows = [
                     row
                     for row in rows
                     if (load(row.input_snapshot) or {}).get("executionId") == execution_id
+                ]
+                # 只读口径对齐：概要非成功（异常/失败/记录缺失）的已完成·滞留案
+                # 同样可重跑；真正的门控在 list_extract_fail_cases，这里放行进集合
+                exec_statuses = resolve_execution_statuses(
+                    [(load(row.input_snapshot) or {}).get("rerunExecutionId") for row in rows]
+                )
+                rows = [
+                    row
+                    for row in rows
+                    if row.status in ("OPEN", "RERUN_FAILED")
+                    or extract_fail_rerunnable(load(row.input_snapshot) or {}, exec_statuses)
                 ]
             else:
                 raise ReviewValidationError("请选择审核记录或指定执行记录")
@@ -268,8 +346,22 @@ class ManualReviewService:
             job_map = resolve_job_ids(
                 [(load(x.input_snapshot) or {}).get("executionId") for x in rows]
             )
+            # T_EXTRACT_FAIL 只读口径：同样一次 IN 批量取本页重跑执行状态，供
+            # case_dict 推导有效状态（只有 RESOLVED/RERUNNING 案需要核验执行概要）
+            exec_statuses = resolve_execution_statuses(
+                [
+                    (load(x.input_snapshot) or {}).get("rerunExecutionId")
+                    for x in rows
+                    if x.template_id == "T_EXTRACT_FAIL" and x.status in ("RESOLVED", "RERUNNING")
+                ]
+            )
             return {
-                "items": [self.case_dict(x, job_map, operate_spaces=operate_spaces) for x in rows],
+                "items": [
+                    self.case_dict(
+                        x, job_map, operate_spaces=operate_spaces, exec_statuses=exec_statuses
+                    )
+                    for x in rows
+                ],
                 "total": total,
                 "page": page,
                 "pageSize": size,
@@ -355,6 +447,7 @@ class ManualReviewService:
                 self.require_case_access(a, review_case)
                 space = review_case.graph_space
             from service.workflow_jobs import _job_business, authorize_background_execution
+
             client_id = _job_business(a.platform_actor, {"graphSpace": space})
             target = authorize_background_execution(
                 {"actorUserId": uid, "clientId": client_id, "graphSpace": space}
@@ -620,17 +713,28 @@ class ManualReviewService:
         execution_id: str | None = None,
         statuses: tuple[str, ...] = ("OPEN", "RERUN_FAILED"),
     ) -> list[dict[str, Any]]:
-        """查可重跑的 T_EXTRACT_FAIL case（供重跑服务分组、下发）。"""
+        """查可重跑的 T_EXTRACT_FAIL case（供重跑服务分组、下发）。
+
+        与只读口径对齐：除给定状态外，RESOLVED/RERUNNING 案在其绑定重跑执行
+        非成功终态（异常/失败/终止）或执行记录已缺失时同样可重跑——「已完成」
+        必须以执行概要成功为准，概要非成功的失败记录可以一直重跑。
+        """
+        fetch_statuses = tuple(dict.fromkeys((*statuses, "RESOLVED", "RERUNNING")))
         with self.sf() as s:
             q = select(ReviewCase).where(ReviewCase.template_id == "T_EXTRACT_FAIL")
             if case_ids:
                 q = q.where(ReviewCase.id.in_(case_ids))
-            if statuses:
-                q = q.where(ReviewCase.status.in_(statuses))
+            if fetch_statuses:
+                q = q.where(ReviewCase.status.in_(fetch_statuses))
             rows = s.scalars(q).all()
+            exec_statuses = resolve_execution_statuses(
+                [(load(x.input_snapshot) or {}).get("rerunExecutionId") for x in rows]
+            )
         result: list[dict[str, Any]] = []
         for c in rows:
             snapshot = load(c.input_snapshot) or {}
+            if c.status not in statuses and not extract_fail_rerunnable(snapshot, exec_statuses):
+                continue
             if execution_id and snapshot.get("executionId") != execution_id:
                 continue
             record_id = str(c.source_record_id or "")
@@ -661,16 +765,43 @@ class ManualReviewService:
         先标记再触发，避免竞态（执行先完成而 case 尚未标记导致回写落空）。
         执行 id 由 ``attach_rerun_execution`` 在触发成功后补写进 snapshot。
         触发失败由调用方 ``revert_extract_rerun`` 回滚为 OPEN。
+
+        终态/RERUNNING 的案默认跳过；例外是只读口径放行的「概要非成功」案
+        （重跑异常/失败后误归已完成、或滞留重跑中）——重新标 RERUNING 拉起
+        正常闭环，结束时 resolve 照常回写成功/仍失败。
         """
         actor = self._extract_service_actor("rerun")
         t = now()
         marked = 0
         with self.sf() as s:
-            for case_id in case_ids:
-                c = s.scalar(select(ReviewCase).where(ReviewCase.id == case_id))
-                if c is None or c.template_id != "T_EXTRACT_FAIL":
+            cases = [
+                c
+                for c in (
+                    s.scalar(select(ReviewCase).where(ReviewCase.id == case_id))
+                    for case_id in case_ids
+                )
+                if c is not None
+            ]
+            # 只有终态/RERUNNING 案才需要核验执行概要（OPEN/RERUN_FAILED 恒可标）
+            gate_candidates = [
+                c for c in cases if c.status in TERMINAL_STATUSES or c.status == "RERUNNING"
+            ]
+            exec_statuses = (
+                resolve_execution_statuses(
+                    [
+                        (load(c.input_snapshot) or {}).get("rerunExecutionId")
+                        for c in gate_candidates
+                    ]
+                )
+                if gate_candidates
+                else {}
+            )
+            for c in cases:
+                if c.template_id != "T_EXTRACT_FAIL":
                     continue
-                if c.status in TERMINAL_STATUSES or c.status == "RERUNNING":
+                if (c.status in TERMINAL_STATUSES or c.status == "RERUNNING") and not (
+                    extract_fail_rerunnable(load(c.input_snapshot) or {}, exec_statuses)
+                ):
                     continue
                 snapshot = load(c.input_snapshot) or {}
                 if rerun_execution_id:
@@ -694,14 +825,18 @@ class ManualReviewService:
         return marked
 
     def attach_rerun_execution(self, case_ids: list[str], rerun_execution_id: str) -> int:
-        """触发成功后把重跑执行 id 补写进 case snapshot（前端展示/追踪）。"""
+        """触发成功后把重跑执行 id 补写进 case snapshot（前端展示/追踪）。
+
+        只补写本次已标 RERUNING 的案：mark 阶段被跳过的案（如真正已完成）
+        不改绑执行，保持「已完成·概要成功」的核验链稳定。
+        """
         t = now()
         attached = 0
         try:
             with self.sf() as s:
                 for case_id in case_ids:
                     c = s.scalar(select(ReviewCase).where(ReviewCase.id == case_id))
-                    if c is None:
+                    if c is None or c.status != "RERUNNING":
                         continue
                     snapshot = load(c.input_snapshot) or {}
                     snapshot["rerunExecutionId"] = rerun_execution_id
@@ -1360,13 +1495,20 @@ class ManualReviewService:
         """物理删除未处理 case（连同草稿/决议/附件/审计一并删除，不可恢复）。
 
         仅非终态（OPEN/RERUN_FAILED 等未处理）可删——与可重跑同门控；
-        已处理的记录保留作历史，不给删。review_admin 专用。
+        例外与只读口径对齐：T_EXTRACT_FAIL 终态案绑定重跑执行非成功
+        （误归「已完成」/滞留）时同样放行删除。其余已处理记录保留作历史。
+        review_admin 专用。
         """
         require_role(a, "reviewer" if a.platform_actor else "review_admin")
         with self.sf() as s:
             c = self.need(s, i)
             self.require_case_access(a, c)
-            if c.status in TERMINAL_STATUSES:
+            if c.status in TERMINAL_STATUSES and not extract_fail_rerunnable(
+                load(c.input_snapshot) or {},
+                resolve_execution_statuses(
+                    [(load(c.input_snapshot) or {}).get("rerunExecutionId")]
+                ),
+            ):
                 raise ReviewConflictError("已处理的记录不可删除")
             s.execute(delete(ReviewDraft).where(ReviewDraft.case_id == i))
             s.execute(delete(ReviewDecision).where(ReviewDecision.case_id == i))
@@ -1546,9 +1688,25 @@ class ManualReviewService:
             )
         )
 
-    def case_dict(self, c, job_map: dict[str, str] | None = None, operate_spaces=None):
+    def case_dict(
+        self,
+        c,
+        job_map: dict[str, str] | None = None,
+        operate_spaces=None,
+        exec_statuses: dict[str, str] | None = None,
+    ):
         input_data = load(c.input_snapshot) or {}
         execution_id = input_data.get("executionId")
+        # T_EXTRACT_FAIL 只读口径：执行概要成功（COMPLETED）才算「已完成」，
+        # 否则按「重跑失败」返回（前端映射可重跑徽标/按钮）；exec_statuses 为
+        # None（控制面不可达）时保留库内状态。
+        effective_status = (
+            effective_extract_fail_status(
+                c.status, input_data.get("rerunExecutionId"), exec_statuses
+            )
+            if c.template_id == "T_EXTRACT_FAIL" and exec_statuses is not None
+            else c.status
+        )
         return {
             "id": c.id,
             "graphSpace": c.graph_space,
@@ -1582,7 +1740,7 @@ class ManualReviewService:
             "riskLevel": _risk_label(c.risk_level),
             "scope": c.scope,
             "isolationScope": c.isolation_scope,
-            "status": c.status,
+            "status": effective_status,
             "assigneeId": c.assignee_id,
             "assigneeName": c.assignee_name,
             "version": c.version,
@@ -1600,7 +1758,17 @@ class ManualReviewService:
 
     def detail(self, s, c, duplicate=False):
         input_data = load(c.input_snapshot) or {}
-        d = self.case_dict(c, resolve_job_ids([input_data.get("executionId")]))
+        # T_EXTRACT_FAIL 详情与队列同口径：按执行概要推导有效状态（只读）
+        exec_statuses = (
+            resolve_execution_statuses([input_data.get("rerunExecutionId")])
+            if c.template_id == "T_EXTRACT_FAIL"
+            else None
+        )
+        d = self.case_dict(
+            c,
+            resolve_job_ids([input_data.get("executionId")]),
+            exec_statuses=exec_statuses,
+        )
         dr = s.get(ReviewDraft, c.id)
         reported = (load(c.candidate_snapshot) or {}).pop("reportedEvidence", [])
         files = [

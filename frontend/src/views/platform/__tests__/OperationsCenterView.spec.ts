@@ -525,6 +525,66 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     expect(wrapper.find('.case-log-dl router-link-stub').exists()).toBe(false)
     expect(wrapper.get('.case-log-close').text()).toBe('关闭')
   })
+
+  it('「日志」单 Schema 执行阶段名=Schema 中文名（schemaLabel），不带脚本步 id', async () => {
+    mocks.getProductionReview.mockResolvedValue({
+      ...caseRow('MR-1', 'OPEN'),
+      data: { input: { executionId: 'EXEC-RERUN-9' } },
+    })
+    mocks.getExecution.mockResolvedValue({
+      id: 'EXEC-RERUN-9', definitionId: 'schema-extract-expert', workflowId: 'wf-1', status: 'ABNORMAL',
+      startedAt: '2026-10-09 14:40:25', completedAt: '2026-10-09 14:41:00', triggerSource: 'RERUN',
+      taskId: 'PI-1', message: '抽取完成，含 2 条失败记录（已转人工审核）',
+      output: { schemaLabel: '专家', sources: [{ written: 10, failed: 2 }], failures: { count: 2 } },
+    })
+    mocks.getTask.mockResolvedValue({
+      id: 'PI-1', logs: ['抽取完成，含 2 条失败记录（已转人工审核）'],
+      steps: [{ id: 'extract', phase: '图谱构建', name: 'extract', status: '成功', count: '12', abnormal: '2', duration: '3s', description: '' }],
+    })
+
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+    await wrapper.findAll('tbody .review-action-btn')[0].trigger('click')
+    await flushPromises()
+
+    // 与原执行 chain 段/任务详情页同口径：阶段名=Schema 中文名，不渲染脚本步 id；行级失败仍映射「异常」
+    const stepRow = wrapper.get('.case-log-steps li')
+    expect(stepRow.get('.case-log-step-name').text()).toBe('专家')
+    expect(stepRow.find('.case-log-step-sub').exists()).toBe(false)
+    expect(stepRow.text()).not.toContain('extract')
+    expect(stepRow.text()).toContain('异常')
+  })
+
+  it('「日志」chain 执行阶段名保持 Schema 中文名，不渲染步 id 小字', async () => {
+    mocks.getProductionReview.mockResolvedValue({
+      ...caseRow('MR-1', 'OPEN'),
+      data: { input: { executionId: 'EXEC-CHAIN-3' } },
+    })
+    mocks.getExecution.mockResolvedValue({
+      id: 'EXEC-CHAIN-3', definitionId: 'chain-x', workflowId: 'wf-3', status: 'ABNORMAL',
+      startedAt: '2026-10-09 14:31:31', completedAt: '2026-10-09 14:32:20', triggerSource: 'MANUAL',
+      taskId: 'PI-3', message: '抽取完成，含 2 条失败记录（已转人工审核）',
+      output: { sources: [{ written: 500, failed: 2 }], failures: { count: 2 } },
+    })
+    mocks.getTask.mockResolvedValue({
+      id: 'PI-3', logs: [],
+      steps: [
+        { id: 'schema:abc', phase: '图谱构建', name: '论文', status: '成功', count: '300', abnormal: '0', duration: '1m', description: '' },
+        { id: 'schema:def', phase: '图谱构建', name: '专家', status: '成功', count: '12', abnormal: '2', duration: '3s', description: '' },
+      ],
+    })
+
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+    await wrapper.findAll('tbody .review-action-btn')[0].trigger('click')
+    await flushPromises()
+
+    // chain 段名本就是 Schema 中文名，原样保留；不套单 Schema 的步 id 小字
+    expect(wrapper.findAll('.case-log-step-name').map((node) => node.text())).toEqual(['论文', '专家'])
+    expect(wrapper.findAll('.case-log-step-sub')).toHaveLength(0)
+  })
 })
 
 describe('执行日志标签切换', () => {

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import type { CascaderOption } from '@arco-design/web-vue'
+
 import { computed, onMounted, watch } from 'vue'
 
 import { useAuthStore } from '../stores/auth'
@@ -7,7 +9,20 @@ import { useGraphSpaceStore } from '../stores/graphSpace'
 const graphSpaceStore = useGraphSpaceStore()
 const authStore = useAuthStore()
 
-const options = computed(() => graphSpaceStore.groups)
+// 只有一个分组时拍平成单列：两级弹层里左列只挂一行分组名、其余 80% 空白，
+// 既难看又把弹层撑到 360px 宽顶死屏幕右缘；多分组（公共/业务/未归属并存）保持两级
+const options = computed(() => {
+  const groups = graphSpaceStore.groups
+  return groups.length === 1 ? groups[0]!.children : groups
+})
+
+/** 回显只显示空间名。arco 2.58 cascader 没有 show-path prop（早期传的
+    :show-path="false" 是无效属性从未生效），默认把整条路径「未归属空间 / dev2」
+    回显进 200px 触发框——分组前缀近半宽度，真实空间名反被挤成省略号，
+    看起来像框里卡了个占位符。format-label 拿到路径数组，取末级叶子即可。 */
+function formatLabel(path: CascaderOption[]): string {
+  return String(path[path.length - 1]?.label ?? '')
+}
 const showEmpty = computed(
   () =>
     !graphSpaceStore.loading &&
@@ -45,7 +60,7 @@ watch(
       :placeholder="showEmpty ? '暂无可用图空间' : '图空间'"
       :loading="graphSpaceStore.loading"
       :disabled="graphSpaceStore.loading"
-      :show-path="false"
+      :format-label="formatLabel"
       :trigger-props="{ contentClass: 'app-space-select-popup' }"
       @change="(value: unknown) => graphSpaceStore.setCurrent(String(value ?? ''))"
     />
@@ -114,10 +129,31 @@ watch(
 
 .app-space-select-popup .arco-cascader-panel {
   max-width: min(360px, 80vw);
+  /* arco 面板定高 200px，行高 36px 只装 5.56 行——第 6 行被拦腰截断，半截浅灰
+     字形在弹层底边像条残影/占位带。改成 6 整行（216px 内容 + 2px 上下边框），
+     列滚动区同步放高，长列表照常滚动。 */
+  height: 218px;
+}
+
+.app-space-select-popup .arco-cascader-column-content {
+  max-height: 216px;
 }
 
 .app-space-select-popup .arco-cascader-option-label {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* cascader 把 position:'bl' 硬编码进 mergeProps（triggerProps 覆盖不掉），弹层
+   左缘对齐触发器左缘、向右铺 360px，auto-fit 又把它推到贴死屏幕右缘——阴影被裁，
+   看着就是右侧溢出。顶栏右缘内边距恒 32px（实测 1280~1920 四档视口），直接把
+   teleport 到 body 的定位层右对齐到输入框右缘，宽窄（单列/双列）自适应；
+   left 必须用 !important 压掉 arco 每次重算写入的 inline left。手机端布局
+   不同（label 隐藏、输入框拉伸），维持原生 auto-fit。 */
+@media (min-width: 768px) {
+  body > .arco-trigger-popup:has(.app-space-select-popup) {
+    left: auto !important;
+    right: 32px;
+  }
 }
 </style>

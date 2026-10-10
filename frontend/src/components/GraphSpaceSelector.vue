@@ -1,11 +1,21 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useResizeObserver } from '@vueuse/core'
 
 import { useAuthStore } from '../stores/auth'
 import { useGraphSpaceStore } from '../stores/graphSpace'
 
 const graphSpaceStore = useGraphSpaceStore()
 const authStore = useAuthStore()
+
+const selector = ref<HTMLElement>()
+const popupWidth = ref(200)
+const triggerElement = computed(() => selector.value?.querySelector<HTMLElement>('.arco-select-view'))
+// 弹层在 body 下，不能继承选择框宽度；按实际外框宽同步，窄屏收缩后也保持同宽。
+useResizeObserver(triggerElement, ([entry]) => {
+  const width = entry?.target.getBoundingClientRect().width
+  if (width && width > 0) popupWidth.value = width
+})
 
 const options = computed(() => graphSpaceStore.groups)
 const showEmpty = computed(
@@ -33,6 +43,7 @@ watch(
 
 <template>
   <div
+    ref="selector"
     class="app-space-select"
     :title="graphSpaceStore.loadError ? '图空间列表加载失败，请重试' : graphSpaceStore.current ? `切换当前工作图空间：${graphSpaceStore.current}` : '切换当前工作图空间'"
   >
@@ -46,7 +57,7 @@ watch(
       :loading="graphSpaceStore.loading"
       :disabled="graphSpaceStore.loading"
       :show-path="false"
-      :trigger-props="{ contentClass: 'app-space-select-popup' }"
+      :trigger-props="{ contentClass: 'app-space-select-popup', contentStyle: { width: `${popupWidth}px` } }"
       @change="(value: unknown) => graphSpaceStore.setCurrent(String(value ?? ''))"
     />
   </div>
@@ -123,10 +134,10 @@ watch(
 </style>
 
 <style>
-/* 弹层 teleport 到 body，经 contentClass 限定范围。固定两列比例及面板尺寸，
+/* 弹层 teleport 到 body，经 contentClass 限定范围。面板与上方外框同宽，
    目录切换、名称长度和选项数量只影响省略号/滚动，不再改变弹层大小。 */
 .app-space-select-popup .arco-cascader-panel {
-  width: min(360px, calc(100vw - 24px));
+  width: 100%;
   height: 200px;
 }
 
@@ -149,6 +160,7 @@ watch(
 .app-space-select-popup .arco-cascader-option-label {
   min-width: 0;
   overflow: hidden;
+  white-space: nowrap;
   text-overflow: ellipsis;
 }
 </style>

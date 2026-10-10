@@ -1,0 +1,75 @@
+OK   dwd_bid_base_out
+OK*  dwd_bid_purchase_agency_out  (重试去掉 INPLACE 子句成功)
+OK*  dwd_bid_target_item_out  (重试去掉 INPLACE 子句成功)
+OK*  dwd_bid_win_candidate_out  (重试去掉 INPLACE 子句成功)
+OK   dwd_en_author
+OK   dwd_en_journal
+OK   dwd_en_paper
+OK*  dwd_en_paper_citation  (重试去掉 INPLACE 子句成功)
+OK   dwd_en_paper_classification
+OK*  dwd_en_paper_reference  (重试去掉 INPLACE 子句成功)
+OK   dwd_en_paper_related
+OK   dwd_en_project
+OK   dwd_en_project_output
+OK   dwd_en_report
+OK*  dwd_forg_act_contro_info  (重试去掉 INPLACE 子句成功)
+OK   dwd_forg_base_info
+OK*  dwd_forg_beneficiary_info  (重试去掉 INPLACE 子句成功)
+OK*  dwd_forg_executive_info  (重试去掉 INPLACE 子句成功)
+OK   dwd_forg_product_info
+OK*  dwd_forg_shareholder_info  (重试去掉 INPLACE 子句成功)
+OK*  dwd_forg_stock_fin_info  (重试去掉 INPLACE 子句成功)
+OK*  dwd_forg_subsidiary_info  (重试去掉 INPLACE 子句成功)
+OK   dwd_industry_chain_info
+OK   dwd_industry_chain_news_info
+OK   dwd_org_annual_financial_info
+OK   dwd_org_bankruptcy_public_cases
+OK*  dwd_org_bankruptcy_public_cases_list  (重试去掉 INPLACE 子句成功)
+OK   dwd_org_base_info
+OK*  dwd_org_changerecord_info  (重试去掉 INPLACE 子句成功)
+OK*  dwd_org_company_abnormal  (重试去掉 INPLACE 子句成功)
+OK*  dwd_org_company_illegal  (重试去掉 INPLACE 子句成功)
+OK*  dwd_org_company_punish  (重试去掉 INPLACE 子句成功)
+OK*  dwd_org_executive_info  (重试去掉 INPLACE 子句成功)
+OK*  dwd_org_financing_info  (重试去掉 INPLACE 子句成功)
+OK   dwd_org_heis_info
+OK*  dwd_org_important_news_info  (重试去掉 INPLACE 子句成功)
+OK   dwd_org_industry_chain_dtl
+OK   dwd_org_industry_chain_prod_dtl
+OK*  dwd_org_invest_info  (重试去掉 INPLACE 子句成功)
+OK*  dwd_org_merger_acquisition_info  (重试去掉 INPLACE 子句成功)
+OK*  dwd_org_opt_judicial_case  (重试去掉 INPLACE 子句成功)
+OK   dwd_org_org_product_info
+OK*  dwd_org_recruit_info  (重试去掉 INPLACE 子句成功)
+OK*  dwd_org_risk_shixin  (重试去掉 INPLACE 子句成功)
+OK*  dwd_org_risk_tax_punish  (重试去掉 INPLACE 子句成功)
+OK*  dwd_org_risk_zhixing  (重试去掉 INPLACE 子句成功)
+OK*  dwd_org_shareholder_info  (重试去掉 INPLACE 子句成功)
+OK*  dwd_org_stock_base  (重试去掉 INPLACE 子句成功)
+OK*  dwd_org_stock_finance_info  (重试去掉 INPLACE 子句成功)
+OK   dwd_research_institute_base_info
+OK   dwd_scholar
+OK   dwd_scholar_coauthor
+OK   dwd_scholar_paper_relation
+OK*  dwd_scholar_papers  (重试去掉 INPLACE 子句成功)
+OK   dwd_scholar_research_direction
+OK   dwd_scholar_talent_flag
+OK   dwd_special_aomen_company
+OK   dwd_special_hongkong_company
+OK   dwd_special_taiwan_company
+OK   dwd_zck_intl_policy
+OK   dwd_zh_author
+OK   dwd_zh_journal
+OK   dwd_zh_paper
+OK*  dwd_zh_paper_citation  (重试去掉 INPLACE 子句成功)
+OK   dwd_zh_paper_classification
+OK*  dwd_zh_paper_reference  (重试去掉 INPLACE 子句成功)
+OK*  dwd_zh_paper_related  (重试去掉 INPLACE 子句成功)
+OK   dwd_zh_project
+OK   dwd_zh_project_output
+OK   dwd_zh_report
+OK*  dwd_zh_report_paper  (重试去掉 INPLACE 子句成功)
+OK   dws_zck_policy
+OK   ods_en_journal
+OK*  ods_en_report  (重试去掉 INPLACE 子句成功)
+OK   ods_zh_journal

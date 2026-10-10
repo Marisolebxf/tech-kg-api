@@ -525,7 +525,7 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     expect(wrapper.get('.case-log-close').text()).toBe('关闭')
   })
 
-  it('「日志」单 Schema 执行阶段主名=Schema 中文名（schemaLabel），步 id 降为次级小字', async () => {
+  it('「日志」单 Schema 执行阶段名=Schema 中文名（schemaLabel），不带脚本步 id', async () => {
     mocks.getProductionReview.mockResolvedValue({
       ...caseRow('MR-1', 'OPEN'),
       data: { input: { executionId: 'EXEC-RERUN-9' } },
@@ -547,10 +547,11 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     await wrapper.findAll('tbody .review-action-btn')[0].trigger('click')
     await flushPromises()
 
-    // 与原执行 chain 段/任务详情页同口径：主名=Schema 中文名，步 id 小字；行级失败仍映射「异常」
+    // 与原执行 chain 段/任务详情页同口径：阶段名=Schema 中文名，不渲染脚本步 id；行级失败仍映射「异常」
     const stepRow = wrapper.get('.case-log-steps li')
     expect(stepRow.get('.case-log-step-name').text()).toBe('专家')
-    expect(stepRow.get('.case-log-step-sub').text()).toBe('extract')
+    expect(stepRow.find('.case-log-step-sub').exists()).toBe(false)
+    expect(stepRow.text()).not.toContain('extract')
     expect(stepRow.text()).toContain('异常')
   })
 

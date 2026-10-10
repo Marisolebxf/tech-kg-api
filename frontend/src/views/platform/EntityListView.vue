@@ -6,10 +6,9 @@ import { IconSearch } from '@arco-design/web-vue/es/icon'
 import {
   browseEntities,
   entitySearchErrorMessage,
-  getEntityIndexStatus,
+  exportEntitiesCsv,
   getEntitySearchTypes,
   searchEntities,
-  type EntityIndexStatus,
   type EntityListResult,
   type EntityTypeCount,
 } from '../../api/entitySearch'
@@ -31,6 +30,10 @@ onUnmounted(() => { clearTimeout(tableScrollTimer) })
 const { showToast } = useToast()
 
 const PROPERTY_CHIP_LIMIT = 4
+const ENTITY_PREVIEW_LIMIT = 1000
+const exporting = ref(false)
+let exportController: AbortController | undefined
+onUnmounted(() => exportController?.abort())
 
 const keyword = ref('')
 const appliedKeyword = ref('')
@@ -42,30 +45,36 @@ const pageSize = ref(10)
 const page = ref(1)
 
 const types = ref<EntityTypeCount[]>([])
-const status = ref<EntityIndexStatus | null>(null)
 const result = ref<EntityListResult | null>(null)
 const loading = ref(false)
 const searchError = ref('')
+let searchVersion = 0
 
-const items = computed(() => result.value?.items ?? [])
+const items = computed(() => (result.value?.items ?? []).slice(
+  0, Math.max(0, ENTITY_PREVIEW_LIMIT - (page.value - 1) * pageSize.value),
+))
 const isBrowseMode = computed(() => !appliedKeyword.value)
 const paginationTotal = computed(() => {
   if (!result.value) return 0
-  return result.value.total
-    ?? (result.value.returned ?? result.value.items.length) + (page.value - 1) * pageSize.value
+  return Math.min(
+    ENTITY_PREVIEW_LIMIT,
+    result.value.total
+      ?? (result.value.returned ?? result.value.items.length) + (page.value - 1) * pageSize.value,
+  )
 })
 const totalPages = computed(() => {
   return Math.max(Math.ceil(paginationTotal.value / pageSize.value), 1)
 })
 
-async function loadIndexInfo() {
+async function loadEntityTypes() {
+  const selectedSpace = space.value
   try {
-    const [typeItems, statusData] = await Promise.all([
-      getEntitySearchTypes(space.value || null),
-      getEntityIndexStatus(space.value || null),
-    ])
+    const typeItems = await getEntitySearchTypes(selectedSpace || null)
+    if (selectedSpace !== space.value) return
     types.value = typeItems
-    status.value = statusData
+    if (entityType.value && !typeItems.some(type => type.name === entityType.value)) {
+      entityType.value = ''
+    }
   } catch (error) {
     showToast(entitySearchErrorMessage(error), 'error')
   }
@@ -77,14 +86,16 @@ function resetPagingAndSearch() {
 }
 
 async function doSearch() {
-  if (loading.value) return
+  const version = ++searchVersion
   const trimmed = keyword.value.trim()
   appliedKeyword.value = trimmed
   loading.value = true
   searchError.value = ''
   try {
+    let nextResult: EntityListResult
     if (trimmed) {
-      result.value = await searchEntities({
+      nextResult = await searchEntities({
+        previewOnly: true,
         keyword: trimmed,
         space: space.value || null,
         entityType: entityType.value || null,
@@ -92,24 +103,55 @@ async function doSearch() {
         offset: (page.value - 1) * pageSize.value,
       })
     } else {
-      // 空关键词：浏览模式——图空间直查分页（按 id 顺序取前几个）
-      result.value = await browseEntities({
+      // 空关键词：浏览模式——图空间直查分页，导航最多覆盖 1000 个实体。
+      nextResult = await browseEntities({
+        previewOnly: true,
         space: space.value || null,
         entityType: entityType.value || null,
         limit: pageSize.value,
         offset: (page.value - 1) * pageSize.value,
       })
     }
+    if (version === searchVersion) result.value = nextResult
   } catch (error) {
-    result.value = null
-    searchError.value = entitySearchErrorMessage(error)
+    if (version === searchVersion) {
+      result.value = null
+      searchError.value = entitySearchErrorMessage(error)
+    }
   } finally {
-    loading.value = false
+    if (version === searchVersion) loading.value = false
   }
 }
 
 function onEntityTypeChange() {
   resetPagingAndSearch()
+}
+
+async function onExport() {
+  if (exporting.value) return
+  exporting.value = true
+  const selectedType = entityType.value || null
+  const selectedSpace = space.value
+  const controller = new AbortController()
+  exportController = controller
+  try {
+    const blob = await exportEntitiesCsv({ space: selectedSpace || null, entityType: selectedType }, controller.signal)
+    if (controller.signal.aborted || selectedSpace !== space.value) return
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `实体列表_${selectedType || '全部'}_${new Date().toISOString().slice(0, 10)}.csv`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    showToast('CSV 导出完成', 'success')
+  } catch (error) {
+    if (!controller.signal.aborted) showToast(entitySearchErrorMessage(error), 'error')
+  } finally {
+    exporting.value = false
+    exportController = undefined
+  }
 }
 
 function onPageSizeChange(next: number) {
@@ -141,16 +183,24 @@ function propertyOverflow(item: EntityListResult['items'][number]): number {
 }
 
 onMounted(() => {
-  void loadIndexInfo().then(() => doSearch())
+  void loadEntityTypes().then(() => doSearch())
 })
 
 // 全局图空间切换：重置分页与关键词后按新空间重查
 watch(
   () => graphSpaceStore.current,
   () => {
+    exportController?.abort()
+    ++searchVersion
+    result.value = null
+    loading.value = true
     page.value = 1
+    keyword.value = ''
     appliedKeyword.value = ''
-    void loadIndexInfo().then(() => doSearch())
+    const selectedSpace = space.value
+    void loadEntityTypes().then(() => {
+      if (selectedSpace === space.value) void doSearch()
+    })
   },
 )
 </script>
@@ -170,10 +220,13 @@ watch(
             :scrollbar="false"
             @change="onEntityTypeChange"
           >
-            <a-option v-for="t in types" :key="t.name" :value="t.name" :label="`${t.name}（${t.count}）`">
-              <span class="entity-type-option" :title="`${t.name}（${t.count}）`">{{ t.name }}（{{ t.count }}）</span>
+            <a-option v-for="t in types" :key="t.name" :value="t.name" :label="t.name">
+              <span class="entity-type-option" :title="t.name">{{ t.name }}</span>
             </a-option>
           </a-select>
+          <button class="kg-button" type="button" :disabled="exporting" :aria-busy="exporting" title="导出当前图空间所选类型的全部实体，不受列表上限和关键词限制" @click="onExport">
+            {{ exporting ? '导出中...' : '导出 CSV' }}
+          </button>
         </div>
         <div class="entity-toolbar__right">
           <a-input
@@ -181,7 +234,7 @@ watch(
             v-model="keyword"
             class="entity-search-input"
             :max-length="SEARCH_KEYWORD_MAX_LENGTH"
-            aria-label="输入实体名称 / 属性关键词（语义 + 关键词混合检索）；留空则分页浏览全部实体"
+            aria-label="在当前最多 1000 个实体中查询名称、ID或属性关键词；留空则分页预览实体"
             placeholder="输入实体名称 / 属性关键词"
             @keyup.enter="resetPagingAndSearch"
           >
@@ -192,12 +245,7 @@ watch(
           </button>
         </div>
       </div>
-      <p v-if="status?.milvusReachable === false" class="entity-hint">
-        Milvus 当前不可用，已降级为 VID/已建图属性索引的精确查询。
-      </p>
-      <p v-else-if="status && !status.bm25Ready && status.indexed" class="entity-hint">
-        BM25 关键词条目缺失（仅语义检索可用），可通过图谱构建任务的实体索引重建恢复混合检索能力。
-      </p>
+      <p class="entity-preview-hint">列表和搜索仅覆盖最多 {{ ENTITY_PREVIEW_LIMIT }} 个实体，不足时按实际数量；完整数据可通过导出 CSV 获取。</p>
     </section>
 
     <section class="entity-shell entity-result-shell" aria-label="实体列表">
@@ -212,7 +260,7 @@ watch(
           <template v-else>当前图空间暂无实体</template>
         </template>
         <template v-else>
-          未找到匹配「{{ appliedKeyword }}」的实体{{ entityType ? `（类型 ${entityType}）` : '' }}
+          当前展示范围内未找到匹配「{{ appliedKeyword }}」的实体{{ entityType ? `（类型 ${entityType}）` : '' }}
         </template>
       </div>
       <template v-else>
@@ -224,7 +272,6 @@ watch(
                 <th>ID</th>
                 <th>实体类型</th>
                 <th>公共属性</th>
-                <th>{{ isBrowseMode ? '' : '相关度' }}</th>
               </tr>
             </thead>
             <tbody>
@@ -277,7 +324,6 @@ watch(
                       <span v-if="!propertyEntries(item).length" class="entity-props__empty">—</span>
                     </div>
                   </td>
-                  <td>{{ item.score ?? '' }}</td>
                 </tr>
               </template>
             </tbody>
@@ -295,7 +341,7 @@ watch(
         >
           <template #summary>
             <span class="entity-pagination__info">
-              <template v-if="isBrowseMode && result?.total != null">共 {{ result.total }} 个实体</template>
+              <template v-if="isBrowseMode">共 {{ paginationTotal }} 个实体</template>
               <template v-else>共 {{ paginationTotal }} 条</template>
             </span>
           </template>
@@ -313,9 +359,9 @@ watch(
 .entity-toolbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px 16px}
 .entity-toolbar__left,.entity-toolbar__right{display:flex;min-width:0;align-items:center;gap:8px}
 .entity-toolbar__left{flex-wrap:wrap}
+.entity-preview-hint{margin:8px 0 0;color:#86909c;font-size:12px;line-height:20px}
 .entity-toolbar button{flex-shrink:0;white-space:nowrap}
 .entity-toolbar__right{min-width:0;flex:1 1 320px;justify-content:flex-end}
-.entity-hint{margin:0;padding:8px 16px;border-top:1px dashed #ffe4ba;background:#fff7e8;color:#b54708;font-size:12px;line-height:20px}
 .entity-empty{flex:1;display:grid;place-items:center;padding:40px 16px;color:#86909c;font-size:13px;line-height:22px;text-align:center}
 .entity-table-wrap{flex:1;min-height:0;overflow:auto;scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:transparent transparent}
 .entity-table-wrap:hover,.entity-table-wrap.entity-scroll--active{scrollbar-color:rgba(78,89,105,.55) transparent}

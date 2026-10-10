@@ -16,6 +16,12 @@ class EntitySearchApplication:
     def browse(self, **kwargs) -> dict[str, Any]:
         return self._service.browse(**kwargs)
 
+    def preview_page(self, snapshot: dict[str, Any], **kwargs) -> dict[str, Any]:
+        return self._service.preview_page(snapshot, **kwargs)
+
+    def export_csv(self, **kwargs) -> str:
+        return self._service.export_csv(**kwargs)
+
     def reindex(self, **kwargs) -> dict[str, Any]:
         return self._service.reindex(**kwargs)
 

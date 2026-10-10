@@ -77,15 +77,36 @@ function errorMessage(error: unknown): string {
 
 export { errorMessage as entitySearchErrorMessage }
 
+export async function exportEntitiesCsv(payload: {
+  space?: string | null
+  entityType?: string | null
+}, signal?: AbortSignal): Promise<Blob> {
+  try {
+    // 全量导出可能持续数分钟；用户离开页面或切换图空间时取消请求。
+    return await http.get(`${PREFIX}/export`, {
+      params: payload, responseType: 'blob', timeout: 0, signal,
+    }) as unknown as Blob
+  } catch (error) {
+    // blob 请求的错误正文仍是 JSON，解包后才能展示后端权限/图查询错误。
+    const response = (error as { response?: { data?: unknown } })?.response
+    if (response?.data instanceof Blob) {
+      try { response.data = JSON.parse(await response.data.text()) } catch { /* 保留网络错误 */ }
+    }
+    throw new Error(errorMessage(error))
+  }
+}
+
 export async function browseEntities(payload: {
   space?: string | null
   entityType?: string | null
   limit?: number
   offset?: number
+  previewOnly?: boolean
 }): Promise<EntityListResult> {
+  const { previewOnly, ...params } = payload
   return unwrap(
     await asApiPromise<EntityListResult>(
-      http.get(`${PREFIX}/entities`, { params: payload }),
+      http.get(`${PREFIX}/${previewOnly ? 'preview' : 'entities'}`, { params }),
     ),
   )
 }
@@ -114,9 +135,15 @@ export async function searchEntities(payload: {
   entityType?: string | null
   limit?: number
   offset?: number
+  previewOnly?: boolean
 }): Promise<EntityListResult> {
+  const { previewOnly, ...params } = payload
   return unwrap(
-    await asApiPromise<EntityListResult>(http.post(`${PREFIX}/search`, payload)),
+    await asApiPromise<EntityListResult>(
+      previewOnly
+        ? http.get(`${PREFIX}/preview`, { params })
+        : http.post(`${PREFIX}/search`, params),
+    ),
   )
 }
 

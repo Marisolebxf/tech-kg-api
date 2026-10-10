@@ -9,7 +9,9 @@ import os
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+from starlette.types import Receive, Scope, Send
 
 from application.entity_search import EntitySearchApplication
 from biz.dependencies.auth import CurrentActor
@@ -20,6 +22,7 @@ from infra.entity_response_cache import build_cache_key
 from infra.graph_db.config import TRSGraphSettings
 from infra.workflow_mysql import get_workflow_session
 from service.entity_search import (
+    ENTITY_PREVIEW_LIMIT,
     EntitySearchError,
     EntitySearchReindexInProgressError,
     clear_entity_caches,
@@ -33,6 +36,17 @@ router = APIRouter(
     dependencies=[Depends(bind_selected_graph_space)],
 )
 logger = logging.getLogger(__name__)
+
+
+class TemporaryCsvResponse(FileResponse):
+    """成功下载或客户端断开后均回收临时文件。"""
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            os.unlink(self.path)
+
 
 # 浏览页默认缓存 5 分钟；关键词搜索仍使用较短 TTL，避免索引变化后旧命中保留过久。
 # 两者都是 L1 进程缓存 + L2 Redis 共享缓存，Redis 不可用时自动降级到 L1。
@@ -166,6 +180,37 @@ def _ensure_space_access(actor: CurrentActor, space: str | None) -> None:
     graph_space_access(actor, space)
 
 
+@router.get("/preview", response_model=ApiResponse)
+async def preview_entities(
+    actor: CurrentActor,
+    session: Annotated[Session, Depends(get_workflow_session)],
+    space: str | None = Query(None, max_length=64, description="图空间"),
+    entityType: str | None = Query(None, max_length=64, description="实体类型过滤"),
+    keyword: str = Query("", max_length=256, description="仅在列表预览范围内匹配名称、ID、属性"),
+    limit: int = Query(10, ge=1, le=100),
+    offset: int = Query(0, ge=0, le=ENTITY_PREVIEW_LIMIT),
+) -> ApiResponse:
+    """浏览/搜索共用同一份最多 1000 个实体的缓存，筛选后再按匹配数分页。"""
+    space = resolve_selected_space(space)
+    _ensure_space_access(actor, space)
+    try:
+        payload, _ = await _load_browse_payload(
+            session,
+            space=space,
+            entity_type=entityType,
+            limit=ENTITY_PREVIEW_LIMIT,
+            offset=0,
+        )
+        snapshot = json.loads(payload)["data"]
+        data = _application(session).preview_page(
+            snapshot, keyword=keyword, limit=limit, offset=offset
+        )
+        data["graphSpace"] = _resolved_space(space)
+        return ApiResponse(data=data)
+    except EntitySearchError as exc:
+        _raise_domain_error(exc)
+
+
 @router.get("/entities", response_model=ApiResponse)
 async def browse_entities(
     actor: CurrentActor,
@@ -194,6 +239,28 @@ async def browse_entities(
         payload,
         media_type="application/json",
         headers={"X-Entity-Cache": "HIT" if cache_hit else "MISS"},
+    )
+
+
+@router.get("/export", response_class=FileResponse)
+def export_entities_csv(
+    actor: CurrentActor,
+    session: Annotated[Session, Depends(get_workflow_session)],
+    space: str | None = Query(None, max_length=64, description="图空间"),
+    entityType: str | None = Query(None, max_length=64, description="实体类型；为空导出全部类型"),
+) -> FileResponse:
+    """导出所选图空间/类型的全部实体，不受列表分页上限或关键词影响。"""
+    space = resolve_selected_space(space)
+    _ensure_space_access(actor, space)
+    try:
+        path = _application(session).export_csv(space=space, entity_type=entityType)
+    except EntitySearchError as exc:
+        _raise_domain_error(exc)
+    return TemporaryCsvResponse(
+        path,
+        media_type="text/csv; charset=utf-8",
+        filename=f"entities_{entityType or 'all'}.csv",
+        headers={"Cache-Control": "no-store"},
     )
 
 

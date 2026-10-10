@@ -1201,7 +1201,11 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
         if pk_cursor:
             binds["cursor"] = str(pk_cursor)
     else:
-        cursor = request.get("cursor")
+        # keyset 游标键名与 workflow 批循环回传一致（final["pkCursor"]）：此前误读
+        # request["cursor"] 恒为空 → 每批从持久化空游标重读首页 → 无限批循环
+        # （2026-10-10 复测「转人工审核」链路时实测：时间列留空的 querySql 绑定
+        #  5500+ 批不停、执行永不收尾）。首批未带游标时回退持久化 checkpoint。
+        cursor = request.get("pkCursor")
         if cursor is None:
             wm_row = read_watermark(request.get("definitionId"), request.get("stepId") or "")
             cursor = ((wm_row or {}).get("checkpoint") or {}).get("pkCursor") or ""

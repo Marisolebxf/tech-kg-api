@@ -797,8 +797,13 @@ class TestSchemaExtractChain:
         assert beta["written"] == 1
         assert beta["failed"] == 1
         assert beta["activities"]["main"]["failed"] == 1
-        # 毒行失败跨环汇总；写图两环各一次
-        assert result["failures"] == {"count": 1, "recorded": 1, "truncated": False}
+        # 毒行失败跨环汇总；写图两环各一次（noRecordId 如实汇报，见 03efe8f7 口径）
+        assert result["failures"] == {
+            "count": 1,
+            "recorded": 1,
+            "noRecordId": 0,
+            "truncated": False,
+        }
         assert state["writes"] == ["Alpha", "Beta"]
         assert state["record_failures"][0]["recordId"] == "bad"
 

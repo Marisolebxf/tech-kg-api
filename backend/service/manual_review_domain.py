@@ -62,6 +62,8 @@ class ReviewIdentity:
         if not space:
             raise ReviewForbiddenError("审核记录未明确归属图空间，请管理员核实历史归属")
         actor = self.platform_actor
+        if actor and getattr(actor, "context_graph_space", "") and actor.context_graph_space != space:
+            raise ReviewForbiddenError("审核记录不属于当前图空间")
         if actor is None or actor.business_only or not actor.can_develop:
             raise ReviewForbiddenError("当前账号无人工审核权限")
         if actor.is_admin:
@@ -79,6 +81,8 @@ class ReviewIdentity:
         if not space:
             raise ReviewForbiddenError("审核记录未明确归属图空间，请管理员核实历史归属")
         actor = self.platform_actor
+        if actor and getattr(actor, "context_graph_space", "") and actor.context_graph_space != space:
+            raise ReviewForbiddenError("审核记录不属于当前图空间")
         if actor is None or actor.business_only or not actor.can_develop:
             raise ReviewForbiddenError("当前账号无人工审核权限")
         if actor.is_admin:

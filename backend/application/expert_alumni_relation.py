@@ -10,6 +10,7 @@ from typing import Any
 from infra.graph_db import TRSGraphClient
 from infra.graph_db.config import TRSGraphSettings
 from service.expert_alumni_relation import ExpertAlumniRelationService
+from service.graph_space_context import get_current_space, request_can_write
 
 logger = logging.getLogger(__name__)
 
@@ -37,14 +38,16 @@ class ExpertAlumniRelationApplication:
             education_stage=education_stage,
             limit=limit,
         )
-        # 写图副作用不缓存(服务层 TTL 缓存命中也会照常执行):校友判定结果
-        # upsert 为 ALUMNI 边,模式与同事模块 _persist_relations 一致。
+        # 当前空间允许写入才 upsert ALUMNI 边；公共空间只读查询不落盘。
         # 浅拷贝顶层 dict,避免把 persistence 键写进服务层共享缓存对象。
-        return {**data, "persistence": self._persist_relations(data)}
+        persistence = (self._persist_relations(data) if request_can_write.get() else
+                       {"space": get_current_space(), "edgeType": "ALUMNI", "created": 0, "updated": 0, "total": 0, "readOnly": True})
+        return {**data, "persistence": persistence}
 
     @staticmethod
     def _persist_relations(data: dict[str, Any]) -> dict[str, Any]:
         settings = TRSGraphSettings.from_env()
+        settings.space = get_current_space()
         graph = TRSGraphClient(settings)
         graph.connect()
         created = updated = 0

@@ -17,6 +17,10 @@ IDENTIFIER_TEXT_PATTERN = re.compile(r"[\w一-鿿·.\-]+")
 EDGE_ID_TEXT_PATTERN = re.compile(r"[\w一-鿿·.\->@]+")
 # 关键词类字段(名称、说明、原因等):允许空格、括号、顿号、逗号、斜杠和常用标点
 KEYWORD_TEXT_PATTERN = re.compile(r"[\w一-鿿·.\-()（）、，,/:：;；\s]+")
+# 长文本说明类字段(Schema 描述等):关键词字符集之上放行书名号、引号、感叹/疑问号、
+# 省略号、破折号等常规中文标点——正常中文行文用到这些符号不该被判异常字符
+# (2026-10-09 测试反馈「规范说明文本报异常字符」的根因即白名单缺这些符号)
+PROSE_TEXT_PATTERN = re.compile(r"[\w一-鿿·.\-()（）【】《》〈〉“”‘’！？…—～、，,。；;：:/\s]+")
 # URL 类字段(Base URL 等):允许 : / . ? # = & % ~ -
 URL_TEXT_PATTERN = re.compile(r"[\w:/.?#=&%~\-]+")
 # 密钥类字段(API Key 等):字母数字与常见分隔符,不允许空格

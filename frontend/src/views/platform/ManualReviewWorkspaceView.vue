@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useSpacePermissions } from "../../composables/use-space-permissions"
+const { canReview } = useSpacePermissions()
+
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppAlert from '../../components/AppAlert.vue'
@@ -33,7 +36,7 @@ const extractRerunning = computed(() => productionCase.value?.status === 'RERUNN
 const extractRerunSubmitting = ref(false)
 
 async function rerunThisRecord() {
-  if (!productionCase.value || extractRerunSubmitting.value) return
+  if (!isEditable.value || !productionCase.value || extractRerunSubmitting.value) return
   extractRerunSubmitting.value = true
   try {
     const result = await rerunExtractFailures({ caseIds: [productionCase.value.id] })
@@ -74,6 +77,7 @@ const directPatchedCandidate = computed<Record<string, unknown> | null>(() => {
   return patched
 })
 function toggleDirectEdit() {
+  if (!isEditable.value) return
   directEditing.value = !directEditing.value
   if (directEditing.value) {
     const initial: Record<string, string> = {}
@@ -122,7 +126,7 @@ const directTitle = computed(() => {
   return isHistory.value ? `${subject}审核结果` : `${subject}入库审核`
 })
 /** 查看档只读 case（如开发维护打开共享生产空间的记录）：仅查看，隐藏裁决操作。 */
-const isReadOnlyCase = computed(() => productionCase.value?.canOperate === false)
+const isReadOnlyCase = computed(() => !canReview.value || productionCase.value?.canOperate === false)
 const isEditable = computed(() => {
   if (isReadOnlyCase.value) return false
   if (isDirectCase.value) return productionCase.value?.status === 'OPEN'
@@ -248,10 +252,10 @@ const mapProductionRecord = (item: ProductionReviewCase): ReviewRecord => ({
 })
 
 const startHeartbeat = () => {
-  if (!productionCase.value || !['CLAIMED','IN_REVIEW'].includes(productionCase.value.status)) return
+  if (!isEditable.value || !productionCase.value || !['CLAIMED','IN_REVIEW'].includes(productionCase.value.status)) return
   window.clearInterval(heartbeatTimer)
   heartbeatTimer = window.setInterval(async () => {
-    if (!productionCase.value) return
+    if (!isEditable.value || !productionCase.value) { window.clearInterval(heartbeatTimer); return }
     try { productionCase.value = await heartbeatProductionReview(productionCase.value.id, productionCase.value.version) }
     catch { window.clearInterval(heartbeatTimer) }
   }, 30000)
@@ -463,7 +467,7 @@ const runPrimary = () => {
             <!-- 已处理（终态）重跑按钮保留但置灰 -->
             <button type="button"
               class="direct-accept"
-              :disabled="extractRerunSubmitting || productionCase?.status !== 'OPEN'"
+              :disabled="!isEditable || extractRerunSubmitting || productionCase?.status !== 'OPEN'"
               @click="rerunThisRecord"
             >
               <strong>{{ extractRerunSubmitting ? '下发中…' : '重跑该记录' }}</strong>
@@ -533,14 +537,14 @@ const runPrimary = () => {
         <div v-else-if="templateId === 'T_DIRECT'" class="direct-fields-block">
           <header class="direct-candidate-head">
             <p class="link-candidates-title">待入库候选字段（{{ directKind === 'relation' ? (labelZh(directEdgeType) || '关系') : (labelZh(directNodeLabel) || '实体') }}）：</p>
-            <button v-if="isEditable && !directEditing" type="button" class="direct-edit-toggle" @click="toggleDirectEdit">编辑字段</button>
+            <button v-if="!directEditing" :disabled="!isEditable" type="button" class="direct-edit-toggle" @click="toggleDirectEdit">编辑字段</button>
             <button v-else-if="directEditing && isEditable" type="button" class="direct-edit-toggle is-active" @click="toggleDirectEdit">取消编辑</button>
           </header>
           <table v-if="directCandidateFields.length" class="direct-fields" :class="{ 'is-editing': directEditing }">
             <tbody>
               <tr v-for="[key, val] in directCandidateFields" :key="String(key)" :class="{ 'is-edited': directEditing && directEdits[key] !== undefined && directEdits[key] !== directOriginalText(val) }">
                 <th>{{ key }}</th>
-                <td v-if="directEditing"><input aria-label="directEdits[key]" v-model="directEdits[key]" :placeholder="directOriginalText(val)" /></td>
+                <td v-if="directEditing"><input aria-label="directEdits[key]" v-model="directEdits[key]" :disabled="!isEditable" :placeholder="directOriginalText(val)" /></td>
                 <td v-else>{{ directOriginalText(val) }}</td>
               </tr>
             </tbody>
@@ -636,9 +640,9 @@ const runPrimary = () => {
       <!-- 确认操作放在详情框内右下角；查看档只读 case 仅展示权限提示。 -->
       <footer class="rw-foot">
         <AppAlert v-if="isReadOnlyCase" type="warning" class="rw-readonly-hint">
-          当前图空间为共享生产空间：该审核记录仅可查看，裁决需管理员或本业务开发维护人员执行。
+          当前图空间仅可查看，无法提交审核操作。
         </AppAlert>
-        <div v-else class="rw-foot__actions">
+        <div class="rw-foot__actions">
           <button class="primary" type="button" :disabled="isPrimaryDisabled" @click="runPrimary">{{ templateId === 'T_EXTRACT_FAIL' ? primaryActionLabel : '确认' }}</button>
         </div>
       </footer>
@@ -1295,6 +1299,7 @@ const runPrimary = () => {
 /* 失败原因：错误态提示符 + 等宽原文（原样换行） */
 .extract-error-block{margin:0}
 .extract-error-text{margin:0;font:12px/19px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-all}
+.direct-edit-toggle:disabled{color:#a9aeb8;background:#f2f3f5;cursor:not-allowed}
 </style>
 <style scoped>
 /* DESIGN_RULES: manual review detail contract. */
@@ -1310,4 +1315,5 @@ const runPrimary = () => {
 .rw-foot{margin-top:auto;padding-top:16px}.rw-foot__actions{flex:none}.rw-foot button{width:auto;min-width:88px;height:32px;padding:0 20px;font-size:14px;font-weight:500}
 .direct-actions{gap:16px}.direct-accept,.direct-reject{min-height:32px;padding:8px 16px;border-radius:4px;font-size:14px}.direct-accept strong,.direct-reject strong{font-size:14px;line-height:22px}.direct-accept em,.direct-reject em{font-size:12px;line-height:20px}
 @media(max-width:960px){.tri-grid{grid-template-columns:1fr}}
+.direct-edit-toggle:disabled{color:#a9aeb8;background:#f2f3f5;cursor:not-allowed}
 </style>

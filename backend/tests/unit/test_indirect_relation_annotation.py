@@ -11,7 +11,9 @@ from sqlalchemy.pool import StaticPool
 
 from biz.handler.expert_indirect_relation import router as expert_indirect_relation_router
 from db_model.base import Base
-from db_model.indirect_relation_annotation import IndirectRelationAnnotation
+from db_model.indirect_relation_annotation import (
+    SpaceIndirectRelationAnnotation as IndirectRelationAnnotation,
+)
 from infra.mysql import get_session
 
 ANNOTATIONS_URL = "/api/v1/kg-construction/expert-indirect-relations/annotations"

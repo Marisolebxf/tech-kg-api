@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from dao.mysql_datasource import MysqlDatasourceDAO
 from db_model.mysql_datasource import MysqlDatasource
 from infra.mysql import MySQLClient
+from utils.time_display import utc_to_cst_str
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +41,8 @@ def _to_out(cfg: MysqlDatasource) -> dict[str, Any]:
         "status": cfg.status,
         "hasPassword": bool(cfg.password),
         "passwordMasked": _mask_password(cfg.password),
-        "createdAt": cfg.created_at,
-        "updatedAt": cfg.updated_at,
+        "createdAt": utc_to_cst_str(cfg.created_at),
+        "updatedAt": utc_to_cst_str(cfg.updated_at),
     }
 
 

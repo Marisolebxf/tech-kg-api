@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 import service.entity_confidence as mod
 from service.entity_confidence import (
     DEFAULT_ENTITY_CONFIDENCE,
@@ -63,7 +65,7 @@ def test_resolve_prefers_existing_then_rule_then_default() -> None:
     assert resolve_entity_confidence({}) == DEFAULT_ENTITY_CONFIDENCE
 
 
-def test_fill_writes_back_when_missing() -> None:
+def test_fill_writes_back_when_missing(writable_graph_request) -> None:
     graph = FakeGraph()
     props = {"source_table": "dwd_scholar", "source_record_id": "s1", "name_zh": "李四"}
     value = fill_entity_confidence(props, {"Person"}, vid="person_s1", client=graph)
@@ -87,7 +89,7 @@ def test_persist_alters_tag_then_retries() -> None:
     assert graph.writes[-1].startswith("UPDATE VERTEX ON `IndustryNode`")
 
 
-def test_fill_survives_persist_failure() -> None:
+def test_fill_survives_persist_failure(writable_graph_request) -> None:
     class Boom:
         def execute_write(self, query: str) -> None:
             raise RuntimeError("graph down")
@@ -96,3 +98,13 @@ def test_fill_survives_persist_failure() -> None:
     value = fill_entity_confidence(props, {"Organization"}, vid="org_z", client=Boom())
     assert value == DEFAULT_ENTITY_CONFIDENCE
     assert props["confidence"] == DEFAULT_ENTITY_CONFIDENCE
+
+
+@pytest.fixture
+def writable_graph_request():
+    from service.graph_space_context import request_can_write
+    token = request_can_write.set(True)
+    try:
+        yield
+    finally:
+        request_can_write.reset(token)

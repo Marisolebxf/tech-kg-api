@@ -71,6 +71,10 @@ class AuthApplication:
 
         profile.business_rbac_enabled = rbac_enabled()
         profile.business_id = actor.business_id
+        profile.business_ids = list(actor.business_ids)
+        profile.developer_business_ids = list(actor.developer_business_ids)
+        from service.business_access_control import business_summaries
+        profile.businesses = business_summaries(actor)
         profile.platform_role = actor.role_code
         profile.can_develop = actor.can_develop
         profile.business_only = str(profile.user.id) in self.settings.business_only_user_ids
@@ -92,10 +96,9 @@ class AuthApplication:
             bootstrap_first_admin=self.settings.bootstrap_first_admin,
             force_admin=(self.settings.dev_first_user_admin and self._dev_admin_user_id == user_id),
         )
-        from service.business_access_control import resolve_membership
+        from service.business_access_control import with_memberships
 
-        business_id, business_role = resolve_membership(user_id)
-        actor = replace(actor, business_id=business_id, business_role=business_role)
+        actor = with_memberships(actor)
         # Explicit account scope caps effective access without changing either role source.
         if user_id in self.settings.business_only_user_ids:
             return replace(actor, is_admin=False, business_only=True)

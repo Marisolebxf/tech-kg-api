@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useSpacePermissions } from "../../composables/use-space-permissions"
+const { canWrite, spaces } = useSpacePermissions()
+
 import DeleteConfirmDialog from '../../components/DeleteConfirmDialog.vue'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
@@ -58,43 +61,8 @@ const filterTaskTypeSelect = computed({
   },
 })
 
-/** 图空间筛选持久化：'__all__'=全部空间；具体空间名=钉住该空间；空=跟随总览页全局选择器。
- *  由旧版「全部空间」开关迁移：开着的一律视为选了全部空间。 */
-const SPACE_SCOPE_KEY = 'tech-kg-graph-build-space-scope'
-const OLD_ALL_SPACES_KEY = 'tech-kg-graph-build-all-spaces'
-const ALL_SPACES = '__all__'
-
-function readStoredSpaceScope(): string {
-  try {
-    const stored = localStorage.getItem(SPACE_SCOPE_KEY)
-    if (stored === ALL_SPACES) return ALL_SPACES
-    if (stored) return stored
-    if (localStorage.getItem(OLD_ALL_SPACES_KEY) === '1') return ALL_SPACES
-  } catch {
-    // localStorage 不可用（隐私模式等）：仅内存态生效
-  }
-  return ''
-}
-
-const spaceScope = ref(readStoredSpaceScope())
-const spaceScopeSelect = computed({
-  get: () => spaceScope.value || graphSpaceStore.current || graphSpaceStore.spaces[0],
-  set: (value: string | undefined) => {
-    spaceScope.value = value ?? ''
-  },
-})
-watch(spaceScope, (value) => {
-  try {
-    localStorage.setItem(SPACE_SCOPE_KEY, value)
-  } catch {
-    // localStorage 不可用（隐私模式等）：仅内存态生效
-  }
-})
-
-/** 任务归属空间：payload 未带 graphSpace 的历史任务落当时的默认业务空间（空间列表首位恒为默认）。 */
-function jobSpace(job: WorkflowJob): string {
-  return job.graphSpace || graphSpaceStore.spaces[0] || graphSpaceStore.current
-}
+/** Historical jobs without a verified space are not assigned by list order. */
+function jobSpace(job: WorkflowJob): string { return job.graphSpace || '' }
 
 /** extract/chain 可新建；single/upload 为历史键（D2 停止新建），存量行仍需中文展示 */
 const TASK_TYPE_LABELS: Record<string, string> = {
@@ -106,9 +74,9 @@ const TASK_TYPE_LABELS: Record<string, string> = {
 
 const filteredJobs = computed(() => {
   const name = submittedName.value.toLowerCase()
-  const space = spaceScope.value || graphSpaceStore.current
+  const space = graphSpaceStore.current
   return jobs.value.filter((job) => {
-    if (space !== ALL_SPACES && jobSpace(job) !== space) return false
+    if (jobSpace(job) !== space) return false
     if (name && !job.name.toLowerCase().includes(name)) return false
     if (filterStatus.value && deriveJobUnifiedStatus(job) !== filterStatus.value) return false
     if (filterTaskType.value && job.taskType !== filterTaskType.value) return false
@@ -138,7 +106,7 @@ const {
   changePage: changeJobPage,
   changePageSize: changeJobPageSize,
 } = useClientPagination(filteredJobs, 10)
-watch([submittedName, filterStatus, filterTaskType, spaceScope, () => graphSpaceStore.current], resetJobPage)
+watch([submittedName, filterStatus, filterTaskType, () => graphSpaceStore.current], resetJobPage)
 
 function submitJobSearch() {
   submittedName.value = filterName.value.trim()
@@ -210,6 +178,7 @@ onUnmounted(() => {
 })
 
 function openCreate() {
+  if (!canWrite.value) return
   createOpen.value = true
 }
 
@@ -226,7 +195,17 @@ function jobScriptLabel(job: WorkflowJob): string {
   return job.definitionName || job.definitionId
 }
 
+/** 脚本列「脚本名 +N」悬停展开：chain 逐行列出全部脚本（按执行顺序）；
+ *  单脚本与展示文本一致，不设 title。 */
+function jobScriptTitle(job: WorkflowJob): string | undefined {
+  if (job.taskType !== 'chain') return undefined
+  const labels = job.schemaLabels?.length ? job.schemaLabels : job.definitionIds
+  if (labels.length < 2) return undefined
+  return [`共 ${labels.length} 个脚本（按执行顺序）：`, ...labels.map((label, i) => `${i + 1}. ${label}`)].join('\n')
+}
+
 async function onTrigger(job: WorkflowJob) {
+  if (!spaces.canWrite(jobSpace(job))) return
   // 未运行首启 + 运行失败/运行异常重跑（异常=行级失败已转审核，重跑按水位增量续抽）；
   // 已完成按产品决策不提供重复执行
   if (!['未运行', '运行失败', '运行异常'].includes(deriveJobUnifiedStatus(job)) || triggeringJobId.value) return
@@ -262,6 +241,7 @@ async function confirmPausedState(executionId: string, expected: boolean): Promi
 }
 
 async function onToggleState(job: WorkflowJob) {
+  if (!spaces.canWrite(jobSpace(job))) return
   // 方向按 job.status：暂停→恢复；其余（含运行中）→暂停。
   const active = job.status === '暂停'
   try {
@@ -304,13 +284,14 @@ const deleteVisible = ref(false)
 const deleteSubmitting = ref(false)
 const deleteError = ref('')
 function onDelete(job: WorkflowJob) {
+  if (!spaces.canWrite(jobSpace(job))) return
   deleteTarget.value = job
   deleteError.value = ''
   deleteVisible.value = true
 }
 async function confirmDeleteJob() {
   const job = deleteTarget.value
-  if (!job || deleteSubmitting.value) return
+  if (!job || !spaces.canWrite(jobSpace(job)) || deleteSubmitting.value) return
   deleteSubmitting.value = true
   deleteError.value = ''
 
@@ -341,7 +322,7 @@ function jobActions(job: WorkflowJob): JobAction[] {
     actions.push({
       key: 'trigger',
       label: status === '未运行' ? '执行' : '重新执行',
-      disabled: triggeringJobId.value === job.id,
+      disabled: !spaces.canWrite(jobSpace(job)) || triggeringJobId.value === job.id,
       title: triggeringJobId.value === job.id ? '正在下发执行…' : undefined,
       run: () => void onTrigger(job),
     })
@@ -350,14 +331,14 @@ function jobActions(job: WorkflowJob): JobAction[] {
     actions.push({
       key: 'pause',
       label: pausingJobIds.value[job.id] ? '暂停中…' : '暂停',
-      disabled: Boolean(pausingJobIds.value[job.id]),
+      disabled: !spaces.canWrite(jobSpace(job)) || Boolean(pausingJobIds.value[job.id]),
       run: () => void onToggleState(job),
     })
   } else if (job.status === '暂停' || status === '已暂停') {
     actions.push({
       key: 'resume',
       label: resumingJobIds.value[job.id] ? '恢复中…' : '恢复',
-      disabled: Boolean(resumingJobIds.value[job.id]),
+      disabled: !spaces.canWrite(jobSpace(job)) || Boolean(resumingJobIds.value[job.id]),
       run: () => void onToggleState(job),
     })
   }
@@ -366,7 +347,7 @@ function jobActions(job: WorkflowJob): JobAction[] {
     key: 'delete',
     label: '删除',
     danger: true,
-    disabled: status === '运行中',
+    disabled: !spaces.canWrite(jobSpace(job)) || status === '运行中',
     title: status === '运行中' ? '运行中：等待本次任务完成后再删除' : undefined,
     run: () => void onDelete(job),
   })
@@ -414,7 +395,7 @@ onMounted(() => {
 <template>
   <main class="graph-build-page">
     <div class="gb-actions">
-      <button type="button" class="primary" @click="openCreate">＋ 新建任务</button>
+      <button type="button" class="primary" :disabled="!canWrite" @click="openCreate">＋ 新建任务</button>
       <button type="button" :disabled="loading" @click="loadData()"><IconRefresh class="refresh-icon" />{{ loading ? '刷新中…' : '刷新' }}</button>
     </div>
 
@@ -438,16 +419,6 @@ onMounted(() => {
       <header class="gb-jobs-toolbar">
         <strong class="gb-section-title">任务列表</strong>
         <form class="gb-filters" role="search" @submit.prevent="submitJobSearch">
-          <a-select
-            v-model="spaceScopeSelect"
-            class="gb-filter-select"
-            placeholder="图空间"
-            allow-clear
-            title="按图空间筛选任务（清空即跟随总览页全局选择器的当前空间）"
-          >
-            <a-option :value="ALL_SPACES">全部空间</a-option>
-            <a-option v-for="space in graphSpaceStore.spaces" :key="space" :value="space">{{ space }}</a-option>
-          </a-select>
           <a-select id="graph-build-filter-status" v-model="filterStatusSelect" class="gb-filter-select" placeholder="状态" allow-clear>
             <a-option value="">未选择</a-option>
             <a-option value="未运行">未运行</a-option>
@@ -478,8 +449,8 @@ onMounted(() => {
             <tr v-for="job in pagedJobs" :key="job.id">
               <td><b>{{ job.name }}</b></td>
               <td>{{ TASK_TYPE_LABELS[job.taskType] || job.taskType }}</td>
-              <td><code>{{ jobScriptLabel(job) }}</code></td>
-              <td>{{ job.graphSpace || '默认' }}</td>
+              <td><code :title="jobScriptTitle(job)">{{ jobScriptLabel(job) }}</code></td>
+              <td>{{ job.graphSpace || '归属待确认' }}</td>
               <td>
                 <span
                   v-if="job.schedule.kind === 'cron'"
@@ -581,7 +552,6 @@ onMounted(() => {
 .gb-search-button{box-sizing:border-box;height:32px;padding:0 16px;border:1px solid #165dff;border-radius:4px;background:#165dff;color:#fff;font-size:14px;line-height:22px;cursor:pointer}
 .gb-search-button:hover{border-color:#4080ff;background:#4080ff}
 .gb-search-button:focus-visible{outline:2px solid rgba(22,93,255,.3);outline-offset:2px}
-/* 图空间下拉：跟随筛选条尺寸合同，不换行不被压缩 */
 .gb-task-table{flex:1;min-height:0;overflow:auto;padding:0;scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:transparent transparent}
 .gb-task-table:hover,.gb-task-table.gb-scroll--active{scrollbar-color:rgba(78,89,105,.55) transparent}
 .gb-task-table::-webkit-scrollbar{width:8px;height:8px}
@@ -641,7 +611,7 @@ span.run{color:var(--status-info)}
 /* 名称搜索清空图标：与下拉箭头同口径放大着色（Arco 默认 12px 偏淡几乎看不见） */
 .app-workspace .gb-filters #graph-build-filter-name .arco-input-clear-btn svg{width:14px;height:14px;font-size:14px;color:#4e5969}
 .app-workspace .gb-filters #graph-build-filter-name input.arco-input{box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
-/* 筛选下拉统一按类命中（状态/类型/图空间同一边框与尺寸合同），不再绑死控件 id */
+/* 筛选下拉统一按类命中（状态/类型同一边框与尺寸合同），不再绑死控件 id */
 .app-workspace .gb-filters .gb-filter-select.arco-select-view{display:inline-flex;box-sizing:border-box;align-items:center;width:160px;min-width:0;max-width:100%;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:0 0 160px}
 .app-workspace .gb-filters .gb-filter-select.arco-select-view:hover{border-color:#4080ff!important;background:#fff!important}
 .app-workspace .gb-filters .gb-filter-select.arco-select-view:focus-within,.app-workspace .gb-filters .gb-filter-select.arco-select-view-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
@@ -656,4 +626,5 @@ span.run{color:var(--status-info)}
 .gb-action-menu-item--danger.arco-dropdown-option:not(.arco-dropdown-option-disabled){color:#f53f3f}
 .gb-action-menu-item--danger.arco-dropdown-option:not(.arco-dropdown-option-disabled):hover{color:#f53f3f}
 .gb-action-menu-item.arco-dropdown-option-disabled{color:#c9cdd4}
+.gb-actions .primary:disabled{background:#f2f3f5;border-color:#e5e6eb;color:#a9aeb8;cursor:not-allowed}
 </style>

@@ -12,6 +12,9 @@ from db_model.business_access import (
     BusinessClient,
     BusinessGraphSpace,
     BusinessMember,
+    BusinessMembership,
+    BusinessMembershipState,
+    BusinessSpacePolicy,
     BusinessSpaceRequest,
 )
 from db_model.platform_governance import AdminAuditLog
@@ -30,6 +33,9 @@ def database(monkeypatch):
     Base.metadata.create_all(
         engine,
         tables=[
+            BusinessMembership.__table__,
+            BusinessMembershipState.__table__,
+            BusinessSpacePolicy.__table__,
             BusinessClient.__table__,
             BusinessMember.__table__,
             BusinessGraphSpace.__table__,

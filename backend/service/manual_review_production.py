@@ -48,6 +48,7 @@ from service.manual_review_domain import (
     validate_action,
     write_target,
 )
+from utils.time_display import utc_to_cst_str
 
 STATE_OR_VERSION_CONFLICT = "状态或版本冲突"
 
@@ -347,15 +348,14 @@ class ManualReviewService:
     def transfer(self, i, v, uid, name, a):
         require_role(a, "reviewer" if a.platform_actor else "review_admin")
         if a.platform_actor:
-            from service.business_access_control import ensure_space_access, resolve_membership
+            from service.business_access_control import ensure_space_access
 
             with self.sf() as session:
                 review_case = self.need(session, i)
                 self.require_case_access(a, review_case)
                 space = review_case.graph_space
-            from service.workflow_jobs import authorize_background_execution
-
-            client_id, _ = resolve_membership(uid)
+            from service.workflow_jobs import _job_business, authorize_background_execution
+            client_id = _job_business(a.platform_actor, {"graphSpace": space})
             target = authorize_background_execution(
                 {"actorUserId": uid, "clientId": client_id, "graphSpace": space}
             )
@@ -1390,7 +1390,7 @@ class ManualReviewService:
                     "oldStatus": x.old_status,
                     "newStatus": x.new_status,
                     "detail": load(x.detail),
-                    "createdAt": x.created_at.isoformat(),
+                    "createdAt": utc_to_cst_str(x.created_at),
                 }
                 for x in s.scalars(
                     select(ReviewAuditLog)
@@ -1586,16 +1586,16 @@ class ManualReviewService:
             "assigneeId": c.assignee_id,
             "assigneeName": c.assignee_name,
             "version": c.version,
-            "slaClaimAt": c.sla_claim_at.isoformat(),
-            "slaResolveAt": c.sla_resolve_at.isoformat(),
+            "slaClaimAt": utc_to_cst_str(c.sla_claim_at),
+            "slaResolveAt": utc_to_cst_str(c.sla_resolve_at),
             "diagnosis": c.diagnosis,
             "sourceTable": c.source_table,
             "sourceRecordId": c.source_record_id,
             # 重跑轮次（00919：OPEN 待处理记录应为 attempt=1）：快照未写 = 首次失败；
             # 重跑仍失败建新案时快照带 attempt+1（与 list_rerun_failures 同口径）
             "attempt": int(input_data.get("attempt") or 1),
-            "createdAt": c.created_at.isoformat(),
-            "updatedAt": c.updated_at.isoformat(),
+            "createdAt": utc_to_cst_str(c.created_at),
+            "updatedAt": utc_to_cst_str(c.updated_at),
         }
 
     def detail(self, s, c, duplicate=False):

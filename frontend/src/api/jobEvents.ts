@@ -1,9 +1,11 @@
 import { apiBase } from '../config'
+import { currentGraphSpace } from './currentGraphSpace'
 
 export interface JobChangeEvent {
   /** 发生变化的控制面记录（"job:<id>" / "exec:<id>"），仅作"有变化"信号 */
-  changed: string[]
-  removed: string[]
+  changed?: string[]
+  removed?: string[]
+  graphSpace?: string
 }
 
 /**
@@ -16,7 +18,9 @@ export function subscribeJobEvents(
   onChange: (event: JobChangeEvent) => void,
   onOpen?: () => void,
 ): () => void {
-  const source = new EventSource(`${apiBase}/v1/workflow-system/jobs/events`)
+  const space = currentGraphSpace()
+  if (!space) return () => {}
+  const source = new EventSource(`${apiBase}/v1/workflow-system/jobs/events?graphSpace=${encodeURIComponent(space)}`)
   source.addEventListener('open', () => onOpen?.())
   source.addEventListener('jobs-changed', (event) => {
     try {

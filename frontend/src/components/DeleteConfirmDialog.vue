@@ -9,7 +9,11 @@ withDefaults(defineProps<{
   description: string
   loading?: boolean
   error?: string
-}>(), { loading: false, error: '', identifier: '', identifierLabel: '标识' })
+  /** 动作词（标题「确认{verb}…」与确认按钮），默认「删除」。 */
+  verb?: string
+  /** 名称行尾的后果提示；可逆操作（如解绑）传真实后果替代「无法恢复」。 */
+  warning?: string
+}>(), { loading: false, error: '', identifier: '', identifierLabel: '标识', verb: '删除', warning: '删除后无法恢复，请谨慎操作。' })
 const emit = defineEmits<{ 'update:visible': [visible: boolean]; confirm: [] }>()
 </script>
 
@@ -20,13 +24,13 @@ const emit = defineEmits<{ 'update:visible': [visible: boolean]; confirm: [] }>(
     @update:visible="value => !loading && emit('update:visible', value)">
     <div class="kg-delete-summary">
       <span class="kg-delete-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3 2.8 19a1.4 1.4 0 0 0 1.2 2h16a1.4 1.4 0 0 0 1.2-2L12 3Zm0 6v5m0 3.5v.1" /></svg></span>
-      <div><h3>确认删除“{{ name }}”吗？</h3><p><template v-if="identifier">{{ identifierLabel }}：<code>{{ identifier }}</code>。 </template>删除后无法恢复，请谨慎操作。</p></div>
+      <div><h3>确认{{ verb }}“{{ name }}”吗？</h3><p><template v-if="identifier">{{ identifierLabel }}：<code>{{ identifier }}</code>。 </template>{{ warning }}</p></div>
     </div>
     <div class="kg-delete-impact"><p>{{ description }}</p></div>
     <p v-if="error" class="kg-delete-error" role="alert">{{ error }}</p>
     <template #footer>
       <button type="button" :disabled="loading" @click="emit('update:visible', false)">取消</button>
-      <button type="button" class="danger" :disabled="loading" @click="emit('confirm')">{{ loading ? '删除中...' : '确认删除' }}</button>
+      <button type="button" class="danger" :disabled="loading" @click="emit('confirm')">{{ loading ? `${verb}中...` : `确认${verb}` }}</button>
     </template>
   </a-modal>
 </template>

@@ -38,6 +38,7 @@ from typing import Any, Literal
 import httpx
 
 from service.business_access import business_graph_app
+from service.graph_space_context import get_current_space
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,7 @@ class GraphAPIClient:
         Returns:
             剥壳后的 ``data`` 字段。
         """
+        params = {"space": get_current_space(), **(params or {})}
         response = await self._http.get(f"{_API_PREFIX}{path}", params=params)
         return self._unwrap(response)
 
@@ -95,6 +97,7 @@ class GraphAPIClient:
         Returns:
             剥壳后的 ``data`` 字段。
         """
+        params = {"space": get_current_space(), **(params or {})}
         response = await self._http.post(f"{_API_PREFIX}{path}", params=params, json=json)
         return self._unwrap(response)
 
@@ -140,6 +143,7 @@ class GraphAPIClient:
     # ------------- 图查询原子能力 -------------
     async def get_node(self, vid: str, *, space: str | None = None) -> dict[str, Any] | None:
         """按 VID 取节点详情。节点不存在时返回 ``None``。"""
+        space = space or get_current_space()
         cache_key = (vid, space)
         if cache_key in self._node_cache:
             return self._node_cache[cache_key]

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from biz.dependencies.auth import CurrentActor
+from biz.dependencies.selected_graph_space import bind_selected_graph_space
 from service.graph_console import GraphConsoleError, run_statement_cached_payload
 
-router = APIRouter(prefix="/graph-console", tags=["graph-console"])
+router = APIRouter(prefix="/graph-console", tags=["graph-console"], dependencies=[Depends(bind_selected_graph_space)])
 
 
 class GraphConsoleRequest(BaseModel):

@@ -140,6 +140,11 @@ async def production_queue(
     page: int = 1,
     page_size: int = Query(50, alias="pageSize"),
 ):
+    selected_space = getattr(identity.platform_actor, "context_graph_space", "")
+    if selected_space:
+        if graph_space and graph_space != selected_space:
+            raise HTTPException(403, "请求空间与当前图空间不一致")
+        graph_space = selected_space
     cache_key = (
         "queue:"
         + _cache_scope(identity)

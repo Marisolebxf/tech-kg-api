@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useSpacePermissions } from "../../../composables/use-space-permissions"
+const { canWrite, spaces } = useSpacePermissions()
+
 import ElSelect, { ElOption } from "element-plus/es/components/select/index";
 import "element-plus/es/components/select/style/css";
 import { MonthPicker as AMonthPicker } from "@arco-design/web-vue";
@@ -225,9 +228,9 @@ watch(panoramaAutoRefresh, (enabled) => {
 });
 
 watch(
-  () => props.moduleInfo.key,
+  () => `${props.moduleInfo.key}|${spaces.contextKey}`,
   (key) => {
-    if (key !== "industry-chain-panorama") {
+    if (!key.startsWith("industry-chain-panorama|")) {
       panoramaAutoRefresh.value = false;
     }
   },
@@ -2763,6 +2766,7 @@ async function loadIndirectRelationAnnotations() {
 
 /** 确认保存一条关系标注（按边主键 upsert 到业务库），成功后同步本地标注。 */
 async function saveRelationAnnotation(edgeKey: string) {
+  if (!canWrite.value) return;
   if (relationAnnotationSaving.value[edgeKey]) return;
   const [sourceVid, targetVid] = edgeKey.split(":");
   const annotation = (relationAnnotationDrafts.value[edgeKey] ?? "").trim();
@@ -3603,7 +3607,7 @@ function computeExpertDirectSummaryRows(
 }
 
 watch(
-  () => props.moduleInfo.key,
+  () => `${props.moduleInfo.key}|${spaces.contextKey}`,
   () => {
     resultMode.value = "summary";
     selectedGraphNodeId.value = null;
@@ -3634,7 +3638,7 @@ async function loadModuleDescribe() {
     if (isLiveColleague.value) {
       liveDescribe.value = {
         endpoint: props.moduleInfo.endpoint,
-        space: "dev",
+        space: spaces.current,
       };
       return;
     }
@@ -3656,6 +3660,8 @@ async function loadModuleDescribe() {
 }
 
 function resetParameters({ notify = true }: { notify?: boolean } = {}) {
+  panoramaAutoRefresh.value = false;
+  stopPanoramaAutoRefresh();
   expertDirectAbortController?.abort();
   expertDirectAbortController = null;
   running.value = false;
@@ -5121,13 +5127,13 @@ function clearGraphSelection() {
                   type="text"
                   maxlength="64"
                   placeholder="输入关系标注，如：重点关注"
-                  :disabled="relationAnnotationSaving[row.edgeKey]"
+                  :disabled="!canWrite || relationAnnotationSaving[row.edgeKey]"
                   @keyup.enter="saveRelationAnnotation(row.edgeKey)"
                 />
                 <button
                   type="button"
                   class="kg-button kg-button--secondary result-panel__annotation-save"
-                  :disabled="relationAnnotationSaving[row.edgeKey]"
+                  :disabled="!canWrite || relationAnnotationSaving[row.edgeKey]"
                   @click="saveRelationAnnotation(row.edgeKey)"
                 >
                   {{ relationAnnotationSaving[row.edgeKey] ? "保存中…" : "确认" }}

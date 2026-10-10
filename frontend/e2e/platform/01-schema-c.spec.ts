@@ -284,12 +284,10 @@ test.describe.serial('C. Schema 管理与属性管理', () => {
       { label: '保存绑定提示', timeout: 30_000 },
     )
 
-    // 显式触发抽取
-    await modal.getByRole('button', { name: '触发抽取', exact: true }).click()
-    await waitFor(
-      async () => (await page.getByText(/抽取已触发（执行/, { exact: false }).first().isVisible().catch(() => false)),
-      { label: '抽取触发提示', timeout: 30_000 },
-    )
+    // 显式触发抽取：Schema 页已移除「触发抽取」按钮（抽取统一由图谱构建页安排，
+    // 2026-10-09 口径），e2e 经 API 触发同一端点
+    await expect(modal.getByRole('button', { name: '触发抽取', exact: true })).toHaveCount(0)
+    await apiMust<any>(request, 'POST', `/schema-management/schemas/${schemaId}/extract`, {}, '触发抽取')
 
     // 执行完成（来源触发的抽取产生执行记录；平台抽取执行不建 job，经执行列表核对）
     let executionId = ''

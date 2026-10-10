@@ -86,9 +86,18 @@ const CONFIG_TEXT_LIMITS = {
   password: 256,
 } as const
 
-/** 说明：新建表单 200（FUNC-00430/00492），详情抽屉 500（FUNC-00534～00536/00581～00583/00637） */
+/** MySQL / 向量模型说明：新建表单 200（FUNC-00430/00492），详情抽屉 500（FUNC-00534～00536/00581～00583/00637） */
 export const CREATE_DESCRIPTION_MAX = 200
 export const DETAIL_DESCRIPTION_MAX = 500
+
+/** LlmConfigCreate / LlmConfigUpdate 的 description 接口上限均为 64。 */
+export const LLM_DESCRIPTION_MAX = 64
+
+/** 说明计数器、输入限制和提交校验共用实际可提交的上限。 */
+export function configDescriptionMaxLength(kind: ConfigKindKey, variant: 'create' | 'detail'): number {
+  if (kind === 'llm') return LLM_DESCRIPTION_MAX
+  return variant === 'create' ? CREATE_DESCRIPTION_MAX : DETAIL_DESCRIPTION_MAX
+}
 
 /** 图数据空间名称：必填 + 64（FUNC-00672/00676），标识符字符集由后端 CREATE SPACE 约束 */
 export function validateGraphSpaceName(value: unknown): string | null {
@@ -106,7 +115,7 @@ export type ConfigFieldErrors = Partial<Record<
 
 /**
  * 整表校验：按配置类型对当前值算出全部字段错误（键为字段名）。
- * variant 只影响凭据必填（新建 API Key 必填、更新留空保留原值）与说明上限（新建 200 / 详情 500）。
+ * variant 影响凭据必填与说明上限；语言模型说明同时受接口的 64 字限制。
  * 只校验该类型存在的字段，缺失字段不产生错误。
  */
 export function validateConfigFields(
@@ -124,7 +133,7 @@ export function validateConfigFields(
   put(
     'description',
     validateTextField('说明', values.description, {
-      max: variant === 'create' ? CREATE_DESCRIPTION_MAX : DETAIL_DESCRIPTION_MAX,
+      max: configDescriptionMaxLength(kind, variant),
     }),
   )
 

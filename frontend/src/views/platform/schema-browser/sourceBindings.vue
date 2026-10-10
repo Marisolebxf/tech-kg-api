@@ -12,6 +12,7 @@ const props = withDefaults(
   defineProps<{
     modelValue: SourceBindingRow[]
     showAddButton?: boolean
+    readonly?: boolean
   }>(),
   { showAddButton: true },
 )
@@ -25,6 +26,7 @@ const { showToast } = useToast()
 const datasources = ref<MysqlDatasource[]>([])
 
 onMounted(async () => {
+  if (props.readonly) return
   try {
     datasources.value = await listMysqlDatasources()
   } catch (error) {
@@ -36,6 +38,7 @@ const addAttempted = ref(false)
 const hasIncompleteRow = computed(() => props.modelValue.some(row => !isSourceBindingComplete(row)))
 
 function addRow() {
+  if (props.readonly) return
   if (hasIncompleteRow.value) {
     addAttempted.value = true
     return
@@ -45,12 +48,14 @@ function addRow() {
 }
 
 function removeRow(index: number) {
+  if (props.readonly) return
   const next = [...props.modelValue]
   next.splice(index, 1)
   emit('update:modelValue', next)
 }
 
 function updateRow(index: number, value: SourceBindingRow) {
+  if (props.readonly) return
   const next = [...props.modelValue]
   next[index] = value
   emit('update:modelValue', next)
@@ -60,7 +65,7 @@ function updateRow(index: number, value: SourceBindingRow) {
 <template>
   <div class="source-bindings">
     <div v-if="!modelValue.length" class="source-bindings__empty">
-      尚未绑定来源表；绑定后可通过「触发抽取」由平台按时间列水位分批读取并写入图谱。
+      尚未绑定来源表；绑定保存后到「图谱构建」页新建抽取任务，由平台按时间列水位分批读取并写入图谱。
     </div>
     <SourceBindingRowVue
       v-for="(binding, index) in modelValue"
@@ -68,11 +73,12 @@ function updateRow(index: number, value: SourceBindingRow) {
       :model-value="binding"
       :datasources="datasources"
       :removable="true"
+      :readonly="readonly"
       @update:model-value="(value) => updateRow(index, value)"
       @remove="removeRow(index)"
     />
     <p v-if="showAddButton && addAttempted && hasIncompleteRow" class="source-bindings__validation" role="alert">请填写完已有来源表的必填信息（数据源、数据库、来源表）后再添加。</p>
-    <button v-if="showAddButton" type="button" class="source-bindings__add" @click="addRow">＋ 绑定来源表</button>
+    <button v-if="showAddButton" type="button" :disabled="readonly" class="source-bindings__add" @click="addRow">＋ 绑定来源表</button>
   </div>
 </template>
 
@@ -83,4 +89,5 @@ function updateRow(index: number, value: SourceBindingRow) {
 .source-bindings__validation{margin:0;color:#b42318;font-size:14px;line-height:22px}
 .source-bindings__add{align-self:flex-start;height:28px;padding:0 12px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#165dff;font-size:12px;cursor:pointer}
 .source-bindings__add:hover{border-color:#165dff}
+.source-bindings__add:disabled{color:#a9aeb8;border-color:#e5e6eb;background:#f2f3f5;cursor:not-allowed}
 </style>

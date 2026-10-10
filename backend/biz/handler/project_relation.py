@@ -23,7 +23,7 @@ async def query_project_relations(
     body: ProjectRelationQueryRequest,
     actor: ProjectRelationIdentity,
 ) -> ApiResponse:
-    """分页查询默认正式图空间中的项目出边关系。"""
+    """浏览器查询选中空间；机器密钥仅查询已登记的默认公共空间。"""
     del actor
     try:
         application = ProjectRelationApplication(get_trs_graph_client())

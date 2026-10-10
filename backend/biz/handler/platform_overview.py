@@ -3,10 +3,11 @@
 import asyncio
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from application.platform_overview import PlatformOverviewApplication
 from biz.dependencies.auth import CurrentActor
+from biz.dependencies.selected_graph_space import bind_selected_graph_space, resolve_selected_space
 from biz.handler.graph_search import _ensure_space_access
 from biz.schemas.platform_overview import (
     AssetOverviewKey,
@@ -21,11 +22,12 @@ from biz.schemas.platform_overview import (
 )
 from service.business_access_control import allowed_space_names, ensure_space_access, rbac_enabled
 
-router = APIRouter(prefix="/platform/overview", tags=["platform-overview"])
+router = APIRouter(prefix="/platform/overview", tags=["platform-overview"], dependencies=[Depends(bind_selected_graph_space)])
 application = PlatformOverviewApplication()
 
 
 async def _get_overview(space: str | None = None, actor=None) -> PlatformOverviewData:
+    space = resolve_selected_space(space)
     # TRSGraph 客户端为同步实现，放在线程中避免阻塞 FastAPI 事件循环。
     # space：全局图空间选择器当前空间（缺省回落 env 默认空间，兼容旧调用方）。
     if rbac_enabled():

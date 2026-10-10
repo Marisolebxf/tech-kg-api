@@ -6,6 +6,8 @@ import { currentUserId } from './currentUser'
 const PREFIX = '/v1/graph-spaces'
 
 export interface GraphSpaceItem {
+  businessName?: string
+  groupKind?: 'public' | 'business' | 'unassigned'
   readAllowed?: boolean
   writeAllowed?: boolean
   reviewAllowed?: boolean

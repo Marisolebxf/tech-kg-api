@@ -197,7 +197,8 @@ async def test_run_populates_entity_provenance(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_fills_missing_entity_confidence(monkeypatch):
+@pytest.mark.parametrize("writable", [False, True])
+async def test_run_fills_missing_entity_confidence(monkeypatch, writable):
     """图节点没有 confidence 时按证据规则计算、写回，并保证实体 tab 拿到数字。"""
     writes: list[str] = []
 
@@ -216,13 +217,18 @@ async def test_run_fills_missing_entity_confidence(monkeypatch):
         "AsyncClient",
         lambda *a, **kw: _FakeAsyncClient([("/graph-search/filtered-subgraph/", payload)]),
     )
-    resp = await svc.run(KeyEnterpriseRelationRequest(expert_id=EXPERT))
+    from service.graph_space_context import request_can_write
+    token = request_can_write.set(writable)
+    try:
+        resp = await svc.run(KeyEnterpriseRelationRequest(expert_id=EXPERT))
+    finally:
+        request_can_write.reset(token)
 
     # dwd + 稳定 ID + 姓名 + ingest_time → 0.90
     assert resp.entity_provenance[EXPERT].confidence == 0.9
     assert resp.entity_provenance["org_lvdie"].confidence == 0.9
-    assert any("UPDATE VERTEX ON `Person`" in q and EXPERT in q for q in writes)
-    assert any("UPDATE VERTEX ON `Organization`" in q and "org_lvdie" in q for q in writes)
+    assert any("UPDATE VERTEX ON `Person`" in q and EXPERT in q for q in writes) is writable
+    assert any("UPDATE VERTEX ON `Organization`" in q and "org_lvdie" in q for q in writes) is writable
 
 
 @pytest.mark.asyncio

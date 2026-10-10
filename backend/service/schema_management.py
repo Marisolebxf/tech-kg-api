@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import redis as redis_lib
+from sqlalchemy import event
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -38,6 +40,7 @@ from service.schema_ddl import (
 )
 from service.script_security import review_script_security
 from service.script_steps import declared_steps_from_tree
+from utils.time_display import utc_to_cst_str
 
 OWN_SCHEMA_SCRIPT_REQUIRED = "只能更换自己创建的 Schema 脚本"
 SYSTEM_SCHEMA_ADMIN_REQUIRED = "只有 Schema 管理员可以更换系统 Schema 脚本"
@@ -55,6 +58,47 @@ _SCRIPT_OBJECT_CACHE_TTL_SECONDS = float(
     os.getenv("SCHEMA_SCRIPT_AVAILABLE_CACHE_TTL_SECONDS", "30")
 )
 _SCRIPT_OBJECT_CACHE_MAX_KEYS = 4096
+
+# 列表缓存的跨 worker 版本号（与 auth 会话共用 Redis 实例，键前缀隔离；
+# 同 service/graph_algorithm.py 的同步客户端做法）。Redis 不可用时版本恒为
+# "0"，缓存退回纯 TTL 语义——与本次修复之前的行为一致，不阻塞读写。
+_SHARED_LIST_CACHE_VERSION_KEY = "techkg:schema:list-cache:version"
+_shared_list_cache_redis: redis_lib.Redis | None = None
+_shared_list_cache_redis_lock = threading.Lock()
+# Redis 连续不可用时的退避截止（monotonic 秒）：失败后 30s 内不再重试，
+# 避免每次列表读写都拖着一次连接超时 + 日志刷屏
+_shared_list_cache_redis_broken_until = 0.0
+
+
+def _get_shared_list_cache_redis() -> redis_lib.Redis:
+    global _shared_list_cache_redis
+    with _shared_list_cache_redis_lock:
+        if _shared_list_cache_redis is None:
+            url = os.getenv("REDIS_URL", "redis://auth-redis:6379/0")
+            _shared_list_cache_redis = redis_lib.Redis.from_url(url, decode_responses=True)
+        return _shared_list_cache_redis
+
+
+def _bump_shared_list_cache_version() -> None:
+    global _shared_list_cache_redis_broken_until
+    if time.monotonic() < _shared_list_cache_redis_broken_until:
+        return
+    try:
+        _get_shared_list_cache_redis().incr(_SHARED_LIST_CACHE_VERSION_KEY)
+    except Exception:  # noqa: BLE001 — Redis 不可用不影响主流程（退回纯 TTL）
+        _shared_list_cache_redis_broken_until = time.monotonic() + 30.0
+        logger.warning("Schema 列表缓存版本号写 Redis 失败", exc_info=True)
+
+
+def _shared_list_cache_version() -> str:
+    global _shared_list_cache_redis_broken_until
+    if time.monotonic() < _shared_list_cache_redis_broken_until:
+        return "0"
+    try:
+        return str(_get_shared_list_cache_redis().get(_SHARED_LIST_CACHE_VERSION_KEY) or "0")
+    except Exception:  # noqa: BLE001 — 读取失败按版本 0 处理（本地缓存仍按 TTL 生效）
+        _shared_list_cache_redis_broken_until = time.monotonic() + 30.0
+        return "0"
 
 
 class SchemaManagementError(Exception):
@@ -184,7 +228,7 @@ def _schema_admin_user_ids() -> set[str]:
 
 
 def _iso(value: datetime | date | None) -> str | None:
-    return value.isoformat() if value else None
+    return utc_to_cst_str(value) if value else None
 
 
 def _safe_filename(filename: str) -> str:
@@ -296,12 +340,13 @@ class SchemaManagementService:
     # 目录列表结果缓存：序列化 100 行约 100-190ms 纯 Python（GIL 下 4 worker
     # 天花板 ~90rps，2026-09-19 压测用例 02 不达标根因）。键不含用户身份——
     # 缓存条目不带 canDelete/canManageProperties，返回时按当前用户叠加。
-    # 任何目录变更（见各变更方法里的 _invalidate_list_cache）即整体失效。
+    # 任何目录变更在事务提交后整体失效（见 __init__ 里的 after_commit 钩子），
+    # 并升 Redis 版本号让其它 worker 立即失配（键里含版本）。
     # 注意必须挂类级：SchemaManagementService 每请求实例化，实例属性缓存
     # 会在请求结束时随实例丢弃，命中率恒为 0（2026-09-19 实测踩坑）。
     _list_cache_seconds = float(os.getenv("SCHEMA_LIST_CACHE_SECONDS", "60"))
     _list_cache: dict[tuple, tuple[float, dict]] = {}
-    _catalog_cache: dict[str, tuple[float, str]] = {}
+    _catalog_cache: dict[str, tuple[float, str, str]] = {}
     _catalog_cache_lock = threading.Lock()
     _list_cache_lock = threading.Lock()
 
@@ -309,11 +354,35 @@ class SchemaManagementService:
         self._session = session
         self._dao = SchemaManagementDAO(session)
         self._storage = storage or get_schema_s3_storage()
+        # 目录缓存失效挂在 session 的 commit 上（实例级监听，随请求结束丢弃）：
+        # 失效必须发生在变更提交之后——提交前清缓存/升版本，竞态读者会把
+        # 「未提交的旧数据」重新算进缓存还挂上新版本，最长再陈旧一个 TTL。
+        # before_flush 只标记「本次事务动过 kg_schema_* 表」，after_commit 才
+        # 真正清本地缓存并升 Redis 版本（守卫失败/回滚路径不会误伤）。
+        self._touched_schema_tables = False
+        event.listen(self._session, "before_flush", self._note_schema_writes)
+        event.listen(self._session, "after_commit", self._invalidate_after_commit)
 
-    @classmethod
-    def _invalidate_list_cache(cls) -> None:
-        cls._list_cache.clear()
-        cls._catalog_cache.clear()
+    def _note_schema_writes(self, *_args: object) -> None:
+        session = self._session
+        for obj in [*session.new, *session.dirty, *session.deleted]:
+            table = getattr(getattr(obj, "__table__", None), "name", "")
+            if isinstance(table, str) and table.startswith("kg_schema"):
+                self._touched_schema_tables = True
+                return
+
+    def _invalidate_after_commit(self, *_args: object) -> None:
+        if not self._touched_schema_tables:
+            return
+        self._touched_schema_tables = False
+        self._list_cache.clear()
+        self._catalog_cache.clear()
+        # 变更广播到其它 worker：_list_cache/_catalog_cache 是进程内字典，
+        # 多 worker 部署（dev2/yunfei3 均为 uvicorn --workers 8）下本进程清空
+        # 管不到别的进程，其余 worker 最长再供 60s 旧列表——「绑定来源表后
+        # 离开再回来未回显」的根因（2026-10-09 测试反馈）。Redis 版本号 INCR
+        # 一次，读取侧把版本并进缓存键，别的 worker 一见版本变化即失效重算。
+        _bump_shared_list_cache_version()
 
     def overview(self, graph_space: str | None = None) -> dict[str, Any]:
         stats = self._dao.stats(graph_space)
@@ -339,7 +408,18 @@ class SchemaManagementService:
         graph_space: str | None = None,
     ) -> dict[str, Any]:
         user_id = user_id.strip() if user_id else None
-        key = (kind, keyword, page, page_size, include_details, graph_space, is_platform_admin)
+        # 版本号并入缓存键：其它 worker 的变更（Redis INCR）让本进程立即失配重算
+        version = _shared_list_cache_version()
+        key = (
+            kind,
+            keyword,
+            page,
+            page_size,
+            include_details,
+            graph_space,
+            is_platform_admin,
+            version,
+        )
         now = time.monotonic()
         # single-flight：TTL 到期瞬间的并发请求只放一个去重算（重算 ~190ms 纯
         # Python，GIL 串行下放任惊群会把 worker 锁死数秒），其余等锁后读新缓存
@@ -398,13 +478,19 @@ class SchemaManagementService:
     @classmethod
     def _catalog_get(cls, key: str):
         entry = cls._catalog_cache.get(key)
-        if entry and entry[0] > time.monotonic():
+        # 与 Redis 共享版本比对：其它 worker 已变更（版本不一致）即视为未命中，
+        # 避免「本进程没改过、一直读到别的 worker 改前旧数据」的 60s 盲区
+        if entry and entry[0] > time.monotonic() and entry[2] == _shared_list_cache_version():
             return entry[1]
         return None
 
     @classmethod
     def _catalog_put(cls, key: str, payload: str, ttl_seconds: float) -> None:
-        cls._catalog_cache[key] = (time.monotonic() + ttl_seconds, payload)
+        cls._catalog_cache[key] = (
+            time.monotonic() + ttl_seconds,
+            payload,
+            _shared_list_cache_version(),
+        )
 
     @staticmethod
     def _overlay_flags(
@@ -564,7 +650,6 @@ class SchemaManagementService:
         payload: dict[str, Any],
         user_id: str,
     ) -> dict[str, Any]:
-        self._invalidate_list_cache()
         return self._create(kind="entity", payload=payload, user_id=user_id)
 
     def create_relation(
@@ -573,7 +658,6 @@ class SchemaManagementService:
         payload: dict[str, Any],
         user_id: str,
     ) -> dict[str, Any]:
-        self._invalidate_list_cache()
         source_id = payload.get("source_schema_id")
         target_id = payload.get("target_schema_id")
         source = self._dao.get_entity(source_id) if source_id else None
@@ -607,7 +691,6 @@ class SchemaManagementService:
         script_data: bytes,
         is_platform_admin: bool = False,
     ) -> dict[str, Any]:
-        self._invalidate_list_cache()
         user_id = user_id.strip()
         if not user_id or len(user_id) > 128:
             raise SchemaPermissionError("登录用户 ID 不能为空且不能超过 128 个字符")
@@ -790,8 +873,6 @@ class SchemaManagementService:
                     user_id=user_id,
                     workflow_function_name=workflow_function,
                 )
-                # 脚本元数据会体现在列表/详情序列化里，保存成功即失效目录缓存
-                self._invalidate_list_cache()
             except SchemaManagementError as exc:
                 yield {
                     "type": "error",
@@ -916,7 +997,6 @@ class SchemaManagementService:
         回滚目录行并抛 SchemaDdlError。Nebula ALTER ADD 不支持 NOT NULL →
         新增属性在图里一律可空（目录保留 required 口径）。
         """
-        self._invalidate_list_cache()
         from biz.schemas.schema_management import SchemaPropertyInput
 
         definition = self.assert_mutable(schema_id, user_id, is_platform_admin=is_platform_admin)
@@ -980,7 +1060,6 @@ class SchemaManagementService:
         列不存在（system schema DDL 未跑过 / 已删过）时跳过 DDL 只删目录行，
         让目录与图库回到同一个事实源。成功后 ``property_revision += 1``。
         """
-        self._invalidate_list_cache()
         definition = self.assert_mutable(schema_id, user_id, is_platform_admin=is_platform_admin)
         row = next((p for p in definition.properties if p.name == property_name), None)
         if row is None:
@@ -1069,7 +1148,6 @@ class SchemaManagementService:
         每次调用覆盖全部绑定；datasource 存在性经业务库校验。绑定独立水位
         （definition_id + ``source:{id}`` step_id），多表可并行抽取。
         """
-        self._invalidate_list_cache()
         definition = self.assert_mutable(schema_id, user_id, is_platform_admin=is_platform_admin)
         for item in sources:
             _validate_datasource_exists(item["datasource_id"])
@@ -1084,7 +1162,13 @@ class SchemaManagementService:
                     database_name=item["database_name"],
                     table_name=item["table_name"],
                     pk_column=item.get("pk_column") or "id",
-                    time_column=item.get("time_column") or "update_time",
+                    # 空串 = 显式「无时间列」（运行时走 pk keyset 增量），此前被
+                    # or 强转成 update_time，表里没有该列的绑定到抽取时才炸 SQL
+                    time_column=(
+                        item["time_column"]
+                        if item.get("time_column") is not None
+                        else "update_time"
+                    ),
                     query_sql=(item.get("query_sql") or None),
                     position=index,
                 )
@@ -1110,7 +1194,6 @@ class SchemaManagementService:
         抽取任务（防边删边写）→ 实体被关系引用（先删关系）。图数据删除失败
         则目录不动（Schema 保留可重试），成功后才物理删目录行，不可逆。
         """
-        self._invalidate_list_cache()
         user_id = user_id.strip()
         if not user_id:
             raise SchemaPermissionError("登录用户 ID 不能为空")

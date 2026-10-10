@@ -627,7 +627,7 @@ def test_persist_relations_degrades_gracefully_without_edges(
     graph.close.assert_called_once()
 
 
-def test_query_appends_persistence_without_mutating_service_payload() -> None:
+def test_query_appends_persistence_without_mutating_service_payload(writable_graph_request) -> None:
     application = ExpertAlumniRelationApplication()
     data: dict[str, Any] = {"expert": {"id": "S1"}, "total": 0, "items": []}
     application._service = MagicMock()  # type: ignore[method-assign]
@@ -645,3 +645,13 @@ def test_query_appends_persistence_without_mutating_service_payload() -> None:
     # 服务层缓存命中返回共享对象:落盘结果只能并入副本,不能写穿原始 payload。
     assert "persistence" not in data
     assert persist.call_args.args[0]["expert"]["id"] == "S1"
+
+
+@pytest.fixture
+def writable_graph_request():
+    from service.graph_space_context import request_can_write
+    token = request_can_write.set(True)
+    try:
+        yield
+    finally:
+        request_can_write.reset(token)

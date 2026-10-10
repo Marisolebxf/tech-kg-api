@@ -15,7 +15,11 @@ from biz.schemas.workflow_operations import (
     UpdatePolicyRequest,
 )
 from service.business_access_control import rbac_enabled
-from service.workflow_jobs import authorize_workflow_resource, workflow_resource_visible
+from service.workflow_jobs import (
+    authorize_workflow_resource,
+    workflow_resource_capabilities,
+    workflow_resource_visible,
+)
 
 router = APIRouter(prefix="/task-center", tags=["task-center"])
 service = workflow_operations_application.service
@@ -24,14 +28,14 @@ service = workflow_operations_application.service
 @router.get("/overview")
 async def get_overview(actor: CurrentActor) -> ApiResponse:
     return ApiResponse(
-        data=service.task_overview(actor=actor) if rbac_enabled() else service.task_overview()
+        data=service.task_overview(actor=actor) if (rbac_enabled() or actor.context_graph_space) else service.task_overview()
     )
 
 
 @router.get("/batches")
 async def list_batches(actor: CurrentActor) -> ApiResponse:
     items = service.repo.list_batches()
-    if rbac_enabled():
+    if (rbac_enabled() or actor.context_graph_space):
         items = [item for item in items if workflow_resource_visible(actor, item)]
     return ApiResponse(data={"items": items, "total": len(items)})
 
@@ -51,12 +55,12 @@ async def list_tasks(
     page: int = 1,
     page_size: int = Query(default=50, alias="pageSize"),
 ) -> Response:
-    cached = None if rbac_enabled() else get_cache.try_get("task-center:tasks", request)
+    cached = None if (rbac_enabled() or actor.context_graph_space) else get_cache.try_get("task-center:tasks", request)
     if cached is not None:
         return cached
     result = ApiResponse(
         data=service.list_tasks(
-            actor=actor if rbac_enabled() else None,
+            actor=actor if (rbac_enabled() or actor.context_graph_space) else None,
             stage=stage,
             task_status=status,
             domain=domain,
@@ -69,7 +73,7 @@ async def list_tasks(
             page_size=page_size,
         )
     )
-    if rbac_enabled():
+    if (rbac_enabled() or actor.context_graph_space):
         return Response(result.model_dump_json(), media_type="application/json")
     return get_cache.store("task-center:tasks", request, result.model_dump())
 
@@ -84,7 +88,7 @@ async def get_task(task_id: str, actor: CurrentActor) -> ApiResponse:
         task = await service.get_task(task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="任务不存在") from exc
-    if rbac_enabled() and not actor.is_admin:
+    if (rbac_enabled() or actor.context_graph_space) and not actor.is_admin:
         batch = task.get("batch")
         if batch and not workflow_resource_visible(actor, batch):
             task["batch"] = None
@@ -93,7 +97,7 @@ async def get_task(task_id: str, actor: CurrentActor) -> ApiResponse:
     step_state = await service.query_step_state(task)
     if step_state is not None:
         task["pipeline"] = step_state
-    return ApiResponse(data=task)
+    return ApiResponse(data=workflow_resource_capabilities(actor, task))
 
 
 @router.post("/tasks/{task_id}/retry", response_model=ApiResponse)
@@ -123,7 +127,7 @@ async def source_updates(
     page_size: int = Query(default=50, alias="pageSize"),
 ) -> ApiResponse:
     items = service.repo.list_source_updates(domain, since, until)
-    if rbac_enabled():
+    if (rbac_enabled() or actor.context_graph_space):
         items = [item for item in items if workflow_resource_visible(actor, item)]
     start = (max(page, 1) - 1) * min(max(page_size, 1), 200)
     size = min(max(page_size, 1), 200)
@@ -139,15 +143,16 @@ async def source_updates(
 
 @router.get("/update-policy")
 async def get_update_policy(actor: CurrentActor) -> ApiResponse:
-    _require_global_admin(actor)
-    return ApiResponse(data=service.repo.get_setting("update_policy"))
+    _require_global_admin(actor, action="read")
+    key = f"update_policy:{actor.context_graph_space}" if actor.context_graph_space else "update_policy"
+    return ApiResponse(data=service.repo.get_setting(key))
 
 
 @router.put("/update-policy")
 async def save_update_policy(request: UpdatePolicyRequest, actor: CurrentActor) -> ApiResponse:
     _require_global_admin(actor)
     payload = request.model_dump()
-    if rbac_enabled():
+    if (rbac_enabled() or actor.context_graph_space):
         payload.update(actorUserId=actor.user_id, clientId=actor.business_id)
     result = await service.save_update_policy(payload, actor=actor)
     return ApiResponse(data=result, msg="自动抽取更新策略已保存")
@@ -160,15 +165,21 @@ async def trigger_extractions(
     """立即触发全量数据抽取（D3 后原 kg.graph.build 总工作流的重指向）。"""
     _require_global_admin(actor)
     payload = request.model_dump()
-    if rbac_enabled():
+    if (rbac_enabled() or actor.context_graph_space):
         payload.update(actorUserId=actor.user_id, clientId=actor.business_id)
     result = await service.trigger_extract_all(payload, actor=actor)
     get_cache.invalidate("task-center:tasks")
     return ApiResponse(data=result, msg=f"已触发 {len(result['executions'])} 个数据抽取")
 
 
-def _require_global_admin(actor):
-    if rbac_enabled() and not actor.is_admin:
+def _require_global_admin(actor, action="write"):
+    if rbac_enabled() and actor.context_graph_space:
+        from service.business_access_control import ensure_space_access
+        if not actor.can_develop:
+            raise HTTPException(403, "仅开发维护或管理员可访问构建策略")
+        ensure_space_access(actor, actor.context_graph_space, action)
+        return
+    if (rbac_enabled() or actor.context_graph_space) and not actor.is_admin:
         raise HTTPException(
             status_code=403, detail="全局更新策略及全量触发仅管理员可操作，请使用本业务构建任务"
         )

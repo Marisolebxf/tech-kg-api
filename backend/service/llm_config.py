@@ -20,6 +20,7 @@ from infra.llm import (
     reset_llm_client,
     thinking_extra_body,
 )
+from utils.time_display import utc_to_cst_str
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +50,8 @@ def _to_out(cfg: LlmConfig) -> dict:
         "status": cfg.status,
         "hasApiKey": bool(cfg.api_key),
         "apiKeyMasked": _mask_api_key(cfg.api_key),
-        "createdAt": cfg.created_at,
-        "updatedAt": cfg.updated_at,
+        "createdAt": utc_to_cst_str(cfg.created_at),
+        "updatedAt": utc_to_cst_str(cfg.updated_at),
     }
 
 

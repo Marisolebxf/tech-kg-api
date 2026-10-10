@@ -122,6 +122,9 @@ class AuthProfile(CamelCaseModel):
     business_only: bool = False
     business_rbac_enabled: bool = False
     business_id: str = ""
+    business_ids: list[str] = Field(default_factory=list)
+    developer_business_ids: list[str] = Field(default_factory=list)
+    businesses: list[dict[str, str]] = Field(default_factory=list)
     platform_role: str = "user"
     can_develop: bool = False
 

@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useSpacePermissions } from "../../composables/use-space-permissions"
+const { spaces } = useSpacePermissions()
+
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { IconCheckCircleFill, IconClockCircle, IconCloseCircleFill, IconExclamationCircleFill, IconInfoCircleFill } from '@arco-design/web-vue/es/icon'
 import { useRoute, useRouter } from 'vue-router'
@@ -370,11 +373,18 @@ const pipelineSteps = computed(() => {
 })
 const isPipelineFailed = computed(() => processingInstance.value?.taskStatus === '执行出错' && pipelineSteps.value.some((s) => s.info.status === 'FAILED'))
 const retrySubmitting = ref(false)
+const canRetry = computed(() => {
+  const target = processingInstance.value
+  const space = target?.graphSpace || job.value?.graphSpace || ''
+  return Boolean(space && space === spaces.current && spaces.canWrite(space)
+    && target?.canOperate !== false && target?.writeAllowed !== false)
+})
 /** 页面级过程提示：按语义分四态（下发成功=success / 失败=error / 状态说明=info）。 */
 type PipelineTone = 'success' | 'error' | 'info'
 const pipelineMessage = ref<{ type: PipelineTone; text: string } | null>(null)
 
 async function handlePipelineRetry() {
+  if (!canRetry.value) return
   retrySubmitting.value = true
   try {
     const result = await retryTask(taskId.value)
@@ -765,7 +775,7 @@ onMounted(async () => {
       </aside>
 
       <main class="step-detail">
-        <header class="step-head"><div><h2>{{ selectedStep.name }}</h2><p>{{ selectedStep.description }}</p></div><div class="step-head-actions"><button v-if="isChainTask && selectedActivityId" type="button" class="step-head-back" @click="clearActivitySelection()">← 返回脚本级信息</button><button v-if="isPipelineTask && isPipelineFailed" type="button" class="step-head-retry" :disabled="retrySubmitting" @click="handlePipelineRetry">{{ retrySubmitting ? '提交中…' : '重试（reset 回放）' }}</button><RouterLink v-else-if="!isPipelineTask && needsReview" :to="reviewEntryTarget">进入人工处理 →</RouterLink></div></header>
+        <header class="step-head"><div><h2>{{ selectedStep.name }}</h2><p>{{ selectedStep.description }}</p></div><div class="step-head-actions"><button v-if="isChainTask && selectedActivityId" type="button" class="step-head-back" @click="clearActivitySelection()">← 返回脚本级信息</button><button v-if="isPipelineTask && isPipelineFailed" type="button" class="step-head-retry" :disabled="retrySubmitting || !canRetry" @click="handlePipelineRetry">{{ retrySubmitting ? '提交中…' : '重试（reset 回放）' }}</button><RouterLink v-else-if="!isPipelineTask && needsReview" :to="reviewEntryTarget">进入人工处理 →</RouterLink></div></header>
         <nav class="detail-tabs"><button v-for="tab in ([['overview','概况与结果'],['io','输入输出'],['logs','异常与日志'],['lineage','数据溯源']] as const)" :key="tab[0]" type="button" :class="{ active: activeTab === tab[0] }" @click="activeTab = tab[0]">{{ tab[1] }}</button></nav>
 
         <div v-if="activeTab === 'overview'" class="overview-content">

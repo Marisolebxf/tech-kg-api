@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
 from biz.dependencies.auth import CurrentActor
+from biz.dependencies.selected_graph_space import bind_selected_graph_space
 from biz.schemas.common import ApiResponse
 from biz.schemas.graph_algorithm import AlgorithmSubmitRequest
 from service.graph_algorithm import (
@@ -17,7 +18,7 @@ from service.graph_algorithm import (
     submit_job,
 )
 
-router = APIRouter(prefix="/graph-algorithms", tags=["graph-algorithms"])
+router = APIRouter(prefix="/graph-algorithms", tags=["graph-algorithms"], dependencies=[Depends(bind_selected_graph_space)])
 
 
 @router.get("/metadata", response_model=ApiResponse)

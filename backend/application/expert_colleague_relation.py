@@ -13,6 +13,7 @@ from httpx import AsyncClient
 from infra.graph_db import TRSGraphClient
 from infra.graph_db.config import TRSGraphSettings
 from service.expert_colleague_relation import ExpertColleagueRelationService
+from service.graph_space_context import get_current_space, request_can_write
 
 # 60s 进程内读结果缓存：service.query 的图查询读结果可复用；写图副作用 _persist_relations
 # 不缓存，每次照常执行（COLLEAGUE 边仍更新，persistence 计数每次现算）。
@@ -158,8 +159,8 @@ class ExpertColleagueRelationApplication:
         return self._service.describe()
 
     async def query(self, client: AsyncClient, **kwargs: Any) -> dict[str, Any]:
-        # 图空间只由服务端 TRS_GRAPH_SPACE 环境变量决定，不接受请求覆盖。
-        space = TRSGraphSettings.from_env().space
+        # 图空间来自已鉴权请求上下文；离线调用才使用环境默认值。
+        space = get_current_space()
         kwargs["space"] = space
         cache_key = _read_cache_key(kwargs)
         with _read_cache_lock:
@@ -174,13 +175,18 @@ class ExpertColleagueRelationApplication:
                     time.monotonic() + _READ_CACHE_TTL,
                     copy.deepcopy(data),
                 )
-        # 写图副作用不缓存：每次照常执行 COLLEAGUE 边 upsert + 现算 persistence 计数。
-        data["persistence"] = await asyncio.to_thread(self._persist_relations, data)
+        # 只有请求对当前空间有写权限才持久化；公共只读查询仍返回推理结果。
+        data["persistence"] = (
+            await asyncio.to_thread(self._persist_relations, data)
+            if request_can_write.get() else
+            {"space": space, "edgeType": "COLLEAGUE", "created": 0, "updated": 0, "total": 0, "readOnly": True}
+        )
         return data
 
     @staticmethod
     def _persist_relations(data: dict[str, Any]) -> dict[str, Any]:
         settings = TRSGraphSettings.from_env()
+        settings.space = get_current_space()
         graph = TRSGraphClient(settings)
         graph.connect()
         created = updated = 0

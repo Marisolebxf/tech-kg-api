@@ -304,6 +304,23 @@ class WorkflowRepository:
                 ).all()
             )
 
+    def execution_statuses_by_ids(self, execution_ids: list[str | None]) -> dict[str, str]:
+        """按执行 ID 批量取状态列（人工审核 T_EXTRACT_FAIL 只读口径推导用）。
+
+        只查状态列不解析 payload；ID 不在返回映射里 = 执行记录已不存在
+        （如控制库被清理），调用方按「执行概要无成功凭证」处理。
+        """
+        ids = [i for i in execution_ids if i]
+        if not ids:
+            return {}
+        with workflow_session_scope() as session:
+            rows = session.execute(
+                select(WorkflowExecution.id, WorkflowExecution.status).where(
+                    WorkflowExecution.id.in_(ids)
+                )
+            ).all()
+            return {execution_id: status for execution_id, status in rows}
+
     def list_executions(
         self,
         limit: int = 100,

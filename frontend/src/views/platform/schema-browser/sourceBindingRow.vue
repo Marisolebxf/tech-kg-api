@@ -34,6 +34,12 @@ function asString(value: ArcoSelectValue | undefined): string {
   return typeof value === 'string' ? value : ''
 }
 
+/** 数据源触发器悬停提示：显示「名称（host）」而非 id */
+function dsLabel(id: string): string {
+  const ds = props.datasources.find((item) => item.id === id)
+  return ds ? `${ds.name}（${ds.host}）` : ''
+}
+
 const databases = ref<string[]>([])
 const tables = ref<MysqlTable[]>([])
 const columns = ref<MysqlColumn[]>([])
@@ -154,12 +160,12 @@ function applyColumnDefaults() {
     <a-select
       :model-value="row.datasourceId"
       class="source-binding-row__select source-binding-row__ds"
+      :title="dsLabel(row.datasourceId)"
       placeholder="数据源"
       allow-search
       :loading="false"
       :disabled="readonly"
       popup-container=".schema-modal"
-      :trigger-props="{ contentClass: 'source-binding-popup' }"
       @change="onDatasourceChange"
     >
       <a-option v-for="ds in datasources" :key="ds.id" :value="ds.id" :label="`${ds.name}（${ds.host}）`" :title="`${ds.name}（${ds.host}）`">
@@ -169,12 +175,12 @@ function applyColumnDefaults() {
     <a-select
       :model-value="row.databaseName"
       class="source-binding-row__select source-binding-row__db"
+      :title="row.databaseName"
       placeholder="库"
       allow-search
       :loading="loadingDatabases"
       :disabled="readonly || !row.datasourceId"
       popup-container=".schema-modal"
-      :trigger-props="{ contentClass: 'source-binding-popup' }"
       @change="onDatabaseChange"
     >
       <a-option v-for="db in databases" :key="db" :value="db" :title="db">{{ db }}</a-option>
@@ -182,12 +188,12 @@ function applyColumnDefaults() {
     <a-select
       :model-value="row.tableName"
       class="source-binding-row__select source-binding-row__table"
+      :title="row.tableName"
       placeholder="表"
       allow-search
       :loading="loadingTables"
       :disabled="readonly || !row.databaseName"
       popup-container=".schema-modal"
-      :trigger-props="{ contentClass: 'source-binding-popup' }"
       @change="onTableChange"
     >
       <a-option v-for="t in tables" :key="t.name" :value="t.name" :title="t.name">{{ t.name }}</a-option>
@@ -195,12 +201,12 @@ function applyColumnDefaults() {
     <a-select
       :model-value="row.pkColumn"
       class="source-binding-row__select source-binding-row__col"
+      :title="row.pkColumn"
       placeholder="主键列"
       allow-search
       :loading="loadingColumns"
       :disabled="readonly || !row.tableName"
       popup-container=".schema-modal"
-      :trigger-props="{ contentClass: 'source-binding-popup' }"
       @change="(value) => patch({ pkColumn: asString(value) })"
     >
       <a-option v-for="c in columns" :key="c.name" :value="c.name" :title="c.name">{{ c.name }}</a-option>
@@ -208,13 +214,13 @@ function applyColumnDefaults() {
     <a-select
       :model-value="row.timeColumn"
       class="source-binding-row__select source-binding-row__col"
+      :title="row.timeColumn"
       placeholder="时间列（可空）"
       allow-search
       allow-clear
       :loading="loadingColumns"
       :disabled="readonly || !row.tableName"
       popup-container=".schema-modal"
-      :trigger-props="{ contentClass: 'source-binding-popup' }"
       @change="(value) => patch({ timeColumn: asString(value) })"
       @clear="() => patch({ timeColumn: '' })"
     >
@@ -234,9 +240,10 @@ function applyColumnDefaults() {
 </template>
 
 <style scoped>
-/* 列给像素下限并整行 min-width：弹窗窄时不会被压扁，由外层
-   .source-bindings 的 overflow-x 横向拖动看全（触发器内省略号+title 兜底） */
-.source-binding-row{display:grid;grid-template-columns:minmax(150px,1.1fr) minmax(120px,0.9fr) minmax(150px,1fr) minmax(105px,0.7fr) minmax(125px,0.8fr) 24px;gap:8px;align-items:center;min-width:720px}
+/* 列宽下限收窄（合计 546px ≤ 弹窗正文宽），行不再设 min-width——
+   窄屏不再整行横滚；超长名触发器内省略号，悬停 title 出全名（2026-10-10
+   测试反馈「绑定来源表下面的左右滑块异常」，弃横向滚动改悬停看全） */
+.source-binding-row{display:grid;grid-template-columns:minmax(104px,1.1fr) minmax(88px,0.8fr) minmax(104px,1fr) minmax(78px,0.6fr) minmax(116px,0.8fr) 24px;gap:8px;align-items:center}
 .source-binding-row__select{min-width:0}
 :deep(.source-binding-row__select.arco-select-view){display:inline-flex;box-sizing:border-box;align-items:center;width:100%;min-width:0;height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;font-size:14px;line-height:22px;box-shadow:none!important}
 :deep(.source-binding-row__select.arco-select-view:hover){border-color:#4080ff!important;background:#fff!important}
@@ -247,15 +254,5 @@ function applyColumnDefaults() {
 :deep(.source-binding-row__select.arco-select-view .arco-select-view-value),:deep(.source-binding-row__select.arco-select-view .arco-select-view-placeholder){min-width:0;overflow:hidden;background:transparent!important;font-size:14px;line-height:30px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
 .source-binding-row__remove{width:24px;height:24px;border:0;border-radius:4px;background:transparent;color:#e54848;font-size:16px;cursor:pointer}
 .source-binding-row__remove:hover{background:#fff3f3}
-.source-binding-row__remove:disabled{color:#a9aeb8;background:#f2f3f5;cursor:not-allowed}
-</style>
-
-<style>
-/* 弹层 teleport 到 .schema-modal（popup-container），scoped 够不到，
-   经 triggerProps contentClass 打标。触发器列宽有限，长选项（数据源名/host、
-   长 URLs 等）按内容自然宽撑开 + 面板横向滚动，保证下拉里能看全要选什么 */
-.source-binding-popup .arco-select-dropdown-list-wrapper{overflow-x:auto}
-.source-binding-popup .arco-select-option{width:max-content;min-width:100%}
-.source-binding-popup .arco-select-option-content{overflow:visible}
 .source-binding-row__remove:disabled{color:#a9aeb8;background:#f2f3f5;cursor:not-allowed}
 </style>

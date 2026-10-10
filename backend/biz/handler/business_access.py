@@ -112,8 +112,12 @@ def state(actor: CurrentMaintainer, session: Db, application: AuthApplicationDep
     business_stmt = select(BusinessClient)
     request_stmt = select(BusinessSpaceRequest).order_by(BusinessSpaceRequest.created_at.desc())
     if not actor.is_admin:
-        business_stmt = business_stmt.where(BusinessClient.client_id.in_(actor.developer_business_ids))
-        request_stmt = request_stmt.where(BusinessSpaceRequest.client_id.in_(actor.developer_business_ids))
+        business_stmt = business_stmt.where(
+            BusinessClient.client_id.in_(actor.developer_business_ids)
+        )
+        request_stmt = request_stmt.where(
+            BusinessSpaceRequest.client_id.in_(actor.developer_business_ids)
+        )
     businesses = [
         {"clientId": r.client_id, "name": r.name, "enabled": r.enabled}
         for r in session.scalars(business_stmt)
@@ -130,7 +134,11 @@ def state(actor: CurrentMaintainer, session: Db, application: AuthApplicationDep
                     **member,
                     "clientId": client_ids[0] if len(client_ids) == 1 else None,
                     "clientIds": client_ids,
-                    "role": "admin" if member["isAdmin"] else "developer" if any(link.role == "developer" for link in links) else "user",
+                    "role": "admin"
+                    if member["isAdmin"]
+                    else "developer"
+                    if any(link.role == "developer" for link in links)
+                    else "user",
                 }
             )
     rows = space_registrations(session)
@@ -189,7 +197,13 @@ def save_member(
     require_enabled()
     if session.get(PlatformUser, user_id) is None:
         raise HTTPException(404, "用户不存在，请先登录一次以登记统一认证 ID")
-    client_ids = list(dict.fromkeys(payload.clientIds if payload.clientIds is not None else ([payload.clientId] if payload.clientId else [])))
+    client_ids = list(
+        dict.fromkeys(
+            payload.clientIds
+            if payload.clientIds is not None
+            else ([payload.clientId] if payload.clientId else [])
+        )
+    )
     for client_id in client_ids:
         _business(session, client_id)
     if not client_ids and payload.role == "developer":
@@ -208,8 +222,14 @@ def save_member(
     if session.get(BusinessMembershipState, user_id) is None:
         session.add(BusinessMembershipState(user_id=user_id))
     session.execute(delete(BusinessMembership).where(BusinessMembership.user_id == user_id))
-    session.add_all(BusinessMembership(user_id=user_id, client_id=client_id,
-        role="developer" if payload.role == "developer" else "user") for client_id in client_ids)
+    session.add_all(
+        BusinessMembership(
+            user_id=user_id,
+            client_id=client_id,
+            role="developer" if payload.role == "developer" else "user",
+        )
+        for client_id in client_ids
+    )
     _audit(session, actor, "BIND_BUSINESS_MEMBER", user_id, payload.model_dump())
     return ApiResponse(data={"userId": user_id})
 
@@ -237,7 +257,9 @@ def save_space(space_name: str, payload: SpacePayload, actor: CurrentAdmin, sess
         row = BusinessSpacePolicy(space_name=space_name)
         session.add(row)
     row.client_id = payload.clientId
-    row.visibility = "public" if payload.isSharedProduction else "business" if payload.clientId else "unassigned"
+    row.visibility = (
+        "public" if payload.isSharedProduction else "business" if payload.clientId else "unassigned"
+    )
     session.flush()
     _audit(session, actor, "BIND_BUSINESS_SPACE", space_name, payload.model_dump())
     return ApiResponse(data={"name": space_name})
@@ -246,9 +268,15 @@ def save_space(space_name: str, payload: SpacePayload, actor: CurrentAdmin, sess
 @router.post("/requests")
 def request_space(payload: RequestPayload, actor: CurrentMaintainer, session: Db):
     require_enabled()
-    if payload.clientId and not actor.is_admin and payload.clientId not in actor.developer_business_ids:
+    if (
+        payload.clientId
+        and not actor.is_admin
+        and payload.clientId not in actor.developer_business_ids
+    ):
         raise HTTPException(403, "不能为其他业务申请空间")
-    client_id = payload.clientId or (actor.developer_business_ids[0] if len(actor.developer_business_ids) == 1 else None)
+    client_id = payload.clientId or (
+        actor.developer_business_ids[0] if len(actor.developer_business_ids) == 1 else None
+    )
     _business(session, client_id)
     if payload.spaceName in space_registrations(session):
         raise HTTPException(409, "图空间名称已登记")

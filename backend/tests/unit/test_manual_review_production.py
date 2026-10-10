@@ -6,6 +6,7 @@ graph-build 移交通道（内部入口 / correction / outbox）已删除，subm
 
 from __future__ import annotations
 
+import itertools
 import json
 
 import pytest
@@ -503,18 +504,37 @@ def test_resolve_execution_ids_by_job_keyword_swallows_control_plane_failure(mon
     assert mrp.resolve_execution_ids_by_job_keyword("job-1") == []
 
 
-def test_execution_ids_by_job_keyword_matches_partial_job_id():
+def test_execution_ids_by_job_keyword_matches_partial_job_id(monkeypatch):
     # jobId 关键词（含部分匹配）反查执行 ID：按「来源记录」jobId 搜存量案的兜底通道
-    # （控制面 sqlite 注入；host 无控制面 MySQL 时跳过）
+    # （host 无控制面 MySQL 时跳过）。save_execution/查询走模块级 workflow_session_scope
+    # （全局控制面）——注入 sqlite 会话作用域隔离，否则容器内会读写共享控制库，
+    # LIKE 还会命中真实执行（job-f33128bafbec 在 dev2 有真实执行记录）
     try:
-        from service.workflow_repository import WorkflowRepository as Repo
+        import service.workflow_repository as wr
     except Exception:
         pytest.skip("workflow_repository 单例 import 需控制面 MySQL，仅容器内验证")
+    from contextlib import contextmanager
 
     engine = create_engine(
         "sqlite+pysqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
-    repo = Repo(engine=engine)
+    wr.Base.metadata.create_all(engine)
+    sf = sessionmaker(engine, expire_on_commit=False)
+
+    @contextmanager
+    def sqlite_scope():
+        session = sf()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    monkeypatch.setattr(wr, "workflow_session_scope", sqlite_scope)
+    repo = wr.WorkflowRepository(engine=engine)
     base = {
         "definitionId": "schema:paper",
         "workflowId": "wf",
@@ -538,23 +558,25 @@ def test_execution_ids_by_job_keyword_matches_partial_job_id():
 # ----------------------------------------------------------------------
 
 
-def _make_extract_fail_case(service, *, attempt=1, execution_id="EXEC-1", domain="graph"):
+def _make_extract_fail_case(
+    service, *, attempt=1, execution_id="EXEC-1", domain="graph", record_id="w3"
+):
     """模拟 record_extract_failures activity 建案（attempt 记在 input_snapshot）。"""
     resp = service.create_direct_case(
         task_id="TASK-E1",
         execution_id=execution_id,
         step_id="extract",
         kind="entity",
-        candidate={"recordId": "w3", "error": "ValueError: POISON", "schemaKey": "widget"},
-        object_id="w3",
-        object_name="db.widgets#w3",
+        candidate={"recordId": record_id, "error": "ValueError: POISON", "schemaKey": "widget"},
+        object_id=record_id,
+        object_name=f"db.widgets#{record_id}",
         node_label="E2EWidget",
         reason="记录解析失败: ValueError: POISON",
         template_id="T_EXTRACT_FAIL",
         workflow_type="kg.schema.extract",
         domain=domain,
         source_table="db.widgets",
-        source_record_id="w3",
+        source_record_id=record_id,
         extra_snapshot={
             "schemaId": "s1",
             "schemaKey": "widget",
@@ -619,3 +641,196 @@ def test_extract_rerun_refail_chain_each_attempt_distinct(service):
     open_rows = [c for c in rows if c.status == "OPEN"]
     assert len(open_rows) == 1
     assert json.loads(open_rows[0].input_snapshot)["attempt"] == 3
+
+
+# ----------------------------------------------------------------------
+# T_EXTRACT_FAIL 只读口径（2026-10-10）：「已完成」以执行概要成功为准——
+# 重跑执行非成功终态（异常/失败/终止）或记录缺失的案不归类已完成，
+# 显示「重跑失败」且可一直重跑；只有 COMPLETED 才维持已完成（只读）。
+# ----------------------------------------------------------------------
+
+
+_RID = itertools.count()
+
+
+def _bound_extract_fail_case(service, *, status, rerun_execution_id="EXEC-R9"):
+    """造一台已绑定重跑执行的 T_EXTRACT_FAIL 案（模拟 mark/attach/resolve 后形态）。
+
+    record_id 逐台唯一：建案按 task/step/record/candidate 去重，同 record 的
+    重复建案会命中同一条案（状态互相覆盖），多案断言就失真了。
+    """
+    case_id = _make_extract_fail_case(service, record_id=f"w{next(_RID)}")
+    with service.sf() as s:
+        c = s.scalar(select(ReviewCase).where(ReviewCase.id == case_id))
+        snapshot = json.loads(c.input_snapshot)
+        snapshot["rerunExecutionId"] = rerun_execution_id
+        c.input_snapshot = json.dumps(snapshot)
+        c.status = status
+        s.commit()
+    return case_id
+
+
+def _patch_execution_statuses(monkeypatch, mapping):
+    """钉住控制面执行状态映射（None=控制面不可达）。"""
+    monkeypatch.setattr(
+        "service.manual_review_production.resolve_execution_statuses",
+        lambda ids: mapping,
+    )
+
+
+def _admin():
+    return ReviewIdentity(
+        "admin", "admin", frozenset({"review_admin"}), frozenset({"*"}), "org", "req"
+    )
+
+
+@pytest.mark.parametrize(
+    "exec_status,expected",
+    [
+        ("COMPLETED", "RESOLVED"),
+        ("ABNORMAL", "RERUN_FAILED"),
+        ("FAILED", "RERUN_FAILED"),
+        ("CANCELED", "RERUN_FAILED"),
+        ("TIMED_OUT", "RERUN_FAILED"),
+        (None, "RERUN_FAILED"),  # 执行记录已缺失（控制库被清理）
+    ],
+)
+def test_effective_status_resolved_needs_execution_success(exec_status, expected):
+    from service.manual_review_production import effective_extract_fail_status
+
+    assert (
+        effective_extract_fail_status("RESOLVED", "EXEC-R1", {"EXEC-R1": exec_status}) == expected
+    )
+
+
+@pytest.mark.parametrize(
+    "exec_status,expected",
+    [
+        ("RUNNING", "RERUNNING"),
+        ("FAILED", "RERUN_FAILED"),
+        (None, "RERUN_FAILED"),  # 滞留重跑中（回滚失败/执行记录缺失）→ 解锁可再重跑
+    ],
+)
+def test_effective_status_rerunning(exec_status, expected):
+    from service.manual_review_production import effective_extract_fail_status
+
+    assert (
+        effective_extract_fail_status("RERUNNING", "EXEC-R1", {"EXEC-R1": exec_status}) == expected
+    )
+
+
+def test_effective_status_keeps_stored_when_unverifiable():
+    from service.manual_review_production import effective_extract_fail_status
+
+    # 控制面不可达（映射为 None）→ 保留库内状态，不误判
+    assert effective_extract_fail_status("RESOLVED", "EXEC-R1", None) == "RESOLVED"
+    assert effective_extract_fail_status("RERUNNING", "EXEC-R1", None) == "RERUNNING"
+    # 未绑定重跑执行（无可核验凭证）→ 不改判
+    assert effective_extract_fail_status("RESOLVED", None, {}) == "RESOLVED"
+
+
+def test_queue_status_derived_from_execution_summary(service, monkeypatch):
+    done = _bound_extract_fail_case(service, status="RESOLVED", rerun_execution_id="EXEC-OK")
+    abnormal = _bound_extract_fail_case(service, status="RESOLVED", rerun_execution_id="EXEC-BAD")
+    gone = _bound_extract_fail_case(service, status="RESOLVED", rerun_execution_id="EXEC-GONE")
+    stuck = _bound_extract_fail_case(service, status="RERUNNING", rerun_execution_id="EXEC-STUCK")
+    running = _bound_extract_fail_case(service, status="RERUNNING", rerun_execution_id="EXEC-RUN")
+    _patch_execution_statuses(
+        monkeypatch,
+        {
+            "EXEC-OK": "COMPLETED",
+            "EXEC-BAD": "ABNORMAL",
+            "EXEC-STUCK": "FAILED",
+            "EXEC-RUN": "RUNNING",
+        },
+    )  # EXEC-GONE 故意不在映射里 = 执行记录缺失
+    out = service.list_cases({"template_id": "T_EXTRACT_FAIL"}, _admin())
+    statuses = {x["id"]: x["status"] for x in out["items"]}
+    assert statuses[done] == "RESOLVED"
+    assert statuses[abnormal] == "RERUN_FAILED"
+    assert statuses[gone] == "RERUN_FAILED"
+    assert statuses[stuck] == "RERUN_FAILED"
+    assert statuses[running] == "RERUNNING"
+
+
+def test_non_extract_templates_unaffected_by_execution_map(service, monkeypatch):
+    case = claimed(service)
+    case = service.submit(
+        case["id"], case["version"], "entity-confirm", {"entityVerdict": "create"}, "", actor()
+    )
+    _patch_execution_statuses(monkeypatch, {"EXEC-1": "FAILED"})
+    out = service.list_cases({"template_id": "T_LINK"}, _admin())
+    assert [x["status"] for x in out["items"]] == ["RESOLVED"]
+
+
+def test_rerun_gates_accept_derived_rerunnable(service, monkeypatch):
+    reopened = _bound_extract_fail_case(service, status="RESOLVED", rerun_execution_id="EXEC-BAD")
+    done = _bound_extract_fail_case(service, status="RESOLVED", rerun_execution_id="EXEC-OK")
+    _patch_execution_statuses(monkeypatch, {"EXEC-OK": "COMPLETED", "EXEC-BAD": "ABNORMAL"})
+    listed = {c["caseId"] for c in service.list_extract_fail_cases(case_ids=[reopened, done])}
+    assert listed == {reopened}, "概要非成功的已完成案必须可重跑，概要成功的不可"
+    assert service.mark_extract_rerun([reopened, done]) == 1
+    with service.sf() as s:
+        statuses = {
+            c.id: c.status
+            for c in s.scalars(select(ReviewCase).where(ReviewCase.id.in_([reopened, done])))
+        }
+    assert statuses[reopened] == "RERUNNING"
+    assert statuses[done] == "RESOLVED"
+
+
+def test_rerunning_with_live_execution_not_rerunnable(service, monkeypatch):
+    running = _bound_extract_fail_case(service, status="RERUNNING", rerun_execution_id="EXEC-RUN")
+    _patch_execution_statuses(monkeypatch, {"EXEC-RUN": "RUNNING"})
+    assert service.list_extract_fail_cases(case_ids=[running]) == []
+    assert service.mark_extract_rerun([running]) == 0
+
+
+def test_delete_allows_derived_rerunnable_only(service, monkeypatch):
+    admin = actor("admin-1", ("review_admin",))
+    reopened = _bound_extract_fail_case(service, status="RESOLVED", rerun_execution_id="EXEC-BAD")
+    done = _bound_extract_fail_case(service, status="RESOLVED", rerun_execution_id="EXEC-OK")
+    _patch_execution_statuses(monkeypatch, {"EXEC-OK": "COMPLETED", "EXEC-BAD": "FAILED"})
+    assert service.delete_case(reopened, admin) == {"id": reopened, "deleted": True}
+    with pytest.raises(ReviewConflictError):
+        service.delete_case(done, admin)
+
+
+def test_reopened_case_round_trips_through_rerun(service, monkeypatch):
+    # 重开的案走完正常闭环：仍失败（执行 ABNORMAL）→ 维持重跑失败并重建 attempt+1；
+    # 再次重跑成功（执行 COMPLETED）→ 已完成站得住
+    case_id = _bound_extract_fail_case(service, status="RESOLVED", rerun_execution_id="EXEC-BAD")
+    with service.sf() as s:
+        record_id = s.scalar(select(ReviewCase).where(ReviewCase.id == case_id)).source_record_id
+    _patch_execution_statuses(monkeypatch, {"EXEC-BAD": "ABNORMAL"})
+    assert service.mark_extract_rerun([case_id]) == 1
+    service.attach_rerun_execution([case_id], "EXEC-NEW")
+    result = service.resolve_extract_rerun(
+        rerun_case_ids=[case_id],
+        failed_records=[{"sourceBindingId": "b1", "recordId": record_id, "error": "仍失败"}],
+        rerun_execution_id="EXEC-NEW",
+        task_id="TASK-E1",
+    )
+    assert result["refailed"] == 1 and result["recreated"] == 1
+    _patch_execution_statuses(monkeypatch, {"EXEC-NEW": "ABNORMAL"})
+    items = {
+        x["id"]: x["status"]
+        for x in service.list_cases({"template_id": "T_EXTRACT_FAIL"}, _admin())["items"]
+    }
+    assert items[case_id] == "RERUN_FAILED"
+    # 再来一轮：这次成功
+    assert service.mark_extract_rerun([case_id]) == 1
+    service.attach_rerun_execution([case_id], "EXEC-OK2")
+    result = service.resolve_extract_rerun(
+        rerun_case_ids=[case_id],
+        failed_records=[],
+        rerun_execution_id="EXEC-OK2",
+        task_id="TASK-E1",
+    )
+    assert result["resolved"] == 1
+    _patch_execution_statuses(monkeypatch, {"EXEC-OK2": "COMPLETED"})
+    items = {
+        x["id"]: x["status"]
+        for x in service.list_cases({"template_id": "T_EXTRACT_FAIL"}, _admin())["items"]
+    }
+    assert items[case_id] == "RESOLVED"

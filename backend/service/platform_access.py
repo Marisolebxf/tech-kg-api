@@ -70,9 +70,7 @@ class PlatformActor:
 
     @property
     def can_develop(self) -> bool:
-        return not self.business_only and (
-            self.is_admin or bool(self.developer_business_ids)
-        )
+        return not self.business_only and (self.is_admin or bool(self.developer_business_ids))
 
     @property
     def is_developer(self) -> bool:

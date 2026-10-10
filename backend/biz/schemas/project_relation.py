@@ -27,7 +27,7 @@ class ProjectRelationQueryRequest(BaseModel):
                 "pageSize": 100,
                 "cursor": "",
             }
-        }
+        },
     )
 
     keyword: str | None = Field(default=None, max_length=256)
@@ -45,9 +45,7 @@ class ProjectRelationQueryRequest(BaseModel):
 
     @field_validator("relationTypes")
     @classmethod
-    def unique_relation_types(
-        cls, value: list[ProjectRelationType]
-    ) -> list[ProjectRelationType]:
+    def unique_relation_types(cls, value: list[ProjectRelationType]) -> list[ProjectRelationType]:
         return list(dict.fromkeys(value))
 
 

@@ -27,7 +27,10 @@ def get_cached_json(key: str) -> str | None:
 
 
 def set_cached_json(key: str, json_str: str) -> None:
-    _store[(get_current_space(), request_can_write.get(), key)] = (time.monotonic() + _TTL, json_str)
+    _store[(get_current_space(), request_can_write.get(), key)] = (
+        time.monotonic() + _TTL,
+        json_str,
+    )
 
 
 def clear() -> None:
@@ -36,5 +39,7 @@ def clear() -> None:
 
 def discard_prefix(prefix: str) -> None:
     """按键前缀清除缓存（写接口修改数据后让对应 GET 列表立即失效）。"""
-    for key in [k for k in _store if k[0] == get_current_space() and k[2].split("?", 1)[0] == prefix]:
+    for key in [
+        k for k in _store if k[0] == get_current_space() and k[2].split("?", 1)[0] == prefix
+    ]:
         _store.pop(key, None)

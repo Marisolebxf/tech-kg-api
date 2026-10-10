@@ -22,7 +22,11 @@ from biz.schemas.platform_overview import (
 )
 from service.business_access_control import allowed_space_names, ensure_space_access, rbac_enabled
 
-router = APIRouter(prefix="/platform/overview", tags=["platform-overview"], dependencies=[Depends(bind_selected_graph_space)])
+router = APIRouter(
+    prefix="/platform/overview",
+    tags=["platform-overview"],
+    dependencies=[Depends(bind_selected_graph_space)],
+)
 application = PlatformOverviewApplication()
 
 

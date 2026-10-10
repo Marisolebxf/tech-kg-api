@@ -43,7 +43,14 @@ def business_db(monkeypatch):
     )
     Base.metadata.create_all(
         engine,
-        tables=[BusinessClient.__table__, BusinessMember.__table__, BusinessGraphSpace.__table__, BusinessMembership.__table__, BusinessMembershipState.__table__, BusinessSpacePolicy.__table__],
+        tables=[
+            BusinessClient.__table__,
+            BusinessMember.__table__,
+            BusinessGraphSpace.__table__,
+            BusinessMembership.__table__,
+            BusinessMembershipState.__table__,
+            BusinessSpacePolicy.__table__,
+        ],
     )
     factory = sessionmaker(engine, expire_on_commit=False)
 
@@ -146,7 +153,10 @@ def test_space_transfer_revokes_access_even_with_warm_console_cache(business_db,
     statement = "MATCH (n) RETURN n LIMIT 1"
     monkeypatch.setattr(graph_console, "_ngql_payload_cache", {})
     graph_console._ngql_cache_put(graph_console.ngql_cache_key("private_a", statement), "cached")
-    assert graph_console.run_statement_cached_payload(actor("developer"), "private_a", statement) == "cached"
+    assert (
+        graph_console.run_statement_cached_payload(actor("developer"), "private_a", statement)
+        == "cached"
+    )
     with business_db() as session:
         session.get(BusinessGraphSpace, "private_a").client_id = "b"
     with pytest.raises(HTTPException) as caught:

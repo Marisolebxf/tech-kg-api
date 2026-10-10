@@ -340,6 +340,18 @@ const logLines = computed<string[]>(() => {
   return message ? [message] : []
 })
 
+/** 单 Schema 执行（kg.schema.extract）的 output 自带 Schema 中文名（schemaLabel），
+ *  与 chain 段名同源同值：阶段名用它对齐「原执行 chain 段 / 任务详情页」口径；
+ *  chain 段 id 带 schema: 前缀，不套用（名字本就是中文）。 */
+const logSchemaLabel = computed(() => {
+  const output = logExecution.value?.output as Record<string, unknown> | null | undefined
+  return typeof output?.schemaLabel === 'string' && output.schemaLabel ? output.schemaLabel : ''
+})
+
+function stepDisplayName(step: ProcessStep): string {
+  return logSchemaLabel.value && !step.id.startsWith('schema:') ? logSchemaLabel.value : step.name
+}
+
 /** 口径对齐任务详情页（ProcessInstanceDetailView）：环节跑完但含失败行 = 异常，
  *  非成功也非失败；行级失败数在 step.abnormal（kg.schema.extract 的 failed 计数）。 */
 function stepDisplayStatus(step: ProcessStep): string {
@@ -867,7 +879,7 @@ onMounted(() => {
               <h4>阶段状态</h4>
               <ul class="case-log-steps">
                 <li v-for="step in logTask.steps" :key="step.id">
-                  <span class="case-log-step-name">{{ step.name }}</span>
+                  <span class="case-log-step-name">{{ stepDisplayName(step) }}</span>
                   <a-tooltip v-if="stepDisplayStatus(step) === '异常'" :content="`处理 ${step.count} · 异常 ${step.abnormal}`" position="top">
                     <span :class="['case-log-step-status', `is-${stepDisplayStatus(step)}`]">{{ stepDisplayStatus(step) }}</span>
                   </a-tooltip>

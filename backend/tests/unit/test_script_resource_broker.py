@@ -376,10 +376,12 @@ def test_gateway_uses_current_membership_and_persisted_source(monkeypatch):
         with scope() as session:
             session.get(BusinessMember, "alice").role = "developer"
             session.add(BusinessMembershipState(user_id="alice"))
-            session.add_all([
-                BusinessMembership(user_id="alice", client_id="a", role="developer"),
-                BusinessMembership(user_id="alice", client_id="b", role="developer"),
-            ])
+            session.add_all(
+                [
+                    BusinessMembership(user_id="alice", client_id="a", role="developer"),
+                    BusinessMembership(user_id="alice", client_id="b", role="developer"),
+                ]
+            )
         assert live.call("graph", "labels", [], {}) == ["Person"]
         with pytest.raises(HTTPException):
             gateway.ScriptResourceBroker(
@@ -387,6 +389,7 @@ def test_gateway_uses_current_membership_and_persisted_source(monkeypatch):
             )
         with scope() as session:
             from sqlalchemy import delete
+
             session.execute(delete(BusinessMembership).where(BusinessMembership.user_id == "alice"))
         with pytest.raises(HTTPException):
             live.call("graph", "labels", [], {})

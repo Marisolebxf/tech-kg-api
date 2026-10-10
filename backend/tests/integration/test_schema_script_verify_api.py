@@ -100,9 +100,7 @@ async def _list_expert(client: AsyncClient) -> dict:
     return next(item for item in listing.json()["data"]["items"] if item["name"] == "Expert")
 
 
-BENIGN_SCRIPT = (
-    b"from kg_sdk import step\n\n\n@step\ndef clean_row(payload):\n    return payload\n"
-)
+BENIGN_SCRIPT = b"from kg_sdk import step\n\n\n@step\ndef clean_row(payload):\n    return payload\n"
 DANGEROUS_SCRIPT = (
     b"import os\n\nfrom kg_sdk import step\n\n\n@step\ndef clean_row(payload):\n"
     b"    os.system('rm -rf /')\n    return payload\n"

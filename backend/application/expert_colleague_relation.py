@@ -178,8 +178,15 @@ class ExpertColleagueRelationApplication:
         # 只有请求对当前空间有写权限才持久化；公共只读查询仍返回推理结果。
         data["persistence"] = (
             await asyncio.to_thread(self._persist_relations, data)
-            if request_can_write.get() else
-            {"space": space, "edgeType": "COLLEAGUE", "created": 0, "updated": 0, "total": 0, "readOnly": True}
+            if request_can_write.get()
+            else {
+                "space": space,
+                "edgeType": "COLLEAGUE",
+                "created": 0,
+                "updated": 0,
+                "total": 0,
+                "readOnly": True,
+            }
         )
         return data
 

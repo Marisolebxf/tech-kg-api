@@ -125,9 +125,7 @@ def test_cursor_rejects_invalid_or_changed_filters() -> None:
         ("Person", {}, ""),
     ],
 )
-def test_related_entity_name_mapping(
-    label: str, properties: dict[str, Any], expected: str
-) -> None:
+def test_related_entity_name_mapping(label: str, properties: dict[str, Any], expected: str) -> None:
     graph = _Graph([_record(label=label, related_properties=properties)])
     page = ProjectRelationService(graph).query(ProjectRelationQueryRequest())
     assert page.items[0].relatedEntity.name == expected

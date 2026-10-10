@@ -27,7 +27,10 @@ async def read_request_graph_space(request: Request | None) -> str | None:
     values = list(headers)
     values.extend(request.query_params.getlist("space"))
     values.extend(request.query_params.getlist("graphSpace"))
-    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() == "application/json":
+    if (
+        request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        == "application/json"
+    ):
         try:
             body = await request.json()
         except ValueError:
@@ -54,6 +57,7 @@ async def bind_selected_graph_space(request: Request, actor: CurrentActor) -> As
     space = await read_request_graph_space(request)
     if space:
         from biz.handler.graph_search import _ensure_space_access
+
         _ensure_space_access(actor, space)
     token = selected_graph_space.set(space)
     try:

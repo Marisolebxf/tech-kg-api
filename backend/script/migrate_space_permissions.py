@@ -20,7 +20,11 @@ from db_model.business_access import (
 )
 from db_model.platform_governance import PlatformUser
 
-TABLES = (BusinessMembershipState.__table__, BusinessMembership.__table__, BusinessSpacePolicy.__table__)
+TABLES = (
+    BusinessMembershipState.__table__,
+    BusinessMembership.__table__,
+    BusinessSpacePolicy.__table__,
+)
 
 
 def schema_report(engine) -> dict:
@@ -35,7 +39,11 @@ def schema_report(engine) -> dict:
         primary = set(inspector.get_pk_constraint(table.name).get("constrained_columns") or [])
         if not set(table.c.keys()) <= columns or primary != {c.name for c in table.primary_key}:
             incompatible.append(table.name)
-    return {"ready": not missing and not incompatible, "missing": missing, "incompatible": incompatible}
+    return {
+        "ready": not missing and not incompatible,
+        "missing": missing,
+        "incompatible": incompatible,
+    }
 
 
 def apply_plan(session: Session, plan: dict, *, apply: bool = False) -> dict:
@@ -68,7 +76,11 @@ def apply_plan(session: Session, plan: dict, *, apply: bool = False) -> dict:
         if not isinstance(space, dict) or set(space) != {"name", "visibility", "clientId"}:
             raise ValueError("Space requires name, visibility and clientId")
         name = space["name"]
-        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", name) or name in spaces_seen:
+        if (
+            not isinstance(name, str)
+            or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", name)
+            or name in spaces_seen
+        ):
             raise ValueError("Invalid or duplicate space name")
         spaces_seen.add(name)
         if space["visibility"] not in {"public", "business", "unassigned"}:
@@ -86,7 +98,10 @@ def apply_plan(session: Session, plan: dict, *, apply: bool = False) -> dict:
             if session.get(BusinessMembershipState, uid) is None:
                 session.add(BusinessMembershipState(user_id=uid))
             session.execute(delete(BusinessMembership).where(BusinessMembership.user_id == uid))
-            session.add_all(BusinessMembership(user_id=uid, client_id=g["clientId"], role=g["role"]) for g in member["businesses"])
+            session.add_all(
+                BusinessMembership(user_id=uid, client_id=g["clientId"], role=g["role"])
+                for g in member["businesses"]
+            )
         for space in spaces:
             row = session.get(BusinessSpacePolicy, space["name"])
             if row is None:
@@ -94,8 +109,12 @@ def apply_plan(session: Session, plan: dict, *, apply: bool = False) -> dict:
                 session.add(row)
             row.visibility, row.client_id = space["visibility"], space["clientId"]
         session.flush()
-    return {"applied": apply, "membership_users": len(memberships), "space_policies": len(spaces),
-            "legacy_tables_unchanged": True}
+    return {
+        "applied": apply,
+        "membership_users": len(memberships),
+        "space_policies": len(spaces),
+        "legacy_tables_unchanged": True,
+    }
 
 
 def migrate(engine, *, apply: bool = False, plan: dict | None = None) -> dict:
@@ -105,8 +124,12 @@ def migrate(engine, *, apply: bool = False, plan: dict | None = None) -> dict:
     if apply:
         for table in TABLES:
             table.create(engine, checkfirst=True)
-    result = {"schema": schema_report(engine), "created": before["missing"] if apply else [],
-              "legacy_tables_unchanged": True, "assignments": None}
+    result = {
+        "schema": schema_report(engine),
+        "created": before["missing"] if apply else [],
+        "legacy_tables_unchanged": True,
+        "assignments": None,
+    }
     if plan is not None:
         with Session(engine) as session, session.begin():
             result["assignments"] = apply_plan(session, plan, apply=apply)

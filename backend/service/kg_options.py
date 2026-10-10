@@ -39,8 +39,17 @@ def _graph_options(labels: list[str], id_key: str) -> list[dict[str, str]]:
                     continue
                 seen.add(str(node.id))
                 props = node.properties
-                name = next((str(props[k]) for k in ("name_zh", "name_cn", "name", "name_en") if props.get(k)), str(node.id))
-                source_id = props.get("scholar_id" if id_key == "scholarId" else "org_id") or node.id
+                name = next(
+                    (
+                        str(props[k])
+                        for k in ("name_zh", "name_cn", "name", "name_en")
+                        if props.get(k)
+                    ),
+                    str(node.id),
+                )
+                source_id = (
+                    props.get("scholar_id" if id_key == "scholarId" else "org_id") or node.id
+                )
                 out.append({id_key: str(source_id), "name": name})
         except Exception as exc:
             logger.warning("load graph options %s failed: %s", label, exc)

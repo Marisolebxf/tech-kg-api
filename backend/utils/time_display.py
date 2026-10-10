@@ -9,11 +9,11 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 _CST = ZoneInfo("Asia/Shanghai")
-_UTC = timezone.utc
+_UTC = UTC
 
 # 匹配平台通行的 "YYYY-MM-DD HH:MM:SS[.fff]"（T 或空格分隔）裸时间串
 _TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(\.\d+)?$")
@@ -24,13 +24,40 @@ _CST_FMT = "%Y-%m-%d %H:%M:%S"
 # 全字段扫描：日期串、HH:MM 截止块、workflowId 内嵌时间等非键值不受影响。
 _TIME_KEYS = frozenset(
     {
-        "createdAt", "updatedAt", "startedAt", "completedAt", "finishedAt",
-        "lastRunAt", "submittedAt", "heartbeatAt", "claimedAt", "slaClaimAt",
-        "slaResolveAt", "executedAt", "expiresAt", "occurredAt", "lastModifiedAt",
-        "lastExecutedAt", "syncedAt", "deletedAt", "archivedAt", "reviewedAt",
-        "created_at", "updated_at", "started_at", "completed_at", "finished_at",
-        "last_run_at", "submitted_at", "heartbeat_at", "claimed_at", "sla_claim_at",
-        "sla_resolve_at", "executed_at", "reviewed_at", "next_retry_at",
+        "createdAt",
+        "updatedAt",
+        "startedAt",
+        "completedAt",
+        "finishedAt",
+        "lastRunAt",
+        "submittedAt",
+        "heartbeatAt",
+        "claimedAt",
+        "slaClaimAt",
+        "slaResolveAt",
+        "executedAt",
+        "expiresAt",
+        "occurredAt",
+        "lastModifiedAt",
+        "lastExecutedAt",
+        "syncedAt",
+        "deletedAt",
+        "archivedAt",
+        "reviewedAt",
+        "created_at",
+        "updated_at",
+        "started_at",
+        "completed_at",
+        "finished_at",
+        "last_run_at",
+        "submitted_at",
+        "heartbeat_at",
+        "claimed_at",
+        "sla_claim_at",
+        "sla_resolve_at",
+        "executed_at",
+        "reviewed_at",
+        "next_retry_at",
     }
 )
 
@@ -74,9 +101,11 @@ def utc_to_cst_str(value):
         # 带时区标记的 ISO 串：交给 datetime 解析后转北京
         if stripped.endswith(("Z", "z")) or re.search(r"[+-]\d{2}:?\d{2}$", stripped):
             try:
-                return datetime.fromisoformat(stripped.replace("Z", "+00:00")).astimezone(
-                    _CST
-                ).strftime(_CST_FMT)
+                return (
+                    datetime.fromisoformat(stripped.replace("Z", "+00:00"))
+                    .astimezone(_CST)
+                    .strftime(_CST_FMT)
+                )
             except ValueError:
                 return value
         match = _TS_RE.match(stripped)

@@ -283,6 +283,7 @@ async def get_execution(execution_id: str, actor: CurrentActor) -> Response:
         raise HTTPException(status_code=404, detail="工作流执行记录不存在")
     authorize_workflow_resource(actor, execution)
     from service.workflow_jobs import workflow_resource_capabilities
+
     execution = workflow_resource_capabilities(actor, execution)
     payload = json.dumps(
         {"code": 200, "success": True, "data": deep_cst(execution), "msg": "success"},

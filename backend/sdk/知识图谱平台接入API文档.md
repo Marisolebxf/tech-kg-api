@@ -527,12 +527,12 @@ kg = SemanticToolkit("http://<服务地址>:8000")
 
 # 节点：实体
 ner = kg.ner_research(text="Zhang等提出的深度学习方法应用于桥梁监测。")
-for ent in kg.entities_of(ner):          # [{text, type, std_zh, std_en, position}, ...]
+for ent in kg.entities_of(ner):  # [{text, type, std_zh, std_en, position}, ...]
     graph.add_node(ent["std_zh"] or ent["text"], type=ent["type"])
 
 # 边：三元组（消费上游 record_id）
 rel = kg.relation_extract(record_id=kg.record_id(ner))
-for t in kg.triples_of(rel):             # [{subject, relation, object, trigger, ...}, ...]
+for t in kg.triples_of(rel):  # [{subject, relation, object, trigger, ...}, ...]
     graph.add_edge(t["subject"], t["object"], label=t["relation"])
 
 # 属性：分类与关键词
@@ -543,9 +543,13 @@ kws = kg.keywords_en("We propose CNN for SHM of bridges.")
 ents2 = kg.entities_of(kg.ner_general_file("paper.pdf"))
 
 # 批量聚类（≥4 篇）/ 综述（≥2 篇）
-clu = kg.deep_cluster(documents=[{"document_id": "d1", "title": "…", "text": "…",
-                                  "publication_date": "2024-01-01"}, ...])   # ≥4 篇
-rev = kg.structured_review("桥梁监测", documents=[...])                        # ≥2 篇
+clu = kg.deep_cluster(
+    documents=[
+        {"document_id": "d1", "title": "…", "text": "…", "publication_date": "2024-01-01"},
+        ...,
+    ]
+)  # ≥4 篇
+rev = kg.structured_review("桥梁监测", documents=[...])  # ≥2 篇
 
 # 用户资源（术语库/映射表/训练集）先上传后随请求携带 resource_id
 lib = kg.upload_resource("domain_terminology_library", "terms.json")

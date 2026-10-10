@@ -74,6 +74,7 @@ class AuthApplication:
         profile.business_ids = list(actor.business_ids)
         profile.developer_business_ids = list(actor.developer_business_ids)
         from service.business_access_control import business_summaries
+
         profile.businesses = business_summaries(actor)
         profile.platform_role = actor.role_code
         profile.can_develop = actor.can_develop

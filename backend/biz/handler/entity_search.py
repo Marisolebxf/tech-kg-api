@@ -27,7 +27,11 @@ from service.entity_search import (
 from service.entity_search import browse_cache as _browse_cache
 from service.entity_search import search_cache as _search_cache
 
-router = APIRouter(prefix="/entity-search", tags=["entity-search"], dependencies=[Depends(bind_selected_graph_space)])
+router = APIRouter(
+    prefix="/entity-search",
+    tags=["entity-search"],
+    dependencies=[Depends(bind_selected_graph_space)],
+)
 logger = logging.getLogger(__name__)
 
 # 浏览页默认缓存 5 分钟；关键词搜索仍使用较短 TTL，避免索引变化后旧命中保留过久。

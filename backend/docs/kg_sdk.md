@@ -64,10 +64,12 @@ from kg_sdk import Context, current_context
 ```python
 from kg_sdk import step
 
-@step                    # 第一步消费平台读的源表行（id 默认取函数名）
+
+@step  # 第一步消费平台读的源表行（id 默认取函数名）
 def normalize(payload): ...
 
-@step("resolve")         # 显式指定步 id（可含 -）
+
+@step("resolve")  # 显式指定步 id（可含 -）
 def do_resolve(payload): ...
 ```
 
@@ -154,10 +156,12 @@ from kg_sdk import current_context, step
 def normalize(payload):
     """第 1 步：消费平台读的源表行，规整字段。"""
     rows = payload["rows"]
-    return {"items": [
-        {"id": r["id"], "title": (r.get("title") or "").strip(), "org_id": r.get("org_id")}
-        for r in rows
-    ]}
+    return {
+        "items": [
+            {"id": r["id"], "title": (r.get("title") or "").strip(), "org_id": r.get("org_id")}
+            for r in rows
+        ]
+    }
 
 
 @step
@@ -167,9 +171,7 @@ def enrich(payload):
     items = payload["input"]["items"]
     if ctx is not None and ctx.mysql is not None:
         with ctx.mysql.session_scope() as s:
-            org_names = dict(
-                s.execute(text("SELECT id, name FROM org")).fetchall()
-            )  # 简化示意
+            org_names = dict(s.execute(text("SELECT id, name FROM org")).fetchall())  # 简化示意
         for it in items:
             it["org_name"] = org_names.get(it.get("org_id"))
     return {"items": items}
@@ -181,8 +183,7 @@ def emit(payload):
     items = payload["input"]["items"]
     return {
         "entities": [
-            {"id": it["id"], "props": {"id": it["id"], "name": it["title"]}}
-            for it in items
+            {"id": it["id"], "props": {"id": it["id"], "name": it["title"]}} for it in items
         ]
     }
 ```

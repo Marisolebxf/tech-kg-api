@@ -162,10 +162,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
         core = self._core_contribution(papers, patents, projects)
         mode = self._cooperation_mode(items, papers, patents, projects)
 
-        space = (
-            getattr(getattr(graph, "_settings", None), "space", None)
-            or get_current_space()
-        )
+        space = getattr(getattr(graph, "_settings", None), "space", None) or get_current_space()
         source_name = self._display_name(source)
         target_name = self._display_name(target)
         source_props = getattr(source, "properties", None) or {}
@@ -329,8 +326,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 vid,
                 labels=tuple(str(item) for item in (getattr(node, "labels", None) or [])),
                 space=(
-                    getattr(getattr(graph, "_settings", None), "space", None)
-                    or get_current_space()
+                    getattr(getattr(graph, "_settings", None), "space", None) or get_current_space()
                 ),
             ),
             **entity_score,

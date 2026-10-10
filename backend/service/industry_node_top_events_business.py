@@ -59,6 +59,7 @@ _result_cache_lock = threading.Lock()
 def _get_dev_client() -> TRSGraphClient:
     """按已鉴权请求空间获取客户端，不缓存跨空间的服务实例。"""
     from infra.graph_db import get_space_client
+
     return get_space_client(get_current_space())
 
 

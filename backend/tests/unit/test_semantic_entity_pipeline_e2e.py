@@ -59,9 +59,7 @@ class _SemanticHandler(BaseHTTPRequestHandler):
         meta: dict = {}
         if self.path == "/api/v1/ner/general/text":
             data = {
-                "entity_results": [
-                    {"text": "OpenAI", "type": "ORGANIZATION", "confidence": 0.97}
-                ]
+                "entity_results": [{"text": "OpenAI", "type": "ORGANIZATION", "confidence": 0.97}]
             }
             meta = {"record_id": f"general-{len(self.calls)}"}
         elif self.path == "/api/v1/ner/research/text":
@@ -78,14 +76,16 @@ class _SemanticHandler(BaseHTTPRequestHandler):
             meta = {"record_id": f"research-{len(self.calls)}"}
         elif self.path == "/api/v1/ner/domain/text":
             data = {
-                "entity_results": [
-                    {"text": "Transformer", "type": "MODEL", "confidence": 0.96}
-                ],
+                "entity_results": [{"text": "Transformer", "type": "MODEL", "confidence": 0.96}],
                 "selected_domain": payload.get("domain") or "计算机",
             }
             meta = {"record_id": f"domain-{len(self.calls)}"}
         elif self.path == "/api/v1/concept-definition/text":
-            data = {"definitions": [{"concept": "图神经网络", "definition": "处理图结构数据的神经网络。"}]}
+            data = {
+                "definitions": [
+                    {"concept": "图神经网络", "definition": "处理图结构数据的神经网络。"}
+                ]
+            }
         elif self.path == "/api/v1/research-question/text":
             data = {"structured_research_questions": ["如何提升图节点分类准确率？"]}
         elif self.path == "/api/v1/citation-intent/text":
@@ -95,11 +95,7 @@ class _SemanticHandler(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/v1/move/"):
             data = {"moves": [{"move_type": "方法", "text": "提出新方法"}]}
         elif self.path.startswith("/api/v1/classify/"):
-            data = {
-                "classifications": [
-                    {"clc_code": "TP18", "clc_name": "自动化基础理论"}
-                ]
-            }
+            data = {"classifications": [{"clc_code": "TP18", "clc_name": "自动化基础理论"}]}
         elif self.path.startswith("/api/v1/keywords/"):
             data = {
                 "keywords": [
@@ -171,9 +167,7 @@ class SemanticEntityPipelineE2ETest(unittest.TestCase):
         entities = client.entities_of(client.research_entities("节点分类", "GNN用于节点分类"))
         self.assertEqual(entities[0]["standard_names"]["zh"], "图神经网络")
         self.assertEqual(
-            client.definitions_of(client.concept_definitions("图神经网络用于图数据"))[0][
-                "concept"
-            ],
+            client.definitions_of(client.concept_definitions("图神经网络用于图数据"))[0]["concept"],
             "图神经网络",
         )
         self.assertEqual(

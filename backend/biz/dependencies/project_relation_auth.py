@@ -54,13 +54,17 @@ async def require_project_relation_identity(
 
 async def project_relation_space(
     request: Request,
-    identity: Annotated[ExternalClientIdentity | PlatformActor, Depends(require_project_relation_identity)],
+    identity: Annotated[
+        ExternalClientIdentity | PlatformActor, Depends(require_project_relation_identity)
+    ],
 ):
     from service.graph_space import default_graph_space
     from service.graph_space_context import selected_graph_space
+
     space = default_graph_space()
     if isinstance(identity, PlatformActor):
         from biz.dependencies.selected_graph_space import read_request_graph_space
+
         space = await read_request_graph_space(request) or space
     token = selected_graph_space.set(space)
     try:

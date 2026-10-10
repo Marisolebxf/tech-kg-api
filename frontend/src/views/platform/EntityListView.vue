@@ -5,7 +5,6 @@ import { IconSearch } from '@arco-design/web-vue/es/icon'
 
 import {
   browseEntities,
-  countEntityList,
   entitySearchErrorMessage,
   getEntitySearchTypes,
   searchEntityList,
@@ -49,71 +48,10 @@ const PAGE_CACHE_TTL = 60_000
 const pageCache = new Map<string, { expires: number; result: EntityListResult }>()
 const pendingPages = new Map<string, Promise<EntityListResult>>()
 let cacheVersion = 0
-let countController: AbortController | undefined
-let countScope = ''
-const knownTotals = new Map<string, number>()
-
-function stopCount() {
-  countController?.abort()
-  countController = undefined
-  countScope = ''
-}
-
-function totalKey(request: PageRequest, data: EntityListResult) {
-  return JSON.stringify([request.keyword, request.space, request.entityType, data.generation, data.matchMode])
-}
-
-function applyTotal(key: string, total: number) {
-  for (const cached of pageCache.values()) {
-    const data = cached.result
-    if (JSON.stringify([data.keyword, data.graphSpace, data.entityType, data.generation, data.matchMode]) === key) {
-      data.total = total
-      data.totalStatus = 'ready'
-    }
-  }
-  if (result.value && totalKey({ keyword: appliedKeyword.value, space: space.value || null,
-    entityType: entityType.value || null, limit: pageSize.value, offset: 0 }, result.value) === key) {
-    result.value = { ...result.value, total, totalStatus: 'ready' }
-  }
-}
-
-function startTotal(request: PageRequest, data: EntityListResult) {
-  if (!request.keyword || data.total != null) return
-  const key = totalKey(request, data)
-  const known = knownTotals.get(key)
-  if (known != null) { applyTotal(key, known); return }
-  if (countScope === key && countController) return
-  stopCount()
-  countScope = key
-  const controller = new AbortController()
-  countController = controller
-  void countEntityList({ keyword: request.keyword, space: request.space, entityType: request.entityType,
-    generation: data.generation, matchMode: data.matchMode }, controller.signal).then(count => {
-    if (controller.signal.aborted || key !== countScope) return
-    if (knownTotals.size >= 20) knownTotals.delete(knownTotals.keys().next().value!)
-    knownTotals.set(key, count.total)
-    applyTotal(key, count.total)
-  }).catch(() => {
-    if (!controller.signal.aborted && key === countScope && result.value) {
-      result.value = { ...result.value, totalStatus: 'error' }
-    }
-  }).finally(() => {
-    if (countController === controller) countController = undefined
-  })
-}
-
-function retryTotal() {
-  // Refresh the page too: the index revision may have changed while counting.
-  clearPageCache()
-  void doSearch()
-}
-
 type PageRequest = { keyword: string; space: string | null; entityType: string | null; limit: number; offset: number }
 
 function clearPageCache() {
   ++cacheVersion
-  stopCount()
-  knownTotals.clear()
   pageCache.clear()
   pendingPages.clear()
 }
@@ -147,7 +85,6 @@ const paginationTotal = computed(() => {
   if (!result.value) return 0
   return result.value.total
     ?? (result.value.returned ?? result.value.items.length) + (page.value - 1) * pageSize.value
-      + (result.value.hasMore ? 1 : 0)
 })
 const totalPages = computed(() => {
   return Math.max(Math.ceil(paginationTotal.value / pageSize.value), 1)
@@ -189,9 +126,8 @@ async function doSearch() {
     const nextResult = await loadPage(request)
     if (version === searchVersion) {
       result.value = nextResult
-      startTotal(request, nextResult)
       // 仅预取下一页；与用户翻页共享进行中的请求，失败不影响当前页。
-      if (nextResult.total != null && request.offset + request.limit < nextResult.total) {
+      if (request.offset + request.limit < (nextResult.total ?? 0)) {
         void loadPage({ ...request, offset: request.offset + request.limit }).catch(() => {})
       }
     }
@@ -238,8 +174,7 @@ function propertyOverflow(item: EntityListResult['items'][number]): number {
 }
 
 onMounted(() => {
-  void loadEntityTypes()
-  void doSearch()
+  void loadEntityTypes().then(() => doSearch())
 })
 
 // 全局图空间切换：重置分页与关键词后按新空间重查
@@ -307,15 +242,12 @@ watch(
         <button class="kg-button" type="button" @click="doSearch">重试</button>
       </div>
       <div v-else-if="!items.length" class="entity-empty">
-        <template v-if="page > 1">当前页暂无实体，请返回上一页或重新查询</template>
-        <template v-else>
         <template v-if="isBrowseMode">
           <template v-if="entityType">类型 {{ entityType }} 下暂无实体</template>
           <template v-else>当前图空间暂无实体</template>
         </template>
         <template v-else>
           未找到匹配「{{ appliedKeyword }}」的实体{{ entityType ? `（类型 ${entityType}）` : '' }}
-        </template>
         </template>
       </div>
       <template v-else>
@@ -387,7 +319,7 @@ watch(
         </div>
       </template>
       <ListPagination
-        v-if="result && (items.length || page > 1 || result.totalStatus === 'pending' || result.totalStatus === 'error')"
+        v-if="result && items.length"
         :total="paginationTotal"
         :page="page"
         :page-size="pageSize"
@@ -400,11 +332,7 @@ watch(
       >
         <template #summary>
           <span class="entity-pagination__info">
-            <template v-if="result.totalStatus === 'pending'">统计中</template>
-            <template v-else-if="result.totalStatus === 'error'">
-              统计失败 <button class="kg-button" type="button" @click="retryTotal">重新统计</button>
-            </template>
-            <template v-else>共 {{ result.total ?? paginationTotal }} 个实体</template>
+            共 {{ paginationTotal }} 个实体
           </span>
         </template>
       </ListPagination>

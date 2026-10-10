@@ -1299,12 +1299,7 @@ class ManualReviewService:
 
         cols = ", ".join(f"`{key}`" for key in props)
         values = ", ".join(_ngql_value(props[key]) for key in props)
-        query = f'INSERT VERTEX `{node_label}`({cols}) VALUES "{vid}":({values})'
-        entity_writer = getattr(client, "execute_entity_write", None)
-        if entity_writer is not None:
-            entity_writer(query, node_ids=[str(vid)])
-        else:
-            client.execute_write(query)
+        client.execute_write(f'INSERT VERTEX `{node_label}`({cols}) VALUES "{vid}":({values})')
 
     def direct_decide(
         self,
@@ -1426,11 +1421,7 @@ class ManualReviewService:
                 f'INSERT VERTEX {node_label}({", ".join(cols)}) VALUES "{c.object_id}": '
                 f"({', '.join(_ngql_value(props[col]) for col in cols)})"
             )
-            entity_writer = getattr(graph, "execute_entity_write", None)
-            if entity_writer is not None:
-                entity_writer(stmt, node_ids=[str(c.object_id)])
-            else:
-                graph.execute_write(stmt)
+            graph.execute_write(stmt)
         elif kind == "relation":
             edge_type = snapshot.get("_edgeType")
             from_id = snapshot.get("_fromId")

@@ -287,10 +287,14 @@ def parse_execution_records(
             exec_rows.append(row)
             # 反查窗口下界优先用开跑前的起点水位（startWatermark）：watermark 是
             # 跑完后的终值，取 min 后窗口会缩成最后一批同秒，写图时间落在窗口内的
-            # 顶点/边查不全；旧执行没有 startWatermark 时退回 watermark
+            # 顶点/边查不全；旧执行没有 startWatermark 时退回 watermark。
+            # 水位在 payload 里是 ISO 'T' 分隔而图侧 update_time 是空格分隔：
+            # 字符串比较 'T'(0x54)>' '(0x20)，同日 T 格式水位会大于全部同日图值，
+            # 当天跑的执行（cron fire/rerun 水位必是当天）反查恒 0 命中退聚合行，
+            # 故统一规范成空格分隔再进窗口
             watermark = str(source.get("startWatermark") or source.get("watermark") or "")
             if watermark:
-                watermarks.append(watermark)
+                watermarks.append(watermark.replace("T", " ", 1))
         descriptor = ExtractExecutionInfo(
             kind=kind,
             schema_key=schema_key,

@@ -1134,6 +1134,70 @@ def test_enrich_day_rows_lookup_upper_bound_is_day_end_not_completion() -> None:
     assert [row.object for row in result.entity_rows] == ["被后续执行改写的对象"]
 
 
+def test_enrich_day_rows_lookup_lower_bound_normalizes_iso_watermark() -> None:
+    """反查窗下界水位规范化：payload 里 startWatermark 是 ISO 'T' 分隔而图侧
+    update_time 是空格分隔，字符串比较 'T'>' ' 会让同日水位大于全部同日图值——
+    当天跑的执行（cron fire/rerun 水位必是当天）反查恒 0 命中、退「Schema · N 条」
+    聚合行（dev2 ewrdf 实测「专家 · 2 条」）。须统一成空格分隔再进窗口。"""
+    snapshot = parse_execution_records(
+        [
+            _execution_record(
+                written=2,
+                completed_at="2026-09-23 03:41:54",
+                sources=[
+                    {
+                        "table": "techkg_e2e_liz.review_widgets",
+                        "written": 2,
+                        "startWatermark": "2026-09-23T03:00:24",
+                    }
+                ],
+            )
+        ],
+        day="2026-09-23",
+        target_space="dev2",
+        default_space="dev2",
+    )
+
+    # 解析层：window_lo 已规范成空格分隔
+    assert snapshot.entity_executions[0].window_lo == "2026-09-23 03:00:24"
+
+    client = _ScriptedGraphClient(
+        [
+            (
+                "DESC TAG `ReviewWidget`",
+                [{"Field": "name", "Type": "string"}, {"Field": "update_time", "Type": "string"}],
+            ),
+            (
+                "LOOKUP ON `ReviewWidget`",
+                [
+                    {
+                        "vid": "rwxT-wm-01",
+                        "props": {
+                            "name": "同日水位对象",
+                            "source_table": "techkg_e2e_liz.review_widgets",
+                            "update_time": "2026-09-23 03:20:02",
+                        },
+                    }
+                ],
+            ),
+        ]
+    )
+
+    result = enrich_day_rows_with_graph(
+        snapshot,
+        "dev2",
+        connect_client=lambda space: client,
+        schema_names={"review-widget-64d0d5": "ReviewWidget"},
+        schema_labels={"ReviewWidget": "审测挂件"},
+    )
+
+    lookup = next(q for q in client.queries if q.startswith("LOOKUP ON `ReviewWidget`"))
+    # 语句层：下界是空格格式，不得把 'T' 带进比较串
+    assert '`ReviewWidget`.`update_time` >= "2026-09-23 03:00:24"' in lookup
+    assert "2026-09-23T03:00:24" not in lookup
+    assert [row.object for row in result.entity_rows] == ["同日水位对象"]
+
+
 def test_enrich_day_rows_zero_hit_lookup_lists_no_aggregate_row() -> None:
     """LOOKUP 执行成功但 0 命中（对象被统计日后的执行改写出窗/删除）：如实不出行，
     不再退「Schema · N 条」聚合行——用户口径：不需要聚合，有多少条展示多少条。"""

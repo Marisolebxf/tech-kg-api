@@ -184,6 +184,8 @@ function handleResultTabKeydown(event: KeyboardEvent) {
   });
 }
 const running = ref(false);
+/** 「刷新图谱」进行中：请求互斥仍看 running，但刷新按钮的转圈/文案只跟随刷新动作，不跟随执行测试。 */
+const panoramaRefreshing = ref(false);
 const lastTestTime = ref("—");
 const lastUpdateTime = ref<number | null>(null);
 
@@ -4628,7 +4630,12 @@ function clearParameterError(fieldName: string) {
 
 /** 全景图「刷新图谱」：忽略服务端缓存重新组装分层与子图。 */
 async function handleRefreshPanorama() {
-  await handleRun({ refresh: true });
+  panoramaRefreshing.value = true;
+  try {
+    await handleRun({ refresh: true });
+  } finally {
+    panoramaRefreshing.value = false;
+  }
 }
 
 function handleSelectGraphNode(node: GraphNodeData) {
@@ -4824,7 +4831,7 @@ function clearGraphSelection() {
         :disabled="running || (isPaperCooperation && hasParameterErrors)"
         @click="handleRun()"
       >
-        {{ running ? "测试中..." : "执行测试" }}
+        {{ running && !panoramaRefreshing ? "测试中..." : "执行测试" }}
       </button>
       <button
         class="kg-button kg-button--secondary"
@@ -4860,13 +4867,14 @@ function clearGraphSelection() {
           <button
             v-if="isPanorama"
             class="kg-button kg-button--secondary graph-panel__refresh"
+            :class="{ 'graph-panel__refresh--loading': panoramaRefreshing }"
             type="button"
             :disabled="running"
             title="忽略服务端缓存，重新拉取分层与子图"
             @click="handleRefreshPanorama"
           >
             <AIconRefresh class="graph-panel__refresh-icon" />
-            {{ running ? "刷新中…" : "刷新图谱" }}
+            {{ panoramaRefreshing ? "刷新中…" : "刷新图谱" }}
           </button>
           <span>最近测试时间：</span>
           <strong>{{ lastTestTime }}</strong>
@@ -6046,7 +6054,8 @@ function clearGraphSelection() {
   flex: 0 0 auto;
 }
 
-.graph-panel__refresh:disabled .graph-panel__refresh-icon {
+/* 只有真正的刷新动作才转圈；执行测试期间按钮仅禁用（防止并发请求），不转。 */
+.graph-panel__refresh--loading .graph-panel__refresh-icon {
   animation: graph-panel-refresh-spin 1s linear infinite;
 }
 

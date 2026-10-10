@@ -9,7 +9,8 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
  * 配置不动，本规格守住三条边界：
  * - 1395px：弹层右侧至少保留 12px，不再顶死视口右缘；
  * - 375px：左移后弹层左右都不越出视口；
- * - 两列比例、360px 封顶、长名省略号与纵向滚动不因左移回归。
+ * - 两列比例、360px 封顶、长名省略号与纵向滚动不因左移回归；
+ * - hover 自绘滑块收掉，不再与弹层右边框并排读成"两条滚动条"（滚轮仍可滚）。
  */
 
 const SPACES_PATH = '/graph-search/spaces'
@@ -134,6 +135,17 @@ test('1395px: 超长空间名省略号截断，列表仍可纵向滚动', async 
   })
   expect(scrolled, '12 个选项超出 200px 定高面板，列表须可纵向滚动').not.toBeNull()
   expect(scrolled!.scrolled, '滚动位置实际可移动').toBe(true)
+
+  // hover 第二列原本会淡入 Arco 自绘滑块，与弹层右边框并排像"两条滚动条"；
+  // 修复=该弹层内整条轨道 display:none，滚轮滚动能力由上一断言守住。
+  await popup.locator('.arco-cascader-panel-column').nth(1).hover()
+  await page.waitForTimeout(300)
+  const trackDisplay = await popup.evaluate(
+    (root) => root.querySelector('.arco-scrollbar-track') !== null
+      ? getComputedStyle(root.querySelector('.arco-scrollbar-track')!).display
+      : 'absent',
+  )
+  expect(trackDisplay, 'hover 时自绘滑块轨道不渲染').toBe('none')
 })
 
 test('375px: 弹层左移后左右都不越出视口', async ({ page }) => {

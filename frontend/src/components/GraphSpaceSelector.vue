@@ -159,4 +159,10 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* 右缘"并排两条滚动条"实为 Arco 自绘 hover 滑块紧贴弹层右边框。整条收掉该弹层
+   的滑块与轨道（含透明轨道的点击跳转死区），列表滚轮/键盘滚动不受影响。 */
+.app-space-select-popup .arco-scrollbar-track {
+  display: none;
+}
 </style>

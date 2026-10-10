@@ -602,8 +602,9 @@ const assetChangeRows = ref<Record<AssetOverviewKey, AssetChangeRow[]>>({
   entity: [],
   relation: [],
 })
-// 昨日新增数值合计（Σwritten，与资产卡徽标同源）：抽屉明细行受单执行
-// 上限截断，行数 < 合计时页脚标注「共 N 条 · 展示前 n 条」
+// 昨日新增数值合计（与资产卡徽标同源）：图反查逐对象成功时=明细行数（徽标与
+// 抽屉同数）；图反查降级成聚合行时=控制库 Σwritten，行数 < 合计时页脚标注
+// 「共 N 条 · 展示前 n 条」
 const assetChangeTotals = ref<Partial<Record<AssetOverviewKey, number>>>({})
 function assetChangeFooterText(key: AssetOverviewKey | null): string {
   if (!key) return ''

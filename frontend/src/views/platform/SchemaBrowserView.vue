@@ -859,28 +859,25 @@ function schemaKey(name: string) {
     .toLowerCase()
 }
 
-/** arco form.validate() reject 的是 { 字段: [{ message }] } 结构：取第一条
- *  错误文案用于 toast——与输入框下方的红字同源同文案（此前只亮红字不弹提示，
- *  点「确认创建」看似无响应）。 */
+/** arco form.validate() 校验失败时 **resolve** 错误对象（不 reject）：
+ *  { 字段: { message } }。取第一条错误文案用于 toast——与输入框下方的红字
+ *  同源同文案（此前误当 reject 捕获成了死分支，非法输入放行到预览/创建，
+ *  最后靠后端 422 聚合报错兜底，2026-10-10 测试反馈「报错太笼统」的根因）。 */
 function firstFormError(errors: unknown): string | null {
   if (!errors || typeof errors !== 'object') return null
-  for (const messages of Object.values(errors as Record<string, unknown>)) {
-    if (Array.isArray(messages) && messages.length) {
-      const message = (messages[0] as { message?: unknown })?.message
-      if (typeof message === 'string' && message) return message
-    }
+  for (const item of Object.values(errors as Record<string, { message?: unknown }>)) {
+    const message = item?.message
+    if (typeof message === 'string' && message) return message
   }
   return null
 }
 
 async function saveItem() {
-  // arco form.validate() 校验失败时 reject（不是 resolve 错误对象）——必须捕获，
-  // 否则静默中断（空表单点「预览并创建」无反应的根因）。
-  try {
-    await createFormRef.value?.validate()
-  } catch (errors) {
-    const message = firstFormError(errors)
-    if (message) showToast(message, 'warning')
+  // arco form.validate() 校验失败时 resolve 错误对象（不 reject）——必须检查
+  // 返回值，否则非法输入直接放行到预览/创建。
+  const errors = await createFormRef.value?.validate()
+  if (errors) {
+    showToast(firstFormError(errors) || '请检查表单填写', 'warning')
     return
   }
   const f = createForm.value

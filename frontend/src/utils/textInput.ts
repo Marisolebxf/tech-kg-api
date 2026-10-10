@@ -70,8 +70,13 @@ export const SCHEMA_RELATION_NAME_RULE: TextRule = {
   patternHint: '关系英文名需为大写下划线（如 USES_TECHNOLOGY）',
 }
 
-/** Schema 中文名：label max_length=128 */
-export const SCHEMA_LABEL_RULE: TextRule = { max: 128 }
+/** Schema 中文名：label max_length=128，字符集与后端 check_text(allow_space)
+ *  的关键词字符集对齐（2026-10-10 前端无 pattern、后端 422 兜底的漂移收口） */
+export const SCHEMA_LABEL_RULE: TextRule = {
+  max: 128,
+  pattern: /^[\w一-鿿·.\-()（）、，,/:：;；\s]+$/,
+  patternHint: '中文名不能包含 ！？《》 等特殊字符（可为中英文、数字、下划线、空格及 · . - ( ) （） 、 ， , / : ： ; ；）',
+}
 
 /** Schema 说明：description max_length=4000；字符集与后端 PROSE_TEXT_PATTERN 对齐——
  *  在关键词字符集之上放行书名号/引号/感叹号/省略号/破折号等常规中文标点

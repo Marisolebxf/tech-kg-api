@@ -33,7 +33,11 @@ export interface EntityListResult {
   offset: number
   limit: number
   returned?: number
-  total?: number
+  total?: number | null
+  totalStatus?: 'pending' | 'ready' | 'error'
+  hasMore?: boolean
+  generation?: string
+  matchMode?: 'exact' | 'contains'
   keyword?: string
   entityType: string | null
   graphSpace?: string | null
@@ -158,3 +162,16 @@ export async function searchEntityList(payload: {
   return unwrap(await asApiPromise<EntityListResult>(http.get(`${PREFIX}/keyword`, { params: payload })))
 }
 
+
+/** Count independently so the first page never waits for a full aggregate. */
+export async function countEntityList(payload: {
+  keyword: string
+  space?: string | null
+  entityType?: string | null
+  generation?: string
+  matchMode?: 'exact' | 'contains'
+}, signal?: AbortSignal): Promise<{ total: number; generation: string; matchMode: 'exact' | 'contains' }> {
+  return unwrap(await asApiPromise<{ total: number; generation: string; matchMode: 'exact' | 'contains' }>(
+    http.get(`${PREFIX}/keyword/count`, { params: payload, timeout: 0, signal }),
+  ))
+}

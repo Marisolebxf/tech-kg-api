@@ -3,11 +3,11 @@ import { Popover } from '@arco-design/web-vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import EntityListView from '../EntityListView.vue'
-import { browseEntities, exportEntitiesCsv, searchEntityList, getEntitySearchTypes } from '../../../api/entitySearch'
+import { browseEntities, exportEntitiesCsv, searchEntityList, getEntitySearchTypes, countEntityList } from '../../../api/entitySearch'
 import ListPagination from '../../../components/list-pagination.vue'
 
 vi.mock('../../../api/entitySearch', () => ({
-  browseEntities: vi.fn(), searchEntityList: vi.fn(),
+  browseEntities: vi.fn(), searchEntityList: vi.fn(), countEntityList: vi.fn(),
   exportEntitiesCsv: vi.fn(),
   entitySearchErrorMessage: (error: Error) => error.message,
   getEntitySearchTypes: vi.fn(),
@@ -207,5 +207,77 @@ describe('实体列表翻页缓存', () => {
     await flushPromises()
     expect(vi.mocked(searchEntityList).mock.calls.length).toBeGreaterThan(calls)
     wrapper.unmount()
+  })
+})
+
+
+describe('独立实体总数统计', () => {
+  function pendingResult(offset = 0, hasMore = true) {
+    return { items: Array.from({ length: 10 }, (_, i) => ({ ...row, vid: `row-${offset + i}` })),
+      total: null, totalStatus: 'pending' as const, hasMore, generation: 'g'.repeat(32), matchMode: 'contains' as const,
+      keyword: '目标实体', graphSpace: 'dev2', offset, limit: 10, entityType: null, mode: 'keyword' as const }
+  }
+
+  it('先显示本页，慢统计期间可以翻页且只发起一次统计，完成后更新所有分页', async () => {
+    let resolveCount!: (value: { total: number; generation: string; matchMode: 'contains' }) => void
+    vi.mocked(countEntityList).mockReturnValue(new Promise(resolve => { resolveCount = resolve }))
+    vi.mocked(searchEntityList).mockImplementation(async request => pendingResult(request.offset))
+    const wrapper = await setup()
+    await wrapper.findAll('button').find(button => button.text() === '查询')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('table').text()).toContain('目标实体')
+    expect(wrapper.text()).toContain('统计中')
+    expect(wrapper.findComponent(ListPagination).props('disabled')).toBe(false)
+    wrapper.findComponent(ListPagination).vm.$emit('change', 2)
+    await flushPromises()
+    expect(searchEntityList).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 10 }))
+    expect(countEntityList).toHaveBeenCalledTimes(1)
+    resolveCount({ total: 1015, generation: 'g'.repeat(32), matchMode: 'contains' })
+    await flushPromises()
+    expect(wrapper.text()).toContain('共 1015 个实体')
+    wrapper.findComponent(ListPagination).vm.$emit('change', 1)
+    await flushPromises()
+    expect(wrapper.text()).toContain('共 1015 个实体')
+    expect(countEntityList).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('新查询会取消旧统计，迟到的旧结果不能覆盖新查询', async () => {
+    let resolveCount!: (value: { total: number; generation: string; matchMode: 'contains' }) => void
+    vi.mocked(countEntityList).mockReturnValue(new Promise(resolve => { resolveCount = resolve }))
+    vi.mocked(searchEntityList).mockResolvedValueOnce(pendingResult()).mockResolvedValueOnce({
+      ...pendingResult(), total: 2, totalStatus: 'ready', hasMore: false,
+    })
+    const wrapper = await setup()
+    const search = () => wrapper.findAll('button').find(button => button.text() === '查询')!.trigger('click')
+    await search()
+    await flushPromises()
+    const signal = vi.mocked(countEntityList).mock.calls[0]![1]!
+    await wrapper.get('input').setValue('新关键词')
+    await search()
+    await flushPromises()
+    expect(signal.aborted).toBe(true)
+    resolveCount({ total: 9999, generation: 'g'.repeat(32), matchMode: 'contains' })
+    await flushPromises()
+    expect(wrapper.text()).toContain('共 2 个实体')
+    expect(wrapper.text()).not.toContain('9999')
+    wrapper.unmount()
+  })
+
+  it('统计失败保留本页并提供重试，离开页面取消统计', async () => {
+    vi.mocked(searchEntityList).mockResolvedValue(pendingResult())
+    vi.mocked(countEntityList).mockRejectedValueOnce(new Error('timeout'))
+    const wrapper = await setup()
+    await wrapper.findAll('button').find(button => button.text() === '查询')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('统计失败')
+    expect(wrapper.get('table').text()).toContain('目标实体')
+    vi.mocked(countEntityList).mockReturnValue(new Promise(() => {}))
+    await wrapper.findAll('button').find(button => button.text() === '重新统计')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('统计中')
+    const signal = vi.mocked(countEntityList).mock.calls.at(-1)![1]!
+    wrapper.unmount()
+    expect(signal.aborted).toBe(true)
   })
 })

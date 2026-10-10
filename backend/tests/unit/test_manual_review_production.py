@@ -385,6 +385,51 @@ def test_queue_rows_expose_job_id(service, monkeypatch):
     assert resolved == [["EXEC-1", "EXEC-9"]]
 
 
+def test_queue_keyword_matches_source_record_info(service, monkeypatch):
+    # 失败重跑搜索栏按「来源记录」信息搜索：来源表 + 快照里的 jobId / 抽取执行
+    # executionId（此前只搜案号/对象/记录 id，搜来源记录列展示的 jobId 与 EXEC 一律空）
+    import service.manual_review_production as mrp
+
+    # 控制面反解走单测桩：这里只验证快照直搜，兜底路径见下一条用例
+    monkeypatch.setattr(mrp, "resolve_execution_ids_by_job_keyword", lambda kw: [])
+    _make_extract_fail_case(service, domain="talent")  # EXEC-1 / job-1 / db.widgets#w3
+    reviewer = actor("r", ("reviewer",))
+    assert service.list_cases({"category": "C", "keyword": "job-1"}, reviewer)["total"] == 1
+    assert service.list_cases({"category": "C", "keyword": "EXEC-1"}, reviewer)["total"] == 1
+    assert service.list_cases({"category": "C", "keyword": "db.widgets"}, reviewer)["total"] == 1
+    assert service.list_cases({"category": "C", "keyword": "job-404"}, reviewer)["total"] == 0
+
+
+def test_queue_keyword_matches_legacy_job_via_control_db(service, monkeypatch):
+    # 存量案快照没写 jobId（来源记录列靠控制面 EXEC→job 解析展示）：
+    # 搜该 jobId 时按 job→执行反解回快照匹配，搜展示值能命中
+    import service.manual_review_production as mrp
+
+    service.create_direct_case(
+        task_id="TASK-E9",
+        execution_id="EXEC-9",
+        step_id="extract",
+        kind="entity",
+        candidate={"recordId": "w9", "error": "ValueError: POISON", "schemaKey": "widget"},
+        object_id="w9",
+        object_name="db.widgets#w9",
+        reason="记录解析失败: ValueError: POISON",
+        template_id="T_EXTRACT_FAIL",
+        workflow_type="kg.schema.extract",
+        domain="talent",
+        source_table="db.widgets",
+        source_record_id="w9",
+        extra_snapshot={"schemaId": "s1", "schemaKey": "widget", "attempt": 1},  # 无 jobId
+    )
+    monkeypatch.setattr(
+        mrp,
+        "resolve_execution_ids_by_job_keyword",
+        lambda kw: ["EXEC-9"] if kw == "job-legacy" else [],
+    )
+    reviewer = actor("r", ("reviewer",))
+    assert service.list_cases({"category": "C", "keyword": "job-legacy"}, reviewer)["total"] == 1
+
+
 def test_detail_includes_resolved_job_id(service, monkeypatch):
     # 详情页「所属任务」：无快照 jobId 的存量 case 由 detail 单条解析补齐
     import service.manual_review_production as mrp
@@ -442,13 +487,80 @@ def test_job_ids_by_execution_ids_batch():
     assert repo.job_ids_by_execution_ids([]) == {}
 
 
+def test_resolve_execution_ids_by_job_keyword_swallows_control_plane_failure(monkeypatch):
+    # 控制面库不可达：吞异常返回空列表，搜索退化为快照直搜，不拖垮队列
+    import sys
+    import types
+
+    import service.manual_review_production as mrp
+
+    fake_module = types.ModuleType("service.workflow_repository")
+
+    def boom(keyword):
+        raise RuntimeError("control-plane down")
+
+    fake_module.repository = types.SimpleNamespace(execution_ids_by_job_keyword=boom)
+    monkeypatch.setitem(sys.modules, "service.workflow_repository", fake_module)
+    assert mrp.resolve_execution_ids_by_job_keyword("job-1") == []
+
+
+def test_execution_ids_by_job_keyword_matches_partial_job_id(monkeypatch):
+    # jobId 关键词（含部分匹配）反查执行 ID：按「来源记录」jobId 搜存量案的兜底通道
+    # （host 无控制面 MySQL 时跳过）。save_execution/查询走模块级 workflow_session_scope
+    # （全局控制面）——注入 sqlite 会话作用域隔离，否则容器内会读写共享控制库，
+    # LIKE 还会命中真实执行（job-f33128bafbec 在 dev2 有真实执行记录）
+    try:
+        import service.workflow_repository as wr
+    except Exception:
+        pytest.skip("workflow_repository 单例 import 需控制面 MySQL，仅容器内验证")
+    from contextlib import contextmanager
+
+    engine = create_engine(
+        "sqlite+pysqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    wr.Base.metadata.create_all(engine)
+    sf = sessionmaker(engine, expire_on_commit=False)
+
+    @contextmanager
+    def sqlite_scope():
+        session = sf()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    monkeypatch.setattr(wr, "workflow_session_scope", sqlite_scope)
+    repo = wr.WorkflowRepository(engine=engine)
+    base = {
+        "definitionId": "schema:paper",
+        "workflowId": "wf",
+        "runId": None,
+        "status": "COMPLETED",
+        "startedAt": "2026-09-17 10:00:00",
+    }
+    repo.save_execution({**base, "id": "E1", "workflowId": "wf-1", "jobId": "job-f33128bafbec"})
+    repo.save_execution({**base, "id": "E2", "workflowId": "wf-2", "jobId": "job-f33128bafbec"})
+    repo.save_execution({**base, "id": "E3", "workflowId": "wf-3", "jobId": "job-other"})
+    repo.save_execution({**base, "id": "E4", "workflowId": "wf-4"})  # 无 jobId 的行不参与
+    # 部分关键词命中同一 job 的全部执行（前端搜索框粘半截 jobId 是常态）
+    assert set(repo.execution_ids_by_job_keyword("f33128")) == {"E1", "E2"}
+    assert repo.execution_ids_by_job_keyword("job-other") == ["E3"]
+    assert repo.execution_ids_by_job_keyword("job-404") == []
+
+
 # ----------------------------------------------------------------------
 # T_EXTRACT_FAIL 重跑仍失败：attempt+1 新 case 必须真的建出来
 # （candidate 不带 attempt 时去重键与原案相同，新 case 被静默吞掉）
 # ----------------------------------------------------------------------
 
 
-def _make_extract_fail_case(service, *, attempt=1, execution_id="EXEC-1", record_id="w3"):
+def _make_extract_fail_case(
+    service, *, attempt=1, execution_id="EXEC-1", domain="graph", record_id="w3"
+):
     """模拟 record_extract_failures activity 建案（attempt 记在 input_snapshot）。"""
     resp = service.create_direct_case(
         task_id="TASK-E1",
@@ -462,6 +574,7 @@ def _make_extract_fail_case(service, *, attempt=1, execution_id="EXEC-1", record
         reason="记录解析失败: ValueError: POISON",
         template_id="T_EXTRACT_FAIL",
         workflow_type="kg.schema.extract",
+        domain=domain,
         source_table="db.widgets",
         source_record_id=record_id,
         extra_snapshot={

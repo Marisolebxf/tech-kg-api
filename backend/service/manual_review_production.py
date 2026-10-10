@@ -92,6 +92,22 @@ def resolve_job_ids(execution_ids: list[str | None]) -> dict[str, str]:
         return {}
 
 
+def resolve_execution_ids_by_job_keyword(keyword: str) -> list[str]:
+    """jobId 关键词 → 执行 ID 集合（队列按「来源记录」jobId 搜索的存量案兜底）。
+
+    快照没写 jobId 的 case，来源记录列展示值来自控制面 EXEC→job 解析；
+    搜该 jobId 须反向解出执行 ID 回快照匹配。控制面库不可达时返回空列表，
+    其余搜索条件不受影响——与 resolve_job_ids 同一套容错。
+    """
+    try:
+        from service.workflow_repository import repository
+
+        return repository.execution_ids_by_job_keyword(keyword)
+    except Exception:  # noqa: BLE001
+        logger.warning("resolve executionIds by job keyword failed", exc_info=True)
+        return []
+
+
 # T_EXTRACT_FAIL 只读口径（2026-10-10）：「已完成」以执行概要成功为准——
 # 重跑执行终态里只有 COMPLETED 算成功；FAILED/ABNORMAL（异常=抽取完成但含
 # 行级失败记录）/CANCELED/TERMINATED/TIMED_OUT 都不算，执行记录缺失
@@ -308,14 +324,27 @@ class ManualReviewService:
         if a.domains and "*" not in a.domains and not a.has_any("review_admin", "auditor"):
             q.append(ReviewCase.domain.in_(a.domains))
         if f.get("keyword"):
-            x = f"%{f['keyword']}%"
-            q.append(
-                or_(
-                    ReviewCase.id.like(x),
-                    ReviewCase.object_name.like(x),
-                    ReviewCase.source_record_id.like(x),
-                )
+            kw = str(f["keyword"])
+            x = f"%{kw}%"
+            # 「来源记录」信息一并可搜（失败重跑队列此前只搜案号/对象/记录 id，
+            # 搜来源记录列展示的 jobId 或抽取执行 EXEC 一律空）：来源表 +
+            # 快照里的 jobId/executionId——快照是紧凑 JSON（separators=(",",":")），
+            # 锚定 "key":"value" 形态匹配，避免整段快照模糊误伤
+            keyword_match = [
+                ReviewCase.id.like(x),
+                ReviewCase.object_name.like(x),
+                ReviewCase.source_record_id.like(x),
+                ReviewCase.source_table.like(x),
+                ReviewCase.input_snapshot.like(f'%"jobId":"%{kw}%"%'),
+                ReviewCase.input_snapshot.like(f'%"executionId":"%{kw}%"%'),
+            ]
+            # 存量案快照没写 jobId（来源记录列靠控制面 EXEC→job 解析展示）：
+            # 反向按 job 关键词解出执行 ID，回快照精确匹配，搜展示值才能命中
+            keyword_match.extend(
+                ReviewCase.input_snapshot.like(f'%"executionId":"{execution_id}"%')
+                for execution_id in resolve_execution_ids_by_job_keyword(kw)
             )
+            q.append(or_(*keyword_match))
         # 更新时间窗口过滤（队列页「时间」下拉）：1h/24h/7d/30d
         updated_within_hours = {"1h": 1, "24h": 24, "7d": 24 * 7, "30d": 24 * 30}
         if f.get("updated_within") in updated_within_hours:

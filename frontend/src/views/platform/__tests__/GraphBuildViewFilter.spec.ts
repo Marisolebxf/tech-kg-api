@@ -1,4 +1,5 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { Popover as APopover } from '@arco-design/web-vue'
 import { defineComponent } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -78,7 +79,13 @@ function mountView() {
   wrapper = mount(GraphBuildView, {
     global: {
       components: { ASelect: ASelectStub, AOption: AOptionStub, AInput: AInputStub, ATooltip: SlotStub },
-      stubs: { JobLaunchDialog: true, ListPagination: true, teleport: true },
+      // 脚本列悬停浮层：槽位直渲染便于断言（口径同 entity-list-search.spec）
+      stubs: {
+        JobLaunchDialog: true,
+        ListPagination: true,
+        teleport: true,
+        Popover: { props: ['trigger', 'position', 'contentClass'], template: '<div class="popover-stub"><slot /><div class="popover-content"><slot name="content" /></div></div>' },
+      },
     },
   })
   return wrapper
@@ -246,12 +253,16 @@ it('未登记归属的历史任务不能按空间列表首项归入当前空间'
   expect(wrapper.text()).toContain('任务j1')
 })
 
-it('保留上游脚本列完整名称提示', async () => {
+it('脚本列悬停浮层列出全部脚本（按执行顺序，替代原生 title）', async () => {
   wrapper.unmount()
   mocks.listJobs.mockResolvedValue({ items: [jobFixture('script', { taskType: 'chain', definitionIds: ['first.script', 'second.script'] })] })
   mountView()
   await flushPromises()
-  const scriptCell = wrapper.find('tbody tr td:nth-child(3) code')
-  expect(scriptCell.attributes('title')).toContain('first.script')
-  expect(scriptCell.attributes('title')).toContain('second.script')
+  const popover = wrapper.findComponent(APopover)
+  expect(popover.props('trigger')).toEqual(['hover', 'click'])
+  expect(popover.props('position')).toBe('bl')
+  expect(popover.props('contentClass')).toBe('gb-script-popover')
+  const names = wrapper.findAll('.gb-script-popover__name').map((item) => item.text())
+  expect(names).toEqual(['first.script', 'second.script'])
+  expect(wrapper.find('.gb-script-popover__title').text()).toBe('共 2 个脚本（按执行顺序）')
 })

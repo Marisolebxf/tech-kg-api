@@ -6,6 +6,7 @@ import DeleteConfirmDialog from '../../components/DeleteConfirmDialog.vue'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { IconInfoCircle, IconRefresh, IconSearch } from '@arco-design/web-vue/es/icon'
+import { Popover as APopover } from '@arco-design/web-vue'
 import {
   countJobUnifiedStatuses,
   deleteJob,
@@ -197,13 +198,12 @@ function jobScriptLabel(job: WorkflowJob): string {
   return job.definitionName || job.definitionId
 }
 
-/** 脚本列「脚本名 +N」悬停展开：chain 逐行列出全部脚本（按执行顺序）；
- *  单脚本与展示文本一致，不设 title。 */
-function jobScriptTitle(job: WorkflowJob): string | undefined {
-  if (job.taskType !== 'chain') return undefined
+/** 脚本列「脚本名 +N」悬停展开（APopover，样式对齐实体列表「公共属性」浮层）：
+ *  chain 逐行列出全部脚本（按执行顺序）；单脚本与展示文本一致，不出浮层。 */
+function jobScriptList(job: WorkflowJob): string[] {
+  if (job.taskType !== 'chain') return []
   const labels = job.schemaLabels?.length ? job.schemaLabels : job.definitionIds
-  if (labels.length < 2) return undefined
-  return [`共 ${labels.length} 个脚本（按执行顺序）：`, ...labels.map((label, i) => `${i + 1}. ${label}`)].join('\n')
+  return labels.length < 2 ? [] : labels
 }
 
 async function onTrigger(job: WorkflowJob) {
@@ -451,7 +451,28 @@ onMounted(() => {
             <tr v-for="job in pagedJobs" :key="job.id">
               <td><b>{{ job.name }}</b></td>
               <td>{{ TASK_TYPE_LABELS[job.taskType] || job.taskType }}</td>
-              <td><code :title="jobScriptTitle(job)">{{ jobScriptLabel(job) }}</code></td>
+              <td>
+                <APopover
+                  v-if="jobScriptList(job).length"
+                  :trigger="['hover', 'click']"
+                  position="bl"
+                  content-class="gb-script-popover"
+                >
+                  <code>{{ jobScriptLabel(job) }}</code>
+                  <template #content>
+                    <div class="gb-script-popover__content">
+                      <p class="gb-script-popover__title">共 {{ jobScriptList(job).length }} 个脚本（按执行顺序）</p>
+                      <ul class="gb-script-popover__list">
+                        <li v-for="(name, i) in jobScriptList(job)" :key="`${i}-${name}`">
+                          <span class="gb-script-popover__idx">{{ i + 1 }}</span>
+                          <span class="gb-script-popover__name">{{ name }}</span>
+                        </li>
+                      </ul>
+                    </div>
+                  </template>
+                </APopover>
+                <code v-else>{{ jobScriptLabel(job) }}</code>
+              </td>
               <td>{{ job.graphSpace || '归属待确认' }}</td>
               <td>
                 <span
@@ -629,4 +650,11 @@ span.run{color:var(--status-info)}
 .gb-action-menu-item--danger.arco-dropdown-option:not(.arco-dropdown-option-disabled):hover{color:#f53f3f}
 .gb-action-menu-item.arco-dropdown-option-disabled{color:#c9cdd4}
 .gb-actions .primary:disabled{background:#f2f3f5;border-color:#e5e6eb;color:#a9aeb8;cursor:not-allowed}
+/* 脚本列悬停浮层（teleport 到 body，需全局控制；样式对齐实体列表「公共属性」浮层） */
+.gb-script-popover{box-sizing:border-box;width:320px;max-width:calc(100vw - 48px);padding:12px 16px!important}
+.gb-script-popover__title{margin:0 0 8px;color:#1d2129;font-size:13px;line-height:20px;font-weight:500}
+.gb-script-popover__list{display:grid;gap:6px;max-height:280px;margin:0;padding:0;overflow:auto;list-style:none}
+.gb-script-popover__list li{display:flex;align-items:center;min-width:0;gap:8px;padding:4px 8px;border:1px solid #e5e6eb;border-radius:4px;background:#f7f8fa;font-size:12px;line-height:20px}
+.gb-script-popover__idx{flex:0 0 auto;min-width:18px;height:18px;border-radius:9px;background:#e8f3ff;color:#165dff;font-size:11px;line-height:18px;text-align:center}
+.gb-script-popover__name{flex:1;min-width:0;overflow:hidden;color:#1d2129;text-overflow:ellipsis;white-space:nowrap}
 </style>

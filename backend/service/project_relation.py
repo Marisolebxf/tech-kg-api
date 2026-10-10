@@ -92,10 +92,9 @@ class ProjectRelationService:
         )
 
     @staticmethod
-    def _fingerprint(
-        body: ProjectRelationQueryRequest, relation_types: tuple[str, ...]
-    ) -> str:
+    def _fingerprint(body: ProjectRelationQueryRequest, relation_types: tuple[str, ...]) -> str:
         from service.graph_space_context import get_current_space
+
         filters = {
             "space": get_current_space(),
             "keyword": body.keyword or "",
@@ -170,12 +169,18 @@ class ProjectRelationService:
         labels = [_text(label) for label in raw_labels]
         entity_type = next((label for label in labels if label in ENTITY_NAME_KEYS), "")
         name = next(
-            (_text(related.get(key)) for key in ENTITY_NAME_KEYS.get(entity_type, ()) if related.get(key)),
+            (
+                _text(related.get(key))
+                for key in ENTITY_NAME_KEYS.get(entity_type, ())
+                if related.get(key)
+            ),
             "",
         )
         allowed_props = RELATION_PROPERTY_KEYS.get(relation_type, ())
         relation_properties = {
-            key: relation[key] for key in allowed_props if key in relation and relation[key] is not None
+            key: relation[key]
+            for key in allowed_props
+            if key in relation and relation[key] is not None
         }
         return ProjectRelationItem(
             project=ProjectData(

@@ -85,6 +85,7 @@ def _scope_schema_capabilities(payload: str, actor) -> str:
         elif isinstance(item, list):
             for value in item:
                 visit(value)
+
     visit(data)
     return json.dumps(data, ensure_ascii=False)
 
@@ -163,11 +164,14 @@ def get_schema_topology(
 ) -> Response:
     graph_space = _scoped_space(actor, graph_space)
     return Response(
-        _scope_schema_capabilities(_application(session).topology_payload(
-            actor.user_id,
-            is_platform_admin=_can_manage(actor),
-            graph_space=graph_space,
-        ), actor),
+        _scope_schema_capabilities(
+            _application(session).topology_payload(
+                actor.user_id,
+                is_platform_admin=_can_manage(actor),
+                graph_space=graph_space,
+            ),
+            actor,
+        ),
         media_type="application/json",
     )
 
@@ -181,11 +185,14 @@ def get_schema_detail(
     _schema_access(actor, session, schema_id, "read")
     try:
         return Response(
-            _scope_schema_capabilities(_application(session).get_schema_payload(
-                schema_id,
-                actor.user_id,
-                is_platform_admin=_can_manage(actor),
-            ), actor),
+            _scope_schema_capabilities(
+                _application(session).get_schema_payload(
+                    schema_id,
+                    actor.user_id,
+                    is_platform_admin=_can_manage(actor),
+                ),
+                actor,
+            ),
             media_type="application/json",
         )
     except SchemaManagementError as exc:
@@ -336,7 +343,9 @@ def replace_schema_sources(
         # 未携带浏览器头的调用也必须按实际 Schema 空间限制来源配置业务。
         scoped_actor = replace(actor, context_graph_space=schema.graph_space)
         for source in payload.sources:
-            _validate_resource_selectors(scoped_actor, {"mysql_datasource_id": source.datasource_id})
+            _validate_resource_selectors(
+                scoped_actor, {"mysql_datasource_id": source.datasource_id}
+            )
     try:
         data = _application(session).replace_sources(
             schema_id=schema_id,

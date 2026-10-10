@@ -38,7 +38,12 @@ def membership_grants(session, user_id: str):
         .where(source.user_id == user_id, BusinessClient.enabled.is_(True))
         .order_by(source.client_id)
     )
-    return tuple(BusinessMembershipGrant(r.client_id, r.role if r.role in {"user", "developer"} else "user", r.name) for r in rows)
+    return tuple(
+        BusinessMembershipGrant(
+            r.client_id, r.role if r.role in {"user", "developer"} else "user", r.name
+        )
+        for r in rows
+    )
 
 
 def resolve_memberships(user_id: str):
@@ -60,20 +65,32 @@ def resolve_membership(user_id: str) -> tuple[str, str]:
 def with_memberships(actor):
     grants = resolve_memberships(actor.user_id)
     single = grants[0] if len(grants) == 1 else None
-    return replace(actor, memberships=grants, business_id=single.client_id if single else "",
-                   business_role=single.role if single else "user")
+    return replace(
+        actor,
+        memberships=grants,
+        business_id=single.client_id if single else "",
+        business_role=single.role if single else "user",
+    )
 
 
 def business_summaries(actor) -> list[dict[str, str]]:
     if rbac_enabled() and actor.is_admin and not actor.business_only:
         try:
             with session_scope() as session:
-                return [{"clientId": row.client_id, "name": row.name, "role": "admin"}
-                        for row in session.scalars(select(BusinessClient).where(BusinessClient.enabled.is_(True)).order_by(BusinessClient.client_id))]
+                return [
+                    {"clientId": row.client_id, "name": row.name, "role": "admin"}
+                    for row in session.scalars(
+                        select(BusinessClient)
+                        .where(BusinessClient.enabled.is_(True))
+                        .order_by(BusinessClient.client_id)
+                    )
+                ]
         except SQLAlchemyError as exc:
             raise HTTPException(503, "无法读取授权业务目录") from exc
-    return [{"clientId": grant.client_id, "name": grant.name, "role": grant.role}
-            for grant in actor.memberships or ()]
+    return [
+        {"clientId": grant.client_id, "name": grant.name, "role": grant.role}
+        for grant in actor.memberships or ()
+    ]
 
 
 @dataclass(frozen=True)
@@ -93,11 +110,19 @@ def space_registrations(session) -> dict[str, SpaceRegistration]:
     for name in rows.keys() | policies.keys():
         old, policy = rows.get(name), policies.get(name)
         public = policy.visibility == "public" if policy else bool(old.is_shared_production)
-        client_id = policy.client_id if policy and policy.visibility == "business" else (
-            None if policy or public else old.client_id)
+        client_id = (
+            policy.client_id
+            if policy and policy.visibility == "business"
+            else (None if policy or public else old.client_id)
+        )
         business = businesses.get(client_id)
-        result[name] = SpaceRegistration(name, client_id, public,
-            business.name if business else "", bool(business and business.enabled) if client_id else True)
+        result[name] = SpaceRegistration(
+            name,
+            client_id,
+            public,
+            business.name if business else "",
+            bool(business and business.enabled) if client_id else True,
+        )
     return result
 
 
@@ -178,7 +203,11 @@ def space_items(actor: PlatformActor) -> list[dict]:
                     "mine": True,
                     "clientId": row.client_id if row else None,
                     "businessName": row.business_name if row else "",
-                    "groupKind": "public" if row and row.is_shared_production else "business" if row and row.client_id else "unassigned",
+                    "groupKind": "public"
+                    if row and row.is_shared_production
+                    else "business"
+                    if row and row.client_id
+                    else "unassigned",
                     "isSharedProduction": bool(row and row.is_shared_production),
                     "readAllowed": True,
                     "writeAllowed": admin or bool(row and _space_allowed(actor, row, "write")),
@@ -196,7 +225,9 @@ def resource_owner_ids(actor: PlatformActor) -> list[str] | None:
     with session_scope() as session:
         return list(
             session.scalars(
-                select(BusinessMembership.user_id).where(BusinessMembership.client_id.in_(actor.developer_business_ids))
+                select(BusinessMembership.user_id).where(
+                    BusinessMembership.client_id.in_(actor.developer_business_ids)
+                )
             )
         )
 

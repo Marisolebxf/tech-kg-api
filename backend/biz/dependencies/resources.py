@@ -35,9 +35,12 @@ def selected_business_id(actor: PlatformActor, *, required: bool = True) -> str:
     return selected
 
 
-def validate_owner_update(actor: PlatformActor, data: dict, *, current_owner: str | None = None) -> None:
+def validate_owner_update(
+    actor: PlatformActor, data: dict, *, current_owner: str | None = None
+) -> None:
     """仅管理员的明确编辑允许改变已有配置归属。"""
     from service.business_access_control import rbac_enabled
+
     if not rbac_enabled() or "owner" not in data:
         return
     if not actor.is_admin:
@@ -49,6 +52,7 @@ def validate_owner_update(actor: PlatformActor, data: dict, *, current_owner: st
     if not owner.startswith("business:"):
         raise HTTPException(400, "请选择配置所属业务")
     from dataclasses import replace
+
     selected_business_id(replace(actor, context_business_id=owner.removeprefix("business:")))
 
 
@@ -75,7 +79,9 @@ def ensure_owner_access(actor: PlatformActor, owner: str) -> None:
             if actor.context_business_id or actor.context_graph_space:
                 selected = selected_business_id(actor, required=False)
                 if selected and owner != f"business:{selected}":
-                    raise HTTPException(403, "配置不属于当前业务；请在公共空间取消业务筛选后核实旧配置归属")
+                    raise HTTPException(
+                        403, "配置不属于当前业务；请在公共空间取消业务筛选后核实旧配置归属"
+                    )
             return
         if not actor.can_develop or not owner.startswith("business:"):
             raise HTTPException(403, "无权访问其他业务配置")

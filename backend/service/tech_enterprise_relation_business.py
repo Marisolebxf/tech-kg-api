@@ -347,7 +347,12 @@ class KeyEnterpriseRelationService:
                 sg_json = await self._get(
                     client,
                     f"/graph-search/filtered-subgraph/{req.expert_id}",
-                    {"space": get_current_space(), "edge_types": edge_types, "depth": 2, "limit": 50},
+                    {
+                        "space": get_current_space(),
+                        "edge_types": edge_types,
+                        "depth": 2,
+                        "limit": 50,
+                    },
                 )
             except Exception as exc:  # noqa: BLE001
                 resp.evidence.append(f"subgraph 查询失败: {exc}")

@@ -1,5 +1,7 @@
 """资料文档实体抽取：kegner.entities 中 type_code=DOCUMENT 的行。"""
-from typing import Any, Mapping
+
+from collections.abc import Mapping
+from typing import Any
 
 from kg_sdk import step
 
@@ -30,5 +32,7 @@ def emit_entities(payload: Mapping[str, Any]) -> dict[str, Any]:
                 }
             )
         except (KeyError, TypeError, ValueError) as exc:
-            failures.append({"recordId": str(row.get("id") or "?"), "error": f"{type(exc).__name__}: {exc}"})
+            failures.append(
+                {"recordId": str(row.get("id") or "?"), "error": f"{type(exc).__name__}: {exc}"}
+            )
     return {"entities": entities, "failures": failures}

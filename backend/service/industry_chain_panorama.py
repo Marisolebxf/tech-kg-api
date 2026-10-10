@@ -192,7 +192,14 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         top_k = max(1, min(int(top_k or 5), MAX_TOP_K))
         depth = max(1, min(int(depth or 2), 3))
         rel_types = self._normalize_relation_types(relation_types)
-        cache_key = (get_current_space(), industry_kw or "", anchor or "", depth, top_k, ",".join(rel_types))
+        cache_key = (
+            get_current_space(),
+            industry_kw or "",
+            anchor or "",
+            depth,
+            top_k,
+            ",".join(rel_types),
+        )
         if refresh:
             # 页面「刷新图谱」：丢掉缓存直接实时重组，保证拿到最新入图数据。
             _panorama_cache.pop(cache_key, None)

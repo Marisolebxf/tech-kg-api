@@ -355,6 +355,7 @@ class ManualReviewService:
                 self.require_case_access(a, review_case)
                 space = review_case.graph_space
             from service.workflow_jobs import _job_business, authorize_background_execution
+
             client_id = _job_business(a.platform_actor, {"graphSpace": space})
             target = authorize_background_execution(
                 {"actorUserId": uid, "clientId": client_id, "graphSpace": space}

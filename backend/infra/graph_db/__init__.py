@@ -76,6 +76,7 @@ def get_trs_graph_client() -> TRSGraphClient:
     图空间统一读取 TRS_GRAPH_SPACE；历史上另有 get_techkg_client 双单例别名，已收敛到本函数。
     """
     from service.graph_space_context import selected_graph_space
+
     space = selected_graph_space.get()
     if space:
         return get_space_client(space)

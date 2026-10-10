@@ -21,13 +21,22 @@ def scoped(monkeypatch):
     monkeypatch.setattr(jobs, "rbac_enabled", lambda: True)
 
     def check_space(actor, space, action="read"):
-        if space not in {"a-space", "production"} or (action != "read" and (not actor.can_develop or (space == "production" and not actor.is_admin))):
+        if space not in {"a-space", "production"} or (
+            action != "read"
+            and (not actor.can_develop or (space == "production" and not actor.is_admin))
+        ):
             raise HTTPException(403, "denied")
 
     monkeypatch.setattr(jobs, "ensure_space_access", check_space)
-    monkeypatch.setattr(jobs, "space_registration", lambda session, space: SimpleNamespace(
-        space_name=space, client_id="a" if space == "a-space" else None,
-        is_shared_production=space == "production"))
+    monkeypatch.setattr(
+        jobs,
+        "space_registration",
+        lambda session, space: SimpleNamespace(
+            space_name=space,
+            client_id="a" if space == "a-space" else None,
+            is_shared_production=space == "production",
+        ),
+    )
     import infra.mysql
 
     monkeypatch.setattr(infra.mysql, "session_scope", lambda: nullcontext(None))
@@ -111,7 +120,12 @@ def test_background_job_rechecks_revoked_or_moved_membership(monkeypatch, member
     )
     monkeypatch.setattr(infra.mysql, "session_scope", lambda: nullcontext(fake_session))
     from service.platform_access import BusinessMembershipGrant
-    monkeypatch.setattr(business_access_control, "resolve_memberships", lambda user_id: (BusinessMembershipGrant(*membership),))
+
+    monkeypatch.setattr(
+        business_access_control,
+        "resolve_memberships",
+        lambda user_id: (BusinessMembershipGrant(*membership),),
+    )
     monkeypatch.delenv("PLATFORM_INITIAL_ADMIN_USER_IDS", raising=False)
     with pytest.raises(HTTPException):
         jobs.authorize_background_execution(

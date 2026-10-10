@@ -650,6 +650,7 @@ def test_query_appends_persistence_without_mutating_service_payload(writable_gra
 @pytest.fixture
 def writable_graph_request():
     from service.graph_space_context import request_can_write
+
     token = request_can_write.set(True)
     try:
         yield

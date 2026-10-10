@@ -57,12 +57,15 @@ async def test_representative_achievements_use_shared_paper_titles():
 
 
 @pytest.mark.asyncio
-async def test_representative_achievements_enrich_graph_paper_from_mysql_when_edges_absent(monkeypatch):
+async def test_representative_achievements_enrich_graph_paper_from_mysql_when_edges_absent(
+    monkeypatch,
+):
     """图上无 AUTHORED_BY 共同论文时回退 MySQL 自连接；仅保留可核实标题。"""
     client = AsyncMock()
     client.get_node_edges.return_value = []
     client.get_node.side_effect = lambda vid: (
-        {"id": vid, "labels": ["Paper"], "properties": {}} if vid == "paper_11"
+        {"id": vid, "labels": ["Paper"], "properties": {}}
+        if vid == "paper_11"
         else {"properties": {}}
     )  # 已有 Paper 节点但缺作者边；SQL 只补充该节点标题。
     rows = [{"expert_a_id": "person_a1", "expert_b_id": "person_b2", "relation_key": "a:b"}]
@@ -258,7 +261,10 @@ async def test_representative_achievements_listing_uses_anchor_pool(monkeypatch)
     client.get_node.side_effect = lambda vid: {
         "person_p1": {"properties": {"name_zh": "王翊", "name_en": "Wang Yi"}},
         "person_p2": {"properties": {"name_zh": "雷凯", "name_en": "Lei Kai"}},
-        **{doi: {"id": doi, "labels": ["Paper"], "properties": {}} for doi in ("10.9/1", "10.9/2", "10.9/4")},
+        **{
+            doi: {"id": doi, "labels": ["Paper"], "properties": {}}
+            for doi in ("10.9/1", "10.9/2", "10.9/4")
+        },
     }.get(vid)
     anchor_node = {
         "id": "person_anchor1",

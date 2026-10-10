@@ -1,5 +1,7 @@
 """包含知识点关系抽取：kegner.relations 中 relation_type=包含知识点 的行。"""
-from typing import Any, Mapping
+
+from collections.abc import Mapping
+from typing import Any
 
 from kg_sdk import step
 
@@ -34,5 +36,7 @@ def emit_edges(payload: Mapping[str, Any]) -> dict[str, Any]:
                 }
             )
         except (TypeError, ValueError) as exc:
-            failures.append({"recordId": str(row.get("id") or "?"), "error": f"{type(exc).__name__}: {exc}"})
+            failures.append(
+                {"recordId": str(row.get("id") or "?"), "error": f"{type(exc).__name__}: {exc}"}
+            )
     return {"edges": edges, "failures": failures}

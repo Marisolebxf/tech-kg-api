@@ -9,7 +9,11 @@ from biz.dependencies.auth import CurrentActor
 from biz.dependencies.selected_graph_space import bind_selected_graph_space
 from service.graph_console import GraphConsoleError, run_statement_cached_payload
 
-router = APIRouter(prefix="/graph-console", tags=["graph-console"], dependencies=[Depends(bind_selected_graph_space)])
+router = APIRouter(
+    prefix="/graph-console",
+    tags=["graph-console"],
+    dependencies=[Depends(bind_selected_graph_space)],
+)
 
 
 class GraphConsoleRequest(BaseModel):

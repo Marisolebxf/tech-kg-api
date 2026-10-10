@@ -15,12 +15,14 @@
     triples = kg.triples_of(rel)            # [{"subject":...,"relation":...,"object":...}, ...]
     # 分类/关键词等其余工具同风格调用
 """
+
 from __future__ import annotations
 
 import json
 import mimetypes
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any
 
 import requests
 
@@ -54,7 +56,9 @@ class SemanticToolkit:
         timeout: 单请求超时秒数（批量任务建议 ≥600）。
     """
 
-    def __init__(self, base_url: str, api_key: Optional[str] = None, *, timeout: float = 600.0) -> None:
+    def __init__(
+        self, base_url: str, api_key: str | None = None, *, timeout: float = 600.0
+    ) -> None:
         self._base = base_url.rstrip("/") + "/api/v1"
         self._timeout = timeout
         self._session = requests.Session()
@@ -65,7 +69,7 @@ class SemanticToolkit:
     def close(self) -> None:
         self._session.close()
 
-    def __enter__(self) -> "SemanticToolkit":
+    def __enter__(self) -> SemanticToolkit:
         return self
 
     def __exit__(self, *_: Any) -> None:
@@ -79,18 +83,33 @@ class SemanticToolkit:
         r = self._session.post(self._base + endpoint, json=dict(payload), timeout=self._timeout)
         return self._check(r)
 
-    def _post_files(self, endpoint: str, file_field: str, paths: Iterable[str | Path],
-                    payload: Optional[Mapping[str, Any]] = None) -> dict:
+    def _post_files(
+        self,
+        endpoint: str,
+        file_field: str,
+        paths: Iterable[str | Path],
+        payload: Mapping[str, Any] | None = None,
+    ) -> dict:
         files, streams = [], []
         try:
             for p in paths:
                 path = Path(p)
                 stream = path.open("rb")
                 streams.append(stream)
-                files.append((file_field, (path.name, stream,
-                                           mimetypes.guess_type(path.name)[0] or "application/octet-stream")))
+                files.append(
+                    (
+                        file_field,
+                        (
+                            path.name,
+                            stream,
+                            mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+                        ),
+                    )
+                )
             data = {k: _form_value(v) for k, v in dict(payload or {}).items() if v is not None}
-            r = self._session.post(self._base + endpoint, files=files, data=data, timeout=self._timeout)
+            r = self._session.post(
+                self._base + endpoint, files=files, data=data, timeout=self._timeout
+            )
             return self._check(r)
         finally:
             for s in streams:
@@ -101,13 +120,18 @@ class SemanticToolkit:
         try:
             body = r.json()
         except ValueError as exc:
-            raise SemanticToolkitError(f"服务返回非 JSON（HTTP {r.status_code}）",
-                                       status_code=r.status_code, response=r.text) from exc
+            raise SemanticToolkitError(
+                f"服务返回非 JSON（HTTP {r.status_code}）",
+                status_code=r.status_code,
+                response=r.text,
+            ) from exc
         if r.status_code // 100 != 2 or int(body.get("code", 0) or 0) != 0:
-            detail = (body.get("detail")
-                      or (body.get("data") or {}).get("error_summary")
-                      or body.get("message")
-                      or f"HTTP {r.status_code}")
+            detail = (
+                body.get("detail")
+                or (body.get("data") or {}).get("error_summary")
+                or body.get("message")
+                or f"HTTP {r.status_code}"
+            )
             raise SemanticToolkitError(str(detail), status_code=r.status_code, response=body)
         return body
 
@@ -119,15 +143,16 @@ class SemanticToolkit:
         """
         path = Path(file_path)
         with path.open("rb") as f:
-            r = self._session.post(self._base + "/semantic-resources/upload",
-                                   data={"resource_key": resource_key},
-                                   files={"upload": (path.name, f, "application/json")},
-                                   timeout=self._timeout)
+            r = self._session.post(
+                self._base + "/semantic-resources/upload",
+                data={"resource_key": resource_key},
+                files={"upload": (path.name, f, "application/json")},
+                timeout=self._timeout,
+            )
         return self._check(r)
 
     def health(self) -> dict:
-        return self._session.get(self._base.rsplit("/api/v1", 1)[0] + "/health",
-                                 timeout=30).json()
+        return self._session.get(self._base.rsplit("/api/v1", 1)[0] + "/health", timeout=30).json()
 
     # ------------------------------------------------------------------ #
     # 实体抽取（图谱节点来源）
@@ -164,8 +189,7 @@ class SemanticToolkit:
     def relation_extract(self, record_id: str) -> dict:
         """实体关系抽取：传入上游 NER 记录的 record_id（先跑 ner_* 取本 SDK
         record_id()），返回三元组/依存/知识网络。"""
-        return self._post_json("/relation/from-ner-record",
-                               {"upstream_ner_record_id": record_id})
+        return self._post_json("/relation/from-ner-record", {"upstream_ner_record_id": record_id})
 
     # ------------------------------------------------------------------ #
     # 自动分类
@@ -189,7 +213,9 @@ class SemanticToolkit:
     def classify_en_file(self, path: str | Path, **params: Any) -> dict:
         return self._post_files("/classify/clc/en/file", "file", [path], params)
 
-    def classify_domain(self, text: str, *, domain: str = "", title: str = "", **params: Any) -> dict:
+    def classify_domain(
+        self, text: str, *, domain: str = "", title: str = "", **params: Any
+    ) -> dict:
         payload = {"text": text, **params}
         if title:
             payload["document_title"] = title
@@ -213,8 +239,9 @@ class SemanticToolkit:
     def keywords_en_file(self, path: str | Path, **params: Any) -> dict:
         return self._post_files("/keywords/en/file", "file", [path], params)
 
-    def research_questions(self, text: str, *, title: str = "",
-                           text_format: str = "自动识别", **params: Any) -> dict:
+    def research_questions(
+        self, text: str, *, title: str = "", text_format: str = "自动识别", **params: Any
+    ) -> dict:
         payload = {"text": text, "text_format_requirement": text_format, **params}
         if title:
             payload["document_title"] = title
@@ -229,8 +256,9 @@ class SemanticToolkit:
     def definitions_file(self, path: str | Path, **params: Any) -> dict:
         return self._post_files("/concept-definition/file", "file", [path], params)
 
-    def citation_intent(self, full_text: str, *, title: str = "",
-                        reference_entries: str = "", **params: Any) -> dict:
+    def citation_intent(
+        self, full_text: str, *, title: str = "", reference_entries: str = "", **params: Any
+    ) -> dict:
         """引用意图识别：文献全文（含 [n] 标记）；reference_entries 为参考文献条目原文（选填）。"""
         payload = {"scientific_document_full_text": full_text, **params}
         if title:
@@ -239,8 +267,9 @@ class SemanticToolkit:
             payload["reference_entries"] = reference_entries
         return self._post_json("/citation-intent/text", payload)
 
-    def citation_sentiment(self, full_text: str, *, title: str = "",
-                           reference_entries: str = "", **params: Any) -> dict:
+    def citation_sentiment(
+        self, full_text: str, *, title: str = "", reference_entries: str = "", **params: Any
+    ) -> dict:
         payload = {"scientific_document_full_text": full_text, **params}
         if title:
             payload["document_title"] = title
@@ -257,44 +286,75 @@ class SemanticToolkit:
 
     def fund_moves(self, project_name: str, full_text: str, **params: Any) -> dict:
         """基金项目语步识别（须为申请书/进展/结题类文档，论文会明确报错）。"""
-        return self._post_json("/move/fund/zh/text",
-                               {"project_name": project_name, "text": full_text, **params})
+        return self._post_json(
+            "/move/fund/zh/text", {"project_name": project_name, "text": full_text, **params}
+        )
 
     # ------------------------------------------------------------------ #
     # 聚类 / 综述
     # ------------------------------------------------------------------ #
 
-    def deep_cluster(self, documents: list[dict], metadata: Optional[list[dict]] = None,
-                     *, dimension: str = "technology", output_format: str = "JSON",
-                     **params: Any) -> dict:
+    def deep_cluster(
+        self,
+        documents: list[dict],
+        metadata: list[dict] | None = None,
+        *,
+        dimension: str = "technology",
+        output_format: str = "JSON",
+        **params: Any,
+    ) -> dict:
         """深度聚类：documents=[{document_id,title,text,publication_date},...]（≥4 篇）。
 
         metadata 与 documents 逐篇对应（document_id+title+publication_date），
         缺省时自动从 documents 生成。
         """
-        meta = metadata or [{"document_id": d["document_id"], "title": d.get("title", ""),
-                             "publication_date": d.get("publication_date", "")} for d in documents]
-        return self._post_json("/cluster/deep/texts",
-                               {"scientific_document_texts": documents,
-                                "document_metadata": meta,
-                                "cluster_dimension": dimension,
-                                "output_format": output_format, **params})
+        meta = metadata or [
+            {
+                "document_id": d["document_id"],
+                "title": d.get("title", ""),
+                "publication_date": d.get("publication_date", ""),
+            }
+            for d in documents
+        ]
+        return self._post_json(
+            "/cluster/deep/texts",
+            {
+                "scientific_document_texts": documents,
+                "document_metadata": meta,
+                "cluster_dimension": dimension,
+                "output_format": output_format,
+                **params,
+            },
+        )
 
     def deep_cluster_files(self, paths: list[str | Path], **params: Any) -> dict:
         return self._post_files("/cluster/deep/files", "files", paths, params)
 
     def cluster_labels(self, phrase_sets: list[dict], **params: Any) -> dict:
         """聚类标签生成：phrase_sets=[{cluster_id, phrases:[...]}, ...]。"""
-        return self._post_json("/cluster-labels/generate",
-                               {"cluster_phrase_sets": phrase_sets, **params})
+        return self._post_json(
+            "/cluster-labels/generate", {"cluster_phrase_sets": phrase_sets, **params}
+        )
 
     def structured_review(self, topic: str, documents: list[dict], **params: Any) -> dict:
         """结构化综述：documents=[{document_id,title,text,publication_date},...]（≥2 篇）。"""
-        meta = [{"document_id": d["document_id"], "title": d.get("title", ""),
-                 "publication_date": d.get("publication_date", "")} for d in documents]
-        return self._post_json("/review/structured/texts",
-                               {"topic_or_keywords": topic, "document_set": documents,
-                                "document_metadata": meta, **params})
+        meta = [
+            {
+                "document_id": d["document_id"],
+                "title": d.get("title", ""),
+                "publication_date": d.get("publication_date", ""),
+            }
+            for d in documents
+        ]
+        return self._post_json(
+            "/review/structured/texts",
+            {
+                "topic_or_keywords": topic,
+                "document_set": documents,
+                "document_metadata": meta,
+                **params,
+            },
+        )
 
     # ------------------------------------------------------------------ #
     # 结果取用辅助（知识图谱构建友好）

@@ -83,6 +83,7 @@ async def require_business_data(request: Request, actor: CurrentActor):
                 raise
             can_write = False
     from biz.prewarm_business import is_readonly_prewarm
+
     if is_readonly_prewarm(request):
         can_write = False
     token = selected_graph_space.set(space)

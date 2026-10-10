@@ -219,12 +219,18 @@ def _person_vid(expert_id: str) -> str:
 # techkg 空间用 AUTHORED/Scholar/Paper；dev 空间用 AUTHORED_BY/Person/Paper。
 def _authored_edge():
     return "AUTHORED" if get_current_space() == "techkg" else "AUTHORED_BY"
+
+
 def _scholar_label():
     return "Scholar" if get_current_space() == "techkg" else "Person"
+
+
 # techkg: Scholar -[AUTHORED]-> Paper
 # dev:    Paper -[AUTHORED_BY]-> Person
 def _person_to_paper_direction():
     return "out" if get_current_space() == "techkg" else "in"
+
+
 def _paper_to_person_direction():
     return "in" if get_current_space() == "techkg" else "out"
 
@@ -529,6 +535,7 @@ def _dedupe_shared_papers(paths: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 _EMPTY_SUBGRAPH: dict[str, Any] = {"nodes": [], "edges": []}
 
+
 # 上下文三类边 (字段, 边类型, 原单类型调用的方向)：techkg 的 AUTHORED 为
 # Scholar→Paper（in）；dev 的 AUTHORED_BY 为 Paper→Person（out）。
 def _context_edge_specs() -> list[tuple[str, str, str]]:
@@ -828,7 +835,9 @@ def _build_provenance(
             or properties.get("keyword")
             or node_id
         )
-        recorded = record_node_source(properties, node.get("labels") or [], space=get_current_space())
+        recorded = record_node_source(
+            properties, node.get("labels") or [], space=get_current_space()
+        )
         if recorded["sourceKind"] == "mysql":
             source_note = f"入库批次：{recorded['ingestBatch']}；入库时间：{recorded['ingestTime']}"
         else:

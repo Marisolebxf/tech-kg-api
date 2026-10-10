@@ -25,6 +25,7 @@ class SchemaManagementApplication:
 
     def list_schemas_payload(self, **kwargs) -> str:
         return self._service.list_schemas_payload(**kwargs)
+
     def overview_payload(self, graph_space: str | None = None) -> str:
         return self._service.overview_payload(graph_space)
 

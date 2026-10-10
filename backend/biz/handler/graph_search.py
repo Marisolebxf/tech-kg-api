@@ -29,7 +29,9 @@ from infra.graph_db.models import GraphEdge, GraphNode
 from infra.graph_exec_budget import GraphExecOverloaded, graph_exec_slot
 from infra.mysql import create_session
 
-router = APIRouter(prefix="/graph-search", tags=["graph-search"], dependencies=[Depends(bind_selected_graph_space)])
+router = APIRouter(
+    prefix="/graph-search", tags=["graph-search"], dependencies=[Depends(bind_selected_graph_space)]
+)
 logger = logging.getLogger(__name__)
 
 

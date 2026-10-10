@@ -74,9 +74,9 @@ from infra.graph_db import get_trs_graph_client
 from infra.milvus import get_milvus_client
 from infra.mysql import session_scope
 
-SPACE = 'yunfei_test_1'
+SPACE = "yunfei_test_1"
 # ① 图空间
-get_trs_graph_client().execute_write(f'DROP SPACE IF EXISTS `{SPACE}`')
+get_trs_graph_client().execute_write(f"DROP SPACE IF EXISTS `{SPACE}`")
 # ② 向量库：Milvus 同名库（含集合）+ 映射行
 mc = get_milvus_client()
 if SPACE in mc.list_databases():
@@ -84,6 +84,7 @@ if SPACE in mc.list_databases():
         mc.drop_collection(col, db_name=SPACE)
     mc.drop_database(SPACE)
 from db_model.platform_governance import GraphSpaceVectorDatabase
+
 with session_scope() as s:
     for r in s.query(GraphSpaceVectorDatabase).filter_by(graph_space=SPACE):
         s.delete(r)
@@ -91,16 +92,25 @@ with session_scope() as s:
 from db_model.script_watermark import ScriptWatermark
 from service.schema_extraction import extract_watermark_definition_ids
 from sqlalchemy import select, text
+
 with session_scope() as s:
-    keys = [r[0] for r in s.execute(text(
-        'SELECT schema_key FROM kg_schema_definition WHERE graph_space=:sp'), {'sp': SPACE})]
+    keys = [
+        r[0]
+        for r in s.execute(
+            text("SELECT schema_key FROM kg_schema_definition WHERE graph_space=:sp"), {"sp": SPACE}
+        )
+    ]
     ids = set()
     for k in keys:
         ids.update(extract_watermark_definition_ids(k))
-    rows = s.execute(select(ScriptWatermark).where(ScriptWatermark.definition_id.in_(ids))).scalars().all()
+    rows = (
+        s.execute(select(ScriptWatermark).where(ScriptWatermark.definition_id.in_(ids)))
+        .scalars()
+        .all()
+    )
     for r in rows:
         s.delete(r)
-    print(f'水位清除 {len(rows)} 行 / {len(ids)} definition_id')   # 本轮 151 行 / 49 id
+    print(f"水位清除 {len(rows)} 行 / {len(ids)} definition_id")  # 本轮 151 行 / 49 id
 ```
 
 要点：
@@ -132,36 +142,49 @@ import re, time
 from infra.graph_db import get_trs_graph_client
 from infra.graph_db.client import TRSGraphClient
 
-SRC, DST = 'dev', 'yunfei_test_1'
+SRC, DST = "dev", "yunfei_test_1"
 base = get_trs_graph_client()
-src = TRSGraphClient(base._settings.model_copy(update={'space': SRC})); src.connect()
-dst = TRSGraphClient(base._settings.model_copy(update={'space': DST})); dst.connect()
+src = TRSGraphClient(base._settings.model_copy(update={"space": SRC}))
+src.connect()
+dst = TRSGraphClient(base._settings.model_copy(update={"space": DST}))
+dst.connect()
+
 
 def w(stmt):
     for i in range(5):
         try:
-            dst.execute_write(stmt); return
+            dst.execute_write(stmt)
+            return
         except Exception as e:
-            if i == 4: raise
-            print('  重试:', str(e)[:80]); time.sleep(1 + i)
+            if i == 4:
+                raise
+            print("  重试:", str(e)[:80])
+            time.sleep(1 + i)
 
-for kw, col in (('TAG', 'Create Tag'), ('EDGE', 'Create Edge')):
-    names = [r.get('Name') for r in src.execute_read(f'SHOW {kw}S').records if isinstance(r, dict)]
+
+for kw, col in (("TAG", "Create Tag"), ("EDGE", "Create Edge")):
+    names = [r.get("Name") for r in src.execute_read(f"SHOW {kw}S").records if isinstance(r, dict)]
     for n in names:
-        ddl = src.execute_read(f'SHOW CREATE {kw} `{n}`').records[0].get(col)
-        ddl = re.sub(r'\s+NOT NULL', '', ddl).replace(f'CREATE {kw} ', f'CREATE {kw} IF NOT EXISTS ')
-        w(f'USE {DST}; {ddl}')
-        if kw == 'TAG':
-            ft = {r.get('Field'): r.get('Type')
-                  for r in src.execute_read(f'DESCRIBE TAG `{n}`').records if isinstance(r, dict)}
-            t = ft.get('name') or ''
-            if t == 'string' or t.startswith('fixed_string'):
-                idx = f'idx_{n.lower()}_name'
-                spec = 'name(64)' if t == 'string' else 'name'
-                w(f'USE {DST}; CREATE TAG INDEX IF NOT EXISTS `{idx}` ON `{n}`({spec})')
+        ddl = src.execute_read(f"SHOW CREATE {kw} `{n}`").records[0].get(col)
+        ddl = re.sub(r"\s+NOT NULL", "", ddl).replace(
+            f"CREATE {kw} ", f"CREATE {kw} IF NOT EXISTS "
+        )
+        w(f"USE {DST}; {ddl}")
+        if kw == "TAG":
+            ft = {
+                r.get("Field"): r.get("Type")
+                for r in src.execute_read(f"DESCRIBE TAG `{n}`").records
+                if isinstance(r, dict)
+            }
+            t = ft.get("name") or ""
+            if t == "string" or t.startswith("fixed_string"):
+                idx = f"idx_{n.lower()}_name"
+                spec = "name(64)" if t == "string" else "name"
+                w(f"USE {DST}; CREATE TAG INDEX IF NOT EXISTS `{idx}` ON `{n}`({spec})")
                 for _ in range(5):
                     try:
-                        dst.execute_query(f'USE {DST}; REBUILD TAG INDEX `{idx}`'); break
+                        dst.execute_query(f"USE {DST}; REBUILD TAG INDEX `{idx}`")
+                        break
                     except Exception:
                         time.sleep(2)
 ```

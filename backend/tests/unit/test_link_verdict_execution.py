@@ -385,8 +385,12 @@ def test_create_verdict_triggers_entity_search_sync(service, graph, entity_searc
 def test_merge_verdict_syncs_target_vid(service, graph, entity_search_sync_calls):
     case_id, version = opened(service)
     service.submit(
-        case_id, version, "entity-confirm", {"entityVerdict": "merge", "targetEntityId": "org_9"},
-        "", actor(),
+        case_id,
+        version,
+        "entity-confirm",
+        {"entityVerdict": "merge", "targetEntityId": "org_9"},
+        "",
+        actor(),
     )
     (detail,) = entity_search_sync_calls
     assert detail["vid"] == "org_9"
@@ -408,10 +412,16 @@ def test_legacy_and_reject_verdicts_skip_sync(service, graph, entity_search_sync
     )
     detail = service.get_case(case["reviewId"], actor())
     service.submit(
-        detail["id"], detail["version"], "entity-confirm",
-        {"entityVerdict": "merge", "targetEntityId": "c"}, "", actor(),
+        detail["id"],
+        detail["version"],
+        "entity-confirm",
+        {"entityVerdict": "merge", "targetEntityId": "c"},
+        "",
+        actor(),
     )
-    assert entity_search_sync_calls == [{"applied": False, "note": "存量写后 case：实体已在图，仅记录决议"}]
+    assert entity_search_sync_calls == [
+        {"applied": False, "note": "存量写后 case：实体已在图，仅记录决议"}
+    ]
 
     # 驳回不写图：无联动
     case_id, version = opened(service)
@@ -434,11 +444,18 @@ def test_entity_search_sync_swallows_infra_failure(monkeypatch):
         entity_search_module, "invalidate_entity_caches_sync", lambda: invalidated.append(True)
     )
     # autouse 桩在本模块全局生效：这里要测的就是真实钩子，装回真函数
-    monkeypatch.setattr(ManualReviewService, "_sync_entity_search_after_write", _real_sync_entity_search)
+    monkeypatch.setattr(
+        ManualReviewService, "_sync_entity_search_after_write", _real_sync_entity_search
+    )
 
     _make_service()._sync_entity_search_after_write(
-        {"applied": True, "verdict": "create", "vid": "v1", "graphSpace": "dev2",
-         "nodeLabel": "Organization"}
+        {
+            "applied": True,
+            "verdict": "create",
+            "vid": "v1",
+            "graphSpace": "dev2",
+            "nodeLabel": "Organization",
+        }
     )  # 不抛异常
 
     assert invalidated == [True]
@@ -446,13 +463,16 @@ def test_entity_search_sync_swallows_infra_failure(monkeypatch):
 
 def test_entity_search_sync_skips_without_applied_or_fields(monkeypatch):
     """applied=False / 缺图空间字段：直接早退，不触任何外部依赖。"""
+
     def boom():
         raise AssertionError("不应触碰实体检索依赖")
 
     import infra.workflow_mysql as workflow_mysql
 
     monkeypatch.setattr(workflow_mysql, "create_workflow_session", boom)
-    monkeypatch.setattr(ManualReviewService, "_sync_entity_search_after_write", _real_sync_entity_search)
+    monkeypatch.setattr(
+        ManualReviewService, "_sync_entity_search_after_write", _real_sync_entity_search
+    )
 
     service = _make_service()
     service._sync_entity_search_after_write({"applied": False})

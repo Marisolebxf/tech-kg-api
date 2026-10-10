@@ -94,7 +94,9 @@ def authorize_workflow_resource(actor, resource, action="read"):
                 if row is None:
                     raise HTTPException(status_code=404, detail="任务关联 Schema 不存在")
                 if action != "read" and explicit_spaces and explicit_spaces != {row.graph_space}:
-                    raise HTTPException(403, "目标空间必须与 Schema 所属空间一致，请选择目标空间的 Schema")
+                    raise HTTPException(
+                        403, "目标空间必须与 Schema 所属空间一致，请选择目标空间的 Schema"
+                    )
                 spaces.add(row.graph_space)
     if not spaces and not actor.is_admin:
         raise HTTPException(status_code=403, detail="历史任务尚未登记图空间归属")
@@ -105,9 +107,16 @@ def authorize_workflow_resource(actor, resource, action="read"):
 
         with session_scope() as session:
             registrations = [space_registration(session, space) for space in spaces]
-        public_read = action == "read" and bool(registrations) and all(
-            row and row.is_shared_production for row in registrations)
-        private_clients = {row.client_id for row in registrations if row and not row.is_shared_production and row.client_id}
+        public_read = (
+            action == "read"
+            and bool(registrations)
+            and all(row and row.is_shared_production for row in registrations)
+        )
+        private_clients = {
+            row.client_id
+            for row in registrations
+            if row and not row.is_shared_production and row.client_id
+        }
         if not public_read:
             if persistent_record and (not client_ids or client_ids != private_clients):
                 raise HTTPException(403, "任务业务归属与目标空间不一致，请由管理员核实")
@@ -117,7 +126,9 @@ def authorize_workflow_resource(actor, resource, action="read"):
                 raise HTTPException(403, "一个构建任务只能归属一个业务")
         # 配置访问固定为该任务业务，不能借用户的其他业务授权跨业务取配置。
         if len(private_clients) == 1:
-            actor = replace(actor, context_business_id=next(iter(private_clients)), context_graph_space="")
+            actor = replace(
+                actor, context_business_id=next(iter(private_clients)), context_graph_space=""
+            )
     if action != "read" and not actor.is_admin:
         from biz.dependencies.resources import ensure_owner_access
         from dao.embedding_config import EmbeddingConfigDAO
@@ -211,8 +222,11 @@ def authorize_background_execution(payload):
         )
     actor = with_memberships(actor)
     client_id = payload.get("clientId") or ""
-    actor = replace(actor, context_business_id=client_id,
-                    context_graph_space=payload.get("graphSpace") or payload.get("graph_space") or "")
+    actor = replace(
+        actor,
+        context_business_id=client_id,
+        context_graph_space=payload.get("graphSpace") or payload.get("graph_space") or "",
+    )
     if not actor.can_develop:
         raise HTTPException(
             403, "执行账号缺少本地开发维护或管理员授权，请管理员核实业务成员及本地角色绑定"
@@ -224,14 +238,23 @@ def authorize_background_execution(payload):
 
 
 def workflow_resource_spaces(resource):
-    values = [resource] + [resource[key] for key in ("payload", "input") if isinstance(resource.get(key), dict)]
-    spaces = {value.get(key) for value in values for key in ("graphSpace", "graph_space")} - {None, ""}
+    values = [resource] + [
+        resource[key] for key in ("payload", "input") if isinstance(resource.get(key), dict)
+    ]
+    spaces = {value.get(key) for value in values for key in ("graphSpace", "graph_space")} - {
+        None,
+        "",
+    }
     schema_ids = set()
     for value in values:
         if value.get("schemaId"):
             schema_ids.add(value["schemaId"])
         schema_ids.update(value.get("schemaIds") or [])
-        schema_ids.update(step["schemaId"] for step in value.get("steps") or [] if isinstance(step, dict) and step.get("schemaId"))
+        schema_ids.update(
+            step["schemaId"]
+            for step in value.get("steps") or []
+            if isinstance(step, dict) and step.get("schemaId")
+        )
     if schema_ids:
         from dao.schema_management import SchemaManagementDAO
         from infra.workflow_mysql import workflow_session_scope
@@ -375,9 +398,12 @@ class WorkflowJobService:
                     self.repo.save_job(job)
             except Exception:  # noqa: BLE001
                 pass
-        return {"job": workflow_resource_capabilities(actor, job), "executions": [
-            workflow_resource_capabilities(actor, execution) for execution in executions
-        ]}
+        return {
+            "job": workflow_resource_capabilities(actor, job),
+            "executions": [
+                workflow_resource_capabilities(actor, execution) for execution in executions
+            ],
+        }
 
     # ---------- 创建 / 编辑 / 删除 ----------
 

@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from db_model.base import Base
-from db_model.business_access import BusinessClient, BusinessGraphSpace
+from db_model.business_access import BusinessClient, BusinessGraphSpace, BusinessSpacePolicy
 from db_model.platform_governance import GraphSpaceVectorDatabase, UserGraphSpace
 from service.graph_space import (
     GraphSpaceError,
@@ -89,6 +89,7 @@ def session_factory():
             GraphSpaceVectorDatabase.__table__,
             BusinessClient.__table__,
             BusinessGraphSpace.__table__,
+            BusinessSpacePolicy.__table__,
         ],
     )
     factory = sessionmaker(bind=engine, expire_on_commit=False, future=True)
@@ -407,3 +408,58 @@ def test_rbac_backfill_retries_without_personal_bindings(session_factory, monkey
         "failed": 0,
     }
     assert set(milvus.created) == {"new_business_space", "public_space"}
+
+
+def test_rbac_new_space_defaults_public(session_factory, monkeypatch):
+    from service.business_access_control import _space_allowed, space_registration
+
+    monkeypatch.setenv("BUSINESS_RBAC_ENABLED", "true")
+    service = _service(session_factory, FakeGraphClient())
+    service.create_space(_actor(USER_A, is_admin=True), "new_public")
+    with session_factory() as session:
+        policy = session.get(BusinessSpacePolicy, "new_public")
+        assert (policy.visibility, policy.client_id) == ("public", None)
+        registration = space_registration(session, "new_public")
+        assert _space_allowed(_actor(USER_B), registration, "read")
+        assert not _space_allowed(_actor(USER_B), registration, "write")
+    assert not service.is_bound(USER_A, "new_public")
+
+
+@pytest.mark.parametrize("source", ["legacy", "policy", "unassigned"])
+def test_rbac_create_preserves_registered_ownership(session_factory, monkeypatch, source):
+    monkeypatch.setenv("BUSINESS_RBAC_ENABLED", "true")
+    with session_factory() as session:
+        session.add(BusinessClient(client_id="business", name="Business"))
+        session.flush()
+        if source == "legacy":
+            session.add(BusinessGraphSpace(space_name="reserved", client_id="business"))
+        else:
+            session.add(
+                BusinessSpacePolicy(
+                    space_name="reserved",
+                    visibility="business" if source == "policy" else "unassigned",
+                    client_id="business" if source == "policy" else None,
+                )
+            )
+        session.commit()
+    _service(session_factory, FakeGraphClient()).create_space(
+        _actor(USER_A, is_admin=True), "reserved"
+    )
+    with session_factory() as session:
+        policy = session.get(BusinessSpacePolicy, "reserved")
+        if source == "legacy":
+            assert policy is None
+            assert session.get(BusinessGraphSpace, "reserved").client_id == "business"
+        else:
+            assert policy.visibility == ("business" if source == "policy" else "unassigned")
+            assert policy.client_id == ("business" if source == "policy" else None)
+
+
+def test_rbac_unconfirmed_creation_does_not_publish_space(session_factory, monkeypatch):
+    monkeypatch.setenv("BUSINESS_RBAC_ENABLED", "true")
+    service = _service(session_factory, FakeGraphClient())
+    monkeypatch.setattr(service, "_wait_for_space", lambda _: False)
+    with pytest.raises(GraphSpaceError, match="创建请求已提交"):
+        service.create_space(_actor(USER_A, is_admin=True), "not_confirmed")
+    with session_factory() as session:
+        assert session.get(BusinessSpacePolicy, "not_confirmed") is None

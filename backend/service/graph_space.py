@@ -180,7 +180,7 @@ class GraphSpaceService:
     # ---------- 创建 ----------
 
     def create_space(self, actor: PlatformActor, space_name: str) -> dict:
-        """管理员真实创建图空间；业务归属由线下数据库配置。
+        """管理员真实创建图空间；未登记归属的新空间默认公共。
 
         CREATE SPACE 需要一个已存在的空间作为执行上下文，因此走默认 env 空间客户端；
         创建后有 schema 传播延迟，轮询 SHOW SPACES 确认；旧模式保留创建者绑定。
@@ -223,7 +223,18 @@ class GraphSpaceService:
             )
         from service.business_access_control import rbac_enabled
 
-        if not rbac_enabled() and not self.is_bound(actor.user_id, space_name):
+        if rbac_enabled():
+            from db_model.business_access import BusinessGraphSpace, BusinessSpacePolicy
+
+            # 业务审批会在 DDL 前预留归属；不能将其覆盖成公共空间。
+            policy = self._session.get(BusinessSpacePolicy, space_name)
+            registration = self._session.get(BusinessGraphSpace, space_name)
+            if policy is None and registration is None:
+                self._session.add(
+                    BusinessSpacePolicy(space_name=space_name, visibility="public", client_id=None)
+                )
+                self._session.commit()
+        elif not self.is_bound(actor.user_id, space_name):
             self._session.add(
                 UserGraphSpace(
                     user_id=actor.user_id, space_name=space_name, created_at=datetime.now(UTC)

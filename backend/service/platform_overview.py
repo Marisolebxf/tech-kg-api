@@ -135,13 +135,18 @@ class DayChangesSnapshot:
     """昨日写图增量（来自工作流控制库，按图空间过滤）。
 
     entity/relation_added 为昨日完成执行的 ``output.sources[].written`` 合计；
-    running_count 为当前 RUNNING 执行数；*_rows 为新增明细行——图反查成功时
-    为逐对象行（数据类型=五类桶、具体对象=name/两端名、来源=source_table），
-    失败时退回 ``*_executions`` 里各执行携带的聚合降级行。
+    ``*_rows_exact`` 表示该类执行是否全部反查成逐对象明细行（含如实 0 命中）——
+    True 时行数即昨日图内真实写入对象数（去重后），「昨日新增」徽标按行数计数、
+    与抽屉明细同数；False 表示有执行退回聚合降级行，行数不可作计数，徽标仍用
+    written 合计。running_count 为当前 RUNNING 执行数；*_rows 为新增明细行——
+    图反查成功时为逐对象行（数据类型=五类桶、具体对象=name/两端名、
+    来源=source_table），失败时退回 ``*_executions`` 里各执行携带的聚合降级行。
     """
 
     entity_added: int = 0
     relation_added: int = 0
+    entity_rows_exact: bool = False
+    relation_rows_exact: bool = False
     running_count: int = 0
     entity_rows: list[AssetChangeRow] = field(default_factory=list)
     relation_rows: list[AssetChangeRow] = field(default_factory=list)
@@ -797,7 +802,9 @@ def enrich_day_rows_with_graph(
     原名）、具体对象=name 公共字段、来源=source_table 公共字段、变更内容=新增
     Schema 名、时间=写入时间。关系行：具体对象=起点实体名 → 终点实体名，其余
     同实体口径。图不可达、schema 名缺失、tag 无索引等任一环节失败都退回该执行
-    的聚合降级行。
+    的聚合降级行。``*_rows_exact`` 随之置位：该类执行全部拿到逐对象行（含如实
+    0 命中）时行数可作「昨日新增」徽标计数，任一执行降级则行数不可信、徽标
+    回退控制库 written 合计。
     """
     if not snapshot.entity_executions and not snapshot.relation_executions:
         return snapshot
@@ -820,6 +827,7 @@ def enrich_day_rows_with_graph(
     time_props: dict[tuple[str, str], str | None] = {}
     entity_rows: list[AssetChangeRow] = []
     seed_vids: list[str] = []
+    entity_exact = True
     try:
         for execution in sorted(
             snapshot.entity_executions, key=lambda ex: ex.completed_at, reverse=True
@@ -832,11 +840,13 @@ def enrich_day_rows_with_graph(
             )
             if rows is None:
                 rows = list(execution.fallback_rows)
+                entity_exact = False
             else:
                 # 当日实体 vid 供关系边 GO FROM 兜底反查（边端点常为当日写入实体）
                 seed_vids.extend(vids)
             entity_rows.extend(rows)
         relation_rows: list[AssetChangeRow] = []
+        relation_exact = True
         for execution in sorted(
             snapshot.relation_executions, key=lambda ex: ex.completed_at, reverse=True
         ):
@@ -848,7 +858,10 @@ def enrich_day_rows_with_graph(
                 if schema_name
                 else None
             )
-            relation_rows.extend(rows if rows is not None else execution.fallback_rows)
+            if rows is None:
+                relation_exact = False
+                rows = list(execution.fallback_rows)
+            relation_rows.extend(rows)
     finally:
         close = getattr(client, "close", None)
         if close is not None:
@@ -861,7 +874,13 @@ def enrich_day_rows_with_graph(
     # 时间倒序全量展示（不截断：有多少条数据就展示多少条）
     entity_rows = _sort_rows_newest_first(_dedupe_rows(entity_rows))
     relation_rows = _sort_rows_newest_first(_dedupe_rows(relation_rows))
-    return replace(snapshot, entity_rows=entity_rows, relation_rows=relation_rows)
+    return replace(
+        snapshot,
+        entity_rows=entity_rows,
+        relation_rows=relation_rows,
+        entity_rows_exact=entity_exact,
+        relation_rows_exact=relation_exact,
+    )
 
 
 def _dedupe_rows(rows: list[AssetChangeRow]) -> list[AssetChangeRow]:
@@ -1061,16 +1080,24 @@ class PlatformOverviewService:
             except Exception as exc:
                 logger.warning("首页昨日新增读取失败（工作流控制库不可用）: %s", exc)
             if changes is not None:
+                # 徽标与抽屉同数：图反查拿到逐对象明细时按行数计数——时间窗圈住的
+                # 是图内昨日真实写入对象（含 FAILED 中途已写图、审核直写等控制库
+                # 未计入的通道，ewrdf 实测 +4 vs 13 条即此偏差）；反查降级成聚合行
+                # 的空间/日子才退回控制库 written 合计
+                entity_count = (
+                    len(changes.entity_rows) if changes.entity_rows_exact else changes.entity_added
+                )
+                relation_count = (
+                    len(changes.relation_rows)
+                    if changes.relation_rows_exact
+                    else changes.relation_added
+                )
                 # 有数才显示 +N；当日为 0 或读不到一律占位 --，标签统一不带括号说明
                 added_label = "昨日新增"
-                entity_added = (
-                    f"+{_format_count(changes.entity_added)}" if changes.entity_added else "--"
-                )
-                relation_added = (
-                    f"+{_format_count(changes.relation_added)}" if changes.relation_added else "--"
-                )
+                entity_added = f"+{_format_count(entity_count)}" if entity_count else "--"
+                relation_added = f"+{_format_count(relation_count)}" if relation_count else "--"
                 change_rows = {"entity": changes.entity_rows, "relation": changes.relation_rows}
-                change_totals = {"entity": changes.entity_added, "relation": changes.relation_added}
+                change_totals = {"entity": entity_count, "relation": relation_count}
                 day_source = "workflow-control-live"
                 extra_warnings: list[str] = []
             else:
@@ -1132,7 +1159,8 @@ class PlatformOverviewService:
                     },
                     "warnings": [
                         "实体与关系统计来自图数据库实时接口。",
-                        "昨日新增与运行中执行数来自工作流控制库（按抽取写图计数）。",
+                        "昨日新增徽标与明细同口径：按图反查逐对象计数，图反查降级时按"
+                        "工作流控制库写图计数；运行中执行数来自工作流控制库。",
                         *extra_warnings,
                     ],
                 }

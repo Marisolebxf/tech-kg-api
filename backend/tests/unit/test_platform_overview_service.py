@@ -406,6 +406,48 @@ def test_overview_uses_control_plane_day_changes() -> None:
     assert set(result.asset_change_rows) == {"entity", "relation"}
 
 
+def test_overview_badge_counts_graph_rows_when_lookup_exact() -> None:
+    """徽标与抽屉同数：图反查逐对象成功（exact）时徽标/合计=明细行数——控制库
+    written 只数 COMPLETED/ABNORMAL 的抽取，时间窗反查圈住的是图内昨日真实
+    写入对象（ewrdf 实测 written 合计 +4 vs 图内 13 条）；反查降级才回退
+    written 合计。"""
+    from biz.schemas.platform_overview import AssetChangeRow
+
+    entity_rows = [
+        AssetChangeRow(
+            type="专家",
+            object=f"专家{index:02d}",
+            change="新增 expert",
+            source="ewrdf_test.t_expert",
+            time="10-10 04:20:02",
+        )
+        for index in range(1, 14)
+    ]
+    result = PlatformOverviewService(
+        stats_provider=FakeStatsProvider(),
+        changes_provider=FakeChangesProvider(
+            DayChangesSnapshot(
+                entity_added=4,
+                relation_added=0,
+                entity_rows_exact=True,
+                entity_rows=entity_rows,
+            )
+        ),
+    ).get_overview("ewrdf")
+
+    assert result.asset_overview_groups[0].added == "+13"  # 与抽屉 13 行同数
+    assert result.asset_change_totals == {"entity": 13, "relation": 0}
+
+    degraded = PlatformOverviewService(
+        stats_provider=FakeStatsProvider(),
+        changes_provider=FakeChangesProvider(
+            DayChangesSnapshot(entity_added=4, relation_added=0, entity_rows=entity_rows)
+        ),
+    ).get_overview("ewrdf")
+    assert degraded.asset_overview_groups[0].added == "+4"  # exact=False 回退 written 合计
+    assert degraded.asset_change_totals == {"entity": 4, "relation": 0}
+
+
 def test_overview_running_count_is_live_not_frozen_in_day_snapshot() -> None:
     """「N 个执行运行中」实时短查：日快照缓存一整天，快照里的 running_count
     不能把运行数冻住——面板以装配时的实时计数为准；控制库不可读回退快照值。"""
@@ -888,9 +930,12 @@ def test_enrich_day_rows_lists_graph_objects_per_vertex() -> None:
     assert result.relation_rows[0].change == "新增 审测关联"
     assert result.relation_rows[0].source == "techkg_e2e_liz.review_widgets"
     assert result.relation_rows[0].time == "09-23 11:44:48"
-    # 徽标计数不变（仍按执行 written 聚合，与明细行数解耦）
+    # 快照保留控制库 written 合计；两类反查均为逐对象行（关系 LOOKUP 无索引走
+    # GO FROM 兜底也算枚举完成）——exact 置位后装配层改按行数计徽标
     assert result.entity_added == 3
     assert result.relation_added == 3
+    assert result.entity_rows_exact is True
+    assert result.relation_rows_exact is True
     # 端点名只发一次批量 FETCH（合并此前逐 vid 的串行调用）
     fetch_calls = [q for q in client.queries if q.startswith("FETCH PROP ON *")]
     assert len(fetch_calls) == 1
@@ -1226,7 +1271,9 @@ def test_enrich_day_rows_zero_hit_lookup_lists_no_aggregate_row() -> None:
     )
 
     assert result.entity_rows == []
-    assert result.entity_added == 2  # 徽标计数仍按执行 written，与明细行数解耦
+    # 快照保留 written 合计；exact=True 时装配按行数 0 展示 --（与空抽屉一致）
+    assert result.entity_added == 2
+    assert result.entity_rows_exact is True
 
 
 def test_enrich_day_rows_relation_zero_hit_no_aggregate_row() -> None:
@@ -1268,6 +1315,7 @@ def test_enrich_day_rows_relation_zero_hit_no_aggregate_row() -> None:
 
     assert result.relation_rows == []
     assert result.relation_added == 2
+    assert result.relation_rows_exact is True
 
 
 def test_enrich_day_rows_relation_without_time_prop_keeps_aggregate() -> None:
@@ -1302,6 +1350,7 @@ def test_enrich_day_rows_relation_without_time_prop_keeps_aggregate() -> None:
     )
 
     assert [row.object for row in result.relation_rows] == ["审测关联 · 2 条"]
+    assert result.relation_rows_exact is False  # 聚合降级行不可作计数
     assert not [q for q in client.queries if q.startswith("GO FROM")]
 
 
@@ -1325,6 +1374,7 @@ def test_enrich_today_rows_falls_back_to_aggregate_when_graph_unavailable() -> N
     )
     # 图不可达：保留聚合降级行，不空转
     assert [row.object for row in result.entity_rows] == ["审测挂件 · 5 条"]
+    assert result.entity_rows_exact is False
 
 
 def test_enrich_today_rows_falls_back_when_tag_has_no_index() -> None:
@@ -1353,6 +1403,7 @@ def test_enrich_today_rows_falls_back_when_tag_has_no_index() -> None:
     )
     # tag 无索引（LOOKUP 400）：退回聚合行
     assert [row.object for row in result.entity_rows] == ["审测挂件 · 5 条"]
+    assert result.entity_rows_exact is False
     assert client.closed is True
 
 

@@ -80,6 +80,46 @@ class UserGraphSpace(Base):
     )
 
 
+class GraphSpaceProfile(Base):
+    """图空间说明等空间级元数据：一个空间一行，与用户绑定无关。
+
+    空间本体在 NebulaGraph 侧，绑定表按 (user, space) 记"我的图空间"，
+    说明属于空间而非绑定关系，单独建表避免多用户绑定行各带一份说明。
+    """
+
+    __tablename__ = "kg_graph_space_profile"
+
+    space_name: Mapped[str] = mapped_column(String(128), primary_key=True)
+    description: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class UserGraphSpaceHidden(Base):
+    """RBAC 模式下用户主动解绑（隐藏）的图空间：行存在 = 该空间从该用户的
+    工作空间下拉中移除；无行 = 跟随业务授权默认可见。
+
+    新模式可见性来自业务授权（公共/业务空间），解绑无法用"删绑定行"表达
+    （授权空间本就没有绑定行），只能以排除行记录；绑定/解绑互为
+    删除/插入本表行。旧模式（BUSINESS_RBAC_ENABLED=false）的绑定语义仍在
+    kg_user_graph_space：行 = 绑定，解绑 = 删行，两表各管一种模式。
+    """
+
+    __tablename__ = "kg_user_graph_space_hidden"
+    __table_args__ = (
+        UniqueConstraint("user_id", "space_name", name="uk_kg_user_graph_space_hidden"),
+        Index("idx_kg_user_graph_space_hidden_user", "user_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    space_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+
+
 class GraphSpaceVectorDatabase(Base):
     """图空间 ↔ Milvus 向量库（database）登记关系。
 

@@ -17,7 +17,7 @@ from db_model.business_access import (
     BusinessMembershipState,
     BusinessSpacePolicy,
 )
-from db_model.platform_governance import PlatformUser
+from db_model.platform_governance import GraphSpaceProfile, PlatformUser, UserGraphSpaceHidden
 from script import migrate_space_permissions as migration
 from service import business_access_control as acl
 from service.platform_access import PlatformActor
@@ -32,7 +32,15 @@ def database(monkeypatch):
     Base.metadata.create_all(
         engine,
         tables=[
-            m.__table__ for m in (BusinessClient, BusinessMember, BusinessGraphSpace, PlatformUser)
+            m.__table__
+            for m in (
+                BusinessClient,
+                BusinessMember,
+                BusinessGraphSpace,
+                PlatformUser,
+                GraphSpaceProfile,
+                UserGraphSpaceHidden,
+            )
         ],
     )
     migration.migrate(engine, apply=True)

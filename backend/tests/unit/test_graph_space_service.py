@@ -9,7 +9,12 @@ from sqlalchemy.pool import StaticPool
 
 from db_model.base import Base
 from db_model.business_access import BusinessClient, BusinessGraphSpace, BusinessSpacePolicy
-from db_model.platform_governance import GraphSpaceVectorDatabase, UserGraphSpace
+from db_model.platform_governance import (
+    GraphSpaceProfile,
+    GraphSpaceVectorDatabase,
+    UserGraphSpace,
+    UserGraphSpaceHidden,
+)
 from service.graph_space import (
     GraphSpaceError,
     GraphSpaceService,
@@ -86,6 +91,8 @@ def session_factory():
         engine,
         tables=[
             UserGraphSpace.__table__,
+            UserGraphSpaceHidden.__table__,
+            GraphSpaceProfile.__table__,
             GraphSpaceVectorDatabase.__table__,
             BusinessClient.__table__,
             BusinessGraphSpace.__table__,
@@ -129,6 +136,7 @@ def test_create_space_creates_and_binds(session_factory) -> None:
         "name": "u1_test",
         "bound": True,
         "mine": True,
+        "description": "",
         "vectorDbStatus": "ready",
     }
     assert "u1_test" in client.spaces
@@ -219,7 +227,7 @@ def test_list_spaces_for_actor(session_factory, monkeypatch) -> None:
 
     # 默认空间与已有绑定去重，保持真实绑定标记。
     assert service.list_spaces_for_actor(_actor(USER_A)) == [
-        {"name": "dev2", "bound": True, "mine": True}
+        {"name": "dev2", "bound": True, "mine": True, "description": ""}
     ]
     # 管理员看全量 + 标记自己绑定的
     admin_view = service.list_spaces_for_actor(_actor("admin", is_admin=True))
@@ -237,21 +245,21 @@ def test_list_work_spaces_for_actor(session_factory, monkeypatch) -> None:
     # 管理员同样只见默认 + 自己绑定（未绑定时仅默认），而非全量
     admin = _actor("admin", is_admin=True)
     assert service.list_work_spaces_for_actor(admin) == [
-        {"name": "dev2", "bound": False, "mine": False}
+        {"name": "dev2", "bound": False, "mine": False, "description": ""}
     ]
     service.bind(admin, "algo_test")
     assert service.list_work_spaces_for_actor(admin) == [
-        {"name": "dev2", "bound": False, "mine": False},
-        {"name": "algo_test", "bound": True, "mine": True},
+        {"name": "dev2", "bound": False, "mine": False, "description": ""},
+        {"name": "algo_test", "bound": True, "mine": True, "description": ""},
     ]
     # 普通用户同规则（默认 + 本人绑定）
     assert service.list_work_spaces_for_actor(_actor(USER_A)) == [
-        {"name": "dev2", "bound": False, "mine": False},
-        {"name": "techkg", "bound": True, "mine": True},
+        {"name": "dev2", "bound": False, "mine": False, "description": ""},
+        {"name": "techkg", "bound": True, "mine": True, "description": ""},
     ]
     # 未绑定任何空间的用户仅见默认
     assert service.list_work_spaces_for_actor(_actor(USER_B)) == [
-        {"name": "dev2", "bound": False, "mine": False}
+        {"name": "dev2", "bound": False, "mine": False, "description": ""}
     ]
     # 全量列表（配置页绑定入口）不受影响：管理员仍可见全部空间
     assert {item["name"] for item in service.list_spaces_for_actor(admin)} == {
@@ -267,7 +275,7 @@ def test_new_user_reads_configured_default_without_binding(session_factory, monk
     service = _service(session_factory, client)
 
     assert service.list_spaces_for_actor(_actor(USER_A)) == [
-        {"name": "delivery_graph", "bound": False, "mine": False}
+        {"name": "delivery_graph", "bound": False, "mine": False, "description": ""}
     ]
     assert service.bound_spaces(USER_A) == []
     assert client.statements == []
@@ -281,8 +289,8 @@ def test_shared_default_preserves_other_bound_spaces(session_factory, monkeypatc
     service.bind(_actor(USER_B), "another_users_graph")
 
     assert service.list_spaces_for_actor(_actor(USER_A)) == [
-        {"name": "delivery_graph", "bound": False, "mine": False},
-        {"name": "private_graph", "bound": True, "mine": True},
+        {"name": "delivery_graph", "bound": False, "mine": False, "description": ""},
+        {"name": "private_graph", "bound": True, "mine": True, "description": ""},
     ]
 
 

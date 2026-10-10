@@ -188,12 +188,16 @@ def test_configuration_owner_stable_across_member_transfer(business_db):
         ensure_owner_access(replace(developer, business_id="b"), "business:a")
 
 
-def test_legacy_personal_bind_mutations_disabled(business_db):
-    from biz.handler.graph_space import _require_legacy_binding
+def test_personal_bind_unbind_allowed_in_rbac_mode(business_db):
+    """绑定/解绑是用户自己的可见性操作，两种模式都放行（不再 409）。
 
-    with pytest.raises(HTTPException) as caught:
-        _require_legacy_binding()
-    assert caught.value.status_code == 409
+    RBAC 模式的语义（解绑写 kg_user_graph_space_hidden 隐藏行、工作空间下拉
+    过滤）由 tests/unit/test_graph_space_unbind.py 覆盖；这里只锁住"不拦"。
+    """
+    from biz.handler.graph_space import bind_graph_space, unbind_graph_space
+
+    assert callable(bind_graph_space)
+    assert callable(unbind_graph_space)
 
 
 def test_legacy_mode_does_not_read_new_tables(monkeypatch):

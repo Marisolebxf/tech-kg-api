@@ -24,17 +24,11 @@ readonly_router = APIRouter(prefix="/graph-spaces", tags=["graph-space-readonly"
 
 class GraphSpaceCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=64)
+    description: str = Field(default="", max_length=200)
 
 
 def _service(session: Session) -> GraphSpaceService:
     return GraphSpaceService(session)
-
-
-def _require_legacy_binding() -> None:
-    from service.business_access_control import rbac_enabled
-
-    if rbac_enabled():
-        raise HTTPException(409, "图空间归属由管理员通过业务绑定 SQL 配置")
 
 
 def _to_response(exc: GraphSpaceError) -> HTTPException:
@@ -59,7 +53,7 @@ def create_graph_space(
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
     try:
-        data = _service(session).create_space(actor, payload.name)
+        data = _service(session).create_space(actor, payload.name, payload.description.strip())
     except GraphSpaceError as exc:
         raise _to_response(exc) from exc
     return ApiResponse(data=data, msg="图空间已创建")
@@ -71,7 +65,6 @@ def bind_graph_space(
     actor: CurrentAdmin,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
-    _require_legacy_binding()
     try:
         data = _service(session).bind(actor, space_name)
     except GraphSpaceError as exc:
@@ -85,7 +78,6 @@ def unbind_graph_space(
     actor: CurrentAdmin,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
-    _require_legacy_binding()
     if not _service(session).unbind(actor, space_name):
         raise HTTPException(status_code=404, detail="未绑定该图空间")
     return ApiResponse(data={"unbound": True}, msg="已解除绑定（图空间数据保留）")

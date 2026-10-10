@@ -257,6 +257,30 @@ def load_extract_schema(schema_id: str, *, session: Session | None = None) -> di
     return info
 
 
+def schema_display_name_map(schema_ids: list[str]) -> dict[str, str]:
+    """批量解析 schema id → 展示名（label 优先，缺失回退 name）。
+
+    任务详情 chain 环 ``schema:<id>`` 标签渲染用：只做展示名解析，不校验
+    可抽取性；查不到/已删除的 id 不进映射，调用方保持原样。
+    """
+    from sqlalchemy.orm import Session as OrmSession
+
+    from db_model.schema_management import GraphSchemaDefinition
+    from infra.workflow_mysql import get_workflow_engine
+
+    unique_ids = list(dict.fromkeys(schema_ids))
+    if not unique_ids:
+        return {}
+    with OrmSession(get_workflow_engine()) as control_session:
+        rows = control_session.scalars(
+            select(GraphSchemaDefinition).where(
+                GraphSchemaDefinition.id.in_(unique_ids),
+                GraphSchemaDefinition.is_deleted.is_(False),
+            )
+        ).all()
+        return {row.id: row.label or row.name for row in rows}
+
+
 def ensure_extract_script_ready(schema_id: str) -> dict[str, Any]:
     """建/触发 extract 任务前的可执行预检，通过则返回 schema 基本信息。
 

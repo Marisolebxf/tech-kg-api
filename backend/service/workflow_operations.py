@@ -15,6 +15,38 @@ def _now() -> str:
     return datetime.now(UTC).astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _decorate_chain_step_names(steps: Any) -> None:
+    """chain 任务详情步骤补确切名称：「{Schema 中文名} 平台喂数抽取」。
+
+    环 RUNNING/FAILED 阶段 workflow 的 chain_steps 不带 name（label 要等环内
+    load_schema_extract_plan 才知道），前端按 name||id 渲染会露出裸
+    ``schema:<uuid>``；实时 get_steps 与落库 steps 回退两条渲染路径都在读取侧
+    统一补名，已完成环的裸 label 一并统一成完整口径。查不到的 id / 解析异常
+    保持原样（展示名缺失不能拖垮任务详情）。两种形状：实时 query 的
+    ``{schema:<id>: info}``（id 在键上）与落库 pipeline_steps 的列表（id 在条目）。
+    """
+    if isinstance(steps, dict):
+        pairs = [(str(key), entry) for key, entry in steps.items()]
+    elif isinstance(steps, list):
+        pairs = [(str(entry.get("id") or ""), entry) for entry in steps if isinstance(entry, dict)]
+    else:
+        return
+    prefix = "schema:"
+    schema_ids = [key[len(prefix) :] for key, _ in pairs if key.startswith(prefix)]
+    if not schema_ids:
+        return
+    try:
+        from service.schema_extraction import schema_display_name_map
+
+        names = schema_display_name_map(schema_ids)
+    except Exception:  # noqa: BLE001
+        return
+    for key, entry in pairs:
+        label = names.get(key[len(prefix) :]) if key.startswith(prefix) else None
+        if label:
+            entry["name"] = f"{label} 平台喂数抽取"
+
+
 def _safe_int(value: Any) -> int:
     try:
         return int(value or 0)
@@ -191,6 +223,9 @@ class WorkflowOperationsService:
             if refreshed is not None:
                 task = refreshed
                 task["batch"] = self.repo.get_batch(task["batchId"])
+        # chain 落库回退路径的 steps 同样补确切名称（实时 query 路径在
+        # query_step_state 里装饰）
+        _decorate_chain_step_names(task.get("steps"))
         return task
 
     async def query_step_state(self, task: dict[str, Any]) -> dict[str, Any] | None:
@@ -217,6 +252,7 @@ class WorkflowOperationsService:
             return None
         if workflow_type == "kg.schema.extract":
             return {"paused": state.get("paused") is True}
+        _decorate_chain_step_names(state.get("steps"))
         return state
 
     @staticmethod

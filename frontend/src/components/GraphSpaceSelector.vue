@@ -9,7 +9,7 @@ const graphSpaceStore = useGraphSpaceStore()
 const authStore = useAuthStore()
 
 const selector = ref<HTMLElement>()
-const popupWidth = ref(200)
+const popupWidth = ref(280)
 const triggerElement = computed(() => selector.value?.querySelector<HTMLElement>('.arco-select-view'))
 // 弹层在 body 下，不能继承选择框宽度；按实际外框宽同步，窄屏收缩后也保持同宽。
 useResizeObserver(triggerElement, ([entry]) => {
@@ -81,10 +81,10 @@ watch(
 /* 同时锁定 flex 基准和宽高，选中长名称、加载及空状态都不改变触发栏大小。 */
 .app-space-select :deep(.arco-select-view) {
   box-sizing: border-box;
-  flex: 0 0 200px;
-  width: 200px;
+  flex: 0 0 280px;
+  width: 280px;
   min-width: 0;
-  max-width: 200px;
+  max-width: 280px;
   height: 32px;
 }
 
@@ -126,8 +126,8 @@ watch(
   }
 
   .app-space-select :deep(.arco-select-view) {
-    flex: 0 1 200px;
-    width: min(200px, 100%);
+    flex: 0 1 280px;
+    width: min(280px, 100%);
   }
 }
 
@@ -143,14 +143,15 @@ watch(
 
 .app-space-select-popup .arco-cascader-panel-column {
   box-sizing: border-box;
-  flex: 0 0 60%;
-  width: 60%;
+  flex: 0 0 55%;
+  width: 55%;
   min-width: 0;
 }
 
 .app-space-select-popup .arco-cascader-panel-column:first-child {
-  flex-basis: 40%;
-  width: 40%;
+  /* 280px 下约 126px，扣除 Arco 的 46px 内边距后仍可展示五个汉字。 */
+  flex-basis: 45%;
+  width: 45%;
 }
 
 .app-space-select-popup .arco-cascader-option {

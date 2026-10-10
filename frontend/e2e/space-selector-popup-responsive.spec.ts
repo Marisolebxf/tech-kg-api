@@ -126,7 +126,8 @@ test('1395px: 超长空间名省略号截断，列表仍可纵向滚动', async 
 
   const scrolled = await popup.evaluate((root) => {
     for (const element of root.querySelectorAll<HTMLElement>('*')) {
-      if (element.scrollHeight > element.clientHeight + 1) {
+      // 面板自带 2px 边框伪溢出，只认真正的列表溢出（12 项 ≈ 432px）
+      if (element.scrollHeight > element.clientHeight + 20) {
         element.scrollTop = 60
         return { className: String(element.className), scrolled: element.scrollTop > 0 }
       }

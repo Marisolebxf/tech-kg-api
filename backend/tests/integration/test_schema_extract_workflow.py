@@ -1212,6 +1212,13 @@ class TestSchemaExtractS3Relay:
                 )
         assert result["status"] == "completed"
         assert result["failures"]["count"] == 2
+        # 整批失败按步归因：失败行计入 activity 崩溃所在的步（步级 failed>0 →
+        # 任务详情/审核日志弹窗的阶段显示「异常」，与执行概要 ABNORMAL 对齐；
+        # 此前步级恒零骨架恒显成功——2026-10-11 用例 MR-20261009-A2DBE6074880）
+        main_stat = result["steps"]["main"]
+        assert main_stat["failed"] == 2
+        assert main_stat["records"] == 0 and main_stat["written"] == 0
+        assert result["sources"][0]["steps"]["main"]["failed"] == 2
         # resolve 必调：拿到按 chunk recordIds 合成的内联失败
         inline = state["resolve"][0]["inline"]
         assert [f["recordId"] for f in inline] == ["w1", "bad"]

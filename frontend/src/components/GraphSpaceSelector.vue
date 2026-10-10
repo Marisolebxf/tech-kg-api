@@ -67,11 +67,14 @@ watch(
   white-space: nowrap;
 }
 
-/* arco 控件不透传 scoped data-v 到视图元素，类选择器匹配不上
-   （旧 .app-space-select__input{width} 是死规则），必须经包裹层 :deep 下钻。
-   a-cascader 的触发器内部同样渲染 SelectView，选择器口径不变 */
+/* 同时锁定 flex 基准和宽高，选中长名称、加载及空状态都不改变触发栏大小。 */
 .app-space-select :deep(.arco-select-view) {
+  box-sizing: border-box;
+  flex: 0 0 200px;
   width: 200px;
+  min-width: 0;
+  max-width: 200px;
+  height: 32px;
 }
 
 /* arco 的 .arco-select-view-value 默认 display:flex——text-overflow 对 flex 容器
@@ -79,6 +82,26 @@ watch(
    自带的 ellipsis 真正生效（完整名悬停包裹层 title 查看） */
 .app-space-select :deep(.arco-select-view-value) {
   display: block;
+  min-width: 0;
+}
+
+/* Arco 保留零宽 input 接收键盘事件；全局 input:focus 会给它画蓝色阴影，
+   叠在选中名称前。只清理内部 input，焦点提示仍由外层 SelectView 提供。 */
+.app-space-select :deep(.arco-select-view-input) {
+  min-width: 0;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  outline: none !important;
+  box-shadow: none !important;
+  caret-color: transparent;
+}
+
+.app-space-select :deep(.arco-select-view-input-hidden) {
+  height: 0 !important;
+  min-height: 0 !important;
+  opacity: 0;
+  pointer-events: none;
 }
 
 @media (max-width: 767px) {
@@ -92,23 +115,39 @@ watch(
   }
 
   .app-space-select :deep(.arco-select-view) {
-    width: 100%;
-    min-width: 0;
+    flex: 0 1 200px;
+    width: min(200px, 100%);
   }
 }
 
 </style>
 
 <style>
-/* 弹层 teleport 到 body，scoped 够不到，经 triggerProps contentClass 打标。
-   cascader 弹层是 inline-flex 的 .arco-cascader-panel，列只有 min-width 没有
-   上限——超长空间名会把弹层撑出屏幕。给面板封顶宽度，列随之收缩，选项 label
-   补 overflow+ellipsis 截断；arco 选项 <li> 原生带 title=label，悬停看全名。 */
+/* 弹层 teleport 到 body，经 contentClass 限定范围。固定两列比例及面板尺寸，
+   目录切换、名称长度和选项数量只影响省略号/滚动，不再改变弹层大小。 */
 .app-space-select-popup .arco-cascader-panel {
-  max-width: min(360px, 80vw);
+  width: min(360px, calc(100vw - 24px));
+  height: 200px;
+}
+
+.app-space-select-popup .arco-cascader-panel-column {
+  box-sizing: border-box;
+  flex: 0 0 60%;
+  width: 60%;
+  min-width: 0;
+}
+
+.app-space-select-popup .arco-cascader-panel-column:first-child {
+  flex-basis: 40%;
+  width: 40%;
+}
+
+.app-space-select-popup .arco-cascader-option {
+  min-width: 0;
 }
 
 .app-space-select-popup .arco-cascader-option-label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }

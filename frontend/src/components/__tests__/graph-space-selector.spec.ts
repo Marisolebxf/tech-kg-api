@@ -43,7 +43,7 @@ describe('两级图空间选择', () => {
     expect(formatLabel([{ label: 'dev2' }])).toBe('dev2')
     wrapper.unmount()
   })
-  it('仅一个分组时拍平成单列，避免左列单行加大片空白', async () => {
+  it('仅一个分组时仍保持两级，组名照常露出（与公网主栈一致）', async () => {
     vi.mocked(listGraphSpaces).mockResolvedValue({ data: {
       spaces: ['dev', 'dev2'],
       items: [{ name: 'dev' }, { name: 'dev2' }],
@@ -51,7 +51,8 @@ describe('两级图空间选择', () => {
     const wrapper = mountSelector()
     await flushPromises()
     expect(wrapper.getComponent(Cascader).props('options')).toEqual([
-      { value: 'dev', label: 'dev' }, { value: 'dev2', label: 'dev2' },
+      { value: 'unassigned', kind: 'unassigned', label: '未归属空间',
+        children: [{ value: 'dev', label: 'dev' }, { value: 'dev2', label: 'dev2' }] },
     ])
     wrapper.unmount()
   })

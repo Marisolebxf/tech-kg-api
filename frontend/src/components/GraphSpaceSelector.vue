@@ -9,12 +9,9 @@ import { useGraphSpaceStore } from '../stores/graphSpace'
 const graphSpaceStore = useGraphSpaceStore()
 const authStore = useAuthStore()
 
-// 只有一个分组时拍平成单列：两级弹层里左列只挂一行分组名、其余 80% 空白，
-// 既难看又把弹层撑到 360px 宽顶死屏幕右缘；多分组（公共/业务/未归属并存）保持两级
-const options = computed(() => {
-  const groups = graphSpaceStore.groups
-  return groups.length === 1 ? groups[0]!.children : groups
-})
+// 恒两级级联、组名在左列露出——与公网主栈一致（2026-10-10 口径：组名可见性
+// 优先于紧凑，单分组时左列只有一行也保留；右缘溢出由弹层右对齐 CSS 兜住）
+const options = computed(() => graphSpaceStore.groups)
 
 /** 回显只显示空间名。arco 2.58 cascader 没有 show-path prop（早期传的
     :show-path="false" 是无效属性从未生效），默认把整条路径「未归属空间 / dev2」

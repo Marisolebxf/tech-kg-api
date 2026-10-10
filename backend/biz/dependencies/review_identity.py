@@ -14,6 +14,7 @@ from biz.dependencies.auth import (
     AuthApplicationDependency,
     BearerDependency,
     require_authenticated_user,
+    require_platform_actor,
 )
 from service.manual_review_domain import ReviewIdentity
 
@@ -33,7 +34,7 @@ async def _review_platform_actor(
     if not rbac_enabled():
         return None
     context = await require_authenticated_user(request, response, application, bearer)
-    return application.platform_actor(context)
+    return require_platform_actor(context, application, request)
 
 
 def get_review_identity(

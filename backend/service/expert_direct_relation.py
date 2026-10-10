@@ -36,11 +36,11 @@ from typing import Any
 from sqlalchemy import text
 
 from infra.graph_api_client import GraphAPIError, graph_api
-from infra.graph_db.config import TRSGraphSettings
 from infra.graph_exec_budget import loop_scoped_semaphore
 from infra.mysql import session_scope
 from service.base_module import KGModuleScaffoldService
 from service.confidence_scoring import edge_confidence
+from service.graph_space_context import get_current_space
 from service.provenance_recorder import record_node_source
 
 # 60s 进程内结果缓存：同参数请求复用，避免高并发打爆 graph-search/trs-graph。
@@ -118,6 +118,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         a_keyword = (expert_a_id or "").strip()
         b_keyword = (expert_b_id or "").strip()
         cache_key = (
+            f"{get_current_space()}|"
             f"all|{a_keyword}|{b_keyword}|{(institution or '').strip()}|"
             f"{(start_time or '').strip()}|{(end_time or '').strip()}|{normalized_limit}"
         )
@@ -361,7 +362,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
     ) -> None:
         paper_ids: dict[str, set[str]] = {}
         titles: dict[str, str] = {}
-        edge_type = "AUTHORED" if TRSGraphSettings.from_env().space == "techkg" else "AUTHORED_BY"
+        edge_type = "AUTHORED" if get_current_space() == "techkg" else "AUTHORED_BY"
         single_pair = len(rows) == 1
         # 列表模式的锚点论文池（懒加载）：一次全表扫描服务全部行。
         pool: list[dict[str, Any]] | None = None
@@ -409,7 +410,8 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                         achievements.append({"id": paper_id, "title": titles[paper_id]})
                     if len(achievements) == 3:
                         break
-                if not achievements:
+                fallback_used = not achievements
+                if fallback_used:
                     # 真实专家常无 AUTHORED_BY 边（跨域兜底 ETL 默认关闭且 Paper
                     # 顶点缺失）：回退 MySQL。单对查询（A+B 都指定）用双方姓名
                     # 联查 SQL；列表模式先走关系表自连接的索引查询，仍无标题
@@ -444,6 +446,14 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                                 client, peer_vid
                             )
                         achievements = _pool_shared_titles(pool, peer_name_forms[peer_vid])
+                if fallback_used:
+                    # SQL is an enrichment source, never a second graph space.
+                    scoped = []
+                    for item in achievements:
+                        paper = await client.get_node(item["id"])
+                        if paper and "Paper" in (paper.get("labels") or []):
+                            scoped.append(item)
+                    achievements = scoped
                 row["representative_achievements"] = achievements
             except GraphAPIError:
                 logger.warning(
@@ -784,7 +794,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         Returns:
             ``{sourceDatabase, summary, evidences[]}``。
         """
-        space = TRSGraphSettings.from_env().space or "dev"
+        space = get_current_space() or "dev"
         source_database = f"trs-graph / space={space}"
         if rows:
             summary_text = f"图库 COAUTHOR_WITH 边命中 {len(rows)} 条直接关系。"
@@ -980,7 +990,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
 
     def _build_anchor_only_provenance(self, anchor: dict[str, Any]) -> dict[str, Any]:
         """仅专家A分支的溯源：只含专家A的实体入库元数据。"""
-        space = TRSGraphSettings.from_env().space or "dev"
+        space = get_current_space() or "dev"
         src = self._person_source(anchor)
         name = self._person_name(anchor) or str(anchor.get("id") or "—")
         system = str(src.get("source_system") or "")
@@ -1208,7 +1218,7 @@ def _anchor_paper_pool(anchor_names: tuple[str, ...]) -> list[dict[str, Any]]:
     usable = _matchable_names(anchor_names)
     if not usable:
         return []
-    key = tuple(sorted(usable))
+    key = (get_current_space(), *sorted(usable))
     with _paper_pool_cache_lock:
         entry = _paper_pool_cache.get(key)
     if entry and entry[0] > time.monotonic():

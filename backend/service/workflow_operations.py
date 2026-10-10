@@ -113,6 +113,8 @@ class WorkflowOperationsService:
             if actor is None or actor.is_admin
             else []
         )
+        if actor is not None:
+            changes = [item for item in changes if workflow_resource_visible(actor, item)]
         return {
             "summary": [
                 {
@@ -132,7 +134,7 @@ class WorkflowOperationsService:
                 "updated": sum(c["change"] == "修改" for c in changes),
                 "deleted": sum(c["change"] == "删除" for c in changes),
             },
-            "updatePolicy": self.repo.get_setting("update_policy")
+            "updatePolicy": self.repo.get_setting(f"update_policy:{actor.context_graph_space}" if actor and actor.context_graph_space else "update_policy")
             if actor is None or actor.is_admin
             else {},
         }
@@ -433,6 +435,8 @@ class WorkflowOperationsService:
         executions: list[dict[str, Any]] = []
         skipped: list[dict[str, str]] = []
         for info in schema_extraction.list_extract_eligible_schemas():
+            if actor and actor.context_graph_space and info.get("graph_space") != actor.context_graph_space:
+                continue
             definition = schema_extraction.persist_extract_definition(
                 schema_extraction.build_extract_definition(info)
             )
@@ -490,6 +494,8 @@ class WorkflowOperationsService:
         schedules: list[dict[str, Any]] = []
         keep_ids: set[str] = set()
         for info in schema_extraction.list_extract_eligible_schemas():
+            if actor and actor.context_graph_space and info.get("graph_space") != actor.context_graph_space:
+                continue
             definition = schema_extraction.persist_extract_definition(
                 schema_extraction.build_extract_definition(info)
             )
@@ -531,7 +537,12 @@ class WorkflowOperationsService:
             self.repo.save_schedule(schedule_record)
             schedules.append(schedule_record)
         # 清理不再属于当前 schema 集合的策略 Schedule 与旧 auto-graph-build（D3 存量）
-        for stale_id in [*(s.get("id") for s in self.repo.list_schedules() or [])]:
+        for stale in self.repo.list_schedules() or []:
+            if actor and actor.context_graph_space:
+                from service.workflow_jobs import workflow_resource_matches_space
+                if not workflow_resource_matches_space(actor, stale):
+                    continue
+            stale_id = stale.get("id")
             if not stale_id:
                 continue
             if stale_id == "auto-graph-build" or (
@@ -542,7 +553,8 @@ class WorkflowOperationsService:
                 except Exception:  # noqa: BLE001
                     temporal_runtime._client = None
                 self.repo.delete_schedule(stale_id)
-        self.repo.save_setting("update_policy", policy)
+        policy_key = f"update_policy:{actor.context_graph_space}" if actor and actor.context_graph_space else "update_policy"
+        self.repo.save_setting(policy_key, policy)
         return {"policy": policy, "schedules": schedules}
 
     def create_definition(self, request: dict[str, Any]) -> dict[str, Any]:

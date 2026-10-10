@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useSpacePermissions } from "../../composables/use-space-permissions"
+const { canReview } = useSpacePermissions()
+
 import DeleteConfirmDialog from '../../components/DeleteConfirmDialog.vue'
 import AppAlert from '../../components/AppAlert.vue'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -70,7 +73,7 @@ type ReviewRow = ReviewRecord & { templateId?: string; rawStatus?: string; jobId
  *  如开发维护看共享生产空间）同样不可操作，后端对操作档仍强校验 403。
  *  不可操作时按钮置灰禁用而非隐藏（保持操作列布局稳定）。 */
 const isRerunnable = (row: ReviewRow) =>
-  (row.rawStatus === 'OPEN' || row.rawStatus === 'RERUN_FAILED') && row.canOperate !== false
+  canReview.value && (row.rawStatus === 'OPEN' || row.rawStatus === 'RERUN_FAILED') && row.canOperate !== false
 
 /** 置灰按钮的悬停说明：按记录状态给出不可操作的原因。 */
 function rerunDisabledReason(row: ReviewRow): string {
@@ -95,7 +98,7 @@ const reviewRows = computed(() => reviewRecords.value)
 
 /** 当前队列整页只读（查看档，如开发维护切到共享生产空间）：顶部提示条。 */
 const reviewReadOnly = computed(
-  () => reviewRows.value.length > 0 && reviewRows.value.every((row) => row.canOperate === false),
+  () => !canReview.value || reviewRows.value.length > 0 && reviewRows.value.every((row) => row.canOperate === false),
 )
 
 /** 分页状态：服务端分页，翻页/改页大小都会重新拉取当前筛选下的数据。
@@ -254,6 +257,7 @@ function showRerunFeedback(type: 'success' | 'warning' | 'error', text: string, 
 }
 
 async function rerunSelected(caseIds: string[] | undefined = undefined, skipConfirm = false) {
+  if (!canReview.value) return
   const ids = caseIds ?? [...rerunSelection.value]
   if (!ids.length || rerunSubmitting.value) return
   if (!skipConfirm && ids.length > 20) {
@@ -435,6 +439,7 @@ const deleteSubmitting = ref(false)
 const deleteError = ref('')
 
 function askDelete(row: ReviewRow) {
+  if (!isRerunnable(row)) return
   deleteTarget.value = row
   deleteError.value = ''
   deleteVisible.value = true
@@ -442,7 +447,7 @@ function askDelete(row: ReviewRow) {
 
 async function confirmDelete() {
   const target = deleteTarget.value
-  if (!target || deleteSubmitting.value) return
+  if (!target || !isRerunnable(target) || deleteSubmitting.value) return
   deleteSubmitting.value = true
   try {
     await deleteProductionReview(target.id)
@@ -472,12 +477,13 @@ function summarizeBatchSkipReasons(skipped: Array<{ id: string; reason: string }
 }
 
 function askBatchDelete() {
-  if (!rerunSelection.value.size || batchDeleteSubmitting.value) return
+  if (!canReview.value || !rerunSelection.value.size || batchDeleteSubmitting.value) return
   batchDeleteVisible.value = true
 }
 
 /** 确认批量删除：已处理的/不存在的按条跳过不中断整批，结果经反馈条展示（有跳过转警告态）。 */
 async function confirmBatchDelete() {
+  if (!canReview.value) return
   const ids = [...rerunSelection.value]
   if (!ids.length || batchDeleteSubmitting.value) return
   batchDeleteSubmitting.value = true
@@ -784,13 +790,13 @@ onMounted(() => {
             <button
               class="review-action-btn rerun-batch-action"
               type="button"
-              :disabled="rerunSubmitting || batchDeleteSubmitting"
+              :disabled="!canReview || rerunSubmitting || batchDeleteSubmitting"
               @click="rerunSelected()"
             >{{ rerunSubmitting ? '下发中…' : `批量重跑（${rerunSelection.size}）` }}</button>
             <button
               class="review-action-btn rerun-batch-action is-danger"
               type="button"
-              :disabled="rerunSubmitting || batchDeleteSubmitting"
+              :disabled="!canReview || rerunSubmitting || batchDeleteSubmitting"
               @click="askBatchDelete"
             >{{ batchDeleteSubmitting ? '删除中…' : `批量删除（${rerunSelection.size}）` }}</button>
           </span>

@@ -1,4 +1,4 @@
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 
 from biz.dependencies.auth import (
     CurrentActor,
@@ -8,6 +8,7 @@ from biz.dependencies.auth import (
 )
 from biz.handler.admin_member import router as admin_member_router
 from biz.handler.auth import router as auth_router
+from biz.handler.business_access import management_router as business_access_router
 from biz.handler.common_capability import router as common_capability_router
 from biz.handler.correction import router as correction_router
 from biz.handler.embedding_config import router as embedding_config_router
@@ -57,11 +58,40 @@ from biz.handler.workflow_system import router as workflow_system_router
 API_V1_PREFIX = "/api/v1"
 
 
-def require_business_data(actor: CurrentActor) -> None:
-    from service.business_access_control import ensure_space_access, rbac_enabled
+async def require_business_data(request: Request, actor: CurrentActor):
+    import asyncio
 
+    from fastapi import HTTPException
+
+    from biz.dependencies.selected_graph_space import read_request_graph_space
+    from service.business_access_control import ensure_space_access, rbac_enabled
+    from service.graph_space_context import (
+        get_current_space,
+        request_can_write,
+        selected_graph_space,
+    )
+
+    space = await read_request_graph_space(request) or get_current_space()
+    await asyncio.to_thread(ensure_space_access, actor, space, "read")
+    can_write = actor.is_admin and not actor.business_only
     if rbac_enabled():
-        ensure_space_access(actor, None, "read")
+        try:
+            await asyncio.to_thread(ensure_space_access, actor, space, "write")
+            can_write = True
+        except HTTPException as exc:
+            if exc.status_code != 403:
+                raise
+            can_write = False
+    from biz.prewarm_business import is_readonly_prewarm
+    if is_readonly_prewarm(request):
+        can_write = False
+    token = selected_graph_space.set(space)
+    write_token = request_can_write.set(can_write)
+    try:
+        yield
+    finally:
+        request_can_write.reset(write_token)
+        selected_graph_space.reset(token)
 
 
 def require_legacy_admin(actor: CurrentActor) -> None:
@@ -146,6 +176,7 @@ def register_routers(app: FastAPI) -> None:
         Depends(require_platform_maintainer),
     ]
     maintainer_routers = (
+        business_access_router,
         task_center_router,
         workflow_system_router,
         schema_management_router,

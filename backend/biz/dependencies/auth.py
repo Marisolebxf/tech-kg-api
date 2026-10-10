@@ -102,8 +102,14 @@ CurrentUser = Annotated[AuthContext, Depends(require_authenticated_user)]
 def require_platform_actor(
     context: CurrentUser,
     application: AuthApplicationDependency,
+    request: Request = None,
 ) -> PlatformActor:
-    return application.platform_actor(context)
+    from dataclasses import replace
+
+    # 请求选择器只提供上下文，资源和空间守卫会在使用时校验授权。
+    return replace(application.platform_actor(context),
+        context_business_id=request.headers.get("X-Business-Id", "").strip() if request else "",
+        context_graph_space=request.headers.get("X-Graph-Space", "").strip() if request else "")
 
 
 CurrentActor = Annotated[PlatformActor, Depends(require_platform_actor)]

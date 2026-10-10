@@ -13,7 +13,14 @@ from sqlalchemy.pool import StaticPool
 from biz.dependencies.auth import require_platform_admin, require_platform_maintainer
 from biz.handler.graph_space import GraphSpaceCreateRequest, create_graph_space
 from db_model.base import Base
-from db_model.business_access import BusinessClient, BusinessGraphSpace, BusinessMember
+from db_model.business_access import (
+    BusinessClient,
+    BusinessGraphSpace,
+    BusinessMember,
+    BusinessMembership,
+    BusinessMembershipState,
+    BusinessSpacePolicy,
+)
 from db_model.platform_governance import PlatformUser, PlatformUserRole, UserGraphSpace
 from service import business_access_control as acl
 from service import platform_access
@@ -31,6 +38,9 @@ def scope(monkeypatch):
         tables=[
             m.__table__
             for m in (
+                BusinessMembership,
+                BusinessMembershipState,
+                BusinessSpacePolicy,
                 BusinessClient,
                 BusinessMember,
                 BusinessGraphSpace,
@@ -115,17 +125,18 @@ def test_personal_binding_does_not_grant_foreign_access(scope, action):
     assert caught.value.status_code == 403
 
 
-def test_ordinary_and_developer_share_business_spaces_but_not_write_or_public_review(scope):
+def test_ordinary_is_public_only_and_developer_public_is_readonly(scope):
     user, developer = resolve("user"), resolve("developer")
-    assert (
-        acl.allowed_space_names(user)
-        == acl.allowed_space_names(developer)
-        == ["dev", "dev2", "gaoxing_test"]
-    )
+    assert acl.allowed_space_names(user) == ["dev"]
+    assert acl.allowed_space_names(developer) == ["dev", "dev2", "gaoxing_test"]
     assert acl.allowed_space_names(developer, "review") == ["dev2", "gaoxing_test"]
     assert acl.allowed_space_names(user, "review") == []
     for space in ("dev", "dev2", "gaoxing_test"):
-        acl.ensure_space_access(developer, space, "write")
+        if space == "dev":
+            with pytest.raises(HTTPException):
+                acl.ensure_space_access(developer, space, "write")
+        else:
+            acl.ensure_space_access(developer, space, "write")
         with pytest.raises(HTTPException):
             acl.ensure_space_access(user, space, "write")
     with pytest.raises(HTTPException):
@@ -156,7 +167,7 @@ def test_sql_membership_change_takes_effect_without_personal_binding(scope):
         row.client_id = "other"
     actor = resolve("developer")
     assert not actor.can_develop
-    assert acl.allowed_space_names(actor) == ["dev", "foreign"]
+    assert acl.allowed_space_names(actor) == ["dev"]
 
 
 def test_existing_config_list_displays_all_authorized_rows(scope):

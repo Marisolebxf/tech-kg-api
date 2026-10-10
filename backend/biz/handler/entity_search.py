@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from application.entity_search import EntitySearchApplication
 from biz.dependencies.auth import CurrentActor
+from biz.dependencies.selected_graph_space import bind_selected_graph_space, resolve_selected_space
 from biz.schemas.common import ApiResponse
 from biz.schemas.entity_search import EntityReindexRequest, EntitySearchRequest
 from infra.entity_response_cache import build_cache_key
@@ -26,7 +27,7 @@ from service.entity_search import (
 from service.entity_search import browse_cache as _browse_cache
 from service.entity_search import search_cache as _search_cache
 
-router = APIRouter(prefix="/entity-search", tags=["entity-search"])
+router = APIRouter(prefix="/entity-search", tags=["entity-search"], dependencies=[Depends(bind_selected_graph_space)])
 logger = logging.getLogger(__name__)
 
 # 浏览页默认缓存 5 分钟；关键词搜索仍使用较短 TTL，避免索引变化后旧命中保留过久。
@@ -53,7 +54,7 @@ async def _clear_entity_cache() -> None:
 
 
 def _resolved_space(space: str | None) -> str:
-    return space or TRSGraphSettings.from_env().space
+    return resolve_selected_space(space) or TRSGraphSettings.from_env().space
 
 
 def _serialized_success(data: dict) -> str:
@@ -173,6 +174,7 @@ async def browse_entities(
     offset: int = Query(0, ge=0, le=10_000_000),
 ) -> ApiResponse:
     """浏览实体（关键词为空的默认视图）：图空间直查分页，页内按 vid 排序。"""
+    space = resolve_selected_space(space)
     _ensure_space_access(actor, space)
     try:
         payload, cache_hit = await _load_browse_payload(
@@ -198,6 +200,7 @@ def list_entity_types(
     space: str | None = Query(None, max_length=64, description="图空间"),
 ) -> ApiResponse:
     """索引内实体类型 + 数量（前端类型过滤下拉）。"""
+    space = resolve_selected_space(space)
     _ensure_space_access(actor, space)
     return ApiResponse(data={"items": _application(session).types(space=space)})
 
@@ -209,6 +212,7 @@ def get_index_status(
     space: str | None = Query(None, max_length=64, description="图空间"),
 ) -> ApiResponse:
     """实体索引状态（是否已建、实体数、类型统计、更新时间、是否重建中）。"""
+    space = resolve_selected_space(space)
     _ensure_space_access(actor, space)
     return ApiResponse(data=_application(session).status(space=space))
 
@@ -223,6 +227,7 @@ async def search_entities(
 
     混合检索为重查询（m3e 向量化 + Milvus + 图直查），同关键词+空间+分页的
     重复检索使用短 TTL 共享缓存（默认 60 秒，可通过环境变量调整）。"""
+    payload = payload.model_copy(update={"space": resolve_selected_space(payload.space)})
     _ensure_space_access(actor, payload.space)
     cache_key = build_cache_key(
         "search",
@@ -274,6 +279,7 @@ async def reindex_entities(
         raise HTTPException(status_code=403, detail="仅平台管理员可以重建实体索引")
     app = _application(session)
     request = payload or EntityReindexRequest()
+    request = request.model_copy(update={"space": resolve_selected_space(request.space)})
     if rbac_enabled():
         ensure_space_access(actor, request.space, "write")
     try:

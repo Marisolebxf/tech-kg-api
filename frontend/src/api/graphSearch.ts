@@ -9,6 +9,7 @@
  */
 
 import { http } from './http'
+import type { GraphSpaceItem } from './graphSpace'
 
 
 /**
@@ -75,6 +76,7 @@ export interface GraphNodeListData {
  */
 export interface GraphSpaceListData {
   spaces: string[]
+  items?: GraphSpaceItem[]
 }
 
 

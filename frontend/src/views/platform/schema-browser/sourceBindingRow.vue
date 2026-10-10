@@ -16,6 +16,7 @@ const props = defineProps<{
   modelValue: SourceBindingRow
   datasources: MysqlDatasource[]
   removable: boolean
+  readonly?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -41,10 +42,12 @@ const loadingTables = ref(false)
 const loadingColumns = ref(false)
 
 function patch(update: Partial<SourceBindingRow>) {
+  if (props.readonly) return
   emit('update:modelValue', { ...props.modelValue, ...update })
 }
 
 async function loadDatabases() {
+  if (props.readonly) return
   databases.value = []
   if (!row.value.datasourceId) return
   loadingDatabases.value = true
@@ -58,6 +61,7 @@ async function loadDatabases() {
 }
 
 async function loadTables() {
+  if (props.readonly) return
   tables.value = []
   if (!row.value.datasourceId || !row.value.databaseName) return
   loadingTables.value = true
@@ -71,6 +75,7 @@ async function loadTables() {
 }
 
 async function loadColumns() {
+  if (props.readonly) return
   columns.value = []
   if (!row.value.datasourceId || !row.value.databaseName || !row.value.tableName) return
   loadingColumns.value = true
@@ -152,6 +157,7 @@ function applyColumnDefaults() {
       placeholder="数据源"
       allow-search
       :loading="false"
+      :disabled="readonly"
       popup-container=".schema-modal"
       :trigger-props="{ contentClass: 'source-binding-popup' }"
       @change="onDatasourceChange"
@@ -166,7 +172,7 @@ function applyColumnDefaults() {
       placeholder="库"
       allow-search
       :loading="loadingDatabases"
-      :disabled="!row.datasourceId"
+      :disabled="readonly || !row.datasourceId"
       popup-container=".schema-modal"
       :trigger-props="{ contentClass: 'source-binding-popup' }"
       @change="onDatabaseChange"
@@ -179,7 +185,7 @@ function applyColumnDefaults() {
       placeholder="表"
       allow-search
       :loading="loadingTables"
-      :disabled="!row.databaseName"
+      :disabled="readonly || !row.databaseName"
       popup-container=".schema-modal"
       :trigger-props="{ contentClass: 'source-binding-popup' }"
       @change="onTableChange"
@@ -192,7 +198,7 @@ function applyColumnDefaults() {
       placeholder="主键列"
       allow-search
       :loading="loadingColumns"
-      :disabled="!row.tableName"
+      :disabled="readonly || !row.tableName"
       popup-container=".schema-modal"
       :trigger-props="{ contentClass: 'source-binding-popup' }"
       @change="(value) => patch({ pkColumn: asString(value) })"
@@ -206,7 +212,7 @@ function applyColumnDefaults() {
       allow-search
       allow-clear
       :loading="loadingColumns"
-      :disabled="!row.tableName"
+      :disabled="readonly || !row.tableName"
       popup-container=".schema-modal"
       :trigger-props="{ contentClass: 'source-binding-popup' }"
       @change="(value) => patch({ timeColumn: asString(value) })"
@@ -219,6 +225,7 @@ function applyColumnDefaults() {
       type="button"
       class="source-binding-row__remove"
       title="移除该绑定"
+      :disabled="readonly"
       @click="emit('remove')"
     >
       ×
@@ -240,6 +247,7 @@ function applyColumnDefaults() {
 :deep(.source-binding-row__select.arco-select-view .arco-select-view-value),:deep(.source-binding-row__select.arco-select-view .arco-select-view-placeholder){min-width:0;overflow:hidden;background:transparent!important;font-size:14px;line-height:30px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
 .source-binding-row__remove{width:24px;height:24px;border:0;border-radius:4px;background:transparent;color:#e54848;font-size:16px;cursor:pointer}
 .source-binding-row__remove:hover{background:#fff3f3}
+.source-binding-row__remove:disabled{color:#a9aeb8;background:#f2f3f5;cursor:not-allowed}
 </style>
 
 <style>
@@ -249,4 +257,5 @@ function applyColumnDefaults() {
 .source-binding-popup .arco-select-dropdown-list-wrapper{overflow-x:auto}
 .source-binding-popup .arco-select-option{width:max-content;min-width:100%}
 .source-binding-popup .arco-select-option-content{overflow:visible}
+.source-binding-row__remove:disabled{color:#a9aeb8;background:#f2f3f5;cursor:not-allowed}
 </style>

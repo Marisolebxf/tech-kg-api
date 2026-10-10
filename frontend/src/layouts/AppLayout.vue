@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useGraphSpaceStore } from "../stores/graphSpace"
+const spaceContext = useGraphSpaceStore()
+
 import { appBase, graphVisualizationEnabled } from "../config";
 // 账号菜单入口暂时隐藏
 // import { IconHistory } from "@arco-design/web-vue/es/icon";
@@ -675,7 +678,7 @@ onBeforeUnmount(() => {
           <AppBreadcrumb :class="{ 'app-breadcrumb--with-actions': isOverviewPage }">
             <div v-if="isOverviewPage" class="app-breadcrumb__actions">
               <a
-                v-if="isAdminUser"
+                v-if="isOverviewPage && isAdminUser"
                 class="app-docs-link"
                 :href="docsHref"
                 target="_blank"
@@ -693,7 +696,7 @@ onBeforeUnmount(() => {
               <strong>页面渲染异常</strong>
               <span>{{ routeError }}</span>
             </div>
-            <RouterView v-else />
+            <RouterView v-else :key="spaceContext.contextKey" />
           </section>
         </section>
       </main>

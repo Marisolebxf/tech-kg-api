@@ -28,7 +28,7 @@ def database(monkeypatch):
 
 
 def actor(user="alice", business="client-a"):
-    return SimpleNamespace(user_id=user, business_id=business)
+    return SimpleNamespace(user_id=user, context_business_id=business)
 
 
 def test_grant_survives_steps_but_not_scope_changes(database):

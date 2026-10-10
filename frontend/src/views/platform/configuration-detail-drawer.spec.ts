@@ -2,10 +2,17 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { defineComponent } from 'vue'
 import { Textarea } from '@arco-design/web-vue'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import ConfigurationManagementView from './ConfigurationManagementView.vue'
 import ListPagination from '../../components/list-pagination.vue'
+import { useAuthStore } from '../../stores/auth'
+import { useGraphSpaceStore } from '../../stores/graphSpace'
+import { currentUserIsAdmin } from '../../api/currentUser'
+import { bindGraphSpace, listGraphSpaceItems, unbindGraphSpace, type GraphSpaceItem } from '../../api/graphSpace'
+import { listLlmConfigs } from '../../api/llmConfig'
+import { listEmbeddingConfigs } from '../../api/embeddingConfig'
+import type { AuthProfile } from '../../api/auth'
 
 const AInputStub = defineComponent({
   props: ['modelValue'],
@@ -71,7 +78,7 @@ vi.mock('../../api/graphSpace', () => ({
   bindGraphSpace: vi.fn(),
   unbindGraphSpace: vi.fn(),
 }))
-vi.mock('../../api/currentUser', () => ({ currentUserIsAdmin: () => true }))
+vi.mock('../../api/currentUser', () => ({ currentUserIsAdmin: vi.fn(() => true) }))
 vi.mock('@arco-design/web-vue/es/icon', () => ({ IconSearch: { template: '<i />' } }))
 
 function mountView(realTextarea = false) {
@@ -364,5 +371,99 @@ describe('配置说明计数与输入上限', () => {
     } finally {
       wrapper.unmount()
     }
+  })
+})
+
+
+describe('配置页合并兼容：业务归属与旧空间绑定', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    setActivePinia(createPinia())
+    vi.mocked(currentUserIsAdmin).mockReturnValue(true)
+  })
+
+  async function openSpaces(wrapper: ReturnType<typeof mountView>) {
+    await wrapper.findAll('.category-nav button').find(button => button.text().includes('图数据空间'))!.trigger('click')
+    await flushPromises()
+  }
+
+  function enableBusinessRbac(isAdmin: boolean) {
+    vi.mocked(currentUserIsAdmin).mockReturnValue(isAdmin)
+    useAuthStore().profile = {
+      businessRbacEnabled: true, isAdmin, platformRole: isAdmin ? 'admin' : 'developer',
+      businesses: [
+        { clientId: 'business-a', name: '业务 A', role: 'developer' },
+        { clientId: 'business-b', name: '业务 B', role: 'developer' },
+      ],
+    } as AuthProfile
+  }
+
+  it('保留上游暂时隐藏向量模型入口和停止预拉取的行为', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.get('.category-nav').text()).not.toContain('向量模型')
+    expect(listEmbeddingConfigs).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('业务权限启用时管理员通过业务权限管理归属，不触发旧绑定解绑', async () => {
+    enableBusinessRbac(true)
+    const space: GraphSpaceItem = { name: 'dev', bound: false, mine: false, groupKind: 'public' }
+    vi.mocked(listGraphSpaceItems).mockResolvedValueOnce([space])
+    const wrapper = mountView()
+    await flushPromises()
+    await openSpaces(wrapper)
+    expect(wrapper.get('.space-table').text()).toContain('公共图空间')
+    expect(wrapper.get('.space-table').text()).not.toContain('已解绑')
+    expect(wrapper.get('.space-table .row-actions').text()).toBe('管理归属')
+    expect(wrapper.findAll('.category-nav button').find(button => button.text().includes('图数据空间'))!.get('em').text()).toBe('1')
+    // 即便从旧调用入口直接触发，也不能覆盖新版业务归属。
+    await (wrapper.vm as unknown as { toggleSpaceBinding(space: GraphSpaceItem): Promise<void> }).toggleSpaceBinding(space)
+    expect(bindGraphSpace).not.toHaveBeenCalled()
+    expect(unbindGraphSpace).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('开发者公共多业务先选择配置业务；空间可搜索查看而不能创建或绑定', async () => {
+    enableBusinessRbac(false)
+    vi.mocked(listGraphSpaceItems).mockResolvedValueOnce([{ name: 'dev', bound: false, mine: false, groupKind: 'public' }])
+    const wrapper = mountView()
+    await flushPromises()
+    expect(listLlmConfigs).not.toHaveBeenCalled()
+    expect(wrapper.get('.create-entry').attributes('disabled')).toBeDefined()
+    useGraphSpaceStore().setBusiness('business-a')
+    await flushPromises()
+    expect(wrapper.get('.create-entry').attributes('disabled')).toBeUndefined()
+    await openSpaces(wrapper)
+    expect(wrapper.get('.create-entry').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('.space-table .row-actions').text()).toBe('管理员维护')
+    await wrapper.get('.config-search-input').setValue('找不到')
+    await wrapper.get('.config-search-form').trigger('submit')
+    expect(wrapper.get('.space-table').text()).toContain('没有符合条件的图空间')
+    await wrapper.get('.config-search-input').setValue('')
+    expect(wrapper.get('.space-table').text()).toContain('dev')
+    wrapper.unmount()
+    vi.mocked(currentUserIsAdmin).mockReturnValue(true)
+  })
+
+  it('旧模式管理员仍可行级解绑再绑定，成功后刷新全局空间目录', async () => {
+    vi.mocked(listGraphSpaceItems)
+      .mockResolvedValueOnce([{ name: 'legacy', bound: true, mine: true }])
+      .mockResolvedValueOnce([{ name: 'legacy', bound: false, mine: false }])
+      .mockResolvedValueOnce([{ name: 'legacy', bound: true, mine: true }])
+    const refreshSpaces = vi.spyOn(useGraphSpaceStore(), 'ensureLoaded').mockResolvedValue()
+    const wrapper = mountView()
+    await flushPromises()
+    await openSpaces(wrapper)
+    expect(wrapper.get('.space-table .row-actions button').text()).toBe('解绑')
+    await wrapper.get('.space-table .row-actions button').trigger('click')
+    await flushPromises()
+    expect(unbindGraphSpace).toHaveBeenCalledWith('legacy', 'user-e2e')
+    expect(wrapper.get('.space-table .row-actions button').text()).toBe('绑定')
+    await wrapper.get('.space-table .row-actions button').trigger('click')
+    await flushPromises()
+    expect(bindGraphSpace).toHaveBeenCalledWith('legacy', 'user-e2e')
+    expect(refreshSpaces).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
   })
 })

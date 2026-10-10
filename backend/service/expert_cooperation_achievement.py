@@ -12,7 +12,6 @@ from datetime import date, datetime
 from typing import Any
 
 from infra.graph_db import GraphNotFoundError, TRSGraphClient, get_trs_graph_client
-from infra.graph_db.config import TRSGraphSettings
 from service.base_module import KGModuleScaffoldService
 from service.confidence_scoring import (
     achievement_entity_confidence,
@@ -20,6 +19,7 @@ from service.confidence_scoring import (
     edge_confidence,
     expert_entity_confidence,
 )
+from service.graph_space_context import get_current_space
 from service.provenance_recorder import record_node_source
 
 PAPER_EDGE_TYPES = frozenset({"AUTHORED_BY"})
@@ -113,6 +113,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             raise ValueError("sourceExpertId 与 targetExpertId 不能相同")
 
         cache_key = (
+            f"{get_current_space()}|"
             f"{source_expert_id}|{target_expert_id}|"
             f"{tuple(achievement_types or [])}|{time_range_start or ''}|"
             f"{time_range_end or ''}|{limit_per_type}"
@@ -163,7 +164,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
 
         space = (
             getattr(getattr(graph, "_settings", None), "space", None)
-            or TRSGraphSettings.from_env().space
+            or get_current_space()
         )
         source_name = self._display_name(source)
         target_name = self._display_name(target)
@@ -329,7 +330,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
                 labels=tuple(str(item) for item in (getattr(node, "labels", None) or [])),
                 space=(
                     getattr(getattr(graph, "_settings", None), "space", None)
-                    or TRSGraphSettings.from_env().space
+                    or get_current_space()
                 ),
             ),
             **entity_score,

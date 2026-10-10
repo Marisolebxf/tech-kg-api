@@ -36,13 +36,13 @@ from biz.schemas.tech_enterprise_relation_business import (
 )
 from service.business_access import business_graph_app
 from service.entity_confidence import fill_entity_confidence, parse_confidence
+from service.graph_space_context import get_current_space, request_can_write
 from service.industry_node_top_events_business import RISK_EVENT_TYPES
 from service.provenance_recorder import record_node_source
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_BASE = os.getenv("BUSINESS_API_BASE", "http://127.0.0.1:8000")
-SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
 
 # 60s 进程内结果缓存：同参数请求复用，避免高并发打爆 graph-search/trs-graph。
 _RESULT_CACHE_TTL = float(os.getenv("RESULT_CACHE_TTL", "60"))
@@ -307,6 +307,7 @@ class KeyEnterpriseRelationService:
         auth_headers: Mapping[str, str] | None = None,
     ) -> KeyEnterpriseRelationResponse:
         cache_key = (
+            f"{get_current_space()}|{request_can_write.get()}|"
             f"{req.expert_id}|{req.enterprise_name}|{req.role_type}|"
             f"{req.industry}|{req.key_tech_enterprise_only}"
         )
@@ -346,7 +347,7 @@ class KeyEnterpriseRelationService:
                 sg_json = await self._get(
                     client,
                     f"/graph-search/filtered-subgraph/{req.expert_id}",
-                    {"space": SPACE, "edge_types": edge_types, "depth": 2, "limit": 50},
+                    {"space": get_current_space(), "edge_types": edge_types, "depth": 2, "limit": 50},
                 )
             except Exception as exc:  # noqa: BLE001
                 resp.evidence.append(f"subgraph 查询失败: {exc}")
@@ -518,7 +519,7 @@ class KeyEnterpriseRelationService:
         resp.cooperation_fields = sorted({r.tech_field for r in relations if r.tech_field})
         resp.confidence = max((r.confidence for r in relations), default=0.0)
         resp.evidence = [
-            f"从 {SPACE} 空间专家 {req.expert_id} 2 跳子图解析出 {len(relations)} 条专家-企业关系",
+            f"从 {get_current_space()} 空间专家 {req.expert_id} 2 跳子图解析出 {len(relations)} 条专家-企业关系",
             "合作时间来源：项目 research_period / 专利 application_date / 学者 work_experience_date",
             "角色定位来源：EXECUTIVE_OF.position 等边属性 + 边类型映射",
         ]
@@ -538,7 +539,7 @@ class KeyEnterpriseRelationService:
 
         置信度逻辑不变：图上已有值 → 证据规则计算并尽力写回 → 默认 0.80。
         """
-        recorded = record_node_source(properties, labels, space=SPACE)
+        recorded = record_node_source(properties, labels, space=get_current_space())
         confidence = fill_entity_confidence(properties, labels, vid=vid, client=client)
         return EntityProvenance(
             sourceTable=recorded["sourceTable"],
@@ -569,7 +570,7 @@ class KeyEnterpriseRelationService:
                     client,
                     f"/graph-search/filtered-subgraph/{org_id}",
                     {
-                        "space": SPACE,
+                        "space": get_current_space(),
                         "edge_types": "INVOLVED_IN",
                         "depth": 1,
                         "limit": 20,

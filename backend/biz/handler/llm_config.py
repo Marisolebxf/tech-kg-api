@@ -16,6 +16,7 @@ from biz.dependencies.resources import (
     assigned_resource_owner,
     ensure_owner_access,
     resource_owner_filter,
+    validate_owner_update,
 )
 from biz.schemas.common import ApiResponse
 from biz.schemas.llm_config import LlmConfigCreate, LlmConfigUpdate, LlmConfigVerifyRequest
@@ -124,8 +125,9 @@ def update_llm_config(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
-    _owned_config(_application(session), actor, config_id)
+    existing = _owned_config(_application(session), actor, config_id)
     data = payload.model_dump(exclude_unset=True)
+    validate_owner_update(actor, data, current_owner=existing.get("owner", ""))
     if not actor.is_admin:
         data.pop("owner", None)
     updated = _application(session).update_config(

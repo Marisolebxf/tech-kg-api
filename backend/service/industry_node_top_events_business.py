@@ -1,6 +1,6 @@
 """科技产业链点 TOP-N 事件关系业务编排服务。
 
-查图方式：直接调用 infra graph client（dev 空间），不再 HTTP 回调本服务 graph-search 接口。
+查图方式：直接调用 infra graph client（当前已鉴权图空间），不再 HTTP 回调本服务 graph-search 接口。
 原 HTTP 自调用在 500 并发下会与处理请求的 worker 互锁导致全超时；直调 infra 消除互锁根因，
 并配合 asyncio.gather 并行化多企业查询、60s 结果缓存，显著降低单次延迟与高并发负载。
 
@@ -30,14 +30,13 @@ from biz.schemas.industry_node_top_events_business import (
 )
 from biz.schemas.tech_enterprise_relation_business import EntityProvenance
 from infra.graph_db import TRSGraphClient
-from infra.graph_db.config import TRSGraphSettings
 from service.entity_confidence import fill_entity_confidence
+from service.graph_space_context import get_current_space, request_can_write
 from service.provenance_recorder import record_node_source
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_BASE = os.getenv("BUSINESS_API_BASE", "http://127.0.0.1:8000")
-SPACE = os.getenv("TRS_GRAPH_SPACE", "dev")
 
 # 与重点科技企业关系 GOVERNANCE_MODE 对齐：事件企业上一跳 Person 边都算关联专家。
 # 仅查 EXECUTIVE_OF/LEGAL_REP_OF/ACTUAL_CONTROLLER_OF 会漏任职学者和股东/受益人；
@@ -51,10 +50,6 @@ PERSON_ORG_EDGE_ROLES = {
     "AFFILIATED_WITH": "任职",
 }
 
-# 进程内 dev 空间 graph client（缓存，避免每次请求重建连接）
-_dev_client: TRSGraphClient | None = None
-_dev_lock = threading.Lock()
-
 # 60s 结果缓存：读多写少，同 chain_node_id+参数 的请求复用结果，避免高并发打爆 trs-graph
 _RESULT_CACHE_TTL = float(os.getenv("RESULT_CACHE_TTL", "60"))
 _result_cache: dict[str, tuple[float, IndustryNodeTopEventsResponse]] = {}
@@ -62,18 +57,9 @@ _result_cache_lock = threading.Lock()
 
 
 def _get_dev_client() -> TRSGraphClient:
-    """获取 dev 空间的 trs-graph 客户端（进程内单例，懒加载）。"""
-    global _dev_client
-    if _dev_client is not None:
-        return _dev_client
-    with _dev_lock:
-        if _dev_client is None:
-            settings = TRSGraphSettings.from_env()
-            settings.space = SPACE
-            client = TRSGraphClient(settings)
-            client.connect()
-            _dev_client = client
-        return _dev_client
+    """按已鉴权请求空间获取客户端，不缓存跨空间的服务实例。"""
+    from infra.graph_db import get_space_client
+    return get_space_client(get_current_space())
 
 
 def _result_cache_get(key: str) -> IndustryNodeTopEventsResponse | None:
@@ -425,7 +411,7 @@ def _entity_provenance(
 
     置信度逻辑不变：图上已有值 → 证据规则计算并尽力写回 → 默认 0.80。
     """
-    recorded = record_node_source(properties, labels, space=SPACE)
+    recorded = record_node_source(properties, labels, space=get_current_space())
     confidence = fill_entity_confidence(properties, labels, vid=vid, client=client)
     return EntityProvenance(
         sourceTable=recorded["sourceTable"],
@@ -444,7 +430,7 @@ class IndustryNodeTopEventsService:
         self.timeout = timeout
 
     async def run(self, req: IndustryNodeTopEventsRequest) -> IndustryNodeTopEventsResponse:
-        cache_key = f"{req.chain_node_id}|{req.top_n}|{req.event_type}|{req.time_range_start}|{req.time_range_end}|{req.max_orgs}"
+        cache_key = f"{get_current_space()}|{request_can_write.get()}|{req.chain_node_id}|{req.top_n}|{req.event_type}|{req.time_range_start}|{req.time_range_end}|{req.max_orgs}"
         cached = _result_cache_get(cache_key)
         if cached is not None:
             return cached

@@ -19,9 +19,7 @@ class RelationDetailAnnotationService(KGModuleScaffoldService):
         self._graph: TRSGraphClient | None = None
 
     def _client(self) -> TRSGraphClient:
-        if self._graph is None:
-            self._graph = get_trs_graph_client()
-        return self._graph
+        return self._graph if self._graph is not None else get_trs_graph_client()
 
     def annotate(self, payload: dict[str, Any]) -> dict[str, Any]:
         relation_id = payload.get("relationId", "")

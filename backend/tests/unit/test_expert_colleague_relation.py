@@ -598,7 +598,7 @@ def test_persist_relations_reads_space_from_environment(monkeypatch: pytest.Monk
 
 @pytest.mark.asyncio
 async def test_application_uses_environment_space_for_query_and_persistence(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, writable_graph_request,
 ) -> None:
     monkeypatch.setenv("TRS_GRAPH_SPACE", "tenant_graph")
     application = ExpertColleagueRelationApplication()
@@ -616,3 +616,13 @@ async def test_application_uses_environment_space_for_query_and_persistence(
     assert persist.call_args.args[0]["expert"]["id"] == "person_z"
     assert len(persist.call_args.args) == 1
     assert result["persistence"]["space"] == "tenant_graph"
+
+
+@pytest.fixture
+def writable_graph_request():
+    from service.graph_space_context import request_can_write
+    token = request_can_write.set(True)
+    try:
+        yield
+    finally:
+        request_can_write.reset(token)

@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useSpacePermissions } from "../../composables/use-space-permissions"
+const { canWrite } = useSpacePermissions()
+
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { IconSearch } from '@arco-design/web-vue/es/icon'
 import hljs from 'highlight.js/lib/core'
@@ -325,6 +328,7 @@ const backfilling = ref(false)
 const backfillConfirmOpen = ref(false)
 
 async function requestBackfill() {
+  if (!canWrite.value) return
   const target = sourcesTarget.value
   if (!target || backfilling.value) return
   if (target.script?.stale) {
@@ -335,6 +339,7 @@ async function requestBackfill() {
 }
 
 async function runBackfill(force: boolean) {
+  if (!canWrite.value) return
   const target = sourcesTarget.value
   if (!target || backfilling.value) return
   backfilling.value = true
@@ -361,6 +366,7 @@ async function runBackfill(force: boolean) {
 
 // 引导弹窗 → 直达该行「更换脚本」上传入口（更新脚本后由行级「待重跑」提示接力）
 function goUpdateScriptFromPropertyChange() {
+  if (!canWrite.value) return
   const target = propertyTarget.value
   propertyScriptGuideOpen.value = false
   if (!target) return
@@ -369,10 +375,6 @@ function goUpdateScriptFromPropertyChange() {
 }
 
 function openSourcesModal(schema: SchemaDefinition) {
-  if (!schema.canManageProperties) {
-    showToast(schema.isSystem ? '系统 Schema 仅 Schema 管理员可维护来源表' : '只有创建者或管理员可维护来源表', 'warning')
-    return
-  }
   sourcesTarget.value = schema
   sourcesForm.value = (schema.sources || []).map((s) => ({
     datasourceId: s.datasourceId,
@@ -385,6 +387,7 @@ function openSourcesModal(schema: SchemaDefinition) {
 }
 
 async function saveSources(): Promise<boolean> {
+  if (!canWrite.value || !sourcesTarget.value?.canManageProperties) return false
   const target = sourcesTarget.value
   if (!target || sourcesSaving.value) return false
   const payloads = sourcesForm.value
@@ -409,10 +412,6 @@ async function saveSources(): Promise<boolean> {
 }
 
 function openPropertyModal(schema: SchemaDefinition) {
-  if (!schema.canManageProperties) {
-    showToast(schema.isSystem ? '系统 Schema 仅 Schema 管理员可维护属性' : '只有创建者或管理员可维护属性', 'warning')
-    return
-  }
   propertyTarget.value = schema
   propertyForm.value = { name: '', dataType: 'string', length: '64', required: false }
   propertyDeleteTarget.value = null
@@ -438,6 +437,7 @@ async function refreshPropertyTarget() {
 }
 
 async function submitAddProperty() {
+  if (!canWrite.value || !propertyTarget.value?.canManageProperties) return
   const target = propertyTarget.value
   if (!target || propertySaving.value) return
   const name = propertyForm.value.name.trim()
@@ -485,11 +485,13 @@ async function submitAddProperty() {
 }
 
 function requestDeleteProperty(prop: SchemaProperty) {
+  if (!canWrite.value || !propertyTarget.value?.canManageProperties) return
   propertyDeleteTarget.value = prop
   propertyDeleteConfirmOpen.value = true
 }
 
 async function confirmDeleteProperty() {
+  if (!canWrite.value || !propertyTarget.value?.canManageProperties) return
   const target = propertyTarget.value
   const prop = propertyDeleteTarget.value
   if (!target || !prop || propertyDeleting.value) return
@@ -518,6 +520,7 @@ async function confirmDeleteProperty() {
 }
 
 function openDeleteModal(schema: SchemaDefinition) {
+  if (!canWrite.value) return
   if (!schema.canDelete) {
     showToast(schema.isSystem ? '系统内置 Schema 不可删除' : '只有创建者或管理员可删除该 Schema', 'warning')
     return
@@ -549,6 +552,7 @@ const deleteConfirmDisabled = computed(() =>
 )
 
 async function confirmDelete() {
+  if (!canWrite.value) return
   const target = deleteTarget.value
   if (!target || deleting.value) return
   if (target.kind === 'entity' && blockingRelations.value.length > 0) return
@@ -621,6 +625,7 @@ const incompleteProperties = computed(() => createForm.value.properties.some((ro
 const incompleteSources = computed(() => createForm.value.sources.some((row) => !isSourceBindingComplete(row)))
 
 function addProperty() {
+  if (!canWrite.value) return
   if (incompleteProperties.value) {
     propertyAddAttempted.value = true
     return
@@ -630,6 +635,7 @@ function addProperty() {
 }
 
 function addSourceBinding() {
+  if (!canWrite.value) return
   if (incompleteSources.value) {
     sourceAddAttempted.value = true
     return
@@ -639,6 +645,7 @@ function addSourceBinding() {
 }
 
 function removeProperty(index: number) {
+  if (!canWrite.value) return
   if (createForm.value.properties[index]?.locked) return
   createForm.value.properties.splice(index, 1)
 }
@@ -843,6 +850,7 @@ watch(
 )
 
 function openCreate() {
+  if (!canWrite.value) return
   createForm.value = emptyCreateForm()
   propertyAddAttempted.value = false
   sourceAddAttempted.value = false
@@ -874,6 +882,7 @@ function firstFormError(errors: unknown): string | null {
 }
 
 async function saveItem() {
+  if (!canWrite.value) return
   // arco form.validate() 校验失败时 reject（不是 resolve 错误对象）——必须捕获，
   // 否则静默中断（空表单点「预览并创建」无反应的根因）。
   try {
@@ -1004,6 +1013,7 @@ function toastCreateResult(result: SchemaDefinition) {
 }
 
 function openUploadModal(rowId: string, rowName: string) {
+  if (!canWrite.value) return
   uploadTargetId.value = rowId
   uploadTargetName.value = rowName
   uploadState.value = 'idle'
@@ -1015,10 +1025,12 @@ function openUploadModal(rowId: string, rowName: string) {
 }
 
 function pickUploadFile() {
+  if (!canWrite.value) return
   uploadFileInput.value?.click()
 }
 
 async function handleUploadFile(file: File) {
+  if (!canWrite.value) return
   if (!file.name.toLowerCase().endsWith('.py')) {
     uploadFileName.value = file.name
     uploadState.value = 'error'
@@ -1176,7 +1188,7 @@ function descCell(text: string): string {
           <button v-for="tab in tabs" :key="tab" type="button" :class="{ active: activeTab === tab }" @click="switchTab(tab)">{{ tab }}</button>
         </div>
         <form class="schema-toolbar__actions" role="search" @submit.prevent="submitKeyword">
-          <button class="primary" type="button" @click="openCreate">＋ 增加</button>
+          <button class="primary" type="button" :disabled="!canWrite" @click="openCreate">＋ 增加</button>
           <span class="limit-field">
             <a-input v-model="keyword" class="schema-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" :aria-label="`搜索${activeTab}`" :placeholder="`搜索${activeTab}`">
               <template #prefix><IconSearch /></template>
@@ -1188,9 +1200,9 @@ function descCell(text: string): string {
       </nav>
       <div class="schema-shell schema-table-shell">
 
-      <div v-if="activeTab === '标准实体'" ref="tableWrapRef" class="schema-table-wrap" :class="{ 'has-scroll-right': tableHasMoreToScroll }" @scroll.passive="handleScroll"><table class="schema-entity-table"><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>说明</th><th>属性</th><th>脚本状态</th><th>操作</th></tr></thead><tbody><template v-for="row in entities" :key="row.id"><tr><td><b>{{ row.label }}</b></td><td><a-tooltip v-if="row.name.length > 10" :content="row.name" position="top"><code>{{ schemaNameCell(row.name) }}</code></a-tooltip><code v-else>{{ row.name }}</code></td><td class="schema-desc-cell"><a-tooltip v-if="(row.description || '').length > DESC_CELL_LIMIT" :content="row.description" position="top"><span class="schema-desc-text">{{ descCell(row.description || '') }}</span></a-tooltip><template v-else>{{ row.description }}</template></td><td class="schema-props-cell"><SchemaPropertyCell :schema="row.schema" /></td><td class="schema-script-status"><div class="schema-script-status__items"><span v-if="!scriptByRow[row.name]" class="schema-script-status__empty">未上传</span><span v-else-if="!scriptByRow[row.name].stale && !scriptByRow[row.name].needsRun && scriptByRow[row.name].lastRunStatus !== 'failed'" class="schema-script-status__ready">已上传</span><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本（更新后还需重跑）`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name] && !scriptByRow[row.name].stale && scriptByRow[row.name].needsRun" class="script-badge script-badge--rerun" :title="scriptByRow[row.name].lastRunAt ? '脚本更新后尚未重新运行：最新脚本尚未应用到图数据，请到「图谱构建」新建抽取任务或到「来源表」回填历史数据（重跑完成前持续提示）' : '脚本上传后尚未运行过抽取：请到「图谱构建」新建抽取任务，将脚本应用到图数据（或到「来源表」回填历史数据全量重跑）'">{{ scriptByRow[row.name].lastRunAt ? '待重跑' : '未运行' }}</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span></div></td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? (scriptByRow[row.name] ? '更换脚本' : '上传脚本') : '无权维护脚本'" @click="openUploadModal(row.id, row.name)">更换脚本</button><button type="button" class="schema-action-link" :disabled="!scriptByRow[row.name]" :title="scriptByRow[row.name] ? '查看脚本' : '尚未上传脚本'" @click="openViewModal(row.id, row.name)">查看脚本</button><!-- 操作 >3 个：第三个起收进「···」（来源表/属性管理/删除） --><a-dropdown trigger="click" position="bl"><button type="button" class="schema-action-link schema-action-more" :aria-label="`${row.label}更多操作`" title="更多操作">···</button><template #content><a-doption class="schema-action-menu-item" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</a-doption><a-doption class="schema-action-menu-item" :disabled="!row.schema.canManageProperties" @click="openPropertyModal(row.schema)">属性管理</a-doption><a-doption class="schema-action-menu-item schema-action-menu-item--danger" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</a-doption></template></a-dropdown></div></td></tr></template></tbody></table></div>
+      <div v-if="activeTab === '标准实体'" ref="tableWrapRef" class="schema-table-wrap" :class="{ 'has-scroll-right': tableHasMoreToScroll }" @scroll.passive="handleScroll"><table class="schema-entity-table"><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>说明</th><th>属性</th><th>脚本状态</th><th>操作</th></tr></thead><tbody><template v-for="row in entities" :key="row.id"><tr><td><b>{{ row.label }}</b></td><td><a-tooltip v-if="row.name.length > 10" :content="row.name" position="top"><code>{{ schemaNameCell(row.name) }}</code></a-tooltip><code v-else>{{ row.name }}</code></td><td class="schema-desc-cell"><a-tooltip v-if="(row.description || '').length > DESC_CELL_LIMIT" :content="row.description" position="top"><span class="schema-desc-text">{{ descCell(row.description || '') }}</span></a-tooltip><template v-else>{{ row.description }}</template></td><td class="schema-props-cell"><SchemaPropertyCell :schema="row.schema" /></td><td class="schema-script-status"><div class="schema-script-status__items"><span v-if="!scriptByRow[row.name]" class="schema-script-status__empty">未上传</span><span v-else-if="!scriptByRow[row.name].stale && !scriptByRow[row.name].needsRun && scriptByRow[row.name].lastRunStatus !== 'failed'" class="schema-script-status__ready">已上传</span><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本（更新后还需重跑）`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name] && !scriptByRow[row.name].stale && scriptByRow[row.name].needsRun" class="script-badge script-badge--rerun" :title="scriptByRow[row.name].lastRunAt ? '脚本更新后尚未重新运行：最新脚本尚未应用到图数据，请到「图谱构建」新建抽取任务或到「来源表」回填历史数据（重跑完成前持续提示）' : '脚本上传后尚未运行过抽取：请到「图谱构建」新建抽取任务，将脚本应用到图数据（或到「来源表」回填历史数据全量重跑）'">{{ scriptByRow[row.name].lastRunAt ? '待重跑' : '未运行' }}</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span></div></td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :disabled="!canWrite || !row.schema.canManageProperties" :title="row.schema.canManageProperties ? (scriptByRow[row.name] ? '更换脚本' : '上传脚本') : '无权维护脚本'" @click="openUploadModal(row.id, row.name)">更换脚本</button><button type="button" class="schema-action-link" :disabled="!scriptByRow[row.name]" :title="scriptByRow[row.name] ? '查看脚本' : '尚未上传脚本'" @click="openViewModal(row.id, row.name)">查看脚本</button><!-- 操作 >3 个：第三个起收进「···」（来源表/属性管理/删除） --><a-dropdown trigger="click" position="bl"><button type="button" class="schema-action-link schema-action-more" :aria-label="`${row.label}更多操作`" title="更多操作">···</button><template #content><a-doption class="schema-action-menu-item" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</a-doption><a-doption class="schema-action-menu-item" @click="openPropertyModal(row.schema)">属性管理</a-doption><a-doption class="schema-action-menu-item schema-action-menu-item--danger" :disabled="!canWrite || !row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</a-doption></template></a-dropdown></div></td></tr></template></tbody></table></div>
 
-      <div v-else ref="tableWrapRef" class="schema-table-wrap" :class="{ 'has-scroll-right': tableHasMoreToScroll }" @scroll.passive="handleScroll"><table class="schema-relation-table"><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>说明</th><th>属性</th><th>脚本状态</th><th>操作</th></tr></thead><tbody><template v-for="row in relations" :key="row.id"><tr><td><a-tooltip v-if="row.label.length > 10" :content="row.label" position="top"><b>{{ schemaNameCell(row.label) }}</b></a-tooltip><b v-else>{{ row.label }}</b></td><td><a-tooltip v-if="row.name.length > 10" :content="row.name" position="top"><code>{{ schemaNameCell(row.name) }}</code></a-tooltip><code v-else>{{ row.name }}</code></td><td><a-tooltip v-if="row.source.length > 5" :content="row.source" position="top"><span>{{ endpointNameCell(row.source) }}</span></a-tooltip><template v-else>{{ row.source }}</template></td><td><a-tooltip v-if="row.target.length > 5" :content="row.target" position="top"><span>{{ endpointNameCell(row.target) }}</span></a-tooltip><template v-else>{{ row.target }}</template></td><td class="schema-desc-cell"><a-tooltip v-if="(row.basis || '').length > DESC_CELL_LIMIT" :content="row.basis" position="top"><span class="schema-desc-text">{{ descCell(row.basis || '') }}</span></a-tooltip><template v-else>{{ row.basis }}</template></td><td class="schema-props-cell"><SchemaPropertyCell :schema="row.schema" /></td><td class="schema-script-status"><div class="schema-script-status__items"><span v-if="!scriptByRow[row.name]" class="schema-script-status__empty">未上传</span><span v-else-if="!scriptByRow[row.name].stale && !scriptByRow[row.name].needsRun && scriptByRow[row.name].lastRunStatus !== 'failed'" class="schema-script-status__ready">已上传</span><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本（更新后还需重跑）`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name] && !scriptByRow[row.name].stale && scriptByRow[row.name].needsRun" class="script-badge script-badge--rerun" :title="scriptByRow[row.name].lastRunAt ? '脚本更新后尚未重新运行：最新脚本尚未应用到图数据，请到「图谱构建」新建抽取任务或到「来源表」回填历史数据（重跑完成前持续提示）' : '脚本上传后尚未运行过抽取：请到「图谱构建」新建抽取任务，将脚本应用到图数据（或到「来源表」回填历史数据全量重跑）'">{{ scriptByRow[row.name].lastRunAt ? '待重跑' : '未运行' }}</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span></div></td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? (scriptByRow[row.name] ? '更换脚本' : '上传脚本') : '无权维护脚本'" @click="openUploadModal(row.id, row.name)">更换脚本</button><button type="button" class="schema-action-link" :disabled="!scriptByRow[row.name]" :title="scriptByRow[row.name] ? '查看脚本' : '尚未上传脚本'" @click="openViewModal(row.id, row.name)">查看脚本</button><!-- 操作 >3 个：第三个起收进「···」（来源表/属性管理/删除） --><a-dropdown trigger="click" position="bl"><button type="button" class="schema-action-link schema-action-more" :aria-label="`${row.label}更多操作`" title="更多操作">···</button><template #content><a-doption class="schema-action-menu-item" :disabled="!row.schema.canManageProperties" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</a-doption><a-doption class="schema-action-menu-item" :disabled="!row.schema.canManageProperties" @click="openPropertyModal(row.schema)">属性管理</a-doption><a-doption class="schema-action-menu-item schema-action-menu-item--danger" :disabled="!row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</a-doption></template></a-dropdown></div></td></tr></template></tbody></table></div>
+      <div v-else ref="tableWrapRef" class="schema-table-wrap" :class="{ 'has-scroll-right': tableHasMoreToScroll }" @scroll.passive="handleScroll"><table class="schema-relation-table"><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>说明</th><th>属性</th><th>脚本状态</th><th>操作</th></tr></thead><tbody><template v-for="row in relations" :key="row.id"><tr><td><a-tooltip v-if="row.label.length > 10" :content="row.label" position="top"><b>{{ schemaNameCell(row.label) }}</b></a-tooltip><b v-else>{{ row.label }}</b></td><td><a-tooltip v-if="row.name.length > 10" :content="row.name" position="top"><code>{{ schemaNameCell(row.name) }}</code></a-tooltip><code v-else>{{ row.name }}</code></td><td><a-tooltip v-if="row.source.length > 5" :content="row.source" position="top"><span>{{ endpointNameCell(row.source) }}</span></a-tooltip><template v-else>{{ row.source }}</template></td><td><a-tooltip v-if="row.target.length > 5" :content="row.target" position="top"><span>{{ endpointNameCell(row.target) }}</span></a-tooltip><template v-else>{{ row.target }}</template></td><td class="schema-desc-cell"><a-tooltip v-if="(row.basis || '').length > DESC_CELL_LIMIT" :content="row.basis" position="top"><span class="schema-desc-text">{{ descCell(row.basis || '') }}</span></a-tooltip><template v-else>{{ row.basis }}</template></td><td class="schema-props-cell"><SchemaPropertyCell :schema="row.schema" /></td><td class="schema-script-status"><div class="schema-script-status__items"><span v-if="!scriptByRow[row.name]" class="schema-script-status__empty">未上传</span><span v-else-if="!scriptByRow[row.name].stale && !scriptByRow[row.name].needsRun && scriptByRow[row.name].lastRunStatus !== 'failed'" class="schema-script-status__ready">已上传</span><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本（更新后还需重跑）`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name] && !scriptByRow[row.name].stale && scriptByRow[row.name].needsRun" class="script-badge script-badge--rerun" :title="scriptByRow[row.name].lastRunAt ? '脚本更新后尚未重新运行：最新脚本尚未应用到图数据，请到「图谱构建」新建抽取任务或到「来源表」回填历史数据（重跑完成前持续提示）' : '脚本上传后尚未运行过抽取：请到「图谱构建」新建抽取任务，将脚本应用到图数据（或到「来源表」回填历史数据全量重跑）'">{{ scriptByRow[row.name].lastRunAt ? '待重跑' : '未运行' }}</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span></div></td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :disabled="!canWrite || !row.schema.canManageProperties" :title="row.schema.canManageProperties ? (scriptByRow[row.name] ? '更换脚本' : '上传脚本') : '无权维护脚本'" @click="openUploadModal(row.id, row.name)">更换脚本</button><button type="button" class="schema-action-link" :disabled="!scriptByRow[row.name]" :title="scriptByRow[row.name] ? '查看脚本' : '尚未上传脚本'" @click="openViewModal(row.id, row.name)">查看脚本</button><!-- 操作 >3 个：第三个起收进「···」（来源表/属性管理/删除） --><a-dropdown trigger="click" position="bl"><button type="button" class="schema-action-link schema-action-more" :aria-label="`${row.label}更多操作`" title="更多操作">···</button><template #content><a-doption class="schema-action-menu-item" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</a-doption><a-doption class="schema-action-menu-item" @click="openPropertyModal(row.schema)">属性管理</a-doption><a-doption class="schema-action-menu-item schema-action-menu-item--danger" :disabled="!canWrite || !row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</a-doption></template></a-dropdown></div></td></tr></template></tbody></table></div>
 
       <!-- 列表分页（服务端分页，两个页签共用每页条数、各自记住页码）。 -->
       <ListPagination
@@ -1208,7 +1220,7 @@ function descCell(text: string): string {
       </ListPagination>
 
       <!-- 版本记录（已隐藏）
-      <div v-else class="schema-table-wrap schema-version-table"><table><thead><tr><th>版本</th><th>状态</th><th>发布时间</th><th>实体范围</th><th>关系范围</th><th>变更内容</th><th>发布人</th><th>操作</th></tr></thead><tbody><tr v-for="row in schemaVersions" :key="row.version"><td><code>{{ row.version }}</code></td><td><span :class="row.status === '当前版本' ? 'core' : 'support'">{{ row.status }}</span></td><td>{{ row.time }}</td><td>{{ row.entities }}</td><td>{{ row.relations }}</td><td>{{ row.change }}</td><td>{{ row.publisher }}</td><td><div class="schema-version-actions"><button type="button" @click="schemaVersionMessage = `已打开 ${row.version} 的完整变更清单。`">变更详情</button><button v-if="row.status !== '当前版本'" class="danger" type="button" @click="schemaVersionMessage = `已创建回退至 ${row.version} 的申请，通过影响分析与审批后才会执行。`">申请回退</button></div></td></tr></tbody></table></div>
+      <div v-else class="schema-table-wrap schema-version-table"><table><thead><tr><th>版本</th><th>状态</th><th>发布时间</th><th>实体范围</th><th>关系范围</th><th>变更内容</th><th>发布人</th><th>操作</th></tr></thead><tbody><tr v-for="row in schemaVersions" :key="row.version"><td><code>{{ row.version }}</code></td><td><span :class="row.status === '当前版本' ? 'core' : 'support'">{{ row.status }}</span></td><td>{{ row.time }}</td><td>{{ row.entities }}</td><td>{{ row.relations }}</td><td>{{ row.change }}</td><td>{{ row.publisher }}</td><td><div class="schema-version-actions"><button type="button" @click="schemaVersionMessage = `已打开 ${row.version} 的完整变更清单。`">变更详情</button><button v-if="row.status !== '当前版本'" class="danger" type="button" :disabled="!canWrite" @click="schemaVersionMessage = `已创建回退至 ${row.version} 的申请，通过影响分析与审批后才会执行。`">申请回退</button></div></td></tr></tbody></table></div>
       -->
       </div>
     </section>
@@ -1262,7 +1274,7 @@ function descCell(text: string): string {
                 :class="{ 'create-prop-row--has-length': p.dataType === 'fixed_string', 'create-prop-row--locked': p.locked }"
               >
                 <a-form-item class="prop-name-field" :field="`properties.${i}.name`" :rules="[{ required: true, message: '请输入属性名称' }, { validator: validatePropName }]" hide-label>
-                  <input aria-label="属性名" v-model="p.name" :maxlength="PROP_NAME_RULE.max" placeholder="属性名" class="prop-name" :class="{ 'is-at-limit': !p.locked && atLimit(p.name, PROP_NAME_RULE.max) }" :disabled="p.locked" :title="p.locked ? '公共必选属性，不可修改' : undefined" />
+                  <input aria-label="属性名" v-model="p.name" :maxlength="PROP_NAME_RULE.max" placeholder="属性名" class="prop-name" :class="{ 'is-at-limit': !p.locked && atLimit(p.name, PROP_NAME_RULE.max) }" :disabled="!canWrite || p.locked" :title="p.locked ? '公共必选属性，不可修改' : undefined" />
                 </a-form-item>
                 <template v-if="p.locked">
                   <span class="prop-locked-type">string</span>
@@ -1311,7 +1323,7 @@ function descCell(text: string): string {
           <footer>
             <button type="button" @click="modalOpen = false">取消</button>
             <button v-if="confirming" type="button" @click="confirming = false">返回修改</button>
-            <button type="button" class="primary" :disabled="creating" @click="saveItem">{{ creating ? '创建中...' : confirming ? '确认创建' : '预览并创建' }}</button>
+            <button type="button" class="primary" :disabled="!canWrite || creating" @click="saveItem">{{ creating ? '创建中...' : confirming ? '确认创建' : '预览并创建' }}</button>
           </footer>
         </aside>
       </div>
@@ -1359,7 +1371,7 @@ function descCell(text: string): string {
           </div>
           <footer>
             <button type="button" @click="deleteModalOpen = false">取消</button>
-            <button type="button" class="danger" :disabled="deleteConfirmDisabled" @click="confirmDelete">{{ deleting ? '删除中...' : '确认删除' }}</button>
+            <button type="button" class="danger" :disabled="!canWrite || deleteConfirmDisabled" @click="confirmDelete">{{ deleting ? '删除中...' : '确认删除' }}</button>
           </footer>
         </aside>
       </div>
@@ -1387,20 +1399,20 @@ function descCell(text: string): string {
                   <span class="property-table__type">{{ p.dataType }}</span>
                   <span>{{ p.required ? '是' : '否' }}</span>
                   <span :class="p.locked ? 'property-table__category property-table__category--common' : 'property-table__category'">{{ p.locked ? '公共属性' : '自定义属性' }}</span>
-                  <span><button type="button" class="schema-action-link schema-action-link--danger" :disabled="p.locked" :title="p.locked ? '公共属性不可删除' : '删除属性'" @click="!p.locked && requestDeleteProperty(p)">删除</button></span>
+                  <span><button type="button" class="schema-action-link schema-action-link--danger" :disabled="!canWrite || !propertyTarget?.canManageProperties || p.locked" :title="p.locked ? '公共属性不可删除' : '删除属性'" @click="!p.locked && requestDeleteProperty(p)">删除</button></span>
                 </div>
               </div>
             </div>
             <div class="property-section">
               <div class="property-section__head"><strong>新增属性</strong><span>新增后在图库执行 ALTER ADD（可空列）</span></div>
               <div class="property-add-form">
-                <a-input v-model="propertyForm.name" :max-length="PROP_NAME_RULE.max" aria-label="属性名（字母/数字/下划线）" placeholder="属性名（字母/数字/下划线）" class="property-add-form__name" :class="{ 'is-at-limit': atLimit(propertyForm.name, PROP_NAME_RULE.max) }" />
-                <a-select v-model="propertyForm.dataType" class="property-add-form__type" popup-container=".property-modal" :scrollbar="false">
+                <a-input :disabled="!canWrite || !propertyTarget?.canManageProperties" v-model="propertyForm.name" :max-length="PROP_NAME_RULE.max" aria-label="属性名（字母/数字/下划线）" placeholder="属性名（字母/数字/下划线）" class="property-add-form__name" :class="{ 'is-at-limit': atLimit(propertyForm.name, PROP_NAME_RULE.max) }" />
+                <a-select :disabled="!canWrite || !propertyTarget?.canManageProperties" v-model="propertyForm.dataType" class="property-add-form__type" popup-container=".property-modal" :scrollbar="false">
                   <a-option v-for="t in PROPERTY_TYPES" :key="t" :value="t">{{ t }}</a-option>
                 </a-select>
-                <input aria-label="1~1024" v-if="propertyForm.dataType === 'fixed_string'" :value="propertyForm.length" type="text" inputmode="numeric" :maxlength="FIXED_STRING_MAX_INPUT_CHARS" class="property-add-form__len" :class="{ 'property-add-form__len--invalid': propertyLengthInvalid }" :title="propertyLengthError || undefined" placeholder="1~1024" @input="onPropertyLengthInput" />
-                <a-checkbox v-model="propertyForm.required" class="property-add-form__required">必填</a-checkbox>
-                <button type="button" class="primary" :disabled="propertySaving" @click="submitAddProperty">{{ propertySaving ? '新增中...' : '确认新增' }}</button>
+                <input :disabled="!canWrite || !propertyTarget?.canManageProperties" aria-label="1~1024" v-if="propertyForm.dataType === 'fixed_string'" :value="propertyForm.length" type="text" inputmode="numeric" :maxlength="FIXED_STRING_MAX_INPUT_CHARS" class="property-add-form__len" :class="{ 'property-add-form__len--invalid': propertyLengthInvalid }" :title="propertyLengthError || undefined" placeholder="1~1024" @input="onPropertyLengthInput" />
+                <a-checkbox :disabled="!canWrite || !propertyTarget?.canManageProperties" v-model="propertyForm.required" class="property-add-form__required">必填</a-checkbox>
+                <button type="button" class="primary" :disabled="!canWrite || !propertyTarget?.canManageProperties || propertySaving" @click="submitAddProperty">{{ propertySaving ? '新增中...' : '确认新增' }}</button>
               </div>
               <p v-if="propertyForm.dataType === 'fixed_string'" class="prop-length-live" :class="{ 'prop-length-live--invalid': propertyLengthInvalid }">长度：当前 {{ propertyForm.length || '—' }}，可定义 {{ FIXED_STRING_MIN }}~{{ FIXED_STRING_MAX }}</p>
               <p v-if="propertyAddLimitNote" class="limit-field-note">{{ propertyAddLimitNote }}</p>
@@ -1424,7 +1436,7 @@ function descCell(text: string): string {
           </div>
           <footer>
             <button type="button" @click="propertyDeleteConfirmOpen = false">取消</button>
-            <button type="button" class="danger" :disabled="propertyDeleting" @click="confirmDeleteProperty">{{ propertyDeleting ? '删除中...' : '确认删除（不可逆）' }}</button>
+            <button type="button" class="danger" :disabled="!canWrite || propertyDeleting" @click="confirmDeleteProperty">{{ propertyDeleting ? '删除中...' : '确认删除（不可逆）' }}</button>
           </footer>
         </aside>
       </div>
@@ -1437,12 +1449,12 @@ function descCell(text: string): string {
           <header><h2>来源表 · {{ sourcesTarget?.label || sourcesTarget?.name }}</h2><button type="button" @click="sourcesModalOpen = false">×</button></header>
           <div class="schema-modal__body">
             <p class="sources-note">绑定来源表并保存后，到「图谱构建」页新建抽取任务即可让平台按各表独立的时间列水位分批读取行数据交给脚本转换并写入图谱（保存绑定不会自动触发抽取）；每张表可独立并行推进。「回填历史数据」会清空全部来源水位后全量重跑（新属性对历史数据的补齐需脚本先覆盖该属性）。</p>
-            <SourceBindings v-model="sourcesForm" />
+            <SourceBindings v-model="sourcesForm" :readonly="!canWrite || !sourcesTarget?.canManageProperties" />
           </div>
           <footer>
             <button type="button" @click="sourcesModalOpen = false">取消</button>
-            <button type="button" class="primary" :disabled="sourcesSaving" @click="saveSources">{{ sourcesSaving ? '保存中...' : '保存绑定' }}</button>
-            <button type="button" :disabled="sourcesSaving || backfilling" @click="requestBackfill">{{ backfilling ? '回填中...' : '回填历史数据' }}</button>
+            <button type="button" class="primary" :disabled="!canWrite || !sourcesTarget?.canManageProperties || sourcesSaving" @click="saveSources">{{ sourcesSaving ? '保存中...' : '保存绑定' }}</button>
+            <button type="button" :disabled="!canWrite || sourcesSaving || backfilling" @click="requestBackfill">{{ backfilling ? '回填中...' : '回填历史数据' }}</button>
           </footer>
         </aside>
       </div>
@@ -1459,7 +1471,7 @@ function descCell(text: string): string {
           </div>
           <footer>
             <button type="button" @click="backfillConfirmOpen = false">取消</button>
-            <button type="button" class="danger" :disabled="backfilling" @click="runBackfill(true)">{{ backfilling ? '回填中...' : '仍要回填' }}</button>
+            <button type="button" class="danger" :disabled="!canWrite || backfilling" @click="runBackfill(true)">{{ backfilling ? '回填中...' : '仍要回填' }}</button>
           </footer>
         </aside>
       </div>
@@ -2031,4 +2043,5 @@ function descCell(text: string): string {
 .schema-property-popover__item b::after{content:":"}
 .schema-property-popover__item em{flex:1;min-width:0;overflow:hidden;color:#1d2129;font-style:normal;text-overflow:ellipsis}
 .app-workspace .schema-toolbar__actions .schema-search-input.arco-input-wrapper .arco-input{height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;outline:none!important}
+.schema-page .primary:disabled,.schema-modal .primary:disabled{background:#f2f3f5!important;border-color:#e5e6eb!important;color:#a9aeb8!important;cursor:not-allowed}
 </style>

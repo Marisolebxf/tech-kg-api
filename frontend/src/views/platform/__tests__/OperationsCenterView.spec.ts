@@ -27,8 +27,8 @@ vi.mock('@arco-design/web-vue/es/icon', () => ({
 // 全局图空间 store：reactive 包装（Vue 对同一 target 缓存同一代理），
 // 用例经 graphSpaceMock.state 改 current 才能触发组件的切空间重拉 watch
 const graphSpaceMock = vi.hoisted(() => {
-  const raw = { current: 'dev' }
-  return { raw, state: null as { current: string } | null }
+  const raw = { current: 'dev', writable: true, canWrite() { return this.writable }, canReview() { return this.writable } }
+  return { raw, state: null as { current: string; writable: boolean } | null }
 })
 vi.mock('../../../stores/graphSpace', async () => {
   const { reactive } = await import('vue')
@@ -91,6 +91,7 @@ beforeEach(() => {
   routeState.query = {}
   // 图空间复位默认 dev（经 raw 写：组件未挂载，无需触发响应式）
   graphSpaceMock.raw.current = 'dev'
+  graphSpaceMock.raw.writable = true
   mocks.getProductionReviews.mockReset().mockResolvedValue({ items: C_ROWS, total: 4, page: 1, pageSize: 10 })
   mocks.rerunExtractFailures.mockReset().mockResolvedValue({ executions: [], cases: 2 })
   mocks.getProductionReview.mockReset()
@@ -640,6 +641,22 @@ describe('执行日志标签切换', () => {
 })
 
 describe('查看档只读（开发维护 × 共享生产空间）', () => {
+  it('已勾选并打开批量删除确认后失去写权限，按钮置灰且确认不提交', async () => {
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+    await rowCheckboxes(wrapper)[0].setValue(true)
+    await wrapper.get('.rerun-batch-action.is-danger').trigger('click')
+    graphSpaceMock.state!.writable = false
+    await flushPromises()
+    for (const button of wrapper.findAll('.rerun-batch-action')) {
+      expect(button.attributes()).toHaveProperty('disabled')
+    }
+    wrapper.findAllComponents({ name: 'AModal' })[1].vm.$emit('ok')
+    await flushPromises()
+    expect(mocks.batchDeleteProductionReviews).not.toHaveBeenCalled()
+  })
+
   it('canOperate=false 的行不可勾选/重跑/删除，整页出现只读提示条', async () => {
     mocks.getProductionReviews.mockReset().mockResolvedValue({
       items: [
@@ -855,4 +872,17 @@ describe('队列跟随图空间切换', () => {
       expect.objectContaining({ graphSpace: 'dev2', page: 1 }),
     )
   })
+})
+
+it('空间只读即使记录旧快照允许操作，也禁用重跑删除且允许看日志', async () => {
+  graphSpaceMock.raw.writable = false
+  const wrapper = renderReview()
+  await flushPromises()
+  await switchToCategoryC(wrapper)
+  const buttons = wrapper.findAll('tbody tr')[0].findAll('.review-action-btn')
+  expect(buttons.map(button => button.text())).toEqual(['日志', '重跑', '删除'])
+  expect(buttons[0].attributes('disabled')).toBeUndefined()
+  expect(buttons[1].attributes()).toHaveProperty('disabled')
+  expect(buttons[2].attributes()).toHaveProperty('disabled')
+  expect(mocks.rerunExtractFailures).not.toHaveBeenCalled()
 })

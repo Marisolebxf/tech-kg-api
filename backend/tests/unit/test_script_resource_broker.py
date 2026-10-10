@@ -265,7 +265,14 @@ def test_gateway_uses_current_membership_and_persisted_source(monkeypatch):
 
     from dao.schema_management import SchemaManagementDAO
     from db_model.base import Base
-    from db_model.business_access import BusinessClient, BusinessGraphSpace, BusinessMember
+    from db_model.business_access import (
+        BusinessClient,
+        BusinessGraphSpace,
+        BusinessMember,
+        BusinessMembership,
+        BusinessMembershipState,
+        BusinessSpacePolicy,
+    )
     from db_model.mysql_datasource import MysqlDatasource
     from db_model.platform_governance import PlatformUser, PlatformUserRole
     from infra import mysql, workflow_mysql
@@ -282,6 +289,9 @@ def test_gateway_uses_current_membership_and_persisted_source(monkeypatch):
                 BusinessClient,
                 BusinessGraphSpace,
                 BusinessMember,
+                BusinessMembership,
+                BusinessMembershipState,
+                BusinessSpacePolicy,
                 PlatformUser,
                 PlatformUserRole,
                 MysqlDatasource,
@@ -360,6 +370,24 @@ def test_gateway_uses_current_membership_and_persisted_source(monkeypatch):
             )
         with scope() as session:
             session.get(BusinessMember, "alice").role = "user"
+        with pytest.raises(HTTPException):
+            live.call("graph", "labels", [], {})
+        # 即使开发者同时获准操作两个空间，业务 B 的任务仍不能使用业务 A 的数据源。
+        with scope() as session:
+            session.get(BusinessMember, "alice").role = "developer"
+            session.add(BusinessMembershipState(user_id="alice"))
+            session.add_all([
+                BusinessMembership(user_id="alice", client_id="a", role="developer"),
+                BusinessMembership(user_id="alice", client_id="b", role="developer"),
+            ])
+        assert live.call("graph", "labels", [], {}) == ["Person"]
+        with pytest.raises(HTTPException):
+            gateway.ScriptResourceBroker(
+                {**request, "clientId": "b", "schemaId": "schema-b", "graphSpace": "space-b"}, {}
+            )
+        with scope() as session:
+            from sqlalchemy import delete
+            session.execute(delete(BusinessMembership).where(BusinessMembership.user_id == "alice"))
         with pytest.raises(HTTPException):
             live.call("graph", "labels", [], {})
     finally:

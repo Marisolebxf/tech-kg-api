@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { subscribeJobEvents } from './jobEvents'
+vi.mock('./currentGraphSpace', () => ({ currentGraphSpace: () => 'business-space' }))
 
 type Listener = (event: { type: string; data?: string }) => void
 
@@ -45,6 +46,7 @@ describe('subscribeJobEvents', () => {
 
     const source = FakeEventSource.instances.at(-1)!
     expect(source.url).toContain('/v1/workflow-system/jobs/events')
+    expect(source.url).toContain('graphSpace=business-space')
 
     source.emit('jobs-changed', JSON.stringify({ changed: ['job:a'], removed: [] }))
     expect(changes).toEqual([{ changed: ['job:a'], removed: [] }])

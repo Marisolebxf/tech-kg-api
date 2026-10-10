@@ -4,13 +4,14 @@ from fastapi import HTTPException
 
 from biz.dependencies.auth import CurrentActor
 from service.business_access_control import ensure_space_access, rbac_enabled
+from service.graph_space_context import get_current_space
 
 
 def require_default_space_writer(actor: CurrentActor) -> None:
     if rbac_enabled():
         if not actor.can_develop:
             raise HTTPException(403, "仅开发维护或管理员可以修改业务数据")
-        ensure_space_access(actor, None, "write")
+        ensure_space_access(actor, get_current_space(), "write")
     elif not actor.is_admin:
         raise HTTPException(403, "仅全局管理员可以执行该操作")
 

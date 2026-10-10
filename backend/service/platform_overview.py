@@ -8,8 +8,9 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from biz.schemas.platform_overview import (
     AssetChangeRow,
@@ -121,7 +122,11 @@ class ExtractExecutionInfo:
     schema_key: str
     schema_label: str
     completed_at: str  # YYYY-MM-DD HH:MM:SS
-    window_lo: str  # 反查时间窗下界：源表读取起点水位最早值，缺省当日 00:00:00
+    window_lo: str  # 反查时间窗下界：源表读取起点水位最早值，缺省统计日起点
+    # 反查时间窗上界：统计日（北京自然日）终点的图侧时刻，不用执行完成时刻——
+    # 同日后续执行（如 chain 对同一批顶点的 upsert 改写）会把对象的 update_time
+    # 推到本执行完成之后，按完成时刻封顶会把这些对象挡在窗外、退回聚合行
+    window_hi: str = ""
     fallback_rows: list[AssetChangeRow] = field(default_factory=list)
 
 
@@ -166,6 +171,39 @@ def _written_of(output: dict[str, Any]) -> int:
     return sum(max(0, int(source.get("written") or 0)) for source in output.get("sources") or [])
 
 
+# 「昨日新增」日窗口时区：按北京自然日 00:00 翻日（2026-10-10 用户口径），
+# 不再随 api 容器 UTC 时钟到北京 08:00 才翻日。completedAt 记 api 进程本地钟
+# （dev2 容器为 UTC），归属统计日前先按系统时区解读、折算到本时区再比日期；
+# 图反查窗口（window_lo/completed_at 上界比较图侧时间戳）仍用原字符串，不吃 8h 位移。
+_DAY_TZ = ZoneInfo(os.getenv("PLATFORM_OVERVIEW_DAY_TIMEZONE", "Asia/Shanghai"))
+
+
+def _completed_in_day_tz(completed_at: str) -> datetime | None:
+    """完成时刻字符串（api 进程本地钟）→ 日窗口时区时刻；空/坏格式返回 None。"""
+    try:
+        return (
+            datetime.strptime(completed_at[:19], "%Y-%m-%d %H:%M:%S")
+            .astimezone()
+            .astimezone(_DAY_TZ)
+        )
+    except ValueError:
+        return None
+
+
+def _day_boundary_utc(day: str, *, end: bool) -> str:
+    """统计日（日窗口时区自然日）起/终点 → 图侧 UTC 时间串。
+
+    图 update_time 按原始 UTC 字符串存储与比较，日界折算不随 api 进程时区走
+    （否则非 UTC 宿主上窗口会整体平移 8h）。"""
+    moment = datetime.strptime(day, "%Y-%m-%d").replace(
+        hour=23 if end else 0,
+        minute=59 if end else 0,
+        second=59 if end else 0,
+        tzinfo=_DAY_TZ,
+    )
+    return moment.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def parse_execution_records(
     payloads: list[str],
     *,
@@ -187,6 +225,10 @@ def parse_execution_records(
     relation_rows: list[tuple[str, AssetChangeRow]] = []
     entity_execs: list[ExtractExecutionInfo] = []
     relation_execs: list[ExtractExecutionInfo] = []
+    # 反查窗日界（图侧 UTC 串）：上界放宽到统计日终点——同日后续执行对同一批
+    # 对象的改写仍落在窗内，对象不至于反查不到；下界缺水位时兜底用统计日起点
+    day_start_graph = _day_boundary_utc(day, end=False)
+    day_end_graph = _day_boundary_utc(day, end=True)
     for raw in payloads:
         try:
             record = json.loads(raw)
@@ -204,7 +246,8 @@ def parse_execution_records(
             # ABNORMAL = 抽取完成但含行级失败记录：图已写入，昨日新增必须计入
             continue
         completed_at = str(record.get("completedAt") or "")
-        if completed_at[:10] != day:
+        completed_local = _completed_in_day_tz(completed_at)
+        if completed_local is None or completed_local.strftime("%Y-%m-%d") != day:
             continue
         output = record.get("output") or {}
         kind = str(output.get("kind") or "")
@@ -221,7 +264,8 @@ def parse_execution_records(
         )
         display_label = schema_label or ("实体 Schema" if kind == "entity" else "关系 Schema")
         change = f"新增 {schema_key}"
-        completed_time = completed_at[5:19] or "-"
+        # 明细时间列与日窗口同时区：北京时刻展示（完成串是进程本地钟，折算后展示）
+        completed_time = completed_local.strftime("%m-%d %H:%M:%S")
         target_rows = entity_rows if kind == "entity" else relation_rows
         # 一次执行绑定多个来源表时按表拆行（来源列各自取本表名），只出 written>0 的表
         exec_rows: list[AssetChangeRow] = []
@@ -252,8 +296,9 @@ def parse_execution_records(
             schema_key=schema_key,
             schema_label=schema_label or display_label,
             completed_at=completed_at,
-            # 源表水位（读取起点）必然早于写图时刻，作反查窗下界；缺省当日零点
-            window_lo=min(watermarks) if watermarks else f"{completed_at[:10]} 00:00:00",
+            # 源表水位（读取起点）必然早于写图时刻，作反查窗下界；缺省统计日起点
+            window_lo=min(watermarks) if watermarks else day_start_graph,
+            window_hi=day_end_graph,
             fallback_rows=exec_rows,
         )
         if kind == "entity":
@@ -294,8 +339,8 @@ class WorkflowControlDayChangesProvider:
         self._cached: dict[str | None, DayChangesSnapshot] = {}
 
     def _current_day(self) -> str:
-        """统计日 = 容器本地日期的昨天（独立方法便于单测冻结日期）。"""
-        return (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        """统计日 = 日窗口时区（默认北京）自然日的昨天；北京 00:00 翻日。"""
+        return (datetime.now(_DAY_TZ) - timedelta(days=1)).strftime("%Y-%m-%d")
 
     def get_day_changes(self, space: str | None = None) -> DayChangesSnapshot:
         day = self._current_day()
@@ -374,14 +419,9 @@ class WorkflowControlDayChangesProvider:
 
 
 # ---- 昨日新增明细行：按图内对象逐行展示（图反查） ------------------------------
-# 单次执行的对象行/端点 vid 上限：防大时间窗把明细表与查询打爆（抽取 written
-# 通常个位~百级；超限截断，行数语义见抽屉 footer）
-_OBJECT_ROW_CAP = 50
-# 端点名批量 FETCH 的单批 vid 数：合并此前逐 vid 一次 FETCH 的 ~百次串行 HTTP
+# 明细全量展示不截断（2026-10-10 用户口径：有多少条数据就展示多少条），仅保留
+# 端点名批量 FETCH 的分批大小：合并此前逐 vid 一次 FETCH 的 ~百次串行 HTTP
 _FETCH_PROP_BATCH = 50
-# 抽屉最终展示上限（实体/关系各自去重后）：当日多执行合计行数超限时统一截到
-# 同一上限，两个抽屉的「展示前 n 条」保持一致，且按识别时间倒序取最新
-_DISPLAY_ROW_CAP = 50
 # 顶点「对象名」取值候选：公共字段 name 优先，历史 ETL tag 无字面 name 时按
 # 域定制键回退（Person=name_cn、Keyword=keyword、Paper=title_zh…）
 _NAME_PROP_CANDIDATES = (
@@ -405,8 +445,20 @@ def _vertex_display_name(props: dict[str, Any], vid: str) -> str:
 
 
 def _time_short(value: Any, fallback: str) -> str:
-    """识别时间带月日（MM-DD HH:MM:SS）：昨日窗口跨天后只剩时分秒有歧义。"""
-    return str(value or "")[5:19] or fallback
+    """识别时间带月日（MM-DD HH:MM:SS）：昨日窗口跨天后只剩时分秒有歧义。
+    图侧时间戳按 api 进程钟（UTC）写入，展示前折算到日窗口时区（北京），
+    与明细完成时刻同口径；解析失败退原串切片。"""
+    raw = str(value or "")
+    local = _completed_in_day_tz(raw)
+    if local is not None:
+        return local.strftime("%m-%d %H:%M:%S")
+    return raw[5:19] or fallback
+
+
+def _utc_slice_local(utc_str: str) -> str:
+    """UTC 完成串 → 日窗口时区的展示串；解析失败退原切片。"""
+    local = _completed_in_day_tz(utc_str)
+    return local.strftime("%m-%d %H:%M:%S") if local else utc_str[5:19]
 
 
 def _flatten_vertex_props(vertex: Any) -> dict[str, Any]:
@@ -484,7 +536,7 @@ def _entity_object_rows(
         return None, []
     statement = (
         f'LOOKUP ON `{tag}` WHERE `{tag}`.`{time_prop}` >= "{execution.window_lo}" '
-        f'AND `{tag}`.`{time_prop}` <= "{execution.completed_at}" '
+        f'AND `{tag}`.`{time_prop}` <= "{execution.window_hi or execution.completed_at}" '
         "YIELD id(vertex) AS vid, properties(vertex) AS props"
     )
     try:
@@ -500,7 +552,7 @@ def _entity_object_rows(
     fallback_source = execution.fallback_rows[0].source if execution.fallback_rows else "-"
     rows: list[AssetChangeRow] = []
     vids: list[str] = []
-    for record in records[:_OBJECT_ROW_CAP]:
+    for record in records:
         props = record.get("props") or {}
         vid = _safe_vid(record.get("vid"))
         rows.append(
@@ -509,12 +561,12 @@ def _entity_object_rows(
                 object=_vertex_display_name(props, vid),
                 change=f"新增 {type_label}",
                 source=str(props.get("source_table") or fallback_source),
-                time=_time_short(props.get(time_prop), execution.completed_at[5:19]),
+                time=_time_short(props.get(time_prop), _utc_slice_local(execution.completed_at)),
             )
         )
         vids.append(vid)
-    if not rows:
-        return None, []
+    # 查询成功即如实全量出行（含 0 命中：对象被统计日后的执行改写出窗/已删，
+    # 不再造「Schema · N 条」聚合行）；结构性失败在上面已提前返回 None
     return rows, vids
 
 
@@ -524,11 +576,16 @@ def _relation_edges(
     edge_type: str,
     time_prop: str | None,
     seed_vids: list[str],
-) -> list[tuple[str, str, dict[str, Any]]]:
+) -> tuple[list[tuple[str, str, dict[str, Any]]], bool]:
     """当日关系边收集：①边属性时间窗 LOOKUP（需边索引）②退而求其次从当日
-    实体 vid 出发 GO BIDIRECT（边端点通常就是当日写入的实体）再按时间过滤。"""
+    实体 vid 出发 GO BIDIRECT（边端点通常就是当日写入的实体）再按时间过滤。
+
+    返回 (边清单, 是否完成枚举)：任一收集通道成功执行（哪怕 0 命中）即视为
+    枚举完成；只有结构性失败（无索引且 GO 也执行不了）才让调用方退聚合行。"""
     edges: list[tuple[str, str, dict[str, Any]]] = []
     seen: set[tuple[str, str]] = set()
+    enumerated = False
+    window_hi = execution.window_hi or execution.completed_at
 
     def _collect(records: Any, *, window_filter: bool) -> None:
         for record in records:
@@ -541,7 +598,7 @@ def _relation_edges(
                 continue
             if window_filter and time_prop:
                 stamp = str(props.get(time_prop) or "")
-                if not (execution.window_lo <= stamp <= execution.completed_at):
+                if not (execution.window_lo <= stamp <= window_hi):
                     continue
             seen.add(key)
             edges.append((src, dst, props))
@@ -552,7 +609,7 @@ def _relation_edges(
         if not (space and is_known_no_index(space, "lookup", f"{edge_type}.{time_prop}")):
             statement = (
                 f'LOOKUP ON `{edge_type}` WHERE `{edge_type}`.`{time_prop}` >= "{execution.window_lo}" '
-                f'AND `{edge_type}`.`{time_prop}` <= "{execution.completed_at}" '
+                f'AND `{edge_type}`.`{time_prop}` <= "{window_hi}" '
                 "YIELD src(edge) AS src, dst(edge) AS dst, properties(edge) AS eprops"
             )
             try:
@@ -560,12 +617,15 @@ def _relation_edges(
                     client.execute_query(statement, timeout=_SWEEP_QUERY_TIMEOUT_SECONDS).records,
                     window_filter=False,
                 )
+                enumerated = True
             except Exception as exc:
                 if space and is_no_index_error(exc):
                     mark_no_index(space, "lookup", f"{edge_type}.{time_prop}")
                 # 边类型无索引（400）→ 走 GO FROM 兜底
-    if not edges and seed_vids:
-        vid_list = ", ".join(f'"{vid}"' for vid in seed_vids[:_OBJECT_ROW_CAP])
+    if not edges and seed_vids and time_prop:
+        # GO 兜底仅在边类型有时间属性可滤时使用：没有时间滤的 BIDIRECT 会把
+        # 端点的全部历史边都算进「昨日新增」，宁可退聚合行也不出脏行
+        vid_list = ", ".join(f'"{vid}"' for vid in seed_vids)
         statement = (
             f"GO FROM {vid_list} OVER `{edge_type}` BIDIRECT "
             "YIELD src(edge) AS src, dst(edge) AS dst, properties(edge) AS eprops"
@@ -575,9 +635,10 @@ def _relation_edges(
                 client.execute_query(statement, timeout=_SWEEP_QUERY_TIMEOUT_SECONDS).records,
                 window_filter=True,
             )
+            enumerated = True
         except Exception:
             pass
-    return edges
+    return edges, enumerated
 
 
 def _endpoint_names(client: Any, vids: list[str]) -> dict[str, str]:
@@ -615,11 +676,13 @@ def _relation_object_rows(
     """按边类型反查当日关系边，具体对象 = 起点实体名 → 终点实体名。"""
     edge_type = _safe_identifier(schema_name)
     time_prop = _graph_time_prop(client, "relation", edge_type, time_props)
-    edges = _relation_edges(client, execution, edge_type, time_prop, seed_vids)
+    edges, enumerated = _relation_edges(client, execution, edge_type, time_prop, seed_vids)
     if not edges:
-        return None
+        # 枚举完成但 0 命中：如实不出行（对象已被统计日后的执行改写出窗/删除），
+        # 只有结构性失败（无法枚举）才退回聚合降级行
+        return [] if enumerated else None
     endpoint_vids: list[str] = []
-    for src, dst, _ in edges[:_OBJECT_ROW_CAP]:
+    for src, dst, _ in edges:
         for vid in (src, dst):
             if vid not in endpoint_vids:
                 endpoint_vids.append(vid)
@@ -628,9 +691,9 @@ def _relation_object_rows(
     # 查不到目录名时退原边类型名
     type_label = schema_labels.get(edge_type) or edge_type
     fallback_source = execution.fallback_rows[0].source if execution.fallback_rows else "-"
-    fallback_time = execution.completed_at[5:19]
+    fallback_time = _utc_slice_local(execution.completed_at)
     rows: list[AssetChangeRow] = []
-    for src, dst, edge_props in edges[:_OBJECT_ROW_CAP]:
+    for src, dst, edge_props in edges:
         rows.append(
             AssetChangeRow(
                 type=type_label,
@@ -790,10 +853,10 @@ def enrich_day_rows_with_graph(
             except Exception:  # noqa: BLE001
                 logger.exception("关闭昨日新增反查图客户端失败")
     # 同一对象常被当日多次执行触碰（重跑/补写），明细按 (类型, 对象) 去重；
-    # 执行按完成时间降序遍历，先到的行即最新一次写入的口径。随后按识别时间
-    # 倒序并截到统一展示上限——实体/关系两抽屉的「展示前 n」一致且为最新行
-    entity_rows = _cap_display_rows(_dedupe_rows(entity_rows))
-    relation_rows = _cap_display_rows(_dedupe_rows(relation_rows))
+    # 执行按完成时间降序遍历，先到的行即最新一次写入的口径。随后统一按识别
+    # 时间倒序全量展示（不截断：有多少条数据就展示多少条）
+    entity_rows = _sort_rows_newest_first(_dedupe_rows(entity_rows))
+    relation_rows = _sort_rows_newest_first(_dedupe_rows(relation_rows))
     return replace(snapshot, entity_rows=entity_rows, relation_rows=relation_rows)
 
 
@@ -810,12 +873,9 @@ def _dedupe_rows(rows: list[AssetChangeRow]) -> list[AssetChangeRow]:
     return unique
 
 
-def _cap_display_rows(
-    rows: list[AssetChangeRow], cap: int = _DISPLAY_ROW_CAP
-) -> list[AssetChangeRow]:
-    """明细统一按识别时间倒序，超上限截到 cap 行（同秒稳定保序）。"""
-    ordered = sorted(rows, key=lambda row: row.time, reverse=True)
-    return ordered[:cap]
+def _sort_rows_newest_first(rows: list[AssetChangeRow]) -> list[AssetChangeRow]:
+    """明细统一按识别时间倒序（最新在上，同秒稳定保序）；全量展示不截断。"""
+    return sorted(rows, key=lambda row: row.time, reverse=True)
 
 
 def _ratios(values: list[int]) -> list[int]:

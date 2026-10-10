@@ -892,7 +892,7 @@ async function saveItem() {
   }
   const f = createForm.value
   if (!f.name.trim()) {
-    showToast(isRelationTab() ? '请填写关系英文名（UPPER_SNAKE_CASE）' : '请填写实体名（PascalCase）', 'warning')
+    showToast(isRelationTab() ? '请填写关系英文名（大写字母加下划线）' : '请填写实体名（首字母大写英文）', 'warning')
     return
   }
   if (!f.label.trim()) {

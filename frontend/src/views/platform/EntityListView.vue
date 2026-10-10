@@ -7,10 +7,8 @@ import {
   browseEntities,
   entitySearchErrorMessage,
   exportEntitiesCsv,
-  getEntityIndexStatus,
   getEntitySearchTypes,
   searchEntities,
-  type EntityIndexStatus,
   type EntityListResult,
   type EntityTypeCount,
 } from '../../api/entitySearch'
@@ -47,7 +45,6 @@ const pageSize = ref(10)
 const page = ref(1)
 
 const types = ref<EntityTypeCount[]>([])
-const status = ref<EntityIndexStatus | null>(null)
 const result = ref<EntityListResult | null>(null)
 const loading = ref(false)
 const searchError = ref('')
@@ -69,14 +66,15 @@ const totalPages = computed(() => {
   return Math.max(Math.ceil(paginationTotal.value / pageSize.value), 1)
 })
 
-async function loadIndexInfo() {
+async function loadEntityTypes() {
+  const selectedSpace = space.value
   try {
-    const [typeItems, statusData] = await Promise.all([
-      getEntitySearchTypes(space.value || null),
-      getEntityIndexStatus(space.value || null),
-    ])
+    const typeItems = await getEntitySearchTypes(selectedSpace || null)
+    if (selectedSpace !== space.value) return
     types.value = typeItems
-    status.value = statusData
+    if (entityType.value && !typeItems.some(type => type.name === entityType.value)) {
+      entityType.value = ''
+    }
   } catch (error) {
     showToast(entitySearchErrorMessage(error), 'error')
   }
@@ -97,6 +95,7 @@ async function doSearch() {
     let nextResult: EntityListResult
     if (trimmed) {
       nextResult = await searchEntities({
+        previewOnly: true,
         keyword: trimmed,
         space: space.value || null,
         entityType: entityType.value || null,
@@ -106,6 +105,7 @@ async function doSearch() {
     } else {
       // 空关键词：浏览模式——图空间直查分页，导航最多覆盖 1000 个实体。
       nextResult = await browseEntities({
+        previewOnly: true,
         space: space.value || null,
         entityType: entityType.value || null,
         limit: pageSize.value,
@@ -183,7 +183,7 @@ function propertyOverflow(item: EntityListResult['items'][number]): number {
 }
 
 onMounted(() => {
-  void loadIndexInfo().then(() => doSearch())
+  void loadEntityTypes().then(() => doSearch())
 })
 
 // 全局图空间切换：重置分页与关键词后按新空间重查
@@ -191,9 +191,16 @@ watch(
   () => graphSpaceStore.current,
   () => {
     exportController?.abort()
+    ++searchVersion
+    result.value = null
+    loading.value = true
     page.value = 1
+    keyword.value = ''
     appliedKeyword.value = ''
-    void loadIndexInfo().then(() => doSearch())
+    const selectedSpace = space.value
+    void loadEntityTypes().then(() => {
+      if (selectedSpace === space.value) void doSearch()
+    })
   },
 )
 </script>
@@ -227,7 +234,7 @@ watch(
             v-model="keyword"
             class="entity-search-input"
             :max-length="SEARCH_KEYWORD_MAX_LENGTH"
-            aria-label="输入实体名称 / 属性关键词（语义 + 关键词混合检索）；留空则分页预览实体"
+            aria-label="在当前最多 1000 个实体中查询名称、ID或属性关键词；留空则分页预览实体"
             placeholder="输入实体名称 / 属性关键词"
             @keyup.enter="resetPagingAndSearch"
           >
@@ -238,13 +245,7 @@ watch(
           </button>
         </div>
       </div>
-      <p class="entity-preview-hint">列表最多展示 {{ ENTITY_PREVIEW_LIMIT }} 个实体，完整数据可通过导出 CSV 获取。</p>
-      <p v-if="status?.milvusReachable === false" class="entity-hint">
-        Milvus 当前不可用，已降级为 VID/已建图属性索引的精确查询。
-      </p>
-      <p v-else-if="status && !status.bm25Ready && status.indexed" class="entity-hint">
-        BM25 关键词条目缺失（仅语义检索可用），可通过图谱构建任务的实体索引重建恢复混合检索能力。
-      </p>
+      <p class="entity-preview-hint">列表和搜索仅覆盖最多 {{ ENTITY_PREVIEW_LIMIT }} 个实体，不足时按实际数量；完整数据可通过导出 CSV 获取。</p>
     </section>
 
     <section class="entity-shell entity-result-shell" aria-label="实体列表">
@@ -259,7 +260,7 @@ watch(
           <template v-else>当前图空间暂无实体</template>
         </template>
         <template v-else>
-          未找到匹配「{{ appliedKeyword }}」的实体{{ entityType ? `（类型 ${entityType}）` : '' }}
+          当前展示范围内未找到匹配「{{ appliedKeyword }}」的实体{{ entityType ? `（类型 ${entityType}）` : '' }}
         </template>
       </div>
       <template v-else>
@@ -271,7 +272,6 @@ watch(
                 <th>ID</th>
                 <th>实体类型</th>
                 <th>公共属性</th>
-                <th>{{ isBrowseMode ? '' : '相关度' }}</th>
               </tr>
             </thead>
             <tbody>
@@ -324,7 +324,6 @@ watch(
                       <span v-if="!propertyEntries(item).length" class="entity-props__empty">—</span>
                     </div>
                   </td>
-                  <td>{{ item.score ?? '' }}</td>
                 </tr>
               </template>
             </tbody>
@@ -363,7 +362,6 @@ watch(
 .entity-preview-hint{margin:8px 0 0;color:#86909c;font-size:12px;line-height:20px}
 .entity-toolbar button{flex-shrink:0;white-space:nowrap}
 .entity-toolbar__right{min-width:0;flex:1 1 320px;justify-content:flex-end}
-.entity-hint{margin:0;padding:8px 16px;border-top:1px dashed #ffe4ba;background:#fff7e8;color:#b54708;font-size:12px;line-height:20px}
 .entity-empty{flex:1;display:grid;place-items:center;padding:40px 16px;color:#86909c;font-size:13px;line-height:22px;text-align:center}
 .entity-table-wrap{flex:1;min-height:0;overflow:auto;scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:transparent transparent}
 .entity-table-wrap:hover,.entity-table-wrap.entity-scroll--active{scrollbar-color:rgba(78,89,105,.55) transparent}

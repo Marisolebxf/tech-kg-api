@@ -275,6 +275,43 @@ def test_compose_entity_text_keeps_long_value_tail_and_late_property() -> None:
     assert "last_field 国内机构要素库" in text
 
 
+def test_preview_search_selects_scope_before_filtering_and_paging() -> None:
+    items = [
+        {
+            "vid": f"entity_{i:04}",
+            "entityId": f"ID-{i}",
+            "name": f"专家{i}",
+            "properties": {"org": "ABC研究所"},
+        }
+        for i in range(1005)
+    ]
+    snapshot = {"items": items, "total": 527336, "entityType": "Expert"}
+    preview = EntitySearchService.preview_page(snapshot, limit=20, offset=980)
+    assert preview["total"] == 1000
+    assert preview["items"] == items[980:1000]
+    assert EntitySearchService.preview_page(snapshot, keyword="专家999")["items"] == [items[999]]
+    assert EntitySearchService.preview_page(snapshot, keyword="entity_1000")["total"] == 0
+    assert EntitySearchService.preview_page(snapshot, keyword="专家1000")["items"] == []
+    assert EntitySearchService.preview_page(snapshot, keyword="ID-1000")["items"] == []
+    matches = EntitySearchService.preview_page(snapshot, keyword="abc研究所", limit=20, offset=20)
+    assert matches["total"] == 1000
+    assert matches["returned"] == 20
+    assert matches["items"] == items[20:40]
+    assert matches["mode"] == "keyword"
+    assert EntitySearchService.preview_page(snapshot, keyword="  ")["mode"] == "browse"
+
+
+def test_preview_search_uses_actual_small_or_empty_scope() -> None:
+    item = {"vid": "e1", "entityId": "E1", "name": "张三", "properties": {"年龄": "0"}}
+    snapshot = {"items": [item], "total": 2000, "entityType": "Expert"}
+    assert EntitySearchService.preview_page(snapshot)["total"] == 1
+    assert EntitySearchService.preview_page(snapshot, keyword="张三")["total"] == 1
+    assert EntitySearchService.preview_page(snapshot, keyword="0")["items"] == [item]
+    assert EntitySearchService.preview_page(snapshot, keyword="李四")["total"] == 0
+    assert EntitySearchService.preview_page(snapshot, offset=10)["items"] == []
+    assert EntitySearchService.preview_page({"items": []})["total"] == 0
+
+
 def test_export_csv_full_data_and_properties(state_session, monkeypatch, tmp_path) -> None:
     long_text = '中文,"引号"\n' + "长属性" * 1000
     experts = [FakeNode(f"expert_{i}", {"name": f"专家{i}"}) for i in range(1003)]

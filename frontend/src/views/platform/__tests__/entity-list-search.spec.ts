@@ -10,7 +10,6 @@ vi.mock('../../../api/entitySearch', () => ({
   browseEntities: vi.fn(), searchEntities: vi.fn(),
   exportEntitiesCsv: vi.fn(),
   entitySearchErrorMessage: (error: Error) => error.message,
-  getEntityIndexStatus: async () => null,
   getEntitySearchTypes: vi.fn(),
 }))
 vi.mock('../../../api/currentGraphSpace', () => ({ currentGraphSpace: () => 'dev2' }))
@@ -50,8 +49,8 @@ describe('实体搜索结果', () => {
     wrapper.unmount()
   })
 
-  it('精确结果按服务端总数分页', async () => {
-    vi.mocked(searchEntities).mockResolvedValue({ items: [row], total: 21, offset: 0, limit: 10, entityType: null, mode: 'graph-exact' })
+  it('搜索要求预览范围内匹配，并按实际匹配数分页', async () => {
+    vi.mocked(searchEntities).mockResolvedValue({ items: [row], total: 21, offset: 0, limit: 10, entityType: null, mode: 'keyword' })
     const wrapper = await setup()
     await wrapper.findAll('button').find(button => button.text() === '查询')!.trigger('click')
     await flushPromises()
@@ -60,7 +59,8 @@ describe('实体搜索结果', () => {
     expect(wrapper.findComponent(ListPagination).props()).toMatchObject({ showJumper: false, sizeAtEnd: true, total: 21 })
     wrapper.findComponent(ListPagination).vm.$emit('change', 2)
     await flushPromises()
-    expect(searchEntities).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 10, space: 'dev2', keyword: '目标实体' }))
+    expect(searchEntities).toHaveBeenLastCalledWith(expect.objectContaining({ previewOnly: true, offset: 10, space: 'dev2', keyword: '目标实体' }))
+    expect(wrapper.get('thead').text()).not.toContain('相关度')
     wrapper.unmount()
   })
 
@@ -71,13 +71,13 @@ describe('实体搜索结果', () => {
     await wrapper.findAll('button').find(button => button.text() === '查询')!.trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('共 1000 个实体')
-    expect(wrapper.text()).toContain('列表最多展示 1000 个实体')
+    expect(wrapper.text()).toContain('列表和搜索仅覆盖最多 1000 个实体')
     expect(wrapper.text()).not.toContain('第 1 / 52734 页')
     expect(wrapper.findComponent(ListPagination).props()).toMatchObject({ total: 1000, pageSize: 10, showJumper: false, sizeAtEnd: true })
     expect(wrapper.findComponent(ListPagination).exists()).toBe(true)
     wrapper.findComponent(ListPagination).vm.$emit('change', 100)
     await flushPromises()
-    expect(browseEntities).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 990, limit: 10 }))
+    expect(browseEntities).toHaveBeenLastCalledWith(expect.objectContaining({ previewOnly: true, offset: 990, limit: 10 }))
     const calls = vi.mocked(browseEntities).mock.calls.length
     wrapper.findComponent(ListPagination).vm.$emit('change', 101)
     await flushPromises()
@@ -88,14 +88,20 @@ describe('实体搜索结果', () => {
     wrapper.unmount()
   })
 
-  it('不足展示上限时保留实际总数，搜索结果也遵守 1000 条上限', async () => {
+  it('不足 1000 时保留实际数量，搜索无匹配时不恢复全图搜索，清空后恢复预览', async () => {
     const wrapper = await setup()
     expect(wrapper.text()).toContain('共 1 个实体')
-    vi.mocked(searchEntities).mockResolvedValue({ items: [row], total: 3000, offset: 0, limit: 10, entityType: null, mode: 'graph-exact' })
+    vi.mocked(searchEntities).mockResolvedValue({ items: [], total: 0, offset: 0, limit: 10, entityType: null, mode: 'keyword' })
     await wrapper.findAll('button').find(button => button.text() === '查询')!.trigger('click')
     await flushPromises()
-    expect(wrapper.text()).toContain('共 1000 条')
-    expect(wrapper.findComponent(ListPagination).props('total')).toBe(1000)
+    expect(wrapper.text()).toContain('当前展示范围内未找到匹配')
+    expect(wrapper.find('table').exists()).toBe(false)
+    expect(searchEntities).toHaveBeenLastCalledWith(expect.objectContaining({ previewOnly: true }))
+    await wrapper.get('input').setValue('')
+    await wrapper.findAll('button').find(button => button.text() === '查询')!.trigger('click')
+    await flushPromises()
+    expect(browseEntities).toHaveBeenLastCalledWith(expect.objectContaining({ previewOnly: true, offset: 0 }))
+    expect(wrapper.text()).toContain('共 1 个实体')
     wrapper.unmount()
   })
 

@@ -101,10 +101,12 @@ export async function browseEntities(payload: {
   entityType?: string | null
   limit?: number
   offset?: number
+  previewOnly?: boolean
 }): Promise<EntityListResult> {
+  const { previewOnly, ...params } = payload
   return unwrap(
     await asApiPromise<EntityListResult>(
-      http.get(`${PREFIX}/entities`, { params: payload }),
+      http.get(`${PREFIX}/${previewOnly ? 'preview' : 'entities'}`, { params }),
     ),
   )
 }
@@ -133,9 +135,15 @@ export async function searchEntities(payload: {
   entityType?: string | null
   limit?: number
   offset?: number
+  previewOnly?: boolean
 }): Promise<EntityListResult> {
+  const { previewOnly, ...params } = payload
   return unwrap(
-    await asApiPromise<EntityListResult>(http.post(`${PREFIX}/search`, payload)),
+    await asApiPromise<EntityListResult>(
+      previewOnly
+        ? http.get(`${PREFIX}/preview`, { params })
+        : http.post(`${PREFIX}/search`, params),
+    ),
   )
 }
 

@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "kg_entity"
 DEFAULT_PAGE_SIZE = 10
+ENTITY_PREVIEW_LIMIT = 1000
 GRAPH_PAGE_SIZE = 200
 # m3e embedding 服务侧限制：单条 ≤16000 字符、单批 ≤ M3E_MAX_BATCH_SIZE（当前 64）。
 # 任一超限服务直接 422 拒绝整批，全量重建在 pass 2 首批即中断（2026-09-21 实测）。
@@ -590,6 +591,40 @@ class EntitySearchService:
 
     def __init__(self, session: Session) -> None:
         self._session = session
+
+    @staticmethod
+    def preview_page(
+        snapshot: dict[str, Any], *, keyword: str = "", limit: int = 10, offset: int = 0
+    ) -> dict[str, Any]:
+        """先固定浏览数据集，再筛选和分页；绝不按关键词从全图补充实体。"""
+        keyword = keyword.strip()
+        needle = keyword.casefold()
+        candidates = snapshot.get("items", [])[:ENTITY_PREVIEW_LIMIT]
+        if needle:
+            candidates = [
+                item
+                for item in candidates
+                if any(
+                    needle in str(value if value is not None else "").casefold()
+                    for value in (
+                        item.get("name"),
+                        item.get("entityId"),
+                        item.get("vid"),
+                        *(item.get("properties") or {}).values(),
+                    )
+                )
+            ]
+        items = candidates[offset : offset + limit]
+        return {
+            "items": items,
+            "offset": offset,
+            "limit": limit,
+            "returned": len(items),
+            "total": len(candidates),
+            "keyword": keyword,
+            "entityType": snapshot.get("entityType"),
+            "mode": "keyword" if keyword else "browse",
+        }
 
     def export_csv(self, *, space: str | None = None, entity_type: str | None = None) -> str:
         """分批写入完整 CSV，不使用展示截断、索引计数快照或搜索命中集。

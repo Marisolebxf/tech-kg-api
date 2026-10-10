@@ -22,6 +22,7 @@ from infra.entity_response_cache import build_cache_key
 from infra.graph_db.config import TRSGraphSettings
 from infra.workflow_mysql import get_workflow_session
 from service.entity_search import (
+    ENTITY_PREVIEW_LIMIT,
     EntitySearchError,
     EntitySearchReindexInProgressError,
     clear_entity_caches,
@@ -177,6 +178,37 @@ def _ensure_space_access(actor: CurrentActor, space: str | None) -> None:
     from biz.handler.graph_search import _ensure_space_access as graph_space_access
 
     graph_space_access(actor, space)
+
+
+@router.get("/preview", response_model=ApiResponse)
+async def preview_entities(
+    actor: CurrentActor,
+    session: Annotated[Session, Depends(get_workflow_session)],
+    space: str | None = Query(None, max_length=64, description="图空间"),
+    entityType: str | None = Query(None, max_length=64, description="实体类型过滤"),
+    keyword: str = Query("", max_length=256, description="仅在列表预览范围内匹配名称、ID、属性"),
+    limit: int = Query(10, ge=1, le=100),
+    offset: int = Query(0, ge=0, le=ENTITY_PREVIEW_LIMIT),
+) -> ApiResponse:
+    """浏览/搜索共用同一份最多 1000 个实体的缓存，筛选后再按匹配数分页。"""
+    space = resolve_selected_space(space)
+    _ensure_space_access(actor, space)
+    try:
+        payload, _ = await _load_browse_payload(
+            session,
+            space=space,
+            entity_type=entityType,
+            limit=ENTITY_PREVIEW_LIMIT,
+            offset=0,
+        )
+        snapshot = json.loads(payload)["data"]
+        data = _application(session).preview_page(
+            snapshot, keyword=keyword, limit=limit, offset=offset
+        )
+        data["graphSpace"] = _resolved_space(space)
+        return ApiResponse(data=data)
+    except EntitySearchError as exc:
+        _raise_domain_error(exc)
 
 
 @router.get("/entities", response_model=ApiResponse)

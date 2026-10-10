@@ -2,8 +2,9 @@
 // 平台统一的列表分页条：共 N 条 · 第 x / y 页 + 每页条数 + 跳页。
 // 客户端/服务端分页通用——total 由调用方给出（客户端传源数组长度，服务端传接口 total）。
 // 跳页框（前往）恒显：不按总页数阈值隐藏，保证各页面右下角功能一致。
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { Pagination as APagination, Select as ASelect } from '@arco-design/web-vue'
+import { IconLeft, IconRight } from '@arco-design/web-vue/es/icon'
 
 import { PAGE_SIZE_OPTIONS } from '../composables/use-client-pagination'
 
@@ -17,6 +18,7 @@ const props = withDefaults(defineProps<{
   showJumper?: boolean
   compactPages?: boolean
   sizeAtEnd?: boolean
+  slidingPages?: boolean
 }>(), {
   pageSizeOptions: () => PAGE_SIZE_OPTIONS,
   disabled: false,
@@ -24,6 +26,7 @@ const props = withDefaults(defineProps<{
   showJumper: true,
   compactPages: false,
   sizeAtEnd: false,
+  slidingPages: false,
 })
 
 const emit = defineEmits<{ change: [page: number]; 'change-size': [size: number] }>()
@@ -32,6 +35,26 @@ const totalPages = computed(() =>
   props.total === 0 ? 1 : Math.ceil(props.total / props.pageSize),
 )
 const isDisabled = computed(() => props.disabled || props.loading)
+
+// 实体列表使用七个连续页码；到达窗口边缘时以当前页为中心移动窗口。
+const windowStart = ref(1)
+watch([() => props.page, totalPages, () => props.pageSize], ([page, pages, size], previous) => {
+  const lastStart = Math.max(1, pages - 6)
+  if (!previous || page === 1 || size !== previous[2]) windowStart.value = 1
+  windowStart.value = Math.min(windowStart.value, lastStart)
+  if (page <= windowStart.value || page >= windowStart.value + 6) {
+    windowStart.value = Math.max(1, Math.min(page - 3, lastStart))
+  }
+}, { immediate: true })
+const visiblePages = computed(() => Array.from(
+  { length: Math.min(7, totalPages.value) }, (_, index) => windowStart.value + index,
+))
+
+function onSlidingPageChange(next: number) {
+  if (!isDisabled.value && next >= 1 && next <= totalPages.value && next !== props.page) {
+    emit('change', next)
+  }
+}
 
 // a-select @change 参数是宽 union，统一 Number() 容错（与 SchemaBrowserView 的写法一致）
 function onSelectChange(value: unknown) {
@@ -55,7 +78,35 @@ function onSelectChange(value: unknown) {
         @change="onSelectChange"
       />
     </span>
+    <nav v-if="slidingPages" class="list-pagination__window" aria-label="实体列表页码">
+      <button
+        type="button"
+        class="list-pagination__page"
+        aria-label="上一页"
+        :disabled="isDisabled || page <= 1"
+        @click="onSlidingPageChange(page - 1)"
+      ><IconLeft /></button>
+      <button
+        v-for="number in visiblePages"
+        :key="number"
+        type="button"
+        class="list-pagination__page"
+        :class="{ 'list-pagination__page--active': number === page }"
+        :aria-label="`第 ${number} 页`"
+        :aria-current="number === page ? 'page' : undefined"
+        :disabled="isDisabled"
+        @click="onSlidingPageChange(number)"
+      >{{ number }}</button>
+      <button
+        type="button"
+        class="list-pagination__page"
+        aria-label="下一页"
+        :disabled="isDisabled || page >= totalPages"
+        @click="onSlidingPageChange(page + 1)"
+      ><IconRight /></button>
+    </nav>
     <a-pagination
+      v-else
       :current="page"
       :page-size="pageSize"
       :total="total"
@@ -79,6 +130,12 @@ function onSelectChange(value: unknown) {
 .list-pagination .list-pagination__summary{margin-left:auto}
 .list-pagination .list-pagination__size{display:flex;align-items:center;gap:8px;white-space:nowrap}
 .list-pagination--size-at-end .list-pagination__size{order:1}
+.list-pagination__window{display:flex;max-width:100%;flex-wrap:wrap;align-items:center;gap:8px}
+.list-pagination__page{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;min-width:32px;height:32px;min-height:32px!important;padding:0 8px!important;border:0;border-radius:4px;background:transparent;color:#4e5969;font-family:inherit;font-size:14px!important;line-height:32px!important;cursor:pointer}
+.list-pagination__page:hover:not(:disabled){background:#f2f3f5}
+.list-pagination__page--active,.list-pagination__page--active:hover:not(:disabled){background:#165dff;color:#fff}
+.list-pagination__page:disabled{cursor:not-allowed;opacity:.5}
+.list-pagination__page:focus-visible{outline:2px solid #165dff;outline-offset:2px}
 .list-pagination :deep(.arco-select-view){box-sizing:border-box;width:88px;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;font-size:14px;line-height:22px}
 .list-pagination :deep(.list-pagination__size-select.arco-select-view:hover){border-color:#4080ff!important}
 .list-pagination :deep(.list-pagination__size-select.arco-select-view:focus-within),.list-pagination :deep(.list-pagination__size-select.arco-select-view-focus){border-color:#165dff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}

@@ -644,7 +644,10 @@ const visibleOverviewJobs = computed(() =>
 
 const overviewJobStats = computed(() => {
   const counts = countJobUnifiedStatuses(visibleOverviewJobs.value)
+  // 六态与 countJobUnifiedStatuses/JOB_STATUS_TONE 对齐（「未运行」此前漏展示，
+  // 与图谱构建页统计卡同一次修齐）
   return [
+    { label: '未运行', value: counts['未运行'], tone: JOB_STATUS_TONE['未运行'] },
     { label: '运行中', value: counts['运行中'], tone: JOB_STATUS_TONE['运行中'] },
     { label: '已完成', value: counts['已完成'], tone: JOB_STATUS_TONE['已完成'] },
     { label: '运行异常', value: counts['运行异常'], tone: JOB_STATUS_TONE['运行异常'] },

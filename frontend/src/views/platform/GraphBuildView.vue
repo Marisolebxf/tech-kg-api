@@ -84,10 +84,12 @@ const filteredJobs = computed(() => {
   })
 })
 
-// 状态卡片与表格同口径：跟随当前筛选范围（含当前空间过滤）
+// 状态卡片与表格同口径：跟随当前筛选范围（含当前空间过滤）；六态与
+// countJobUnifiedStatuses/JOB_STATUS_TONE 对齐，「未运行」此前漏展示
 const summaryItems = computed(() => {
   const counts = countJobUnifiedStatuses(filteredJobs.value)
   return [
+    { label: '未运行', value: counts['未运行'], hint: '已创建但尚无执行记录（含排队待下发）' },
     { label: '运行中', value: counts['运行中'], hint: '正在执行的任务' },
     { label: '已完成', value: counts['已完成'], hint: '最近一次执行成功' },
     { label: '运行异常', value: counts['运行异常'], hint: '完成但含失败记录（是否已转人工审核见执行详情）' },

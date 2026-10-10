@@ -33,11 +33,11 @@ describe('两级图空间选择', () => {
     cascader.vm.$emit('change', 'dev2')
     expect(useGraphSpaceStore().current).toBe('dev2')
     await nextTick()
-    // 触发栏 200px 装不下长名时省略号截断，完整名靠包裹层悬停 title 兜底；
+    // 触发栏 280px 装不下长名时省略号截断，完整名靠包裹层悬停 title 兜底；
     // 弹层与触发栏同宽，且通过专用类名限定样式范围
     expect(wrapper.find('.app-space-select').attributes('title')).toBe('切换当前工作图空间：dev2')
     expect(cascader.props('triggerProps')).toEqual({
-      contentClass: 'app-space-select-popup', contentStyle: { width: '200px' },
+      contentClass: 'app-space-select-popup', contentStyle: { width: '280px' },
     })
     wrapper.unmount()
   })
@@ -61,7 +61,7 @@ describe('两级图空间选择', () => {
     const popup = document.querySelector<HTMLElement>('.app-space-select-popup')
     expect(popup).not.toBeNull()
     const bounds = vi.spyOn(trigger, 'getBoundingClientRect')
-    for (const width of [200, 156, 200]) {
+    for (const width of [280, 156, 280]) {
       bounds.mockReturnValue({ width } as DOMRect)
       notifyResize?.([{ target: trigger } as ResizeObserverEntry], {} as ResizeObserver)
       await nextTick()

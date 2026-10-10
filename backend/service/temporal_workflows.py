@@ -2830,6 +2830,9 @@ class SchemaExtractWorkflow:
                         written = 0
                         chunk_step_stats: dict[str, dict[str, int]] = {}
                         batch_failures: list[dict[str, Any]] = []
+                        # 当前步标识：整批 ActivityError 的按步归因用（except 块里可见）
+                        current_step_id: str | None = None
+                        current_seq = 0
                         try:
                             # 步链串行执行（批间并行度仍由 max_inflight 的队列背压管）：
                             # 每步一次 execute_transform，带各自的 functionName/payload，
@@ -2841,6 +2844,8 @@ class SchemaExtractWorkflow:
                             for seq, step in enumerate(steps):
                                 # 步间暂停挂起点：当前步结束后、下一步开始前等待
                                 await self._wait_if_paused()
+                                current_step_id = step["id"]
+                                current_seq = seq
                                 step_started = workflow.now().astimezone()
                                 transform_request: dict[str, Any] = {
                                     "scriptPath": plan["scriptPath"],
@@ -3034,6 +3039,21 @@ class SchemaExtractWorkflow:
                                 }
                                 for rid in chunk["recordIds"]
                             ]
+                            if track_steps and current_step_id:
+                                # 整批失败按步归因：失败行计入 activity 重试耗尽时所在的
+                                # 步，步级 failed>0 让任务详情/审核日志弹窗的阶段显示
+                                # 「异常」，与执行概要 ABNORMAL 对齐——否则步级恒零骨架
+                                # 恒显成功（2026-10-11 用例 MR-20261009-A2DBE6074880）
+                                stat = chunk_step_stats.setdefault(
+                                    current_step_id,
+                                    {
+                                        "position": current_seq + 1,
+                                        "records": 0,
+                                        "written": 0,
+                                        "failed": 0,
+                                    },
+                                )
+                                stat["failed"] += _failure_entries_count(batch_failures)
                         failures.extend(batch_failures)
                         prev = slots.get(idx) or {"rows": 0, "written": 0, "failed": 0}
                         slots[idx] = {

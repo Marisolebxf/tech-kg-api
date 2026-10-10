@@ -2637,6 +2637,13 @@ class SchemaExtractWorkflow:
         schedule_id = request.get("_scheduleId")
         if schedule_id:
             info = workflow.info()
+            # 执行记录 payload 带上解析后的目标图空间：Schedule 直发载荷可能没记
+            # 空间（job 建时未传 graphSpace，实际落图空间来自 Schema 绑定），而
+            # 总览「昨日新增」/任务列表都按 payload.graph_space 归属空间，缺记
+            # 会被算进默认空间
+            record_payload = dict(request)
+            if graph_space:
+                record_payload["graph_space"] = graph_space
             await workflow.execute_activity(
                 register_scheduled_execution,
                 {
@@ -2644,7 +2651,7 @@ class SchemaExtractWorkflow:
                     "scheduleId": schedule_id,
                     "workflowId": info.workflow_id,
                     "runId": info.run_id,
-                    "payload": request,
+                    "payload": record_payload,
                 },
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=ACTIVITY_RETRY_POLICY,

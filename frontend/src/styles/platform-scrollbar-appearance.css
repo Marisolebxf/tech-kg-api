@@ -59,3 +59,16 @@ body:has(:is(.platform-overview,.platform-query,.schema-page,.graph-build-page,.
   height: 4px !important;
   margin: 5.5px 0;
 }
+
+/* Arco 在同一容器上绘制模拟滚动条。全局 .kg-is-scrolling 会重新启用原生条，
+   两者就会同时显示。仅隐藏 Arco 容器的原生条，保留 overflow 和拖动/滚轮行为。
+   同时覆盖标准属性与 WebKit 伪元素，避免浏览器采用不同滚动条样式路径。 */
+.arco-scrollbar-container {
+  scrollbar-width: none !important;
+}
+
+.arco-scrollbar-container::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}

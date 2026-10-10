@@ -96,6 +96,13 @@ watch(
   display: block;
 }
 
+/* 打开下拉时 arco 聚焦内部隐藏 input 做键盘导航，空 input 的光标竖线
+   （默认 #1d2129 灰蓝）正好叠在回显文本第一个字母处，像一条选择线；
+   该 input 只读且不可见，光标无意义，透明掉 */
+.app-space-select :deep(.arco-select-view-input) {
+  caret-color: transparent;
+}
+
 @media (max-width: 767px) {
   .app-space-select {
     flex: 1 1 80px;

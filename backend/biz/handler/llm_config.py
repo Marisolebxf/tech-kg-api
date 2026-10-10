@@ -16,6 +16,7 @@ from biz.dependencies.resources import (
     assigned_resource_owner,
     ensure_owner_access,
     resource_owner_filter,
+    validate_owner_update,
 )
 from biz.schemas.common import ApiResponse
 from biz.schemas.llm_config import LlmConfigCreate, LlmConfigUpdate, LlmConfigVerifyRequest
@@ -124,8 +125,9 @@ def update_llm_config(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
-    _owned_config(_application(session), actor, config_id)
+    existing = _owned_config(_application(session), actor, config_id)
     data = payload.model_dump(exclude_unset=True)
+    validate_owner_update(actor, data, current_owner=existing.get("owner", ""))
     if not actor.is_admin:
         data.pop("owner", None)
     updated = _application(session).update_config(
@@ -137,13 +139,19 @@ def update_llm_config(
     return ApiResponse(data=updated, msg="LLM 配置已更新")
 
 
-@router.delete("/llm-configs/{config_id}", responses={404: {"description": "请求的资源不存在"}})
+@router.delete(
+    "/llm-configs/{config_id}",
+    responses={404: {"description": "请求的资源不存在"}, 409: {"description": "默认配置不可删除"}},
+)
 def delete_llm_config(
     config_id: str,
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
-    _owned_config(_application(session), actor, config_id)
+    config = _owned_config(_application(session), actor, config_id)
+    # 默认必须恒有一条：删掉当前默认会让"全都不是默认"，LLM 只能回退 env——先转移默认再删
+    if config.get("isDefault"):
+        raise HTTPException(status_code=409, detail="默认配置不能删除：请先将其他配置设为默认")
     ok = _application(session).delete_config(config_id)
     if not ok:
         raise HTTPException(status_code=404, detail=LLM_CONFIG_NOT_FOUND)

@@ -1,15 +1,10 @@
-"""测试参数下拉选项聚合：图库(关系边) + gkx(学者/企业) + 目录(关系类型/角色/维度/领域/CPC)。"""
+"""参数下拉选项：当前图空间的学者、企业、关系，以及固定分类目录。"""
 
 from __future__ import annotations
 
 import logging
 from typing import Any
 
-from sqlalchemy import select
-
-from db_model.domestic_organization import DwdOrgRegInfo, DwdOrgStockBase
-from db_model.scholar import DwdScholar
-from infra.gkx import get_gkx_session
 from infra.graph_db import get_trs_graph_client
 from service.enterprise_relation_catalog import RELATION_TYPES, ROLE_CATALOG
 
@@ -32,41 +27,32 @@ CPC_CODES: list[str] = [
 ]
 
 
-def _scholars() -> list[dict[str, str]]:
-    """从 gkx_local.dwd_scholar 读真实学者（如 007Rb117 吴边）。"""
-    out: list[dict[str, str]] = []
-    try:
-        session = get_gkx_session()
+def _graph_options(labels: list[str], id_key: str) -> list[dict[str, str]]:
+    out = []
+    seen = set()
+    for label in labels:
         try:
-            for r in session.execute(select(DwdScholar).limit(200)).scalars():
-                out.append({"scholarId": r.scholar_id, "name": r.name_zh or r.scholar_id})
-        finally:
-            session.close()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("load scholars failed: %s", exc)
+            graph = get_trs_graph_client()
+            nodes = graph.find_nodes([label], {}, limit=200).items
+            for node in nodes:
+                if node.properties.get("manual_disabled") is True or str(node.id) in seen:
+                    continue
+                seen.add(str(node.id))
+                props = node.properties
+                name = next((str(props[k]) for k in ("name_zh", "name_cn", "name", "name_en") if props.get(k)), str(node.id))
+                source_id = props.get("scholar_id" if id_key == "scholarId" else "org_id") or node.id
+                out.append({id_key: str(source_id), "name": name})
+        except Exception as exc:
+            logger.warning("load graph options %s failed: %s", label, exc)
     return out
+
+
+def _scholars() -> list[dict[str, str]]:
+    return _graph_options(["Person", "Scholar"], "scholarId")
 
 
 def _enterprises() -> list[dict[str, str]]:
-    """从 gkx_local 读真实企业（上市公司优先，补注册企业），取前 200 条。"""
-    out: list[dict[str, str]] = []
-    try:
-        session = get_gkx_session()
-        try:
-            seen: set[str] = set()
-            for r in session.execute(select(DwdOrgStockBase).limit(200)).scalars():
-                if r.org_id and r.org_id not in seen:
-                    seen.add(r.org_id)
-                    out.append({"enterpriseId": r.org_id, "name": r.name_cn or r.org_id})
-            for r in session.execute(select(DwdOrgRegInfo).limit(200)).scalars():
-                if r.org_id and r.org_id not in seen:
-                    seen.add(r.org_id)
-                    out.append({"enterpriseId": r.org_id, "name": r.name_cn or r.org_id})
-        finally:
-            session.close()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("load enterprises failed: %s", exc)
-    return out
+    return _graph_options(["Organization"], "enterpriseId")
 
 
 def _edges() -> list[dict[str, str]]:

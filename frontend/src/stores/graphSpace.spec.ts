@@ -181,3 +181,59 @@ describe('业务空间隔离', () => {
     expect(store.current).toBe('')
   })
 })
+
+describe('两级目录与空间能力', () => {
+  const items = [
+    { name: 'a', bound: true, mine: true, groupKind: 'business' as const, clientId: 'business-a', businessName: '业务 A', writeAllowed: true, reviewAllowed: true },
+    { name: 'b', bound: true, mine: true, groupKind: 'business' as const, clientId: 'business-b', businessName: '业务 B', writeAllowed: true, reviewAllowed: true },
+    { name: 'dev', bound: false, mine: false, groupKind: 'public' as const, writeAllowed: false, reviewAllowed: false },
+  ]
+  function prepare(isAdmin = false) {
+    useAuthStore().profile = {
+      isAdmin, businessRbacEnabled: true, platformRole: isAdmin ? 'admin' : 'developer',
+      businessIds: ['business-a', 'business-b'], developerBusinessIds: ['business-a', 'business-b'],
+      businesses: [{clientId: 'business-a', name: '业务 A', role: 'developer'}, {clientId: 'business-b', name: '业务 B', role: 'developer'}],
+    } as AuthProfile
+    const store = useGraphSpaceStore()
+    store.$patch({current: 'dev', spaces: items.map(item => item.name), items})
+    return store
+  }
+  it('公共目录置顶不改变用于兼容的原列表顺序，业务空间分到正确业务', () => {
+    const store = prepare()
+    expect(store.groups.map(group => group.label)).toEqual(['公共图空间', '业务 A', '业务 B'])
+    expect(store.spaces).toEqual(['a', 'b', 'dev'])
+    expect(store.groups[1]!.children.map(item => item.value)).toEqual(['a'])
+  })
+  it('开发人员公共只读，切回任一绑定业务可操作；未知空间禁止写入', () => {
+    const store = prepare()
+    expect(store.canWrite()).toBe(false)
+    expect(store.canReview()).toBe(false)
+    for (const space of ['a', 'b']) {
+      store.setCurrent(space)
+      expect(store.canWrite()).toBe(true)
+      expect(store.canReview()).toBe(true)
+    }
+    expect(store.canWrite('other')).toBe(false)
+    expect(store.canReview('other')).toBe(false)
+  })
+  it('公共空间多业务不擅自选择，私有空间业务覆盖先前配置选择', () => {
+    const store = prepare()
+    expect(store.businessId).toBe('')
+    store.selectedBusinessId = 'business-b'
+    expect(store.businessId).toBe('business-b')
+    store.setCurrent('a')
+    expect(store.businessId).toBe('business-a')
+    store.setCurrent('dev')
+    store.selectedBusinessId = 'unbound'
+    expect(store.businessId).toBe('')
+  })
+  it('普通单业务开发者自动选配置业务，管理员仍可查看未归属旧配置', () => {
+    const store = prepare()
+    useAuthStore().profile!.businesses = [{clientId: 'business-a', name: '业务 A', role: 'developer'}]
+    expect(store.businessId).toBe('business-a')
+    useAuthStore().profile!.isAdmin = true
+    expect(store.businessId).toBe('')
+    store.selectedBusinessId = 'business-a'
+    expect(store.businessId).toBe('business-a')
+  })
+})

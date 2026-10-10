@@ -21,6 +21,7 @@ from typing import Any
 import redis as redis_lib
 
 from service.platform_access import PlatformActor
+from utils.time_display import utc_to_cst_str
 
 logger = logging.getLogger(__name__)
 
@@ -120,10 +121,10 @@ def _job_to_data(job: Any) -> dict:
     """AlgorithmJob dataclass → camelCase 快照。"""
     return {
         "jobId": job.job_id,
-        "status": job.status,
-        "createdAt": job.created_at,
-        "startedAt": job.started_at,
-        "finishedAt": job.finished_at,
+        "status": "cancelled" if job.driver_state == "KILLED" else job.status,
+        "createdAt": utc_to_cst_str(job.created_at),
+        "startedAt": utc_to_cst_str(job.started_at),
+        "finishedAt": utc_to_cst_str(job.finished_at),
         "submissionId": job.submission_id,
         "driverState": job.driver_state,
         "error": job.error,
@@ -225,6 +226,41 @@ _DEGREE_INDEX_BUILD_TIMEOUT_SECONDS = float(
 _DEGREE_INDEX_POLL_SECONDS = float(os.getenv("GRAPH_ALGO_DEGREE_INDEX_POLL_SECONDS", "2"))
 _degree_jobs: dict[str, dict[str, Any]] = {}
 _degree_jobs_lock = threading.Lock()
+_degree_context = threading.local()
+_DEGREE_CANCEL_PREFIX = "algo:degree_cancel:"
+
+
+class _DegreeCancelled(Exception):
+    """Cooperative cancellation at graph request boundaries."""
+
+
+def _degree_cancelled(job: dict[str, Any]) -> bool:
+    if job.get("status") == "cancelled":
+        return True
+    try:
+        return bool(_shared_redis().get(_DEGREE_CANCEL_PREFIX + job["job_id"]))
+    except Exception:  # Redis outages do not fail otherwise healthy calculations.
+        return False
+
+
+def _check_degree_cancelled() -> None:
+    job = getattr(_degree_context, "job", None)
+    if job is not None and _degree_cancelled(job):
+        raise _DegreeCancelled()
+
+
+def _degree_pause(seconds: float) -> None:
+    # Retry/index waits remain interruptible across API workers.
+    if getattr(_degree_context, "job", None) is None:
+        time.sleep(seconds)
+        return
+    deadline = time.monotonic() + seconds
+    while True:
+        _check_degree_cancelled()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(remaining, 0.25))
 
 
 def _utc_now_iso() -> str:
@@ -284,9 +320,13 @@ def _local_degree_job(space: str, job_id: str) -> dict[str, Any] | None:
             if time.time() - job["saved_at"] > _DEGREE_JOB_TTL_SECONDS:
                 del _degree_jobs[job_id]
                 return None
+            if job["status"] != "cancelled" and _degree_cancelled(job):
+                job.update(status="cancelled", finished_at=_utc_now_iso(), rows=[])
             return job
     shared = _shared_job_load(job_id)
     if shared is not None and shared.get("space") == space:
+        if shared.get("status") != "cancelled" and _degree_cancelled(shared):
+            shared.update(status="cancelled", finished_at=_utc_now_iso(), rows=[])
         # 仅终态快照可落本地缓存：running 态若被缓存，本 worker 会拿着旧状态
         # 一直 409 到 TTL 过期（提交 worker 后台写回 succeeded 也不会同步过来）。
         if shared.get("status") != "running":
@@ -301,9 +341,9 @@ def _local_job_to_data(job: dict[str, Any]) -> dict:
     return {
         "jobId": job["job_id"],
         "status": job["status"],
-        "createdAt": job["created_at"],
-        "startedAt": job["created_at"],
-        "finishedAt": job["finished_at"],
+        "createdAt": utc_to_cst_str(job["created_at"]),
+        "startedAt": utc_to_cst_str(job["created_at"]),
+        "finishedAt": utc_to_cst_str(job["finished_at"]),
         "submissionId": None,
         "driverState": None,
         "error": job["error"],
@@ -368,11 +408,17 @@ def _execute_degree_read(
     from infra.graph_db.exceptions import GraphRequestError
 
     for attempt in range(_DEGREE_SESSION_RETRY_LIMIT + 1):
+        _check_degree_cancelled()
         try:
             # 单个 worker 内最多一个 Degree 请求占用图服务会话；多作业仍可在
             # 后台排队，避免同进程并发查询进一步耗尽共享会话池。
-            with _degree_query_slots:
+            while not _degree_query_slots.acquire(timeout=0.25):
+                _check_degree_cancelled()
+            try:
+                _check_degree_cancelled()
                 return client.execute_read(query, timeout=timeout)
+            finally:
+                _degree_query_slots.release()
         except GraphRequestError as exc:
             if not _is_graph_session_busy_error(exc):
                 raise
@@ -393,7 +439,7 @@ def _execute_degree_read(
                 _DEGREE_SESSION_RETRY_LIMIT,
                 delay,
             )
-            time.sleep(delay)
+            _degree_pause(delay)
     raise AssertionError("unreachable")
 
 
@@ -437,7 +483,7 @@ def _lookup_degree_pairs(client: Any, label: str) -> Iterable[tuple[str, str]]:
                     _DEGREE_LOOKUP_RETRY_LIMIT,
                     exc,
                 )
-                time.sleep(delay)
+                _degree_pause(delay)
                 continue
             raise GraphAlgorithmError(
                 f"关系类型 {label} 在偏移 {offset} 处读取超时，已缩小到每页 "
@@ -568,7 +614,10 @@ def _ensure_degree_edge_index(client: Any, label: str) -> None:
     index_name = _degree_index_name(label)
     deadline = time.monotonic() + _DEGREE_INDEX_BUILD_TIMEOUT_SECONDS
     try:
+        _check_degree_cancelled()
         client.execute_write(f"CREATE EDGE INDEX IF NOT EXISTS `{index_name}` ON `{label}`()")
+    except _DegreeCancelled:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise GraphAlgorithmError(
             f"关系类型 {label} 缺少边索引，自动创建索引失败: {exc}", status_code=502
@@ -576,6 +625,7 @@ def _ensure_degree_edge_index(client: Any, label: str) -> None:
 
     # CREATE DDL 需要短暂传播；并发 worker 可能发现同一索引已在重建，均转入可用性轮询。
     while True:
+        _check_degree_cancelled()
         try:
             client.execute_write(f"REBUILD EDGE INDEX `{index_name}`")
             break
@@ -592,7 +642,7 @@ def _ensure_degree_edge_index(client: Any, label: str) -> None:
                     f"关系类型 {label} 的索引 {index_name} 在创建后未及时可见，请稍后重试",
                     status_code=504,
                 ) from exc
-            time.sleep(_DEGREE_INDEX_POLL_SECONDS)
+            _degree_pause(_DEGREE_INDEX_POLL_SECONDS)
 
     while True:
         try:
@@ -609,7 +659,7 @@ def _ensure_degree_edge_index(client: Any, label: str) -> None:
                         f"{int(_DEGREE_INDEX_BUILD_TIMEOUT_SECONDS)} 秒，请稍后重试",
                         status_code=504,
                     )
-                time.sleep(_DEGREE_INDEX_POLL_SECONDS)
+                _degree_pause(_DEGREE_INDEX_POLL_SECONDS)
                 continue
             # FINISHED 后再确认 LOOKUP 已可用；空结果也是合法结果。
             _execute_degree_read(
@@ -631,7 +681,7 @@ def _ensure_degree_edge_index(client: Any, label: str) -> None:
                     f"{int(_DEGREE_INDEX_BUILD_TIMEOUT_SECONDS)} 秒，请稍后重试",
                     status_code=504,
                 ) from exc
-            time.sleep(_DEGREE_INDEX_POLL_SECONDS)
+            _degree_pause(_DEGREE_INDEX_POLL_SECONDS)
 
 
 def _degree_rows_via_ngql(
@@ -699,20 +749,32 @@ def _submit_degree_via_ngql(
 
 def _run_degree_job(job: dict[str, Any]) -> None:
     """后台执行计算，成功和失败均更新同一个可轮询作业。"""
+    _degree_context.job = job
     try:
+        _check_degree_cancelled()
         rows, truncated = _degree_rows_via_ngql(
             job["space"], job["labels"], allow_index_writes=job.get("allow_index_writes", True)
         )
         with _degree_jobs_lock:
-            job.update(rows=rows, truncated=truncated, status="succeeded")
+            if _degree_cancelled(job):
+                job.update(rows=[], status="cancelled")
+            else:
+                job.update(rows=rows, truncated=truncated, status="succeeded")
+    except _DegreeCancelled:
+        with _degree_jobs_lock:
+            job.update(rows=[], status="cancelled", error=None)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Degree 后台计算失败: %s", exc)
         with _degree_jobs_lock:
-            job.update(status="failed", error=f"度数计算失败: {exc}")
+            if _degree_cancelled(job):
+                job.update(rows=[], status="cancelled", error=None)
+            else:
+                job.update(status="failed", error=f"度数计算失败: {exc}")
     finally:
         with _degree_jobs_lock:
             job.update(finished_at=_utc_now_iso(), saved_at=time.time())
         _shared_job_save(job["job_id"], job)
+        del _degree_context.job
 
 
 def submit_job(
@@ -829,6 +891,62 @@ def get_job(actor: PlatformActor, space: str, job_id: str) -> dict:
     except Exception as exc:  # noqa: BLE001
         raise _map_error(exc) from exc
     return _job_to_data(job)
+
+
+def cancel_job(actor: PlatformActor, space: str, job_id: str) -> dict:
+    """Cancel only the selected job, respecting graph-space ownership."""
+    from infra.graph_db import get_space_algorithm_client
+
+    _ensure_space_access(actor, space)
+    local = _local_degree_job(space, job_id)
+    if local is not None:
+        if local["status"] != "running":
+            return _local_job_to_data(local)
+        # Separate durable marker cannot be overwritten by a computation snapshot.
+        try:
+            saved = _shared_redis().set(
+                _DEGREE_CANCEL_PREFIX + job_id, "1", ex=_DEGREE_JOB_TTL_SECONDS
+            )
+            if not saved:
+                raise RuntimeError("cancellation marker was not saved")
+        except Exception as exc:
+            raise GraphAlgorithmError("终止信号保存失败，请稍后重试", 503) from exc
+        with _degree_jobs_lock:
+            local.update(status="cancelled", rows=[], error=None, finished_at=_utc_now_iso())
+        _shared_job_save(job_id, local)
+        return _local_job_to_data(local)
+
+    _ensure_remote_job_access(actor, space, job_id)
+    try:
+        client = get_space_algorithm_client(space)
+        job = client.get_job(job_id)
+        if job.status != "running":
+            return _job_to_data(job)
+        runner_url = os.getenv("TRSGRAPH_ALGORITHM_RUNNER_URL", "").strip()
+        if runner_url:
+            # 单机 all-in-one 部署：算法经 trsgraph-algorithm-runner 以 Spark
+            # local 模式执行（无 standalone master，作业快照无 submissionId），
+            # 直接让 runner 终止 spark-submit 子进程，终态为 cancelled。
+            from infra.graph_db.algorithm_client import kill_runner_job
+
+            kill_runner_job(job_id, runner_url)
+            # Runner acceptance is not completion: polling confirms "cancelled".
+            return _job_to_data(client.get_job(job_id))
+        rest_url = os.getenv("GRAPH_ALGO_SPARK_REST_URL", "").strip()
+        if not rest_url:
+            raise GraphAlgorithmError(
+                "未配置算法作业终止通道：单机部署请配置 TRSGRAPH_ALGORITHM_RUNNER_URL"
+                "（图算法 runner 地址，如 http://trsgraph:8091），"
+                "Spark Standalone 部署请配置 GRAPH_ALGO_SPARK_REST_URL",
+                503,
+            )
+        if not job.submission_id:
+            raise GraphAlgorithmError("算法引擎尚未返回 Spark 作业标识，请刷新状态后重试", 409)
+        client.kill_submission(job.submission_id, rest_url)
+        # Spark acceptance is not completion. Existing polling confirms KILLED.
+        return _job_to_data(client.get_job(job_id))
+    except Exception as exc:
+        raise _map_error(exc) from exc
 
 
 def get_result(actor: PlatformActor, space: str, job_id: str) -> dict:

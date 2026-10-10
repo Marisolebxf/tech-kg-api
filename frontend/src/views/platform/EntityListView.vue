@@ -164,13 +164,14 @@ watch(
             id="entity-filter-type"
             v-model="entityType"
             class="entity-filter-select"
-            placeholder="实体类型"
+            placeholder="全部"
+            aria-label="实体类型"
             allow-clear
             :scrollbar="false"
             @change="onEntityTypeChange"
           >
-            <a-option v-for="t in types" :key="t.name" :value="t.name">
-              {{ t.name }}（{{ t.count }}）
+            <a-option v-for="t in types" :key="t.name" :value="t.name" :label="`${t.name}（${t.count}）`">
+              <span class="entity-type-option" :title="`${t.name}（${t.count}）`">{{ t.name }}（{{ t.count }}）</span>
             </a-option>
           </a-select>
         </div>
@@ -371,4 +372,5 @@ watch(
 .entity-property-popover__item b{flex:0 1 auto;min-width:0;overflow:hidden;color:#4e5969;font-weight:500;text-overflow:ellipsis}
 .entity-property-popover__item b::after{content:":"}
 .entity-property-popover__item em{flex:1;min-width:0;overflow:hidden;color:#1d2129;font-style:normal;text-overflow:ellipsis}
+.entity-type-option{display:block;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 </style>

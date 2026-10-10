@@ -21,10 +21,13 @@ def scoped(monkeypatch):
     monkeypatch.setattr(jobs, "rbac_enabled", lambda: True)
 
     def check_space(actor, space, action="read"):
-        if space not in {"a-space", "production"} or (action != "read" and not actor.can_develop):
+        if space not in {"a-space", "production"} or (action != "read" and (not actor.can_develop or (space == "production" and not actor.is_admin))):
             raise HTTPException(403, "denied")
 
     monkeypatch.setattr(jobs, "ensure_space_access", check_space)
+    monkeypatch.setattr(jobs, "space_registration", lambda session, space: SimpleNamespace(
+        space_name=space, client_id="a" if space == "a-space" else None,
+        is_shared_production=space == "production"))
     import infra.mysql
 
     monkeypatch.setattr(infra.mysql, "session_scope", lambda: nullcontext(None))
@@ -36,11 +39,11 @@ def test_same_business_colleague_can_read_job():
     )
 
 
-def test_persisted_business_cannot_expose_production_task():
+def test_public_task_is_readable_regardless_of_creator_business_but_not_writable():
+    task = {"owner": "outsider", "clientId": "b", "graphSpace": "production"}
+    jobs.authorize_workflow_resource(actor(), task)
     with pytest.raises(HTTPException):
-        jobs.authorize_workflow_resource(
-            actor(), {"owner": "outsider", "clientId": "b", "graphSpace": "production"}
-        )
+        jobs.authorize_workflow_resource(actor(), task, "write")
 
 
 def test_nested_payload_cannot_hide_second_space_alias():
@@ -107,7 +110,8 @@ def test_background_job_rechecks_revoked_or_moved_membership(monkeypatch, member
         scalar=lambda query: None,
     )
     monkeypatch.setattr(infra.mysql, "session_scope", lambda: nullcontext(fake_session))
-    monkeypatch.setattr(business_access_control, "resolve_membership", lambda user_id: membership)
+    from service.platform_access import BusinessMembershipGrant
+    monkeypatch.setattr(business_access_control, "resolve_memberships", lambda user_id: (BusinessMembershipGrant(*membership),))
     monkeypatch.delenv("PLATFORM_INITIAL_ADMIN_USER_IDS", raising=False)
     with pytest.raises(HTTPException):
         jobs.authorize_background_execution(

@@ -16,6 +16,20 @@ PANORAMA_QUERY_PATH = "/api/v1/kg-construction/industry-chain-panorama/query"
 
 logger = logging.getLogger(__name__)
 
+_PREWARM_SCOPE_KEY = "techkg.readonly_business_prewarm"
+_PREWARM_MARKER = object()
+
+
+def is_readonly_prewarm(request) -> bool:
+    return request.scope.get(_PREWARM_SCOPE_KEY) is _PREWARM_MARKER
+
+
+def _readonly_prewarm_app(app):
+    async def wrapped(scope, receive, send):
+        await app({**scope, _PREWARM_SCOPE_KEY: _PREWARM_MARKER}, receive, send)
+    return wrapped
+
+
 # 预热用的固定入参（与 JMeter 压测计划一致；用真实存在的 ID 以返回 200+success）。
 _PREWARM_CASES: list[tuple[str, dict]] = [
     (
@@ -37,7 +51,7 @@ _PREWARM_CASES: list[tuple[str, dict]] = [
     ),
     (
         "/api/v1/kg-service/expert-colleague-relation",
-        {"expertId": "4P566No1", "limit": 20, "space": "dev"},
+        {"expertId": "4P566No1", "limit": 20},
     ),
     (
         "/api/v1/kg-construction/expert-alumni-relations/query",
@@ -70,11 +84,15 @@ async def prewarm_business(app: object) -> None:
     """对业务接口及热点全景图参数各发一次请求，填满本 worker 结果缓存。"""
     if os.getenv("PREWARM_BUSINESS", "false").lower() != "true":
         return
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), timeout=120) as client:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=_readonly_prewarm_app(app)), timeout=120) as client:
         for path, body in _PREWARM_CASES:
             try:
                 # ASGI transport 按路径路由，URL 需带 scheme/host（httpx 要求完整 URL）
-                resp = await client.post(f"https://prewarm{path}", json=body)
+                from service.graph_space import default_graph_space
+                resp = await client.post(
+                    f"https://prewarm{path}", json=body,
+                    headers={"X-Graph-Space": default_graph_space()},
+                )
                 logger.info("prewarm %s -> %s", path, resp.status_code)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("prewarm %s 失败: %s", path, exc)

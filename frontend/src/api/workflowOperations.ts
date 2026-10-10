@@ -42,6 +42,9 @@ export interface ProcessStep {
 }
 
 export interface ProcessingInstance {
+  graphSpace?: string | null
+  canOperate?: boolean
+  writeAllowed?: boolean
   id: string
   batchId: string
   stage: '数据处理' | '图谱构建'
@@ -190,6 +193,14 @@ export const getProductionReviewAuditLogs = (id: string) =>
 /** 物理删除未处理 case（review_admin；已终态的后端 409）。 */
 export const deleteProductionReview = (id: string) =>
   unwrap(http.delete(`/v1/manual-reviews/production/${id}`)) as Promise<{ id: string; deleted: boolean }>
+
+/** 批量物理删除未处理 case：逐条复用单删门控，已处理/不存在/无权限的按条跳过不阻断整批。 */
+export const batchDeleteProductionReviews = (data: { caseIds: string[] }) =>
+  unwrap(http.post('/v1/manual-reviews/production/batch-delete', data)) as Promise<{
+    requested: number
+    deleted: number
+    skipped: Array<{ id: string; reason: string }>
+  }>
 
 /** T_EXTRACT_FAIL 抽取失败记录重跑：所选 case 按 schema 合并为新执行（triggerSource=RERUN）。
  *  skipped = 校验失败被跳过的 schema 组（已删/不在当前控制面/缺来源绑定），不阻断其余重跑。 */
@@ -405,14 +416,13 @@ export function executionStatusLabel(status?: string | null): string {
   return EXECUTION_STATUS_LABEL[status.toUpperCase()] ?? status
 }
 
-/** 任务归属空间（列表页/总览卡共用同一口径）：payload 未带 graphSpace 的历史任务
- *  落默认业务空间（空间列表首位恒为默认）。 */
+/** 任务归属空间由后端确认；历史缺失值保持未知，禁止按授权空间顺序推断。 */
 export function jobGraphSpace(
   job: Pick<WorkflowJob, 'graphSpace'>,
-  defaultSpace: string,
-  current: string,
+  _defaultSpace: string,
+  _current: string,
 ): string {
-  return job.graphSpace || defaultSpace || current
+  return job.graphSpace || ''
 }
 
 export const createJob = (input: JobCreateInput) =>

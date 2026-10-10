@@ -10,7 +10,14 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from db_model.base import Base
-from db_model.business_access import BusinessClient, BusinessGraphSpace, BusinessMember
+from db_model.business_access import (
+    BusinessClient,
+    BusinessGraphSpace,
+    BusinessMember,
+    BusinessMembership,
+    BusinessMembershipState,
+    BusinessSpacePolicy,
+)
 from service import business_access_control as acl
 from service.platform_access import PlatformActor
 
@@ -36,7 +43,7 @@ def business_db(monkeypatch):
     )
     Base.metadata.create_all(
         engine,
-        tables=[BusinessClient.__table__, BusinessMember.__table__, BusinessGraphSpace.__table__],
+        tables=[BusinessClient.__table__, BusinessMember.__table__, BusinessGraphSpace.__table__, BusinessMembership.__table__, BusinessMembershipState.__table__, BusinessSpacePolicy.__table__],
     )
     factory = sessionmaker(engine, expire_on_commit=False)
 
@@ -46,6 +53,7 @@ def business_db(monkeypatch):
             yield session
 
     monkeypatch.setattr(acl, "session_scope", scope)
+    monkeypatch.setattr("infra.mysql.session_scope", scope)
     with scope() as session:
         session.add_all(
             [BusinessClient(client_id="a", name="A"), BusinessClient(client_id="b", name="B")]
@@ -70,7 +78,7 @@ def business_db(monkeypatch):
 @pytest.mark.parametrize(
     "role,space,action,allowed",
     [
-        ("user", "private_a", "read", True),
+        ("user", "private_a", "read", False),
         ("user", "private_a", "write", False),
         ("user", "private_a", "review", False),
         ("user", "private_a", "review_view", False),
@@ -87,7 +95,7 @@ def business_db(monkeypatch):
         ("developer", "private_b", "review", False),
         ("developer", "private_b", "review_view", False),
         ("developer", "production", "read", True),
-        ("developer", "production", "write", True),
+        ("developer", "production", "write", False),
         ("developer", "production", "review", False),
         ("developer", "production", "review_view", True),
         ("developer", "unregistered", "read", False),
@@ -138,11 +146,11 @@ def test_space_transfer_revokes_access_even_with_warm_console_cache(business_db,
     statement = "MATCH (n) RETURN n LIMIT 1"
     monkeypatch.setattr(graph_console, "_ngql_payload_cache", {})
     graph_console._ngql_cache_put(graph_console.ngql_cache_key("private_a", statement), "cached")
-    assert graph_console.run_statement_cached_payload(actor(), "private_a", statement) == "cached"
+    assert graph_console.run_statement_cached_payload(actor("developer"), "private_a", statement) == "cached"
     with business_db() as session:
         session.get(BusinessGraphSpace, "private_a").client_id = "b"
     with pytest.raises(HTTPException) as caught:
-        graph_console.run_statement_cached_payload(actor(), "private_a", statement)
+        graph_console.run_statement_cached_payload(actor("developer"), "private_a", statement)
     assert caught.value.status_code == 403
 
 

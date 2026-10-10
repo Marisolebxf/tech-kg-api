@@ -1065,6 +1065,41 @@ class TRSAlgorithmClient:
         resp = self._request("GET", f"{_ALGORITHMS_BASE}/jobs/{job_id}")
         return _parse_job(resp.json())
 
+    def kill_submission(self, submission_id: str, rest_url: str) -> None:
+        """Ask the configured Spark standalone master to kill one driver.
+
+        rest_url is server configuration, never a URL provided by an API caller.
+        An accepted kill still needs job polling to confirm the terminal state.
+        """
+        from urllib.parse import quote, urlsplit
+
+        parsed = urlsplit(rest_url)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("Spark REST 地址必须是 http(s) 服务地址")
+        if not submission_id:
+            raise ValueError("Spark submissionId 不能为空")
+        path = f"/v1/submissions/kill/{quote(submission_id, safe='')}"
+        try:
+            with httpx.Client(timeout=self._settings.timeout, transport=self._transport) as client:
+                response = client.post(f"{rest_url.rstrip('/')}{path}")
+                response.raise_for_status()
+                body = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise GraphConnectionError("Spark 终止请求失败") from exc
+        if (
+            not isinstance(body, dict)
+            or body.get("success") is not True
+            or body.get("submissionId") != submission_id
+        ):
+            raise GraphRequestError(
+                "Spark 未接受该作业的终止请求", status_code=502, body=response.text
+            )
+
     def get_result(self, job_id: str) -> AlgorithmResult:
         """Fetch a succeeded job's result.
 
@@ -1159,6 +1194,60 @@ class TRSAlgorithmClient:
         return resp.json()
 
 
+def kill_runner_job(
+    job_id: str, base_url: str, *, transport: httpx.BaseTransport | None = None
+) -> None:
+    """Ask the all-in-one algorithm runner to kill one Spark local job.
+
+    Complements TRSAlgorithmClient.kill_submission(): deployments without a
+    Spark standalone master run ``spark-submit --master local[*]`` behind the
+    Python runner (trsgraph-algorithm-runner, POST /jobs/{id}/kill). The
+    runner SIGTERMs the driver process and finalizes the status to
+    "cancelled". Accepting the kill is not completion — poll get_job().
+
+    transport is a test seam (httpx.MockTransport), mirroring the client.
+
+    Raises GraphConnectionError on transport failure, GraphNotFoundError on
+    404 (unknown job or runner restarted), GraphRequestError when the runner
+    rejects the kill or confirms a different job, and ValueError for a
+    malformed base_url (mirrors kill_submission's contract).
+    """
+    from urllib.parse import quote, urlsplit
+
+    parsed = urlsplit(base_url)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("算法运行器地址必须是 http(s) 服务地址")
+    if not job_id:
+        raise ValueError("算法作业标识不能为空")
+    path = f"/jobs/{quote(job_id, safe='')}/kill"
+    try:
+        with httpx.Client(timeout=10.0, transport=transport) as client:
+            response = client.post(f"{base_url.rstrip('/')}{path}")
+    except httpx.HTTPError as exc:
+        raise GraphConnectionError("算法运行器终止请求失败") from exc
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise GraphRequestError(
+            "算法运行器终止响应不是 JSON", status_code=502, body=response.text
+        ) from exc
+    if response.status_code == 404:
+        raise GraphNotFoundError(f"POST {path} -> 404 (job not found or runner restarted)")
+    if not response.is_success:
+        raise GraphRequestError(
+            f"POST {path} -> {response.status_code}",
+            status_code=response.status_code,
+            body=response.text,
+        )
+    if not isinstance(body, dict) or str(body.get("jobId", "")) != job_id:
+        raise GraphRequestError("算法运行器未确认终止的作业", status_code=502, body=response.text)
+
+
 __all__ = [
     "TRSAlgorithmClient",
     "AlgorithmJob",
@@ -1166,4 +1255,5 @@ __all__ = [
     "AlgorithmJobBusyError",
     "AlgorithmJobFailedError",
     "AlgorithmJobTimeoutError",
+    "kill_runner_job",
 ]

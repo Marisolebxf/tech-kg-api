@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   rerunExtractFailures: vi.fn(),
   getProductionReview: vi.fn(),
   deleteProductionReview: vi.fn(),
+  batchDeleteProductionReviews: vi.fn(),
   getExecution: vi.fn(),
   getTask: vi.fn(),
   TRIGGER_SOURCE_LABEL: { MANUAL: '手动触发', SCHEDULE: '定期触发', RERUN: '重新执行' },
@@ -26,8 +27,8 @@ vi.mock('@arco-design/web-vue/es/icon', () => ({
 // 全局图空间 store：reactive 包装（Vue 对同一 target 缓存同一代理），
 // 用例经 graphSpaceMock.state 改 current 才能触发组件的切空间重拉 watch
 const graphSpaceMock = vi.hoisted(() => {
-  const raw = { current: 'dev' }
-  return { raw, state: null as { current: string } | null }
+  const raw = { current: 'dev', writable: true, canWrite() { return this.writable }, canReview() { return this.writable } }
+  return { raw, state: null as { current: string; writable: boolean } | null }
 })
 vi.mock('../../../stores/graphSpace', async () => {
   const { reactive } = await import('vue')
@@ -57,7 +58,7 @@ const renderReview = () => {
         AInput: {
           name: 'AInput',
           props: ['modelValue'],
-          emits: ['update:modelValue'],
+          emits: ['update:modelValue', 'clear'],
           setup: (props: { modelValue?: string }, { emit }: { emit: (event: string, value: string) => void }) =>
             () => h('input', { value: props.modelValue, onInput: (event: Event) => emit('update:modelValue', (event.target as HTMLInputElement).value) }),
         },
@@ -90,10 +91,12 @@ beforeEach(() => {
   routeState.query = {}
   // 图空间复位默认 dev（经 raw 写：组件未挂载，无需触发响应式）
   graphSpaceMock.raw.current = 'dev'
+  graphSpaceMock.raw.writable = true
   mocks.getProductionReviews.mockReset().mockResolvedValue({ items: C_ROWS, total: 4, page: 1, pageSize: 10 })
   mocks.rerunExtractFailures.mockReset().mockResolvedValue({ executions: [], cases: 2 })
   mocks.getProductionReview.mockReset()
   mocks.deleteProductionReview.mockReset()
+  mocks.batchDeleteProductionReviews.mockReset().mockResolvedValue({ requested: 0, deleted: 0, skipped: [] })
   mocks.getExecution.mockReset()
   mocks.getTask.mockReset()
 })
@@ -180,6 +183,60 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     await wrapper.get('.review-filter-row').trigger('submit')
     await flushPromises()
     expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: undefined }))
+  })
+
+  it('搜索框带清空（×）：点清空连已提交关键词一起复位并重新拉取', async () => {
+    const wrapper = renderReview()
+    await flushPromises()
+    const input = wrapper.get('.review-filter-search')
+    expect(input.attributes('allow-clear')).toBeDefined()
+    await input.setValue('MR-2')
+    await wrapper.get('.review-filter-row').trigger('submit')
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: 'MR-2' }))
+
+    // 点 ×（Arco 清空输入并触发 clear 事件）：不点「查询」也应立即按无关键词重拉
+    wrapper.findComponent({ name: 'AInput' }).vm.$emit('clear')
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: undefined }))
+  })
+
+  it('Tab 切换不影响筛选条件：A/C 各自独立记忆，切回原样恢复', async () => {
+    const wrapper = renderReview()
+    await flushPromises()
+    // A 页（入库决策）设筛选：状态=已处理 + 关键词「对齐」
+    wrapper.findAllComponents({ name: 'ASelect' })[0].vm.$emit('update:modelValue', '已处理')
+    await wrapper.get('.review-filter-search').setValue('对齐')
+    await wrapper.get('.review-filter-row').trigger('submit')
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
+      expect.objectContaining({ category: 'A', statusGroup: 'processed', keyword: '对齐' }),
+    )
+
+    // 切到 C：用 C 自己的默认筛选（不携带 A 的已处理/关键词，避免「重跑中」类错位），再设「重跑中」
+    await switchToCategoryC(wrapper)
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
+      expect.objectContaining({ category: 'C', statusGroup: undefined, keyword: undefined }),
+    )
+    wrapper.findAllComponents({ name: 'ASelect' })[0].vm.$emit('update:modelValue', '重跑中')
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
+      expect.objectContaining({ category: 'C', status: 'RERUNNING' }),
+    )
+
+    // 切回 A：已处理 + 关键词原样恢复（含输入框文本）
+    await wrapper.findAll('.review-tabs nav button')[0].trigger('click')
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
+      expect.objectContaining({ category: 'A', templateId: 'T_LINK', statusGroup: 'processed', keyword: '对齐' }),
+    )
+    expect((wrapper.get('.review-filter-search').element as HTMLInputElement).value).toBe('对齐')
+
+    // 再切回 C：「重跑中」还在
+    await switchToCategoryC(wrapper)
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
+      expect.objectContaining({ category: 'C', status: 'RERUNNING' }),
+    )
   })
 
   it('操作列阴影只在右侧仍有可滚动内容时出现', async () => {
@@ -361,6 +418,64 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     expect(bar.text()).toContain('schema-paper · 2 条')
   })
 
+  it('批量删除按钮在批量重跑右侧：勾选后出现，确认弹窗通过后才下发', async () => {
+    mocks.batchDeleteProductionReviews.mockResolvedValueOnce({ requested: 2, deleted: 2, skipped: [] })
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+
+    expect(wrapper.findAll('.rerun-batch-action')).toHaveLength(0)
+    const header = headerCheckbox(wrapper)
+    ;(header.element as HTMLInputElement).checked = true
+    await header.trigger('change')
+
+    const buttons = wrapper.findAll('.rerun-batch-action')
+    expect(buttons).toHaveLength(2)
+    expect(buttons[0].text()).toBe('批量重跑（2）')
+    expect(buttons[1].text()).toBe('批量删除（2）')
+    expect(buttons[1].classes()).toContain('is-danger')
+
+    // 点击批量删除只弹二次确认，不直接调 API；确认（弹窗 ok）才下发
+    await buttons[1].trigger('click')
+    expect(mocks.batchDeleteProductionReviews).not.toHaveBeenCalled()
+    // 模板里第 2 个 a-modal 是批量删除确认框（1=批量重跑确认、3=日志弹窗）
+    wrapper.findAllComponents({ name: 'AModal' })[1].vm.$emit('ok')
+    await flushPromises()
+
+    expect(mocks.batchDeleteProductionReviews).toHaveBeenCalledWith({ caseIds: ['MR-1', 'MR-2'] })
+    const bar = wrapper.get('.rerun-feedback')
+    expect(bar.classes()).toContain('app-alert--success')
+    expect(bar.text()).toContain('已删除失败记录 2 条')
+    // 删除完成：清空勾选并刷新列表
+    expect(rowCheckboxes(wrapper).every((input) => !(input.element as HTMLInputElement).checked)).toBe(true)
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ category: 'C' }))
+  })
+
+  it('批量删除部分被跳过：反馈条转黄并聚合跳过原因', async () => {
+    mocks.batchDeleteProductionReviews.mockResolvedValueOnce({
+      requested: 2,
+      deleted: 1,
+      skipped: [{ id: 'MR-2', reason: '已处理的记录不可删除' }],
+    })
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+
+    const header = headerCheckbox(wrapper)
+    ;(header.element as HTMLInputElement).checked = true
+    await header.trigger('change')
+
+    await wrapper.findAll('.rerun-batch-action')[1].trigger('click')
+    wrapper.findAllComponents({ name: 'AModal' })[1].vm.$emit('ok')
+    await flushPromises()
+
+    const bar = wrapper.get('.rerun-feedback')
+    expect(bar.classes()).toContain('app-alert--warning')
+    expect(bar.text()).toContain('已删除失败记录 1 条')
+    expect(bar.text()).toContain('跳过 1 条')
+    expect(bar.text()).toContain('已处理的记录不可删除×1')
+  })
+
   it('更新时间表头三态排序：默认 → 新→旧 → 旧→新 → 默认，请求带对应 sort 参数', async () => {
     const wrapper = renderReview()
     await flushPromises()
@@ -412,7 +527,136 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
   })
 })
 
+describe('执行日志标签切换', () => {
+  const execution = (id: string, status = 'COMPLETED') => ({
+    id, status, taskId: `PI-${id}`, definitionId: 'schema:paper', workflowId: `wf-${id}`,
+    startedAt: '2026-09-17 10:00:00', message: `${id} 执行消息`,
+  })
+  const task = (id: string) => ({ id: `PI-${id}`, steps: [], logs: [`${id} 任务日志`] })
+  const deferred = <T,>() => {
+    let resolve!: (value: T) => void
+    let reject!: (reason: Error) => void
+    const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej })
+    return { promise, resolve, reject }
+  }
+  beforeEach(() => {
+    mocks.getProductionReview.mockResolvedValue({
+      ...caseRow('MR-1', 'RESOLVED'),
+      data: { input: { executionId: 'EXEC-ORIGINAL', rerunExecutionId: 'EXEC-RERUN' } },
+    })
+    mocks.getExecution.mockImplementation(async (id: string) => execution(id))
+    mocks.getTask.mockImplementation(async (id: string) => task(id.slice(3)))
+  })
+  async function openLog() {
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+    await wrapper.findAll('tbody .review-action-btn')[0].trigger('click')
+    await flushPromises()
+    return wrapper
+  }
+
+  it('慢请求期间保留内容，概要与任务日志一次更新，已结束执行再次切换无需请求', async () => {
+    const wrapper = await openLog()
+    const pendingExecution = deferred<ReturnType<typeof execution>>()
+    const pendingTask = deferred<ReturnType<typeof task>>()
+    mocks.getExecution.mockReturnValueOnce(pendingExecution.promise)
+    mocks.getTask.mockReturnValueOnce(pendingTask.promise)
+    const content = () => wrapper.get('.case-log-content')
+    await wrapper.get('.case-log-switch button:nth-child(2)').trigger('click')
+    expect(content().attributes('aria-busy')).toBe('true')
+    expect(content().text()).toContain('EXEC-RERUN 任务日志')
+    expect(wrapper.find('.case-log-missing').exists()).toBe(false)
+    pendingExecution.resolve(execution('EXEC-ORIGINAL'))
+    await flushPromises()
+    expect(content().text()).toContain('EXEC-RERUN 任务日志')
+    expect(wrapper.get('.case-log-dl').text()).not.toContain('EXEC-ORIGINAL')
+    pendingTask.resolve(task('EXEC-ORIGINAL'))
+    await flushPromises()
+    expect(content().attributes('aria-busy')).toBe('false')
+    expect(wrapper.get('.case-log-dl').text()).toContain('EXEC-ORIGINAL')
+    expect(content().text()).toContain('EXEC-ORIGINAL 任务日志')
+    await wrapper.get('.case-log-switch button:first-child').trigger('click')
+    await wrapper.get('.case-log-switch button:nth-child(2)').trigger('click')
+    expect(content().text()).toContain('EXEC-ORIGINAL 任务日志')
+    expect(content().attributes('aria-busy')).toBe('false')
+    expect(mocks.getExecution).toHaveBeenCalledTimes(2)
+    expect(mocks.getTask).toHaveBeenCalledTimes(2)
+  })
+
+  it('快速切回重跑执行后，原执行的迟到任务响应不能覆盖当前日志', async () => {
+    const wrapper = await openLog()
+    const pendingTask = deferred<ReturnType<typeof task>>()
+    mocks.getTask.mockReturnValueOnce(pendingTask.promise)
+    await wrapper.get('.case-log-switch button:nth-child(2)').trigger('click')
+    await flushPromises()
+    await wrapper.get('.case-log-switch button:first-child').trigger('click')
+    pendingTask.resolve(task('EXEC-ORIGINAL'))
+    await flushPromises()
+    expect(wrapper.get('.case-log-dl').text()).toContain('EXEC-RERUN')
+    expect(wrapper.get('.case-log-console').text()).toBe('EXEC-RERUN 任务日志')
+    expect(wrapper.get('.case-log-content').attributes('aria-busy')).toBe('false')
+  })
+
+  it('过期请求失败不会把当前已加载日志替换为缺失警告', async () => {
+    const wrapper = await openLog()
+    const pending = deferred<ReturnType<typeof execution>>()
+    mocks.getExecution.mockReturnValueOnce(pending.promise)
+    await wrapper.get('.case-log-switch button:nth-child(2)').trigger('click')
+    await wrapper.get('.case-log-switch button:first-child').trigger('click')
+    pending.reject(new Error('原执行请求失败'))
+    await flushPromises()
+    expect(wrapper.find('.case-log-missing').exists()).toBe(false)
+    expect(wrapper.get('.case-log-console').text()).toBe('EXEC-RERUN 任务日志')
+  })
+
+  it('关闭重开会刷新数据并使上一次弹窗的在途响应失效', async () => {
+    const wrapper = await openLog()
+    const pendingTask = deferred<ReturnType<typeof task>>()
+    mocks.getTask.mockReturnValueOnce(pendingTask.promise)
+    await wrapper.get('.case-log-switch button:nth-child(2)').trigger('click')
+    await flushPromises()
+    await wrapper.get('.case-log-close').trigger('click')
+    mocks.getTask.mockResolvedValueOnce({ ...task('EXEC-RERUN'), logs: ['重开后新日志'] })
+    await wrapper.findAll('tbody .review-action-btn')[0].trigger('click')
+    await flushPromises()
+    pendingTask.resolve(task('EXEC-ORIGINAL'))
+    await flushPromises()
+    expect(mocks.getExecution.mock.calls.filter(([id]) => id === 'EXEC-RERUN')).toHaveLength(2)
+    expect(wrapper.get('.case-log-dl').text()).toContain('EXEC-RERUN')
+    expect(wrapper.get('.case-log-console').text()).toBe('重开后新日志')
+  })
+
+  it('运行中执行切回时重新加载，不复用旧的运行状态和日志', async () => {
+    mocks.getExecution.mockImplementation(async (id: string) => execution(id, id === 'EXEC-RERUN' ? 'RUNNING' : 'COMPLETED'))
+    const wrapper = await openLog()
+    await wrapper.get('.case-log-switch button:nth-child(2)').trigger('click')
+    await flushPromises()
+    mocks.getTask.mockResolvedValueOnce({ ...task('EXEC-RERUN'), logs: ['运行中新增日志'] })
+    await wrapper.get('.case-log-switch button:first-child').trigger('click')
+    await flushPromises()
+    expect(mocks.getExecution.mock.calls.filter(([id]) => id === 'EXEC-RERUN')).toHaveLength(2)
+    expect(wrapper.get('.case-log-console').text()).toBe('运行中新增日志')
+  })
+})
+
 describe('查看档只读（开发维护 × 共享生产空间）', () => {
+  it('已勾选并打开批量删除确认后失去写权限，按钮置灰且确认不提交', async () => {
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+    await rowCheckboxes(wrapper)[0].setValue(true)
+    await wrapper.get('.rerun-batch-action.is-danger').trigger('click')
+    graphSpaceMock.state!.writable = false
+    await flushPromises()
+    for (const button of wrapper.findAll('.rerun-batch-action')) {
+      expect(button.attributes()).toHaveProperty('disabled')
+    }
+    wrapper.findAllComponents({ name: 'AModal' })[1].vm.$emit('ok')
+    await flushPromises()
+    expect(mocks.batchDeleteProductionReviews).not.toHaveBeenCalled()
+  })
+
   it('canOperate=false 的行不可勾选/重跑/删除，整页出现只读提示条', async () => {
     mocks.getProductionReviews.mockReset().mockResolvedValue({
       items: [
@@ -628,4 +872,17 @@ describe('队列跟随图空间切换', () => {
       expect.objectContaining({ graphSpace: 'dev2', page: 1 }),
     )
   })
+})
+
+it('空间只读即使记录旧快照允许操作，也禁用重跑删除且允许看日志', async () => {
+  graphSpaceMock.raw.writable = false
+  const wrapper = renderReview()
+  await flushPromises()
+  await switchToCategoryC(wrapper)
+  const buttons = wrapper.findAll('tbody tr')[0].findAll('.review-action-btn')
+  expect(buttons.map(button => button.text())).toEqual(['日志', '重跑', '删除'])
+  expect(buttons[0].attributes('disabled')).toBeUndefined()
+  expect(buttons[1].attributes()).toHaveProperty('disabled')
+  expect(buttons[2].attributes()).toHaveProperty('disabled')
+  expect(mocks.rerunExtractFailures).not.toHaveBeenCalled()
 })

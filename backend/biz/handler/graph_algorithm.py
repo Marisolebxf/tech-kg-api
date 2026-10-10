@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
 from biz.dependencies.auth import CurrentActor
+from biz.dependencies.selected_graph_space import bind_selected_graph_space
 from biz.schemas.common import ApiResponse
 from biz.schemas.graph_algorithm import AlgorithmSubmitRequest
 from service.graph_algorithm import (
     GraphAlgorithmError,
+    cancel_job,
     engine_status,
     get_job,
     get_result,
@@ -16,7 +18,7 @@ from service.graph_algorithm import (
     submit_job,
 )
 
-router = APIRouter(prefix="/graph-algorithms", tags=["graph-algorithms"])
+router = APIRouter(prefix="/graph-algorithms", tags=["graph-algorithms"], dependencies=[Depends(bind_selected_graph_space)])
 
 
 @router.get("/metadata", response_model=ApiResponse)
@@ -87,6 +89,20 @@ def read_job_result(
     """获取已成功作业的 csv 结果。"""
     try:
         data = get_result(actor, space, job_id)
+    except GraphAlgorithmError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return ApiResponse(data=data)
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=ApiResponse)
+def stop_job(
+    actor: CurrentActor,
+    job_id: str,
+    space: str = Query(min_length=1, max_length=64),
+) -> ApiResponse:
+    """终止指定空间内的单个算法作业。"""
+    try:
+        data = cancel_job(actor, space, job_id)
     except GraphAlgorithmError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     return ApiResponse(data=data)

@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -16,16 +16,19 @@ from biz.schemas.common import ApiResponse
 from db_model.business_access import (
     BusinessClient,
     BusinessGraphSpace,
-    BusinessMember,
+    BusinessMembership,
+    BusinessMembershipState,
+    BusinessSpacePolicy,
     BusinessSpaceRequest,
 )
 from db_model.platform_governance import AdminAuditLog, PlatformUser
 from infra.mysql import get_session, session_scope
-from service.business_access_control import rbac_enabled
+from service.business_access_control import membership_grants, rbac_enabled, space_registrations
 from service.graph_space import GraphSpaceService
 from service.platform_access import list_members, set_admin_role
 
 router = APIRouter(prefix="/business-access", tags=["business-access"])
+management_router = APIRouter(prefix="/business-access", tags=["business-access"])
 Db = Annotated[Session, Depends(get_session)]
 CLIENT_PATTERN = r"^[a-z0-9][a-z0-9_-]{0,63}$"
 SPACE_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]{0,63}$"
@@ -38,6 +41,7 @@ class BusinessPayload(BaseModel):
 
 class MemberPayload(BaseModel):
     clientId: str | None = Field(default=None, pattern=CLIENT_PATTERN)
+    clientIds: list[str] | None = None
     role: Literal["user", "developer", "admin"]
 
 
@@ -108,34 +112,35 @@ def state(actor: CurrentMaintainer, session: Db, application: AuthApplicationDep
     business_stmt = select(BusinessClient)
     request_stmt = select(BusinessSpaceRequest).order_by(BusinessSpaceRequest.created_at.desc())
     if not actor.is_admin:
-        business_stmt = business_stmt.where(BusinessClient.client_id == actor.business_id)
-        request_stmt = request_stmt.where(BusinessSpaceRequest.client_id == actor.business_id)
+        business_stmt = business_stmt.where(BusinessClient.client_id.in_(actor.developer_business_ids))
+        request_stmt = request_stmt.where(BusinessSpaceRequest.client_id.in_(actor.developer_business_ids))
     businesses = [
         {"clientId": r.client_id, "name": r.name, "enabled": r.enabled}
         for r in session.scalars(business_stmt)
     ]
     members = []
     if actor.is_admin:
-        memberships = {r.user_id: r for r in session.scalars(select(BusinessMember))}
         for member in list_members(
             session, initial_admin_ids=application.settings.initial_admin_user_ids
         ):
-            link = memberships.get(member["userId"])
+            links = membership_grants(session, member["userId"])
+            client_ids = [link.client_id for link in links]
             members.append(
                 {
                     **member,
-                    "clientId": link.client_id if link else None,
-                    "role": "admin" if member["isAdmin"] else link.role if link else "user",
+                    "clientId": client_ids[0] if len(client_ids) == 1 else None,
+                    "clientIds": client_ids,
+                    "role": "admin" if member["isAdmin"] else "developer" if any(link.role == "developer" for link in links) else "user",
                 }
             )
-    rows = {r.space_name: r for r in session.scalars(select(BusinessGraphSpace))}
+    rows = space_registrations(session)
     if actor.is_admin:
         names = sorted(set(GraphSpaceService(session)._all_spaces()) | set(rows))
     else:
         names = sorted(
             r.space_name
             for r in rows.values()
-            if r.client_id == actor.business_id or r.is_shared_production
+            if r.client_id in actor.developer_business_ids or r.is_shared_production
         )
     spaces = [
         {
@@ -152,6 +157,7 @@ def state(actor: CurrentMaintainer, session: Db, application: AuthApplicationDep
             "spaces": spaces,
             "requests": [_request_dict(r) for r in session.scalars(request_stmt)],
             "currentBusinessId": actor.business_id,
+            "currentBusinessIds": list(actor.developer_business_ids),
         }
     )
 
@@ -183,10 +189,11 @@ def save_member(
     require_enabled()
     if session.get(PlatformUser, user_id) is None:
         raise HTTPException(404, "用户不存在，请先登录一次以登记统一认证 ID")
-    if payload.clientId:
-        _business(session, payload.clientId)
-    elif payload.role == "developer":
-        raise HTTPException(400, "开发维护角色必须归属一个业务")
+    client_ids = list(dict.fromkeys(payload.clientIds if payload.clientIds is not None else ([payload.clientId] if payload.clientId else [])))
+    for client_id in client_ids:
+        _business(session, client_id)
+    if not client_ids and payload.role == "developer":
+        raise HTTPException(400, "开发维护角色必须归属至少一个业务")
     try:
         set_admin_role(
             session,
@@ -197,15 +204,12 @@ def save_member(
         )
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
-    row = session.get(BusinessMember, user_id)
-    if payload.clientId:
-        if row is None:
-            row = BusinessMember(user_id=user_id)
-            session.add(row)
-        row.client_id = payload.clientId
-        row.role = "developer" if payload.role == "developer" else "user"
-    elif row is not None:
-        session.delete(row)
+    # 不改写与旧部署共享的旧成员表。
+    if session.get(BusinessMembershipState, user_id) is None:
+        session.add(BusinessMembershipState(user_id=user_id))
+    session.execute(delete(BusinessMembership).where(BusinessMembership.user_id == user_id))
+    session.add_all(BusinessMembership(user_id=user_id, client_id=client_id,
+        role="developer" if payload.role == "developer" else "user") for client_id in client_ids)
     _audit(session, actor, "BIND_BUSINESS_MEMBER", user_id, payload.model_dump())
     return ApiResponse(data={"userId": user_id})
 
@@ -223,21 +227,18 @@ def save_space(space_name: str, payload: SpacePayload, actor: CurrentAdmin, sess
         _business(session, payload.clientId)
     if space_name not in GraphSpaceService(session).client.list_spaces():
         raise HTTPException(404, "图空间不存在")
-    row = session.get(BusinessGraphSpace, space_name)
-    if row is not None and row.provision_request_id:
-        request = session.get(BusinessSpaceRequest, row.provision_request_id)
+    legacy = session.get(BusinessGraphSpace, space_name)
+    if legacy is not None and legacy.provision_request_id:
+        request = session.get(BusinessSpaceRequest, legacy.provision_request_id)
         if request is not None and request.status in {"creating", "failed"}:
             raise HTTPException(409, "请先完成该空间的创建申请，再调整业务归属")
+    row = session.get(BusinessSpacePolicy, space_name)
     if row is None:
-        row = BusinessGraphSpace(space_name=space_name)
+        row = BusinessSpacePolicy(space_name=space_name)
         session.add(row)
     row.client_id = payload.clientId
-    row.is_shared_production = payload.isSharedProduction
-    row.shared_key = "production" if payload.isSharedProduction else None
-    try:
-        session.flush()
-    except IntegrityError as exc:
-        raise HTTPException(409, "已存在共享生产空间，请先取消原空间的共享标记") from exc
+    row.visibility = "public" if payload.isSharedProduction else "business" if payload.clientId else "unassigned"
+    session.flush()
     _audit(session, actor, "BIND_BUSINESS_SPACE", space_name, payload.model_dump())
     return ApiResponse(data={"name": space_name})
 
@@ -245,11 +246,11 @@ def save_space(space_name: str, payload: SpacePayload, actor: CurrentAdmin, sess
 @router.post("/requests")
 def request_space(payload: RequestPayload, actor: CurrentMaintainer, session: Db):
     require_enabled()
-    if payload.clientId and not actor.is_admin and payload.clientId != actor.business_id:
+    if payload.clientId and not actor.is_admin and payload.clientId not in actor.developer_business_ids:
         raise HTTPException(403, "不能为其他业务申请空间")
-    client_id = payload.clientId if actor.is_admin and payload.clientId else actor.business_id
+    client_id = payload.clientId or (actor.developer_business_ids[0] if len(actor.developer_business_ids) == 1 else None)
     _business(session, client_id)
-    if session.get(BusinessGraphSpace, payload.spaceName) is not None:
+    if payload.spaceName in space_registrations(session):
         raise HTTPException(409, "图空间名称已登记")
     duplicate = session.scalar(
         select(BusinessSpaceRequest.id).where(
@@ -370,3 +371,10 @@ def retry_request(request_id: str, actor: CurrentAdmin, session: Db):
     _audit(session, actor, "RETRY_BUSINESS_SPACE", row.id, {})
     session.commit()
     return ApiResponse(data=_provision(request_id, actor))
+
+
+# 仅挂载配置管理需要的归属接口；旧空间申请审批接口仍需单独显式挂载。
+management_router.add_api_route("/state", state, methods=["GET"])
+management_router.add_api_route("/businesses/{client_id}", save_business, methods=["PUT"])
+management_router.add_api_route("/members/{user_id}", save_member, methods=["PUT"])
+management_router.add_api_route("/spaces/{space_name}", save_space, methods=["PUT"])

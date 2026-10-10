@@ -13,6 +13,7 @@ from biz.dependencies.review_identity import get_review_identity
 from biz.schemas.common import ApiResponse
 from biz.schemas.manual_review_production import (
     CancelRequest,
+    DeleteCasesRequest,
     DirectDecideRequest,
     DraftRequest,
     EvidenceCompleteRequest,
@@ -139,6 +140,11 @@ async def production_queue(
     page: int = 1,
     page_size: int = Query(50, alias="pageSize"),
 ):
+    selected_space = getattr(identity.platform_actor, "context_graph_space", "")
+    if selected_space:
+        if graph_space and graph_space != selected_space:
+            raise HTTPException(403, "请求空间与当前图空间不一致")
+        graph_space = selected_space
     cache_key = (
         "queue:"
         + _cache_scope(identity)
@@ -343,6 +349,33 @@ async def delete_case(case_id: str, identity: ReviewIdentityDep):
         return ApiResponse(data=production_service.delete_case(case_id, identity))
     except Exception as exc:
         _raise_production_error(exc)
+
+
+@router.post("/production/batch-delete", response_model=ApiResponse)
+async def batch_delete_cases(body: DeleteCasesRequest, identity: ReviewIdentityDep):
+    """批量物理删除未处理 case：逐条复用单删门控（review_admin / 空间校验 / 终态不可删）。
+
+    单条被拒（已处理、不存在、无权限）只跳过该条不阻断整批，结果聚合返回；
+    requested 为去重后的请求数。
+    """
+    _queue_cache_clear()
+    case_ids = list(dict.fromkeys(body.caseIds))
+    deleted = 0
+    skipped: list[dict[str, str]] = []
+    for case_id in case_ids:
+        try:
+            production_service.delete_case(case_id, identity)
+            deleted += 1
+        except KeyError:
+            skipped.append({"id": case_id, "reason": REVIEW_TASK_NOT_FOUND})
+        except Exception as exc:
+            # 业务拒绝（终态 409 / 权限 403）与意外异常均按条跳过并带回原因，
+            # 避免一条坏记录拖垮整批
+            skipped.append({"id": case_id, "reason": str(exc) or exc.__class__.__name__})
+    return ApiResponse(
+        data={"requested": len(case_ids), "deleted": deleted, "skipped": skipped},
+        msg=f"已删除 {deleted} 条、跳过 {len(skipped)} 条",
+    )
 
 
 @router.get("/production/{case_id}/audit-logs")

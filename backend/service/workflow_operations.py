@@ -47,7 +47,9 @@ def _extract_result_log_lines(execution: dict[str, Any]) -> list[str]:
     - 逐来源批次/读行/写入/失败/游标来自 output.sources（工作流结束回填）；
     - 失败汇总来自 output.failures——重跑模式 recorded 恒 0（仍失败记录由
       resolve 重建为新审核 case），此时引导看失败队列而非 recorded；
-      缺记录 id 的失败行建不了 case（noRecordId），须如实说明未入队。
+      缺记录 id 的失败行建不了 case（noRecordId），须如实说明未入队；
+      普通模式 recorded=0 且无 noRecordId 明细时，未建任何 case，如实说明
+      而非引导翻空队列。
     """
     lines: list[str] = []
     scope = _rerun_scope_line(execution.get("payload"))
@@ -70,14 +72,18 @@ def _extract_result_log_lines(execution: dict[str, Any]) -> list[str]:
     if isinstance(failures, dict) and _safe_int(failures.get("count")):
         recorded = _safe_int(failures.get("recorded"))
         no_record_id = _safe_int(failures.get("noRecordId"))
+        payload = execution.get("payload")
+        rerun = isinstance(payload, dict) and bool(payload.get("recordIdsBySource"))
         if recorded:
             detail = f"已落审核 case {recorded} 条"
             if no_record_id:
                 detail += f"，{no_record_id} 条缺记录 id 未入队"
-        elif no_record_id:
-            detail = f"{no_record_id} 条缺记录 id 未入队，请检查脚本 failures 是否携带记录主键"
-        else:
+        elif rerun:
             detail = "详见人工审核失败队列"
+        elif no_record_id:
+            detail = f"未转人工审核：{no_record_id} 条缺记录 id 无法转审，请检查脚本 failures 是否携带记录主键"
+        else:
+            detail = "未转人工审核：失败行缺少记录主键"
         lines.append(f"失败汇总：{failures.get('count')} 条（{detail}）")
     return lines
 
@@ -107,6 +113,8 @@ class WorkflowOperationsService:
             if actor is None or actor.is_admin
             else []
         )
+        if actor is not None:
+            changes = [item for item in changes if workflow_resource_visible(actor, item)]
         return {
             "summary": [
                 {
@@ -126,7 +134,7 @@ class WorkflowOperationsService:
                 "updated": sum(c["change"] == "修改" for c in changes),
                 "deleted": sum(c["change"] == "删除" for c in changes),
             },
-            "updatePolicy": self.repo.get_setting("update_policy")
+            "updatePolicy": self.repo.get_setting(f"update_policy:{actor.context_graph_space}" if actor and actor.context_graph_space else "update_policy")
             if actor is None or actor.is_admin
             else {},
         }
@@ -427,6 +435,8 @@ class WorkflowOperationsService:
         executions: list[dict[str, Any]] = []
         skipped: list[dict[str, str]] = []
         for info in schema_extraction.list_extract_eligible_schemas():
+            if actor and actor.context_graph_space and info.get("graph_space") != actor.context_graph_space:
+                continue
             definition = schema_extraction.persist_extract_definition(
                 schema_extraction.build_extract_definition(info)
             )
@@ -484,6 +494,8 @@ class WorkflowOperationsService:
         schedules: list[dict[str, Any]] = []
         keep_ids: set[str] = set()
         for info in schema_extraction.list_extract_eligible_schemas():
+            if actor and actor.context_graph_space and info.get("graph_space") != actor.context_graph_space:
+                continue
             definition = schema_extraction.persist_extract_definition(
                 schema_extraction.build_extract_definition(info)
             )
@@ -525,7 +537,12 @@ class WorkflowOperationsService:
             self.repo.save_schedule(schedule_record)
             schedules.append(schedule_record)
         # 清理不再属于当前 schema 集合的策略 Schedule 与旧 auto-graph-build（D3 存量）
-        for stale_id in [*(s.get("id") for s in self.repo.list_schedules() or [])]:
+        for stale in self.repo.list_schedules() or []:
+            if actor and actor.context_graph_space:
+                from service.workflow_jobs import workflow_resource_matches_space
+                if not workflow_resource_matches_space(actor, stale):
+                    continue
+            stale_id = stale.get("id")
             if not stale_id:
                 continue
             if stale_id == "auto-graph-build" or (
@@ -536,7 +553,8 @@ class WorkflowOperationsService:
                 except Exception:  # noqa: BLE001
                     temporal_runtime._client = None
                 self.repo.delete_schedule(stale_id)
-        self.repo.save_setting("update_policy", policy)
+        policy_key = f"update_policy:{actor.context_graph_space}" if actor and actor.context_graph_space else "update_policy"
+        self.repo.save_setting(policy_key, policy)
         return {"policy": policy, "schedules": schedules}
 
     def create_definition(self, request: dict[str, Any]) -> dict[str, Any]:

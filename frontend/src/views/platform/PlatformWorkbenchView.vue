@@ -49,6 +49,7 @@ import { IconInfoCircle, IconRefresh, IconSearch } from '@arco-design/web-vue/es
 import { useAuthStore } from '../../stores/auth'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
 import {
+  cancelAlgorithmJob,
   fetchGraphAlgorithmEngine,
   fetchGraphAlgorithmMetadata,
   getAlgorithmJob,
@@ -304,6 +305,7 @@ const queryMode = ref<'ngql' | 'algo'>('ngql')
 const ngqlStatement = ref('')
 const ngqlLoading = ref(false)
 const ngqlResult = ref<GraphConsoleResult | null>(null)
+const executedNgqlStatement = ref('')
 // nGQL 结果客户端分页：后端不限制返回行数，大结果集翻页展示（表头徽标仍显示总行数）
 const ngqlRecords = computed(() => ngqlResult.value?.records ?? [])
 const {
@@ -322,6 +324,8 @@ const selectedAlgorithm = ref(GRAPH_ALGORITHMS[0].id)
 interface AlgorithmState {
   labels: string[]
   submitting: boolean
+  cancelling: boolean
+  version: number
   job: AlgorithmJobSnapshot | null
   space: string
   result: AlgorithmResultPayload | null
@@ -329,7 +333,7 @@ interface AlgorithmState {
 }
 function createAlgorithmStates(): Record<string, AlgorithmState> {
   return Object.fromEntries(GRAPH_ALGORITHMS.map(({ id }) => [id, {
-    labels: [], submitting: false, job: null, space: '', result: null, pollFailures: 0,
+    labels: [], submitting: false, cancelling: false, version: 0, job: null, space: '', result: null, pollFailures: 0,
   }]))
 }
 const algorithmStates = ref(createAlgorithmStates())
@@ -353,6 +357,7 @@ const algoPartitionNum = ref(8)
 const algoMetadataLoading = ref(false)
 const algoMetadata = ref<GraphAlgorithmMetadata | null>(null)
 const algoSubmitLoading = computed(() => activeAlgorithmState.value.submitting)
+const algoCancelLoading = computed(() => activeAlgorithmState.value.cancelling)
 const algoJob = computed(() => activeAlgorithmState.value.job)
 const algoResult = computed(() => activeAlgorithmState.value.result)
 let algoPollTimer: number | undefined
@@ -435,7 +440,7 @@ function exportAlgoCsv(): void {
     const safe = /^[=+@\-\t\r]/.test(value) ? `'${value}` : value
     return `"${safe.replaceAll('"', '""')}"`
   }
-  const csv = [columns, ...algoRows.value.map((row) => columns.map((column) => String(row[column] ?? '')))]
+  const csv = [['序号', ...columns], ...filteredAndSortedAlgoRows.value.map((row, index) => [String(index + 1), ...columns.map((column) => String(row[column] ?? ''))])]
     .map((row) => row.map(escapeCell).join(',')).join('\r\n')
   const url = URL.createObjectURL(new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' }))
   const link = document.createElement('a')
@@ -459,8 +464,9 @@ const algoEngineStatus = computed(() => {
 const algoJobStatus = computed(() => {
   const job = algoJob.value
   if (!job) return null
-  if (job.status === 'running') return { label: '运行中', tone: 'is-运行中' }
+  if (job.status === 'running') return { label: activeAlgorithmState.value.cancelling ? '终止中' : '运行中', tone: 'is-运行中' }
   if (job.status === 'succeeded') return { label: '成功', tone: 'is-成功' }
+  if (job.status === 'cancelled') return { label: '已终止', tone: 'is-阻断' }
   return { label: '失败', tone: 'is-阻断' }
 })
 
@@ -914,6 +920,7 @@ async function handleNgqlQuery(): Promise<void> {
 
   ngqlLoading.value = true
   ngqlResult.value = null
+  executedNgqlStatement.value = ''
   resetNgqlPage()
 
   try {
@@ -921,6 +928,7 @@ async function handleNgqlQuery(): Promise<void> {
     const result = await runNgql(space, statement)
     if (context !== graphContextVersion) return
     ngqlResult.value = result
+    executedNgqlStatement.value = statement
   } catch (error) {
     if (context !== graphContextVersion) return
     // 完整错误进控制台便于排查；右上角提示只保留单行短文案
@@ -1001,20 +1009,22 @@ async function pollAlgoJob(): Promise<void> {
   if (queryMode.value !== 'algo' || activeTab.value !== 'query') return
   const context = graphContextVersion
   const jobId = state.job.jobId
+  const version = state.version
   try {
     const job = await getAlgorithmJob(state.space, jobId)
-    if (context !== graphContextVersion || state.job?.jobId !== jobId) return
+    if (context !== graphContextVersion || state.job?.jobId !== jobId || version !== state.version) return
     state.job = job
+    if (job.status !== 'running') state.cancelling = false
     state.pollFailures = 0
     if (job.status === 'succeeded') {
       await fetchAlgoResult(state)
     } else if (job.status === 'failed') {
       showToast('算法作业执行失败，详情见作业状态面板', 'error')
-    } else {
+    } else if (job.status === 'running') {
       scheduleAlgoPoll(state)
     }
   } catch (error) {
-    if (context !== graphContextVersion || state.job?.jobId !== jobId) return
+    if (context !== graphContextVersion || state.job?.jobId !== jobId || version !== state.version) return
     showToast(getErrorMessage(error, '算法作业状态查询失败'), 'warning')
     // 连续 3 次轮询失败即停止，避免页面后台空转打接口
     state.pollFailures += 1
@@ -1026,13 +1036,14 @@ async function fetchAlgoResult(state = activeAlgorithmState.value): Promise<void
   if (!state.job || !state.space) return
   const context = graphContextVersion
   const jobId = state.job.jobId
+  const version = state.version
   try {
     const result = await getAlgorithmJobResult(state.space, jobId)
-    if (context !== graphContextVersion || state.job?.jobId !== jobId) return
+    if (context !== graphContextVersion || state.job?.jobId !== jobId || version !== state.version) return
     state.result = result
     if (state === activeAlgorithmState.value) resetAlgoPage()
   } catch (error) {
-    if (context !== graphContextVersion || state.job?.jobId !== jobId) return
+    if (context !== graphContextVersion || state.job?.jobId !== jobId || version !== state.version) return
     showToast(getErrorMessage(error, '算法结果获取失败'), 'warning')
   }
 }
@@ -1043,15 +1054,41 @@ async function refreshAlgoJob(): Promise<void> {
   if (!state.job || !state.space) return
   const context = graphContextVersion
   const jobId = state.job.jobId
+  const version = state.version
   try {
     const job = await getAlgorithmJob(state.space, jobId)
-    if (context !== graphContextVersion || state.job?.jobId !== jobId) return
+    if (context !== graphContextVersion || state.job?.jobId !== jobId || version !== state.version) return
     state.job = job
+    if (job.status !== 'running') state.cancelling = false
     if (job.status === 'succeeded') await fetchAlgoResult(state)
     else if (job.status === 'running') scheduleAlgoPoll(state)
   } catch (error) {
-    if (context !== graphContextVersion || state.job?.jobId !== jobId) return
+    if (context !== graphContextVersion || state.job?.jobId !== jobId || version !== state.version) return
     showToast(getErrorMessage(error, '算法作业状态查询失败'), 'warning')
+  }
+}
+
+async function handleAlgoCancel(): Promise<void> {
+  const state = activeAlgorithmState.value
+  if (!state.job || state.job.status !== 'running' || state.cancelling) return
+  const context = graphContextVersion
+  const jobId = state.job.jobId
+  const version = ++state.version
+  state.cancelling = true
+  stopAlgoPoll()
+  try {
+    const job = await cancelAlgorithmJob(state.space, jobId)
+    if (context !== graphContextVersion || state.job?.jobId !== jobId || version !== state.version) return
+    state.job = job
+    state.cancelling = job.status === 'running'
+    if (job.status === 'running') scheduleAlgoPoll(state)
+    else if (job.status === 'succeeded') await fetchAlgoResult(state)
+    else state.result = null
+  } catch (error) {
+    if (context !== graphContextVersion || state.job?.jobId !== jobId || version !== state.version) return
+    state.cancelling = false
+    showToast(getErrorMessage(error, '终止算法作业失败'), 'warning')
+    scheduleAlgoPoll(state)
   }
 }
 
@@ -1069,7 +1106,7 @@ function collectAlgoParams(): Record<string, number | string | boolean> {
 
 async function handleAlgoSubmit(): Promise<void> {
   const state = activeAlgorithmState.value
-  if (state.submitting) return
+  if (state.submitting || state.cancelling || state.job?.status === 'running') return
   if (!algoSpace.value) {
     showToast('请选择图空间', 'warning')
     return
@@ -1115,6 +1152,7 @@ async function handleAlgoSubmit(): Promise<void> {
   }
 
   state.submitting = true
+  state.version += 1
   stopAlgoPoll()
   const context = graphContextVersion
   const space = algoSpace.value
@@ -1179,6 +1217,7 @@ watch(algoSpace, () => {
   graphContextVersion += 1
   stopAlgoPoll()
   ngqlResult.value = null
+  executedNgqlStatement.value = ''
   ngqlLoading.value = false
   resetNgqlPage()
   algoLabels.value = []
@@ -1364,7 +1403,7 @@ const pageMeta = computed(() => {
           <div v-else-if="overviewReviewsState === 'empty'" class="platform-card-empty">
             <strong>当前没有待审核任务</strong>
             <p>构建流程发现的低置信度候选会进入这里等待人工决策。</p>
-            <RouterLink to="/manual-review">前往人工审核</RouterLink>
+            <RouterLink class="primary" to="/manual-review">前往人工审核</RouterLink>
           </div>
           <div v-else-if="overviewReviewsState === 'loading'" class="platform-card-empty"><strong>审核队列加载中…</strong></div>
           <div v-else-if="overviewReviewsState === 'forbidden'" class="platform-card-empty"><strong>暂无审核权限</strong><p>需要审核角色（reviewer / 数据质量 / 图谱治理）后才能查看队列。</p><RouterLink to="/manual-review">前往人工审核</RouterLink></div>
@@ -1618,7 +1657,7 @@ const pageMeta = computed(() => {
                   :class="{ 'is-active': selectedAlgorithm === algo.id }"
                   @click="selectedAlgorithm = algo.id"
                 >{{ algo.label }}</button>
-                <APopover trigger="click" :title="algo.label" position="bottom">
+                <APopover :trigger="['hover', 'focus']" :title="algo.label" position="bl">
                   <AButton type="text" shape="circle" class="platform-algorithm-info" :class="{ 'is-active': selectedAlgorithm === algo.id }" :aria-label="`查看${algo.label}说明`">
                     <IconInfoCircle aria-hidden="true" />
                   </AButton>
@@ -1728,6 +1767,14 @@ const pageMeta = computed(() => {
               >
                 提交算法作业
               </AButton>
+              <AButton
+                type="primary"
+                class="platform-query-algo-cancel"
+                :disabled="!isAlgoJobRunning || algoSubmitLoading || algoCancelLoading"
+                @click="handleAlgoCancel"
+              >
+                终止算法作业
+              </AButton>
             </div>
           </div>
           <div v-if="algoSubmitLoading && !algoJob" class="platform-query-algo__job platform-query-algo__job-running" role="status" aria-live="polite">
@@ -1742,7 +1789,7 @@ const pageMeta = computed(() => {
               <span v-if="algoJob.finishedAt">完成 {{ formatAlgoTime(algoJob.finishedAt) }}</span>
               <span v-if="algoJob.status !== 'running' && algoJobElapsedText">耗时 {{ algoJobElapsedText }}</span>
               <span v-if="algoJob.driverState">Spark Driver：{{ algoJob.driverState }}</span>
-              <button class="kg-button kg-button--text" type="button" @click="refreshAlgoJob"><IconRefresh class="refresh-icon" />刷新状态</button>
+              <button class="kg-button kg-button--text platform-query-engine-refresh" type="button" :disabled="algoCancelLoading" @click="refreshAlgoJob"><IconRefresh class="refresh-icon" />刷新状态</button>
             </div>
             <div v-if="algoJob.status === 'running'" class="platform-query-algo__job-running" role="status">
               <i class="platform-query-algo__job-spinner" aria-hidden="true"></i>
@@ -1774,7 +1821,7 @@ const pageMeta = computed(() => {
         </header>
         <div class="platform-query-result__body">
           <div class="platform-query-result__table">
-            <QueryResultTable v-if="ngqlTotal" aria-label="nGQL 查询结果" :rows="pagedNgqlRecords" :columns="ngqlResult?.columns ?? []" :page="ngqlPage" :page-size="ngqlPageSize" :loading="ngqlLoading" />
+            <QueryResultTable v-if="ngqlTotal" aria-label="nGQL 查询结果" :rows="pagedNgqlRecords" :columns="ngqlResult?.columns ?? []" :page="ngqlPage" :page-size="ngqlPageSize" :loading="ngqlLoading" :space="algoSpace" :query-statement="executedNgqlStatement" />
             <div v-else class="platform-query-result__empty" role="status" aria-live="polite">
               <AEmpty :description="ngqlLoading ? '查询执行中，请稍候…' : ngqlResult ? '语句执行成功，无返回记录' : '暂无数据，执行 nGQL 语句后在此查看结果'" />
             </div>
@@ -1819,9 +1866,9 @@ const pageMeta = computed(() => {
         </div>
         <div class="platform-query-result__body">
           <div class="platform-query-result__table">
-            <QueryResultTable v-if="algoTotal" aria-label="图算法执行结果" :rows="pagedAlgoRows" :columns="algoResultColumns" :labels="algorithmColumnLabels" :page="algoPage" :page-size="algoPageSize" sortable :sort-column="algoSortColumn" :sort-direction="algoSortDirection" @sort="sortAlgoColumn" />
+            <QueryResultTable v-if="algoTotal" aria-label="图算法执行结果" :rows="pagedAlgoRows" :columns="algoResultColumns" :labels="algorithmColumnLabels" :page="algoPage" :page-size="algoPageSize" sortable :sort-column="algoSortColumn" :sort-direction="algoSortDirection" :space="activeAlgorithmState.space" :algorithm-name="selectedAlgorithmDef.label" :job-id="algoJob?.jobId" @sort="sortAlgoColumn" />
             <div v-else class="platform-query-result__empty" role="status" aria-live="polite">
-              <AEmpty :description="algoSubmitLoading ? '正在提交作业，请稍候…' : isAlgoJobRunning ? '算法运行中，完成后自动展示结果' : algoResult ? (submittedAlgoSearch ? '没有匹配的结果，请调整搜索条件' : '算法执行成功，无返回记录') : algoJob?.status === 'failed' ? '算法执行失败，请查看上方失败原因' : '暂无数据，提交算法作业后在此查看结果'" />
+              <AEmpty :description="algoSubmitLoading ? '正在提交作业，请稍候…' : isAlgoJobRunning ? '算法运行中，完成后自动展示结果' : algoResult ? (submittedAlgoSearch ? '没有匹配的结果，请调整搜索条件' : '算法执行成功，无返回记录') : algoJob?.status === 'cancelled' ? '算法作业已终止，可重新提交' : algoJob?.status === 'failed' ? '算法执行失败，请查看上方失败原因' : '暂无数据，提交算法作业后在此查看结果'" />
             </div>
           </div>
           <ListPagination v-if="algoTotal > 0" :total="algoTotal" :page="algoPage" :page-size="algoPageSize" :page-size-options="[20, 50, 100]" :show-jumper="false" :size-at-end="true" @change="changeAlgoPage" @change-size="changeAlgoPageSize">
@@ -2006,10 +2053,10 @@ print(response.json())</pre>
     <Teleport to="body">
       <button v-if="selectedAssetChange" class="asset-change-mask" type="button" aria-label="关闭新增数据详情" @click="selectedAssetChange = null" />
       <aside aria-label="辅助区域 4" v-if="selectedAssetChange && activeAssetOverview" class="asset-change-drawer">
-        <header><div><span>昨日图谱数据变化</span><h2>{{ activeAssetOverview.title }}新增明细</h2><p>{{ activeAssetOverview.addedLabel }} {{ activeAssetOverview.added }} · 数据更新至 {{ overviewMeta.updatedAt }}</p></div><button type="button" @click="selectedAssetChange = null">×</button></header>
+        <header><div><span>昨日图谱数据变化</span><h2>{{ activeAssetOverview.title }}新增明细</h2><p>{{ activeAssetOverview.addedLabel }} {{ activeAssetOverview.added }} · 数据更新至 {{ overviewMeta.updatedAt }}</p></div><button type="button" aria-label="关闭新增数据详情" @click="selectedAssetChange = null">×</button></header>
         <section class="asset-change-summary"><article><span>当前总量</span><strong>{{ activeAssetOverview.total }}</strong></article><article><span>{{ activeAssetOverview.addedLabel }}</span><strong>{{ activeAssetOverview.added }}</strong></article></section>
         <div class="asset-change-table"><table aria-label="数据表"><thead><tr><th>数据类型</th><th>具体对象</th><th>来源</th><th>识别时间</th></tr></thead><tbody><tr v-if="!assetChangeRows[selectedAssetChange].length"><td colspan="4">昨日暂无写图记录</td></tr><tr v-for="(row, idx) in assetChangeRows[selectedAssetChange]" :key="`${row.object}-${row.time}`"><td>{{ row.type }}</td><td><a-tooltip :popup-visible="assetTipVisible.has(`obj-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`obj-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><span class="asset-change-object" @mouseenter="showAssetTipIfTruncated(`obj-${idx}`, $event)" @mouseleave="hideAssetTip(`obj-${idx}`)"><strong>{{ row.object }}</strong></span><template #content>{{ row.object }}</template></a-tooltip></td><td><a-tooltip :popup-visible="assetTipVisible.has(`src-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`src-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><code class="asset-change-source" @mouseenter="showAssetTipIfTruncated(`src-${idx}`, $event)" @mouseleave="hideAssetTip(`src-${idx}`)">{{ row.source }}</code><template #content>{{ row.source }}</template></a-tooltip></td><td>{{ row.time }}</td></tr></tbody></table></div>
-        <footer><span>{{ assetChangeFooterText(selectedAssetChange) }}</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看对应更新任务 →</RouterLink></footer>
+        <footer><span>{{ assetChangeFooterText(selectedAssetChange) }}</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看对应更新任务</RouterLink></footer>
       </aside>
     </Teleport>
 
@@ -2255,8 +2302,9 @@ print(response.json())</pre>
 .platform-summary-card__items em { overflow:hidden;color:#8290a5;font-size:8px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }.platform-summary-card__items strong { overflow:hidden;color:#344861;font-size:10px;text-overflow:ellipsis;white-space:nowrap; }
 
 /* 末尾两卡仍等高：面板吃满所在网格行，剩余高度由列表弹性行摊平（不留底部空白）；
- * gap 统一 16px 与页头间距对齐。加载中/异常时由 min-height 预留就绪高度。 */
-.platform-overview-main { display:grid;flex-grow:1;grid-template-columns:minmax(0,1.65fr) minmax(360px,.72fr);gap:16px;min-height:340px; }
+ * gap 统一 16px 与页头间距对齐。加载中/空态/异常时由 min-height 预留就绪高度
+ * （450 ≈ 表头+计数行+8×44 行槽，保证审核空态时整行不塌、任务行高恒定）。 */
+.platform-overview-main { display:grid;flex-grow:1;grid-template-columns:minmax(0,1.65fr) minmax(360px,.72fr);gap:16px;min-height:450px; }
 /* 两卡同为 flex 列 + 列表区 1fr 弹性行：面板等高时行自动摊满，不再留底部空白 */
 .platform-jobs-panel,.platform-review-panel { display:flex;flex-direction:column;min-width:0;overflow:hidden; }
 .platform-jobs-panel .kg-panel__header>div,.platform-review-panel .kg-panel__header>div { display:grid;gap:2px; }
@@ -2268,9 +2316,9 @@ print(response.json())</pre>
 .platform-jobs-stats article span { font-size:18px;font-weight:600; }
 .platform-jobs-stats article span.is-run { color:var(--status-info); }.platform-jobs-stats article span.is-ok { color:var(--status-success); }.platform-jobs-stats article span.is-err { color:var(--status-danger); }.platform-jobs-stats article span.is-warn { color:var(--status-warning); }.platform-jobs-stats article span.is-idle { color:var(--status-neutral); }
 .platform-jobs-stats article em { color:#52627a;font-size:12px;line-height:20px;font-style:normal; }
-.platform-jobs-list { display:grid;flex:1;grid-auto-rows:minmax(44px,1fr);overflow-y:auto; }
+.platform-jobs-list { display:grid;flex:1;grid-template-rows:repeat(5,minmax(44px,1fr));overflow-y:auto; }
 .platform-jobs-list a { display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:10px;min-height:44px;padding:9px 14px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
-.platform-jobs-list a:last-child { border-bottom:0; }
+.platform-jobs-list a:nth-child(5):last-child { border-bottom:0; }
 .platform-jobs-list a:hover { background:#f4f8ff; }
 .platform-jobs-list strong { overflow:hidden;color:#253752;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap; }
 .platform-jobs-list a>span { display:inline-flex;align-items:center;gap:6px;padding:0;border-radius:0;background:transparent;color:#004ecc;font-size:14px;line-height:22px;white-space:nowrap; }
@@ -2281,9 +2329,9 @@ print(response.json())</pre>
 .platform-review-count strong { margin:0;color:#10264c;font-size:18px; }
 /* 行紧贴左侧任务行（44px 上下限 + 弹性摊高），类别列在行内右侧而非换行堆叠——
  * 8 行与「图谱构建」卡等高，更多的走粘底「还有 N 条待处理」。 */
-.platform-review-list { display:grid;flex:1;grid-auto-rows:minmax(44px,1fr);overflow-y:auto; }
+.platform-review-list { display:grid;flex:1;grid-template-rows:repeat(8,minmax(44px,1fr));overflow-y:auto; }
 .platform-review-list a { display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 10px;align-items:center;padding:9px 14px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
-.platform-review-list a:last-child { border-bottom:0; }
+.platform-review-list a:nth-child(8):last-child { border-bottom:0; }
 .platform-review-list a:hover { background:#f4f8ff; }
 .platform-review-list strong { min-width:0;overflow:hidden;color:#253752;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap; }
 .platform-review-list em { min-width:0;overflow:hidden;color:#8a97aa;font-size:12px;line-height:20px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }
@@ -4627,7 +4675,7 @@ print(response.json())</pre>
 
 .asset-change-mask{position:fixed;z-index:49;inset:0;border:0;background:rgba(16,36,76,.22)}
 .asset-change-drawer{position:fixed;z-index:50;top:0;right:0;display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;width:min(820px,78vw);height:100vh;background:#f8fbff;box-shadow:-18px 0 42px rgba(34,74,132,.22)}
-.asset-change-drawer>header{display:flex;align-items:flex-start;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.asset-change-drawer>header span{color:#004ecc;font-size:11px}.asset-change-drawer h2{margin:6px 0 3px;font-size:20px}.asset-change-drawer header p{margin:0;color:#718098;font-size:12px}.asset-change-drawer header>button{width:31px;height:31px;border:0;border-radius:5px;background:#f0f4fa;color:#52647f;font-size:20px;cursor:pointer}
+.asset-change-drawer>header{display:flex;align-items:flex-start;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.asset-change-drawer>header span{color:#004ecc;font-size:11px}.asset-change-drawer h2{margin:6px 0 3px;font-size:20px}.asset-change-drawer header p{margin:0;color:#718098;font-size:12px}.asset-change-drawer header>button{width:31px;height:31px;border:0;border-radius:5px;background:transparent;color:#52647f;font-size:20px;cursor:pointer}
 .asset-change-summary{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:14px}.asset-change-summary article{display:grid;gap:5px;padding:14px;border:1px solid #c7dcfb;border-radius:7px;background:#fff}.asset-change-summary span{color:#718098;font-size:11px}.asset-change-summary strong{color:#004ecc;font-size:24px}.asset-change-summary article:last-child strong{color:#067647}
 .asset-change-table{min-height:0;overflow:auto;padding:0 14px 14px}.asset-change-table table{width:100%;border-collapse:collapse;border:1px solid #dce8f8;background:#fff;font-size:12px}.asset-change-table th,.asset-change-table td{height:48px;padding:10px 12px;border-bottom:1px solid #e3ebf6;text-align:left}.asset-change-table th{position:sticky;top:0;background:#f3f7fc;color:#62728a}.asset-change-table td{color:#344861}.asset-change-table code{color:#004ecc;font-family:inherit}.asset-change-table td .asset-change-object{display:inline-block;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}.asset-change-table td .asset-change-source{display:inline-block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 .asset-change-drawer>footer{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.asset-change-drawer>footer span{color:#718098;font-size:11px}.asset-change-drawer>footer a{height:32px;padding:0 12px;border-radius:5px;background:#004ecc;color:#fff;font-size:11px;line-height:32px;text-decoration:none}
@@ -4811,6 +4859,9 @@ print(response.json())</pre>
 @media(max-width:768px){.platform-query-algo__controls{flex-direction:column;gap:12px}.platform-query-algo__form{width:100%}.platform-query-algo__actions{padding-top:0}.platform-algo-search-form{width:100%}.platform-algo-search{width:100%;min-width:0;flex:1}.platform-algo-list-toolbar>button{margin-left:0}}
 .platform-query .platform-query-engine-refresh,.platform-query .platform-query-engine-refresh:hover,.platform-query .platform-query-engine-refresh:active{padding:0;border:0;background:transparent;color:#165dff;font-size:14px;box-shadow:none}
 .platform-query .platform-query-engine-refresh:disabled{color:#c9cdd4;cursor:not-allowed}
+.platform-query :deep(.platform-query-algo-cancel.arco-btn-primary){background:#ffece8;color:#f53f3f}
+.platform-query :deep(.platform-query-algo-cancel.arco-btn-primary:hover:not(:disabled)){background:#fdd8d1;color:#cb272d}
+.platform-query :deep(.platform-query-algo-cancel.arco-btn-primary:disabled){background:#fff3f0;color:#f7b3a9}
 .platform-query :deep(.platform-algo-search .arco-input-prefix){color:#86909c;margin-right:8px}
 .platform-ngql-input :deep(.arco-textarea::placeholder){color:#86909c!important;opacity:1}
 .platform-relation-label-hint{margin-left:4px;color:var(--color-text-3);font-size:12px;font-weight:400}

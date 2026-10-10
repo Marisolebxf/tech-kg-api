@@ -32,6 +32,13 @@ ADMIN_PERMISSIONS = (
 
 
 @dataclass(frozen=True, slots=True)
+class BusinessMembershipGrant:
+    client_id: str
+    role: str = "user"
+    name: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class PlatformActor:
     user_id: str
     username: str
@@ -42,11 +49,29 @@ class PlatformActor:
     business_id: str = ""
     business_role: str = "user"
     business_only: bool = False
+    # None 兼容旧单业务身份；() 表示已明确撤销所有新版权限，禁止回退旧授权。
+    memberships: tuple[BusinessMembershipGrant, ...] | None = None
+    context_business_id: str = ""
+    context_graph_space: str = ""
+
+    @property
+    def business_ids(self) -> tuple[str, ...]:
+        if self.memberships is not None:
+            return tuple(grant.client_id for grant in self.memberships)
+        return (self.business_id,) if self.business_id else ()
+
+    @property
+    def developer_business_ids(self) -> tuple[str, ...]:
+        if self.business_only:
+            return ()
+        if self.memberships is not None:
+            return tuple(grant.client_id for grant in self.memberships if grant.role == "developer")
+        return (self.business_id,) if self.business_id and self.business_role == "developer" else ()
 
     @property
     def can_develop(self) -> bool:
         return not self.business_only and (
-            self.is_admin or bool(self.business_id and self.business_role == "developer")
+            self.is_admin or bool(self.developer_business_ids)
         )
 
     @property

@@ -1,10 +1,18 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { defineComponent } from 'vue'
-import { describe, expect, it, vi } from 'vitest'
+import { Textarea } from '@arco-design/web-vue'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import ConfigurationManagementView from './ConfigurationManagementView.vue'
 import ListPagination from '../../components/list-pagination.vue'
+import { useAuthStore } from '../../stores/auth'
+import { useGraphSpaceStore } from '../../stores/graphSpace'
+import { currentUserIsAdmin } from '../../api/currentUser'
+import { bindGraphSpace, listGraphSpaceItems, unbindGraphSpace, type GraphSpaceItem } from '../../api/graphSpace'
+import { listLlmConfigs } from '../../api/llmConfig'
+import { listEmbeddingConfigs } from '../../api/embeddingConfig'
+import type { AuthProfile } from '../../api/auth'
 
 const AInputStub = defineComponent({
   props: ['modelValue'],
@@ -70,10 +78,10 @@ vi.mock('../../api/graphSpace', () => ({
   bindGraphSpace: vi.fn(),
   unbindGraphSpace: vi.fn(),
 }))
-vi.mock('../../api/currentUser', () => ({ currentUserIsAdmin: () => true }))
+vi.mock('../../api/currentUser', () => ({ currentUserIsAdmin: vi.fn(() => true) }))
 vi.mock('@arco-design/web-vue/es/icon', () => ({ IconSearch: { template: '<i />' } }))
 
-function mountView() {
+function mountView(realTextarea = false) {
   return mount(ConfigurationManagementView, {
     global: {
       stubs: {
@@ -81,7 +89,7 @@ function mountView() {
         'a-select': true, 'a-option': true, 'a-input': AInputStub,
         'a-form': { template: '<form><slot /></form>' },
         'a-form-item': { template: '<label><slot /></label>' },
-        'a-textarea': true, 'a-checkbox': true,
+        'a-textarea': realTextarea ? Textarea : true, 'a-checkbox': true,
       },
     },
   })
@@ -161,7 +169,7 @@ describe('配置管理 · 管理抽屉编辑隔离', () => {
     wrapper.unmount()
   })
 
-  it('引用情况使用清晰的默认状态按钮并保留取消默认操作', async () => {
+  it('引用情况使用清晰的默认状态按钮；默认必须恒有一条，当前默认不可取消', async () => {
     setActivePinia(createPinia())
     const { updateLlmConfig } = await import('../../api/llmConfig')
     const previous = { ...state.current }
@@ -170,10 +178,40 @@ describe('配置管理 · 管理抽屉编辑隔离', () => {
     const control = wrapper.get('.config-usage-col .config-default-toggle')
     expect(control.text()).toBe('默认')
     expect(control.attributes('aria-pressed')).toBe('true')
+    // 全都不是默认就没有可用大模型：当前默认的开关禁用，点击无副作用
+    expect(control.attributes('disabled')).toBeDefined()
     await control.trigger('click')
     await flushPromises()
-    expect(updateLlmConfig).toHaveBeenCalledWith('LLM-E2E', { isDefault: false }, 'user-e2e')
-    expect(wrapper.get('.config-usage-col .config-default-toggle').text()).toBe('设为默认')
+    expect(updateLlmConfig).not.toHaveBeenCalled()
+    expect(wrapper.get('.config-usage-col .config-default-toggle').text()).toBe('默认')
+    wrapper.unmount()
+    state.current = previous
+  })
+
+  it('非默认项「设为默认」走 set-default 转移接口，原默认自动取消', async () => {
+    setActivePinia(createPinia())
+    const { listLlmConfigs, setDefaultLlmConfig, updateLlmConfig } = await import('../../api/llmConfig')
+    const previous = { ...state.current }
+    const other = { ...previous, id: 'LLM-2', name: '备用模型', isDefault: false }
+    vi.mocked(listLlmConfigs).mockResolvedValueOnce([previous, other])
+    // set-default 返回服务端视角：新默认开启，原默认已被 clear_other_defaults 关闭
+    vi.mocked(setDefaultLlmConfig).mockImplementationOnce(async (id: string) => {
+      state.current = { ...state.current, isDefault: false }
+      return { ...other, isDefault: id === 'LLM-2' }
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    const candidate = wrapper.findAll('.config-usage-col .config-default-toggle')
+      .find((t) => t.text() === '设为默认')
+    expect(candidate?.attributes('disabled')).toBeUndefined()
+    await candidate?.trigger('click')
+    await flushPromises()
+    expect(setDefaultLlmConfig).toHaveBeenCalledWith('LLM-2', 'user-e2e')
+    expect(updateLlmConfig).not.toHaveBeenCalled()
+    // 列表就地更新：新默认置顶显示「默认」，原默认变「设为默认」
+    const toggles = wrapper.findAll('.config-usage-col .config-default-toggle').map((t) => t.text())
+    expect(toggles[0]).toBe('默认')
+    expect(toggles).toContain('设为默认')
     wrapper.unmount()
     state.current = previous
   })
@@ -272,6 +310,160 @@ describe('配置管理 · 管理抽屉编辑隔离', () => {
 
     await portInput.setValue('1'.repeat(65))
     expect(fieldError()).toContain('数字输入长度不能超过64个字符')
+    wrapper.unmount()
+  })
+})
+
+// 使用真实 Arco Textarea，验证计数随编辑更新且超长粘贴不能超过实际提交上限。
+describe('配置说明计数与输入上限', () => {
+  it('语言模型：新建与管理显示 /64，回填说明和长文本粘贴均正确计数', async () => {
+    setActivePinia(createPinia())
+    state.current.description = '原说明'
+    const wrapper = mountView(true)
+    await flushPromises()
+    try {
+      await wrapper.get('.create-entry').trigger('click')
+      const create = wrapper.get('.config-create-dialog .config-description-textarea')
+      expect(create.get('.arco-textarea-word-limit').text()).toBe('0/64')
+      await create.get('textarea').setValue('测'.repeat(65))
+      expect(create.get('.arco-textarea-word-limit').text()).toBe('64/64')
+      expect((create.get('textarea').element as HTMLTextAreaElement).value).toHaveLength(64)
+      await wrapper.get('.config-create-dialog header button').trigger('click')
+      await openDrawer(wrapper)
+      const detail = wrapper.get('.detail-drawer .config-description-textarea')
+      expect(detail.get('.arco-textarea-word-limit').text()).toBe('3/64')
+      await detail.get('textarea').setValue('新说明')
+      expect(detail.get('.arco-textarea-word-limit').text()).toBe('3/64')
+      expect(wrapper.get('.config-table-wrap .config-name').text()).toContain('原说明')
+      await detail.get('textarea').setValue('文'.repeat(65))
+      expect(detail.get('.arco-textarea-word-limit').text()).toBe('64/64')
+      expect((detail.get('textarea').element as HTMLTextAreaElement).value).toHaveLength(64)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('MySQL：新建显示 /200，管理显示 /500，并保留既有说明', async () => {
+    setActivePinia(createPinia())
+    const { listMysqlDatasources } = await import('../../api/mysqlDatasource')
+    vi.mocked(listMysqlDatasources).mockResolvedValue([{
+      id: 'MY-COUNTER', name: '说明测试', description: '数据库说明', owner: 'admin',
+      updatedAt: '', status: '正常', isDefault: false, host: '127.0.0.1', port: 3306,
+      defaultDatabase: 'test', username: 'root', hasPassword: true, passwordMasked: '••••••',
+    }])
+    const wrapper = mountView(true)
+    await flushPromises()
+    try {
+      await wrapper.findAll('.category-nav > button').find(b => b.text().includes('MySQL'))!.trigger('click')
+      await flushPromises()
+      await wrapper.get('.create-entry').trigger('click')
+      const create = wrapper.get('.config-create-dialog .config-description-textarea')
+      expect(create.get('.arco-textarea-word-limit').text()).toBe('0/200')
+      await create.get('textarea').setValue('测'.repeat(201))
+      expect(create.get('.arco-textarea-word-limit').text()).toBe('200/200')
+      await wrapper.get('.config-create-dialog header button').trigger('click')
+      await openDrawer(wrapper)
+      const detail = wrapper.get('.detail-drawer .config-description-textarea')
+      expect(detail.get('.arco-textarea-word-limit').text()).toBe('5/500')
+      await detail.get('textarea').setValue('文'.repeat(501))
+      expect(detail.get('.arco-textarea-word-limit').text()).toBe('500/500')
+      expect((detail.get('textarea').element as HTMLTextAreaElement).value).toHaveLength(500)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+})
+
+
+describe('配置页合并兼容：业务归属与旧空间绑定', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    setActivePinia(createPinia())
+    vi.mocked(currentUserIsAdmin).mockReturnValue(true)
+  })
+
+  async function openSpaces(wrapper: ReturnType<typeof mountView>) {
+    await wrapper.findAll('.category-nav button').find(button => button.text().includes('图数据空间'))!.trigger('click')
+    await flushPromises()
+  }
+
+  function enableBusinessRbac(isAdmin: boolean) {
+    vi.mocked(currentUserIsAdmin).mockReturnValue(isAdmin)
+    useAuthStore().profile = {
+      businessRbacEnabled: true, isAdmin, platformRole: isAdmin ? 'admin' : 'developer',
+      businesses: [
+        { clientId: 'business-a', name: '业务 A', role: 'developer' },
+        { clientId: 'business-b', name: '业务 B', role: 'developer' },
+      ],
+    } as AuthProfile
+  }
+
+  it('保留上游暂时隐藏向量模型入口和停止预拉取的行为', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.get('.category-nav').text()).not.toContain('向量模型')
+    expect(listEmbeddingConfigs).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('业务权限启用时管理员通过业务权限管理归属，不触发旧绑定解绑', async () => {
+    enableBusinessRbac(true)
+    const space: GraphSpaceItem = { name: 'dev', bound: false, mine: false, groupKind: 'public' }
+    vi.mocked(listGraphSpaceItems).mockResolvedValueOnce([space])
+    const wrapper = mountView()
+    await flushPromises()
+    await openSpaces(wrapper)
+    expect(wrapper.get('.space-table').text()).toContain('公共图空间')
+    expect(wrapper.get('.space-table').text()).not.toContain('已解绑')
+    expect(wrapper.get('.space-table .row-actions').text()).toBe('管理归属')
+    expect(wrapper.findAll('.category-nav button').find(button => button.text().includes('图数据空间'))!.get('em').text()).toBe('1')
+    // 即便从旧调用入口直接触发，也不能覆盖新版业务归属。
+    await (wrapper.vm as unknown as { toggleSpaceBinding(space: GraphSpaceItem): Promise<void> }).toggleSpaceBinding(space)
+    expect(bindGraphSpace).not.toHaveBeenCalled()
+    expect(unbindGraphSpace).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('开发者公共多业务先选择配置业务；空间可搜索查看而不能创建或绑定', async () => {
+    enableBusinessRbac(false)
+    vi.mocked(listGraphSpaceItems).mockResolvedValueOnce([{ name: 'dev', bound: false, mine: false, groupKind: 'public' }])
+    const wrapper = mountView()
+    await flushPromises()
+    expect(listLlmConfigs).not.toHaveBeenCalled()
+    expect(wrapper.get('.create-entry').attributes('disabled')).toBeDefined()
+    useGraphSpaceStore().setBusiness('business-a')
+    await flushPromises()
+    expect(wrapper.get('.create-entry').attributes('disabled')).toBeUndefined()
+    await openSpaces(wrapper)
+    expect(wrapper.get('.create-entry').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('.space-table .row-actions').text()).toBe('管理员维护')
+    await wrapper.get('.config-search-input').setValue('找不到')
+    await wrapper.get('.config-search-form').trigger('submit')
+    expect(wrapper.get('.space-table').text()).toContain('没有符合条件的图空间')
+    await wrapper.get('.config-search-input').setValue('')
+    expect(wrapper.get('.space-table').text()).toContain('dev')
+    wrapper.unmount()
+    vi.mocked(currentUserIsAdmin).mockReturnValue(true)
+  })
+
+  it('旧模式管理员仍可行级解绑再绑定，成功后刷新全局空间目录', async () => {
+    vi.mocked(listGraphSpaceItems)
+      .mockResolvedValueOnce([{ name: 'legacy', bound: true, mine: true }])
+      .mockResolvedValueOnce([{ name: 'legacy', bound: false, mine: false }])
+      .mockResolvedValueOnce([{ name: 'legacy', bound: true, mine: true }])
+    const refreshSpaces = vi.spyOn(useGraphSpaceStore(), 'ensureLoaded').mockResolvedValue()
+    const wrapper = mountView()
+    await flushPromises()
+    await openSpaces(wrapper)
+    expect(wrapper.get('.space-table .row-actions button').text()).toBe('解绑')
+    await wrapper.get('.space-table .row-actions button').trigger('click')
+    await flushPromises()
+    expect(unbindGraphSpace).toHaveBeenCalledWith('legacy', 'user-e2e')
+    expect(wrapper.get('.space-table .row-actions button').text()).toBe('绑定')
+    await wrapper.get('.space-table .row-actions button').trigger('click')
+    await flushPromises()
+    expect(bindGraphSpace).toHaveBeenCalledWith('legacy', 'user-e2e')
+    expect(refreshSpaces).toHaveBeenCalledTimes(2)
     wrapper.unmount()
   })
 })

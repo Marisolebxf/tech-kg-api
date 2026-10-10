@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { Button as AButton, Modal as AModal, Table as ATable } from '@arco-design/web-vue'
+import { Modal as AModal, Table as ATable } from '@arco-design/web-vue'
 import type { TableColumnData } from '@arco-design/web-vue/es/table/interface'
 
 const props = withDefaults(defineProps<{
@@ -13,34 +13,65 @@ const props = withDefaults(defineProps<{
   sortColumn?: string
   sortDirection?: 'asc' | 'desc'
   loading?: boolean
+  space?: string
+  queryStatement?: string
+  algorithmName?: string
+  jobId?: string
 }>(), {
   labels: () => ({}), sortable: false, sortColumn: '', sortDirection: 'desc', loading: false,
+  space: '', queryStatement: '', algorithmName: '', jobId: '',
 })
 const emit = defineEmits<{ sort: [column: string, direction: 'asc' | 'desc' | undefined] }>()
 const tableRoot = ref<HTMLElement | null>(null)
 const hasHiddenColumns = ref(false)
+const scrollActive = ref(false)
+const viewportHeight = ref(280)
+let scrollIdleTimer: ReturnType<typeof setTimeout> | undefined
 let resizeObserver: ResizeObserver | undefined
 function updateColumnShadow(): void {
   const scroller = tableRoot.value?.querySelector<HTMLElement>('.arco-table-content')
   hasHiddenColumns.value = !!scroller && scroller.scrollWidth - scroller.clientWidth - scroller.scrollLeft > 1
 }
+function updateTableViewport(): void {
+  if (!tableRoot.value) return
+  // Keep the scrollbar above pagination within the visible query viewport.
+  viewportHeight.value = Math.max(200, window.innerHeight - tableRoot.value.getBoundingClientRect().top - 80)
+  updateColumnShadow()
+}
+function handleScroll(): void {
+  updateColumnShadow()
+  scrollActive.value = true
+  clearTimeout(scrollIdleTimer)
+  scrollIdleTimer = setTimeout(() => { scrollActive.value = false }, 700)
+}
 onMounted(() => {
   if (typeof ResizeObserver !== 'undefined') {
-    resizeObserver = new ResizeObserver(updateColumnShadow)
+    resizeObserver = new ResizeObserver(updateTableViewport)
     if (tableRoot.value) resizeObserver.observe(tableRoot.value)
+    if (tableRoot.value?.parentElement) resizeObserver.observe(tableRoot.value.parentElement)
+    const form = tableRoot.value?.closest('.platform-query')?.querySelector('.platform-query-form')
+    if (form) resizeObserver.observe(form)
     const table = tableRoot.value?.querySelector('.arco-table-element')
     if (table) resizeObserver.observe(table)
   }
-  updateColumnShadow()
+  window.addEventListener('resize', updateTableViewport)
+  updateTableViewport()
 })
-onUnmounted(() => resizeObserver?.disconnect())
+onUnmounted(() => {
+  resizeObserver?.disconnect()
+  window.removeEventListener('resize', updateTableViewport)
+  clearTimeout(scrollIdleTimer)
+})
 watch(() => [props.rows, props.columns], async () => {
   await nextTick()
   updateColumnShadow()
 }, { flush: 'post' })
 const selectedRow = ref<Record<string, unknown> | null>(null)
 const detailsOpen = ref(false)
-watch(() => props.rows, () => { detailsOpen.value = false })
+const selectedRecordNumber = ref(0)
+watch(() => [props.rows, props.space, props.queryStatement, props.jobId, props.algorithmName], () => {
+  detailsOpen.value = false
+})
 
 function formatCell(value: unknown): string {
   if (value === null || value === undefined) return 'NULL'
@@ -66,7 +97,7 @@ const tableColumns = computed<TableColumnData[]>(() => [
       sortOrder: props.sortColumn === column ? (props.sortDirection === 'asc' ? 'ascend' : 'descend') : '',
     } : undefined,
   })),
-  { title: '操作', dataIndex: '__action', width: 84, fixed: 'right', slotName: 'details', align: 'center' },
+  { title: '操作', dataIndex: '__action', width: 84, fixed: 'right', slotName: 'details', align: 'left' },
 ])
 const tableRows = computed(() => props.rows.map((row, index) => ({
   __key: String(index),
@@ -79,14 +110,15 @@ function handleSort(field: string, direction: string): void {
   const column = props.columns[Number(field.replace('cell_', ''))]
   if (column) emit('sort', column, direction === 'ascend' ? 'asc' : direction === 'descend' ? 'desc' : undefined)
 }
-function showDetails(row: Record<string, unknown>): void {
+function showDetails(row: Record<string, unknown>, index: number): void {
   selectedRow.value = row
+  selectedRecordNumber.value = index
   detailsOpen.value = true
 }
 </script>
 
 <template>
-  <div ref="tableRoot" class="query-result-table" :class="{ 'query-result-table--hidden-columns': hasHiddenColumns }" @scroll.capture="updateColumnShadow">
+  <div ref="tableRoot" class="query-result-table" :class="{ 'query-result-table--hidden-columns': hasHiddenColumns, 'query-result-table--scroll-active': scrollActive }" @scroll.capture="handleScroll">
     <ATable
       :columns="tableColumns"
       :data="tableRows"
@@ -97,21 +129,33 @@ function showDetails(row: Record<string, unknown>): void {
       :hoverable="true"
       :loading="loading"
       :table-layout-fixed="true"
-      :scroll="{ x: tableWidth }"
+      :scroll="{ x: tableWidth, maxHeight: `${viewportHeight}px` }"
       :scrollbar="false"
       @sorter-change="handleSort"
     >
       <template #details="{ record }">
-        <AButton type="text" size="small" @click="showDetails(record.__raw)">详情</AButton>
+        <button class="query-details-button" type="button" @click="showDetails(record.__raw, record.__index)">详情</button>
       </template>
     </ATable>
     <AModal v-model:visible="detailsOpen" modal-class="query-record-modal" title="记录详情" title-align="start" :width="640" :unmount-on-close="true">
-      <dl class="query-record-details">
-        <div v-for="column in columns" :key="column">
-          <dt>{{ labels[column] ?? column }}</dt>
-          <dd><pre>{{ formatCell(selectedRow?.[column]) }}</pre></dd>
-        </div>
-      </dl>
+      <div class="query-record-details">
+        <section class="query-record-section">
+          <h3>{{ algorithmName ? '作业信息' : '查询信息' }}</h3>
+          <dl class="query-record-fields">
+            <div v-if="space"><dt>图空间</dt><dd>{{ space }}</dd></div>
+            <div><dt>结果序号</dt><dd>{{ selectedRecordNumber }}</dd></div>
+            <div v-if="queryStatement"><dt>执行语句</dt><dd><pre>{{ queryStatement }}</pre></dd></div>
+            <div v-if="algorithmName"><dt>算法</dt><dd>{{ algorithmName }}</dd></div>
+            <div v-if="jobId"><dt>作业 ID</dt><dd><pre>{{ jobId }}</pre></dd></div>
+          </dl>
+        </section>
+        <section class="query-record-section">
+          <h3>原始查询结果</h3>
+          <dl class="query-record-fields">
+            <div v-for="column in columns" :key="column"><dt>{{ labels[column] ?? column }}</dt><dd><pre>{{ formatCell(selectedRow?.[column]) }}</pre></dd></div>
+          </dl>
+        </section>
+      </div>
       <template #footer>
         <button type="button" class="query-record-cancel" @click="detailsOpen = false">取消</button>
       </template>
@@ -121,16 +165,23 @@ function showDetails(row: Record<string, unknown>): void {
 
 <style scoped>
 .query-result-table{min-width:0;overflow:hidden}
+/* A single viewport contains the header and rows, so the vertical scrollbar
+   starts at the field-name row. Sticky cells preserve the header on scroll. */
+.query-result-table :deep(.arco-table-content){overflow:auto}
+.query-result-table :deep(thead .arco-table-th){position:sticky;top:0;z-index:11}
+.query-result-table :deep(thead .arco-table-col-fixed-right){z-index:12}
+.query-details-button{height:auto;padding:0;border:0;background:transparent;color:#165dff;font-size:14px;line-height:22px;font-weight:400;white-space:nowrap;cursor:pointer}
+.query-details-button:hover,.query-details-button:active{background:transparent;color:#4080ff}
 /* Horizontal overflow is indicated by the fixed action column only. */
 .query-result-table :deep(.arco-table-container::before){display:none;box-shadow:none}
 /* The fixed action column only signals data still hidden to its left. */
 .query-result-table:not(.query-result-table--hidden-columns) :deep(.arco-table-col-fixed-right-first::after){box-shadow:none}
 .query-result-table :deep(.arco-table-content),.query-record-details{scrollbar-width:thin;scrollbar-color:transparent transparent}
-.query-result-table:hover :deep(.arco-table-content),.query-result-table :deep(.arco-table-content.kg-is-scrolling),.query-record-details:hover,.query-record-details.kg-is-scrolling{scrollbar-color:rgba(78,89,105,.55) transparent}
+.query-result-table:hover :deep(.arco-table-content),.query-result-table--scroll-active :deep(.arco-table-content),.query-result-table :deep(.arco-table-content.kg-is-scrolling),.query-record-details:hover,.query-record-details.kg-is-scrolling{scrollbar-color:rgba(78,89,105,.55) transparent}
 .query-result-table :deep(.arco-table-content::-webkit-scrollbar),.query-record-details::-webkit-scrollbar{width:8px;height:8px}
 .query-result-table :deep(.arco-table-content::-webkit-scrollbar-track),.query-record-details::-webkit-scrollbar-track{background:transparent}
 .query-result-table :deep(.arco-table-content::-webkit-scrollbar-thumb),.query-record-details::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background-color:transparent;background-clip:padding-box}
-.query-result-table:hover :deep(.arco-table-content::-webkit-scrollbar-thumb),.query-result-table :deep(.arco-table-content.kg-is-scrolling::-webkit-scrollbar-thumb),.query-record-details:hover::-webkit-scrollbar-thumb,.query-record-details.kg-is-scrolling::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
+.query-result-table:hover :deep(.arco-table-content::-webkit-scrollbar-thumb),.query-result-table--scroll-active :deep(.arco-table-content::-webkit-scrollbar-thumb),.query-result-table :deep(.arco-table-content.kg-is-scrolling::-webkit-scrollbar-thumb),.query-record-details:hover::-webkit-scrollbar-thumb,.query-record-details.kg-is-scrolling::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
 .query-result-table :deep(.arco-table-content::-webkit-scrollbar-thumb:hover),.query-record-details::-webkit-scrollbar-thumb:hover{background-color:rgba(78,89,105,.8)}
 .query-result-table :deep(.arco-table){color:var(--color-text-1)}
 .query-result-table :deep(.arco-table-container){border:0;border-radius:0}
@@ -141,11 +192,14 @@ function showDetails(row: Record<string, unknown>): void {
 .query-result-table :deep(.query-cell-number){font-variant-numeric:tabular-nums;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
 .query-result-table :deep(.arco-table-cell){box-sizing:border-box;height:39px;white-space:nowrap;padding:0 16px!important}
 .query-record-details{margin:0;max-height:65vh;overflow:auto;text-align:left}
-.query-record-details>div{display:grid;grid-template-columns:140px minmax(0,1fr);gap:16px;padding:12px 0}
+.query-record-fields{margin:0}
+.query-record-fields>div{display:grid;grid-template-columns:140px minmax(0,1fr);gap:16px;padding:8px 0}
+.query-record-section+.query-record-section{margin-top:20px;padding-top:16px;border-top:1px solid var(--color-border-2)}
+.query-record-section h3{margin:0 0 8px;color:var(--color-text-1);font-size:14px;line-height:22px;font-weight:500}
 .query-record-details dt{color:var(--color-text-3);overflow-wrap:anywhere}
 .query-record-details dd{margin:0;min-width:0}
 .query-record-details pre{margin:0;color:var(--color-text-1);font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
-@media(max-width:600px){.query-record-details>div{grid-template-columns:1fr;gap:8px}}
+@media(max-width:600px){.query-record-fields>div{grid-template-columns:1fr;gap:8px}}
 </style>
 <style>
 .query-record-modal{border-radius:8px}

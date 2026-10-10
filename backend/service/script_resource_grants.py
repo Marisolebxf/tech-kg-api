@@ -29,7 +29,7 @@ def _valid(run_key, record_id, actor, space):
 def _owned(row, actor, space):
     return (
         row.graph_space == space
-        and row.client_id == (actor.business_id or "")
+        and row.client_id == (actor.context_business_id or "")
         and row.actor_user_id == actor.user_id
     )
 
@@ -53,7 +53,7 @@ def remember(run_key, record_id, actor, space):
                     run_key=run_key,
                     record_id=record_id,
                     graph_space=space,
-                    client_id=actor.business_id or "",
+                    client_id=actor.context_business_id or "",
                     actor_user_id=actor.user_id,
                     expires_at=now + timedelta(days=30),
                 )

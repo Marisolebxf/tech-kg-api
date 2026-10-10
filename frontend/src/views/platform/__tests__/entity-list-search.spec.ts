@@ -3,14 +3,14 @@ import { Popover } from '@arco-design/web-vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import EntityListView from '../EntityListView.vue'
-import { browseEntities, searchEntities } from '../../../api/entitySearch'
+import { browseEntities, searchEntities, getEntitySearchTypes } from '../../../api/entitySearch'
 import ListPagination from '../../../components/list-pagination.vue'
 
 vi.mock('../../../api/entitySearch', () => ({
   browseEntities: vi.fn(), searchEntities: vi.fn(),
   entitySearchErrorMessage: (error: Error) => error.message,
   getEntityIndexStatus: async () => null,
-  getEntitySearchTypes: async () => [],
+  getEntitySearchTypes: vi.fn(),
 }))
 vi.mock('../../../api/currentGraphSpace', () => ({ currentGraphSpace: () => 'dev2' }))
 vi.mock('../../../stores/graphSpace', () => ({ useGraphSpaceStore: () => ({ current: 'dev2' }) }))
@@ -19,6 +19,7 @@ vi.mock('../../../composables/use-toast', () => ({ useToast: () => ({ showToast:
 const row = { vid: 'entity-1', entityId: 'entity-1', name: '目标实体', entityType: 'DataSource', properties: {}, score: null }
 beforeEach(() => {
   vi.resetAllMocks()
+  vi.mocked(getEntitySearchTypes).mockResolvedValue([])
   vi.mocked(browseEntities).mockResolvedValue({ items: [row], total: 1, offset: 0, limit: 10, entityType: null, mode: 'browse' })
 })
 
@@ -35,6 +36,18 @@ async function setup() {
 }
 
 describe('实体搜索结果', () => {
+  it('类型筛选默认显示全部，并通过原生 title 展示选项全称', async () => {
+    const name = '非常长的实体类型名称用于完整显示测试'
+    vi.mocked(getEntitySearchTypes).mockResolvedValue([{ name, count: 123 }])
+    const wrapper = await setup()
+    expect(wrapper.get('select').attributes('placeholder')).toBe('全部')
+    expect(wrapper.get('select').attributes('aria-label')).toBe('实体类型')
+    const option = wrapper.get('.entity-type-option')
+    expect(option.text()).toBe(`${name}（123）`)
+    expect(option.attributes('title')).toBe(`${name}（123）`)
+    wrapper.unmount()
+  })
+
   it('精确结果按服务端总数分页', async () => {
     vi.mocked(searchEntities).mockResolvedValue({ items: [row], total: 21, offset: 0, limit: 10, entityType: null, mode: 'graph-exact' })
     const wrapper = await setup()

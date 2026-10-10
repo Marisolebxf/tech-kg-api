@@ -95,7 +95,9 @@ class ProjectRelationService:
     def _fingerprint(
         body: ProjectRelationQueryRequest, relation_types: tuple[str, ...]
     ) -> str:
+        from service.graph_space_context import get_current_space
         filters = {
+            "space": get_current_space(),
             "keyword": body.keyword or "",
             "relationTypes": sorted(relation_types),
         }

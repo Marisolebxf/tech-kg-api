@@ -90,9 +90,7 @@ class ExpertEnterpriseMiningService(KGModuleScaffoldService):
         return get_gkx_session()
 
     def _graph_client(self) -> TRSGraphClient:
-        if self._graph is None:
-            self._graph = get_trs_graph_client()
-        return self._graph
+        return self._graph if self._graph is not None else get_trs_graph_client()
 
     def _llm_client(self):
         if self._llm is None:

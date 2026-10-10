@@ -1,6 +1,10 @@
 <script setup lang="ts">
+import { useGraphSpaceStore } from "../stores/graphSpace"
+const spaceContext = useGraphSpaceStore()
+
 import { appBase, graphVisualizationEnabled } from "../config";
-import { IconHistory } from "@arco-design/web-vue/es/icon";
+// 账号菜单入口暂时隐藏
+// import { IconHistory } from "@arco-design/web-vue/es/icon";
 import {
   computed,
   nextTick,
@@ -16,11 +20,12 @@ import figmaMenuFold from "../assets/icons/figma-menu-fold.svg";
 import figmaMenuUnfold from "../assets/icons/figma-menu-unfold.svg";
 import accountAvatar from "../assets/icons/account-menu/avatar-default.svg";
 import accountCaret from "../assets/icons/account-menu/caret-down.svg";
-import accountIcon from "../assets/icons/account-menu/icon-account.svg";
-import accountLockIcon from "../assets/icons/account-menu/icon-lock.svg";
+// 账号菜单入口暂时隐藏
+// import accountIcon from "../assets/icons/account-menu/icon-account.svg";
+// 账号菜单入口暂时隐藏
+// import accountLockIcon from "../assets/icons/account-menu/icon-lock.svg";
 import accountLogoutIcon from "../assets/icons/account-menu/icon-logout.svg";
 import accountMemberStar from "../assets/icons/account-menu/icon-member-star.svg";
-import iconMessage from "../assets/icons/icon-message.svg";
 import iconBook from "../assets/icons/icon-book.svg";
 import navOverview from "../assets/icons/nav-overview.svg";
 import navGraph from "../assets/icons/nav-graph.svg";
@@ -95,32 +100,15 @@ function toggleQueryNav() {
   }
   queryNavCollapsed.value = !queryNavCollapsed.value;
 }
-const alertDrawerOpen = ref(false);
-const alertPreviewOpen = ref(false);
 const userMenuOpen = ref(false);
 const userEntryRef = ref<HTMLElement | null>(null);
 const assistantEntryRef = ref<HTMLButtonElement | null>(null);
 const accountFeedback = ref("");
-const assistantOpen = ref(false);
 const isMobile = ref(false);
 const mobileNavOpen = ref(false);
 const sidebarCollapsed = computed(() => appStore.collapsed && !isMobile.value);
 const assistantPosition = ref({ x: 0, y: 0 });
 const assistantViewport = ref({ width: 1440, height: 900 });
-const alertItems = ref<
-  Array<{
-    id: string;
-    blocked: boolean;
-    module: string;
-    title: string;
-    meta: string;
-    time: string;
-    status: string;
-    hasReviewDetail: boolean;
-    detailTo: string;
-    reviewTo: string;
-  }>
->([]);
 const serviceNavItems = [
   {
     to: "/expert-direct",
@@ -211,15 +199,7 @@ onErrorCaptured((error) => {
   return false;
 });
 
-function openAlertDrawer() {
-  alertPreviewOpen.value = false;
-  userMenuOpen.value = false;
-  assistantOpen.value = false;
-  alertDrawerOpen.value = true;
-}
-
 function toggleUserMenu() {
-  alertPreviewOpen.value = false;
   const willOpen = !userMenuOpen.value;
   if (willOpen) accountFeedback.value = "";
   userMenuOpen.value = willOpen;
@@ -306,8 +286,6 @@ function closeMobileNavigation() {
 watch(
   () => route.fullPath,
   () => {
-    alertDrawerOpen.value = false;
-    alertPreviewOpen.value = false;
     userMenuOpen.value = false;
     mobileNavOpen.value = false;
   },
@@ -595,49 +573,6 @@ onBeforeUnmount(() => {
             <span v-if="isMobile">目录</span>
           </button>
           <div class="app-top-actions__right">
-            <a
-              v-if="isAdminUser"
-              class="app-docs-link"
-              :href="docsHref"
-              target="_blank"
-              rel="noopener"
-              aria-label="打开文档中心（新标签页）"
-              title="文档中心"
-            >
-              <img :src="iconBook" alt="" aria-hidden="true" />
-            </a>
-            <div
-              class="app-alert-entry"
-              @mouseenter="alertPreviewOpen = !alertDrawerOpen"
-              @mouseleave="alertPreviewOpen = false"
-            >
-              <button
-                class="app-alert-bell"
-                type="button"
-                :aria-label="`${alertItems.length} 条消息通知`"
-                :aria-expanded="alertDrawerOpen"
-                @click="openAlertDrawer"
-              >
-                <img :src="iconMessage" alt="" aria-hidden="true" />
-                <b v-if="alertItems.length">{{ alertItems.length }}</b>
-              </button>
-              <aside
-                v-if="alertPreviewOpen"
-                class="alert-preview"
-                aria-label="消息通知概览"
-              >
-                <header>
-                  <div><strong>消息通知</strong></div>
-                </header>
-                <div class="notification-empty">
-                  {{
-                    alertItems.length
-                      ? `${alertItems.length} 条新消息`
-                      : "暂无消息"
-                  }}
-                </div>
-              </aside>
-            </div>
             <div ref="userEntryRef" class="app-user-entry">
               <button
                 class="app-top-actions__user"
@@ -684,6 +619,7 @@ onBeforeUnmount(() => {
                   </div>
                 </header>
                 <nav aria-label="功能导航 2">
+                  <!-- 账号信息、账号与安全、操作记录入口暂时隐藏
                   <button
                     :class="{ active: route.path === '/user-center' }"
                     type="button"
@@ -718,6 +654,7 @@ onBeforeUnmount(() => {
                     <IconHistory class="app-user-menu__icon" />
                     <span>操作记录</span>
                   </button>
+                  -->
                   <button
                     type="button"
                     @click="handleAccountAction('退出登录')"
@@ -738,67 +675,31 @@ onBeforeUnmount(() => {
         </div>
         <section class="app-stage">
           <!-- 面包屑统一走 AppBreadcrumb（Arco 规范：首项图标回首页、/ 分隔、末项当前页） -->
-          <AppBreadcrumb :class="{ 'app-breadcrumb--with-select': isOverviewPage }">
-            <GraphSpaceSelector v-if="isOverviewPage" />
+          <AppBreadcrumb :class="{ 'app-breadcrumb--with-actions': isOverviewPage }">
+            <div v-if="isOverviewPage" class="app-breadcrumb__actions">
+              <a
+                v-if="isOverviewPage && isAdminUser"
+                class="app-docs-link"
+                :href="docsHref"
+                target="_blank"
+                rel="noopener"
+                aria-label="打开文档中心（新标签页）"
+                title="文档中心"
+              >
+                <img :src="iconBook" alt="" aria-hidden="true" />
+              </a>
+              <GraphSpaceSelector />
+            </div>
           </AppBreadcrumb>
           <section class="app-workspace" :aria-label="pageTitle">
             <div v-if="routeError" class="route-error">
               <strong>页面渲染异常</strong>
               <span>{{ routeError }}</span>
             </div>
-            <RouterView v-else />
+            <RouterView v-else :key="spaceContext.contextKey" />
           </section>
         </section>
       </main>
-      <button
-        v-if="alertDrawerOpen"
-        class="alert-drawer-mask"
-        type="button"
-        aria-label="关闭消息通知"
-        @click="alertDrawerOpen = false"
-      />
-      <aside v-if="alertDrawerOpen" class="alert-drawer" aria-label="消息通知">
-        <header>
-          <div>
-            <h2>消息通知</h2>
-            <p>
-              {{
-                alertItems.length
-                  ? `${alertItems.length} 条新消息`
-                  : "暂无新消息"
-              }}
-            </p>
-          </div>
-          <button
-            type="button"
-            aria-label="关闭"
-            @click="alertDrawerOpen = false"
-          >
-            ×
-          </button>
-        </header>
-        <div class="alert-drawer__list">
-          <p v-if="!alertItems.length" class="notification-empty">暂无消息</p>
-          <article v-for="item in alertItems" :key="item.id" class="alert-item">
-            <i></i>
-            <div>
-              <span
-                >{{ item.module }}<em>{{ item.time }}</em></span
-              ><strong>{{ item.title }}</strong>
-              <p>{{ item.meta }}</p>
-              <small>{{ item.status }}</small>
-              <nav aria-label="功能导航 3">
-                <template v-if="item.hasReviewDetail"
-                  ><RouterLink :to="item.detailTo">查看详情</RouterLink
-                  ><RouterLink class="primary" :to="item.reviewTo"
-                    >处理</RouterLink
-                  ></template
-                ><button v-else type="button" disabled>查看详情</button>
-              </nav>
-            </div>
-          </article>
-        </div>
-      </aside>
     </div>
   </div>
 </template>
@@ -1488,11 +1389,6 @@ onBeforeUnmount(() => {
   margin-left: auto;
   margin-right: 16px;
 }
-.app-alert-entry {
-  position: relative;
-  z-index: 38;
-  display: inline-flex;
-}
 .app-docs-link {
   display: inline-grid;
   place-items: center;
@@ -1510,417 +1406,6 @@ onBeforeUnmount(() => {
   height: 16px;
   object-fit: contain;
   opacity: 0.72;
-}
-.app-alert-bell {
-  position: relative;
-  display: inline-grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: #59636f;
-  cursor: pointer;
-}
-.app-alert-bell:hover,
-.app-alert-bell[aria-expanded="true"] {
-  background: rgba(255, 255, 255, 0.48);
-}
-.app-alert-bell > img {
-  width: 16px;
-  height: 16px;
-  object-fit: contain;
-  opacity: 0.72;
-}
-.app-alert-bell b {
-  position: absolute;
-  top: -3px;
-  right: -4px;
-  display: grid;
-  place-items: center;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 3px;
-  border: 2px solid #d8e7fc;
-  border-radius: 9px;
-  background: #b42318;
-  color: #fff;
-  font-size: 9px;
-  line-height: 1;
-}
-.alert-preview {
-  position: absolute;
-  z-index: 45;
-  top: 38px;
-  right: -8px;
-  width: 350px;
-  overflow: hidden;
-  border: 1px solid #c8daf4;
-  border-radius: 9px;
-  background: #fff;
-  box-shadow: 0 18px 45px rgba(34, 74, 132, 0.2);
-  color: #263853;
-}
-.alert-preview::before {
-  position: absolute;
-  top: -6px;
-  right: 17px;
-  width: 11px;
-  height: 11px;
-  border-top: 1px solid #c8daf4;
-  border-left: 1px solid #c8daf4;
-  background: #fff;
-  content: "";
-  transform: rotate(45deg);
-}
-.alert-preview > header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 13px 14px;
-  border-bottom: 1px solid #e1eaf6;
-}
-.alert-preview > header > div {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.alert-preview > header strong {
-  font-size: 14px;
-}
-.alert-preview > header span {
-  padding: 2px 6px;
-  border-radius: 999px;
-  background: #e9f8ef;
-  color: #067647;
-  font-size: 9px;
-}
-.alert-preview > header em {
-  color: #52627a;
-  font-size: 9px;
-  font-style: normal;
-}
-.alert-preview > section {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 7px;
-  padding: 10px 12px;
-  background: #f7faff;
-}
-.alert-preview > section article {
-  display: grid;
-  gap: 2px;
-  padding: 9px;
-  border: 1px solid #dce8f8;
-  border-radius: 6px;
-  background: #fff;
-}
-.alert-preview > section article strong {
-  color: #004ecc;
-  font-size: 18px;
-}
-.alert-preview > section article.danger strong {
-  color: #b42318;
-}
-.alert-preview > section article span {
-  color: #52627a;
-  font-size: 9px;
-}
-.alert-preview > div {
-  padding: 5px 12px 9px;
-}
-.alert-preview > div p {
-  display: grid;
-  grid-template-columns: 7px minmax(0, 1fr);
-  gap: 9px;
-  margin: 0;
-  padding: 8px 2px;
-  border-bottom: 1px solid #edf2f8;
-}
-.alert-preview > div p:last-child {
-  border-bottom: 0;
-}
-.alert-preview > div p > i {
-  width: 7px;
-  height: 7px;
-  margin-top: 5px;
-  border-radius: 50%;
-  background: #f79009;
-}
-.alert-preview > div p span {
-  display: grid;
-  gap: 2px;
-}
-.alert-preview > div p strong {
-  overflow: hidden;
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.alert-preview > div p em {
-  color: #8592a6;
-  font-size: 9px;
-  font-style: normal;
-}
-
-.alert-drawer-mask {
-  position: fixed;
-  z-index: 39;
-  inset: 0;
-  border: 0;
-  background: rgba(16, 36, 76, 0.18);
-  cursor: default;
-}
-.alert-drawer {
-  position: fixed;
-  z-index: 40;
-  top: 0;
-  right: 0;
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
-  width: 430px;
-  height: 100vh;
-  padding: 0;
-  border-left: 1px solid #c8daf4;
-  background: #f8fbff;
-  box-shadow: -18px 0 42px rgba(34, 74, 132, 0.2);
-}
-.alert-drawer > header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  padding: 20px 20px 15px;
-  border-bottom: 1px solid #dce8f8;
-  background: #fff;
-}
-.alert-drawer h2 {
-  margin: 0;
-  color: #152642;
-  font-size: 19px;
-}
-.alert-drawer header p {
-  margin: 4px 0 0;
-  color: #73819a;
-  font-size: 12px;
-}
-.alert-drawer header button {
-  width: 30px;
-  height: 30px;
-  border: 0;
-  border-radius: 5px;
-  background: #f2f6fc;
-  color: #60708b;
-  font-size: 21px;
-  cursor: pointer;
-}
-.alert-drawer__filter {
-  display: flex;
-  gap: 5px;
-  padding: 10px 16px;
-  border-bottom: 1px solid #dce8f8;
-  background: #fff;
-}
-.alert-drawer__filter button {
-  height: 28px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: #475467;
-  font-size: 12px;
-  cursor: pointer;
-}
-.alert-drawer__filter button.active {
-  background: #eaf2ff;
-  color: #004ecc;
-  font-weight: 600;
-}
-.alert-drawer__list {
-  overflow: auto;
-  padding: 10px;
-}
-.alert-item {
-  display: grid;
-  grid-template-columns: 8px minmax(0, 1fr) 14px;
-  gap: 10px;
-  margin-bottom: 8px;
-  padding: 13px 12px;
-  border: 1px solid #dce8f8;
-  border-radius: 8px;
-  background: #fff;
-  color: #263853;
-  text-decoration: none;
-}
-.alert-item:hover {
-  border-color: #8fb7f2;
-  box-shadow: 0 6px 16px rgba(48, 105, 194, 0.09);
-}
-.alert-item > i {
-  width: 7px;
-  height: 7px;
-  margin-top: 6px;
-  border-radius: 50%;
-  background: #2e90fa;
-}
-.alert-item > i.is-blocked {
-  background: #b42318;
-  box-shadow: 0 0 0 4px #fee4e2;
-}
-.alert-item > div > span {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: #77859b;
-  font-size: 11px;
-}
-.alert-item > div > span em {
-  margin-left: auto;
-  font-style: normal;
-}
-.alert-item strong {
-  display: block;
-  margin-top: 7px;
-  color: #233550;
-  font-size: 13px;
-  line-height: 20px;
-}
-.alert-item p {
-  margin: 4px 0 0;
-  color: #73819a;
-  font-size: 11px;
-}
-.alert-item small {
-  display: inline-flex;
-  margin-top: 8px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: #fff3d8;
-  color: #b54708;
-  font-size: 10px;
-}
-.alert-item small.is-blocked {
-  background: #fee4e2;
-  color: #b42318;
-}
-.alert-item small.is-processing {
-  background: #eaf2ff;
-  color: #004ecc;
-}
-.alert-item nav {
-  display: flex;
-  justify-content: flex-end;
-  gap: 7px;
-  margin-top: 11px;
-  padding-top: 10px;
-  border-top: 1px solid #edf2f8;
-}
-.alert-item nav a {
-  height: 30px;
-  padding: 0 11px;
-  border: 1px solid #cbdaf0;
-  border-radius: 5px;
-  background: #fff;
-  color: #526783;
-  font-size: 12px;
-  line-height: 28px;
-  text-decoration: none;
-  white-space: nowrap;
-}
-.alert-item nav button {
-  height: 30px;
-  padding: 0 11px;
-  border: 1px solid #d8e1ed;
-  border-radius: 5px;
-  background: #f7f9fc;
-  color: #59636f;
-  font-size: 12px;
-  cursor: default;
-}
-.alert-item nav a.primary {
-  border-color: #004ecc;
-  background: #004ecc;
-  color: #fff;
-}
-.alert-item nav a:hover {
-  border-color: #8fb7f2;
-  color: #004ecc;
-}
-.alert-item nav a.primary:hover {
-  border-color: #004ecc;
-  background: #004ecc;
-  color: #fff;
-}
-.alert-item__arrow {
-  align-self: center;
-  color: #8ea0b9;
-  font-size: 22px;
-}
-.alert-drawer > footer {
-  position: relative;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 58px;
-  padding: 11px 18px;
-  border-top: 1px solid #dce8f8;
-  background: #fff;
-  box-shadow: 0 -8px 18px rgba(42, 77, 128, 0.06);
-}
-.alert-drawer > footer a {
-  color: #004ecc;
-  font-size: 12px;
-  text-decoration: none;
-}
-.alert-drawer > footer .footer-primary {
-  height: 32px;
-  padding: 0 12px;
-  border-radius: 5px;
-  background: #004ecc;
-  color: #fff;
-  line-height: 32px;
-}
-.alert-preview,
-.alert-preview *,
-.alert-drawer,
-.alert-drawer * {
-  color: #1d2129;
-}
-.alert-preview .notification-empty,
-.alert-drawer .notification-empty {
-  margin: 0;
-  padding: 24px 16px;
-  color: #1d2129;
-  font-size: 12px;
-  text-align: center;
-}
-.alert-drawer {
-  grid-template-rows: auto minmax(0, 1fr);
-  background: #fff;
-}
-.alert-drawer header p,
-.alert-drawer h2,
-.alert-item > div > span,
-.alert-item p,
-.alert-item small,
-.alert-item nav a,
-.alert-drawer > footer a {
-  color: #1d2129;
-}
-.alert-item > i,
-.alert-item > i.is-blocked {
-  background: #1d2129;
-  box-shadow: none;
-}
-.alert-item small,
-.alert-item small.is-blocked,
-.alert-item small.is-processing {
-  padding: 0;
-  border-radius: 0;
-  background: transparent;
-  color: #1d2129;
 }
 .knowledge-assistant-entry {
   position: fixed;
@@ -2147,12 +1632,16 @@ onBeforeUnmount(() => {
 
 /* 面包屑本体（图标/分隔/链接/当前页样式）在 AppBreadcrumb 组件内；
    这里只保留平台总览页挂图空间选择器的行布局口径 */
-.app-breadcrumb--with-select {
+.app-breadcrumb--with-actions {
   width: 100%;
   height: 32px;
 }
 
-.app-breadcrumb--with-select > .app-space-select {
+.app-breadcrumb__actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
   margin-left: auto;
 }
 
@@ -2204,9 +1693,6 @@ onBeforeUnmount(() => {
 @media (max-width: 1050px) {
   .app-top-actions__user span {
     display: none;
-  }
-  .alert-drawer {
-    width: min(430px, 94vw);
   }
 }
 
@@ -2294,7 +1780,7 @@ onBeforeUnmount(() => {
     margin-right: 0;
   }
 
-  .app-top-actions__right > :is(.app-docs-link, .app-alert-entry, .app-top-actions__user) {
+  .app-top-actions__right > .app-user-entry {
     flex-shrink: 0;
   }
 
@@ -2320,8 +1806,5 @@ onBeforeUnmount(() => {
     border-radius: 6px;
   }
 
-  .alert-drawer {
-    width: 100vw;
-  }
 }
 </style>

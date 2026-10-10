@@ -195,7 +195,7 @@ test.describe.serial('M. 图空间横切', () => {
     await expect(dialog.getByText(`图空间：${SPACE_B}`).first()).toBeVisible()
     await expect(
       dialog.getByText(
-        `暂无可抽取 Schema——请先在 Schema 管理页上传抽取脚本并绑定来源表；若已配置过，请检查 Schema 所在图空间与当前「${SPACE_B}」是否一致（顶部全局选择器可切换）`,
+        `暂无可抽取 Schema——请先在 Schema 管理页上传抽取脚本并绑定来源表；若已配置过，请检查 Schema 所在图空间与当前「${SPACE_B}」是否一致（平台总览的图空间选择器可切换）`,
       ),
     ).toBeVisible({ timeout: 30_000 })
 

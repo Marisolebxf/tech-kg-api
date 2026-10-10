@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from service.enterprise_background_analysis import EnterpriseBackgroundAnalysisService
 
 
@@ -54,3 +56,8 @@ def test_analyze_core_tech_tolerates_patent_error(monkeypatch):
         assert "core_tech" in result["dimensions"]
     finally:
         patent_mod.PatentDAO.list_by_assignee = orig
+
+
+@pytest.fixture(autouse=True)
+def graph_entity_present(monkeypatch):
+    monkeypatch.setattr("service.enterprise_background_analysis.has_graph_entity", lambda *args: True)

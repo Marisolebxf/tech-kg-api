@@ -42,9 +42,6 @@ def test_get_options_tolerates_data_source_failure(monkeypatch):
     monkeypatch.setattr(
         mod, "get_trs_graph_client", lambda: (_ for _ in ()).throw(RuntimeError("no graph"))
     )
-    monkeypatch.setattr(
-        mod, "get_gkx_session", lambda: (_ for _ in ()).throw(RuntimeError("no gkx"))
-    )
     opts = mod.get_options()
     assert opts["scholars"] == []
     assert opts["enterprises"] == []

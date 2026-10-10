@@ -70,7 +70,7 @@ async function renderLayout(isAdmin: boolean, path = '/expert-direct', collapsed
   const wrapper = mount(AppLayout, { global: { plugins: [pinia, router] } })
   wrappers.push(wrapper)
   await flushPromises()
-  return { wrapper, auth }
+  return { wrapper, auth, router }
 }
 
 describe('既有侧边栏按有效管理员身份显隐', () => {
@@ -181,6 +181,46 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
     expect(store.current).toBe('dev2')
     // 面包屑标题与选择器同行：选择器是面包屑行最后一个子元素
     expect(wrapper.get('.app-breadcrumb').text()).toContain('平台总览')
+    const actions = wrapper.get('.app-breadcrumb__actions')
+    const docs = actions.get('a.app-docs-link')
+    expect(docs.attributes('href')).toBe('/docs/')
+    expect(docs.attributes('target')).toBe('_blank')
+    expect(docs.element.nextElementSibling).toBe(selector.element)
+    expect(wrapper.find('.app-top-actions .app-docs-link').exists()).toBe(false)
+  })
+
+  it('账号菜单只保留退出入口并正常退出，消息通知组件不再渲染', async () => {
+    const { wrapper, auth } = await renderLayout(true, '/overview')
+    const logout = vi.spyOn(auth, 'logout').mockResolvedValue()
+    await wrapper.get('.app-top-actions__user').trigger('click')
+    const buttons = wrapper.findAll('.app-user-menu nav button')
+    expect(buttons.map((button) => button.text())).toEqual(['退出登录'])
+    expect(wrapper.find('.app-alert-entry').exists()).toBe(false)
+    expect(wrapper.find('.alert-drawer').exists()).toBe(false)
+    await buttons[0]!.trigger('click')
+    await flushPromises()
+    expect(logout).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('.app-user-menu').exists()).toBe(false)
+  })
+
+  it('文档入口仅保留在总览，其他页面隐藏，返回总览时恢复', async () => {
+    const { wrapper, router } = await renderLayout(true, '/overview')
+    expect(wrapper.find('.app-docs-link').exists()).toBe(true)
+    for (const path of [...managementPaths, ...queryPaths, ...sharedPaths, '/user-center', '/account-security', '/operation-logs', '/graph-build/jobs/preview', '/manual-review/task/preview']) {
+      await router.push(path)
+      await flushPromises()
+      expect(wrapper.find('.app-docs-link').exists(), path).toBe(false)
+      expect(wrapper.find('.app-breadcrumb__actions').exists(), path).toBe(false)
+    }
+    await router.push('/overview')
+    await flushPromises()
+    expect(wrapper.find('.app-breadcrumb .app-docs-link').exists()).toBe(true)
+  })
+
+  it('总览页保持普通用户原有可见范围', async () => {
+    const viewer = await renderLayout(false, '/overview')
+    expect(viewer.wrapper.find('.app-docs-link').exists()).toBe(false)
+    expect(viewer.wrapper.find('.app-space-select').exists()).toBe(true)
   })
 
   it('图谱可视化入口默认隐藏，开关开启后出现在图谱查询组', async () => {

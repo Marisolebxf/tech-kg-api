@@ -15,9 +15,9 @@ export function notifySessionExpired(message: string): void {
   portalBridge.send(PortalAction.SESSION_EXPIRED, { message })
 }
 
-export function loginRedirect(fullPath: string, error?: string) {
+export function loginRedirect(fullPath: string, error?: string, expired = false) {
   if (isPortalEmbeddedMode()) {
-    return { path: '/login', query: { embedded: '1', portalState: 'session-expired' } }
+    return { path: '/login', query: { embedded: '1', portalState: expired ? 'session-expired' : 'login-required' } }
   }
   return {
     path: '/login',
@@ -32,10 +32,10 @@ export function installSessionRecovery(router: Router): void {
   setSessionExpiredHandler((message) => {
     const authStore = useAuthStore()
     // 并发请求失效只恢复一次登录，且不打断用户主动退出。
-    if (authStore.initialized && !authStore.isAuthenticated) return
-    authStore.invalidate()
+    if (!authStore.isAuthenticated) return
+    authStore.invalidate(true)
     notifySessionExpired(message)
     if (router.currentRoute.value.name === 'login') return
-    return router.replace(loginRedirect(router.currentRoute.value.fullPath, message))
+    return router.replace(loginRedirect(router.currentRoute.value.fullPath, message, true))
   })
 }

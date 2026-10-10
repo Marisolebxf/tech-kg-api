@@ -180,6 +180,8 @@ async def test_machine_key_requires_explicit_shared_production(auth_client, monk
         )
 
     monkeypatch.setattr("infra.mysql.session_scope", session)
+    monkeypatch.setattr("service.business_access_control.space_registration", lambda *_args:
+                        None if shared is None else SimpleNamespace(is_shared_production=shared))
     response = await client.post(
         PATH, json={}, headers={"X-Client-Id": "partner-a", "X-API-Key": "test-key"}
     )

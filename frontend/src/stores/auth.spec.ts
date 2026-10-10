@@ -25,12 +25,37 @@ beforeEach(() => {
 })
 
 describe('session state recovery', () => {
+  it('treats a first unauthenticated response as login-required rather than expired', async () => {
+    const store = useAuthStore()
+    vi.mocked(getCurrentProfile).mockRejectedValue({ response: { status: 401, data: { detail: '尚未登录' } } })
+    expect(await store.loadCurrentUser(true)).toBeNull()
+    expect(store.sessionExpired).toBe(false)
+  })
+
+  it.each(['登录已过期，请重新登录', '访问令牌已过期'])('recognizes an explicit server expiry even after reload: %s', async (detail) => {
+    const store = useAuthStore()
+    vi.mocked(getCurrentProfile).mockRejectedValue({ response: { status: 401, data: { detail } } })
+    expect(await store.loadCurrentUser(true)).toBeNull()
+    expect(store.sessionExpired).toBe(true)
+    vi.mocked(getCurrentProfile).mockResolvedValue(profile)
+    await store.loadCurrentUser(true)
+    expect(store.sessionExpired).toBe(false)
+  })
+
+  it('does not retain expiry after explicit logout', async () => {
+    const store = useAuthStore()
+    store.invalidate(true)
+    await store.logout()
+    expect(store.sessionExpired).toBe(false)
+  })
+
   it('rechecks a cached identity and clears it when the server rejects it', async () => {
     const store = useAuthStore()
     vi.mocked(getCurrentProfile).mockResolvedValueOnce(profile).mockRejectedValueOnce(unauthorized)
     expect(await store.loadCurrentUser(true)).toEqual(profile)
     expect(await store.loadCurrentUser(true)).toBeNull()
     expect(store.isAuthenticated).toBe(false)
+    expect(store.sessionExpired).toBe(true)
     expect(getCurrentProfile).toHaveBeenCalledTimes(2)
   })
 

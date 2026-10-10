@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { getCurrentInstance, onUnmounted, ref } from 'vue'
 
 interface ToastItem {
   id: number
@@ -11,7 +11,11 @@ const toasts = ref<ToastItem[]>([])
 let nextId = 0
 
 export function useToast() {
+  let active = true
+  if (getCurrentInstance()) onUnmounted(() => { active = false })
   function showToast(message: string, tone: ToastItem['tone'] = 'success') {
+    // 空间切换会卸载原页面，其未完成请求不应再向新页面推送提示。
+    if (!active) return
     const id = nextId++
     toasts.value = [...toasts.value, { id, message, tone }]
     window.setTimeout(() => {

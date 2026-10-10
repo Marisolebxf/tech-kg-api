@@ -29,6 +29,35 @@ class BusinessMember(Base):
     role: Mapped[str] = mapped_column(String(16), nullable=False, default="user")
 
 
+class BusinessMembershipState(Base):
+    """明确标记新版授权来源，撤权后不得回退旧表重新获得权限。"""
+
+    __tablename__ = "kg_business_membership_state"
+    user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+
+
+class BusinessMembership(Base):
+    """新增多业务关联，保留旧成员表，兼容共享库上的旧实例。"""
+
+    __tablename__ = "kg_business_membership"
+    user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    client_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("kg_business_client.client_id"), primary_key=True
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False, default="user")
+
+
+class BusinessSpacePolicy(Base):
+    """新版空间可见性覆盖，不改写旧部署依赖的空间绑定。"""
+
+    __tablename__ = "kg_business_space_policy"
+    space_name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    visibility: Mapped[str] = mapped_column(String(16), nullable=False)
+    client_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("kg_business_client.client_id"), nullable=True
+    )
+
+
 class BusinessGraphSpace(Base):
     __tablename__ = "kg_business_graph_space"
     __table_args__ = (Index("ix_business_space_client", "client_id"),)

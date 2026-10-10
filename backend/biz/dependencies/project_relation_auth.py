@@ -44,14 +44,33 @@ async def require_project_relation_identity(
     context = await require_authenticated_user(request, response, application, bearer)
     # 保留原 CurrentActor 的用户资料校验和角色解析，机器身份不进入用户表。
     actor = await asyncio.to_thread(application.platform_actor, context)
+    from biz.dependencies.selected_graph_space import read_request_graph_space
     from service.business_access_control import ensure_space_access
 
-    await asyncio.to_thread(ensure_space_access, actor, None, "read")
+    space = await read_request_graph_space(request)
+    await asyncio.to_thread(ensure_space_access, actor, space, "read")
     return actor
 
 
+async def project_relation_space(
+    request: Request,
+    identity: Annotated[ExternalClientIdentity | PlatformActor, Depends(require_project_relation_identity)],
+):
+    from service.graph_space import default_graph_space
+    from service.graph_space_context import selected_graph_space
+    space = default_graph_space()
+    if isinstance(identity, PlatformActor):
+        from biz.dependencies.selected_graph_space import read_request_graph_space
+        space = await read_request_graph_space(request) or space
+    token = selected_graph_space.set(space)
+    try:
+        yield identity
+    finally:
+        selected_graph_space.reset(token)
+
+
 ProjectRelationIdentity = Annotated[
-    ExternalClientIdentity | PlatformActor, Depends(require_project_relation_identity)
+    ExternalClientIdentity | PlatformActor, Depends(project_relation_space)
 ]
 
 
@@ -59,16 +78,15 @@ def _ensure_external_shared_space() -> None:
     """机器密钥只能查询显式登记的共享生产数据，不复用 OAuth 或业务 ID。"""
     from sqlalchemy.exc import SQLAlchemyError
 
-    from db_model.business_access import BusinessGraphSpace
     from infra.mysql import session_scope
-    from service.business_access_control import rbac_enabled
+    from service.business_access_control import rbac_enabled, space_registration
     from service.graph_space import default_graph_space
 
     if not rbac_enabled():
         return
     try:
         with session_scope() as session:
-            row = session.get(BusinessGraphSpace, default_graph_space())
+            row = space_registration(session, default_graph_space())
             if row is not None and row.is_shared_production:
                 return
     except SQLAlchemyError as exc:

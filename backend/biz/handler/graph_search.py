@@ -15,11 +15,12 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from biz.dependencies.auth import CurrentActor
+from biz.dependencies.selected_graph_space import bind_selected_graph_space, resolve_selected_space
 from biz.handler import get_cache
 from biz.schemas.common import ApiResponse
 from infra.graph_db import TRSGraphClient, get_space_client, get_trs_graph_client
@@ -28,7 +29,7 @@ from infra.graph_db.models import GraphEdge, GraphNode
 from infra.graph_exec_budget import GraphExecOverloaded, graph_exec_slot
 from infra.mysql import create_session
 
-router = APIRouter(prefix="/graph-search", tags=["graph-search"])
+router = APIRouter(prefix="/graph-search", tags=["graph-search"], dependencies=[Depends(bind_selected_graph_space)])
 logger = logging.getLogger(__name__)
 
 
@@ -374,6 +375,7 @@ async def get_node(
     ``paper_ref_10.1111/jth.14768``），经网关/uvicorn 解码后是多个路径段，
     单段参数会直接 404 Not Found。
     """
+    space = resolve_selected_space(space)
     _ensure_space_access(actor, space)
     node_id = node_id.strip('"')
     try:
@@ -397,6 +399,7 @@ async def list_nodes(
     space: str | None = Query(None, description="图空间"),
 ) -> ApiResponse:
     """按标签分页查询节点列表（total 为库里真实总数）。"""
+    space = resolve_selected_space(space)
     _ensure_space_access(actor, space)
     try:
         client = _get_client(space)
@@ -427,6 +430,7 @@ async def search_nodes(
     space: str | None = Query(None, description="图空间"),
 ) -> ApiResponse:
     """按属性搜索节点（如 {"doi": "10.xxx"} 查论文）。"""
+    space = resolve_selected_space(space)
     _ensure_space_access(actor, space)
     try:
         async with graph_exec_slot():
@@ -444,6 +448,7 @@ async def search_nodes(
 @router.post("/paths/search", response_model=ApiResponse)
 async def search_typed_paths(body: TypedPathSearchRequest, actor: CurrentActor) -> ApiResponse:
     """按逐跳边类型和方向查询全部匹配路径，支持中间节点属性过滤与分页。"""
+    body = body.model_copy(update={"space": resolve_selected_space(body.space)})
     _ensure_space_access(actor, body.space)
     try:
         client = _get_client(body.space)
@@ -500,6 +505,7 @@ async def get_subgraph(
 
     路径参数用 path 转换器：同 /nodes/{node_id}，兼容含 ``/`` 的 VID（DOI）。
     """
+    space = resolve_selected_space(space)
     _ensure_space_access(actor, space)
     node_id = node_id.strip('"')
     try:
@@ -620,6 +626,7 @@ async def get_filtered_subgraph(
     与 /subgraph 的区别：支持多边类型过滤（逗号分隔），每种边类型单独查，
     不会因 limit 截断把需要的边挤掉（论文/合作者等不会占名额）。
     """
+    space = resolve_selected_space(space)
     _ensure_space_access(actor, space)
     et_set = [et.strip() for et in edge_types.split(",") if et.strip()]
     if not et_set:
@@ -813,6 +820,7 @@ async def get_node_edges(
     space: str | None = Query(None, description="图空间"),
 ) -> ApiResponse:
     """查某节点的所有边（不含邻居节点属性，轻量）。"""
+    space = resolve_selected_space(space)
     _ensure_space_access(actor, space)
     try:
         async with graph_exec_slot():
@@ -841,6 +849,7 @@ async def get_neighbours(
     space: str | None = Query(None, description="图空间"),
 ) -> ApiResponse:
     """查某节点的邻居节点（含属性）。"""
+    space = resolve_selected_space(space)
     _ensure_space_access(actor, space)
     try:
         # 与其它端点同口径：同步客户端调用放线程执行（async handler 里直调会
@@ -870,6 +879,7 @@ async def shortest_path(
     space: str | None = Query(None, description="图空间"),
 ) -> ApiResponse:
     """查两个节点之间的最短路径。"""
+    space = resolve_selected_space(space)
     _ensure_space_access(actor, space)
     try:
         # 与其它端点同口径：同步客户端调用放线程执行，并占用一个公共执行名额。
@@ -899,7 +909,7 @@ async def list_spaces(actor: CurrentActor) -> ApiResponse:
             items = GraphSpaceService(session).list_work_spaces_for_actor(actor)
         finally:
             session.close()
-        return ApiResponse(data={"spaces": [item["name"] for item in items]})
+        return ApiResponse(data={"spaces": [item["name"] for item in items], "items": items})
     except Exception:  # noqa: BLE001
         # 绑定库不可用时仅返回默认业务空间，不泄露其他空间列表。
         from service.business_access_control import rbac_enabled
@@ -924,6 +934,7 @@ async def get_stats(
     外层再套 GET 结果缓存（命中返回预序列化 JSON，跳过序列化开销）；
     ``refresh=true`` 表示调用方要最新数据，跳过外层缓存且不写入。
     """
+    space = resolve_selected_space(space)
     _ensure_space_access(actor, space)
     if not refresh:
         cached = get_cache.try_get("graph-search:stats", request)

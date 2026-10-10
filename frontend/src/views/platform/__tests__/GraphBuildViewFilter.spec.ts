@@ -234,3 +234,24 @@ it('公共只读时保留任务查看、查询与刷新，执行和删除置灰'
   expect(refresh.attributes('disabled')).toBeUndefined()
   localStorage.removeItem('tech-kg-graph-build-space-scope')
 })
+
+
+it('未登记归属的历史任务不能按空间列表首项归入当前空间', async () => {
+  wrapper.unmount()
+  mocks.listJobs.mockResolvedValue({ items: [jobFixture('legacy', { graphSpace: undefined }), JOBS[0]] })
+  mountView()
+  await flushPromises()
+  expect(rowCount()).toBe(1)
+  expect(wrapper.text()).not.toContain('任务legacy')
+  expect(wrapper.text()).toContain('任务j1')
+})
+
+it('保留上游脚本列完整名称提示', async () => {
+  wrapper.unmount()
+  mocks.listJobs.mockResolvedValue({ items: [jobFixture('script', { taskType: 'chain', definitionIds: ['first.script', 'second.script'] })] })
+  mountView()
+  await flushPromises()
+  const scriptCell = wrapper.find('tbody tr td:nth-child(3) code')
+  expect(scriptCell.attributes('title')).toContain('first.script')
+  expect(scriptCell.attributes('title')).toContain('second.script')
+})

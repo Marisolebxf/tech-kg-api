@@ -6,7 +6,7 @@ import re
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from biz.schemas.text_rules import ABNORMAL_CHARS_HINT, KEYWORD_TEXT_PATTERN, check_text
+from biz.schemas.text_rules import ABNORMAL_CHARS_HINT, PROSE_TEXT_PATTERN, check_text
 from service.schema_ddl import FIXED_STRING_MAX_LENGTH, is_valid_data_type
 
 ENTITY_NAME_PATTERN = re.compile(r"^[A-Z][A-Za-z0-9]*$")
@@ -40,10 +40,10 @@ class SchemaPropertyInput(CamelModel):
     def validate_rule(cls, value: str) -> str:
         if not value:
             return value
-        # 属性规则允许较长说明文本（512），仅套用 text_rules 的关键词字符白名单，
+        # 属性规则允许较长说明文本（512），仅套用 text_rules 的长文本白名单，
         # 不走 check_text 的 64 字符长度上限。
         text = value.strip()
-        if not KEYWORD_TEXT_PATTERN.fullmatch(text):
+        if not PROSE_TEXT_PATTERN.fullmatch(text):
             raise ValueError(f"属性规则不能包含{ABNORMAL_CHARS_HINT}")
         return text
 
@@ -116,9 +116,10 @@ class SchemaCreateBase(CamelModel):
     def validate_description(cls, value: str) -> str:
         if not value:
             return value
-        # 说明允许较长文本（4000），仅套用字符白名单，不走 check_text 的默认 64 长度上限
+        # 说明允许较长文本（4000），仅套用长文本字符白名单（含常规中文标点，
+        # 见 text_rules.PROSE_TEXT_PATTERN），不走 check_text 的默认 64 长度上限
         text = value.strip()
-        if not KEYWORD_TEXT_PATTERN.fullmatch(text):
+        if not PROSE_TEXT_PATTERN.fullmatch(text):
             raise ValueError(f"Schema 说明不能包含{ABNORMAL_CHARS_HINT}")
         return text
 

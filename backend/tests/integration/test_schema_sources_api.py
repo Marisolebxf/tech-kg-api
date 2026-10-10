@@ -44,6 +44,7 @@ def _actor(user_id: str, is_admin: bool) -> PlatformActor:
 
 @pytest.fixture
 def sources_api(monkeypatch):
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "techkg")
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -59,6 +60,11 @@ def sources_api(monkeypatch):
     app.dependency_overrides[get_workflow_session] = override_session
     monkeypatch.setattr("service.schema_management.get_schema_s3_storage", lambda: storage)
     monkeypatch.setenv("SCHEMA_AUTO_PROVENANCE", "false")
+    monkeypatch.setattr("service.schema_ddl.list_graph_spaces", lambda: ["techkg"])
+    monkeypatch.setattr("service.schema_management.run_schema_ddl", lambda *args, **kwargs: {
+        "status": "succeeded", "error": None, "statement": "CREATE TAG Widget",
+        "executed_at": "2026-10-10T08:00:00",
+    })
     # 数据源存在性校验走业务库——单测里直接放行（存在性语义单测覆盖）
     monkeypatch.setattr("service.schema_management._validate_datasource_exists", lambda ds_id: None)
 
@@ -158,6 +164,27 @@ async def test_replace_sources_full_flow(sources_api) -> None:
         assert detail["sources"][0]["pkColumn"] == "org_id"
         assert detail["sources"][0]["timeColumn"] == "modified_at"
 
+        # timeColumn 空串 = 显式「无时间列」（抽取走 pk keyset 增量），须原样
+        # 保存不被强转成默认值（2026-10-09：绑定显示 id、保存变 u_id 的配套修复）
+        no_time = await client.put(
+            f"/api/v1/schema-management/schemas/{entity['id']}/sources",
+            json={
+                "sources": [
+                    {
+                        "datasourceId": "MYSQL-1",
+                        "databaseName": "gkx",
+                        "tableName": "dwd_bid_base_out",
+                        "pkColumn": "u_id",
+                        "timeColumn": "",
+                    }
+                ]
+            },
+        )
+        assert no_time.status_code == 200
+        saved = no_time.json()["data"]["sources"][0]
+        assert saved["pkColumn"] == "u_id"
+        assert saved["timeColumn"] == ""
+
         # 空列表清空绑定
         cleared = await client.put(
             f"/api/v1/schema-management/schemas/{entity['id']}/sources",
@@ -243,8 +270,16 @@ async def test_replace_sources_identifier_injection_rejected(sources_api) -> Non
 async def test_replace_sources_permissions(sources_api) -> None:
     _, set_actor, _ = sources_api
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        set_actor("user-a", False)
+        set_actor("user-a", True)
         entity = await _create_entity(client)
+
+        # 创建者降为普通用户后也不能维护来源，不能以历史归属绕过角色权限。
+        set_actor("user-a", False)
+        owner_forbidden = await client.put(
+            f"/api/v1/schema-management/schemas/{entity['id']}/sources",
+            json={"sources": []},
+        )
+        assert owner_forbidden.status_code == 403
 
         set_actor("user-b", False)
         forbidden = await client.put(

@@ -3,7 +3,6 @@ import BusinessAccessPanel from "../../components/BusinessAccessPanel.vue"
 
 import DeleteConfirmDialog from '../../components/DeleteConfirmDialog.vue'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useAuthStore } from '../../stores/auth'
 import { IconSearch } from '@arco-design/web-vue/es/icon'
 import ListPagination from '../../components/list-pagination.vue'
 import { useClientPagination } from '../../composables/use-client-pagination'
@@ -41,13 +40,16 @@ import {
   bindGraphSpace,
   createGraphSpace,
   listGraphSpaceItems,
+  unbindGraphSpace,
   type GraphSpaceItem,
 } from '../../api/graphSpace'
 import { currentUserIsAdmin } from '../../api/currentUser'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
+import { useAuthStore } from '../../stores/auth'
 import { useToast } from '../../composables/use-toast'
 import { SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
 import {
+  configDescriptionMaxLength,
   numberOrNullForSubmit,
   portValueForSubmit,
   validateConfigFields,
@@ -97,11 +99,11 @@ const graphSpaceStore = useGraphSpaceStore()
 
 const categories = computed(() => [
   { key: '语言模型', label: '语言模型', hint: 'LLM 语言模型配置' },
-  { key: '向量模型', label: '向量模型', hint: 'embedding 向量模型配置' },
   { key: 'MySQL 数据源', label: 'MySQL 数据源', hint: 'MySQL 关系库连接' },
   { key: '图数据空间', label: '图数据空间', hint: '我的图空间绑定' },
   ...(isAdmin.value && useAuthStore().profile?.businessRbacEnabled ? [{ key: '业务权限', label: '业务权限', hint: '成员与图空间归属' }] : []),
 ])
+// 向量模型页签暂不展示；后端与 embedding 相关代码保留。
 
 // 响应式跟随 auth store（profile 异步加载，一次性赋值会把 admin 恒判 false——
 // 免登录部署下绑定入口/新建空间入口不渲染）
@@ -117,7 +119,7 @@ const configBusiness = computed({
 const graphSpaces = ref<GraphSpaceItem[]>([])
 const spaceDialogOpen = ref(false)
 const newSpaceName = ref('')
-const bindTarget = ref('')
+const spaceSubmitAttempted = ref(false)
 const spaceWorking = ref(false)
 
 const items = ref<ConfigItem[]>([])
@@ -164,6 +166,12 @@ function submitConfigSearch() {
   resetConfigPage()
 }
 
+// 搜索框清空（点 × 或手动删光）即恢复搜索前列表，无需再点查询（与图空间页签一致；
+// 翻页复位由下方 submittedKeyword 的 watch 兜住）
+watch(keyword, (value) => {
+  if (!value && submittedKeyword.value) submittedKeyword.value = ''
+})
+
 type ConfigForm = {
   name?: string
   baseUrl?: string
@@ -193,7 +201,12 @@ const detailFieldErrors = computed<ConfigFieldErrors>(() =>
     ? validateConfigFields(selected.value.kind, selected.value, 'detail')
     : {})
 const hasDetailErrors = computed(() => Object.keys(detailFieldErrors.value).length > 0)
-const spaceNameError = computed(() => (spaceDialogOpen.value ? validateGraphSpaceName(newSpaceName.value) : null))
+const spaceNameError = computed(() => {
+  if (!spaceDialogOpen.value) return null
+  // 空名称在点击创建后提示；非空输入仍保留即时格式/长度校验。
+  if (!spaceSubmitAttempted.value && !newSpaceName.value.trim()) return null
+  return validateGraphSpaceName(newSpaceName.value)
+})
 
 const isModelKind = computed(() => activeCategory.value === '语言模型' || activeCategory.value === '向量模型')
 const canVerifyForm = computed(() =>
@@ -205,8 +218,8 @@ watch(form, () => { verified.value = false }, { deep: true })
 
 const isGraphSpaceCategory = computed(() => activeCategory.value === '图数据空间')
 
-const mySpaces = computed(() => graphSpaces.value.filter((item) => item.mine))
-const bindableSpaces = computed(() => graphSpaces.value.filter((item) => !item.mine))
+// 行级绑定/解绑进行中的空间名（只禁用被点的那行按钮）
+const spaceWorkingName = ref('')
 
 const formKind = computed<ConfigKind | null>(() => {
   switch (activeCategory.value) {
@@ -224,7 +237,7 @@ const formKind = computed<ConfigKind | null>(() => {
 const visibleItems = computed(() => items.value.filter((item) => {
   const matchCategory = item.category === activeCategory.value
   const query = submittedKeyword.value.toLowerCase()
-  const endpointOrUrl = item.baseUrl || item.host || item.endpoint
+  const endpointOrUrl = item.baseUrl || (item.host ? `${item.host}:${item.port}` : '') || item.endpoint
   const matchKeyword = !query || `${item.name}${item.id}${item.type}${endpointOrUrl}${item.model || ''}`.toLowerCase().includes(query)
   const matchStatus = !statusFilter.value || statusFilter.value === '全部状态' || item.status === statusFilter.value
   return matchCategory && matchKeyword && matchStatus
@@ -241,6 +254,37 @@ const {
   changePageSize: changeConfigPageSize,
 } = useClientPagination(visibleItems, 10)
 watch([submittedKeyword, statusFilter, activeCategory], resetConfigPage)
+
+// 图空间列表分页：与配置列表同款（10/页客户端分页，不再滚动）；已绑定的排前面
+const spaceKeyword = ref('')
+const submittedSpaceKeyword = ref('')
+function submitSpaceSearch() {
+  submittedSpaceKeyword.value = spaceKeyword.value.trim()
+  resetSpacePage()
+}
+// 搜索框清空（点 × 或手动删光）即恢复搜索前列表，无需再点查询
+watch(spaceKeyword, (value) => {
+  if (!value && submittedSpaceKeyword.value) {
+    submittedSpaceKeyword.value = ''
+    resetSpacePage()
+  }
+})
+const visibleSpaces = computed(() => {
+  const query = submittedSpaceKeyword.value.toLowerCase()
+  return graphSpaces.value
+    .filter((space) => !query || space.name.toLowerCase().includes(query))
+    .sort((a, b) => Number(b.mine) - Number(a.mine) || a.name.localeCompare(b.name))
+})
+const {
+  page: spacePage,
+  pageSize: spacePageSize,
+  total: spaceTotal,
+  pagedItems: pagedSpaces,
+  resetPage: resetSpacePage,
+  changePage: changeSpacePage,
+  changePageSize: changeSpacePageSize,
+} = useClientPagination(visibleSpaces, 10)
+watch(activeCategory, resetSpacePage)
 watch([pagedItems, activeCategory], async () => {
   await nextTick()
   updateConfigTableScrollState()
@@ -248,7 +292,7 @@ watch([pagedItems, activeCategory], async () => {
 
 function categoryCount(key: string) {
   if (key === '图数据空间') {
-    return graphSpaces.value.filter((item) => item.mine).length
+    return businessRbac.value ? graphSpaces.value.length : graphSpaces.value.filter((item) => item.mine).length
   }
   return items.value.filter((i) => i.category === key).length
 }
@@ -257,8 +301,9 @@ function buildUsage(kind: ConfigKind, isDefault: boolean): string {
   if (isDefault) {
     if (kind === 'llm') return '默认语言模型'
     if (kind === 'embedding') return '默认向量模型'
-    return '默认 MySQL 数据源'
   }
+  // MySQL 数据源默认不生效（任务触发时手动选择），不存在"默认数据源"概念
+  if (kind === 'mysql') return '任务触发时手动选择'
   return '尚未引用'
 }
 
@@ -330,12 +375,13 @@ async function createSpace() {
     showToast('请线下向管理员申请创建图空间。', 'info')
     return
   }
+  spaceSubmitAttempted.value = true
   if (spaceNameError.value) return
   const name = newSpaceName.value.trim()
   spaceWorking.value = true
   try {
     await createGraphSpace(name)
-    showToast(`图数据空间“${name}”已创建并绑定。空间建好后有秒级传播延迟，随后即可在任务触发时选择。`, 'success')
+    showToast(businessRbac.value ? `图数据空间“${name}”已创建，请在「业务权限」中设置公共或业务归属。` : `图数据空间“${name}”已创建并绑定。空间建好后有秒级传播延迟，随后即可在任务触发时选择。`, 'success')
     spaceDialogOpen.value = false
     newSpaceName.value = ''
     await loadGraphSpaces()
@@ -348,22 +394,27 @@ async function createSpace() {
   }
 }
 
-async function bindSpace() {
-  if (!canChangeLegacyBinding()) return
-  const name = bindTarget.value
-  if (!name) return
-  spaceWorking.value = true
+/** 行级绑定/解绑：解绑只删当前用户与空间的绑定关系（平台总览的图空间筛选不再显示该空间），
+ * 图数据库中的空间与数据原样保留；重新绑定后照常使用之前的数据。 */
+async function toggleSpaceBinding(space: GraphSpaceItem) {
+  if (!canChangeLegacyBinding() || spaceWorkingName.value) return
+  const unbinding = space.mine
+  spaceWorkingName.value = space.name
   try {
-    await bindGraphSpace(name)
-    showToast(`图数据空间“${name}”已绑定。`)
-    bindTarget.value = ''
+    if (unbinding) {
+      await unbindGraphSpace(space.name, currentUserId())
+      showToast(`图数据空间“${space.name}”已解绑（数据保留，重新绑定后照常使用）。`, 'success')
+    } else {
+      await bindGraphSpace(space.name, currentUserId())
+      showToast(`图数据空间“${space.name}”已绑定。`, 'success')
+    }
     await loadGraphSpaces()
-    // 绑定对所有用户生效：平台总览页全局图空间选择器立即出现该空间
+    // 平台总览右上角的图空间选择器同步增减该空间
     void graphSpaceStore.ensureLoaded(true)
   } catch (err) {
-    showToast(`绑定失败：${(err as Error).message}`, 'error')
+    showToast(`${unbinding ? '解绑' : '绑定'}失败：${(err as Error).message}`, 'error')
   } finally {
-    spaceWorking.value = false
+    spaceWorkingName.value = ''
   }
 }
 
@@ -385,6 +436,12 @@ function openDetail(item: ConfigItem) {
 async function switchCategory(key: string) {
   activeCategory.value = key
   selected.value = null
+  // 搜索词不跨页签：各分类数据不同，上一分类的过滤条件不应带到下一分类
+  //（keyword 清空会触发上面的 watch 同步清掉 submittedKeyword，这里显式赋值兜底）
+  keyword.value = ''
+  submittedKeyword.value = ''
+  spaceKeyword.value = ''
+  submittedSpaceKeyword.value = ''
   // 首屏已并行加载全部分类，点击切换不再重拉；仅当本地没有该分类数据（首屏加载失败）时补拉。
   // 增删改后的刷新由各 mutation 内的 loadByCategory 覆盖。
   if (key === '图数据空间') {
@@ -410,7 +467,9 @@ function emptyForm(kind: ConfigKind): ConfigForm {
 function openCreate() {
   if (!isGraphSpaceCategory.value && !canCreateConfig.value) return
   if (isGraphSpaceCategory.value) {
+    if (!isAdmin.value) return
     newSpaceName.value = ''
+    spaceSubmitAttempted.value = false
     spaceDialogOpen.value = true
     return
   }
@@ -581,37 +640,32 @@ async function toggleItem(item: ConfigItem) {
 const defaultUpdating = ref(false)
 const hasCategoryDefault = computed(() => items.value.some(item => item.category === activeCategory.value && item.isDefault))
 function defaultSwitchDisabled(item: ConfigItem) {
-  return defaultUpdating.value || (!item.isDefault && items.value.some(other => other.kind === item.kind && other.isDefault))
+  // 默认必须恒有一条：当前默认不可取消（只能被"设为默认"替换），非默认随时可直接切换
+  return defaultUpdating.value || item.isDefault
 }
 async function toggleDefault(item: ConfigItem, value: unknown) {
   const enabled = value === true
-  if (defaultSwitchDisabled(item) || enabled === item.isDefault) return
+  if (!enabled || defaultSwitchDisabled(item) || enabled === item.isDefault) return
   defaultUpdating.value = true
   try {
     let updated: ConfigItem
     if (item.kind === 'llm') {
-      updated = toConfigItem('llm', enabled
-        ? await setDefaultLlmConfig(item.id, currentUserId())
-        : await updateLlmConfig(item.id, { isDefault: false }, currentUserId()))
+      updated = toConfigItem('llm', await setDefaultLlmConfig(item.id, currentUserId()))
     } else if (item.kind === 'embedding') {
-      updated = toConfigItem('embedding', enabled
-        ? await setDefaultEmbeddingConfig(item.id, currentUserId())
-        : await updateEmbeddingConfig(item.id, { isDefault: false }, currentUserId()))
+      updated = toConfigItem('embedding', await setDefaultEmbeddingConfig(item.id, currentUserId()))
     } else {
-      updated = toConfigItem('mysql', enabled
-        ? await setDefaultMysqlDatasource(item.id, currentUserId())
-        : await updateMysqlDatasource(item.id, { isDefault: false }, currentUserId()))
+      updated = toConfigItem('mysql', await setDefaultMysqlDatasource(item.id, currentUserId()))
     }
     items.value = items.value.map(other => {
       if (other.id === item.id && other.kind === item.kind) return updated
-      if (enabled && other.kind === item.kind) return { ...other, isDefault: false, usage: buildUsage(other.kind, false) }
+      if (other.kind === item.kind) return { ...other, isDefault: false, usage: buildUsage(other.kind, false) }
       return other
     })
     if (selected.value?.id === item.id && selected.value.kind === item.kind) {
       selected.value = { ...selected.value, isDefault: updated.isDefault, usage: updated.usage }
     }
-    if (enabled) resetConfigPage()
-    showToast(`“${item.name}”已${enabled ? '设为默认' : '取消默认'}。`, 'success')
+    resetConfigPage()
+    showToast(`“${item.name}”已设为默认，原默认已自动取消。`, 'success')
   } catch (err) {
     showToast(`更新默认配置失败：${(err as Error).message}`, 'error')
   } finally {
@@ -624,6 +678,10 @@ const deleteVisible = ref(false)
 const deleteSubmitting = ref(false)
 const deleteError = ref('')
 function removeConfig(item: ConfigItem) {
+  if ((item.kind === 'llm' || item.kind === 'embedding') && item.isDefault) {
+    showToast('默认配置不能删除：请先将其他配置设为默认。', 'info')
+    return
+  }
   deleteTarget.value = item
   deleteError.value = ''
   deleteVisible.value = true
@@ -653,20 +711,17 @@ async function confirmDeleteConfig() {
   }
 }
 
-/** 首屏并行加载全部三类，让分类计数固定展示（loadByCategory 是替换式合并，并发会互相覆盖）。 */
+/** 首屏并行加载可见分类，让分类计数固定展示（loadByCategory 是替换式合并，并发会互相覆盖）。 */
 async function loadAllCategories() {
   if (!configContextReady.value) return
-  const [llm, embedding, mysql] = await Promise.allSettled([
+  const [llm, mysql] = await Promise.allSettled([
     listLlmConfigs(currentUserId()),
-    listEmbeddingConfigs(currentUserId()),
     listMysqlDatasources(currentUserId()),
   ])
   const loaded: ConfigItem[] = []
   const failed: string[] = []
   if (llm.status === 'fulfilled') loaded.push(...llm.value.map((c) => toConfigItem('llm', c)))
   else failed.push('语言模型')
-  if (embedding.status === 'fulfilled') loaded.push(...embedding.value.map((c) => toConfigItem('embedding', c)))
-  else failed.push('向量模型')
   if (mysql.status === 'fulfilled') loaded.push(...mysql.value.map((c) => toConfigItem('mysql', c)))
   else failed.push('MySQL 数据源')
   if (failed.length) showToast(`加载${[...new Set(failed)].join('、')}配置失败`, 'error')
@@ -704,30 +759,44 @@ onUnmounted(() => {
 
       <BusinessAccessPanel v-if="activeCategory === '业务权限' && isAdmin" />
       <main v-else class="config-list">
-        <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" :disabled="!canCreateConfig" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilter" allow-clear placeholder="全部状态"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><form class="config-search-form" role="search" @submit.prevent="submitConfigSearch"><a-input v-model="keyword" class="config-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识或地址" placeholder="搜索名称、标识或地址"><template #prefix><IconSearch /></template></a-input><button class="primary config-search-button" type="submit">查询</button></form></nav><nav v-else class="bind-nav"><button class="primary" type="button" :disabled="!isAdmin" @click="spaceDialogOpen = true">＋ 新建图数据空间</button><a-select v-if="isAdmin && !businessRbac && bindableSpaces.length" v-model="bindTarget" placeholder="绑定已有图数据空间" allow-clear><a-option v-for="space in bindableSpaces" :key="space.name" :value="space.name">{{ space.name }}</a-option></a-select><button v-if="isAdmin && !businessRbac && bindableSpaces.length" type="button" :disabled="spaceWorking" @click="bindSpace">绑定</button></nav></header>
+        <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" :disabled="!canCreateConfig" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilter" allow-clear placeholder="全部状态"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><form class="config-search-form" role="search" @submit.prevent="submitConfigSearch"><a-input v-model="keyword" class="config-search-input" allow-clear :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识、类型或地址" placeholder="搜索名称、标识、类型或地址"><template #prefix><IconSearch /></template></a-input><button class="primary config-search-button" type="submit">查询</button></form></nav><nav v-else class="config-list-actions"><button class="primary create-entry" type="button" :disabled="!isAdmin" @click="openCreate">＋ 新建图数据空间</button><form class="config-search-form" role="search" @submit.prevent="submitSpaceSearch"><a-input v-model="spaceKeyword" class="config-search-input" allow-clear :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索图空间名称" placeholder="搜索图空间名称"><template #prefix><IconSearch /></template></a-input><button class="primary config-search-button" type="submit">查询</button></form></nav></header>
         <div v-if="isGraphSpaceCategory" class="table-wrap space-table">
           <table>
-            <thead><tr><th>图数据空间</th><th>绑定状态</th></tr></thead>
+            <thead><tr><th>图数据空间</th><th class="config-status-col">{{ businessRbac ? '空间归属' : '绑定状态' }}</th><th class="config-action-col">操作</th></tr></thead>
             <tbody>
-              <tr v-for="space in mySpaces" :key="space.name">
+              <tr v-for="space in pagedSpaces" :key="space.name">
                 <td><div class="config-name"><span><strong>{{ space.name }}</strong><small>NebulaGraph 图空间</small></span></div></td>
-                <td><span class="status is-正常"><i />已绑定</span></td>
+                <td class="config-status-col"><span v-if="businessRbac">{{ space.groupKind === 'public' || space.isSharedProduction ? '公共图空间' : space.businessName || space.clientId || '未归属空间' }}</span><span v-else class="status" :class="space.mine ? 'is-正常' : 'is-停用'"><i />{{ space.mine ? '已绑定' : '已解绑' }}</span></td>
+                <td class="config-action-col">
+                  <div class="row-actions">
+                    <template v-if="businessRbac">
+                      <button v-if="isAdmin" class="link" type="button" @click="switchCategory('业务权限')">管理归属</button>
+                      <span v-else>管理员维护</span>
+                    </template>
+                    <button v-else
+                      :class="space.mine ? 'link danger' : 'link'"
+                      type="button"
+                      :disabled="!isAdmin || !!spaceWorkingName"
+                      :title="space.mine ? '解绑仅从我的图空间列表移除（平台总览筛选不再显示），图数据保留，重新绑定后照常使用' : '绑定到我的图空间列表'"
+                      @click.stop="toggleSpaceBinding(space)"
+                    >{{ spaceWorkingName === space.name ? '处理中…' : space.mine ? '解绑' : '绑定' }}</button>
+                  </div>
+                </td>
               </tr>
-              <tr v-if="!mySpaces.length"><td class="empty" colspan="2">{{ isAdmin ? '还没有绑定的图数据空间，可点击右上角创建' : '暂无可用图数据空间，请联系管理员分配' }}</td></tr>
+              <tr v-if="!visibleSpaces.length"><td class="empty" colspan="3">{{ graphSpaces.length ? '没有符合条件的图空间' : isAdmin ? '还没有图数据空间，可点击右上角创建' : '暂无可用图数据空间，请联系管理员分配' }}</td></tr>
             </tbody>
           </table>
-          <p class="space-hint">新建图数据空间会真实执行 CREATE SPACE（创建后有秒级传播延迟）；解除绑定请找管理员处理。</p>
         </div>
         <div v-else ref="configTableRef" class="table-wrap config-table-wrap" :class="{ 'has-scroll-right': tableHasMoreToScroll, 'config-scroll--active': tableScrollActive }" @scroll.passive="handleConfigTableScroll">
           <table>
-            <thead><tr><th>配置名称</th><th>标识</th><th>类型 / 地址</th><th class="config-status-col">状态</th><th class="config-usage-col">引用情况</th><th class="config-time-col">更新时间</th><th class="config-action-col">操作</th></tr></thead>
+            <thead><tr><th>配置名称 / 说明</th><th>标识</th><th>类型 / 地址</th><th class="config-status-col">状态</th><th v-if="isModelKind" class="config-usage-col">引用情况</th><th class="config-time-col">更新时间</th><th class="config-action-col">操作</th></tr></thead>
             <tbody>
               <tr v-for="item in pagedItems" :key="item.id">
-                <td><div class="config-name"><span><strong>{{ item.name }}<b v-if="item.isDefault" class="default-tag">默认</b></strong><small v-if="item.description">{{ item.description }}</small></span></div></td>
+                <td><div class="config-name"><span><strong>{{ item.name }}<b v-if="item.isDefault && isModelKind" class="default-tag">默认</b></strong><small v-if="item.description">{{ item.description }}</small></span></div></td>
                 <td class="config-id-col">{{ item.id }}</td>
                 <td><strong class="type-name">{{ item.type }}<template v-if="item.model"> · {{ item.model }}</template></strong><code>{{ item.baseUrl || item.host && `${item.host}:${item.port}` || item.endpoint }}</code></td>
                 <td class="config-status-col"><span class="status" :class="`is-${item.status}`"><i />{{ item.status }}</span></td>
-                <td class="config-usage-col">
+                <td v-if="isModelKind" class="config-usage-col">
                   <button
                     type="button"
                     class="config-default-toggle"
@@ -735,26 +804,36 @@ onUnmounted(() => {
                     :disabled="defaultSwitchDisabled(item)"
                     :aria-pressed="item.isDefault"
                     :aria-busy="defaultUpdating"
-                    :aria-label="item.isDefault ? `取消${item.name}的默认配置` : `将${item.name}设为默认配置`"
-                    :title="!item.isDefault && hasCategoryDefault ? '请先关闭当前默认配置' : item.isDefault ? '取消默认配置' : '设为默认配置'"
-                    @click.stop="toggleDefault(item, !item.isDefault)"
+                    :aria-label="item.isDefault ? `当前默认：${item.name}` : `将${item.name}设为默认配置`"
+                    :title="item.isDefault ? '默认配置必须保留一条；如需更换，请将其他配置设为默认' : '设为默认配置（自动替换当前默认）'"
+                    @click.stop="toggleDefault(item, true)"
                   ><span class="config-default-toggle__dot" aria-hidden="true" />{{ item.isDefault ? '默认' : '设为默认' }}</button>
                 </td>
-                <td class="config-time-col"><span>{{ item.owner }}</span><small class="updated">{{ item.updatedAt }}</small></td>
+                <td class="config-time-col"><small class="updated">{{ item.updatedAt }}</small></td>
                 <td class="config-action-col">
                   <div class="row-actions">
                     <button class="link" type="button" @click.stop="openDetail(item)">管理</button>
-                    <button class="link" type="button" @click.stop="toggleItem(item)">{{ item.status === '停用' ? '启用' : '停用' }}</button>
-                    <button class="link danger" type="button" @click.stop="removeConfig(item)">删除</button>
+                    <button class="link" type="button" :disabled="isModelKind && item.isDefault && item.status !== '停用'" :title="isModelKind && item.isDefault && item.status !== '停用' ? '默认配置不能停用' : ''" @click.stop="toggleItem(item)">{{ item.status === '停用' ? '启用' : '停用' }}</button>
+                    <button class="link danger" type="button" :disabled="isModelKind && item.isDefault" :title="isModelKind && item.isDefault ? '默认配置不能删除，请先将其他配置设为默认' : ''" @click.stop="removeConfig(item)">删除</button>
                   </div>
                 </td>
               </tr>
-              <tr v-if="!visibleItems.length"><td class="empty" colspan="7">没有符合条件的配置</td></tr>
+              <tr v-if="!visibleItems.length"><td class="empty" :colspan="isModelKind ? 7 : 6">没有符合条件的配置</td></tr>
             </tbody>
           </table>
         </div>
         <ListPagination
-          v-if="configTotal > 0"
+          v-if="isGraphSpaceCategory && spaceTotal > 0"
+          :total="spaceTotal"
+          :page="spacePage"
+          :page-size="spacePageSize"
+          :show-jumper="false"
+          :size-at-end="true"
+          @change="changeSpacePage"
+          @change-size="changeSpacePageSize"
+        ><template #summary><span class="config-page-summary">共 {{ spaceTotal }} 条</span></template></ListPagination>
+        <ListPagination
+          v-if="!isGraphSpaceCategory && configTotal > 0"
           :total="configTotal"
           :page="configPage"
           :page-size="configPageSize"
@@ -793,7 +872,7 @@ onUnmounted(() => {
             <a-form-item label="访问凭据"><input aria-label="input-field" :value="selected.passwordMasked || (selected.hasPassword ? '••••••••' : '未设置')" readonly /></a-form-item>
             <a-form-item class="wide" label="更新密码（留空保留原值）"><input aria-label="输入新密码覆盖原值" v-model="selected.password" type="password" placeholder="输入新密码覆盖原值" /><small v-if="detailFieldErrors.password" class="field-error">{{ detailFieldErrors.password }}</small></a-form-item>
           </template>
-          <a-form-item class="wide" label="配置说明"><a-textarea v-model="selected.description" /><small v-if="detailFieldErrors.description" class="field-error">{{ detailFieldErrors.description }}</small></a-form-item>
+          <a-form-item class="wide" label="配置说明"><a-textarea v-model="selected.description" class="config-description-textarea" :max-length="configDescriptionMaxLength(selected.kind, 'detail')" show-word-limit :auto-size="{ minRows: 3, maxRows: 5 }" /><small v-if="detailFieldErrors.description" class="field-error">{{ detailFieldErrors.description }}</small></a-form-item>
         </a-form>
         <section class="reference-card"><header><strong>引用关系</strong><span>{{ selected.usage }}</span></header><p>配置变更将在下次脚本调用时生效（context 按触发时所选数据源 / 图空间 / LLM / embedding 注入；向量库随图空间自动同名创建）。</p></section>
       </div>
@@ -809,10 +888,12 @@ onUnmounted(() => {
         <header><div><h2>新建图数据空间</h2></div><button type="button" @click="spaceDialogOpen=false">×</button></header>
         <a-form class="dialog-form" layout="vertical" :model="{}">
           <a-form-item class="wide" label="图数据空间名称" required>
-            <input aria-label="仅字母、数字、下划线，以字母或下划线开头" v-model="newSpaceName" placeholder="仅字母、数字、下划线，以字母或下划线开头" />
-            <small v-if="spaceNameError" class="field-error">{{ spaceNameError }}</small>
+            <div class="space-name-field">
+              <input aria-label="仅字母、数字、下划线，以字母或下划线开头" v-model="newSpaceName" placeholder="仅字母、数字、下划线，以字母或下划线开头" :aria-invalid="Boolean(spaceNameError)" :aria-describedby="spaceNameError ? 'space-name-error' : undefined" />
+              <small v-if="spaceNameError" id="space-name-error" class="field-error" role="alert">{{ spaceNameError }}</small>
+            </div>
           </a-form-item>
-          <p class="space-dialog-hint">将真实执行 CREATE SPACE 并自动绑定到你的账号；空间创建后有秒级传播延迟。</p>
+          <p class="space-dialog-hint">{{ businessRbac ? '创建后请在「业务权限」中设置空间归属；未归属空间仅管理员可见。' : '将真实执行 CREATE SPACE 并自动绑定到你的账号；空间创建后有秒级传播延迟。' }}</p>
         </a-form>
         <footer><button type="button" @click="spaceDialogOpen=false">取消</button><button class="primary" type="button" :disabled="!isAdmin || spaceWorking" @click="createSpace">{{ spaceWorking ? '创建中…' : '创建' }}</button></footer>
       </aside>
@@ -835,7 +916,7 @@ onUnmounted(() => {
           <a-form-item field="username" label="用户名" required><input aria-label="username" v-model="form.username" /><small v-if="createFieldErrors.username" class="field-error">{{ createFieldErrors.username }}</small></a-form-item>
           <a-form-item class="wide" label="密码"><input aria-label="password" v-model="form.password" type="password" /><small v-if="createFieldErrors.password" class="field-error">{{ createFieldErrors.password }}</small></a-form-item>
         </template>
-        <a-form-item class="wide" label="说明"><a-textarea v-model="form.description" :auto-size="{ minRows: 3, maxRows: 5 }" /><small v-if="createFieldErrors.description" class="field-error">{{ createFieldErrors.description }}</small></a-form-item>
+        <a-form-item class="wide" label="说明"><a-textarea v-model="form.description" class="config-description-textarea" :max-length="configDescriptionMaxLength(formKind || 'llm', 'create')" show-word-limit :auto-size="{ minRows: 3, maxRows: 5 }" /><small v-if="createFieldErrors.description" class="field-error">{{ createFieldErrors.description }}</small></a-form-item>
         <a-form-item class="wide" field="isDefault"><a-checkbox v-model="form.isDefault" :disabled="hasCategoryDefault || defaultUpdating" class="default-config-checkbox">设为默认（同一类别仅一条默认生效）</a-checkbox></a-form-item>
       </a-form>
       <footer>
@@ -883,7 +964,7 @@ onUnmounted(() => {
 .reference-card{margin:0 24px;padding:16px;border-radius:6px}.reference-card strong{font-size:14px;line-height:22px}.reference-card span,.reference-card p{font-size:12px;line-height:20px}
 .detail-drawer>footer,.create-dialog>footer{height:64px;box-sizing:border-box;gap:16px;padding:0 24px}.detail-drawer>footer button,.create-dialog>footer button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
 .default-tag{border-radius:4px;font-size:12px;line-height:20px}
-.config-search-input.arco-input-wrapper{box-sizing:border-box;width:280px;min-width:0;max-width:100%;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:1 1 240px}
+.config-search-input.arco-input-wrapper{box-sizing:border-box;width:360px;min-width:0;max-width:100%;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:0 1 360px}
 .config-search-input.arco-input-wrapper:hover{border-color:#4080ff!important;background:#fff!important}
 .config-search-input.arco-input-wrapper:focus-within,.config-search-input.arco-input-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
 .config-search-input.arco-input-wrapper :deep(.arco-input-prefix){padding-right:8px;color:#4e5969}.config-search-input.arco-input-focus :deep(.arco-input-prefix){color:#165dff}
@@ -905,8 +986,9 @@ onUnmounted(() => {
 .dialog-form .default-config-checkbox{display:inline-flex!important;flex-direction:row!important;align-items:center!important;justify-content:flex-start;gap:0!important;white-space:nowrap}
 .config-create-form input:not([type="checkbox"]){box-sizing:border-box;width:100%;height:32px;padding:0 12px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#1d2129;font-family:inherit;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0;outline:none;box-shadow:none;transition:border-color .1s ease,box-shadow .1s ease}
 .config-create-form input:not([type="checkbox"]):hover{border-color:#4080ff}.config-create-form input:not([type="checkbox"]):focus,.config-create-form input:not([type="checkbox"]):focus-visible{border-color:#165dff;outline:none;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
-.config-create-form :deep(.arco-textarea-wrapper){box-sizing:border-box;width:100%;height:auto;min-height:80px;max-height:none;border:1px solid #e5e6eb;border-radius:4px;background:#fff!important;box-shadow:none;transition:border-color .1s ease,box-shadow .1s ease}.config-create-form :deep(.arco-textarea-wrapper:hover){border-color:#4080ff}.config-create-form :deep(.arco-textarea-wrapper.arco-textarea-focus){border-color:#165dff;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
-.config-create-form :deep(textarea.arco-textarea){box-sizing:border-box;width:100%;height:auto;min-height:78px;padding:8px 12px 28px;background:#fff!important;color:#1d2129;font-family:inherit;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0;resize:vertical;overflow-y:auto}.config-create-form :deep(.arco-textarea-word-limit){right:12px;bottom:6px;color:#86909c;font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
+/* 新建和管理说明均采用 Schema 的白底文本框及右下角字数计数。 */
+:deep(.config-description-textarea.arco-textarea-wrapper){box-sizing:border-box;width:100%;height:auto;min-height:80px;max-height:none;border:1px solid #e5e6eb;border-radius:4px;background:#fff!important;box-shadow:none;transition:border-color .1s ease,box-shadow .1s ease}:deep(.config-description-textarea.arco-textarea-wrapper:hover){border-color:#4080ff}:deep(.config-description-textarea.arco-textarea-wrapper.arco-textarea-focus){border-color:#165dff;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
+:deep(.config-description-textarea textarea.arco-textarea){box-sizing:border-box;width:100%;height:auto;min-height:78px;padding:8px 12px 28px;background:#fff!important;color:#1d2129;font-family:inherit;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0;resize:vertical;overflow-y:auto}:deep(.config-description-textarea .arco-textarea-word-limit){right:12px;bottom:6px;color:#86909c;font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
 .create-dialog>header{align-items:center;padding:0 24px}.create-dialog>header>div{display:flex;height:24px;align-items:center}.create-dialog>header span{display:none}.create-dialog h2{margin:0;font-size:16px;line-height:24px}
 .config-create-dialog>header>button{display:grid;width:32px;height:32px;padding:0;border:0;background:transparent;color:#4e5969;font-size:20px;line-height:1;place-items:center}.config-create-dialog>header>button:hover{background:transparent;color:#165dff}.config-create-dialog>header>button:focus-visible{background:transparent;outline:2px solid rgba(22,93,255,.16);outline-offset:2px}
 .space-dialog>header{align-items:center}
@@ -934,11 +1016,8 @@ onUnmounted(() => {
 .create-dialog{display:flex;max-height:min(88vh,760px);flex-direction:column}
 .create-dialog .dialog-form{flex:1 1 auto;min-height:0;overflow:auto}
 .create-dialog>footer{margin-top:auto}
-/* 图空间分类。select 宽度按最长占位符「绑定已有图数据空间」(9 个汉字)定：
-   扣除边框/内边距/下拉箭头后 input 需 ~160px+，200px 会把最后一个字裁掉(实测)。 */
-.bind-nav{display:flex;width:100%;gap:16px;align-items:center}.bind-nav :deep(.arco-select){width:240px;min-width:240px}.bind-nav button{height:32px;padding:0 16px;border:1px solid #bdd0ea;border-radius:4px;font-size:14px;cursor:pointer}
-.space-hint{margin:8px 16px;color:#86909c;font-size:12px;line-height:20px}
 .space-dialog-hint{grid-column:1/-1;margin:0;color:#86909c;font-size:12px;line-height:20px}
+.space-name-field{display:flex;width:100%;min-width:0;flex-direction:column;gap:4px}
 /* 字段级校验提示（输入即校验，超长/异常字符/范围/必填） */
 .dialog-form .field-error,.detail-form .field-error{display:block;color:#e4322d;font-size:12px;line-height:18px}
 
@@ -976,7 +1055,7 @@ onUnmounted(() => {
 .detail-drawer>header .config-id{display:block;margin-top:2px;color:#165dff;font-size:12px;line-height:20px;font-weight:400}
 .health-card{grid-template-columns:8px minmax(0,1fr) auto;gap:16px;margin:16px 24px 0;padding:16px;border-color:#e5e6eb;border-radius:6px;box-shadow:none}.health-card>i{width:8px;height:8px}.health-card>div{gap:4px}.health-card strong{font-size:14px;line-height:22px;font-weight:600}.health-card span{font-size:12px;line-height:20px;font-weight:400}.health-card button{height:32px;padding:0 16px;border-color:#e5e6eb;border-radius:4px;font-size:14px;line-height:22px;font-weight:400}
 .detail-form,.dialog-form{gap:16px;padding:24px}.detail-form label,.dialog-form label{gap:8px}.detail-form label span,.dialog-form label span{font-size:14px;line-height:22px;font-weight:400}
-.reference-card{margin:0 24px;padding:16px;border-color:#e5e6eb;border-radius:6px;box-shadow:none}.reference-card strong{font-size:14px;line-height:22px;font-weight:600}.reference-card span,.reference-card p,.space-hint,.space-dialog-hint{font-size:12px;line-height:20px;font-weight:400}
+.reference-card{margin:0 24px;padding:16px;border-color:#e5e6eb;border-radius:6px;box-shadow:none}.reference-card strong{font-size:14px;line-height:22px;font-weight:600}.reference-card span,.reference-card p,.space-dialog-hint{font-size:12px;line-height:20px;font-weight:400}
 .detail-drawer>footer,.create-dialog>footer{gap:16px;padding:0 24px}.detail-drawer>footer button,.create-dialog>footer button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px;font-weight:400}
 
 /* 工作台留白与表格背景：操作区、数据行不使用额外底色，仅表头区分层级。 */
@@ -1023,9 +1102,9 @@ onUnmounted(() => {
 .config-table-wrap :is(th,td){white-space:nowrap}
 .config-table-wrap tbody tr{cursor:default}
 .config-id-col{color:#4e5969}
-/* 筛选输入框固定为紧凑宽度；查询与新建使用同一主按钮。 */
+/* 筛选输入框加宽（可搜名称/标识/类型/地址）；查询与新建使用同一主按钮。 */
 .config-search-form{display:flex;min-width:0;margin-left:auto;align-items:center;gap:16px}
-.config-list-actions .config-search-input.arco-input-wrapper{width:240px;max-width:240px;margin-left:0;flex:0 1 240px}
+.config-list-actions .config-search-input.arco-input-wrapper{width:360px;max-width:100%;margin-left:0;flex:0 1 360px}
 .config-search-form .config-search-button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
 .config-search-form .config-search-button:hover{border-color:#4080ff!important;background:#4080ff!important}
 /* 自定义分页摘要由父组件定位，避免插槽内容在共享分页组件中靠左。 */

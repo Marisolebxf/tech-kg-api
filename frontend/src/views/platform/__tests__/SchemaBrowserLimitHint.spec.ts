@@ -6,10 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Form, FormItem } from '@arco-design/web-vue'
 
 import {
+  backfillSchemaHistory,
   deleteSchema,
   getSchemaDeleteImpact,
   getSchemaOverview,
   listSchemasPaged,
+  replaceSchemaSources,
   type SchemaDefinition,
 } from '../../../api/schemaManagement'
 import SchemaBrowserView from '../SchemaBrowserView.vue'
@@ -31,7 +33,6 @@ vi.mock('../../../api/schemaManagement', () => ({
   listSchemasPaged: vi.fn(),
   replaceSchemaSources: vi.fn(),
   schemaErrorMessage: vi.fn((error: unknown) => String(error)),
-  triggerSchemaExtraction: vi.fn(),
   verifyAndSaveScript: vi.fn(),
 }))
 vi.mock('../../../api/currentUser', () => ({ currentUserId: vi.fn(() => 'user-1') }))
@@ -152,6 +153,47 @@ beforeEach(() => {
 
 afterEach(() => {
   wrapper?.unmount()
+})
+
+describe('来源弹窗权限与抽取入口合并回归', () => {
+  it.each([
+    ['entity', true], ['entity', false], ['relation', true], ['relation', false],
+  ] as const)('%s 空间可写=%s 时保留来源查看并引导到图谱构建抽取', async (kind, writable) => {
+    useGraphSpaceStore().items[0]!.writeAllowed = writable
+    vi.mocked(listSchemasPaged).mockResolvedValue({
+      items: [schemaFixture({ kind, canManageProperties: writable, canDelete: writable })],
+      total: 1, page: 1, pageSize: 10,
+    })
+    const view = mountView()
+    await flushPromises()
+    if (kind === 'relation') {
+      await view.findAll('.schema-tabs__items button').find(button => button.text() === '关系')!.trigger('click')
+      await flushPromises()
+    }
+    await view.get('.schema-action-more').trigger('click')
+    const sourceAction = view.findAll('.test-dropdown-menu button').find(button => button.text() === '来源表')!
+    expect(sourceAction.attributes('disabled')).toBeUndefined()
+    await sourceAction.trigger('click')
+    await flushPromises()
+
+    const modal = view.get('.sources-modal')
+    expect(modal.text()).toContain('到「图谱构建」页新建抽取任务')
+    expect(modal.findAll('button').some(button => button.text() === '触发抽取')).toBe(false)
+    expect(view.getComponent(SourceBindings).props('readonly')).toBe(!writable)
+    const save = modal.findAll('footer button').find(button => button.text() === '保存绑定')!
+    const backfill = modal.findAll('footer button').find(button => button.text() === '回填历史数据')!
+    if (writable) {
+      expect(save.attributes('disabled')).toBeUndefined()
+      expect(backfill.attributes('disabled')).toBeUndefined()
+    } else {
+      expect(save.attributes('disabled')).toBeDefined()
+      expect(backfill.attributes('disabled')).toBeDefined()
+      await save.trigger('click')
+      await backfill.trigger('click')
+      expect(replaceSchemaSources).not.toHaveBeenCalled()
+      expect(backfillSchemaHistory).not.toHaveBeenCalled()
+    }
+  })
 })
 
 it('仅在点击查询或提交表单时按输入词请求第一页', async () => {

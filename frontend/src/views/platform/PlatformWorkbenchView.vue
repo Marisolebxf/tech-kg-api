@@ -440,7 +440,7 @@ function exportAlgoCsv(): void {
     const safe = /^[=+@\-\t\r]/.test(value) ? `'${value}` : value
     return `"${safe.replaceAll('"', '""')}"`
   }
-  const csv = [['序号', ...columns], ...algoRows.value.map((row, index) => [String(index + 1), ...columns.map((column) => String(row[column] ?? ''))])]
+  const csv = [['序号', ...columns], ...filteredAndSortedAlgoRows.value.map((row, index) => [String(index + 1), ...columns.map((column) => String(row[column] ?? ''))])]
     .map((row) => row.map(escapeCell).join(',')).join('\r\n')
   const url = URL.createObjectURL(new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' }))
   const link = document.createElement('a')
@@ -1403,7 +1403,7 @@ const pageMeta = computed(() => {
           <div v-else-if="overviewReviewsState === 'empty'" class="platform-card-empty">
             <strong>当前没有待审核任务</strong>
             <p>构建流程发现的低置信度候选会进入这里等待人工决策。</p>
-            <RouterLink to="/manual-review">前往人工审核</RouterLink>
+            <RouterLink class="primary" to="/manual-review">前往人工审核</RouterLink>
           </div>
           <div v-else-if="overviewReviewsState === 'loading'" class="platform-card-empty"><strong>审核队列加载中…</strong></div>
           <div v-else-if="overviewReviewsState === 'forbidden'" class="platform-card-empty"><strong>暂无审核权限</strong><p>需要审核角色（reviewer / 数据质量 / 图谱治理）后才能查看队列。</p><RouterLink to="/manual-review">前往人工审核</RouterLink></div>
@@ -2053,10 +2053,10 @@ print(response.json())</pre>
     <Teleport to="body">
       <button v-if="selectedAssetChange" class="asset-change-mask" type="button" aria-label="关闭新增数据详情" @click="selectedAssetChange = null" />
       <aside aria-label="辅助区域 4" v-if="selectedAssetChange && activeAssetOverview" class="asset-change-drawer">
-        <header><div><span>昨日图谱数据变化</span><h2>{{ activeAssetOverview.title }}新增明细</h2><p>{{ activeAssetOverview.addedLabel }} {{ activeAssetOverview.added }} · 数据更新至 {{ overviewMeta.updatedAt }}</p></div><button type="button" @click="selectedAssetChange = null">×</button></header>
+        <header><div><span>昨日图谱数据变化</span><h2>{{ activeAssetOverview.title }}新增明细</h2><p>{{ activeAssetOverview.addedLabel }} {{ activeAssetOverview.added }} · 数据更新至 {{ overviewMeta.updatedAt }}</p></div><button type="button" aria-label="关闭新增数据详情" @click="selectedAssetChange = null">×</button></header>
         <section class="asset-change-summary"><article><span>当前总量</span><strong>{{ activeAssetOverview.total }}</strong></article><article><span>{{ activeAssetOverview.addedLabel }}</span><strong>{{ activeAssetOverview.added }}</strong></article></section>
         <div class="asset-change-table"><table aria-label="数据表"><thead><tr><th>数据类型</th><th>具体对象</th><th>来源</th><th>识别时间</th></tr></thead><tbody><tr v-if="!assetChangeRows[selectedAssetChange].length"><td colspan="4">昨日暂无写图记录</td></tr><tr v-for="(row, idx) in assetChangeRows[selectedAssetChange]" :key="`${row.object}-${row.time}`"><td>{{ row.type }}</td><td><a-tooltip :popup-visible="assetTipVisible.has(`obj-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`obj-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><span class="asset-change-object" @mouseenter="showAssetTipIfTruncated(`obj-${idx}`, $event)" @mouseleave="hideAssetTip(`obj-${idx}`)"><strong>{{ row.object }}</strong></span><template #content>{{ row.object }}</template></a-tooltip></td><td><a-tooltip :popup-visible="assetTipVisible.has(`src-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`src-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><code class="asset-change-source" @mouseenter="showAssetTipIfTruncated(`src-${idx}`, $event)" @mouseleave="hideAssetTip(`src-${idx}`)">{{ row.source }}</code><template #content>{{ row.source }}</template></a-tooltip></td><td>{{ row.time }}</td></tr></tbody></table></div>
-        <footer><span>{{ assetChangeFooterText(selectedAssetChange) }}</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看对应更新任务 →</RouterLink></footer>
+        <footer><span>{{ assetChangeFooterText(selectedAssetChange) }}</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看对应更新任务</RouterLink></footer>
       </aside>
     </Teleport>
 
@@ -2302,8 +2302,9 @@ print(response.json())</pre>
 .platform-summary-card__items em { overflow:hidden;color:#8290a5;font-size:8px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }.platform-summary-card__items strong { overflow:hidden;color:#344861;font-size:10px;text-overflow:ellipsis;white-space:nowrap; }
 
 /* 末尾两卡仍等高：面板吃满所在网格行，剩余高度由列表弹性行摊平（不留底部空白）；
- * gap 统一 16px 与页头间距对齐。加载中/异常时由 min-height 预留就绪高度。 */
-.platform-overview-main { display:grid;flex-grow:1;grid-template-columns:minmax(0,1.65fr) minmax(360px,.72fr);gap:16px;min-height:340px; }
+ * gap 统一 16px 与页头间距对齐。加载中/空态/异常时由 min-height 预留就绪高度
+ * （450 ≈ 表头+计数行+8×44 行槽，保证审核空态时整行不塌、任务行高恒定）。 */
+.platform-overview-main { display:grid;flex-grow:1;grid-template-columns:minmax(0,1.65fr) minmax(360px,.72fr);gap:16px;min-height:450px; }
 /* 两卡同为 flex 列 + 列表区 1fr 弹性行：面板等高时行自动摊满，不再留底部空白 */
 .platform-jobs-panel,.platform-review-panel { display:flex;flex-direction:column;min-width:0;overflow:hidden; }
 .platform-jobs-panel .kg-panel__header>div,.platform-review-panel .kg-panel__header>div { display:grid;gap:2px; }
@@ -2315,9 +2316,9 @@ print(response.json())</pre>
 .platform-jobs-stats article span { font-size:18px;font-weight:600; }
 .platform-jobs-stats article span.is-run { color:var(--status-info); }.platform-jobs-stats article span.is-ok { color:var(--status-success); }.platform-jobs-stats article span.is-err { color:var(--status-danger); }.platform-jobs-stats article span.is-warn { color:var(--status-warning); }.platform-jobs-stats article span.is-idle { color:var(--status-neutral); }
 .platform-jobs-stats article em { color:#52627a;font-size:12px;line-height:20px;font-style:normal; }
-.platform-jobs-list { display:grid;flex:1;grid-auto-rows:minmax(44px,1fr);overflow-y:auto; }
+.platform-jobs-list { display:grid;flex:1;grid-template-rows:repeat(5,minmax(44px,1fr));overflow-y:auto; }
 .platform-jobs-list a { display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:10px;min-height:44px;padding:9px 14px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
-.platform-jobs-list a:last-child { border-bottom:0; }
+.platform-jobs-list a:nth-child(5):last-child { border-bottom:0; }
 .platform-jobs-list a:hover { background:#f4f8ff; }
 .platform-jobs-list strong { overflow:hidden;color:#253752;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap; }
 .platform-jobs-list a>span { display:inline-flex;align-items:center;gap:6px;padding:0;border-radius:0;background:transparent;color:#004ecc;font-size:14px;line-height:22px;white-space:nowrap; }
@@ -2328,9 +2329,9 @@ print(response.json())</pre>
 .platform-review-count strong { margin:0;color:#10264c;font-size:18px; }
 /* 行紧贴左侧任务行（44px 上下限 + 弹性摊高），类别列在行内右侧而非换行堆叠——
  * 8 行与「图谱构建」卡等高，更多的走粘底「还有 N 条待处理」。 */
-.platform-review-list { display:grid;flex:1;grid-auto-rows:minmax(44px,1fr);overflow-y:auto; }
+.platform-review-list { display:grid;flex:1;grid-template-rows:repeat(8,minmax(44px,1fr));overflow-y:auto; }
 .platform-review-list a { display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 10px;align-items:center;padding:9px 14px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
-.platform-review-list a:last-child { border-bottom:0; }
+.platform-review-list a:nth-child(8):last-child { border-bottom:0; }
 .platform-review-list a:hover { background:#f4f8ff; }
 .platform-review-list strong { min-width:0;overflow:hidden;color:#253752;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap; }
 .platform-review-list em { min-width:0;overflow:hidden;color:#8a97aa;font-size:12px;line-height:20px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }
@@ -4674,7 +4675,7 @@ print(response.json())</pre>
 
 .asset-change-mask{position:fixed;z-index:49;inset:0;border:0;background:rgba(16,36,76,.22)}
 .asset-change-drawer{position:fixed;z-index:50;top:0;right:0;display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;width:min(820px,78vw);height:100vh;background:#f8fbff;box-shadow:-18px 0 42px rgba(34,74,132,.22)}
-.asset-change-drawer>header{display:flex;align-items:flex-start;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.asset-change-drawer>header span{color:#004ecc;font-size:11px}.asset-change-drawer h2{margin:6px 0 3px;font-size:20px}.asset-change-drawer header p{margin:0;color:#718098;font-size:12px}.asset-change-drawer header>button{width:31px;height:31px;border:0;border-radius:5px;background:#f0f4fa;color:#52647f;font-size:20px;cursor:pointer}
+.asset-change-drawer>header{display:flex;align-items:flex-start;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.asset-change-drawer>header span{color:#004ecc;font-size:11px}.asset-change-drawer h2{margin:6px 0 3px;font-size:20px}.asset-change-drawer header p{margin:0;color:#718098;font-size:12px}.asset-change-drawer header>button{width:31px;height:31px;border:0;border-radius:5px;background:transparent;color:#52647f;font-size:20px;cursor:pointer}
 .asset-change-summary{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:14px}.asset-change-summary article{display:grid;gap:5px;padding:14px;border:1px solid #c7dcfb;border-radius:7px;background:#fff}.asset-change-summary span{color:#718098;font-size:11px}.asset-change-summary strong{color:#004ecc;font-size:24px}.asset-change-summary article:last-child strong{color:#067647}
 .asset-change-table{min-height:0;overflow:auto;padding:0 14px 14px}.asset-change-table table{width:100%;border-collapse:collapse;border:1px solid #dce8f8;background:#fff;font-size:12px}.asset-change-table th,.asset-change-table td{height:48px;padding:10px 12px;border-bottom:1px solid #e3ebf6;text-align:left}.asset-change-table th{position:sticky;top:0;background:#f3f7fc;color:#62728a}.asset-change-table td{color:#344861}.asset-change-table code{color:#004ecc;font-family:inherit}.asset-change-table td .asset-change-object{display:inline-block;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}.asset-change-table td .asset-change-source{display:inline-block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 .asset-change-drawer>footer{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.asset-change-drawer>footer span{color:#718098;font-size:11px}.asset-change-drawer>footer a{height:32px;padding:0 12px;border-radius:5px;background:#004ecc;color:#fff;font-size:11px;line-height:32px;text-decoration:none}

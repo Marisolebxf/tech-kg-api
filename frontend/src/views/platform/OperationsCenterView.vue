@@ -297,6 +297,20 @@ const logCase = ref<ProductionReviewCase>()
 const logExecution = ref<WorkflowExecution | null>(null)
 const logTask = ref<ProcessingInstance | null>(null)
 const logExecutionMissing = ref(false)
+const logExecutionLoading = ref(false)
+let logRequestId = 0
+type ExecutionLogSnapshot = { execution: WorkflowExecution | null; task: ProcessingInstance | null }
+const logCache = new Map<string, ExecutionLogSnapshot>()
+const terminalExecutionStatuses = new Set(['COMPLETED', 'ABNORMAL', 'FAILED', 'CANCELED', 'TERMINATED', 'TIMED_OUT'])
+
+// 关闭弹窗后使在途请求失效；再次打开时重新获取，避免跨记录复用日志。
+watch(logVisible, (visible) => {
+  if (!visible) {
+    logRequestId += 1
+    logExecutionLoading.value = false
+    logCache.clear()
+  }
+}, { flush: 'sync' })
 /** 当前展示哪个执行：rerun=重跑执行（最新一次处理）；original=原执行。 */
 const logExecutionChoice = ref<'rerun' | 'original'>('rerun')
 
@@ -350,44 +364,64 @@ function executionStatusTone(status?: string | null): string {
   return ({ 成功: 'ok', 异常: 'warn', 失败: 'err' } as Record<string, string>)[label] ?? 'run'
 }
 
-async function loadExecutionLog(executionId: string) {
-  logExecution.value = null
-  logTask.value = null
-  logExecutionMissing.value = false
-  if (!executionId) {
-    logExecutionMissing.value = true
-    return
-  }
+async function loadExecutionLog(executionId: string, requestId: number) {
+  logExecutionLoading.value = true
+  const isCurrent = () => logVisible.value && requestId === logRequestId
   try {
-    const execution = await getExecution(executionId)
-    logExecution.value = execution ?? null
-    if (!execution) logExecutionMissing.value = true
-    else if (execution.taskId) {
-      // 任务（PI-）记录携带工作流执行日志数组与阶段回写 steps
-      try { logTask.value = await getTask(execution.taskId) } catch { logTask.value = null }
+    let snapshot = logCache.get(executionId)
+    if (!snapshot) {
+      let execution: WorkflowExecution | null = null
+      let task: ProcessingInstance | null = null
+      let taskLoaded = false
+      try {
+        execution = executionId ? (await getExecution(executionId) ?? null) : null
+        if (!isCurrent()) return
+        if (execution?.taskId) {
+          // 执行与任务日志都就绪后再一起回填，避免概要/阶段/日志分次跳动。
+          try { task = await getTask(execution.taskId); taskLoaded = true } catch { /* 保留执行 message 回退 */ }
+        } else {
+          taskLoaded = true
+        }
+      } catch { /* 沿用关联执行缺失提示 */ }
+      if (!isCurrent()) return
+      snapshot = { execution, task }
+      // 只缓存已结束执行；运行中的执行或任务日志加载失败仍允许切换后重试。
+      if (execution && taskLoaded && terminalExecutionStatuses.has(execution.status.toUpperCase())) {
+        logCache.set(executionId, snapshot)
+      }
     }
-  } catch {
-    logExecution.value = null
-    logExecutionMissing.value = true
+    if (!isCurrent()) return
+    logExecution.value = snapshot.execution
+    logTask.value = snapshot.task
+    logExecutionMissing.value = !snapshot.execution
+  } finally {
+    if (isCurrent()) logExecutionLoading.value = false
   }
 }
 
 async function openLog(row: ReviewRow) {
+  const requestId = ++logRequestId
+  logCache.clear()
   logVisible.value = true
   logLoading.value = true
   logError.value = ''
   logCase.value = undefined
   logExecution.value = null
   logTask.value = null
+  logExecutionMissing.value = false
   try {
-    logCase.value = await getProductionReview(row.id)
+    const reviewCase = await getProductionReview(row.id)
+    if (!logVisible.value || requestId !== logRequestId) return
+    logCase.value = reviewCase
     // 重跑执行优先展示（最新一次对该记录的处理）；无重跑则展示原执行
     logExecutionChoice.value = logRerunExecutionId.value ? 'rerun' : 'original'
-    await loadExecutionLog(logActiveExecutionId.value)
+    await loadExecutionLog(logActiveExecutionId.value, requestId)
   } catch (error) {
-    logError.value = error instanceof Error ? error.message : '日志加载失败'
+    if (logVisible.value && requestId === logRequestId) {
+      logError.value = error instanceof Error ? error.message : '日志加载失败'
+    }
   } finally {
-    logLoading.value = false
+    if (logVisible.value && requestId === logRequestId) logLoading.value = false
   }
 }
 
@@ -395,7 +429,7 @@ async function openLog(row: ReviewRow) {
 function switchLogExecution(choice: 'rerun' | 'original') {
   if (choice === logExecutionChoice.value) return
   logExecutionChoice.value = choice
-  void loadExecutionLog(logActiveExecutionId.value)
+  void loadExecutionLog(logActiveExecutionId.value, ++logRequestId)
 }
 
 /** 删除：二次确认后物理删除（仅未处理可删，与重跑同门控）。 */
@@ -473,6 +507,8 @@ async function confirmBatchDelete() {
 }
 
 onUnmounted(() => {
+  logRequestId += 1
+  logCache.clear()
   reviewDisposed = true
   reviewRequestId += 1
   window.removeEventListener('resize', updateReviewTableScrollState)
@@ -812,38 +848,41 @@ onMounted(() => {
           <button type="button" :class="{ active: logExecutionChoice === 'rerun' }" @click="switchLogExecution('rerun')">重跑执行</button>
           <button type="button" :class="{ active: logExecutionChoice === 'original' }" @click="switchLogExecution('original')">原执行</button>
         </div>
-        <AppAlert v-if="logExecutionMissing" type="warning" class="case-log-missing">未找到关联的工作流执行记录（{{ logActiveExecutionId || '该记录未关联执行 ID' }}）——执行记录可能已随环境重置被清理。</AppAlert>
-        <template v-else-if="logExecution">
-          <section class="case-log-sec">
-            <h4>执行概要</h4>
-            <dl class="case-log-dl">
-              <div><dt>执行 ID</dt><dd><code>{{ logExecution.id }}</code></dd></div>
-              <div><dt>触发方式</dt><dd>{{ TRIGGER_SOURCE_LABEL[logExecution.triggerSource || 'MANUAL'] || logExecution.triggerSource || '—' }}</dd></div>
-              <div><dt>状态</dt><dd><span :class="['case-log-exec-status', executionStatusTone(logExecution.status)]">{{ executionDisplayStatus(logExecution.status) }}</span></dd></div>
-              <div><dt>开始时间</dt><dd>{{ logExecution.startedAt || '—' }}</dd></div>
-              <div><dt>完成时间</dt><dd>{{ logExecution.completedAt || '—' }}</dd></div>
-              <div v-if="logExtractSummary"><dt>抽取结果</dt><dd>写入 {{ logExtractSummary.written }} · 失败 {{ logExtractSummary.failed }}（{{ logExtractSummary.sourceCount }} 个来源）</dd></div>
-            </dl>
-          </section>
-          <section v-if="logTask && logTask.steps.length" class="case-log-sec">
-            <h4>阶段状态</h4>
-            <ul class="case-log-steps">
-              <li v-for="step in logTask.steps" :key="step.id">
-                <span class="case-log-step-name">{{ step.name }}</span>
-                <a-tooltip v-if="stepDisplayStatus(step) === '异常'" :content="`处理 ${step.count} · 异常 ${step.abnormal}`" position="top">
-                  <span :class="['case-log-step-status', `is-${stepDisplayStatus(step)}`]">{{ stepDisplayStatus(step) }}</span>
-                </a-tooltip>
-                <span v-else :class="['case-log-step-status', `is-${stepDisplayStatus(step)}`]">{{ stepDisplayStatus(step) }}</span>
-              </li>
-            </ul>
-          </section>
-          <section class="case-log-sec">
-            <h4>执行日志</h4>
-            <pre v-if="logLines.length" class="case-log-console">{{ logLines.join('\n') }}</pre>
-            <p v-else class="case-log-empty">该执行暂无任务日志。</p>
-          </section>
-        </template>
-        <AppAlert v-else type="warning" class="case-log-missing">该记录未关联工作流执行（无 executionId），无法展示执行日志。</AppAlert>
+        <div class="case-log-content" :aria-busy="logExecutionLoading">
+          <span v-if="logExecutionLoading" class="case-log-refreshing" role="status">加载执行日志中…</span>
+          <AppAlert v-if="logExecutionMissing" type="warning" class="case-log-missing">未找到关联的工作流执行记录（{{ logActiveExecutionId || '该记录未关联执行 ID' }}）——执行记录可能已随环境重置被清理。</AppAlert>
+          <template v-else-if="logExecution">
+            <section class="case-log-sec">
+              <h4>执行概要</h4>
+              <dl class="case-log-dl">
+                <div><dt>执行 ID</dt><dd><code>{{ logExecution.id }}</code></dd></div>
+                <div><dt>触发方式</dt><dd>{{ TRIGGER_SOURCE_LABEL[logExecution.triggerSource || 'MANUAL'] || logExecution.triggerSource || '—' }}</dd></div>
+                <div><dt>状态</dt><dd><span :class="['case-log-exec-status', executionStatusTone(logExecution.status)]">{{ executionDisplayStatus(logExecution.status) }}</span></dd></div>
+                <div><dt>开始时间</dt><dd>{{ logExecution.startedAt || '—' }}</dd></div>
+                <div><dt>完成时间</dt><dd>{{ logExecution.completedAt || '—' }}</dd></div>
+                <div v-if="logExtractSummary"><dt>抽取结果</dt><dd>写入 {{ logExtractSummary.written }} · 失败 {{ logExtractSummary.failed }}（{{ logExtractSummary.sourceCount }} 个来源）</dd></div>
+              </dl>
+            </section>
+            <section v-if="logTask && logTask.steps.length" class="case-log-sec">
+              <h4>阶段状态</h4>
+              <ul class="case-log-steps">
+                <li v-for="step in logTask.steps" :key="step.id">
+                  <span class="case-log-step-name">{{ step.name }}</span>
+                  <a-tooltip v-if="stepDisplayStatus(step) === '异常'" :content="`处理 ${step.count} · 异常 ${step.abnormal}`" position="top">
+                    <span :class="['case-log-step-status', `is-${stepDisplayStatus(step)}`]">{{ stepDisplayStatus(step) }}</span>
+                  </a-tooltip>
+                  <span v-else :class="['case-log-step-status', `is-${stepDisplayStatus(step)}`]">{{ stepDisplayStatus(step) }}</span>
+                </li>
+              </ul>
+            </section>
+            <section class="case-log-sec">
+              <h4>执行日志</h4>
+              <pre v-if="logLines.length" class="case-log-console">{{ logLines.join('\n') }}</pre>
+              <p v-else class="case-log-empty">该执行暂无任务日志。</p>
+            </section>
+          </template>
+          <AppAlert v-else type="warning" class="case-log-missing">该记录未关联工作流执行（无 executionId），无法展示执行日志。</AppAlert>
+        </div>
       </template>
       <template #footer>
         <button type="button" class="case-log-close" @click="logVisible = false">关闭</button>
@@ -1027,6 +1066,8 @@ onMounted(() => {
 .case-log-error-block{margin:0}
 .case-log-error-text{margin:0;font:12px/19px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-all}
 .case-log-loading{margin:0;padding:24px;color:#86909c;text-align:center}
+.case-log-content{position:relative}
+.case-log-refreshing{position:absolute;top:0;right:0;padding:0 8px;border-radius:4px;background:#f2f3f5;color:#86909c;font-size:12px;line-height:22px}
 /* 执行日志弹窗：原执行/重跑执行切换 + 概要 + 阶段状态 + 日志终端 */
 .case-log-switch{display:flex;box-sizing:border-box;width:max-content;height:40px;margin:0 0 16px;padding:4px;border-radius:4px;background:#f2f3f5;overflow:visible}
 .case-log-switch button{display:inline-flex;box-sizing:border-box;align-items:center;justify-content:center;width:120px;height:32px;padding:5px 16px;border:0;border-radius:4px;background:transparent;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
@@ -1080,5 +1121,5 @@ onMounted(() => {
 .delete-confirm-modal .arco-modal-footer .arco-btn-primary:hover:not(:disabled){border-color:#b42318;background:#b42318}
 /* 日志弹窗（teleport 到 body，需全局控制弹体） */
 .case-log-modal{border-radius:8px;font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
-.case-log-modal .arco-modal-header{box-sizing:border-box;height:56px;padding:0 24px}.case-log-modal .arco-modal-title{justify-content:flex-start;text-align:left;font-size:16px;line-height:24px;font-weight:600;letter-spacing:0}.case-log-modal .arco-modal-body{max-height:70vh;overflow:auto;padding:16px 24px}.case-log-modal .arco-modal-footer{box-sizing:border-box;min-height:64px;padding:16px 24px;border-top:1px solid #e5e6eb}.case-log-modal .case-log-close{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;cursor:pointer}
+.case-log-modal .arco-modal-header{box-sizing:border-box;height:56px;padding:0 24px}.case-log-modal .arco-modal-title{justify-content:flex-start;text-align:left;font-size:16px;line-height:24px;font-weight:600;letter-spacing:0}.case-log-modal .arco-modal-body{box-sizing:border-box;height:min(70vh,560px);overflow:auto;scrollbar-gutter:stable;padding:16px 24px}.case-log-modal .arco-modal-footer{box-sizing:border-box;min-height:64px;padding:16px 24px;border-top:1px solid #e5e6eb}.case-log-modal .case-log-close{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;cursor:pointer}
 </style>

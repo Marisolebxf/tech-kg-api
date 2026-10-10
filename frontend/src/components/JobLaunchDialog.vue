@@ -41,8 +41,11 @@ const extractSchemaId = ref('')
 const extractBatchSize = ref<string>('')
 const extractSchemas = ref<SchemaDefinition[]>([])
 const schemasLoading = ref(false)
+let schemaRequestVersion = 0
+let mysqlRequestVersion = 0
 
-// 图空间默认取平台总览页全局选择器的当前位置，弹窗内可改。
+// 目标 Schema 下拉跟随顶部全局图空间选择器（弹窗内无空间选择器；每个标签页各持一份
+// store，跨标签页改空间不会同步进来——空间标签与空态提示即为此兜底）。
 // MySQL 数据源/库默认跟随所选 Schema 的来源绑定（"当前位置"），可改；
 // 二者仅注入脚本 ctx.mysql 与写图空间，读取源仍按 Schema 来源绑定。
 const graphSpace = computed(() => currentGraphSpace())
@@ -52,10 +55,16 @@ const mysqlDatasources = ref<MysqlDatasource[]>([])
 const mysqlDatabases = ref<string[]>([])
 
 async function loadMysqlResources(datasourceId: string, preferDatabase?: string) {
+  const version = ++mysqlRequestVersion
+  const space = graphSpace.value
+  const isCurrent = () => version === mysqlRequestVersion && space === graphSpace.value && props.open
   if (!mysqlDatasources.value.length) {
     try {
-      mysqlDatasources.value = await listMysqlDatasources()
+      const datasources = await listMysqlDatasources()
+      if (!isCurrent()) return
+      mysqlDatasources.value = datasources
     } catch {
+      if (!isCurrent()) return
       mysqlDatasources.value = []
     }
   }
@@ -65,8 +74,11 @@ async function loadMysqlResources(datasourceId: string, preferDatabase?: string)
   }
   if (!mysqlDatasourceId.value) mysqlDatasourceId.value = datasourceId
   try {
-    mysqlDatabases.value = await listMysqlDatabases(datasourceId)
+    const databases = await listMysqlDatabases(datasourceId)
+    if (!isCurrent()) return
+    mysqlDatabases.value = databases
   } catch {
+    if (!isCurrent()) return
     mysqlDatabases.value = []
   }
   if (preferDatabase && mysqlDatabases.value.includes(preferDatabase)) {
@@ -113,29 +125,34 @@ const sinceError = computed(() =>
 const batchSizeError = computed(() => validateNumericField(extractBatchSize.value, { label: '批大小', min: 1, max: 5000 }))
 
 const canSubmit = computed(() => {
-  if (!name.value.trim()) return false
+  if (schemasLoading.value || !name.value.trim()) return false
   if (nameError.value || sinceError.value || batchSizeError.value) return false
   if (taskType.value === 'chain') {
     return chainSteps.value.length >= 2 && chainSteps.value.length <= CHAIN_SCHEMA_LIMIT
   }
-  return Boolean(extractSchemaId.value)
+  return extractSchemas.value.some((schema) => schema.id === extractSchemaId.value)
 })
 
-async function loadExtractSchemas(force = false) {
-  if (schemasLoading.value) return
-  if (!force && extractSchemas.value.length) return
+async function loadExtractSchemas() {
+  const version = ++schemaRequestVersion
+  const space = graphSpace.value
+  const isCurrent = () => version === schemaRequestVersion && space === graphSpace.value && props.open
+  extractSchemas.value = []
   schemasLoading.value = true
   try {
     // M4 图空间联动：下拉只列所选空间绑定的可抽取 schema，随空间切换重查；
-    // script.available=false 是目录占位（如系统 Schema 种子，S3 无脚本本体）——选了必失败，直接排除
-    const all = await listAllSchemas(getCurrentUserId(), graphSpace.value || undefined)
+    // script.available=false 是目录占位（如系统 Schema 种子，S3 无脚本本体）——选了必失败，直接排除。
+    // 每次打开弹窗都重查、不缓存：全局空间可能在别的页面/标签页改过，陈旧列表会把
+    // 「空间不匹配」伪装成「无数据」（2026-10-09 测试反馈的根因）
+    const all = await listAllSchemas(getCurrentUserId(), space || undefined)
+    if (!isCurrent()) return
     extractSchemas.value = all.filter(
       (s) => s.script && (s.sources?.length ?? 0) > 0 && s.script.available !== false,
     )
   } catch {
-    extractSchemas.value = []
+    if (isCurrent()) extractSchemas.value = []
   } finally {
-    schemasLoading.value = false
+    if (isCurrent()) schemasLoading.value = false
   }
 }
 
@@ -161,15 +178,31 @@ watch(() => props.open, (open) => {
     reset()
     loadExtractSchemas()
     void loadMysqlResources(mysqlDatasourceId.value)
+  } else {
+    ++schemaRequestVersion
+    ++mysqlRequestVersion
+    schemasLoading.value = false
+    extractSchemas.value = []
   }
-})
+}, { immediate: true })
 
 
 watch(graphSpace, () => {
-  // 换空间后原选择不再属于该空间：清空并按新空间重查
+  // 换空间后原选择不再属于该空间：清空并按新空间重查（弹窗关闭时跳过——下次打开必重查）
+  ++schemaRequestVersion
+  ++mysqlRequestVersion
   extractSchemaId.value = ''
+  chainPick.value = ''
   chainSteps.value = []
-  loadExtractSchemas(true)
+  extractSchemas.value = []
+  mysqlDatasourceId.value = ''
+  mysqlDatabase.value = ''
+  mysqlDatasources.value = []
+  mysqlDatabases.value = []
+  if (props.open) {
+    void loadExtractSchemas()
+    void loadMysqlResources('')
+  }
 })
 
 watch(extractSchemaId, (id) => {
@@ -193,6 +226,7 @@ function addChainStep(value: string | number | boolean | Record<string, any> | u
     return
   }
   const schema = extractSchemas.value.find((s) => s.id === id)
+  if (!schema || schemasLoading.value) return
   chainSteps.value.push({ id, name: schema ? schemaOptionLabel(schema) : id })
   chainPick.value = ''
   if (chainSteps.value.length === 1 && schema) applySchemaBindingDefaults([schema])
@@ -261,7 +295,7 @@ async function submit() {
                 v-if="!schemasLoading && !extractSchemas.length"
                 class="muted-warn"
                 role="status"
-              >暂无可抽取 Schema——请先在 Schema 管理页上传抽取脚本并绑定来源表</small>
+              >暂无可抽取 Schema——请先在 Schema 管理页上传抽取脚本并绑定来源表；若已配置过，请检查 Schema 所在图空间与当前「{{ graphSpace || '默认空间' }}」是否一致（平台总览的图空间选择器可切换）</small>
             </div>
             <!-- label 会把点击转发给 a-select 内部 input 造成"开→关"双切换，包 a-select 的字段一律用 div -->
             <a-select v-model="taskType" class="job-select" aria-label="任务类型">
@@ -273,7 +307,10 @@ async function submit() {
 
         <div v-if="taskType === 'extract'" class="job-row">
           <div class="job-field">
-            <span><i class="job-required" aria-hidden="true">*</i>目标 Schema（已传脚本并绑定来源表）</span>
+            <div class="job-field__label-row">
+              <span><i class="job-required" aria-hidden="true">*</i>目标 Schema（已传脚本并绑定来源表）</span>
+              <span class="space-scope-chip" :title="`下拉只列出「${graphSpace || '默认空间'}」图空间下的 Schema，跟随平台总览的图空间选择器切换`">图空间：{{ graphSpace || '默认空间' }}</span>
+            </div>
             <a-select v-model="extractSchemaId" class="job-select" aria-required="true" :loading="schemasLoading" placeholder="选择要抽取的实体/关系" allow-search allow-clear>
               <a-option v-for="s in extractSchemas" :key="s.id" :value="s.id">{{ schemaOptionLabel(s) }}</a-option>
             </a-select>
@@ -287,7 +324,10 @@ async function submit() {
 
         <template v-else>
           <div class="job-field">
-            <span><i class="job-required" aria-hidden="true">*</i>串联 Schema 队列（按顺序串行执行，任一失败即中止）</span>
+            <div class="job-field__label-row">
+              <span><i class="job-required" aria-hidden="true">*</i>串联 Schema 队列（按顺序串行执行，任一失败即中止）</span>
+              <span class="space-scope-chip" :title="`下拉只列出「${graphSpace || '默认空间'}」图空间下的 Schema，跟随平台总览的图空间选择器切换`">图空间：{{ graphSpace || '默认空间' }}</span>
+            </div>
             <a-select :model-value="chainPick" class="job-select" :loading="schemasLoading" placeholder="搜索并添加 Schema" allow-search allow-clear @change="addChainStep">
               <a-option v-for="s in extractSchemas" :key="s.id" :value="s.id">{{ schemaOptionLabel(s) }}</a-option>
             </a-select>
@@ -427,6 +467,8 @@ async function submit() {
 .chain-steps button:disabled{opacity:.35;cursor:not-allowed}
 .chain-steps button.danger{border-color:#f6b9b4;color:#b42318}
 .muted-warn{margin:0;color:#ff7d00;font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
+/* 目标 Schema 的空间作用域标签：弹窗无空间选择器、静默跟随全局选择器，标签把它显式化 */
+.space-scope-chip{flex:0 0 auto;padding:0 8px;border:1px solid #94bfff;border-radius:10px;background:#e8f3ff;color:#165dff;font-size:12px;line-height:20px;font-weight:400;white-space:nowrap;cursor:help}
 .schedule-preview{margin:0;color:#4e5969;font-size:12px;line-height:20px}
 .field-error{color:#e4322d;font-size:12px;line-height:18px}
 .job-launch-dialog .field-help{display:grid;flex:0 0 auto;width:16px;height:16px;place-items:center;border:1px solid #c9cdd4;border-radius:50%;background:#fff;color:#86909c;cursor:help;font-size:11px;line-height:14px}

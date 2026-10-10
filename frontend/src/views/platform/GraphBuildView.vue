@@ -195,6 +195,15 @@ function jobScriptLabel(job: WorkflowJob): string {
   return job.definitionName || job.definitionId
 }
 
+/** 脚本列「脚本名 +N」悬停展开：chain 逐行列出全部脚本（按执行顺序）；
+ *  单脚本与展示文本一致，不设 title。 */
+function jobScriptTitle(job: WorkflowJob): string | undefined {
+  if (job.taskType !== 'chain') return undefined
+  const labels = job.schemaLabels?.length ? job.schemaLabels : job.definitionIds
+  if (labels.length < 2) return undefined
+  return [`共 ${labels.length} 个脚本（按执行顺序）：`, ...labels.map((label, i) => `${i + 1}. ${label}`)].join('\n')
+}
+
 async function onTrigger(job: WorkflowJob) {
   if (!spaces.canWrite(jobSpace(job))) return
   // 未运行首启 + 运行失败/运行异常重跑（异常=行级失败已转审核，重跑按水位增量续抽）；
@@ -440,8 +449,8 @@ onMounted(() => {
             <tr v-for="job in pagedJobs" :key="job.id">
               <td><b>{{ job.name }}</b></td>
               <td>{{ TASK_TYPE_LABELS[job.taskType] || job.taskType }}</td>
-              <td><code>{{ jobScriptLabel(job) }}</code></td>
-              <td>{{ job.graphSpace || '默认' }}</td>
+              <td><code :title="jobScriptTitle(job)">{{ jobScriptLabel(job) }}</code></td>
+              <td>{{ job.graphSpace || '归属待确认' }}</td>
               <td>
                 <span
                   v-if="job.schedule.kind === 'cron'"
@@ -543,7 +552,6 @@ onMounted(() => {
 .gb-search-button{box-sizing:border-box;height:32px;padding:0 16px;border:1px solid #165dff;border-radius:4px;background:#165dff;color:#fff;font-size:14px;line-height:22px;cursor:pointer}
 .gb-search-button:hover{border-color:#4080ff;background:#4080ff}
 .gb-search-button:focus-visible{outline:2px solid rgba(22,93,255,.3);outline-offset:2px}
-/* 图空间下拉：跟随筛选条尺寸合同，不换行不被压缩 */
 .gb-task-table{flex:1;min-height:0;overflow:auto;padding:0;scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:transparent transparent}
 .gb-task-table:hover,.gb-task-table.gb-scroll--active{scrollbar-color:rgba(78,89,105,.55) transparent}
 .gb-task-table::-webkit-scrollbar{width:8px;height:8px}
@@ -603,7 +611,7 @@ span.run{color:var(--status-info)}
 /* 名称搜索清空图标：与下拉箭头同口径放大着色（Arco 默认 12px 偏淡几乎看不见） */
 .app-workspace .gb-filters #graph-build-filter-name .arco-input-clear-btn svg{width:14px;height:14px;font-size:14px;color:#4e5969}
 .app-workspace .gb-filters #graph-build-filter-name input.arco-input{box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
-/* 筛选下拉统一按类命中（状态/类型/图空间同一边框与尺寸合同），不再绑死控件 id */
+/* 筛选下拉统一按类命中（状态/类型同一边框与尺寸合同），不再绑死控件 id */
 .app-workspace .gb-filters .gb-filter-select.arco-select-view{display:inline-flex;box-sizing:border-box;align-items:center;width:160px;min-width:0;max-width:100%;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:0 0 160px}
 .app-workspace .gb-filters .gb-filter-select.arco-select-view:hover{border-color:#4080ff!important;background:#fff!important}
 .app-workspace .gb-filters .gb-filter-select.arco-select-view:focus-within,.app-workspace .gb-filters .gb-filter-select.arco-select-view-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}

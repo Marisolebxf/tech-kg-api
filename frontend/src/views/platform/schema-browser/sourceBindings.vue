@@ -65,7 +65,7 @@ function updateRow(index: number, value: SourceBindingRow) {
 <template>
   <div class="source-bindings">
     <div v-if="!modelValue.length" class="source-bindings__empty">
-      尚未绑定来源表；绑定后可通过「触发抽取」由平台按时间列水位分批读取并写入图谱。
+      尚未绑定来源表；绑定保存后到「图谱构建」页新建抽取任务，由平台按时间列水位分批读取并写入图谱。
     </div>
     <SourceBindingRowVue
       v-for="(binding, index) in modelValue"

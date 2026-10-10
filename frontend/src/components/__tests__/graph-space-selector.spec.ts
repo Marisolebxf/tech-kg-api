@@ -36,6 +36,23 @@ describe('两级图空间选择', () => {
     // 弹层封顶宽 CSS 依赖 triggerProps contentClass 打标，一并守住
     expect(wrapper.find('.app-space-select').attributes('title')).toBe('切换当前工作图空间：dev2')
     expect(cascader.props('triggerProps')).toEqual({ contentClass: 'app-space-select-popup' })
+    // arco 2.58 没有 show-path prop，回显默认带全路径「未归属空间 / dev2」，
+    // 分组前缀占掉触发框近半宽——format-label 只取路径末级叶子
+    const formatLabel = cascader.props('formatLabel') as (path: { label?: unknown }[]) => string
+    expect(formatLabel([{ label: '公共图空间' }, { label: 'dev2' }])).toBe('dev2')
+    expect(formatLabel([{ label: 'dev2' }])).toBe('dev2')
+    wrapper.unmount()
+  })
+  it('仅一个分组时拍平成单列，避免左列单行加大片空白', async () => {
+    vi.mocked(listGraphSpaces).mockResolvedValue({ data: {
+      spaces: ['dev', 'dev2'],
+      items: [{ name: 'dev' }, { name: 'dev2' }],
+    } } as never)
+    const wrapper = mountSelector()
+    await flushPromises()
+    expect(wrapper.getComponent(Cascader).props('options')).toEqual([
+      { value: 'dev', label: 'dev' }, { value: 'dev2', label: 'dev2' },
+    ])
     wrapper.unmount()
   })
   it('空授权集显示空状态且不选择默认空间', async () => {

@@ -726,11 +726,16 @@ def test_parse_execution_records_collects_graph_lookup_descriptors() -> None:
     # 反查窗下界优先取开跑前起点水位（startWatermark），而非跑完后的 watermark 终值
     assert entity_exec.window_lo == "2026-09-23 03:00:24"
     assert entity_exec.completed_at == "2026-09-23 03:41:54"
+    # 反查窗上界 = 统计日（北京自然日）终点的图侧 UTC 时刻：同日后续执行的改写
+    # 不至于把对象挡在窗外；比本执行完成时刻（03:41:54）更宽
+    assert entity_exec.window_hi == "2026-09-23 15:59:59"
     assert [row.object for row in entity_exec.fallback_rows] == ["审测挂件 · 3 条"]
 
     relation_exec = snapshot.relation_executions[0]
     assert relation_exec.schema_key == "review-linked-196fe7"
-    assert relation_exec.window_lo == "2026-09-23 00:00:00"  # 无水位退当日零点
+    # 无水位退统计日起点（北京 09-23 00:00 = UTC 09-22 16:00，图侧时钟）
+    assert relation_exec.window_lo == "2026-09-22 16:00:00"
+    assert relation_exec.window_hi == "2026-09-23 15:59:59"
 
 
 def test_enrich_day_rows_lists_graph_objects_per_vertex() -> None:
@@ -988,29 +993,252 @@ def test_dedupe_rows_keeps_first_occurrence() -> None:
     ]
 
 
-def test_cap_display_rows_sorts_newest_first_and_truncates() -> None:
-    """明细统一展示上限：无论多少个执行凑出行，最终按识别时间倒序、超限截到
-    同一 cap——实体/关系两抽屉的「展示前 n 条」保持一致且为最新行。"""
-    from service.platform_overview import AssetChangeRow, _cap_display_rows
+def test_sort_rows_newest_first_keeps_all_rows() -> None:
+    """明细统一按识别时间倒序（最新在上、同秒稳定保序），全量保留不截断
+    （2026-10-10 用户口径：有多少条数据就展示多少条，不再有展示上限）。"""
+    from service.platform_overview import AssetChangeRow, _sort_rows_newest_first
 
     def row(obj: str, time: str) -> AssetChangeRow:
         return AssetChangeRow(type="专利", object=obj, change="新增 专利", source="-", time=time)
 
     rows = [
-        row("熔丝元件", "20:01:00"),
-        row("旋转电机", "20:03:00"),
-        row("散热基板", "20:02:00"),
+        row("熔丝元件", "09-23 20:01:00"),
+        row("旋转电机", "09-23 20:03:00"),
+        row("散热基板", "09-23 20:02:00"),
     ]
-    # 少于上限：全部保留，但统一按时间倒序（最新在上）
-    assert [r.object for r in _cap_display_rows(rows, cap=5)] == [
+    assert [r.object for r in _sort_rows_newest_first(rows)] == [
         "旋转电机",
         "散热基板",
         "熔丝元件",
     ]
-    # 超上限：截到 cap 行，取的是时间最新的那些；同秒稳定保序
-    assert [r.object for r in _cap_display_rows(rows, cap=2)] == ["旋转电机", "散热基板"]
-    tied = [row("对象B", "20:03:00"), row("对象A", "20:03:00"), row("对象C", "20:02:00")]
-    assert [r.object for r in _cap_display_rows(tied, cap=2)] == ["对象B", "对象A"]
+    # 远超旧上限（50）也全量保留
+    many = [row(f"对象{i:03d}", f"09-23 20:00:{i % 60:02d}") for i in range(120)]
+    assert len(_sort_rows_newest_first(many)) == 120
+    tied = [row("对象B", "09-23 20:03:00"), row("对象A", "09-23 20:03:00")]
+    assert [r.object for r in _sort_rows_newest_first(tied)] == ["对象B", "对象A"]
+
+
+def test_enrich_day_rows_no_object_truncation() -> None:
+    """单次执行反查命中超旧对象上限（50）的对象也全量出行：不再截断。"""
+    snapshot = parse_execution_records(
+        [
+            _execution_record(
+                written=80,
+                completed_at="2026-09-23 03:41:54",
+                sources=[
+                    {
+                        "table": "techkg_e2e_liz.review_widgets",
+                        "written": 80,
+                        "startWatermark": "2026-09-23 03:00:24",
+                    }
+                ],
+            )
+        ],
+        day="2026-09-23",
+        target_space="dev2",
+        default_space="dev2",
+    )
+    client = _ScriptedGraphClient(
+        [
+            (
+                "DESC TAG `ReviewWidget`",
+                [{"Field": "name", "Type": "string"}, {"Field": "update_time", "Type": "string"}],
+            ),
+            (
+                "LOOKUP ON `ReviewWidget`",
+                [
+                    {
+                        "vid": f"rwxT-{i:03d}",
+                        "props": {
+                            "name": f"总览造数-实体{i:03d}",
+                            "source_table": "techkg_e2e_liz.review_widgets",
+                            "update_time": "2026-09-23 03:00:35",
+                        },
+                    }
+                    for i in range(80)
+                ],
+            ),
+        ]
+    )
+
+    result = enrich_day_rows_with_graph(
+        snapshot,
+        "dev2",
+        connect_client=lambda space: client,
+        schema_names={"review-widget-64d0d5": "ReviewWidget"},
+        schema_labels={"ReviewWidget": "审测挂件"},
+    )
+
+    assert len(result.entity_rows) == 80
+    assert {row.object for row in result.entity_rows} == {
+        f"总览造数-实体{i:03d}" for i in range(80)
+    }
+
+
+def test_enrich_day_rows_lookup_upper_bound_is_day_end_not_completion() -> None:
+    """反查窗上界用统计日终点（图侧 UTC）而非执行完成时刻：同日后续执行对同一批
+    对象的 upsert 改写（update_time 晚于本执行完成时刻）仍落在窗内、能出实名行。"""
+    snapshot = parse_execution_records(
+        [
+            _execution_record(
+                written=2,
+                completed_at="2026-09-23 03:41:54",
+                sources=[
+                    {
+                        "table": "techkg_e2e_liz.review_widgets",
+                        "written": 2,
+                        "startWatermark": "2026-09-23 03:00:24",
+                    }
+                ],
+            )
+        ],
+        day="2026-09-23",
+        target_space="dev2",
+        default_space="dev2",
+    )
+    client = _ScriptedGraphClient(
+        [
+            (
+                "DESC TAG `ReviewWidget`",
+                [{"Field": "name", "Type": "string"}, {"Field": "update_time", "Type": "string"}],
+            ),
+            (
+                "LOOKUP ON `ReviewWidget`",
+                [
+                    {
+                        # 改写时刻 05:14 晚于执行完成 03:41:54，但仍在统计日内
+                        "vid": "rwxT-rewrite-01",
+                        "props": {
+                            "name": "被后续执行改写的对象",
+                            "source_table": "techkg_e2e_liz.review_widgets",
+                            "update_time": "2026-09-23 05:14:07",
+                        },
+                    }
+                ],
+            ),
+        ]
+    )
+
+    result = enrich_day_rows_with_graph(
+        snapshot,
+        "dev2",
+        connect_client=lambda space: client,
+        schema_names={"review-widget-64d0d5": "ReviewWidget"},
+        schema_labels={"ReviewWidget": "审测挂件"},
+    )
+
+    lookup = next(q for q in client.queries if q.startswith("LOOKUP ON `ReviewWidget`"))
+    assert '`ReviewWidget`.`update_time` >= "2026-09-23 03:00:24"' in lookup
+    assert '`ReviewWidget`.`update_time` <= "2026-09-23 15:59:59"' in lookup
+    assert "03:41:54" not in lookup  # 完成时刻不再作窗上界
+    assert [row.object for row in result.entity_rows] == ["被后续执行改写的对象"]
+
+
+def test_enrich_day_rows_zero_hit_lookup_lists_no_aggregate_row() -> None:
+    """LOOKUP 执行成功但 0 命中（对象被统计日后的执行改写出窗/删除）：如实不出行，
+    不再退「Schema · N 条」聚合行——用户口径：不需要聚合，有多少条展示多少条。"""
+    snapshot = parse_execution_records(
+        [_execution_record(written=2, completed_at="2026-09-23 03:41:54")],
+        day="2026-09-23",
+        target_space="dev2",
+        default_space="dev2",
+    )
+    client = _ScriptedGraphClient(
+        [
+            (
+                "DESC TAG `ReviewWidget`",
+                [{"Field": "name", "Type": "string"}, {"Field": "update_time", "Type": "string"}],
+            ),
+            ("LOOKUP ON `ReviewWidget`", []),
+        ]
+    )
+
+    result = enrich_day_rows_with_graph(
+        snapshot,
+        "dev2",
+        connect_client=lambda space: client,
+        schema_names={"review-widget-64d0d5": "ReviewWidget"},
+        schema_labels={"ReviewWidget": "审测挂件"},
+    )
+
+    assert result.entity_rows == []
+    assert result.entity_added == 2  # 徽标计数仍按执行 written，与明细行数解耦
+
+
+def test_enrich_day_rows_relation_zero_hit_no_aggregate_row() -> None:
+    """关系边 LOOKUP 成功 0 命中：同样不退聚合行（枚举完成即如实空）。"""
+    snapshot = parse_execution_records(
+        [
+            _execution_record(
+                kind="relation",
+                schema_key="review-linked-196fe7",
+                schema_label="审测关联",
+                written=2,
+                completed_at="2026-09-23 03:45:52",
+            )
+        ],
+        day="2026-09-23",
+        target_space="dev2",
+        default_space="dev2",
+    )
+    client = _ScriptedGraphClient(
+        [
+            (
+                "DESC EDGE `REVIEW_LINKED`",
+                [
+                    {"Field": "source_table", "Type": "string"},
+                    {"Field": "update_time", "Type": "string"},
+                ],
+            ),
+            ("LOOKUP ON `REVIEW_LINKED`", []),
+        ]
+    )
+
+    result = enrich_day_rows_with_graph(
+        snapshot,
+        "dev2",
+        connect_client=lambda space: client,
+        schema_names={"review-linked-196fe7": "REVIEW_LINKED"},
+        schema_labels={"REVIEW_LINKED": "审测关联"},
+    )
+
+    assert result.relation_rows == []
+    assert result.relation_added == 2
+
+
+def test_enrich_day_rows_relation_without_time_prop_keeps_aggregate() -> None:
+    """边类型没有任何 string 时间属性：GO BIDIRECT 没法滤时间（会把端点全部历史边
+    都算进昨日新增），不做兜底反查，退聚合降级行。"""
+    snapshot = parse_execution_records(
+        [
+            _execution_record(
+                kind="relation",
+                schema_key="review-linked-196fe7",
+                schema_label="审测关联",
+                written=2,
+                completed_at="2026-09-23 03:45:52",
+            )
+        ],
+        day="2026-09-23",
+        target_space="dev2",
+        default_space="dev2",
+    )
+    client = _ScriptedGraphClient(
+        [
+            ("DESC EDGE `REVIEW_LINKED`", [{"Field": "source_table", "Type": "string"}]),
+        ]
+    )
+
+    result = enrich_day_rows_with_graph(
+        snapshot,
+        "dev2",
+        connect_client=lambda space: client,
+        schema_names={"review-linked-196fe7": "REVIEW_LINKED"},
+        schema_labels={"REVIEW_LINKED": "审测关联"},
+    )
+
+    assert [row.object for row in result.relation_rows] == ["审测关联 · 2 条"]
+    assert not [q for q in client.queries if q.startswith("GO FROM")]
 
 
 def test_enrich_today_rows_falls_back_to_aggregate_when_graph_unavailable() -> None:

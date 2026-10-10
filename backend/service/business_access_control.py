@@ -18,6 +18,7 @@ from db_model.business_access import (
     BusinessMembershipState,
     BusinessSpacePolicy,
 )
+from db_model.platform_governance import UserGraphSpaceHidden
 from infra.mysql import session_scope
 
 if TYPE_CHECKING:
@@ -191,6 +192,14 @@ def space_items(actor: PlatformActor) -> list[dict]:
     names = allowed_space_names(actor)
     with session_scope() as session:
         rows = space_registrations(session)
+        # 用户主动解绑（隐藏）的空间：mine/bound 为 False，工作空间下拉过滤掉
+        hidden = set(
+            session.scalars(
+                select(UserGraphSpaceHidden.space_name).where(
+                    UserGraphSpaceHidden.user_id == actor.user_id
+                )
+            )
+        )
         result = []
         for name in names:
             row = rows.get(name)
@@ -198,9 +207,10 @@ def space_items(actor: PlatformActor) -> list[dict]:
             result.append(
                 {
                     "name": name,
-                    "bound": True,
-                    # 原配置页用 mine 筛选可显示行；新模式表示已授权，不能作为写权限。
-                    "mine": True,
+                    "bound": name not in hidden,
+                    # 配置页用 mine 显示绑定状态并驱动绑定/解绑按钮；不是写权限
+                    # （写权限看 writeAllowed）。默认（无隐藏行）视为已绑定。
+                    "mine": name not in hidden,
                     "clientId": row.client_id if row else None,
                     "businessName": row.business_name if row else "",
                     "groupKind": "public"

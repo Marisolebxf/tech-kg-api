@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   CREATE_DESCRIPTION_MAX,
   DETAIL_DESCRIPTION_MAX,
+  LLM_DESCRIPTION_MAX,
   numberOrNullForSubmit,
   portValueForSubmit,
   validateConfigFields,
@@ -148,10 +149,16 @@ describe('validateConfigFields 整表（新建/详情两套口径）', () => {
     expect(CREATE_DESCRIPTION_MAX).toBe(200)
     expect(DETAIL_DESCRIPTION_MAX).toBe(500)
     const over200 = repeat('d', CREATE_DESCRIPTION_MAX + 1)
-    expect(validateConfigFields('llm', { ...validLlm(), description: over200 }, 'create').description).toBeTruthy()
-    expect(validateConfigFields('llm', { ...validLlm(), description: over200 }, 'detail').description).toBeUndefined()
+    expect(validateConfigFields('mysql', { ...validMysql(), description: over200 }, 'create').description).toBeTruthy()
+    expect(validateConfigFields('mysql', { ...validMysql(), description: over200 }, 'detail').description).toBeUndefined()
     const over500 = repeat('d', DETAIL_DESCRIPTION_MAX + 1)
     expect(validateConfigFields('mysql', { ...validMysql(), description: over500 }, 'detail').description).toBe('输入长度不能超过500个字符')
+  })
+
+  it.each(['create', 'detail'] as const)('语言模型 %s：64 字可提交、65 字在前端拦截，与接口一致', (variant) => {
+    expect(LLM_DESCRIPTION_MAX).toBe(64)
+    expect(validateConfigFields('llm', { ...validLlm(), description: '测'.repeat(64) }, variant).description).toBeUndefined()
+    expect(validateConfigFields('llm', { ...validLlm(), description: '测'.repeat(65) }, variant).description).toBe('输入长度不能超过64个字符')
   })
 
   it('主机/默认库异常字符拦截（FUNC-00452/00471/00598/00617）', () => {

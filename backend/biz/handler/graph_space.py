@@ -62,7 +62,7 @@ def create_graph_space(
         data = _service(session).create_space(actor, payload.name)
     except GraphSpaceError as exc:
         raise _to_response(exc) from exc
-    return ApiResponse(data=data, msg="图空间已创建，业务归属请由管理员核实配置")
+    return ApiResponse(data=data, msg="图空间已创建")
 
 
 @router.post("/{space_name}/bind", response_model=ApiResponse)

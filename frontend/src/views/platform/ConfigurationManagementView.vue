@@ -381,7 +381,7 @@ async function createSpace() {
   spaceWorking.value = true
   try {
     await createGraphSpace(name)
-    showToast(businessRbac.value ? `图数据空间“${name}”已创建，请在「业务权限」中设置公共或业务归属。` : `图数据空间“${name}”已创建并绑定。空间建好后有秒级传播延迟，随后即可在任务触发时选择。`, 'success')
+    showToast(businessRbac.value ? `图数据空间“${name}”已创建，未指定业务时默认为公共空间，可在「业务权限」中调整归属。` : `图数据空间“${name}”已创建并绑定。空间建好后有秒级传播延迟，随后即可在任务触发时选择。`, 'success')
     spaceDialogOpen.value = false
     newSpaceName.value = ''
     await loadGraphSpaces()
@@ -893,7 +893,7 @@ onUnmounted(() => {
               <small v-if="spaceNameError" id="space-name-error" class="field-error" role="alert">{{ spaceNameError }}</small>
             </div>
           </a-form-item>
-          <p class="space-dialog-hint">{{ businessRbac ? '创建后请在「业务权限」中设置空间归属；未归属空间仅管理员可见。' : '将真实执行 CREATE SPACE 并自动绑定到你的账号；空间创建后有秒级传播延迟。' }}</p>
+          <p class="space-dialog-hint">{{ businessRbac ? '未指定业务的新空间默认为公共空间：所有用户可查看，仅管理员可操作。可在「业务权限」中调整归属。' : '将真实执行 CREATE SPACE 并自动绑定到你的账号；空间创建后有秒级传播延迟。' }}</p>
         </a-form>
         <footer><button type="button" @click="spaceDialogOpen=false">取消</button><button class="primary" type="button" :disabled="!isAdmin || spaceWorking" @click="createSpace">{{ spaceWorking ? '创建中…' : '创建' }}</button></footer>
       </aside>

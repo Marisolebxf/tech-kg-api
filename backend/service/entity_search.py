@@ -1,12 +1,15 @@
 """实体检索：图实体同步 Milvus（BM25 稀疏 + m3e 稠密）混合搜索 + 图直查浏览。
 
-两条查询路径：
+查询路径：
 
 1. ``browse``（关键词为空的默认视图）：直接查图空间按标签分页（页内按 vid 排序，
    跨标签优先用索引统计快照拼接分页窗口，快照不可用时实时计数）；
 2. ``search``（关键词非空）：先用图库 VID / 已索引名称和业务 ID 精确查找；
    无精确命中时用 Milvus ``hybrid_search``（dense + BM25 sparse，RRF 融合），
    ``entity_type`` / ``graph_space`` 标量过滤；embedding 失败降级单路 BM25。
+
+3. ``keyword_search``（实体列表）：文字包含匹配 VID / 名称 / 全部公共属性，
+   直接查询图库并按实际匹配数分页，不返回语义相似项。
 
 索引（``reindex``）按图空间独立：单集合 ``kg_entity`` 内 ``graph_space`` 字段
 分区，使用 ``graph_space::vid`` 作为集合主键，BM25 词表状态存控制库
@@ -97,12 +100,17 @@ search_cache = EntityResponseCache(
     namespace="entity-search:search:v2",
     ttl_seconds=float(os.getenv("ENTITY_SEARCH_CACHE_SECONDS", "60")),
 )
+keyword_cache = EntityResponseCache(
+    namespace="entity-search:keyword:v1",
+    ttl_seconds=float(os.getenv("ENTITY_SEARCH_CACHE_SECONDS", "60")),
+)
 
 
 async def clear_entity_caches() -> None:
     """清掉搜索/浏览的 L1 进程 + L2 Redis 缓存（reindex 完成或写图联动时调用）。"""
     _types_cache.clear()  # 类型下拉计数随重建变化，一并失效
-    await asyncio.gather(browse_cache.clear(), search_cache.clear())
+    _node_count_cache.clear()
+    await asyncio.gather(browse_cache.clear(), search_cache.clear(), keyword_cache.clear())
 
 
 def invalidate_entity_caches_sync() -> None:
@@ -115,6 +123,8 @@ def invalidate_entity_caches_sync() -> None:
     else:
         browse_cache.clear_local()
         search_cache.clear_local()
+        keyword_cache.clear_local()
+        _node_count_cache.clear()
 
 
 class EntitySearchError(Exception):
@@ -591,6 +601,75 @@ class EntitySearchService:
 
     def __init__(self, session: Session) -> None:
         self._session = session
+
+    def keyword_counts(
+        self,
+        *,
+        keyword: str,
+        space: str | None = None,
+        entity_type: str | None = None,
+    ) -> dict[str, int]:
+        """实体列表文字搜索的全量匹配计数，不依赖 Milvus/embedding 状态。"""
+        graph = get_space_client(space or _default_space())
+        labels = sorted(graph.labels())
+        if entity_type:
+            if entity_type not in labels:
+                raise EntitySearchError(f"图空间中不存在实体类型: {entity_type}")
+            labels = [entity_type]
+        try:
+            return {
+                label: graph.keyword_nodes_by_label(label, keyword.strip(), count_only=True).total
+                for label in labels
+            }
+        except Exception as exc:
+            raise EntitySearchError("实体文字检索暂不可用，请稍后重试") from exc
+
+    def keyword_search(
+        self,
+        *,
+        keyword: str,
+        space: str | None = None,
+        entity_type: str | None = None,
+        limit: int = 10,
+        offset: int = 0,
+        counts: dict[str, int] | None = None,
+    ) -> dict[str, Any]:
+        """按类型/VID 稳定分页，只返回文字实际匹配的实体，不补语义相似项。"""
+        keyword = keyword.strip()
+        if not keyword:
+            raise EntitySearchError("关键词不能为空")
+        resolved_space = space or _default_space()
+        if counts is None:
+            counts = self.keyword_counts(
+                keyword=keyword, space=resolved_space, entity_type=entity_type
+            )
+        graph = get_space_client(resolved_space)
+        items = []
+        cursor = 0
+        try:
+            for label, count in sorted(counts.items()):
+                start, end = max(offset - cursor, 0), min(offset + limit - cursor, count)
+                cursor += count
+                if start < end:
+                    rows = graph.keyword_nodes_by_label(
+                        label, keyword, limit=end - start, offset=start
+                    )
+                    items.extend(_serialize_browse_item(node, label) for node in rows.items)
+                if cursor >= offset + limit:
+                    break
+        except Exception as exc:
+            raise EntitySearchError("实体文字检索暂不可用，请稍后重试") from exc
+        return {
+            "items": items,
+            "total": sum(counts.values()),
+            "returned": len(items),
+            "keyword": keyword,
+            "entityType": entity_type,
+            "graphSpace": resolved_space,
+            "limit": limit,
+            "offset": offset,
+            "mode": "keyword",
+        }
 
     @staticmethod
     def preview_page(

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { browseEntities, searchEntities } from './entitySearch'
+import { browseEntities, searchEntities, searchEntityList } from './entitySearch'
 import { http } from './http'
 
 vi.mock('./http', () => ({ http: { get: vi.fn(), post: vi.fn() } }))
@@ -15,7 +15,14 @@ beforeEach(() => {
   vi.mocked(http.post).mockResolvedValue(success)
 })
 
-describe('实体列表预览范围 API', () => {
+describe('实体检索 API 路由', () => {
+  it('实体列表文字搜索使用 keyword 接口，保留当前图空间及分页', async () => {
+    const scope = { space: 'dev2', entityType: 'Paper', keyword: '世界生命科学格局中的中国', limit: 10, offset: 10 }
+    await searchEntityList(scope)
+    expect(http.get).toHaveBeenCalledWith('/v1/entity-search/keyword', { params: scope })
+    expect(http.post).not.toHaveBeenCalled()
+  })
+
   it('浏览和搜索使用同一 preview 接口，不向全图搜索发送请求', async () => {
     const scope = { space: 'dev2', entityType: 'Expert', limit: 10, offset: 0 }
     await browseEntities({ ...scope, previewOnly: true })

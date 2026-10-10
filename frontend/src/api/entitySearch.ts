@@ -147,3 +147,14 @@ export async function searchEntities(payload: {
   )
 }
 
+/** 实体列表采用文字匹配；图谱可视化等调用方仍使用 searchEntities 的语义检索。 */
+export async function searchEntityList(payload: {
+  keyword: string
+  space?: string | null
+  entityType?: string | null
+  limit?: number
+  offset?: number
+}): Promise<EntityListResult> {
+  return unwrap(await asApiPromise<EntityListResult>(http.get(`${PREFIX}/keyword`, { params: payload })))
+}
+

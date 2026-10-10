@@ -28,6 +28,7 @@ from service.entity_search import (
     clear_entity_caches,
 )
 from service.entity_search import browse_cache as _browse_cache
+from service.entity_search import keyword_cache as _keyword_cache
 from service.entity_search import search_cache as _search_cache
 
 router = APIRouter(
@@ -36,6 +37,7 @@ router = APIRouter(
     dependencies=[Depends(bind_selected_graph_space)],
 )
 logger = logging.getLogger(__name__)
+ENTITY_PAGE_BLOCK_SIZE = 100
 
 
 class TemporaryCsvResponse(FileResponse):
@@ -150,12 +152,79 @@ async def prewarm_entity_browse() -> None:
                 session,
                 space=space,
                 entity_type=None,
-                limit=10,
+                limit=ENTITY_PAGE_BLOCK_SIZE,
                 offset=0,
             )
         logger.info("实体列表默认首页预热完成 space=%s cache_hit=%s", space, hit)
     except Exception:  # noqa: BLE001 - startup warm-up must never block API startup
         logger.warning("实体列表默认首页预热失败，首次请求将按正常路径加载", exc_info=True)
+
+
+async def _load_entity_page(load_block, *, limit: int, offset: int) -> tuple[str, bool]:
+    """复用 100 条数据块，连续十个默认页面无需各扫一次图库。"""
+    block_offset = offset // ENTITY_PAGE_BLOCK_SIZE * ENTITY_PAGE_BLOCK_SIZE
+    payload, hit = await load_block(block_offset)
+    data = json.loads(payload)["data"]
+    start = offset - block_offset
+    items = data["items"][start : start + limit]
+    if start + limit > ENTITY_PAGE_BLOCK_SIZE and offset + len(items) < data["total"]:
+        following, following_hit = await load_block(block_offset + ENTITY_PAGE_BLOCK_SIZE)
+        items.extend(json.loads(following)["data"]["items"][: limit - len(items)])
+        hit = hit and following_hit
+    data.update(items=items, limit=limit, offset=offset, returned=len(items))
+    return _serialized_success(data), hit
+
+
+async def _load_keyword_block(
+    session: Session,
+    *,
+    space: str | None,
+    entity_type: str | None,
+    keyword: str,
+    offset: int,
+) -> tuple[str, bool]:
+    scope = {"space": _resolved_space(space), "entity_type": entity_type, "keyword": keyword}
+    key = build_cache_key("keyword-block", **scope, offset=offset)
+    cached = await _keyword_cache.get(key)
+    if cached is not None:
+        return cached, True
+    lock = await _request_lock(key)
+    try:
+        async with lock:
+            cached = await _keyword_cache.get(key)
+            if cached is not None:
+                return cached, True
+            counts_key = build_cache_key("keyword-counts", **scope)
+            counts_lock = await _request_lock(counts_key)
+            try:
+                async with counts_lock:
+                    cached_counts = await _keyword_cache.get(counts_key)
+                    if cached_counts is None:
+                        counts = await asyncio.to_thread(
+                            _application(session).keyword_counts,
+                            space=space,
+                            entity_type=entity_type,
+                            keyword=keyword,
+                        )
+                        await _keyword_cache.put(counts_key, json.dumps(counts))
+                    else:
+                        counts = json.loads(cached_counts)
+            finally:
+                await _release_request_lock(counts_key, counts_lock)
+            data = await asyncio.to_thread(
+                _application(session).keyword_search,
+                space=space,
+                entity_type=entity_type,
+                keyword=keyword,
+                counts=counts,
+                limit=ENTITY_PAGE_BLOCK_SIZE,
+                offset=offset,
+            )
+            payload = _serialized_success(data)
+            await _keyword_cache.put(key, payload)
+            return payload, False
+    finally:
+        await _release_request_lock(key, lock)
 
 
 def _application(session: Session) -> EntitySearchApplication:
@@ -226,13 +295,17 @@ async def browse_entities(
     space = resolve_selected_space(space)
     _ensure_space_access(actor, space)
     try:
-        payload, cache_hit = await _load_browse_payload(
-            session,
-            space=space,
-            entity_type=entityType,
-            limit=limit,
-            offset=offset,
-        )
+
+        async def load_block(block_offset: int):
+            return await _load_browse_payload(
+                session,
+                space=space,
+                entity_type=entityType,
+                limit=ENTITY_PAGE_BLOCK_SIZE,
+                offset=block_offset,
+            )
+
+        payload, cache_hit = await _load_entity_page(load_block, limit=limit, offset=offset)
     except EntitySearchError as exc:
         _raise_domain_error(exc)
     return Response(
@@ -286,6 +359,41 @@ def get_index_status(
     space = resolve_selected_space(space)
     _ensure_space_access(actor, space)
     return ApiResponse(data=_application(session).status(space=space))
+
+
+@router.get("/keyword")
+async def keyword_entities(
+    actor: CurrentActor,
+    session: Annotated[Session, Depends(get_workflow_session)],
+    keyword: str = Query(..., min_length=1, max_length=256),
+    space: str | None = Query(None, max_length=64),
+    entityType: str | None = Query(None, max_length=64),
+    limit: int = Query(10, ge=1, le=100),
+    offset: int = Query(0, ge=0, le=10_000_000),
+) -> Response:
+    """实体列表：文字包含匹配名称/ID/公共属性，返回真实匹配数。"""
+    space = resolve_selected_space(space)
+    _ensure_space_access(actor, space)
+    keyword = keyword.strip()
+    if not keyword:
+        raise HTTPException(status_code=422, detail="关键词不能为空")
+    try:
+
+        async def load_block(block_offset: int):
+            return await _load_keyword_block(
+                session,
+                space=space,
+                entity_type=entityType,
+                keyword=keyword,
+                offset=block_offset,
+            )
+
+        payload, hit = await _load_entity_page(load_block, limit=limit, offset=offset)
+    except EntitySearchError as exc:
+        _raise_domain_error(exc)
+    return Response(
+        payload, media_type="application/json", headers={"X-Entity-Cache": "HIT" if hit else "MISS"}
+    )
 
 
 @router.post("/search")

@@ -28,6 +28,12 @@ class EntitySearchApplication:
     def search(self, **kwargs) -> dict[str, Any]:
         return self._service.search(**kwargs)
 
+    def keyword_counts(self, **kwargs) -> dict[str, int]:
+        return self._service.keyword_counts(**kwargs)
+
+    def keyword_search(self, **kwargs) -> dict[str, Any]:
+        return self._service.keyword_search(**kwargs)
+
     def types(self, **kwargs) -> list[dict[str, Any]]:
         return self._service.types(**kwargs)
 

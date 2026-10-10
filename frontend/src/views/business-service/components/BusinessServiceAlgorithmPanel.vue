@@ -2139,7 +2139,7 @@ const PANORAMA_RELATION_LEDGER: Record<
   AUTHORED_BY: { category: "直接关系", detail: "论文署名关系" },
   COAUTHOR_WITH: { category: "直接关系", detail: "专家合著关系" },
   PUBLISHED_IN: { category: "直接关系", detail: "论文发表关系" },
-  HAS_KEYWORD: { category: "直接关系", detail: "论文主题" },
+  HAS_KEYWORD: { category: "直接关系", detail: "论文主题关联关系" },
   CITES: { category: "直接关系", detail: "论文引用关系" },
   CITED: { category: "直接关系", detail: "论文被引关系" },
   CITED_BY: { category: "直接关系", detail: "论文被引关系" },

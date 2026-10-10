@@ -7,7 +7,7 @@ import {
   browseEntities,
   entitySearchErrorMessage,
   getEntitySearchTypes,
-  searchEntities,
+  searchEntityList,
   type EntityListResult,
   type EntityTypeCount,
 } from '../../api/entitySearch'
@@ -44,6 +44,40 @@ const result = ref<EntityListResult | null>(null)
 const loading = ref(false)
 const searchError = ref('')
 let searchVersion = 0
+const PAGE_CACHE_TTL = 60_000
+const pageCache = new Map<string, { expires: number; result: EntityListResult }>()
+const pendingPages = new Map<string, Promise<EntityListResult>>()
+let cacheVersion = 0
+type PageRequest = { keyword: string; space: string | null; entityType: string | null; limit: number; offset: number }
+
+function clearPageCache() {
+  ++cacheVersion
+  pageCache.clear()
+  pendingPages.clear()
+}
+
+function loadPage(request: PageRequest): Promise<EntityListResult> {
+  const key = JSON.stringify(request)
+  const cached = pageCache.get(key)
+  if (cached && cached.expires > Date.now()) return Promise.resolve(cached.result)
+  const pending = pendingPages.get(key)
+  if (pending) return pending
+  const version = cacheVersion
+  const { keyword: text, ...scope } = request
+  const promise = (text ? searchEntityList(request) : browseEntities(scope)).then(data => {
+    if (version === cacheVersion) {
+      if (pageCache.size >= 20) pageCache.delete(pageCache.keys().next().value!)
+      pageCache.set(key, { expires: Date.now() + PAGE_CACHE_TTL, result: data })
+    }
+    return data
+  }).finally(() => {
+    if (pendingPages.get(key) === promise) pendingPages.delete(key)
+  })
+  pendingPages.set(key, promise)
+  return promise
+}
+
+onUnmounted(() => { ++searchVersion; clearPageCache() })
 
 const items = computed(() => result.value?.items ?? [])
 const isBrowseMode = computed(() => !appliedKeyword.value)
@@ -71,36 +105,32 @@ async function loadEntityTypes() {
 }
 
 function resetPagingAndSearch() {
+  clearPageCache()
+  appliedKeyword.value = keyword.value.trim()
   page.value = 1
   void doSearch()
 }
 
 async function doSearch() {
   const version = ++searchVersion
-  const trimmed = keyword.value.trim()
-  appliedKeyword.value = trimmed
+  const request: PageRequest = {
+    keyword: appliedKeyword.value,
+    space: space.value || null,
+    entityType: entityType.value || null,
+    limit: pageSize.value,
+    offset: (page.value - 1) * pageSize.value,
+  }
   loading.value = true
   searchError.value = ''
   try {
-    let nextResult: EntityListResult
-    if (trimmed) {
-      nextResult = await searchEntities({
-        keyword: trimmed,
-        space: space.value || null,
-        entityType: entityType.value || null,
-        limit: pageSize.value,
-        offset: (page.value - 1) * pageSize.value,
-      })
-    } else {
-      // 空关键词：浏览当前图空间的全部实体范围，按页读取并使用接口实际总数。
-      nextResult = await browseEntities({
-        space: space.value || null,
-        entityType: entityType.value || null,
-        limit: pageSize.value,
-        offset: (page.value - 1) * pageSize.value,
-      })
+    const nextResult = await loadPage(request)
+    if (version === searchVersion) {
+      result.value = nextResult
+      // 仅预取下一页；与用户翻页共享进行中的请求，失败不影响当前页。
+      if (request.offset + request.limit < (nextResult.total ?? 0)) {
+        void loadPage({ ...request, offset: request.offset + request.limit }).catch(() => {})
+      }
     }
-    if (version === searchVersion) result.value = nextResult
   } catch (error) {
     if (version === searchVersion) {
       result.value = null
@@ -151,6 +181,7 @@ onMounted(() => {
 watch(
   () => graphSpaceStore.current,
   () => {
+    clearPageCache()
     ++searchVersion
     result.value = null
     loading.value = true
@@ -205,7 +236,7 @@ watch(
     </section>
 
     <section class="entity-shell entity-result-shell" aria-label="实体列表">
-      <div v-if="loading" class="entity-empty">加载中...</div>
+      <div v-if="loading && !items.length" class="entity-empty">加载中...</div>
       <div v-else-if="searchError" class="entity-empty" role="alert">
         <span>{{ searchError }}</span>
         <button class="kg-button" type="button" @click="doSearch">重试</button>
@@ -220,7 +251,8 @@ watch(
         </template>
       </div>
       <template v-else>
-        <div class="entity-table-wrap" :class="{ 'entity-scroll--active': tableScrollActive }" @scroll.passive="handleTableScroll">
+        <div class="entity-table-wrap" :class="{ 'entity-scroll--active': tableScrollActive }" :aria-busy="loading" @scroll.passive="handleTableScroll">
+          <div v-if="loading" class="entity-loading" role="status">加载中...</div>
           <table>
             <thead>
               <tr>
@@ -320,6 +352,7 @@ watch(
 .entity-toolbar__right{min-width:0;flex:1 1 320px;justify-content:flex-end}
 .entity-empty{flex:1;display:grid;place-items:center;padding:40px 16px;color:#86909c;font-size:13px;line-height:22px;text-align:center}
 .entity-table-wrap{flex:1;min-height:0;overflow:auto;scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:transparent transparent}
+.entity-loading{position:sticky;top:0;z-index:2;padding:6px 16px;background:#edf4ff;color:#165dff;font-size:12px;line-height:20px}
 .entity-table-wrap:hover,.entity-table-wrap.entity-scroll--active{scrollbar-color:rgba(78,89,105,.55) transparent}
 .entity-table-wrap::-webkit-scrollbar{width:8px;height:8px}
 .entity-table-wrap::-webkit-scrollbar-track{background:transparent}

@@ -188,6 +188,7 @@ def entity_search_api(monkeypatch: pytest.MonkeyPatch):
 
     entity_search_handler._browse_cache.clear_local()
     entity_search_handler._search_cache.clear_local()
+    entity_search_handler._keyword_cache.clear_local()
 
     def set_actor(user_id: str, is_admin: bool) -> None:
         actor = PlatformActor(
@@ -203,6 +204,7 @@ def entity_search_api(monkeypatch: pytest.MonkeyPatch):
     yield engine, set_actor, monkeypatch
     entity_search_handler._browse_cache.clear_local()
     entity_search_handler._search_cache.clear_local()
+    entity_search_handler._keyword_cache.clear_local()
     app.dependency_overrides.pop(get_workflow_session, None)
     app.dependency_overrides.pop(require_platform_actor, None)
     engine.dispose()
@@ -325,7 +327,7 @@ async def test_export_temp_file_removed_on_download_failure(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("endpoint", ["preview", "export"])
+@pytest.mark.parametrize("endpoint", ["preview", "export", "keyword"])
 async def test_preview_and_export_check_space_access_before_query(
     entity_search_api, endpoint
 ) -> None:
@@ -349,7 +351,8 @@ async def test_preview_and_export_check_space_access_before_query(
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get(
-                f"/api/v1/entity-search/{endpoint}", params={"space": "forbidden"}
+                f"/api/v1/entity-search/{endpoint}",
+                params={"space": "forbidden", "keyword": "目标"},
             )
             assert response.status_code == 403
     finally:
@@ -554,3 +557,182 @@ async def test_reindex_and_search_full_flow(entity_search_api) -> None:
         )
         assert other_space.status_code == 400
         assert "other" in other_space.json()["detail"]
+
+
+class LiteralApiGraph(FakeGraph):
+    def __init__(self, nodes):
+        self.nodes = nodes
+        self.page_calls = []
+        self.keyword_calls = []
+
+    def labels(self):
+        return sorted(self.nodes)
+
+    def stats_tag_counts(self):
+        return {label: len(rows) for label, rows in self.nodes.items()}
+
+    def paged_nodes_by_label(self, label, *, limit=100, offset=0):
+        self.page_calls.append((label, limit, offset))
+        return self.nodes[label][offset : offset + limit]
+
+    def keyword_nodes_by_label(self, label, keyword, *, limit=100, offset=0, count_only=False):
+        self.keyword_calls.append((label, keyword, count_only, offset, limit))
+        rows = sorted(
+            (
+                node
+                for node in self.nodes[label]
+                if any(
+                    keyword.lower() in str(value).lower()
+                    for value in [node.id, *node.properties.values()]
+                )
+            ),
+            key=lambda node: node.id,
+        )
+
+        class Result:
+            total = len(rows)
+            items = [] if count_only else rows[offset : offset + limit]
+
+        return Result()
+
+
+@pytest.mark.asyncio
+async def test_literal_keyword_uses_unindexed_names_attributes_and_actual_total(entity_search_api):
+    _, _, monkeypatch = entity_search_api
+    graph = LiteralApiGraph(
+        {
+            "Paper": [
+                FakeNode(
+                    "paper_target",
+                    {"title_zh": "世界生命科学格局中的中国", "doi": "10.1234/abc", "year": 2026},
+                ),
+                FakeNode("paper_other", {"title_zh": "中美两国在南美洲的地缘经济格局比较"}),
+            ],
+            "Expert": [FakeNode("expert_1", {"name": "张三"})],
+        }
+    )
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr(
+        "service.entity_search.get_milvus_client", lambda: pytest.fail("文字匹配不能回退语义结果")
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        for keyword in [
+            "世界生命科学格局中的中国",
+            "生命科学",
+            "10.1234/ABC",
+            "2026",
+            "paper_target",
+        ]:
+            response = await client.get(
+                "/api/v1/entity-search/keyword", params={"keyword": keyword, "entityType": "Paper"}
+            )
+            assert response.status_code == 200
+            result = response.json()["data"]
+            assert result["mode"] == "keyword"
+            assert result["total"] == 1
+            assert result["items"][0]["name"] == "世界生命科学格局中的中国"
+        response = await client.get(
+            "/api/v1/entity-search/keyword", params={"keyword": "生命科学", "entityType": "Expert"}
+        )
+        assert response.json()["data"]["total"] == 0
+        assert response.json()["data"]["items"] == []
+        response = await client.get("/api/v1/entity-search/keyword", params={"keyword": "不存在"})
+        assert response.json()["data"]["total"] == 0
+        for keyword in ["", "  ", "x" * 257]:
+            response = await client.get(
+                "/api/v1/entity-search/keyword", params={"keyword": keyword}
+            )
+            assert response.status_code == 422 or response.json().get("code") == 422
+
+
+@pytest.mark.asyncio
+async def test_adjacent_browse_pages_share_100_row_block_including_cross_block_page(
+    entity_search_api,
+):
+    _, _, monkeypatch = entity_search_api
+    graph = LiteralApiGraph(
+        {"Expert": [FakeNode(f"e_{i:04}", {"name": f"专家{i}"}) for i in range(120)]}
+    )
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        seen = []
+        for offset in range(0, 120, 10):
+            response = await client.get(
+                "/api/v1/entity-search/entities", params={"offset": offset, "limit": 10}
+            )
+            data = response.json()["data"]
+            assert data["total"] == 120
+            assert data["offset"] == offset
+            assert data["limit"] == 10
+            seen.extend(item["vid"] for item in data["items"])
+        assert seen == [f"e_{i:04}" for i in range(120)]
+        assert graph.page_calls == [("Expert", 100, 0), ("Expert", 20, 100)]
+        response = await client.get(
+            "/api/v1/entity-search/entities", params={"offset": 90, "limit": 20}
+        )
+        assert [item["vid"] for item in response.json()["data"]["items"]] == [
+            f"e_{i:04}" for i in range(90, 110)
+        ]
+        assert len(graph.page_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_literal_keyword_full_range_counts_reused_across_blocks_and_workers(
+    entity_search_api,
+):
+    _, _, monkeypatch = entity_search_api
+    graph = LiteralApiGraph(
+        {"Paper": [FakeNode(f"p_{i:04}", {"title_zh": "同名论文"}) for i in range(1015)]}
+    )
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    from biz.handler import entity_search as handler
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        for offset in [0, 10, 1000]:
+            response = await client.get(
+                "/api/v1/entity-search/keyword", params={"keyword": "同名论文", "offset": offset}
+            )
+            data = response.json()["data"]
+            assert data["total"] == 1015
+            assert [item["vid"] for item in data["items"]] == [
+                f"p_{i:04}" for i in range(offset, offset + 10)
+            ]
+        assert len([call for call in graph.keyword_calls if call[2]]) == 1
+        assert len([call for call in graph.keyword_calls if not call[2]]) == 2
+        handler._keyword_cache.clear_local()
+        again = await client.get(
+            "/api/v1/entity-search/keyword", params={"keyword": "同名论文", "offset": 1010}
+        )
+        assert again.headers["X-Entity-Cache"] == "HIT"
+        assert len(again.json()["data"]["items"]) == 5
+        assert len(graph.keyword_calls) == 3
+        from service.entity_search import clear_entity_caches
+
+        await clear_entity_caches()
+        graph.nodes["Paper"].append(FakeNode("p_1015", {"title_zh": "同名论文"}))
+        refreshed = await client.get(
+            "/api/v1/entity-search/keyword", params={"keyword": "同名论文", "offset": 1010}
+        )
+        assert refreshed.json()["data"]["total"] == 1016
+        assert len(refreshed.json()["data"]["items"]) == 6
+
+
+@pytest.mark.asyncio
+async def test_literal_keyword_graph_failure_reports_error_and_can_retry(entity_search_api):
+    _, _, monkeypatch = entity_search_api
+    graph = LiteralApiGraph({"Paper": [FakeNode("p1", {"title_zh": "论文"})]})
+    original = graph.keyword_nodes_by_label
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("timeout")
+
+    graph.keyword_nodes_by_label = fail
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/v1/entity-search/keyword", params={"keyword": "论文"})
+        assert response.status_code == 400
+        assert "暂不可用" in response.json()["detail"]
+        graph.keyword_nodes_by_label = original
+        response = await client.get("/api/v1/entity-search/keyword", params={"keyword": "论文"})
+        assert response.status_code == 200
+        assert response.json()["data"]["total"] == 1

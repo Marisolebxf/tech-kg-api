@@ -1987,3 +1987,79 @@ def test_upsert_entity_milvus_error_degrades(
     assert result["reason"].startswith("milvus error:")
     state = state_session.get(EntitySearchState, "dev2")
     assert state.entity_count == 2  # 写入失败不 bump 计数
+
+
+class LiteralGraph(FakeGraph):
+    def keyword_nodes_by_label(self, label, keyword, *, limit=100, offset=0, count_only=False):
+        needle = keyword.lower()
+        rows = [
+            node
+            for node in self._nodes.get(label, [])
+            if any(needle in str(value).lower() for value in [node.id, *node.properties.values()])
+        ]
+        rows.sort(key=lambda node: node.id)
+        return FakePagedResult([] if count_only else rows[offset : offset + limit], total=len(rows))
+
+
+@pytest.mark.parametrize(
+    "keyword", ["世界生命科学格局中的中国", "生命科学", "10.1234/ABC", "2026", "paper_target"]
+)
+def test_literal_search_existing_name_or_unindexed_property(state_session, monkeypatch, keyword):
+    target = FakeNode(
+        "paper_target", {"title_zh": "世界生命科学格局中的中国", "doi": "10.1234/abc", "year": 2026}
+    )
+    graph = LiteralGraph(
+        ["Paper"],
+        {
+            "Paper": [
+                target,
+                FakeNode("paper_other", {"title_zh": "中美两国在南美洲的地缘经济格局比较"}),
+            ]
+        },
+    )
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr(
+        "service.entity_search.get_milvus_client", lambda: pytest.fail("文字匹配不调用语义检索")
+    )
+    monkeypatch.setattr(
+        "service.entity_search._embedding_client", lambda: pytest.fail("文字匹配不调用 embedding")
+    )
+    result = EntitySearchService(state_session).keyword_search(
+        keyword=keyword, space="dev2", entity_type="Paper"
+    )
+    assert result["total"] == 1
+    assert result["items"][0]["name"] == "世界生命科学格局中的中国"
+    assert result["items"][0]["vid"] == "paper_target"
+    assert result["mode"] == "keyword"
+
+
+def test_literal_search_has_full_count_and_stable_cross_type_pages(state_session, monkeypatch):
+    experts = [FakeNode(f"e_{i:04}", {"name": "同名"}) for i in range(1005)]
+    papers = [FakeNode("paper_1", {"title_zh": "同名"})]
+    graph = LiteralGraph(["Paper", "Expert"], {"Expert": experts, "Paper": papers})
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    service = EntitySearchService(state_session)
+    counts = service.keyword_counts(keyword="同名", space="dev2")
+    page = service.keyword_search(
+        keyword="同名", space="dev2", counts=counts, limit=10, offset=1000
+    )
+    assert page["total"] == 1006
+    assert [item["vid"] for item in page["items"]] == [f"e_{i:04}" for i in range(1000, 1005)] + [
+        "paper_1"
+    ]
+    assert service.keyword_search(keyword="不存在", space="dev2")["total"] == 0
+    assert service.keyword_search(keyword="同名", space="dev2", entity_type="Paper")["total"] == 1
+    with pytest.raises(EntitySearchError, match="不存在实体类型"):
+        service.keyword_search(keyword="同名", space="dev2", entity_type="Missing")
+
+
+def test_literal_search_graph_failure_is_not_reported_as_empty(state_session, monkeypatch):
+    class FailingGraph(LiteralGraph):
+        def keyword_nodes_by_label(self, *args, **kwargs):
+            raise RuntimeError("graph timeout")
+
+    monkeypatch.setattr(
+        "service.entity_search.get_space_client", lambda space: FailingGraph(["Paper"], {})
+    )
+    with pytest.raises(EntitySearchError, match="暂不可用"):
+        EntitySearchService(state_session).keyword_search(keyword="论文", space="dev2")

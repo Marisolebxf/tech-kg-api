@@ -25,6 +25,7 @@ from biz.schemas.auth import (
 from config.auth import AuthSettings
 from infra.redis import AsyncJsonStore
 from infra.user_center import UserCenterClient, UserCenterError
+from utils.time_display import utc_to_cst_str
 
 OVERVIEW_PATH = "/overview"
 
@@ -342,6 +343,9 @@ class AuthService:
         if not items and not self.settings.enabled:
             items = self._dev_operation_logs()
             data_mode = "mock"
+        # 审计写入按 UTC ISO 存储（带 +00:00 标记），出口统一转北京时间
+        for item in items:
+            item.occurred_at = utc_to_cst_str(item.occurred_at) or item.occurred_at
         normalized_keyword = (keyword or "").strip().lower()
         if category:
             items = [item for item in items if item.category == category]

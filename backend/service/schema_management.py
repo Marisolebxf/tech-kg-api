@@ -40,6 +40,7 @@ from service.schema_ddl import (
 )
 from service.script_security import review_script_security
 from service.script_steps import declared_steps_from_tree
+from utils.time_display import utc_to_cst_str
 
 OWN_SCHEMA_SCRIPT_REQUIRED = "只能更换自己创建的 Schema 脚本"
 SYSTEM_SCHEMA_ADMIN_REQUIRED = "只有 Schema 管理员可以更换系统 Schema 脚本"
@@ -227,7 +228,7 @@ def _schema_admin_user_ids() -> set[str]:
 
 
 def _iso(value: datetime | date | None) -> str | None:
-    return value.isoformat() if value else None
+    return utc_to_cst_str(value) if value else None
 
 
 def _safe_filename(filename: str) -> str:

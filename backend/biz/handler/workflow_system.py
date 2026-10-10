@@ -15,6 +15,7 @@ from fastapi.responses import Response, StreamingResponse
 from application.workflow_jobs import workflow_job_application
 from application.workflow_operations import workflow_operations_application
 from biz.dependencies.auth import CurrentActor
+from utils.time_display import deep_cst
 from biz.handler import get_cache
 from biz.schemas.common import ApiResponse
 from biz.schemas.workflow_operations import (
@@ -258,7 +259,7 @@ async def list_executions(
         data["items"] = [item for item in data["items"] if workflow_resource_visible(actor, item)]
         data["total"] = len(data["items"])
     payload = json.dumps(
-        {"code": 200, "success": True, "data": data, "msg": "success"},
+        {"code": 200, "success": True, "data": deep_cst(data), "msg": "success"},
         ensure_ascii=False,
         default=str,
     )
@@ -282,7 +283,7 @@ async def get_execution(execution_id: str, actor: CurrentActor) -> Response:
         raise HTTPException(status_code=404, detail="工作流执行记录不存在")
     authorize_workflow_resource(actor, execution)
     payload = json.dumps(
-        {"code": 200, "success": True, "data": execution, "msg": "success"},
+        {"code": 200, "success": True, "data": deep_cst(execution), "msg": "success"},
         ensure_ascii=False,
         default=str,
     )
@@ -421,7 +422,7 @@ async def list_jobs(
         {
             "code": 200,
             "success": True,
-            "data": {"items": items, "total": len(items)},
+            "data": {"items": deep_cst(items), "total": len(items)},
             "msg": "success",
         },
         ensure_ascii=False,
@@ -495,7 +496,7 @@ async def get_job(job_id: str, actor: CurrentActor) -> Response:
     except WorkflowJobError as exc:
         raise _job_error(exc) from exc
     payload = json.dumps(
-        {"code": 200, "success": True, "data": detail, "msg": "success"},
+        {"code": 200, "success": True, "data": deep_cst(detail), "msg": "success"},
         ensure_ascii=False,
         default=str,
     )

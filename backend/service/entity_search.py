@@ -8,8 +8,8 @@
    无精确命中时用 Milvus ``hybrid_search``（dense + BM25 sparse，RRF 融合），
    ``entity_type`` / ``graph_space`` 标量过滤；embedding 失败降级单路 BM25。
 
-3. ``keyword_search``（实体列表）：完整名称/ID 走精确索引，无精确命中时
-   走字符倒排索引并核验公共属性文字包含；本页和准确总数独立查询。
+3. ``keyword_search``（实体列表）：文字包含匹配 VID / 名称 / 全部公共属性，
+   直接查询图库并按实际匹配数分页，不返回语义相似项。
 
 索引（``reindex``）按图空间独立：单集合 ``kg_entity`` 内 ``graph_space`` 字段
 分区，使用 ``graph_space::vid`` 作为集合主键，BM25 词表状态存控制库
@@ -101,7 +101,7 @@ search_cache = EntityResponseCache(
     ttl_seconds=float(os.getenv("ENTITY_SEARCH_CACHE_SECONDS", "60")),
 )
 keyword_cache = EntityResponseCache(
-    namespace="entity-search:keyword:v2",
+    namespace="entity-search:keyword:v1",
     ttl_seconds=float(os.getenv("ENTITY_SEARCH_CACHE_SECONDS", "60")),
 )
 
@@ -263,11 +263,8 @@ def _escape_expression(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def extract_entity_name(props: dict[str, Any], vid: str, entity_type: str | None = None) -> str:
-    keys = NAME_CANDIDATE_KEYS
-    if (entity_type or "").lower() in {"paper", "patent"}:
-        keys = ("title_zh", "title_en", "title", *NAME_CANDIDATE_KEYS)
-    for key in keys:
+def extract_entity_name(props: dict[str, Any], vid: str) -> str:
+    for key in NAME_CANDIDATE_KEYS:
         value = props.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
@@ -341,7 +338,7 @@ def _serialize_browse_item(node: Any, entity_type: str) -> dict[str, Any]:
     return {
         "vid": vid,
         "entityId": entity_id[:256],
-        "name": extract_entity_name(props, vid, entity_type)[:2048],
+        "name": extract_entity_name(props, vid)[:2048],
         "entityType": entity_type,
         "properties": extract_display_properties(props),
         "score": None,
@@ -605,6 +602,28 @@ class EntitySearchService:
     def __init__(self, session: Session) -> None:
         self._session = session
 
+    def keyword_counts(
+        self,
+        *,
+        keyword: str,
+        space: str | None = None,
+        entity_type: str | None = None,
+    ) -> dict[str, int]:
+        """实体列表文字搜索的全量匹配计数，不依赖 Milvus/embedding 状态。"""
+        graph = get_space_client(space or _default_space())
+        labels = sorted(graph.labels())
+        if entity_type:
+            if entity_type not in labels:
+                raise EntitySearchError(f"图空间中不存在实体类型: {entity_type}")
+            labels = [entity_type]
+        try:
+            return {
+                label: graph.keyword_nodes_by_label(label, keyword.strip(), count_only=True).total
+                for label in labels
+            }
+        except Exception as exc:
+            raise EntitySearchError("实体文字检索暂不可用，请稍后重试") from exc
+
     def keyword_search(
         self,
         *,
@@ -613,41 +632,44 @@ class EntitySearchService:
         entity_type: str | None = None,
         limit: int = 10,
         offset: int = 0,
+        counts: dict[str, int] | None = None,
     ) -> dict[str, Any]:
-        from service.entity_literal_index import EntityLiteralIndex, LiteralIndexError
-
-        try:
-            return EntityLiteralIndex(self._session).page(
-                keyword=keyword,
-                space=space or _default_space(),
-                entity_type=entity_type,
-                limit=limit,
-                offset=offset,
+        """按类型/VID 稳定分页，只返回文字实际匹配的实体，不补语义相似项。"""
+        keyword = keyword.strip()
+        if not keyword:
+            raise EntitySearchError("关键词不能为空")
+        resolved_space = space or _default_space()
+        if counts is None:
+            counts = self.keyword_counts(
+                keyword=keyword, space=resolved_space, entity_type=entity_type
             )
-        except LiteralIndexError as exc:
-            raise EntitySearchError(str(exc)) from exc
-
-    def keyword_count(
-        self,
-        *,
-        keyword: str,
-        space: str | None = None,
-        entity_type: str | None = None,
-        generation: str | None = None,
-        match_mode: str | None = None,
-    ) -> dict[str, Any]:
-        from service.entity_literal_index import EntityLiteralIndex, LiteralIndexError
-
+        graph = get_space_client(resolved_space)
+        items = []
+        cursor = 0
         try:
-            return EntityLiteralIndex(self._session).count(
-                keyword=keyword,
-                space=space or _default_space(),
-                entity_type=entity_type,
-                generation=generation,
-                match_mode=match_mode,
-            )
-        except LiteralIndexError as exc:
-            raise EntitySearchError(str(exc)) from exc
+            for label, count in sorted(counts.items()):
+                start, end = max(offset - cursor, 0), min(offset + limit - cursor, count)
+                cursor += count
+                if start < end:
+                    rows = graph.keyword_nodes_by_label(
+                        label, keyword, limit=end - start, offset=start
+                    )
+                    items.extend(_serialize_browse_item(node, label) for node in rows.items)
+                if cursor >= offset + limit:
+                    break
+        except Exception as exc:
+            raise EntitySearchError("实体文字检索暂不可用，请稍后重试") from exc
+        return {
+            "items": items,
+            "total": sum(counts.values()),
+            "returned": len(items),
+            "keyword": keyword,
+            "entityType": entity_type,
+            "graphSpace": resolved_space,
+            "limit": limit,
+            "offset": offset,
+            "mode": "keyword",
+        }
 
     @staticmethod
     def preview_page(
@@ -1452,13 +1474,6 @@ class EntitySearchService:
         访问频率打共享图服务。
         """
         resolved_space = space or _default_space()
-        from service.entity_literal_index import EntityLiteralIndex, LiteralIndexError
-
-        try:
-            literal_state = EntityLiteralIndex(self._session).state(resolved_space)
-            return _sorted_type_items(json.loads(literal_state["type_counts"]))
-        except LiteralIndexError:
-            pass
         cached = _types_cache.get(resolved_space)
         if cached and time.monotonic() - cached[0] < _TYPES_CACHE_TTL_SECONDS:
             return cached[1]

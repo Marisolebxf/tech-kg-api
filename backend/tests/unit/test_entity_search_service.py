@@ -2001,20 +2001,6 @@ class LiteralGraph(FakeGraph):
         return FakePagedResult([] if count_only else rows[offset : offset + limit], total=len(rows))
 
 
-def build_literal_index(session, graph):
-    from service.entity_literal_index import EntityLiteralIndex
-
-    EntityLiteralIndex(session).build(
-        "dev2",
-        (
-            {"vid": node.id, "entity_type": label, "props": node.properties}
-            for label, nodes in graph._nodes.items()
-            for node in nodes
-        ),
-        graph.labels(),
-    )
-
-
 @pytest.mark.parametrize(
     "keyword", ["世界生命科学格局中的中国", "生命科学", "10.1234/ABC", "2026", "paper_target"]
 )
@@ -2038,7 +2024,6 @@ def test_literal_search_existing_name_or_unindexed_property(state_session, monke
     monkeypatch.setattr(
         "service.entity_search._embedding_client", lambda: pytest.fail("文字匹配不调用 embedding")
     )
-    build_literal_index(state_session, graph)
     result = EntitySearchService(state_session).keyword_search(
         keyword=keyword, space="dev2", entity_type="Paper"
     )
@@ -2054,11 +2039,11 @@ def test_literal_search_has_full_count_and_stable_cross_type_pages(state_session
     graph = LiteralGraph(["Paper", "Expert"], {"Expert": experts, "Paper": papers})
     monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
     service = EntitySearchService(state_session)
-    build_literal_index(state_session, graph)
-    page = service.keyword_search(keyword="同名", space="dev2", limit=10, offset=1000)
-    assert page["total"] is None
-    assert page["totalStatus"] == "pending"
-    assert service.keyword_count(keyword="同名", space="dev2")["total"] == 1006
+    counts = service.keyword_counts(keyword="同名", space="dev2")
+    page = service.keyword_search(
+        keyword="同名", space="dev2", counts=counts, limit=10, offset=1000
+    )
+    assert page["total"] == 1006
     assert [item["vid"] for item in page["items"]] == [f"e_{i:04}" for i in range(1000, 1005)] + [
         "paper_1"
     ]
@@ -2068,7 +2053,7 @@ def test_literal_search_has_full_count_and_stable_cross_type_pages(state_session
         service.keyword_search(keyword="同名", space="dev2", entity_type="Missing")
 
 
-def test_literal_search_missing_index_is_not_reported_as_empty(state_session, monkeypatch):
+def test_literal_search_graph_failure_is_not_reported_as_empty(state_session, monkeypatch):
     class FailingGraph(LiteralGraph):
         def keyword_nodes_by_label(self, *args, **kwargs):
             raise RuntimeError("graph timeout")
@@ -2076,5 +2061,5 @@ def test_literal_search_missing_index_is_not_reported_as_empty(state_session, mo
     monkeypatch.setattr(
         "service.entity_search.get_space_client", lambda space: FailingGraph(["Paper"], {})
     )
-    with pytest.raises(EntitySearchError, match="索引尚未建立"):
+    with pytest.raises(EntitySearchError, match="暂不可用"):
         EntitySearchService(state_session).keyword_search(keyword="论文", space="dev2")

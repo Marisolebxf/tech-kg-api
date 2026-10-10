@@ -1737,12 +1737,9 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                             ngql_value_typed(value, key) for key, value in props.items()
                         )
                         vid = json.dumps(str(record["id"]), ensure_ascii=False)
-                        query = f"INSERT VERTEX `{name}`({cols}) VALUES {vid}:({values})"
-                        entity_writer = getattr(client, "execute_entity_write", None)
-                        if entity_writer is not None:
-                            entity_writer(query, node_ids=[str(record["id"])])
-                        else:
-                            client.execute_write(query)
+                        client.execute_write(
+                            f"INSERT VERTEX `{name}`({cols}) VALUES {vid}:({values})"
+                        )
                     else:
                         # 关系也走 nGQL INSERT EDGE（列级 upsert，同实体结论）：
                         # REST /edges/merge 要求 identityProps 非空（平台语义里

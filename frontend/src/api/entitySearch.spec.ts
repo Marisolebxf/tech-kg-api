@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { browseEntities, searchEntities, searchEntityList, countEntityList } from './entitySearch'
+import { browseEntities, searchEntities, searchEntityList } from './entitySearch'
 import { http } from './http'
 
 vi.mock('./http', () => ({ http: { get: vi.fn(), post: vi.fn() } }))
@@ -21,13 +21,6 @@ describe('实体检索 API 路由', () => {
     await searchEntityList(scope)
     expect(http.get).toHaveBeenCalledWith('/v1/entity-search/keyword', { params: scope })
     expect(http.post).not.toHaveBeenCalled()
-  })
-
-  it('总数使用独立接口并传递版本、匹配模式和取消信号', async () => {
-    const signal = new AbortController().signal
-    const scope = { keyword: '生命科学', space: 'dev2', generation: 'g'.repeat(32), matchMode: 'contains' as const }
-    await countEntityList(scope, signal)
-    expect(http.get).toHaveBeenCalledWith('/v1/entity-search/keyword/count', { params: scope, signal, timeout: 0 })
   })
 
   it('浏览和搜索使用同一 preview 接口，不向全图搜索发送请求', async () => {

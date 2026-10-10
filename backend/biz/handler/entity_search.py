@@ -28,6 +28,7 @@ from service.entity_search import (
     clear_entity_caches,
 )
 from service.entity_search import browse_cache as _browse_cache
+from service.entity_search import keyword_cache as _keyword_cache
 from service.entity_search import search_cache as _search_cache
 
 router = APIRouter(
@@ -174,6 +175,58 @@ async def _load_entity_page(load_block, *, limit: int, offset: int) -> tuple[str
     return _serialized_success(data), hit
 
 
+async def _load_keyword_block(
+    session: Session,
+    *,
+    space: str | None,
+    entity_type: str | None,
+    keyword: str,
+    offset: int,
+) -> tuple[str, bool]:
+    scope = {"space": _resolved_space(space), "entity_type": entity_type, "keyword": keyword}
+    key = build_cache_key("keyword-block", **scope, offset=offset)
+    cached = await _keyword_cache.get(key)
+    if cached is not None:
+        return cached, True
+    lock = await _request_lock(key)
+    try:
+        async with lock:
+            cached = await _keyword_cache.get(key)
+            if cached is not None:
+                return cached, True
+            counts_key = build_cache_key("keyword-counts", **scope)
+            counts_lock = await _request_lock(counts_key)
+            try:
+                async with counts_lock:
+                    cached_counts = await _keyword_cache.get(counts_key)
+                    if cached_counts is None:
+                        counts = await asyncio.to_thread(
+                            _application(session).keyword_counts,
+                            space=space,
+                            entity_type=entity_type,
+                            keyword=keyword,
+                        )
+                        await _keyword_cache.put(counts_key, json.dumps(counts))
+                    else:
+                        counts = json.loads(cached_counts)
+            finally:
+                await _release_request_lock(counts_key, counts_lock)
+            data = await asyncio.to_thread(
+                _application(session).keyword_search,
+                space=space,
+                entity_type=entity_type,
+                keyword=keyword,
+                counts=counts,
+                limit=ENTITY_PAGE_BLOCK_SIZE,
+                offset=offset,
+            )
+            payload = _serialized_success(data)
+            await _keyword_cache.put(key, payload)
+            return payload, False
+    finally:
+        await _release_request_lock(key, lock)
+
+
 def _application(session: Session) -> EntitySearchApplication:
     return EntitySearchApplication(session)
 
@@ -308,35 +361,8 @@ def get_index_status(
     return ApiResponse(data=_application(session).status(space=space))
 
 
-@router.get("/keyword/count", response_model=ApiResponse)
-def count_keyword_entities(
-    actor: CurrentActor,
-    session: Annotated[Session, Depends(get_workflow_session)],
-    keyword: str = Query(..., min_length=1, max_length=256),
-    space: str | None = Query(None, max_length=64),
-    entityType: str | None = Query(None, max_length=64),
-    generation: str | None = Query(None, min_length=32, max_length=32),
-    matchMode: str | None = Query(None, pattern="^(exact|contains)$"),
-) -> ApiResponse:
-    space = resolve_selected_space(space)
-    _ensure_space_access(actor, space)
-    if not keyword.strip():
-        raise HTTPException(status_code=422, detail="关键词不能为空")
-    try:
-        data = _application(session).keyword_count(
-            keyword=keyword,
-            space=space,
-            entity_type=entityType,
-            generation=generation,
-            match_mode=matchMode,
-        )
-    except EntitySearchError as exc:
-        _raise_domain_error(exc)
-    return ApiResponse(data=data)
-
-
-@router.get("/keyword", response_model=ApiResponse)
-def keyword_entities(
+@router.get("/keyword")
+async def keyword_entities(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_workflow_session)],
     keyword: str = Query(..., min_length=1, max_length=256),
@@ -344,23 +370,30 @@ def keyword_entities(
     entityType: str | None = Query(None, max_length=64),
     limit: int = Query(10, ge=1, le=100),
     offset: int = Query(0, ge=0, le=10_000_000),
-) -> ApiResponse:
-    """Read current page plus one lookahead; COUNT runs through a separate API."""
+) -> Response:
+    """实体列表：文字包含匹配名称/ID/公共属性，返回真实匹配数。"""
     space = resolve_selected_space(space)
     _ensure_space_access(actor, space)
-    if not keyword.strip():
+    keyword = keyword.strip()
+    if not keyword:
         raise HTTPException(status_code=422, detail="关键词不能为空")
     try:
-        data = _application(session).keyword_search(
-            keyword=keyword,
-            space=space,
-            entity_type=entityType,
-            limit=limit,
-            offset=offset,
-        )
+
+        async def load_block(block_offset: int):
+            return await _load_keyword_block(
+                session,
+                space=space,
+                entity_type=entityType,
+                keyword=keyword,
+                offset=block_offset,
+            )
+
+        payload, hit = await _load_entity_page(load_block, limit=limit, offset=offset)
     except EntitySearchError as exc:
         _raise_domain_error(exc)
-    return ApiResponse(data=data)
+    return Response(
+        payload, media_type="application/json", headers={"X-Entity-Cache": "HIT" if hit else "MISS"}
+    )
 
 
 @router.post("/search")

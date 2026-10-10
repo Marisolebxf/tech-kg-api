@@ -1,6 +1,7 @@
 import { Cascader } from '@arco-design/web-vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
+import { nextTick } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { listGraphSpaces } from '../../api/graphSearch'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
@@ -30,6 +31,11 @@ describe('两级图空间选择', () => {
     expect(useGraphSpaceStore().current).toBe('private-a')
     cascader.vm.$emit('change', 'dev2')
     expect(useGraphSpaceStore().current).toBe('dev2')
+    await nextTick()
+    // 触发栏 200px 装不下长名时省略号截断，完整名靠包裹层悬停 title 兜底；
+    // 弹层封顶宽 CSS 依赖 triggerProps contentClass 打标，一并守住
+    expect(wrapper.find('.app-space-select').attributes('title')).toBe('切换当前工作图空间：dev2')
+    expect(cascader.props('triggerProps')).toEqual({ contentClass: 'app-space-select-popup' })
     wrapper.unmount()
   })
   it('空授权集显示空状态且不选择默认空间', async () => {

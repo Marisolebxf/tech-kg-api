@@ -5,7 +5,7 @@ const { canReview } = useSpacePermissions()
 import DeleteConfirmDialog from '../../components/DeleteConfirmDialog.vue'
 import AppAlert from '../../components/AppAlert.vue'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { IconRefresh, IconSearch } from '@arco-design/web-vue/es/icon'
 
 import { batchDeleteProductionReviews, deleteProductionReview, getExecution, getProductionReview, getProductionReviews, getTask, rerunExtractFailures, TRIGGER_SOURCE_LABEL, type ProcessingInstance, type ProcessStep, type ProductionReviewCase, type WorkflowExecution } from '../../api/workflowOperations'
@@ -23,6 +23,7 @@ type CenterMode = 'review'
 
 const props = defineProps<{ mode: CenterMode }>()
 const route = useRoute()
+const router = useRouter()
 const graphSpaceStore = useGraphSpaceStore()
 
 /** 队列视图状态快照（sessionStorage）：点「查看记录」跳详情再返回时恢复页码/页大小/分类/筛选/排序，
@@ -114,6 +115,24 @@ watch(() => route.query.keyword, (value) => {
   submittedKeyword.value = keyword.value
   void loadReviews()
 })
+
+/** 来源任务深链（任务详情「进入人工处理」带 ?sourceTaskId=PI-…）：队列只看该任务产生的审核案。
+ *  属临时定位不进快照（离开/刷新即失效），筛选行亮出徽标提示当前被限定，可一键解除回全量队列。 */
+const sourceTaskFilter = ref(String(route.query.sourceTaskId || ''))
+watch(() => route.query.sourceTaskId, (value) => {
+  const next = String(value || '')
+  if (next === sourceTaskFilter.value) return
+  sourceTaskFilter.value = next
+  reviewPage.value = 1
+  void loadReviews()
+})
+function clearSourceTaskFilter() {
+  if (!sourceTaskFilter.value) return
+  sourceTaskFilter.value = ''
+  reviewPage.value = 1
+  void router.replace({ query: { ...route.query, sourceTaskId: undefined } })
+  void loadReviews()
+}
 
 const reviewTableRef = ref<HTMLElement | null>(null)
 const tableHasMoreToScroll = ref(false)
@@ -545,6 +564,7 @@ async function loadReviews() {
       graphSpace: currentGraphSpace() || undefined,
       category: reviewCategory.value,
       templateId: reviewCategory.value === 'A' ? 'T_LINK' : undefined,
+      sourceTaskId: sourceTaskFilter.value || undefined,
       keyword: submittedKeyword.value || undefined,
       statusGroup: reviewStatusFilter.value === '待处理' ? 'pending' : reviewStatusFilter.value === '已处理' ? 'processed' : undefined,
       status: reviewStatusFilter.value === '重跑中' ? 'RERUNNING' : undefined,
@@ -640,6 +660,10 @@ onMounted(() => {
         <button type="button" :class="{ active: reviewCategory === 'C' }" @click="switchReviewCategory('C')">抽取失败重跑</button>
       </nav>
       <div class="review-toolbar-actions">
+        <span v-if="sourceTaskFilter" class="review-source-chip" title="只看该来源任务产生的审核案">
+          来源任务 <code>{{ sourceTaskFilter }}</code>
+          <button type="button" aria-label="解除来源任务过滤" @click="clearSourceTaskFilter">×</button>
+        </span>
         <form class="ops-filter is-review review-filter-row" role="search" @submit.prevent="submitReviewSearch">
           <div class="review-filter-field">
             <span class="review-filter-label">状态</span>
@@ -962,6 +986,11 @@ onMounted(() => {
 .review-tabs>nav button.active+button{border-left-color:transparent}
 .review-tabs>nav button:hover:not(.active){background:#fff;color:#165dff}
 .review-toolbar-actions{display:flex;width:100%;min-width:0;align-items:center;justify-content:flex-end;gap:16px;flex:0 0 auto;flex-wrap:wrap}
+/* 来源任务深链徽标：任务详情「进入人工处理」跳入时的临时限定，× 解除回全量队列 */
+.review-source-chip{display:inline-flex;flex:0 0 auto;align-items:center;gap:6px;height:32px;padding:0 4px 0 12px;border:1px solid #94bfff;border-radius:16px;background:#f0f7ff;color:#175cd3;font-size:13px;line-height:20px}
+.review-source-chip code{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+.review-source-chip button{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:0;border-radius:50%;background:transparent;color:#4d7fce;font-size:14px;line-height:1;cursor:pointer}
+.review-source-chip button:hover{background:#d6e8ff;color:#165dff}
 .review-tabs .ops-filter.is-review{display:flex;box-sizing:border-box;width:auto;min-width:0;margin-left:auto;align-items:center;justify-content:flex-end;grid-template-columns:none;gap:16px!important;padding:0!important;border:0;background:transparent;flex:0 1 auto;flex-wrap:wrap}
 .review-search-button{box-sizing:border-box;height:32px;padding:0 16px;border:1px solid #165dff!important;border-radius:4px;background:#165dff!important;color:#fff!important;font-size:14px;line-height:22px;cursor:pointer}
 .review-search-button:hover{border-color:#4080ff!important;background:#4080ff!important}

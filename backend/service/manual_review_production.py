@@ -194,6 +194,8 @@ class ManualReviewService:
             ("domain", ReviewCase.domain),
             ("template_id", ReviewCase.template_id),
             ("assignee_id", ReviewCase.assignee_id),
+            # 来源任务深链：任务详情「进入人工处理」带 sourceTaskId 只看本任务产生的案
+            ("source_task_id", ReviewCase.source_task_id),
         ):
             if f.get(k):
                 q.append(col == f[k])

@@ -312,6 +312,32 @@ def test_queue_rows_expose_execution_and_workflow_id(service):
     assert row["workflowId"] is None or isinstance(row["workflowId"], str)
 
 
+def test_queue_filters_by_source_task(service):
+    # 来源任务深链：任务详情「进入人工处理」带 sourceTaskId 只看本任务产生的案；
+    # 执行级失败（如脚本沙箱未配置）不建案 → 该任务过滤出空列表
+    service.create_direct_case(**link_case_kwargs(task_id="PI-20261010-AAAA"))
+    service.create_direct_case(
+        **link_case_kwargs(
+            task_id="PI-20261010-BBBB",
+            execution_id="EXEC-2",
+            object_id="S-2",
+            candidate={
+                "scholar_id": "S-2",
+                "name_zh": "李四",
+                "existingCandidates": [{"id": "E-1"}],
+            },
+        )
+    )
+    reviewer = actor("r", ("reviewer",))
+    only = service.list_cases({"source_task_id": "PI-20261010-AAAA"}, reviewer)
+    assert only["total"] == 1
+    assert only["items"][0]["sourceTaskId"] == "PI-20261010-AAAA"
+    # 无案任务（执行级失败）→ 空队列，前端据此展示「未产生关联审核任务」说明
+    assert service.list_cases({"source_task_id": "PI-19700101-XXXX"}, reviewer)["total"] == 0
+    # 不传=全部
+    assert service.list_cases({}, reviewer)["total"] == 2
+
+
 def test_queue_filters_by_graph_space(service):
     # 队列跟随全局图空间选择：graph_space 只看该空间；不传=跨空间全量（含 NULL 空间存量案）
     service.create_direct_case(**link_case_kwargs(graph_space="dev2"))

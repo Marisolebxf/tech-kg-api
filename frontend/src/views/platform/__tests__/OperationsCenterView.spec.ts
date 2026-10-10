@@ -19,7 +19,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../../api/workflowOperations', () => ({ ...mocks }))
 // 路由 query 可按用例覆写（?category=C 深链直达抽取失败重跑子页）
 const routeState = vi.hoisted(() => ({ query: {} as Record<string, string> }))
-vi.mock('vue-router', () => ({ useRoute: () => ({ query: routeState.query }) }))
+vi.mock('vue-router', () => ({ useRoute: () => ({ query: routeState.query }), useRouter: () => ({ replace: vi.fn() }) }))
 vi.mock('@arco-design/web-vue/es/icon', () => ({
   IconSearch: { name: 'IconSearch', setup: () => () => null },
   IconRefresh: { name: 'IconRefresh', setup: () => () => null },

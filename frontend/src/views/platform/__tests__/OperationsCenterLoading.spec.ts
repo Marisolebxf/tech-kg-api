@@ -9,7 +9,7 @@ vi.mock('../../../api/workflowOperations', () => ({
   getProductionReview: vi.fn(), getTask: vi.fn(), rerunExtractFailures: vi.fn(),
   TRIGGER_SOURCE_LABEL: {},
 }))
-vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }) }))
+vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }), useRouter: () => ({ replace: vi.fn() }) }))
 vi.mock('@arco-design/web-vue/es/icon', () => ({ IconSearch: { template: '<span />' }, IconRefresh: { template: '<span />' } }))
 // 队列页消费全局图空间 store（请求带 graphSpace、watch 切空间重拉）：此处只需静态当前空间
 vi.mock('../../../stores/graphSpace', () => ({ useGraphSpaceStore: () => ({ current: 'dev', canWrite: () => true, canReview: () => true }) }))

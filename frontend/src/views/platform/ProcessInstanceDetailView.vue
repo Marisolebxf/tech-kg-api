@@ -5,7 +5,7 @@ const { spaces } = useSpacePermissions()
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { IconCheckCircleFill, IconClockCircle, IconCloseCircleFill, IconExclamationCircleFill, IconInfoCircleFill } from '@arco-design/web-vue/es/icon'
 import { useRoute, useRouter } from 'vue-router'
-import { deriveJobUnifiedStatus, executionStatusLabel, getExecution, getJob, getTask, listExecutions, retryTask, TRIGGER_SOURCE_LABEL, type AccessReport, type PipelineActivityInfo, type PipelineStepInfo, type ProcessingInstance, type UpdateBatch, type WorkflowExecution, type WorkflowJob } from '../../api/workflowOperations'
+import { deriveJobUnifiedStatus, executionStatusLabel, getExecution, getJob, getProductionReviews, getTask, listExecutions, retryTask, TRIGGER_SOURCE_LABEL, type AccessReport, type PipelineActivityInfo, type PipelineStepInfo, type ProcessingInstance, type UpdateBatch, type WorkflowExecution, type WorkflowJob } from '../../api/workflowOperations'
 import { getSchemaDetail, type SchemaDefinition } from '../../api/schemaManagement'
 import { currentUserId } from '../../api/currentUser'
 import { accessChips } from '../../utils/accessReport'
@@ -314,13 +314,38 @@ const visiblePhase = computed<'数据处理' | '图谱构建'>(() => steps.value
 const visibleSteps = computed(() => steps.value)
 const needsReview = computed(() => needsTaskReview.value && selectedStep.value.abnormal !== '0' && selectedStep.value.abnormal !== '-')
 /** 「进入人工处理」入口：平台喂数抽取（含 chain）的逐行失败落「抽取失败重跑」
- *  C 类队列（category 深链直达）；其余待复核任务落人工审核处理中心首页。
+ *  C 类队列，并带 sourceTaskId 深链把队列限定到本任务产生的审核案（队列页亮
+ *  「来源任务」徽标）；其余待复核任务落人工审核处理中心首页。
  *  旧实现跳 /manual-review/task/<任务ID>——该路由只认审核案 MR- ID，任务/作业
  *  详情页拿不到（job 路由下 taskId 曾回落演示常量），点击必 404 空白页。 */
-const reviewEntryTarget = computed(() =>
-  processingInstance.value?.workflowType === 'kg.schema.extract' || isChainTask.value
-    ? '/manual-review?category=C'
-    : '/manual-review')
+const reviewEntryTarget = computed(() => {
+  if (processingInstance.value?.workflowType !== 'kg.schema.extract' && !isChainTask.value) return '/manual-review'
+  const sourceTaskId = processingInstance.value?.id || taskId.value
+  return sourceTaskId
+    ? { path: '/manual-review', query: { category: 'C', sourceTaskId } }
+    : { path: '/manual-review', query: { category: 'C' } }
+})
+/** 本任务在审核队列里的关联案数量（T_EXTRACT_FAIL 按来源任务聚合；null=未加载/拉取失败）。
+ *  执行级失败（如脚本运行器未配置，批次转换前即失败）不建逐行案 → 计数为 0，
+ *  此时「进入人工处理」改为说明文案，不再跳到一个与本任务无关的 C 类队列误导排查。 */
+const relatedReviewCount = ref<number | null>(null)
+let relatedReviewLoadedTask = ''
+async function loadRelatedReviewCount() {
+  const sourceTaskId = processingInstance.value?.id || taskId.value
+  if (!sourceTaskId || (processingInstance.value?.workflowType !== 'kg.schema.extract' && !isChainTask.value)) return
+  if (relatedReviewLoadedTask === sourceTaskId) return
+  relatedReviewLoadedTask = sourceTaskId
+  relatedReviewCount.value = null
+  try {
+    const page = await getProductionReviews({ category: 'C', sourceTaskId, page: 1, pageSize: 1 })
+    relatedReviewCount.value = Number(page.total ?? 0)
+  } catch {
+    relatedReviewLoadedTask = '' // 拉取失败退回普通入口（不显示计数），下次触发可重试
+  }
+}
+watch([() => processingInstance.value?.id, needsReview], () => {
+  if (needsReview.value) void loadRelatedReviewCount()
+}, { immediate: true })
 const attentionLabel = computed(() => selectedStep.value.risk === '高风险' ? '重点关注' : selectedStep.value.risk === '中风险' ? '一般关注' : '常规节点')
 const isProcessLevelIncident = computed(() => ['模型批量输出异常', 'Schema 批量映射失败', '公共字典配置异常'].includes(processingInstance.value?.reviewType ?? ''))
 const isTaskExecutionFailure = computed(() => processingInstance.value?.reviewType === '单任务执行失败')
@@ -775,7 +800,7 @@ onMounted(async () => {
       </aside>
 
       <main class="step-detail">
-        <header class="step-head"><div><h2>{{ selectedStep.name }}</h2><p>{{ selectedStep.description }}</p></div><div class="step-head-actions"><button v-if="isChainTask && selectedActivityId" type="button" class="step-head-back" @click="clearActivitySelection()">← 返回脚本级信息</button><button v-if="isPipelineTask && isPipelineFailed" type="button" class="step-head-retry" :disabled="retrySubmitting || !canRetry" @click="handlePipelineRetry">{{ retrySubmitting ? '提交中…' : '重试（reset 回放）' }}</button><RouterLink v-else-if="!isPipelineTask && needsReview" :to="reviewEntryTarget">进入人工处理 →</RouterLink></div></header>
+        <header class="step-head"><div><h2>{{ selectedStep.name }}</h2><p>{{ selectedStep.description }}</p></div><div class="step-head-actions"><button v-if="isChainTask && selectedActivityId" type="button" class="step-head-back" @click="clearActivitySelection()">← 返回脚本级信息</button><button v-if="isPipelineTask && isPipelineFailed" type="button" class="step-head-retry" :disabled="retrySubmitting || !canRetry" @click="handlePipelineRetry">{{ retrySubmitting ? '提交中…' : '重试（reset 回放）' }}</button><RouterLink v-else-if="!isPipelineTask && needsReview && relatedReviewCount !== 0" :to="reviewEntryTarget">进入人工处理{{ relatedReviewCount !== null ? `（本任务 ${relatedReviewCount} 条）` : '' }} →</RouterLink><span v-else-if="!isPipelineTask && needsReview" class="step-head-review-note">本次执行未产生逐行审核任务（执行级失败，无失败行记录可重跑）——请按执行历史中的失败原因修复后重新执行</span></div></header>
         <nav class="detail-tabs"><button v-for="tab in ([['overview','概况与结果'],['io','输入输出'],['logs','异常与日志'],['lineage','数据溯源']] as const)" :key="tab[0]" type="button" :class="{ active: activeTab === tab[0] }" @click="activeTab = tab[0]">{{ tab[1] }}</button></nav>
 
         <div v-if="activeTab === 'overview'" class="overview-content">
@@ -881,6 +906,8 @@ onMounted(async () => {
 .step-head-retry{height:34px;padding:0 14px;border:1px solid #d92d20;border-radius:6px;background:#d92d20;color:#fff;cursor:pointer;font-size:11px}
 .step-head-retry:disabled{opacity:.6;cursor:not-allowed}
 .step-head-actions{display:flex;align-items:center;gap:8px}
+/* 执行级失败（未建逐行审核案）时替代「进入人工处理」的说明文案 */
+.step-head-review-note{max-width:420px;color:#8a6d3b;font-size:12px;line-height:18px}
 .step-head-actions a{color:#165dff;font-size:11px;text-decoration:none}
 .step-head-back{height:32px;padding:0 12px;border:1px solid #bfd4f0;border-radius:6px;background:#f4f8ff;color:#175cd3;cursor:pointer;font-size:11px}
 .step-head-back:hover{background:#e8f1ff}

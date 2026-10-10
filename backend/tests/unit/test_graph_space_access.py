@@ -151,10 +151,14 @@ class TestValidateResourceSelectors:
             {"llm_config_id": "LLM-B", "graph_space": "any"},
         )
 
-    def test_own_config_passes(self, session_factory, monkeypatch) -> None:
+    def test_ordinary_user_cannot_use_config_even_if_legacy_owner(
+        self, session_factory, monkeypatch
+    ) -> None:
         _seed_llm(session_factory, "LLM-A", USER_A)
         monkeypatch.setattr("infra.mysql.create_session", lambda: session_factory())
-        workflow_system._validate_resource_selectors(_actor(USER_A), {"llm_config_id": "LLM-A"})
+        with pytest.raises(HTTPException) as error:
+            workflow_system._validate_resource_selectors(_actor(USER_A), {"llm_config_id": "LLM-A"})
+        assert error.value.status_code == 403
 
     def test_other_users_config_forbidden(self, session_factory, monkeypatch) -> None:
         _seed_llm(session_factory, "LLM-B", USER_B)

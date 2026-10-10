@@ -17,6 +17,7 @@ const props = defineProps<{
   datasources: MysqlDatasource[]
   removable: boolean
   readonly?: boolean
+  reportLoadError?: (message: string) => void
 }>()
 
 const emit = defineEmits<{
@@ -25,6 +26,10 @@ const emit = defineEmits<{
 }>()
 
 const { showToast } = useToast()
+function reportLoadError(message: string) {
+  if (props.reportLoadError) props.reportLoadError(message)
+  else showToast(message, 'error')
+}
 
 const row = computed(() => props.modelValue)
 
@@ -60,7 +65,7 @@ async function loadDatabases() {
   try {
     databases.value = await listMysqlDatabases(row.value.datasourceId)
   } catch (error) {
-    showToast(error instanceof Error ? error.message : '列库失败', 'error')
+    reportLoadError(error instanceof Error ? error.message : '列库失败')
   } finally {
     loadingDatabases.value = false
   }
@@ -74,7 +79,7 @@ async function loadTables() {
   try {
     tables.value = await listMysqlTables(row.value.datasourceId, row.value.databaseName)
   } catch (error) {
-    showToast(error instanceof Error ? error.message : '列表失败', 'error')
+    reportLoadError(error instanceof Error ? error.message : '列表失败')
   } finally {
     loadingTables.value = false
   }
@@ -92,7 +97,7 @@ async function loadColumns() {
       row.value.databaseName,
     )
   } catch (error) {
-    showToast(error instanceof Error ? error.message : '列信息加载失败', 'error')
+    reportLoadError(error instanceof Error ? error.message : '列信息加载失败')
   } finally {
     loadingColumns.value = false
   }

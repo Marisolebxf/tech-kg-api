@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from 'vitest'
 
 import ConfigurationManagementView from './ConfigurationManagementView.vue'
 import ListPagination from '../../components/list-pagination.vue'
+import { useAuthStore } from '../../stores/auth'
+import { currentUserIsAdmin } from '../../api/currentUser'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
 
 const AInputStub = defineComponent({
@@ -72,7 +74,7 @@ vi.mock('../../api/graphSpace', () => ({
   bindGraphSpace: vi.fn(),
   unbindGraphSpace: vi.fn(),
 }))
-vi.mock('../../api/currentUser', () => ({ currentUserIsAdmin: () => true }))
+vi.mock('../../api/currentUser', () => ({ currentUserIsAdmin: vi.fn(() => true) }))
 vi.mock('@arco-design/web-vue/es/icon', () => ({ IconSearch: { template: '<i />' } }))
 
 function mountView(realTextarea = false) {
@@ -401,5 +403,36 @@ describe('图空间说明', () => {
     expect(rowOf('bare').find('.config-name small').exists()).toBe(false) // 无说明不留空行
     ensureLoaded.mockRestore()
     wrapper.unmount()
+  })
+})
+
+describe('开发人员共享配置只读', () => {
+  it('可查看配置详情，禁用所有修改动作，仍能打开新建图空间', async () => {
+    setActivePinia(createPinia())
+    vi.mocked(currentUserIsAdmin).mockReturnValue(false)
+    const auth = useAuthStore()
+    auth.profile = { isAdmin: false, businessRbacEnabled: true, canDevelop: true } as typeof auth.profile
+    const wrapper = mountView()
+    try {
+      await flushPromises()
+      expect(wrapper.get('.create-entry').attributes('disabled')).toBeDefined()
+      const actions = wrapper.findAll('.row-actions button')
+      expect(actions[0]!.text()).toBe('查看')
+      expect(actions[0]!.attributes('disabled')).toBeUndefined()
+      expect(actions[1]!.attributes('disabled')).toBeDefined()
+      expect(actions[2]!.attributes('disabled')).toBeDefined()
+      await actions[0]!.trigger('click')
+      expect(wrapper.get('.detail-form input').attributes('disabled')).toBeDefined()
+      expect(wrapper.get('.detail-drawer footer button').attributes('disabled')).toBeDefined()
+      await wrapper.get('.detail-drawer header button').trigger('click')
+      await wrapper.findAll('.category-nav > button')[2]!.trigger('click')
+      await flushPromises()
+      expect(wrapper.get('.create-entry').attributes('disabled')).toBeUndefined()
+      await wrapper.get('.create-entry').trigger('click')
+      expect(wrapper.find('.space-dialog').exists()).toBe(true)
+    } finally {
+      wrapper.unmount()
+      vi.mocked(currentUserIsAdmin).mockReturnValue(true)
+    }
   })
 })

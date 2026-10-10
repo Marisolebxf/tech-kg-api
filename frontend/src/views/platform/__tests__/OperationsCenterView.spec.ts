@@ -747,7 +747,7 @@ describe('查看档只读（开发维护 × 共享生产空间）', () => {
     expect(firstRowButtons.map((button) => button.text())).toEqual(['日志', '重跑', '删除'])
     expect(firstRowButtons[0].attributes().disabled).toBeUndefined()
     expect(firstRowButtons[1].attributes()).toHaveProperty('disabled')
-    expect(firstRowButtons[1].attributes('title')).toBe('共享生产空间：仅可查看，操作需管理员或本业务开发维护人员')
+    expect(firstRowButtons[1].attributes('title')).toBe('共享生产空间：仅可查看，操作需管理员')
     expect(firstRowButtons[2].attributes()).toHaveProperty('disabled')
   })
 
@@ -771,7 +771,7 @@ describe('查看档只读（开发维护 × 共享生产空间）', () => {
     // 只读行三键保留、重跑/删除置灰（title 指向共享空间只读）
     expect(rows[1].findAll('.review-action-btn').map((button) => button.text())).toEqual(['日志', '重跑', '删除'])
     expect(rows[1].findAll('.review-action-btn')[1].attributes()).toHaveProperty('disabled')
-    expect(rows[1].findAll('.review-action-btn')[1].attributes('title')).toBe('共享生产空间：仅可查看，操作需管理员或本业务开发维护人员')
+    expect(rows[1].findAll('.review-action-btn')[1].attributes('title')).toBe('共享生产空间：仅可查看，操作需管理员')
     // 混合页只读行勾选禁用、可操作行正常
     const boxes = rowCheckboxes(wrapper)
     expect((boxes[0].element as HTMLInputElement).disabled).toBe(false)

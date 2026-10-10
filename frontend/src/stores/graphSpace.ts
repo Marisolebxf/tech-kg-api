@@ -66,11 +66,12 @@ export const useGraphSpaceStore = defineStore('graphSpace', {
       const groups = new Map<string, { value: string; label: string; kind: string; children: { value: string; label: string }[] }>()
       for (const item of state.items) {
         const kind = item.groupKind || (item.isSharedProduction ? 'public' : item.clientId ? 'business' : 'unassigned')
+        if (kind !== 'public' && kind !== 'business') continue
         const key = kind === 'business' ? `business:${item.clientId}` : kind
-        if (!groups.has(key)) groups.set(key, { value: key, kind, label: kind === 'public' ? '公共图空间' : kind === 'unassigned' ? '未归属空间' : item.businessName || item.clientId || '业务', children: [] })
+        if (!groups.has(key)) groups.set(key, { value: key, kind, label: kind === 'public' ? '公共图空间' : item.businessName || item.clientId || '业务', children: [] })
         groups.get(key)!.children.push({ value: item.name, label: item.name })
       }
-      const order: Record<string, number> = { public: 0, business: 1, unassigned: 2 }
+      const order: Record<string, number> = { public: 0, business: 1 }
       return [...groups.values()].sort((a, b) => order[a.kind]! - order[b.kind]!)
     },
   },

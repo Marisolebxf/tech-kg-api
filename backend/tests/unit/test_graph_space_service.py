@@ -459,15 +459,100 @@ def test_rbac_create_preserves_registered_ownership(session_factory, monkeypatch
             assert policy is None
             assert session.get(BusinessGraphSpace, "reserved").client_id == "business"
         else:
-            assert policy.visibility == ("business" if source == "policy" else "unassigned")
+            assert policy.visibility == ("business" if source == "policy" else "public")
             assert policy.client_id == ("business" if source == "policy" else None)
 
 
-def test_rbac_unconfirmed_creation_does_not_publish_space(session_factory, monkeypatch):
+def test_rbac_unconfirmed_creation_keeps_ownership_for_recovery(session_factory, monkeypatch):
     monkeypatch.setenv("BUSINESS_RBAC_ENABLED", "true")
     service = _service(session_factory, FakeGraphClient())
     monkeypatch.setattr(service, "_wait_for_space", lambda _: False)
     with pytest.raises(GraphSpaceError, match="创建请求已提交"):
         service.create_space(_actor(USER_A, is_admin=True), "not_confirmed")
     with session_factory() as session:
-        assert session.get(BusinessSpacePolicy, "not_confirmed") is None
+        # 创建结果未知时仍保留归属，避免实际已创建的空间成为孤立空间。
+        assert session.get(BusinessSpacePolicy, "not_confirmed").visibility == "public"
+
+
+def test_developer_creation_and_personal_visibility_are_business_scoped(
+    session_factory, monkeypatch
+):
+    from contextlib import contextmanager
+    from dataclasses import replace
+
+    from fastapi import HTTPException
+
+    from service import business_access_control as acl
+
+    monkeypatch.setenv("BUSINESS_RBAC_ENABLED", "true")
+    developer = replace(_actor(USER_A), business_id="a", business_role="developer")
+    colleague = replace(developer, user_id=USER_B)
+    other = replace(developer, user_id="303", business_id="b")
+    ordinary = _actor("404")
+    client = FakeGraphClient(spaces=["public_space", "other_space"])
+    with session_factory.begin() as session:
+        session.add_all(
+            [BusinessClient(client_id="a", name="A"), BusinessClient(client_id="b", name="B")]
+        )
+        session.flush()
+        session.add_all(
+            [
+                BusinessSpacePolicy(space_name="public_space", visibility="public"),
+                BusinessSpacePolicy(space_name="other_space", visibility="business", client_id="b"),
+            ]
+        )
+
+    @contextmanager
+    def scope():
+        with session_factory.begin() as session:
+            yield session
+
+    monkeypatch.setattr(acl, "session_scope", scope)
+    monkeypatch.setattr(GraphSpaceService, "_all_spaces", lambda _: client.list_spaces())
+    service = _service(session_factory, client)
+    service.create_space(developer, "new_a")
+    with session_factory() as session:
+        policy = session.get(BusinessSpacePolicy, "new_a")
+        assert (policy.visibility, policy.client_id) == ("business", "a")
+    assert {i["name"] for i in acl.space_items(developer)} == {"public_space", "new_a"}
+    service.unbind(developer, "new_a")
+    assert not next(i for i in acl.space_items(developer) if i["name"] == "new_a")["mine"]
+    assert next(i for i in acl.space_items(colleague) if i["name"] == "new_a")["mine"]
+    assert "new_a" in client.list_spaces()
+    service.bind(developer, "new_a")
+    assert next(i for i in acl.space_items(developer) if i["name"] == "new_a")["mine"]
+    for action in (service.bind, service.unbind):
+        with pytest.raises(HTTPException) as error:
+            action(developer, "other_space")
+        assert error.value.status_code == 403
+        with pytest.raises(HTTPException):
+            action(ordinary, "public_space")
+    with pytest.raises(HTTPException):
+        service.create_space(ordinary, "ordinary_space")
+    assert {i["name"] for i in acl.space_items(other)} == {"public_space", "other_space"}
+
+
+def test_failed_creation_keeps_reservation_but_not_dropdown(session_factory, monkeypatch):
+    from contextlib import contextmanager
+
+    from service import business_access_control as acl
+
+    monkeypatch.setenv("BUSINESS_RBAC_ENABLED", "true")
+    client = FakeGraphClient()
+    monkeypatch.setattr(
+        client, "execute_write", lambda _: (_ for _ in ()).throw(RuntimeError("down"))
+    )
+    monkeypatch.setattr(GraphSpaceService, "_all_spaces", lambda _: client.list_spaces())
+
+    @contextmanager
+    def scope():
+        with session_factory.begin() as session:
+            yield session
+
+    monkeypatch.setattr(acl, "session_scope", scope)
+    admin = _actor(USER_A, is_admin=True)
+    with pytest.raises(GraphSpaceError):
+        _service(session_factory, client).create_space(admin, "retry_later")
+    assert acl.space_items(admin) == []
+    with session_factory() as session:
+        assert session.get(BusinessSpacePolicy, "retry_later").visibility == "public"

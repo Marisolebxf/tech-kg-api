@@ -24,7 +24,9 @@ def app(monkeypatch):
     application = FastAPI()
     application.dependency_overrides[require_platform_actor] = lambda: actor
 
-    @application.api_route("/probe", methods=["GET", "POST"], dependencies=[Depends(bind_selected_graph_space)])
+    @application.api_route(
+        "/probe", methods=["GET", "POST"], dependencies=[Depends(bind_selected_graph_space)]
+    )
     async def probe(request: Request):
         before = resolve_selected_space()
         await asyncio.sleep(0.01)
@@ -39,20 +41,27 @@ def app(monkeypatch):
 
 async def test_parallel_requests_have_separate_space_contexts(app):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        responses = await asyncio.gather(*(
-            client.get("/probe", headers={"X-Graph-Space": space})
-            for space in ("dev", "business_a", "business_b")
-        ))
+        responses = await asyncio.gather(
+            *(
+                client.get("/probe", headers={"X-Graph-Space": space})
+                for space in ("dev", "business_a", "business_b")
+            )
+        )
     assert [r.json() for r in responses] == [
         {"before": space, "after": space} for space in ("dev", "business_a", "business_b")
     ]
     assert selected_graph_space.get() is None
 
 
-@pytest.mark.parametrize("params,body", [({"space": "other"}, {}), ({}, {"space": "other"}), ({}, {"graphSpace": "other"})])
+@pytest.mark.parametrize(
+    "params,body",
+    [({"space": "other"}, {}), ({}, {"space": "other"}), ({}, {"graphSpace": "other"})],
+)
 async def test_conflicting_header_and_payload_rejected(app, params, body):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post("/probe", params=params, json=body, headers={"X-Graph-Space": "dev"})
+        response = await client.post(
+            "/probe", params=params, json=body, headers={"X-Graph-Space": "dev"}
+        )
     assert response.status_code == 400
     assert selected_graph_space.get() is None
 

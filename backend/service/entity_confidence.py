@@ -169,6 +169,7 @@ def persist_entity_confidence(client: Any, vid: str, tag: str, value: float) -> 
     if client is None or not vid or not tag:
         return False
     from service.graph_space_context import get_current_space
+
     alter_key = (get_current_space(), tag)
     query = f"UPDATE VERTEX ON `{tag}` {_ngql_vid(vid)} SET `{tag}`.`confidence` = {value:.4f};"
     try:
@@ -207,6 +208,7 @@ def fill_entity_confidence(
     value = resolve_entity_confidence(props, labels)
     props["confidence"] = value
     from service.graph_space_context import request_can_write
+
     if existing is None and client is not None and vid and request_can_write.get():
         tag = primary_tag(labels)
         if tag:

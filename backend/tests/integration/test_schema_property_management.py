@@ -516,7 +516,9 @@ async def test_list_script_available_flag(property_api) -> None:
         assert item["script"]["available"] is False
 
         # 补上对象本体后翻 True
-        storage.objects[(script_bucket, script_key)] = b"from kg_sdk import step\n\n\n@step\ndef clean_row(payload):\n    return payload\n"
+        storage.objects[(script_bucket, script_key)] = (
+            b"from kg_sdk import step\n\n\n@step\ndef clean_row(payload):\n    return payload\n"
+        )
         listing = await client.get(
             "/api/v1/schema-management/schemas",
             params={"kind": "entity", "pageSize": 100, "includeDetails": True},

@@ -200,9 +200,16 @@ async def graph_error_handler(request, exc: GraphRepoError) -> JSONResponse:
 
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(request, exc: RequestValidationError) -> JSONResponse:
-    # exc.errors() 的 ctx 可能含不可序列化对象（如 ValueError），只取可序列化字段
+    # exc.errors() 的 ctx 可能含不可序列化对象（如 ValueError），只取可序列化字段；
+    # Pydantic v2 的 ValueError 校验消息自带 "Value error, " 前缀，在源头剥掉——
+    # 前端逐字段拼接展示（「name: 实体 Schema 名称必须使用 PascalCase」），
+    # 避免各消费方拿到前缀后再自行 removeprefix。
     errors = [
-        {"loc": list(e.get("loc", [])), "msg": e.get("msg", ""), "type": e.get("type", "")}
+        {
+            "loc": list(e.get("loc", [])),
+            "msg": e.get("msg", "").removeprefix("Value error, "),
+            "type": e.get("type", ""),
+        }
         for e in exc.errors()
     ]
     path = request.url.path
@@ -220,9 +227,9 @@ async def validation_error_handler(request, exc: RequestValidationError) -> JSON
     )
     validation_message = "接口参数校验错误" if indirect_relation_path else "请求参数校验失败"
     if paper_cooperation_path:
+        # 前缀已在上方统一剥掉，这里只取第一条错误作为提示
         first_error = errors[0]["msg"] if errors else "请求参数校验失败"
-        detail_message = first_error.removeprefix("Value error, ")
-        validation_message = f"接口参数校验错误：{detail_message}"
+        validation_message = f"接口参数校验错误：{first_error}"
     return JSONResponse(
         status_code=422 if uses_http_422 else 200,
         content=ApiResponse(

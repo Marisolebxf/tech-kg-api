@@ -177,9 +177,7 @@ class SemanticEntityPipelineLiveTest(unittest.TestCase):
         for capability in expected:
             stats = result["stats"]["capabilities"][capability]
             related_failures = [
-                failure
-                for failure in result["failures"]
-                if failure.get("capability") == capability
+                failure for failure in result["failures"] if failure.get("capability") == capability
             ]
             self.assertGreaterEqual(
                 stats["attempted"],

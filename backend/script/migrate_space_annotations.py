@@ -2,6 +2,7 @@
 
 默认只读检查，--apply 才建表；保留旧 kg_indirect_relation_annotation 表。
 """
+
 import argparse
 import json
 
@@ -24,14 +25,18 @@ def schema_report(engine):
 def migrate(engine=None, *, apply=False):
     if engine is None:
         from infra.mysql import get_engine
+
         engine = get_engine()
     before = schema_report(engine)
     if before["incompatible"]:
         raise ValueError("Existing scoped annotation schema is incompatible; no changes were made")
     if apply:
         SpaceIndirectRelationAnnotation.__table__.create(engine, checkfirst=True)
-    return {"schema": schema_report(engine), "created": before["missing"] if apply else [],
-            "legacy_tables_unchanged": True}
+    return {
+        "schema": schema_report(engine),
+        "created": before["missing"] if apply else [],
+        "legacy_tables_unchanged": True,
+    }
 
 
 def main():

@@ -169,6 +169,7 @@ class TestRerunFailedRecords:
 
     async def test_all_skipped_raises_with_each_schema_reason(self, rerun_env, monkeypatch):
         """全部 schema 不可用时整体 409,报文聚合各组原因。"""
+
         def _always_missing(schema_id):
             raise schema_extraction.SchemaConflictError(f"Schema 不存在: {schema_id}")
 

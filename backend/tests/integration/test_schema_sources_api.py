@@ -61,10 +61,15 @@ def sources_api(monkeypatch):
     monkeypatch.setattr("service.schema_management.get_schema_s3_storage", lambda: storage)
     monkeypatch.setenv("SCHEMA_AUTO_PROVENANCE", "false")
     monkeypatch.setattr("service.schema_ddl.list_graph_spaces", lambda: ["techkg"])
-    monkeypatch.setattr("service.schema_management.run_schema_ddl", lambda *args, **kwargs: {
-        "status": "succeeded", "error": None, "statement": "CREATE TAG Widget",
-        "executed_at": "2026-10-10T08:00:00",
-    })
+    monkeypatch.setattr(
+        "service.schema_management.run_schema_ddl",
+        lambda *args, **kwargs: {
+            "status": "succeeded",
+            "error": None,
+            "statement": "CREATE TAG Widget",
+            "executed_at": "2026-10-10T08:00:00",
+        },
+    )
     # 数据源存在性校验走业务库——单测里直接放行（存在性语义单测覆盖）
     monkeypatch.setattr("service.schema_management._validate_datasource_exists", lambda ds_id: None)
 

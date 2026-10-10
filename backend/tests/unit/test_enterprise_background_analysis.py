@@ -60,4 +60,6 @@ def test_analyze_core_tech_tolerates_patent_error(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def graph_entity_present(monkeypatch):
-    monkeypatch.setattr("service.enterprise_background_analysis.has_graph_entity", lambda *args: True)
+    monkeypatch.setattr(
+        "service.enterprise_background_analysis.has_graph_entity", lambda *args: True
+    )

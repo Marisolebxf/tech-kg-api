@@ -18,7 +18,11 @@ from service.graph_algorithm import (
     submit_job,
 )
 
-router = APIRouter(prefix="/graph-algorithms", tags=["graph-algorithms"], dependencies=[Depends(bind_selected_graph_space)])
+router = APIRouter(
+    prefix="/graph-algorithms",
+    tags=["graph-algorithms"],
+    dependencies=[Depends(bind_selected_graph_space)],
+)
 
 
 @router.get("/metadata", response_model=ApiResponse)
@@ -46,7 +50,9 @@ def read_engine(
 
 
 @router.post("/jobs", response_model=ApiResponse)
-def create_job(payload: AlgorithmSubmitRequest, actor: CurrentActor, background_tasks: BackgroundTasks) -> ApiResponse:
+def create_job(
+    payload: AlgorithmSubmitRequest, actor: CurrentActor, background_tasks: BackgroundTasks
+) -> ApiResponse:
     """提交算法作业，返回 running 快照；前端轮询 GET /jobs/{jobId}。"""
     try:
         data = submit_job(

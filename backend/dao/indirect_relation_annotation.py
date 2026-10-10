@@ -31,7 +31,7 @@ class IndirectRelationAnnotationDAO:
             tuple_(
                 IndirectRelationAnnotation.source_vid,
                 IndirectRelationAnnotation.target_vid,
-            ).in_(keys)
+            ).in_(keys),
         )
         return list(self._session.scalars(statement))
 

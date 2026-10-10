@@ -190,10 +190,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             if mode == "list" and len(items) >= limit:
                 break
 
-        space = (
-            getattr(getattr(graph, "_settings", None), "space", None)
-            or get_current_space()
-        )
+        space = getattr(getattr(graph, "_settings", None), "space", None) or get_current_space()
         expert = {
             "id": expert_id,
             "name": self._display_name(source),
@@ -396,10 +393,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         return names
 
     def _org_name_index(self, graph: TRSGraphClient) -> dict[str, str]:
-        space = (
-            getattr(getattr(graph, "_settings", None), "space", None)
-            or get_current_space()
-        )
+        space = getattr(getattr(graph, "_settings", None), "space", None) or get_current_space()
         with _cache_lock:
             cached = _org_name_index_cache.get(space)
         if cached and cached[0] > time.monotonic():

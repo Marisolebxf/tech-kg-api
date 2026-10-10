@@ -103,6 +103,7 @@ def test_fill_survives_persist_failure(writable_graph_request) -> None:
 @pytest.fixture
 def writable_graph_request():
     from service.graph_space_context import request_can_write
+
     token = request_can_write.set(True)
     try:
         yield

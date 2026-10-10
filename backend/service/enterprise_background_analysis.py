@@ -125,8 +125,11 @@ class EnterpriseBackgroundAnalysisService(KGModuleScaffoldService):
     ) -> dict[str, Any]:
         prod = org_dao.get_products(org_id)
         try:
-            patents = [p for p in pat_dao.list_by_assignee(name_cn, cpc_prefixes)
-                       if has_graph_entity(str(p.patent_id), ("Patent",), ("patent_",))]
+            patents = [
+                p
+                for p in pat_dao.list_by_assignee(name_cn, cpc_prefixes)
+                if has_graph_entity(str(p.patent_id), ("Patent",), ("patent_",))
+            ]
         except Exception as exc:  # noqa: BLE001  gkx 无 dwd_patent 表等
             logger.warning("patent list failed: %s", exc)
             patents = []
@@ -179,6 +182,7 @@ class EnterpriseBackgroundAnalysisService(KGModuleScaffoldService):
     def _patent_distribution(self, pat_dao: PatentDAO, name_cn: str) -> list[dict[str, object]]:
         try:
             from collections import Counter
+
             counts = Counter()
             for patent in pat_dao.list_by_assignee(name_cn):
                 if has_graph_entity(str(patent.patent_id), ("Patent",), ("patent_",)):

@@ -83,7 +83,9 @@ function updateRow(index: number, value: SourceBindingRow) {
 </template>
 
 <style scoped>
-/* 行内五列有像素下限（行 min-width 720px），弹窗窄时整块横向拖动看全 */
+/* overflow-x 仅作极窄视口的兜底：行内五列下限合计 546px，弹窗正文宽 ≥640px，
+   正常宽度不出横向滚动；超长名一律省略号 + 悬停出全名（触发器 title /
+   下拉项 title，2026-10-10 口径，弃「横向拖动看全」） */
 .source-bindings{display:flex;flex-direction:column;gap:8px;overflow-x:auto}
 .source-bindings__empty{padding:8px 16px;border:1px dashed #e5e6eb;border-radius:6px;color:#86909c;font-size:12px;line-height:20px}
 .source-bindings__validation{margin:0;color:#b42318;font-size:14px;line-height:22px}

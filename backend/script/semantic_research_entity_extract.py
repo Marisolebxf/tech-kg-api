@@ -79,8 +79,7 @@ def _client() -> SemanticToolkitClient:
     client = client or get_semantic_client()
     if client is None:
         raise RuntimeError(
-            "未配置语义计算服务：请设置 KG_SCRIPT_CTX.semantic 或 "
-            "SEMANTIC_TOOLKIT_BASE_URL"
+            "未配置语义计算服务：请设置 KG_SCRIPT_CTX.semantic 或 SEMANTIC_TOOLKIT_BASE_URL"
         )
     return client
 
@@ -117,10 +116,7 @@ def _definition_map(items: list[dict[str, Any]]) -> dict[str, str]:
     result: dict[str, str] = {}
     for item in items:
         concept = _clean(
-            item.get("concept")
-            or item.get("term")
-            or item.get("concept_name")
-            or item.get("name")
+            item.get("concept") or item.get("term") or item.get("concept_name") or item.get("name")
         )
         definition = _clean(
             item.get("definition") or item.get("definition_text") or item.get("text")
@@ -242,10 +238,7 @@ def _append_relations(
             continue
         source_id = resolve_endpoint(subject)
         target_id = resolve_endpoint(target)
-        edge_type = (
-            re.sub(r"[^A-Z0-9_]+", "_", relation_name.upper()).strip("_")
-            or "RELATED_TO"
-        )
+        edge_type = re.sub(r"[^A-Z0-9_]+", "_", relation_name.upper()).strip("_") or "RELATED_TO"
         edge_id = _edge_id(source_id, edge_type, target_id)
         relations[edge_id] = {
             "id": edge_id,
@@ -385,9 +378,7 @@ def extract_research_entities(payload: Mapping[str, Any]) -> dict[str, Any]:
         if "citation_sentiment" in selected:
             run(
                 "citation_sentiment",
-                lambda: client.citation_sentiment(
-                    title, text, reference_entries=reference_entries
-                ),
+                lambda: client.citation_sentiment(title, text, reference_entries=reference_entries),
             )
         if "citation_intent" in selected:
             run(

@@ -40,8 +40,18 @@ class ExpertAlumniRelationApplication:
         )
         # 当前空间允许写入才 upsert ALUMNI 边；公共空间只读查询不落盘。
         # 浅拷贝顶层 dict,避免把 persistence 键写进服务层共享缓存对象。
-        persistence = (self._persist_relations(data) if request_can_write.get() else
-                       {"space": get_current_space(), "edgeType": "ALUMNI", "created": 0, "updated": 0, "total": 0, "readOnly": True})
+        persistence = (
+            self._persist_relations(data)
+            if request_can_write.get()
+            else {
+                "space": get_current_space(),
+                "edgeType": "ALUMNI",
+                "created": 0,
+                "updated": 0,
+                "total": 0,
+                "readOnly": True,
+            }
+        )
         return {**data, "persistence": persistence}
 
     @staticmethod

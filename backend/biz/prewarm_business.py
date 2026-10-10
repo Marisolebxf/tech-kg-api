@@ -27,6 +27,7 @@ def is_readonly_prewarm(request) -> bool:
 def _readonly_prewarm_app(app):
     async def wrapped(scope, receive, send):
         await app({**scope, _PREWARM_SCOPE_KEY: _PREWARM_MARKER}, receive, send)
+
     return wrapped
 
 
@@ -84,13 +85,17 @@ async def prewarm_business(app: object) -> None:
     """对业务接口及热点全景图参数各发一次请求，填满本 worker 结果缓存。"""
     if os.getenv("PREWARM_BUSINESS", "false").lower() != "true":
         return
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=_readonly_prewarm_app(app)), timeout=120) as client:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_readonly_prewarm_app(app)), timeout=120
+    ) as client:
         for path, body in _PREWARM_CASES:
             try:
                 # ASGI transport 按路径路由，URL 需带 scheme/host（httpx 要求完整 URL）
                 from service.graph_space import default_graph_space
+
                 resp = await client.post(
-                    f"https://prewarm{path}", json=body,
+                    f"https://prewarm{path}",
+                    json=body,
                     headers={"X-Graph-Space": default_graph_space()},
                 )
                 logger.info("prewarm %s -> %s", path, resp.status_code)

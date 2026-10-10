@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 from typing import Any
 
@@ -204,6 +206,72 @@ def entity_search_api(monkeypatch: pytest.MonkeyPatch):
     app.dependency_overrides.pop(get_workflow_session, None)
     app.dependency_overrides.pop(require_platform_actor, None)
     engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_export_csv_download_and_cleanup(entity_search_api, tmp_path) -> None:
+    _, _, monkeypatch = entity_search_api
+    monkeypatch.setattr("service.entity_search.tempfile.tempdir", str(tmp_path))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/v1/entity-search/export", params={"entityType": "Expert"})
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/csv")
+        assert "attachment;" in response.headers["content-disposition"]
+        assert response.headers["cache-control"] == "no-store"
+        rows = list(csv.DictReader(io.StringIO(response.content.decode("utf-8-sig"))))
+        assert rows[0]["实体名称"] == "张三"
+        assert json.loads(rows[0]["公共属性(JSON)"])["org"] == "中科院"
+        assert list(tmp_path.iterdir()) == []
+        missing = await client.get("/api/v1/entity-search/export", params={"entityType": "Missing"})
+        assert missing.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_export_temp_file_removed_on_download_failure(tmp_path) -> None:
+    from biz.handler.entity_search import TemporaryCsvResponse
+
+    path = tmp_path / "export.csv"
+    path.write_text("实体名称,ID\n张三,1", encoding="utf-8-sig")
+    response = TemporaryCsvResponse(str(path), media_type="text/csv")
+
+    async def receive():
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        raise RuntimeError("下载连接断开")
+
+    with pytest.raises(RuntimeError, match="下载连接断开"):
+        await response({"type": "http", "method": "GET"}, receive, send)
+    assert not path.exists()
+
+
+@pytest.mark.asyncio
+async def test_export_csv_checks_space_access_before_query(entity_search_api) -> None:
+    _, _, monkeypatch = entity_search_api
+    from fastapi import HTTPException
+
+    from biz.dependencies.selected_graph_space import bind_selected_graph_space
+    from biz.handler import entity_search as handler
+
+    def deny_access(actor, space):
+        assert space == "forbidden"
+        raise HTTPException(status_code=403, detail="无权访问图空间")
+
+    def forbidden_query(space):
+        pytest.fail("权限校验失败时不得查询图数据库")
+
+    monkeypatch.setattr(handler, "_ensure_space_access", deny_access)
+    monkeypatch.setattr("service.entity_search.get_space_client", forbidden_query)
+    # 单独验证 endpoint 的空间权限防线，路由公共依赖的 RBAC 另有专项测试。
+    app.dependency_overrides[bind_selected_graph_space] = lambda: None
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get(
+                "/api/v1/entity-search/export", params={"space": "forbidden"}
+            )
+            assert response.status_code == 403
+    finally:
+        app.dependency_overrides.pop(bind_selected_graph_space, None)
 
 
 @pytest.mark.asyncio

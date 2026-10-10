@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 import re
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -271,6 +273,76 @@ def test_compose_entity_text_keeps_long_value_tail_and_late_property() -> None:
 
     assert "尾部目标词" in text
     assert "last_field 国内机构要素库" in text
+
+
+def test_export_csv_full_data_and_properties(state_session, monkeypatch, tmp_path) -> None:
+    long_text = '中文,"引号"\n' + "长属性" * 1000
+    experts = [FakeNode(f"expert_{i}", {"name": f"专家{i}"}) for i in range(1003)]
+    experts[0].properties = {
+        "name": '=HYPERLINK("example")',
+        "id": "ID" * 300,
+        "text": long_text,
+        "nested": {"x": [1, None]},
+    }
+    graph = FakeGraph(
+        ["Expert", "Paper"], {"Expert": experts, "Paper": [FakeNode("paper_1", {"name": "论文"})]}
+    )
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.tempfile.tempdir", str(tmp_path))
+    service = EntitySearchService(state_session)
+    path = Path(service.export_csv(space="dev2", entity_type="Expert"))
+    try:
+        assert path.read_bytes().startswith(b"\xef\xbb\xbf")
+        with path.open(encoding="utf-8-sig", newline="") as source:
+            rows = list(csv.DictReader(source))
+        assert len(rows) == 1003
+        assert {row["实体类型"] for row in rows} == {"Expert"}
+        assert rows[0]["实体名称"].startswith("'=HYPERLINK")
+        assert rows[0]["ID"] == "ID" * 300
+        assert json.loads(rows[0]["公共属性(JSON)"]) == experts[0].properties
+        assert rows[-1]["VID"] == "expert_1002"
+    finally:
+        path.unlink()
+    path = Path(service.export_csv(space="dev2"))
+    try:
+        with path.open(encoding="utf-8-sig", newline="") as source:
+            rows = list(csv.DictReader(source))
+        assert len(rows) == 1004
+        assert {row["实体类型"] for row in rows} == {"Expert", "Paper"}
+    finally:
+        path.unlink()
+
+
+def test_export_csv_does_not_return_partial_file(state_session, monkeypatch, tmp_path) -> None:
+    class FailingGraph(FakeGraph):
+        def paged_nodes_by_label(self, label, *, limit=100, offset=0):
+            if offset:
+                raise GraphRequestError("导出第二批失败", status_code=500)
+            return [FakeNode(str(i), {"name": "专家"}) for i in range(limit)]
+
+    monkeypatch.setattr(
+        "service.entity_search.get_space_client", lambda space: FailingGraph(["Expert"], {})
+    )
+    monkeypatch.setattr("service.entity_search.tempfile.tempdir", str(tmp_path))
+    with pytest.raises(GraphRequestError):
+        EntitySearchService(state_session).export_csv(entity_type="Expert")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_export_csv_unknown_type_and_empty_space(state_session, monkeypatch, tmp_path) -> None:
+    graph = FakeGraph([], {})
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.tempfile.tempdir", str(tmp_path))
+    service = EntitySearchService(state_session)
+    with pytest.raises(EntitySearchError, match="不存在实体类型"):
+        service.export_csv(entity_type="Missing")
+    assert list(tmp_path.iterdir()) == []
+    path = Path(service.export_csv())
+    try:
+        with path.open(encoding="utf-8-sig", newline="") as source:
+            assert len(list(csv.reader(source))) == 1
+    finally:
+        path.unlink()
 
 
 def test_browse_single_type_pagination(state_session, monkeypatch) -> None:

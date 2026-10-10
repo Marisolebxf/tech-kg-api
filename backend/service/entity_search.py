@@ -16,9 +16,11 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import json
 import logging
 import os
+import tempfile
 import threading
 import time
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -588,6 +590,76 @@ class EntitySearchService:
 
     def __init__(self, session: Session) -> None:
         self._session = session
+
+    def export_csv(self, *, space: str | None = None, entity_type: str | None = None) -> str:
+        """分批写入完整 CSV，不使用展示截断、索引计数快照或搜索命中集。
+
+        文件写完才允许下载；任一标签/批次失败时清理文件并报错，避免把部分
+        数据当作全量导出。调用方负责在响应完成后删除临时文件。
+        """
+        graph = get_space_client(space or _default_space())
+        labels = sorted(graph.labels())
+        if entity_type:
+            if entity_type not in labels:
+                raise EntitySearchError(f"图空间中不存在实体类型: {entity_type}")
+            labels = [entity_type]
+
+        def safe_cell(value: str) -> str:
+            # Excel 等工具打开 CSV 时不应执行实体名称/ID 中的公式。
+            probe = value.lstrip()
+            return (
+                "'" + value
+                if probe.startswith(("=", "+", "-", "@")) or value.startswith(("\t", "\r", "\n"))
+                else value
+            )
+
+        path: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8-sig", newline="", suffix=".csv", delete=False
+            ) as output:
+                path = output.name
+                writer = csv.writer(output)
+                writer.writerow(["实体名称", "ID", "实体类型", "VID", "公共属性(JSON)"])
+                for label in labels:
+                    offset = 0
+                    while True:
+                        nodes = graph.paged_nodes_by_label(label, limit=1000, offset=offset)
+                        if not nodes:
+                            break
+                        for node in nodes:
+                            props = dict(node.properties or {})
+                            vid = str(node.id)
+                            entity_id = str(
+                                next(
+                                    (
+                                        props.get(key)
+                                        for key in ("id", "entity_id")
+                                        if _scalar(props.get(key))
+                                    ),
+                                    vid,
+                                )
+                            )
+                            writer.writerow(
+                                [
+                                    safe_cell(value)
+                                    for value in (
+                                        extract_entity_name(props, vid),
+                                        entity_id,
+                                        label,
+                                        vid,
+                                        json.dumps(props, ensure_ascii=False, default=str),
+                                    )
+                                ]
+                            )
+                        offset += len(nodes)
+                        if len(nodes) < 1000:
+                            break
+            return path
+        except BaseException:
+            if path is not None:
+                os.unlink(path)
+            raise
 
     # ------------------------------------------------------------------
     # 浏览（关键词为空）：图直查分页

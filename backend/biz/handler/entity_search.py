@@ -9,7 +9,9 @@ import os
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+from starlette.types import Receive, Scope, Send
 
 from application.entity_search import EntitySearchApplication
 from biz.dependencies.auth import CurrentActor
@@ -33,6 +35,17 @@ router = APIRouter(
     dependencies=[Depends(bind_selected_graph_space)],
 )
 logger = logging.getLogger(__name__)
+
+
+class TemporaryCsvResponse(FileResponse):
+    """成功下载或客户端断开后均回收临时文件。"""
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            os.unlink(self.path)
+
 
 # 浏览页默认缓存 5 分钟；关键词搜索仍使用较短 TTL，避免索引变化后旧命中保留过久。
 # 两者都是 L1 进程缓存 + L2 Redis 共享缓存，Redis 不可用时自动降级到 L1。
@@ -194,6 +207,28 @@ async def browse_entities(
         payload,
         media_type="application/json",
         headers={"X-Entity-Cache": "HIT" if cache_hit else "MISS"},
+    )
+
+
+@router.get("/export", response_class=FileResponse)
+def export_entities_csv(
+    actor: CurrentActor,
+    session: Annotated[Session, Depends(get_workflow_session)],
+    space: str | None = Query(None, max_length=64, description="图空间"),
+    entityType: str | None = Query(None, max_length=64, description="实体类型；为空导出全部类型"),
+) -> FileResponse:
+    """导出所选图空间/类型的全部实体，不受列表分页上限或关键词影响。"""
+    space = resolve_selected_space(space)
+    _ensure_space_access(actor, space)
+    try:
+        path = _application(session).export_csv(space=space, entity_type=entityType)
+    except EntitySearchError as exc:
+        _raise_domain_error(exc)
+    return TemporaryCsvResponse(
+        path,
+        media_type="text/csv; charset=utf-8",
+        filename=f"entities_{entityType or 'all'}.csv",
+        headers={"Cache-Control": "no-store"},
     )
 
 

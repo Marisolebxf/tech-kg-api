@@ -125,6 +125,14 @@ watch(
 <style>
 /* 弹层 teleport 到 body，经 contentClass 限定范围。固定两列比例及面板尺寸，
    目录切换、名称长度和选项数量只影响省略号/滚动，不再改变弹层大小。 */
+
+/* Arco Cascader 默认从触发框左缘展开，弹层固定 360px、触发框在页面右上角，
+   靠近视口右缘时 Arco 会把弹层贴着视口右缘放置（阴影被裁）。仅对 contentClass
+   标记的弹层整体左移 12px 让出右缘呼吸位；宽度与两列 40%/60% 配置不变。 */
+.app-space-select-popup {
+  transform: translateX(-12px);
+}
+
 .app-space-select-popup .arco-cascader-panel {
   width: min(360px, calc(100vw - 24px));
   height: 200px;

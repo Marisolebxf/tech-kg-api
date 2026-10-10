@@ -2,7 +2,7 @@ import { defineConfig } from '@playwright/test'
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: 'business-service-responsive.spec.ts',
+  testMatch: ['business-service-responsive.spec.ts', 'space-selector-popup-responsive.spec.ts'],
   fullyParallel: true,
   workers: 2,
   reporter: 'list',

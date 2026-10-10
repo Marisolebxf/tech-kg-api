@@ -2313,7 +2313,7 @@ print(response.json())</pre>
 .platform-jobs-panel .kg-panel__header>div,.platform-review-panel .kg-panel__header>div { display:grid;gap:2px; }
 .platform-jobs-panel .kg-panel__header span,.platform-review-panel .kg-panel__header span { color:#7b8aa1;font-size:12px;line-height:20px; }
 .platform-jobs-panel .kg-panel__header>a,.platform-review-panel .kg-panel__header>a { color:#004ecc;font-size:14px;line-height:22px;text-decoration:none; }
-.platform-jobs-stats { display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border-bottom:1px solid #e4ecf6; }
+.platform-jobs-stats { display:grid;grid-template-columns:repeat(6,minmax(0,1fr));border-bottom:1px solid #e4ecf6; }
 .platform-jobs-stats article { display:grid;gap:2px;padding:12px 8px;text-align:center;border-right:1px solid #edf2f8; }
 .platform-jobs-stats article:last-child { border-right:0; }
 .platform-jobs-stats article span { font-size:18px;font-weight:600; }
@@ -4587,7 +4587,7 @@ print(response.json())</pre>
 
   .platform-jobs-stats { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .platform-jobs-stats article:nth-child(2n) { border-right:0; }
-  .platform-jobs-stats article:nth-child(-n+2) { border-bottom:1px solid #edf2f8; }
+  .platform-jobs-stats article:nth-child(-n+4) { border-bottom:1px solid #edf2f8; }
 
   .platform-build-context {
     flex-direction: column;

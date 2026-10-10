@@ -82,6 +82,10 @@ function onSelectChange(value: unknown) {
 .list-pagination :deep(.arco-select-view){box-sizing:border-box;width:88px;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;font-size:14px;line-height:22px}
 .list-pagination :deep(.list-pagination__size-select.arco-select-view:hover){border-color:#4080ff!important}
 .list-pagination :deep(.list-pagination__size-select.arco-select-view:focus-within),.list-pagination :deep(.list-pagination__size-select.arco-select-view-focus){border-color:#165dff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
+/* 零宽 input 仍接收键盘事件；不能让全局 input:focus 在数字前画出蓝色竖条。
+   每页下拉的焦点提示由外层 SelectView 提供。 */
+.list-pagination :deep(.list-pagination__size-select .arco-select-view-input){padding:0!important;border:0!important;background:transparent!important;outline:none!important;box-shadow:none!important;caret-color:transparent}
+.list-pagination :deep(.list-pagination__size-select .arco-select-view-input-hidden){height:0!important;min-height:0!important;opacity:0;pointer-events:none}
 /* line-height 须带 !important：readability.css 对 .app-workspace 内所有 li 强刷
    line-height:22px !important，页码按钮是 <li>，不压过它数字会在 32px 按钮里偏上。 */
 .list-pagination :deep(.arco-pagination-item){min-width:32px;height:32px;border-radius:4px;font-size:14px;line-height:32px!important}

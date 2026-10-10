@@ -1,6 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { defineComponent } from 'vue'
+import { Textarea } from '@arco-design/web-vue'
 import { describe, expect, it, vi } from 'vitest'
 
 import ConfigurationManagementView from './ConfigurationManagementView.vue'
@@ -73,7 +74,7 @@ vi.mock('../../api/graphSpace', () => ({
 vi.mock('../../api/currentUser', () => ({ currentUserIsAdmin: () => true }))
 vi.mock('@arco-design/web-vue/es/icon', () => ({ IconSearch: { template: '<i />' } }))
 
-function mountView() {
+function mountView(realTextarea = false) {
   return mount(ConfigurationManagementView, {
     global: {
       stubs: {
@@ -81,7 +82,7 @@ function mountView() {
         'a-select': true, 'a-option': true, 'a-input': AInputStub,
         'a-form': { template: '<form><slot /></form>' },
         'a-form-item': { template: '<label><slot /></label>' },
-        'a-textarea': true, 'a-checkbox': true,
+        'a-textarea': realTextarea ? Textarea : true, 'a-checkbox': true,
       },
     },
   })
@@ -303,5 +304,65 @@ describe('配置管理 · 管理抽屉编辑隔离', () => {
     await portInput.setValue('1'.repeat(65))
     expect(fieldError()).toContain('数字输入长度不能超过64个字符')
     wrapper.unmount()
+  })
+})
+
+// 使用真实 Arco Textarea，验证计数随编辑更新且超长粘贴不能超过实际提交上限。
+describe('配置说明计数与输入上限', () => {
+  it('语言模型：新建与管理显示 /64，回填说明和长文本粘贴均正确计数', async () => {
+    setActivePinia(createPinia())
+    state.current.description = '原说明'
+    const wrapper = mountView(true)
+    await flushPromises()
+    try {
+      await wrapper.get('.create-entry').trigger('click')
+      const create = wrapper.get('.config-create-dialog .config-description-textarea')
+      expect(create.get('.arco-textarea-word-limit').text()).toBe('0/64')
+      await create.get('textarea').setValue('测'.repeat(65))
+      expect(create.get('.arco-textarea-word-limit').text()).toBe('64/64')
+      expect((create.get('textarea').element as HTMLTextAreaElement).value).toHaveLength(64)
+      await wrapper.get('.config-create-dialog header button').trigger('click')
+      await openDrawer(wrapper)
+      const detail = wrapper.get('.detail-drawer .config-description-textarea')
+      expect(detail.get('.arco-textarea-word-limit').text()).toBe('3/64')
+      await detail.get('textarea').setValue('新说明')
+      expect(detail.get('.arco-textarea-word-limit').text()).toBe('3/64')
+      expect(wrapper.get('.config-table-wrap .config-name').text()).toContain('原说明')
+      await detail.get('textarea').setValue('文'.repeat(65))
+      expect(detail.get('.arco-textarea-word-limit').text()).toBe('64/64')
+      expect((detail.get('textarea').element as HTMLTextAreaElement).value).toHaveLength(64)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('MySQL：新建显示 /200，管理显示 /500，并保留既有说明', async () => {
+    setActivePinia(createPinia())
+    const { listMysqlDatasources } = await import('../../api/mysqlDatasource')
+    vi.mocked(listMysqlDatasources).mockResolvedValue([{
+      id: 'MY-COUNTER', name: '说明测试', description: '数据库说明', owner: 'admin',
+      updatedAt: '', status: '正常', isDefault: false, host: '127.0.0.1', port: 3306,
+      defaultDatabase: 'test', username: 'root', hasPassword: true, passwordMasked: '••••••',
+    }])
+    const wrapper = mountView(true)
+    await flushPromises()
+    try {
+      await wrapper.findAll('.category-nav > button').find(b => b.text().includes('MySQL'))!.trigger('click')
+      await flushPromises()
+      await wrapper.get('.create-entry').trigger('click')
+      const create = wrapper.get('.config-create-dialog .config-description-textarea')
+      expect(create.get('.arco-textarea-word-limit').text()).toBe('0/200')
+      await create.get('textarea').setValue('测'.repeat(201))
+      expect(create.get('.arco-textarea-word-limit').text()).toBe('200/200')
+      await wrapper.get('.config-create-dialog header button').trigger('click')
+      await openDrawer(wrapper)
+      const detail = wrapper.get('.detail-drawer .config-description-textarea')
+      expect(detail.get('.arco-textarea-word-limit').text()).toBe('5/500')
+      await detail.get('textarea').setValue('文'.repeat(501))
+      expect(detail.get('.arco-textarea-word-limit').text()).toBe('500/500')
+      expect((detail.get('textarea').element as HTMLTextAreaElement).value).toHaveLength(500)
+    } finally {
+      wrapper.unmount()
+    }
   })
 })

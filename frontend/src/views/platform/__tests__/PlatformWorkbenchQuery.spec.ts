@@ -585,10 +585,56 @@ describe('Algorithm result lists', () => {
     const csv = blobParts[0]!.join('')
     expect(csv.split('\r\n')).toHaveLength(202)
     expect(csv.split('\r\n')[0]).toBe('\uFEFF"序号","vid","degree"')
-    expect(csv.split('\r\n')[1]).toBe('"1","node-0","0"')
-    expect(csv.split('\r\n')[201]).toBe('"201","node-200","200"')
+    expect(csv.split('\r\n')[1]).toBe('"1","node-200","200"')
+    expect(csv.split('\r\n')[201]).toBe('"201","node-0","0"')
     expect(csv).toContain('node-0')
     expect(csv).toContain('node-200')
+    anchorClick.mockRestore()
+  })
+
+  it.each([
+    ['PageRank算法', 'pagerank'], ['Louvain算法', 'louvain'], ['Degree算法', 'degree'],
+  ])('exports %s in the displayed sort order, including VID filters and clearing sort', async (algorithm, column) => {
+    const blobParts: unknown[][] = []
+    vi.stubGlobal('Blob', class {
+      constructor(parts: unknown[]) { blobParts.push(parts) }
+    })
+    vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:test'), revokeObjectURL: vi.fn() })
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    vi.mocked(submitAlgorithmJob).mockResolvedValueOnce({ jobId: 'job-a', status: 'succeeded' })
+    vi.mocked(getAlgorithmJobResult).mockResolvedValueOnce({
+      jobId: 'job-a', sink: 'csv', rows: [
+        { vid: 'paper-middle', [column]: '2' },
+        { vid: 'paper-high', [column]: '10' },
+        { vid: 'person-low', [column]: '1' },
+      ],
+    })
+    await enterAlgorithms()
+    await clickButton(algorithm)
+    await submitAlgorithm()
+    const exportedIds = async () => {
+      await clickButton('导出当前结果 CSV')
+      return blobParts.at(-1)!.join('').split('\r\n').slice(1).map(line => line.split(',')[1])
+    }
+    const displayedIds = () => wrapper.findAll('tbody tr').map(row => `"${row.findAll('td')[1]!.text()}"`)
+    expect(await exportedIds()).toEqual(displayedIds())
+    expect(await exportedIds()).toEqual(['"paper-high"', '"paper-middle"', '"person-low"'])
+    const sortIcons = () => wrapper.findAll('th')[2]!.findAll('.arco-table-sorter-icon')
+    await sortIcons()[0]!.trigger('click') // descend -> no sort
+    await sortIcons()[0]!.trigger('click') // no sort -> ascend
+    expect(await exportedIds()).toEqual(displayedIds())
+    expect(await exportedIds()).toEqual(['"person-low"', '"paper-middle"', '"paper-high"'])
+    await sortIcons()[1]!.trigger('click')
+    expect(await exportedIds()).toEqual(displayedIds())
+    expect(await exportedIds()).toEqual(['"paper-high"', '"paper-middle"', '"person-low"'])
+    await wrapper.get('input[aria-label="搜索图 VID"]').setValue('paper-')
+    await wrapper.get('.platform-algo-search-form').trigger('submit')
+    expect(await exportedIds()).toEqual(displayedIds())
+    expect(await exportedIds()).toEqual(['"paper-high"', '"paper-middle"'])
+    // Clicking the header cycles descend -> no sort -> ascend -> descend.
+    await sortIcons()[1]!.trigger('click')
+    expect(await exportedIds()).toEqual(displayedIds())
+    expect(await exportedIds()).toEqual(['"paper-middle"', '"paper-high"'])
     anchorClick.mockRestore()
   })
 

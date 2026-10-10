@@ -25,17 +25,17 @@ const emit = defineEmits<{ sort: [column: string, direction: 'asc' | 'desc' | un
 const tableRoot = ref<HTMLElement | null>(null)
 const hasHiddenColumns = ref(false)
 const scrollActive = ref(false)
-const bodyHeight = ref(240)
+const viewportHeight = ref(280)
 let scrollIdleTimer: ReturnType<typeof setTimeout> | undefined
 let resizeObserver: ResizeObserver | undefined
 function updateColumnShadow(): void {
-  const scroller = tableRoot.value?.querySelector<HTMLElement>('.arco-table-body')
+  const scroller = tableRoot.value?.querySelector<HTMLElement>('.arco-table-content')
   hasHiddenColumns.value = !!scroller && scroller.scrollWidth - scroller.clientWidth - scroller.scrollLeft > 1
 }
 function updateTableViewport(): void {
   if (!tableRoot.value) return
   // Keep the scrollbar above pagination within the visible query viewport.
-  bodyHeight.value = Math.max(160, window.innerHeight - tableRoot.value.getBoundingClientRect().top - 120)
+  viewportHeight.value = Math.max(200, window.innerHeight - tableRoot.value.getBoundingClientRect().top - 80)
   updateColumnShadow()
 }
 function handleScroll(): void {
@@ -129,7 +129,7 @@ function showDetails(row: Record<string, unknown>, index: number): void {
       :hoverable="true"
       :loading="loading"
       :table-layout-fixed="true"
-      :scroll="{ x: tableWidth, y: bodyHeight }"
+      :scroll="{ x: tableWidth, maxHeight: `${viewportHeight}px` }"
       :scrollbar="false"
       @sorter-change="handleSort"
     >
@@ -165,31 +165,24 @@ function showDetails(row: Record<string, unknown>, index: number): void {
 
 <style scoped>
 .query-result-table{min-width:0;overflow:hidden}
-/* Arco reserves a vertical scrollbar gutter in the split header to align it
-   with the body. Keep that gutter and horizontal scroll synchronization, but
-   override the global scrollbar reveal styles so the header stays invisible. */
-.query-result-table :deep(.arco-table:not(.arco-table-empty) .arco-table-container .arco-table-content .arco-table-header){scrollbar-color:transparent transparent!important}
-.query-result-table :deep(.arco-table:not(.arco-table-empty) .arco-table-container .arco-table-content .arco-table-header::-webkit-scrollbar){height:0!important;background:transparent!important}
-.query-result-table :deep(.arco-table:not(.arco-table-empty) .arco-table-container .arco-table-content .arco-table-header::-webkit-scrollbar-thumb),
-.query-result-table :deep(.arco-table:not(.arco-table-empty) .arco-table-container .arco-table-content .arco-table-header::-webkit-scrollbar-track),
-.query-result-table :deep(.arco-table:not(.arco-table-empty) .arco-table-container .arco-table-content .arco-table-header::-webkit-scrollbar-button){background:transparent!important;border-color:transparent!important}
-@supports selector(::-webkit-scrollbar){
-  /* Chromium must use the same custom gutter width as the body. */
-  .query-result-table :deep(.arco-table:not(.arco-table-empty) .arco-table-container .arco-table-content .arco-table-header){scrollbar-color:auto!important}
-}
+/* A single viewport contains the header and rows, so the vertical scrollbar
+   starts at the field-name row. Sticky cells preserve the header on scroll. */
+.query-result-table :deep(.arco-table-content){overflow:auto}
+.query-result-table :deep(thead .arco-table-th){position:sticky;top:0;z-index:11}
+.query-result-table :deep(thead .arco-table-col-fixed-right){z-index:12}
 .query-details-button{height:auto;padding:0;border:0;background:transparent;color:#165dff;font-size:14px;line-height:22px;font-weight:400;white-space:nowrap;cursor:pointer}
 .query-details-button:hover,.query-details-button:active{background:transparent;color:#4080ff}
 /* Horizontal overflow is indicated by the fixed action column only. */
 .query-result-table :deep(.arco-table-container::before){display:none;box-shadow:none}
 /* The fixed action column only signals data still hidden to its left. */
 .query-result-table:not(.query-result-table--hidden-columns) :deep(.arco-table-col-fixed-right-first::after){box-shadow:none}
-.query-result-table :deep(.arco-table-body),.query-record-details{scrollbar-width:thin;scrollbar-color:transparent transparent}
-.query-result-table:hover :deep(.arco-table-body),.query-result-table--scroll-active :deep(.arco-table-body),.query-result-table :deep(.arco-table-body.kg-is-scrolling),.query-record-details:hover,.query-record-details.kg-is-scrolling{scrollbar-color:rgba(78,89,105,.55) transparent}
-.query-result-table :deep(.arco-table-body::-webkit-scrollbar),.query-record-details::-webkit-scrollbar{width:8px;height:8px}
-.query-result-table :deep(.arco-table-body::-webkit-scrollbar-track),.query-record-details::-webkit-scrollbar-track{background:transparent}
-.query-result-table :deep(.arco-table-body::-webkit-scrollbar-thumb),.query-record-details::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background-color:transparent;background-clip:padding-box}
-.query-result-table:hover :deep(.arco-table-body::-webkit-scrollbar-thumb),.query-result-table--scroll-active :deep(.arco-table-body::-webkit-scrollbar-thumb),.query-result-table :deep(.arco-table-body.kg-is-scrolling::-webkit-scrollbar-thumb),.query-record-details:hover::-webkit-scrollbar-thumb,.query-record-details.kg-is-scrolling::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
-.query-result-table :deep(.arco-table-body::-webkit-scrollbar-thumb:hover),.query-record-details::-webkit-scrollbar-thumb:hover{background-color:rgba(78,89,105,.8)}
+.query-result-table :deep(.arco-table-content),.query-record-details{scrollbar-width:thin;scrollbar-color:transparent transparent}
+.query-result-table:hover :deep(.arco-table-content),.query-result-table--scroll-active :deep(.arco-table-content),.query-result-table :deep(.arco-table-content.kg-is-scrolling),.query-record-details:hover,.query-record-details.kg-is-scrolling{scrollbar-color:rgba(78,89,105,.55) transparent}
+.query-result-table :deep(.arco-table-content::-webkit-scrollbar),.query-record-details::-webkit-scrollbar{width:8px;height:8px}
+.query-result-table :deep(.arco-table-content::-webkit-scrollbar-track),.query-record-details::-webkit-scrollbar-track{background:transparent}
+.query-result-table :deep(.arco-table-content::-webkit-scrollbar-thumb),.query-record-details::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background-color:transparent;background-clip:padding-box}
+.query-result-table:hover :deep(.arco-table-content::-webkit-scrollbar-thumb),.query-result-table--scroll-active :deep(.arco-table-content::-webkit-scrollbar-thumb),.query-result-table :deep(.arco-table-content.kg-is-scrolling::-webkit-scrollbar-thumb),.query-record-details:hover::-webkit-scrollbar-thumb,.query-record-details.kg-is-scrolling::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
+.query-result-table :deep(.arco-table-content::-webkit-scrollbar-thumb:hover),.query-record-details::-webkit-scrollbar-thumb:hover{background-color:rgba(78,89,105,.8)}
 .query-result-table :deep(.arco-table){color:var(--color-text-1)}
 .query-result-table :deep(.arco-table-container){border:0;border-radius:0}
 .query-result-table :deep(.arco-table-th){background:#f7f8fa;color:var(--color-text-1);font-weight:500}

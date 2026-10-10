@@ -15,6 +15,7 @@ import threading
 import time
 import uuid
 from collections.abc import Sequence
+from functools import wraps
 from typing import Any
 
 import httpx
@@ -41,6 +42,17 @@ from infra.graph_db.models import (
     GraphPath,
     GraphQueryResult,
 )
+
+
+def _sync_literal_write(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        from service.entity_literal_sync import sync_literal_write
+
+        return sync_literal_write(method)(self, *args, **kwargs)
+
+    return wrapped
+
 
 SCHEMA_INDEXES_PATH = "/api/v1/schema/indexes"
 
@@ -303,12 +315,14 @@ class TRSGraphClient:
     # Node CRUD
     # ==================================================================
 
+    @_sync_literal_write
     def create_node(self, labels: list[str], properties: dict[str, Any] | None = None) -> GraphNode:
         properties = _ensure_vid(dict(properties) if properties else {})
         body = _build_node_create_body(labels, properties)
         resp = self._request("POST", "/api/v1/nodes", json=body)
         return _trs_node_to_model(resp.json())
 
+    @_sync_literal_write
     def merge_node(
         self,
         labels: list[str],
@@ -688,6 +702,7 @@ class TRSGraphClient:
             offset=offset,
         )
 
+    @_sync_literal_write
     def update_node(self, node_id: Any, properties: dict[str, Any]) -> GraphNode:
         existing = self.get_node(node_id)
         if existing is None:
@@ -701,6 +716,7 @@ class TRSGraphClient:
         existing.properties.update(properties)
         return existing
 
+    @_sync_literal_write
     def delete_node(self, node_id: Any, *, detach: bool = False) -> bool:
         params: dict[str, Any] = {}
         if detach:
@@ -994,6 +1010,7 @@ class TRSGraphClient:
             )
         return GraphQueryResult(records=data.get("records", []), summary=summary)
 
+    @_sync_literal_write
     def execute_query(
         self,
         query: str,
@@ -1026,6 +1043,7 @@ class TRSGraphClient:
         data = resp.json()
         return self._query_result(data, "/api/v1/query/read", expected_space=self._settings.space)
 
+    @_sync_literal_write
     def execute_write(self, query: str, params: dict[str, Any] | None = None) -> GraphQueryResult:
         body: dict[str, Any] = {"query": self._scoped_query(query)}
         if params:
@@ -1034,10 +1052,22 @@ class TRSGraphClient:
         data = resp.json()
         return self._query_result(data, "/api/v1/query/write", expected_space=self._settings.space)
 
+    @_sync_literal_write
+    def execute_entity_write(self, query: str, *, node_ids: Sequence[str]) -> GraphQueryResult:
+        """Execute a node write whose affected VIDs are supplied by the caller.
+
+        Graph construction knows these IDs, so it can update the literal index
+        without parsing arbitrary nGQL or invalidating the whole space.
+        """
+        body = {"query": self._scoped_query(query)}
+        resp = self._request("POST", "/api/v1/query/write", json=body)
+        return self._query_result(resp.json(), "/api/v1/query/write", expected_space=self.space)
+
     # ==================================================================
     # Batch operations
     # ==================================================================
 
+    @_sync_literal_write
     def batch_create_nodes(
         self,
         items: Sequence[dict[str, Any]],

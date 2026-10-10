@@ -172,8 +172,16 @@ def persist_entity_confidence(client: Any, vid: str, tag: str, value: float) -> 
 
     alter_key = (get_current_space(), tag)
     query = f"UPDATE VERTEX ON `{tag}` {_ngql_vid(vid)} SET `{tag}`.`confidence` = {value:.4f};"
+
+    def write_confidence() -> None:
+        entity_writer = getattr(client, "execute_entity_write", None)
+        if entity_writer is not None:
+            entity_writer(query, node_ids=[str(vid)])
+        else:
+            client.execute_write(query)
+
     try:
-        client.execute_write(query)
+        write_confidence()
         return True
     except Exception as exc:
         if alter_key in _altered_tags:
@@ -182,7 +190,7 @@ def persist_entity_confidence(client: Any, vid: str, tag: str, value: float) -> 
         try:
             client.execute_write(f"ALTER TAG `{tag}` ADD (`confidence` double NULL);")
             _altered_tags.add(alter_key)
-            client.execute_write(query)
+            write_confidence()
             return True
         except Exception as alter_exc:
             _altered_tags.add(alter_key)

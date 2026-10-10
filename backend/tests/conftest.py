@@ -3,6 +3,9 @@ import os
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+# Graph-only unit tests do not contact the control DB for write-index maintenance.
+os.environ["ENTITY_LITERAL_INDEX_SYNC_ENABLED"] = "false"
+
 os.environ["AUTH_ENABLED"] = "false"
 os.environ["APP_ENV"] = "test"
 os.environ["AUTH_ALLOW_INSECURE_DEV_CONTEXT"] = "true"

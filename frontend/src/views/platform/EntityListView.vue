@@ -400,7 +400,12 @@ watch(
 .entity-table-wrap:hover::-webkit-scrollbar-thumb,.entity-table-wrap.entity-scroll--active::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
 .entity-table-wrap::-webkit-scrollbar-thumb:hover{background-color:rgba(78,89,105,.8)}
 .entity-table-wrap table{width:100%;border-collapse:collapse;font-size:14px;line-height:22px}
-.entity-table-wrap th{position:sticky;top:0;z-index:1;background:#f7f8fa;color:#1d2129;font-weight:500;text-align:left}
+/* 行高自适应铺满：视口高于表格内容（如每页 10 条）时表格撑满容器、剩余高度均分给
+   数据行（单元格内容垂直居中），底部不再留白；内容超出时仍按自然高度滚动。
+   表头行钉住固定高度不参与分摊；「加载中」提示条占流内空间时退回自然行高，
+   避免出现与提示条等高的假滚动。不支持 :has() 的旧浏览器同退回自然行高。 */
+.entity-table-wrap:not(:has(.entity-loading)) table{height:100%}
+.entity-table-wrap th{position:sticky;top:0;z-index:1;background:#f7f8fa;color:#1d2129;font-weight:500;text-align:left;height:43px}
 .entity-table-wrap th,.entity-table-wrap td{padding:10px 16px;border-bottom:1px solid #f2f3f5;vertical-align:middle}
 .entity-table-wrap td{color:#344763}
 /* 名称列对齐 Schema 页：td b 压回常规字重（Schema 页 DESIGN_RULES 同款），避免加粗显黑显大 */

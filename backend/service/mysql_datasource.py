@@ -153,11 +153,19 @@ class MysqlDatasourceService:
             ok = client.health_check()
             client.dispose()
             latency_ms = int((time.perf_counter() - start) * 1000)
+            self._record_probe_status(config_id, row.status, ok)
             return {"ok": ok, "latencyMs": latency_ms, "error": None}
         except Exception as exc:  # noqa: BLE001
             latency_ms = int((time.perf_counter() - start) * 1000)
             logger.warning("MySQL 测试连接失败 id=%s: %s", config_id, exc)
+            self._record_probe_status(config_id, row.status, False)
             return {"ok": False, "latencyMs": latency_ms, "error": str(exc)}
+
+    def _record_probe_status(self, config_id: str, current_status: str, ok: bool) -> None:
+        """探活结果落库（失败→异常 / 成功→正常）：徽标与探活结果一致，刷新不回跳；停用态不覆盖（启停只由人工切换）。"""
+        if current_status == "停用":
+            return
+        self._dao.update(config_id, status="正常" if ok else "异常")
 
     def list_databases(self, config_id: str) -> list[str]:
         """列出该数据源可访问的库（SHOW DATABASES）。连接失败返回 []。"""

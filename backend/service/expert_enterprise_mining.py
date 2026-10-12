@@ -93,9 +93,7 @@ class ExpertEnterpriseMiningService(KGModuleScaffoldService):
         return self._graph if self._graph is not None else get_trs_graph_client()
 
     def _llm_client(self):
-        if self._llm is None:
-            self._llm = get_llm_client()
-        return self._llm
+        return self._llm if self._llm is not None else get_llm_client()
 
     # ----- 主流程 -----
     def query_existing(self, payload: dict[str, Any]) -> dict[str, Any]:

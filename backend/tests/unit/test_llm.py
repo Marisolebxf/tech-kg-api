@@ -13,12 +13,13 @@ def test_get_llm_client_returns_none_without_key(monkeypatch):
     assert llm_mod.get_llm_client() is None
 
 
-def test_get_llm_client_caches_singleton(monkeypatch):
-    monkeypatch.setenv("LLM_API_KEY", "fake-key")
+def test_get_llm_client_does_not_cache_across_requests(monkeypatch):
+    monkeypatch.setattr(llm_mod, "_resolve_settings", lambda: ("fake-key", "http://models", "m"))
     llm_mod.reset_llm_client()
     c1 = llm_mod.get_llm_client()
     c2 = llm_mod.get_llm_client()
-    assert c1 is c2
+    assert c1 is not c2
+    assert c1.model == c2.model == "m"
     llm_mod.reset_llm_client()
 
 

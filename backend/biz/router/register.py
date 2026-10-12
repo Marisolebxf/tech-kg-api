@@ -86,11 +86,22 @@ async def require_business_data(request: Request, actor: CurrentActor):
 
     if is_readonly_prewarm(request):
         can_write = False
+    from service.llm_context import (
+        request_llm_business,
+        request_llm_settings,
+        selected_llm_business,
+    )
+
+    business = await asyncio.to_thread(request_llm_business, actor, space)
     token = selected_graph_space.set(space)
     write_token = request_can_write.set(can_write)
+    llm_token = selected_llm_business.set(business)
+    settings_token = request_llm_settings.set({})
     try:
         yield
     finally:
+        request_llm_settings.reset(settings_token)
+        selected_llm_business.reset(llm_token)
         request_can_write.reset(write_token)
         selected_graph_space.reset(token)
 

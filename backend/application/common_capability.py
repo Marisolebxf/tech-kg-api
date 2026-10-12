@@ -40,7 +40,7 @@ class CommonCapabilityApplication:
         return disambiguate_entity(text, mention, kb, top_k=top_k)
 
     def extract_relations(self, text: str, method: str = "rule") -> dict[str, Any]:
-        client = get_llm_client()
+        client = get_llm_client() if method in {"llm", "hybrid"} else None
         return extract_relations(
             text=text,
             method=method,
@@ -50,7 +50,7 @@ class CommonCapabilityApplication:
         )
 
     def batch_extract_relations(self, texts: list[str], method: str = "rule") -> dict[str, Any]:
-        client = get_llm_client()
+        client = get_llm_client() if method in {"llm", "hybrid"} else None
         return batch_extract_relations(
             texts=texts,
             method=method,

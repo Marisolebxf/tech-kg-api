@@ -24,6 +24,7 @@ from db_model.business_access import BusinessClient
 from db_model.config_ownership import ConfigOwnership
 from db_model.embedding_config import EmbeddingConfig
 from db_model.llm_config import LlmConfig
+from db_model.llm_default import BusinessLlmDefault
 from db_model.milvus_config import MilvusConfig
 from db_model.mysql_datasource import MysqlDatasource
 from infra.mysql import get_session
@@ -57,6 +58,7 @@ def session_factory():
             ConfigOwnership.__table__,
             BusinessClient.__table__,
             LlmConfig.__table__,
+            BusinessLlmDefault.__table__,
             MysqlDatasource.__table__,
             MilvusConfig.__table__,
             EmbeddingConfig.__table__,
@@ -419,7 +421,10 @@ async def test_business_creation_shared_management_and_cross_business_denial(
         assert (
             await client.put(f"{path}/{private['id']}", json={"isDefault": True})
         ).status_code == 403
-        assert (await client.post(f"{path}/{private['id']}/set-default")).status_code == 403
+        result = await client.post(f"{path}/{private['id']}/set-default")
+        assert result.status_code == (200 if kind == "llm" else 403)
+        if kind == "llm":
+            assert (await client.post(f"{path}/{public['id']}/set-default")).status_code == 200
 
     async with _client(_make_app(session_factory, peer)) as client:
         row = (await client.get(f"{path}/{private['id']}")).json()["data"]

@@ -18,6 +18,7 @@ from dao.llm_config import LlmConfigDAO
 from dao.milvus_config import MilvusConfigDAO
 from dao.mysql_datasource import MysqlDatasourceDAO
 from db_model.base import Base
+from db_model.config_ownership import ConfigOwnership
 from db_model.embedding_config import EmbeddingConfig
 from db_model.llm_config import LlmConfig
 from db_model.milvus_config import MilvusConfig
@@ -39,6 +40,7 @@ def sqlite_session_factory(monkeypatch: pytest.MonkeyPatch):
             MilvusConfig.__table__,
             EmbeddingConfig.__table__,
             LlmConfig.__table__,
+            ConfigOwnership.__table__,
             ScriptWatermark.__table__,
         ],
     )
@@ -141,7 +143,10 @@ def test_get_llm_settings_by_id(sqlite_session_factory) -> None:
 
     params = get_llm_settings_by_id("LLM-1")
     assert params == {"api_key": "lk", "base_url": "http://llm", "model": "m"}
-    assert get_llm_settings_by_id("MISSING") is None
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException):
+        get_llm_settings_by_id("MISSING")
 
 
 def test_watermark_roundtrip_and_advance(sqlite_session_factory) -> None:
@@ -176,7 +181,7 @@ def test_resolve_resources_merges_overrides_and_graph(monkeypatch: pytest.Monkey
     )
     monkeypatch.setattr(
         "service.llm_config.get_llm_settings_by_id",
-        lambda cid: {"api_key": "k", "base_url": "http://x", "model": "m"},
+        lambda cid, business_id=None: {"api_key": "k", "base_url": "http://x", "model": "m"},
     )
     monkeypatch.setattr(
         "service.embedding_config.get_embedding_settings_by_id",

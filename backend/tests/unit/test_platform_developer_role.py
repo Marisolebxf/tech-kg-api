@@ -21,7 +21,13 @@ from db_model.business_access import (
     BusinessMembershipState,
     BusinessSpacePolicy,
 )
-from db_model.platform_governance import PlatformUser, PlatformUserRole, UserGraphSpace
+from db_model.platform_governance import (
+    GraphSpaceProfile,
+    PlatformUser,
+    PlatformUserRole,
+    UserGraphSpace,
+    UserGraphSpaceHidden,
+)
 from service import business_access_control as acl
 from service import platform_access
 from service.graph_space import GraphSpaceService
@@ -47,6 +53,8 @@ def scope(monkeypatch):
                 PlatformUser,
                 PlatformUserRole,
                 UserGraphSpace,
+                UserGraphSpaceHidden,
+                GraphSpaceProfile,
             )
         ],
     )
@@ -180,7 +188,9 @@ def test_existing_config_list_displays_all_authorized_rows(scope):
 
 
 def test_admin_creation_does_not_require_online_approval(scope, monkeypatch):
-    monkeypatch.setattr(GraphSpaceService, "create_space", lambda self, actor, name: {"name": name})
+    monkeypatch.setattr(
+        GraphSpaceService, "create_space", lambda self, actor, name, description="": {"name": name}
+    )
     with scope() as session:
         result = create_graph_space(
             GraphSpaceCreateRequest(name="new_space"), resolve("admin"), session
@@ -188,10 +198,8 @@ def test_admin_creation_does_not_require_online_approval(scope, monkeypatch):
     assert result.data == {"name": "new_space"}
 
 
-def test_domain_creation_rejects_developer_before_graph_call(scope):
+def test_domain_creation_rejects_ordinary_user_before_graph_call(scope):
     with scope() as session:
         with pytest.raises(HTTPException) as caught:
-            GraphSpaceService(session, client=object()).create_space(
-                resolve("developer"), "new_space"
-            )
+            GraphSpaceService(session, client=object()).create_space(resolve("user"), "new_space")
     assert caught.value.status_code == 403

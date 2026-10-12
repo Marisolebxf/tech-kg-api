@@ -372,21 +372,22 @@ def test_gateway_uses_current_membership_and_persisted_source(monkeypatch):
             session.get(BusinessMember, "alice").role = "user"
         with pytest.raises(HTTPException):
             live.call("graph", "labels", [], {})
-        # 即使开发者同时获准操作两个空间，业务 B 的任务仍不能使用业务 A 的数据源。
+        # 配置全平台共享；更换唯一业务后仍可使用原业务历史数据源。
         with scope() as session:
             session.get(BusinessMember, "alice").role = "developer"
             session.add(BusinessMembershipState(user_id="alice"))
             session.add_all(
                 [
-                    BusinessMembership(user_id="alice", client_id="a", role="developer"),
                     BusinessMembership(user_id="alice", client_id="b", role="developer"),
                 ]
             )
-        assert live.call("graph", "labels", [], {}) == ["Person"]
         with pytest.raises(HTTPException):
-            gateway.ScriptResourceBroker(
-                {**request, "clientId": "b", "schemaId": "schema-b", "graphSpace": "space-b"}, {}
-            )
+            live.call("graph", "labels", [], {})
+        other = gateway.ScriptResourceBroker(
+            {**request, "clientId": "b", "schemaId": "schema-b", "graphSpace": "space-b"}, {}
+        )
+        other._clients["graph"] = SimpleNamespace(labels=lambda: ["SharedSource"])
+        assert other.call("graph", "labels", [], {}) == ["SharedSource"]
         with scope() as session:
             from sqlalchemy import delete
 

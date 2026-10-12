@@ -288,6 +288,39 @@ class WorkflowRepository:
             ).all()
             return {execution_id: job_id for execution_id, job_id in rows}
 
+    def execution_ids_by_job_keyword(self, keyword: str, limit: int = 200) -> list[str]:
+        """按 jobId 关键词反查执行 ID（人工审核队列按「来源记录」jobId 搜索）。
+
+        快照没写 jobId 的存量 case，来源记录列靠 EXEC→job 运行时解析展示；
+        搜索走同一控制面数据反向解：job 关键词 → 执行 ID 集合，回案表匹配快照。
+        重跑型 job 的执行数有限，limit 200 兜底防失控。
+        """
+        with workflow_session_scope() as session:
+            return list(
+                session.scalars(
+                    select(WorkflowExecution.id)
+                    .where(WorkflowExecution.job_id.like(f"%{keyword}%"))
+                    .limit(limit)
+                ).all()
+            )
+
+    def execution_statuses_by_ids(self, execution_ids: list[str | None]) -> dict[str, str]:
+        """按执行 ID 批量取状态列（人工审核 T_EXTRACT_FAIL 只读口径推导用）。
+
+        只查状态列不解析 payload；ID 不在返回映射里 = 执行记录已不存在
+        （如控制库被清理），调用方按「执行概要无成功凭证」处理。
+        """
+        ids = [i for i in execution_ids if i]
+        if not ids:
+            return {}
+        with workflow_session_scope() as session:
+            rows = session.execute(
+                select(WorkflowExecution.id, WorkflowExecution.status).where(
+                    WorkflowExecution.id.in_(ids)
+                )
+            ).all()
+            return {execution_id: status for execution_id, status in rows}
+
     def list_executions(
         self,
         limit: int = 100,

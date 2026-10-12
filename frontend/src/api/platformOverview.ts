@@ -46,7 +46,8 @@ export interface PlatformOverviewData {
   updatedAt: string
   assetOverviewGroups: AssetOverviewGroup[]
   assetChangeRows: Record<AssetOverviewKey, AssetChangeRow[]>
-  /** 昨日新增真实计数（Σwritten，与资产卡徽标同源）；明细行受单执行上限截断，
+  /** 昨日新增计数（与资产卡徽标同源）：图反查逐对象成功时=明细行数（去重后，
+   *  与抽屉同数同口径）；图反查降级成聚合行的空间/日子=工作流控制库 Σwritten，
    *  行数 < 合计时用它展示「共 N 条 · 展示前 n 条」 */
   assetChangeTotals?: Partial<Record<AssetOverviewKey, number>>
   entityStructure: StructureItem[]

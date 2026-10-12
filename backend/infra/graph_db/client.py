@@ -493,6 +493,72 @@ class TRSGraphClient:
         """客户端绑定的图空间（临时空间 client 的调用方需要它做缓存键）。"""
         return self._settings.space
 
+    def keyword_nodes_by_label(
+        self,
+        label: str,
+        keyword: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        count_only: bool = False,
+    ) -> GraphPagedResult:
+        """文字包含匹配 VID/全部公共属性；属性无需单独建索引。
+
+        LOOKUP 只负责枚举标签，属性过滤在管道中执行，避免仅查询已索引属性。
+        无标签索引才回退 MATCH；其他查询错误向上传递，不能伪装成无匹配。
+        """
+        if not _TAG_IDENTIFIER.fullmatch(label or ""):
+            raise GraphRequestError(f"非法节点标签: {label!r}", status_code=400)
+        needle = json.dumps(keyword.lower(), ensure_ascii=False)
+
+        def predicate(vertex: str) -> str:
+            return (
+                f"toLower(toString(id({vertex}))) CONTAINS {needle} OR "
+                f"any(k IN keys(properties({vertex})) WHERE "
+                f"toLower(toString(properties({vertex})[k])) CONTAINS {needle})"
+            )
+
+        lookup = (
+            f"LOOKUP ON `{label}` YIELD vertex AS v | "
+            f"YIELD $-.v AS v, id($-.v) AS vid WHERE {predicate('$-.v')}"
+        )
+        lookup += (
+            " | YIELD count(*) AS c"
+            if count_only
+            else f" | ORDER BY $-.vid | LIMIT {int(limit)} OFFSET {int(offset)}"
+        )
+        match = f"MATCH (v:`{label}`) WITH v WHERE {predicate('v')} RETURN "
+        match += (
+            "count(v) AS c"
+            if count_only
+            else f"v, id(v) AS vid ORDER BY vid SKIP {int(offset)} LIMIT {int(limit)}"
+        )
+        if is_known_no_index(self.space, "keyword_lookup", label):
+            result = self.execute_read(match)
+        else:
+            try:
+                result = self.execute_read(lookup)
+            except GraphRequestError as exc:
+                if not is_no_index_error(exc):
+                    raise
+                mark_no_index(self.space, "keyword_lookup", label)
+                result = self.execute_read(match)
+        if count_only:
+            total = next(
+                (int(row["c"]) for row in result.records or [] if row.get("c") is not None), 0
+            )
+            return GraphPagedResult(items=[], total=total, limit=limit, offset=offset)
+        nodes = [
+            GraphNode(
+                id=row["v"].get("id"),
+                labels=list(row["v"].get("labels") or []),
+                properties=dict(row["v"].get("properties") or {}),
+            )
+            for row in result.records or []
+            if isinstance(row.get("v"), dict)
+        ]
+        return GraphPagedResult(items=nodes, total=len(nodes), limit=limit, offset=offset)
+
     def label_count(self, label: str) -> int:
         """标签节点数：优先 SHOW STATS（毫秒级）；标签不在统计中，或空间从未
         跑过 SUBMIT JOB STATS（SHOW STATS 直接 400 "no any stats info"）时回退

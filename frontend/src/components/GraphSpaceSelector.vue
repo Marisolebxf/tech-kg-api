@@ -1,11 +1,21 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useResizeObserver } from '@vueuse/core'
 
 import { useAuthStore } from '../stores/auth'
 import { useGraphSpaceStore } from '../stores/graphSpace'
 
 const graphSpaceStore = useGraphSpaceStore()
 const authStore = useAuthStore()
+
+const selector = ref<HTMLElement>()
+const popupWidth = ref(280)
+const triggerElement = computed(() => selector.value?.querySelector<HTMLElement>('.arco-select-view'))
+// 弹层在 body 下，不能继承选择框宽度；按实际外框宽同步，窄屏收缩后也保持同宽。
+useResizeObserver(triggerElement, ([entry]) => {
+  const width = entry?.target.getBoundingClientRect().width
+  if (width && width > 0) popupWidth.value = width
+})
 
 const options = computed(() => graphSpaceStore.groups)
 const showEmpty = computed(
@@ -33,8 +43,9 @@ watch(
 
 <template>
   <div
+    ref="selector"
     class="app-space-select"
-    :title="graphSpaceStore.loadError ? '图空间列表加载失败，请重试' : '切换当前工作图空间'"
+    :title="graphSpaceStore.loadError ? '图空间列表加载失败，请重试' : graphSpaceStore.current ? `切换当前工作图空间：${graphSpaceStore.current}` : '切换当前工作图空间'"
   >
     <span class="app-space-select__label">图空间</span>
     <a-cascader
@@ -46,7 +57,7 @@ watch(
       :loading="graphSpaceStore.loading"
       :disabled="graphSpaceStore.loading"
       :show-path="false"
-      :trigger-props="{ contentClass: 'app-space-select-popup' }"
+      :trigger-props="{ contentClass: 'app-space-select-popup', contentStyle: { width: `${popupWidth}px` } }"
       @change="(value: unknown) => graphSpaceStore.setCurrent(String(value ?? ''))"
     />
   </div>
@@ -67,10 +78,41 @@ watch(
   white-space: nowrap;
 }
 
-/* arco <a-select> 不透传 scoped data-v 到视图元素，类选择器匹配不上
-   （旧 .app-space-select__input{width} 是死规则），必须经包裹层 :deep 下钻 */
+/* 同时锁定 flex 基准和宽高，选中长名称、加载及空状态都不改变触发栏大小。 */
 .app-space-select :deep(.arco-select-view) {
-  width: 200px;
+  box-sizing: border-box;
+  flex: 0 0 280px;
+  width: 280px;
+  min-width: 0;
+  max-width: 280px;
+  height: 32px;
+}
+
+/* arco 的 .arco-select-view-value 默认 display:flex——text-overflow 对 flex 容器
+   无效，长空间名会被 overflow:hidden 硬裁半个字且无省略号；改回块级让 arco
+   自带的 ellipsis 真正生效（完整名悬停包裹层 title 查看） */
+.app-space-select :deep(.arco-select-view-value) {
+  display: block;
+  min-width: 0;
+}
+
+/* Arco 保留零宽 input 接收键盘事件；全局 input:focus 会给它画蓝色阴影，
+   叠在选中名称前。只清理内部 input，焦点提示仍由外层 SelectView 提供。 */
+.app-space-select :deep(.arco-select-view-input) {
+  min-width: 0;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  outline: none !important;
+  box-shadow: none !important;
+  caret-color: transparent;
+}
+
+.app-space-select :deep(.arco-select-view-input-hidden) {
+  height: 0 !important;
+  min-height: 0 !important;
+  opacity: 0;
+  pointer-events: none;
 }
 
 @media (max-width: 767px) {
@@ -84,28 +126,42 @@ watch(
   }
 
   .app-space-select :deep(.arco-select-view) {
-    width: 100%;
-    min-width: 0;
+    flex: 0 1 280px;
+    width: min(280px, 100%);
   }
 }
 
 </style>
 
 <style>
-/* 弹层 teleport 到 body，scoped 够不到，经 triggerProps contentClass 打标。
-   选择框固定默认宽，超长空间名：触发栏截断（arco 自带省略号+title 悬停），
-   下拉面板整体横向滚动查看（选项不省略，悬停 title 兜底）。 */
-.app-space-select-popup .arco-select-dropdown-list-wrapper {
-  overflow-x: auto;
+/* 弹层 teleport 到 body，经 contentClass 限定范围。面板与上方外框同宽，
+   目录切换、名称长度和选项数量只影响省略号/滚动，不再改变弹层大小。 */
+.app-space-select-popup .arco-cascader-panel {
+  width: 100%;
+  height: 200px;
 }
 
-.app-space-select-popup .arco-select-option {
-  /* 按内容自然宽撑开以触发横向滚动，短选项仍占满整行可点 */
-  width: max-content;
-  min-width: 100%;
+.app-space-select-popup .arco-cascader-panel-column {
+  box-sizing: border-box;
+  flex: 0 0 55%;
+  width: 55%;
+  min-width: 0;
 }
 
-.app-space-select-popup .arco-select-option-content {
-  overflow: visible;
+.app-space-select-popup .arco-cascader-panel-column:first-child {
+  /* 280px 下约 126px，扣除 Arco 的 46px 内边距后仍可展示五个汉字。 */
+  flex-basis: 45%;
+  width: 45%;
+}
+
+.app-space-select-popup .arco-cascader-option {
+  min-width: 0;
+}
+
+.app-space-select-popup .arco-cascader-option-label {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 </style>

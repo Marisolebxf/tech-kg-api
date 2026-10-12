@@ -1893,3 +1893,107 @@ class TestExecBudget:
                 repo._request("GET", "/api/v1/nodes/x")
         finally:
             trs_client_module._trs_exec_slots.release()
+
+
+class TestKeywordNodes:
+    @pytest.fixture(autouse=True)
+    def clear_negative_cache(self):
+        from infra.graph_db.client import _no_index_cache
+
+        _no_index_cache.clear()
+        yield
+        _no_index_cache.clear()
+
+    def test_keyword_filters_all_properties_before_count_or_paging(self):
+        queries = []
+
+        def handler(request):
+            if request.url.path == "/health":
+                return _health_ok(request)
+            query = json.loads(request.content)["query"]
+            queries.append(query)
+            if "count(*)" in query:
+                return httpx.Response(200, json={"records": [{"c": 1500}]})
+            return httpx.Response(
+                200,
+                json={
+                    "records": [
+                        {
+                            "v": {
+                                "id": "paper_1",
+                                "labels": ["Paper"],
+                                "properties": {"title_zh": "世界生命科学格局中的中国"},
+                            }
+                        }
+                    ]
+                },
+            )
+
+        repo = _make_repo(handler)
+        assert (
+            repo.keyword_nodes_by_label("Paper", "世界生命科学格局中的中国", count_only=True).total
+            == 1500
+        )
+        result = repo.keyword_nodes_by_label(
+            "Paper", "世界生命科学格局中的中国", limit=10, offset=1000
+        )
+        assert result.items[0].id == "paper_1"
+        for query in queries:
+            assert "LOOKUP ON `Paper`" in query
+            assert "keys(properties($-.v))" in query
+            assert "properties($-.v)[k]" in query
+            assert 'CONTAINS "世界生命科学格局中的中国"' in query
+        assert "| ORDER BY $-.vid | LIMIT 10 OFFSET 1000" in queries[1]
+        repo.close()
+
+    def test_keyword_quote_is_data_and_invalid_tag_is_rejected(self):
+        queries = []
+
+        def handler(request):
+            if request.url.path == "/health":
+                return _health_ok(request)
+            queries.append(json.loads(request.content)["query"])
+            return httpx.Response(200, json={"records": []})
+
+        repo = _make_repo(handler)
+        keyword = '"; DROP SPACE dev; --\\\n'
+        repo.keyword_nodes_by_label("Paper", keyword)
+        assert f"CONTAINS {json.dumps(keyword.lower(), ensure_ascii=False)}" in queries[0]
+        with pytest.raises(GraphRequestError, match="非法节点标签"):
+            repo.keyword_nodes_by_label("Paper`); DROP SPACE dev; --", keyword)
+        repo.close()
+
+    def test_keyword_fallback_only_for_missing_index_and_reuses_negative_cache(self):
+        queries = []
+
+        def handler(request):
+            if request.url.path == "/health":
+                return _health_ok(request)
+            query = json.loads(request.content)["query"]
+            queries.append(query)
+            if "LOOKUP ON" in query:
+                return httpx.Response(400, json={"error": "There is no index to use"})
+            return httpx.Response(200, json={"records": [{"c": 1}]})
+
+        repo = _make_repo(handler)
+        repo.keyword_nodes_by_label("Paper", "论文", count_only=True)
+        repo.keyword_nodes_by_label("Paper", "论文", count_only=True)
+        assert len(queries) == 3
+        assert "MATCH (v:`Paper`) WITH v WHERE" in queries[-1]
+        assert "RETURN count(v) AS c" in queries[-1]
+        repo.close()
+
+    def test_keyword_query_failure_is_not_a_missing_index_fallback(self):
+        queries = []
+
+        def handler(request):
+            if request.url.path == "/health":
+                return _health_ok(request)
+            queries.append(json.loads(request.content)["query"])
+            return httpx.Response(400, json={"error": "SyntaxError"})
+
+        repo = _make_repo(handler)
+        with pytest.raises(GraphRequestError):
+            repo.keyword_nodes_by_label("Paper", "论文")
+        assert len(queries) == 1
+        repo.close()

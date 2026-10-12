@@ -23,6 +23,15 @@ const emit = defineEmits<{
 
 const { showToast } = useToast()
 
+// Each dialog instance coalesces repeated row-loading errors within one burst.
+const reportedErrors = new Map<string, number>()
+function reportLoadError(message: string) {
+  const now = Date.now()
+  if (now - (reportedErrors.get(message) ?? -Infinity) < 2000) return
+  reportedErrors.set(message, now)
+  showToast(message, 'error')
+}
+
 const datasources = ref<MysqlDatasource[]>([])
 
 onMounted(async () => {
@@ -30,7 +39,7 @@ onMounted(async () => {
   try {
     datasources.value = await listMysqlDatasources()
   } catch (error) {
-    showToast(error instanceof Error ? error.message : '数据源列表加载失败', 'error')
+    reportLoadError(error instanceof Error ? error.message : '数据源列表加载失败')
   }
 })
 
@@ -74,6 +83,7 @@ function updateRow(index: number, value: SourceBindingRow) {
       :datasources="datasources"
       :removable="true"
       :readonly="readonly"
+      :report-load-error="reportLoadError"
       @update:model-value="(value) => updateRow(index, value)"
       @remove="removeRow(index)"
     />

@@ -25,7 +25,7 @@ vi.mock('../../../api/workflowOperations', async (importOriginal) => ({
 vi.mock('../../../api/schemaManagement', () => ({ schemaErrorMessage: vi.fn((e: unknown) => String(e)) }))
 vi.mock('../../../api/jobEvents', () => ({ subscribeJobEvents: vi.fn(() => () => {}) }))
 vi.mock('../../../stores/graphSpace', () => ({
-  useGraphSpaceStore: () => ({ spaces: ['dev2'], current: 'dev2', canWrite: () => permission.writable, canReview: () => permission.writable }),
+  useGraphSpaceStore: () => ({ spaces: ['dev2'], current: 'dev2', currentItem: { name: 'dev2', groupKind: 'public' }, canWrite: () => permission.writable, canReview: () => permission.writable }),
 }))
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
 vi.mock('../../../composables/use-toast', () => ({ useToast: () => ({ showToast: vi.fn() }) }))
@@ -254,4 +254,13 @@ it('保留上游脚本列完整名称提示', async () => {
   const scriptCell = wrapper.find('tbody tr td:nth-child(3) code')
   expect(scriptCell.attributes('title')).toContain('first.script')
   expect(scriptCell.attributes('title')).toContain('second.script')
+})
+
+it('公共空间只读显示管理员操作提醒，管理员不显示', async () => {
+  expect(wrapper.find('.space-readonly-bar').exists()).toBe(false)
+  wrapper.unmount()
+  permission.writable = false
+  mountView()
+  await flushPromises()
+  expect(wrapper.get('.space-readonly-bar').text()).toBe('当前图空间为共享生产空间：图谱构建仅可查看，操作需管理员执行。')
 })

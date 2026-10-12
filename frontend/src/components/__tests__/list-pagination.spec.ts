@@ -10,6 +10,53 @@ const mountPager = (props: Record<string, unknown> = {}) =>
   })
 
 describe('ListPagination', () => {
+  const pageNumbers = (w: ReturnType<typeof mountPager>) => w.findAll('.list-pagination__page')
+    .map(button => button.text()).filter(text => /^\d+$/.test(text))
+
+  it('七页窗口点击右侧边缘后前进，左侧边缘后返回，不固定首尾页或省略号', async () => {
+    const w = mountPager({ total: 1000, slidingPages: true })
+    expect(pageNumbers(w)).toEqual(['1', '2', '3', '4', '5', '6', '7'])
+    expect(w.findComponent(Pagination).exists()).toBe(false)
+    expect(w.get('[aria-label="上一页"]').attributes('disabled')).toBeDefined()
+    await w.get('[aria-label="第 7 页"]').trigger('click')
+    expect(w.emitted('change')).toEqual([[7]])
+    await w.setProps({ page: 7 })
+    expect(pageNumbers(w)).toEqual(['4', '5', '6', '7', '8', '9', '10'])
+    expect(w.get('[aria-current="page"]').text()).toBe('7')
+    await w.setProps({ page: 8 })
+    expect(pageNumbers(w)).toEqual(['4', '5', '6', '7', '8', '9', '10'])
+    await w.setProps({ page: 10 })
+    expect(pageNumbers(w)).toEqual(['7', '8', '9', '10', '11', '12', '13'])
+    await w.setProps({ page: 7 })
+    expect(pageNumbers(w)).toEqual(['4', '5', '6', '7', '8', '9', '10'])
+    await w.setProps({ page: 4 })
+    expect(pageNumbers(w)).toEqual(['1', '2', '3', '4', '5', '6', '7'])
+  })
+
+  it('七页窗口支持首尾边界、每页条数变化和总页数缩小', async () => {
+    const w = mountPager({ total: 1000, page: 100, slidingPages: true })
+    expect(pageNumbers(w)).toEqual(['94', '95', '96', '97', '98', '99', '100'])
+    expect(w.get('[aria-label="下一页"]').attributes('disabled')).toBeDefined()
+    await w.setProps({ page: 1, pageSize: 20 })
+    expect(pageNumbers(w)).toEqual(['1', '2', '3', '4', '5', '6', '7'])
+    await w.setProps({ total: 81, page: 5 })
+    expect(pageNumbers(w)).toEqual(['1', '2', '3', '4', '5'])
+    await w.setProps({ total: 0, page: 1 })
+    expect(pageNumbers(w)).toEqual(['1'])
+    expect(w.get('[aria-label="下一页"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('七页窗口的上下页透传页码，加载中禁止翻页', async () => {
+    const w = mountPager({ total: 1000, page: 7, slidingPages: true })
+    await w.get('[aria-label="上一页"]').trigger('click')
+    await w.get('[aria-label="下一页"]').trigger('click')
+    expect(w.emitted('change')).toEqual([[6], [8]])
+    await w.setProps({ loading: true })
+    expect(w.findAll('.list-pagination__page').every(button => button.attributes('disabled') !== undefined)).toBe(true)
+    await w.get('[aria-label="第 8 页"]').trigger('click')
+    expect(w.emitted('change')).toEqual([[6], [8]])
+  })
+
   it('展示总数与页位，页数向上取整', () => {
     const w = mountPager()
     expect(w.text()).toContain('共 12 条 · 第 1 / 2 页')

@@ -82,7 +82,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from db_model.llm_config import LlmConfig
         from db_model.milvus_config import MilvusConfig
         from db_model.mysql_datasource import MysqlDatasource
-        from db_model.platform_governance import GraphSpaceVectorDatabase, UserGraphSpace
+        from db_model.platform_governance import (
+            GraphSpaceProfile,
+            GraphSpaceVectorDatabase,
+            UserGraphSpace,
+            UserGraphSpaceHidden,
+        )
         from db_model.script_watermark import ScriptWatermark
         from infra.mysql import get_engine
 
@@ -96,6 +101,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     EmbeddingConfig.__table__,
                     ScriptWatermark.__table__,
                     UserGraphSpace.__table__,
+                    UserGraphSpaceHidden.__table__,
+                    GraphSpaceProfile.__table__,
                     GraphSpaceVectorDatabase.__table__,
                     IndirectRelationAnnotation.__table__,
                 ],

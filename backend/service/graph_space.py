@@ -15,10 +15,15 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from db_model.platform_governance import GraphSpaceVectorDatabase, UserGraphSpace
+from db_model.platform_governance import (
+    GraphSpaceProfile,
+    GraphSpaceVectorDatabase,
+    UserGraphSpace,
+    UserGraphSpaceHidden,
+)
 from infra.graph_db import TRSGraphClient, TRSGraphSettings, get_trs_graph_client
 from infra.milvus import get_milvus_client
 from service.platform_access import PlatformActor
@@ -96,15 +101,39 @@ class GraphSpaceService:
         """当前用户可工作空间：默认业务空间 + 本人绑定，绑定对所有用户（含管理员）生效。
 
         共享读取不落永久绑定，也不赋予创建空间或图写入权限。
+        RBAC 模式下解绑（隐藏）的空间从这里移除；配置页全量列表仍可见。
         """
         from service.business_access_control import rbac_enabled, space_items
 
         if rbac_enabled():
-            return space_items(actor)
+            return [item for item in self._with_descriptions(space_items(actor)) if item["mine"]]
         bound_names = [item["name"] for item in self.bound_spaces(actor.user_id)]
         bound = set(bound_names)
+        descriptions = self._space_descriptions()
         names = dict.fromkeys([default_graph_space(), *bound_names])
-        return [{"name": name, "bound": name in bound, "mine": name in bound} for name in names]
+        return [
+            {
+                "name": name,
+                "bound": name in bound,
+                "mine": name in bound,
+                "description": descriptions.get(name, ""),
+            }
+            for name in names
+        ]
+
+    def _space_descriptions(self) -> dict[str, str]:
+        return {
+            row.space_name: row.description
+            for row in self._session.execute(select(GraphSpaceProfile)).scalars()
+            if row.description
+        }
+
+    def _with_descriptions(self, items: list[dict]) -> list[dict]:
+        """RBAC 模式列表项（space_items）补挂空间说明；已有同名键则不覆盖。"""
+        descriptions = self._space_descriptions()
+        for item in items:
+            item.setdefault("description", descriptions.get(item.get("name", ""), ""))
+        return items
 
     # Nebula SHOW SPACES 结果做 30s 进程内缓存：空间列表极少变化，而压测/高频
     # 访问下每次请求都打 Nebula 会拖垮图服务（2026-09-19 用例 08）。
@@ -133,18 +162,43 @@ class GraphSpaceService:
         from service.business_access_control import rbac_enabled, space_items
 
         if rbac_enabled():
-            return space_items(actor)
+            return self._with_descriptions(space_items(actor))
         if not actor.is_admin:
             return self.list_work_spaces_for_actor(actor)
         bound_names = [item["name"] for item in self.bound_spaces(actor.user_id)]
         bound = set(bound_names)
+        descriptions = self._space_descriptions()
         all_spaces = self._all_spaces()
-        return [{"name": s, "bound": s in bound, "mine": s in bound} for s in all_spaces]
+        return [
+            {
+                "name": s,
+                "bound": s in bound,
+                "mine": s in bound,
+                "description": descriptions.get(s, ""),
+            }
+            for s in all_spaces
+        ]
 
     # ---------- 绑定 / 解绑 ----------
 
+    def _require_personal_binding_access(self, actor: PlatformActor, space_name: str) -> None:
+        from fastapi import HTTPException
+
+        from service.business_access_control import _space_allowed, rbac_enabled, space_registration
+
+        if not rbac_enabled():
+            return
+        if actor.business_only or not (actor.is_admin or (rbac_enabled() and actor.can_develop)):
+            raise HTTPException(403, "仅管理员和开发人员可绑定或解绑图空间")
+        if rbac_enabled() and not actor.is_admin:
+            row = space_registration(self._session, space_name)
+            if row is None or not _space_allowed(actor, row, "read"):
+                raise HTTPException(403, "无权绑定或解绑该图空间")
+
     def bind(self, actor: PlatformActor, space_name: str) -> dict:
+        """把空间加回"我的图空间"：旧模式写绑定行，新模式清"解绑（隐藏）"标记。"""
         space_name = _validate_name(space_name)
+        self._require_personal_binding_access(actor, space_name)
         try:
             existing = self.client.list_spaces()
         except Exception as exc:  # noqa: BLE001
@@ -152,7 +206,20 @@ class GraphSpaceService:
         if space_name not in existing:
             raise GraphSpaceError(f"图空间 {space_name} 不存在")
         GraphSpaceService._all_spaces_cached_at = 0.0
-        if not self.is_bound(actor.user_id, space_name):
+        from service.business_access_control import rbac_enabled
+
+        if rbac_enabled():
+            # 新模式可见性来自业务授权：绑定 = 删"解绑"排除行，恢复默认可见
+            self._session.execute(
+                delete(UserGraphSpaceHidden).where(
+                    UserGraphSpaceHidden.user_id == actor.user_id,
+                    UserGraphSpaceHidden.space_name == space_name,
+                )
+            )
+            self._session.commit()
+            # 新模式的绑定仅恢复个人显示，不能顺带修改公共空间的向量库。
+            return {"name": space_name, "bound": True, "mine": True}
+        elif not self.is_bound(actor.user_id, space_name):
             self._session.add(
                 UserGraphSpace(
                     user_id=actor.user_id, space_name=space_name, created_at=datetime.now(UTC)
@@ -164,8 +231,26 @@ class GraphSpaceService:
         return self._space_result(space_name, db_status)
 
     def unbind(self, actor: PlatformActor, space_name: str) -> bool:
-        """解除当前用户与空间的绑定；只删绑定行，不动图数据。"""
+        """解除当前用户与空间的关联；不动图数据，重新绑定后照常使用。
+
+        旧模式删 kg_user_graph_space 绑定行；新模式写 kg_user_graph_space_hidden
+        排除行（可见性来自业务授权，解绑只能以排除表达），下拉不再显示该空间。
+        """
         space_name = _validate_name(space_name)
+        self._require_personal_binding_access(actor, space_name)
+        from service.business_access_control import rbac_enabled
+
+        if rbac_enabled():
+            stmt = select(UserGraphSpaceHidden).where(
+                UserGraphSpaceHidden.user_id == actor.user_id,
+                UserGraphSpaceHidden.space_name == space_name,
+            )
+            if self._session.execute(stmt).scalars().first() is None:
+                self._session.add(
+                    UserGraphSpaceHidden(user_id=actor.user_id, space_name=space_name)
+                )
+                self._session.commit()
+            return True
         stmt = select(UserGraphSpace).where(
             UserGraphSpace.user_id == actor.user_id,
             UserGraphSpace.space_name == space_name,
@@ -179,16 +264,27 @@ class GraphSpaceService:
 
     # ---------- 创建 ----------
 
-    def create_space(self, actor: PlatformActor, space_name: str) -> dict:
-        """管理员真实创建图空间；业务归属由线下数据库配置。
+    def create_space(self, actor: PlatformActor, space_name: str, description: str = "") -> dict:
+        """管理员创建默认公共，开发人员创建归属唯一业务，说明选填。
 
         CREATE SPACE 需要一个已存在的空间作为执行上下文，因此走默认 env 空间客户端；
         创建后有 schema 传播延迟，轮询 SHOW SPACES 确认；旧模式保留创建者绑定。
         """
         from fastapi import HTTPException
 
-        if not actor.is_admin or actor.business_only:
-            raise HTTPException(403, "图空间须由管理员线下批准后创建")
+        from db_model.business_access import BusinessClient, BusinessGraphSpace, BusinessSpacePolicy
+        from service.business_access_control import rbac_enabled
+
+        if actor.business_only or not (actor.is_admin or (rbac_enabled() and actor.can_develop)):
+            raise HTTPException(403, "仅管理员和开发人员可创建图空间")
+        business_id = None
+        if rbac_enabled() and not actor.is_admin:
+            if len(actor.developer_business_ids) != 1:
+                raise HTTPException(403, "开发人员必须且只能归属一个业务")
+            business_id = actor.developer_business_ids[0]
+            business = self._session.get(BusinessClient, business_id)
+            if business is None or not business.enabled:
+                raise HTTPException(403, "所属业务不存在或已停用")
         space_name = _validate_name(space_name)
         try:
             existing = self.client.list_spaces()
@@ -196,6 +292,41 @@ class GraphSpaceService:
             raise GraphSpaceError(f"图服务不可用: {exc}") from exc
         if space_name in existing:
             raise GraphSpaceError(f"图空间 {space_name} 已存在")
+        if rbac_enabled():
+            policy = self._session.get(BusinessSpacePolicy, space_name)
+            registration = self._session.get(BusinessGraphSpace, space_name)
+            # 管理员重新创建历史无归属预留时，按默认公共规则补齐归属。
+            invalid_reservation = (
+                policy is not None and policy.visibility not in {"public", "business"}
+            ) or (
+                policy is None
+                and registration is not None
+                and not registration.is_shared_production
+                and not registration.client_id
+            )
+            if actor.is_admin and invalid_reservation:
+                if policy is None:
+                    policy = BusinessSpacePolicy(space_name=space_name)
+                    self._session.add(policy)
+                policy.visibility, policy.client_id = "public", None
+                self._session.commit()
+            if not actor.is_admin and (policy is not None or registration is not None):
+                from service.business_access_control import _space_allowed, space_registration
+
+                reserved = space_registration(self._session, space_name)
+                if not _space_allowed(actor, reserved, "write"):
+                    raise HTTPException(403, "空间名称已由其他归属预留")
+            if policy is None and registration is None:
+                # 在图数据库 DDL 之前持久化归属。失败可按原归属重试，
+                # 列表只返回真实存在的空间，预留不会产生可选的空空间。
+                self._session.add(
+                    BusinessSpacePolicy(
+                        space_name=space_name,
+                        visibility="business" if business_id else "public",
+                        client_id=business_id,
+                    )
+                )
+                self._session.commit()
         # 副本数与分区数可按集群规模配置：副本数超过在线 storaged 主机数时 Nebula 报
         # "Host not enough!"（按副本数找主机）。交付环境 storaged 单副本（config.py
         # 文档同述），默认 1；多节点生产集群设 GRAPH_SPACE_REPLICA_FACTOR=3
@@ -230,11 +361,19 @@ class GraphSpaceService:
                 )
             )
             self._session.commit()
+        description = (description or "").strip()
+        if description:
+            profile = self._session.get(GraphSpaceProfile, space_name)
+            if profile is None:
+                self._session.add(GraphSpaceProfile(space_name=space_name, description=description))
+            else:
+                profile.description = description
+            self._session.commit()
         # 新空间立即可见：作废 _all_spaces 的 30s 缓存，避免空间列表/控制台
         # 下拉在缓存期内看不到刚创建的空间
         GraphSpaceService._all_spaces_cached_at = 0.0
         db_status, _ = self._ensure_vector_database(space_name)
-        return self._space_result(space_name, db_status)
+        return self._space_result(space_name, db_status, description)
 
     def _wait_for_space(self, space_name: str) -> bool:
         for _ in range(_PROPAGATION_ATTEMPTS):
@@ -248,11 +387,12 @@ class GraphSpaceService:
 
     # ---------- 向量库一一对应登记 ----------
 
-    def _space_result(self, space_name: str, vector_db_status: str) -> dict:
+    def _space_result(self, space_name: str, vector_db_status: str, description: str = "") -> dict:
         result = {
             "name": space_name,
             "bound": True,
             "mine": True,
+            "description": description,
             "vectorDbStatus": vector_db_status,
         }
         if vector_db_status != "ready":

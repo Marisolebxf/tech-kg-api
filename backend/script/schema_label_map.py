@@ -20,7 +20,7 @@ PRODUCT_LABELS: dict[str, str] = {
     "AUTHORED_BY": "论文署名关系",
     "COAUTHOR_WITH": "专家合著关系",
     "PUBLISHED_IN": "论文发表关系",
-    "HAS_KEYWORD": "论文主题",
+    "HAS_KEYWORD": "论文主题关联关系",
     "CITES": "论文引用关系",
     "CITED_BY": "论文被引关系",
     "LEADS": "项目负责人",

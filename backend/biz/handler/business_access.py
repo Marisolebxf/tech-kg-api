@@ -206,8 +206,10 @@ def save_member(
     )
     for client_id in client_ids:
         _business(session, client_id)
-    if not client_ids and payload.role == "developer":
-        raise HTTPException(400, "开发维护角色必须归属至少一个业务")
+    if payload.role == "developer" and len(client_ids) != 1:
+        raise HTTPException(400, "开发人员必须且只能归属一个业务")
+    if payload.role != "developer":
+        client_ids = []
     try:
         set_admin_role(
             session,
@@ -243,6 +245,8 @@ def save_space(space_name: str, payload: SpacePayload, actor: CurrentAdmin, sess
         raise HTTPException(422, "图空间名称不合法")
     if payload.isSharedProduction and payload.clientId:
         raise HTTPException(400, "共享生产空间不归属单个业务")
+    if not payload.isSharedProduction and not payload.clientId:
+        raise HTTPException(400, "请选择公共空间或所属业务")
     if payload.clientId:
         _business(session, payload.clientId)
     if space_name not in GraphSpaceService(session).client.list_spaces():

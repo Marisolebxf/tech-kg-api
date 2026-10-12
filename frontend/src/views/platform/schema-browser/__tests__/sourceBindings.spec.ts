@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
+import SourceBindingRowVue from '../sourceBindingRow.vue'
+const { toast } = vi.hoisted(() => ({ toast: vi.fn() }))
+vi.mock('../../../../composables/use-toast', () => ({ useToast: () => ({ showToast: toast }) }))
 import SourceBindings from '../sourceBindings.vue'
 import { emptySourceBindingRow } from '../sourceBindingRows'
 vi.mock('../../../../api/mysqlDatasource', () => ({ listMysqlDatasources: vi.fn().mockResolvedValue([]) }))
@@ -29,4 +32,19 @@ describe('source binding append validation', () => {
     expect(w.emitted('update:modelValue')![0]![0]).toEqual([emptySourceBindingRow()])
     w.unmount()
   })
+})
+
+it('coalesces identical errors across rows but permits a later retry message', () => {
+  toast.mockClear()
+  const w = mountBindings([emptySourceBindingRow(), emptySourceBindingRow()])
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(10000)
+  try {
+    const rows = w.findAllComponents(SourceBindingRowVue)
+    rows[0]!.props('reportLoadError')!('加载失败')
+    rows[1]!.props('reportLoadError')!('加载失败')
+    expect(toast).toHaveBeenCalledTimes(1)
+    clock.mockReturnValue(13000)
+    rows[1]!.props('reportLoadError')!('加载失败')
+    expect(toast).toHaveBeenCalledTimes(2)
+  } finally { clock.mockRestore(); w.unmount() }
 })

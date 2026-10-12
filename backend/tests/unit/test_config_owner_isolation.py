@@ -1,4 +1,4 @@
-"""配置资源 owner 隔离单测：列表过滤 + 跨用户访问 403。
+"""共享配置角色权限测试：管理员管理、开发人员只读选用、普通用户拒绝。
 
 用 SQLite 内存库 + dependency_overrides（get_session / require_platform_actor）
 直接挂四个配置 router，不需要真实 MySQL / Redis。
@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import datetime
 
 import pytest
@@ -106,15 +107,13 @@ def _seed_llm(session_factory, config_id: str, owner: str, *, is_default: bool =
 
 
 @pytest.mark.asyncio
-async def test_list_filters_by_owner(session_factory) -> None:
+async def test_ordinary_user_cannot_list_shared_configs(session_factory) -> None:
     _seed_llm(session_factory, "LLM-A", USER_A)
     _seed_llm(session_factory, "LLM-B", USER_B)
 
     async with _client(_make_app(session_factory, _actor(USER_A))) as client:
         resp = await client.get("/api/v1/llm-config/llm-configs")
-        assert resp.status_code == 200
-        ids = [item["id"] for item in resp.json()["data"]]
-        assert ids == ["LLM-A"]
+        assert resp.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -145,8 +144,8 @@ async def test_cross_user_access_forbidden(session_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_sets_owner_to_actor(session_factory) -> None:
-    async with _client(_make_app(session_factory, _actor(USER_A))) as client:
+async def test_admin_create_records_actor_without_business_binding(session_factory) -> None:
+    async with _client(_make_app(session_factory, _actor(USER_A, is_admin=True))) as client:
         resp = await client.post(
             "/api/v1/llm-config/llm-configs",
             json={"name": "mine", "baseUrl": "http://llm", "model": "m", "apiKey": "k"},
@@ -160,7 +159,7 @@ async def test_create_sets_owner_to_actor(session_factory) -> None:
 async def test_update_cannot_change_owner(session_factory) -> None:
     _seed_llm(session_factory, "LLM-A", USER_A)
 
-    async with _client(_make_app(session_factory, _actor(USER_A))) as client:
+    async with _client(_make_app(session_factory, _actor(USER_A, is_admin=True))) as client:
         resp = await client.put("/api/v1/llm-config/llm-configs/LLM-A", json={"owner": USER_B})
         assert resp.status_code == 200
         assert resp.json()["data"]["owner"] == USER_A
@@ -195,36 +194,10 @@ async def test_mysql_databases_requires_owner(session_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_set_default_scoped_to_owner(session_factory) -> None:
-    """A、B 各设默认互不影响：is_default 按 owner 隔离，不再全局唯一。"""
-    _seed_llm(session_factory, "LLM-A1", USER_A)
-    _seed_llm(session_factory, "LLM-A2", USER_A)
-    _seed_llm(session_factory, "LLM-B1", USER_B)
-
-    async with _client(_make_app(session_factory, _actor(USER_A))) as client:
-        assert (
-            await client.post("/api/v1/llm-config/llm-configs/LLM-A1/set-default")
-        ).status_code == 200
-
-    async with _client(_make_app(session_factory, _actor(USER_B))) as client:
-        assert (
-            await client.post("/api/v1/llm-config/llm-configs/LLM-B1/set-default")
-        ).status_code == 200
-        resp = await client.get("/api/v1/llm-config/llm-configs")
-        defaults = {item["id"] for item in resp.json()["data"] if item["isDefault"]}
-        assert defaults == {"LLM-B1"}
-
-    s = session_factory()
-    rows = {r.id: r.is_default for r in s.query(LlmConfig).all()}
-    s.close()
-    assert rows == {"LLM-A1": True, "LLM-A2": False, "LLM-B1": True}
-
-
-@pytest.mark.asyncio
 async def test_admin_set_default_exclusive_globally(session_factory) -> None:
     """管理员看到全局列表：设默认时同类别全局互斥（00382），跨 owner 的旧默认一并取消。
 
-    普通用户仍按自身范围互斥（见 test_set_default_scoped_to_owner），互斥范围＝操作者可见范围。
+    开发人员和普通用户不能设置默认。
     """
     _seed_llm(session_factory, "LLM-A1", USER_A, is_default=True)
     _seed_llm(session_factory, "LLM-A2", USER_A)
@@ -242,3 +215,131 @@ async def test_admin_set_default_exclusive_globally(session_factory) -> None:
     rows = {r.id: r.is_default for r in s.query(LlmConfig).all()}
     s.close()
     assert rows == {"LLM-A1": False, "LLM-A2": False, "LLM-B1": True}
+
+
+@pytest.mark.asyncio
+async def test_developer_reads_all_shared_configs_and_cannot_mutate(session_factory, monkeypatch):
+    monkeypatch.setenv("BUSINESS_RBAC_ENABLED", "true")
+    _seed_llm(session_factory, "LLM-OLD", "legacy-admin")
+    _seed_llm(session_factory, "LLM-OTHER", "business:other")
+    with session_factory() as session:
+        session.add(
+            MysqlDatasource(
+                id="MYSQL-OTHER",
+                name="other",
+                host="host",
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+                username="u",
+                password="secret",
+                owner="business:other",
+            )
+        )
+        session.commit()
+    developer = replace(
+        _actor(USER_A),
+        business_id="mine",
+        business_role="developer",
+        context_business_id="mine",
+        context_graph_space="mine-space",
+    )
+    monkeypatch.setattr(
+        "application.mysql_datasource.MysqlDatasourceApplication.list_databases",
+        lambda self, config_id: ["source_db"],
+    )
+    monkeypatch.setattr(
+        "application.mysql_datasource.MysqlDatasourceApplication.list_tables",
+        lambda self, config_id, db: [{"name": "source_table"}],
+    )
+    monkeypatch.setattr(
+        "application.mysql_datasource.MysqlDatasourceApplication.list_columns",
+        lambda self, config_id, table, db: [{"name": "id"}],
+    )
+    async with _client(_make_app(session_factory, developer)) as client:
+        llm = "/api/v1/llm-config/llm-configs"
+        mysql = "/api/v1/mysql-datasources"
+        response = await client.get(llm)
+        assert {row["id"] for row in response.json()["data"]} == {"LLM-OLD", "LLM-OTHER"}
+        assert (await client.get(mysql)).json()["data"][0]["id"] == "MYSQL-OTHER"
+        for endpoint in [f"{llm}/LLM-OTHER", f"{mysql}/MYSQL-OTHER"]:
+            assert (await client.get(endpoint)).status_code == 200
+            assert (await client.put(endpoint, json={"name": "forbidden"})).status_code == 403
+            assert (await client.delete(endpoint)).status_code == 403
+            for operation in ["set-default", "test"]:
+                assert (await client.post(f"{endpoint}/{operation}")).status_code == 403
+        assert (
+            await client.post(llm, json={"name": "x", "baseUrl": "http://llm", "model": "m"})
+        ).status_code == 403
+        assert (
+            await client.post(mysql, json={"name": "x", "host": "h", "username": "u"})
+        ).status_code == 403
+        assert (
+            await client.post(
+                f"{llm}/verify", json={"baseUrl": "http://llm", "model": "m", "apiKey": "k"}
+            )
+        ).status_code == 403
+        for suffix in ["databases", "tables", "tables/source_table/columns"]:
+            assert (await client.get(f"{mysql}/MYSQL-OTHER/{suffix}")).status_code == 200
+    with session_factory() as session:
+        assert session.get(LlmConfig, "LLM-OTHER").owner == "business:other"
+        assert session.get(MysqlDatasource, "MYSQL-OTHER").name == "other"
+
+
+def test_workflow_selectors_allow_shared_configs_but_keep_graph_guard(session_factory, monkeypatch):
+    from fastapi import HTTPException
+
+    from biz.handler import workflow_system
+
+    monkeypatch.setenv("BUSINESS_RBAC_ENABLED", "true")
+    _seed_llm(session_factory, "LLM-OTHER", "business:other")
+    with session_factory() as session:
+        session.add(
+            MysqlDatasource(
+                id="MYSQL-OTHER",
+                name="other",
+                host="host",
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+                username="u",
+                password="secret",
+                owner="legacy-admin",
+            )
+        )
+        session.commit()
+    monkeypatch.setattr("infra.mysql.create_session", session_factory)
+    developer = replace(_actor(USER_A), business_id="mine", business_role="developer")
+
+    def guard(actor, space, action):
+        assert action == "write"
+        if space != "mine-space":
+            raise HTTPException(403, "space denied")
+
+    monkeypatch.setattr(workflow_system, "ensure_space_access", guard)
+    selectors = {
+        "llm_config_id": "LLM-OTHER",
+        "mysql_datasource_id": "MYSQL-OTHER",
+        "graph_space": "mine-space",
+    }
+    workflow_system._validate_resource_selectors(developer, selectors)
+    with pytest.raises(HTTPException, match="space denied"):
+        workflow_system._validate_resource_selectors(
+            developer, {**selectors, "graph_space": "public"}
+        )
+
+
+@pytest.mark.asyncio
+async def test_admin_business_context_does_not_filter_legacy_configuration(
+    session_factory, monkeypatch
+):
+    monkeypatch.setenv("BUSINESS_RBAC_ENABLED", "true")
+    _seed_llm(session_factory, "LLM-LEGACY", "former-admin")
+    administrator = replace(
+        _actor("admin", is_admin=True), context_business_id="mine", context_graph_space="mine-space"
+    )
+    async with _client(_make_app(session_factory, administrator)) as client:
+        path = "/api/v1/llm-config/llm-configs"
+        assert (await client.get(path)).json()["data"][0]["id"] == "LLM-LEGACY"
+        assert (await client.get(f"{path}/LLM-LEGACY")).status_code == 200
+        response = await client.put(f"{path}/LLM-LEGACY", json={"description": "updated"})
+        assert response.status_code == 200
+        assert response.json()["data"]["owner"] == "former-admin"

@@ -1,12 +1,15 @@
 """实体检索：图实体同步 Milvus（BM25 稀疏 + m3e 稠密）混合搜索 + 图直查浏览。
 
-两条查询路径：
+查询路径：
 
 1. ``browse``（关键词为空的默认视图）：直接查图空间按标签分页（页内按 vid 排序，
    跨标签优先用索引统计快照拼接分页窗口，快照不可用时实时计数）；
 2. ``search``（关键词非空）：先用图库 VID / 已索引名称和业务 ID 精确查找；
    无精确命中时用 Milvus ``hybrid_search``（dense + BM25 sparse，RRF 融合），
    ``entity_type`` / ``graph_space`` 标量过滤；embedding 失败降级单路 BM25。
+
+3. ``keyword_search``（实体列表）：文字包含匹配 VID / 名称 / 全部公共属性，
+   直接查询图库并按实际匹配数分页，不返回语义相似项。
 
 索引（``reindex``）按图空间独立：单集合 ``kg_entity`` 内 ``graph_space`` 字段
 分区，使用 ``graph_space::vid`` 作为集合主键，BM25 词表状态存控制库
@@ -16,9 +19,11 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import json
 import logging
 import os
+import tempfile
 import threading
 import time
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -42,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "kg_entity"
 DEFAULT_PAGE_SIZE = 10
+ENTITY_PREVIEW_LIMIT = 1000
 GRAPH_PAGE_SIZE = 200
 # m3e embedding 服务侧限制：单条 ≤16000 字符、单批 ≤ M3E_MAX_BATCH_SIZE（当前 64）。
 # 任一超限服务直接 422 拒绝整批，全量重建在 pass 2 首批即中断（2026-09-21 实测）。
@@ -94,12 +100,17 @@ search_cache = EntityResponseCache(
     namespace="entity-search:search:v2",
     ttl_seconds=float(os.getenv("ENTITY_SEARCH_CACHE_SECONDS", "60")),
 )
+keyword_cache = EntityResponseCache(
+    namespace="entity-search:keyword:v1",
+    ttl_seconds=float(os.getenv("ENTITY_SEARCH_CACHE_SECONDS", "60")),
+)
 
 
 async def clear_entity_caches() -> None:
     """清掉搜索/浏览的 L1 进程 + L2 Redis 缓存（reindex 完成或写图联动时调用）。"""
     _types_cache.clear()  # 类型下拉计数随重建变化，一并失效
-    await asyncio.gather(browse_cache.clear(), search_cache.clear())
+    _node_count_cache.clear()
+    await asyncio.gather(browse_cache.clear(), search_cache.clear(), keyword_cache.clear())
 
 
 def invalidate_entity_caches_sync() -> None:
@@ -112,6 +123,8 @@ def invalidate_entity_caches_sync() -> None:
     else:
         browse_cache.clear_local()
         search_cache.clear_local()
+        keyword_cache.clear_local()
+        _node_count_cache.clear()
 
 
 class EntitySearchError(Exception):
@@ -588,6 +601,179 @@ class EntitySearchService:
 
     def __init__(self, session: Session) -> None:
         self._session = session
+
+    def keyword_counts(
+        self,
+        *,
+        keyword: str,
+        space: str | None = None,
+        entity_type: str | None = None,
+    ) -> dict[str, int]:
+        """实体列表文字搜索的全量匹配计数，不依赖 Milvus/embedding 状态。"""
+        graph = get_space_client(space or _default_space())
+        labels = sorted(graph.labels())
+        if entity_type:
+            if entity_type not in labels:
+                raise EntitySearchError(f"图空间中不存在实体类型: {entity_type}")
+            labels = [entity_type]
+        try:
+            return {
+                label: graph.keyword_nodes_by_label(label, keyword.strip(), count_only=True).total
+                for label in labels
+            }
+        except Exception as exc:
+            raise EntitySearchError("实体文字检索暂不可用，请稍后重试") from exc
+
+    def keyword_search(
+        self,
+        *,
+        keyword: str,
+        space: str | None = None,
+        entity_type: str | None = None,
+        limit: int = 10,
+        offset: int = 0,
+        counts: dict[str, int] | None = None,
+    ) -> dict[str, Any]:
+        """按类型/VID 稳定分页，只返回文字实际匹配的实体，不补语义相似项。"""
+        keyword = keyword.strip()
+        if not keyword:
+            raise EntitySearchError("关键词不能为空")
+        resolved_space = space or _default_space()
+        if counts is None:
+            counts = self.keyword_counts(
+                keyword=keyword, space=resolved_space, entity_type=entity_type
+            )
+        graph = get_space_client(resolved_space)
+        items = []
+        cursor = 0
+        try:
+            for label, count in sorted(counts.items()):
+                start, end = max(offset - cursor, 0), min(offset + limit - cursor, count)
+                cursor += count
+                if start < end:
+                    rows = graph.keyword_nodes_by_label(
+                        label, keyword, limit=end - start, offset=start
+                    )
+                    items.extend(_serialize_browse_item(node, label) for node in rows.items)
+                if cursor >= offset + limit:
+                    break
+        except Exception as exc:
+            raise EntitySearchError("实体文字检索暂不可用，请稍后重试") from exc
+        return {
+            "items": items,
+            "total": sum(counts.values()),
+            "returned": len(items),
+            "keyword": keyword,
+            "entityType": entity_type,
+            "graphSpace": resolved_space,
+            "limit": limit,
+            "offset": offset,
+            "mode": "keyword",
+        }
+
+    @staticmethod
+    def preview_page(
+        snapshot: dict[str, Any], *, keyword: str = "", limit: int = 10, offset: int = 0
+    ) -> dict[str, Any]:
+        """先固定浏览数据集，再筛选和分页；绝不按关键词从全图补充实体。"""
+        keyword = keyword.strip()
+        needle = keyword.casefold()
+        candidates = snapshot.get("items", [])[:ENTITY_PREVIEW_LIMIT]
+        if needle:
+            candidates = [
+                item
+                for item in candidates
+                if any(
+                    needle in str(value if value is not None else "").casefold()
+                    for value in (
+                        item.get("name"),
+                        item.get("entityId"),
+                        item.get("vid"),
+                        *(item.get("properties") or {}).values(),
+                    )
+                )
+            ]
+        items = candidates[offset : offset + limit]
+        return {
+            "items": items,
+            "offset": offset,
+            "limit": limit,
+            "returned": len(items),
+            "total": len(candidates),
+            "keyword": keyword,
+            "entityType": snapshot.get("entityType"),
+            "mode": "keyword" if keyword else "browse",
+        }
+
+    def export_csv(self, *, space: str | None = None, entity_type: str | None = None) -> str:
+        """分批写入完整 CSV，不使用展示截断、索引计数快照或搜索命中集。
+
+        文件写完才允许下载；任一标签/批次失败时清理文件并报错，避免把部分
+        数据当作全量导出。调用方负责在响应完成后删除临时文件。
+        """
+        graph = get_space_client(space or _default_space())
+        labels = sorted(graph.labels())
+        if entity_type:
+            if entity_type not in labels:
+                raise EntitySearchError(f"图空间中不存在实体类型: {entity_type}")
+            labels = [entity_type]
+
+        def safe_cell(value: str) -> str:
+            # Excel 等工具打开 CSV 时不应执行实体名称/ID 中的公式。
+            probe = value.lstrip()
+            return (
+                "'" + value
+                if probe.startswith(("=", "+", "-", "@")) or value.startswith(("\t", "\r", "\n"))
+                else value
+            )
+
+        path: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8-sig", newline="", suffix=".csv", delete=False
+            ) as output:
+                path = output.name
+                writer = csv.writer(output)
+                writer.writerow(["实体名称", "ID", "实体类型", "VID", "公共属性(JSON)"])
+                for label in labels:
+                    offset = 0
+                    while True:
+                        nodes = graph.paged_nodes_by_label(label, limit=1000, offset=offset)
+                        if not nodes:
+                            break
+                        for node in nodes:
+                            props = dict(node.properties or {})
+                            vid = str(node.id)
+                            entity_id = str(
+                                next(
+                                    (
+                                        props.get(key)
+                                        for key in ("id", "entity_id")
+                                        if _scalar(props.get(key))
+                                    ),
+                                    vid,
+                                )
+                            )
+                            writer.writerow(
+                                [
+                                    safe_cell(value)
+                                    for value in (
+                                        extract_entity_name(props, vid),
+                                        entity_id,
+                                        label,
+                                        vid,
+                                        json.dumps(props, ensure_ascii=False, default=str),
+                                    )
+                                ]
+                            )
+                        offset += len(nodes)
+                        if len(nodes) < 1000:
+                            break
+            return path
+        except BaseException:
+            if path is not None:
+                os.unlink(path)
+            raise
 
     # ------------------------------------------------------------------
     # 浏览（关键词为空）：图直查分页

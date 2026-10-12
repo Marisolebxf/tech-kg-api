@@ -16,6 +16,7 @@ export interface GraphSpaceItem {
   name: string
   bound: boolean
   mine: boolean
+  description?: string
 }
 
 export interface BoundGraphSpace {
@@ -49,10 +50,16 @@ export async function listGraphSpaceItems(userId = currentUserId()): Promise<Gra
   ).items
 }
 
-/** 新建图空间（真实 CREATE SPACE，创建后自动绑定到当前用户）。 */
-export async function createGraphSpace(name: string, userId = currentUserId()): Promise<GraphSpaceItem> {
+/** 新建图空间（真实 CREATE SPACE，创建后自动绑定到当前用户；说明选填）。 */
+export async function createGraphSpace(
+  name: string,
+  description = '',
+  userId = currentUserId(),
+): Promise<GraphSpaceItem> {
   return unwrap(
-    await asApiPromise<GraphSpaceItem>(http.post(PREFIX, { name }, { headers: headers(userId) })),
+    await asApiPromise<GraphSpaceItem>(
+      http.post(PREFIX, { name, description }, { headers: headers(userId) }),
+    ),
   )
 }
 

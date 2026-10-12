@@ -3,6 +3,23 @@
   "spaces": [
     {"name": "dev", "visibility": "public", "clientId": null},
     {"name": "dev2", "visibility": "public", "clientId": null},
-    {"name": "gaoxing_test", "visibility": "business", "clientId": "billion-scale-kg-engine"}
+    {"name": "Test_DATE", "visibility": "public", "clientId": null},
+    {"name": "algo_test", "visibility": "public", "clientId": null},
+    {"name": "e2e_verify_space", "visibility": "public", "clientId": null},
+    {"name": "entity_binding_demo", "visibility": "public", "clientId": null},
+    {"name": "ewrdf", "visibility": "public", "clientId": null},
+    {"name": "kg_itest_space", "visibility": "public", "clientId": null},
+    {"name": "kg_itest_space_20261008", "visibility": "public", "clientId": null},
+    {"name": "t", "visibility": "public", "clientId": null},
+    {"name": "techkg", "visibility": "public", "clientId": null},
+    {"name": "techkg_space_01", "visibility": "public", "clientId": null},
+    {"name": "test1", "visibility": "public", "clientId": null},
+    {"name": "test2", "visibility": "public", "clientId": null},
+    {"name": "test_007", "visibility": "public", "clientId": null},
+    {"name": "this_is_a_graph_space_with_long_long_long_name", "visibility": "public", "clientId": null},
+    {"name": "yunfei_test", "visibility": "public", "clientId": null},
+    {"name": "yunfei_test_1", "visibility": "public", "clientId": null},
+    {"name": "gaoxing_test", "visibility": "business", "clientId": "billion-scale-kg-engine"},
+    {"name": "test_space_01", "visibility": "business", "clientId": "billion-scale-kg-engine"}
   ]
 }

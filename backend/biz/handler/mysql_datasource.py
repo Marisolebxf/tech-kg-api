@@ -12,18 +12,13 @@ from sqlalchemy.orm import Session
 
 from application.mysql_datasource import MysqlDatasourceApplication
 from biz.dependencies.auth import CurrentActor
-from biz.dependencies.resources import (
-    assigned_resource_owner,
-    ensure_owner_access,
-    resource_owner_filter,
-    validate_owner_update,
-)
+from biz.dependencies.shared_configs import ensure_shared_config_manage, ensure_shared_config_read
 from biz.schemas.common import ApiResponse
 from biz.schemas.mysql_datasource import MysqlDatasourceCreate, MysqlDatasourceUpdate
 from infra.mysql import get_session
 
 # 数据源列表为读多写少的轻查询，加短 TTL 响应缓存扛读并发；键含用户身份
-# （列表按 owner 隔离：管理员全量/普通用户仅自己），不会跨用户串数据。
+# 管理员和开发人员共享配置列表；读取前始终校验角色。
 # 配置创建/更新/删除后缓存最长 15s 内滞后。TTL 环境变量 CONFIG_CACHE_SECONDS 可调，0=关闭。
 _CONFIG_CACHE_SECONDS = float(os.getenv("CONFIG_CACHE_SECONDS", "15"))
 _config_payload_cache: dict[str, tuple[float, str]] = {}
@@ -55,11 +50,11 @@ def _application(session: Session) -> MysqlDatasourceApplication:
     return MysqlDatasourceApplication(session)
 
 
-def _owned_config(app: MysqlDatasourceApplication, actor: CurrentActor, config_id: str) -> dict:
+def _readable_config(app: MysqlDatasourceApplication, actor: CurrentActor, config_id: str) -> dict:
+    ensure_shared_config_read(actor)
     data = app.get_config(config_id)
     if data is None:
         raise HTTPException(status_code=404, detail="数据源不存在")
-    ensure_owner_access(actor, data.get("owner", ""))
     return data
 
 
@@ -68,7 +63,8 @@ def list_mysql_datasources(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
 ) -> Response:
-    owner = resource_owner_filter(actor)
+    ensure_shared_config_read(actor)
+    owner = None
     cache_key = f"mysql-datasources:{owner}:{actor.user_id}:{actor.is_admin}"
     from service.business_access_control import rbac_enabled
 
@@ -95,10 +91,10 @@ def get_mysql_datasource(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
+    ensure_shared_config_read(actor)
     data = _application(session).get_config(datasource_id)
     if data is None:
         raise HTTPException(status_code=404, detail="数据源不存在")
-    ensure_owner_access(actor, data.get("owner", ""))
     return ApiResponse(data=data)
 
 
@@ -108,10 +104,11 @@ def create_mysql_datasource(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
+    ensure_shared_config_manage(actor)
     _config_cache_clear()
     data = payload.model_dump()
-    data["owner"] = assigned_resource_owner(actor, data.get("owner", ""))
-    result = _application(session).create_config(data, scope_owner=resource_owner_filter(actor))
+    data["owner"] = actor.user_id
+    result = _application(session).create_config(data, scope_owner=None)
     return ApiResponse(data=result, msg="MySQL 数据源已创建")
 
 
@@ -122,15 +119,13 @@ def update_mysql_datasource(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
+    ensure_shared_config_manage(actor)
     _config_cache_clear()
-    existing = _owned_config(_application(session), actor, datasource_id)
+    _readable_config(_application(session), actor, datasource_id)
     data = payload.model_dump(exclude_unset=True)
-    validate_owner_update(actor, data, current_owner=existing.get("owner", ""))
-    if not actor.is_admin:
-        data.pop("owner", None)
-    updated = _application(session).update_config(
-        datasource_id, data, scope_owner=resource_owner_filter(actor)
-    )
+    # Keep historical ownership metadata; it no longer grants configuration access.
+    data.pop("owner", None)
+    updated = _application(session).update_config(datasource_id, data, scope_owner=None)
     if updated is None:
         raise HTTPException(status_code=404, detail="数据源不存在")
     return ApiResponse(data=updated, msg="MySQL 数据源已更新")
@@ -142,8 +137,9 @@ def delete_mysql_datasource(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
+    ensure_shared_config_manage(actor)
     _config_cache_clear()
-    _owned_config(_application(session), actor, datasource_id)
+    _readable_config(_application(session), actor, datasource_id)
     ok = _application(session).delete_config(datasource_id)
     if not ok:
         raise HTTPException(status_code=404, detail="数据源不存在")
@@ -156,11 +152,10 @@ def set_default_mysql_datasource(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
+    ensure_shared_config_manage(actor)
     _config_cache_clear()
-    _owned_config(_application(session), actor, datasource_id)
-    data = _application(session).set_default(
-        datasource_id, scope_owner=resource_owner_filter(actor)
-    )
+    _readable_config(_application(session), actor, datasource_id)
+    data = _application(session).set_default(datasource_id, scope_owner=None)
     if data is None:
         raise HTTPException(status_code=404, detail="数据源不存在")
     return ApiResponse(data=data, msg="已设为默认")
@@ -172,7 +167,8 @@ def test_mysql_datasource(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
-    _owned_config(_application(session), actor, datasource_id)
+    ensure_shared_config_manage(actor)
+    _readable_config(_application(session), actor, datasource_id)
     return ApiResponse(data=_application(session).test_connection(datasource_id))
 
 
@@ -182,7 +178,7 @@ def list_mysql_databases(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
-    _owned_config(_application(session), actor, datasource_id)
+    _readable_config(_application(session), actor, datasource_id)
     return ApiResponse(data={"items": _application(session).list_databases(datasource_id)})
 
 
@@ -194,7 +190,7 @@ def list_mysql_tables(
     database: Annotated[str | None, Query(max_length=128)] = None,
 ) -> ApiResponse:
     """列出指定库（缺省为数据源默认库）的表，供 Schema 来源表绑定选择。"""
-    _owned_config(_application(session), actor, datasource_id)
+    _readable_config(_application(session), actor, datasource_id)
     return ApiResponse(data={"items": _application(session).list_tables(datasource_id, database)})
 
 
@@ -207,7 +203,7 @@ def list_mysql_table_columns(
     database: Annotated[str | None, Query(max_length=128)] = None,
 ) -> ApiResponse:
     """列出指定表的列，供选主键列/时间列。"""
-    _owned_config(_application(session), actor, datasource_id)
+    _readable_config(_application(session), actor, datasource_id)
     return ApiResponse(
         data={"items": _application(session).list_columns(datasource_id, table_name, database)}
     )

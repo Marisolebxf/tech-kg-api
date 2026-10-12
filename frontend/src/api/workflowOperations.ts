@@ -42,6 +42,7 @@ export interface ProcessStep {
 }
 
 export interface ProcessingInstance {
+  isSharedProduction?: boolean
   graphSpace?: string | null
   canOperate?: boolean
   writeAllowed?: boolean
@@ -300,6 +301,9 @@ export interface JobScheduleSpec {
 }
 
 export interface WorkflowJob {
+  isSharedProduction?: boolean
+  writeAllowed?: boolean
+  canOperate?: boolean
   id: string
   name: string
   /** single/upload 已随 D2 停止新建；chain 现为 Schema 串行（kg.schema.extract.chain）。存量旧 chain 触发会被服务端拦截。 */

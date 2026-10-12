@@ -150,7 +150,12 @@ def authorize_workflow_resource(actor, resource, action="read"):
                         row = dao_type(session).get(config_id)
                         if row is None:
                             raise HTTPException(status_code=403, detail="任务配置不存在或不可访问")
-                        ensure_owner_access(actor, row.owner or "")
+                        if dao_type in (LlmConfigDAO, MysqlDatasourceDAO):
+                            from biz.dependencies.shared_configs import ensure_shared_config_read
+
+                            ensure_shared_config_read(actor)
+                        else:
+                            ensure_owner_access(actor, row.owner or "")
 
 
 def _job_business(actor, resource):
@@ -287,7 +292,20 @@ def workflow_resource_capabilities(actor, resource):
             if exc.status_code not in (403, 404):
                 raise
             can_operate = False
-    return {**resource, "graphSpace": space, "canOperate": can_operate, "writeAllowed": can_operate}
+    is_shared = False
+    if space and rbac_enabled():
+        from infra.mysql import session_scope
+
+        with session_scope() as session:
+            registration = space_registration(session, space)
+            is_shared = bool(registration and registration.is_shared_production)
+    return {
+        **resource,
+        "graphSpace": space,
+        "canOperate": can_operate,
+        "writeAllowed": can_operate,
+        "isSharedProduction": is_shared,
+    }
 
 
 def workflow_resource_visible(actor, resource):

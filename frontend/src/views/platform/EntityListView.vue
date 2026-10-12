@@ -6,10 +6,8 @@ import { IconSearch } from '@arco-design/web-vue/es/icon'
 import {
   browseEntities,
   entitySearchErrorMessage,
-  getEntityIndexStatus,
   getEntitySearchTypes,
-  searchEntities,
-  type EntityIndexStatus,
+  searchEntityList,
   type EntityListResult,
   type EntityTypeCount,
 } from '../../api/entitySearch'
@@ -42,10 +40,44 @@ const pageSize = ref(10)
 const page = ref(1)
 
 const types = ref<EntityTypeCount[]>([])
-const status = ref<EntityIndexStatus | null>(null)
 const result = ref<EntityListResult | null>(null)
 const loading = ref(false)
 const searchError = ref('')
+let searchVersion = 0
+const PAGE_CACHE_TTL = 60_000
+const pageCache = new Map<string, { expires: number; result: EntityListResult }>()
+const pendingPages = new Map<string, Promise<EntityListResult>>()
+let cacheVersion = 0
+type PageRequest = { keyword: string; space: string | null; entityType: string | null; limit: number; offset: number }
+
+function clearPageCache() {
+  ++cacheVersion
+  pageCache.clear()
+  pendingPages.clear()
+}
+
+function loadPage(request: PageRequest): Promise<EntityListResult> {
+  const key = JSON.stringify(request)
+  const cached = pageCache.get(key)
+  if (cached && cached.expires > Date.now()) return Promise.resolve(cached.result)
+  const pending = pendingPages.get(key)
+  if (pending) return pending
+  const version = cacheVersion
+  const { keyword: text, ...scope } = request
+  const promise = (text ? searchEntityList(request) : browseEntities(scope)).then(data => {
+    if (version === cacheVersion) {
+      if (pageCache.size >= 20) pageCache.delete(pageCache.keys().next().value!)
+      pageCache.set(key, { expires: Date.now() + PAGE_CACHE_TTL, result: data })
+    }
+    return data
+  }).finally(() => {
+    if (pendingPages.get(key) === promise) pendingPages.delete(key)
+  })
+  pendingPages.set(key, promise)
+  return promise
+}
+
+onUnmounted(() => { ++searchVersion; clearPageCache() })
 
 const items = computed(() => result.value?.items ?? [])
 const isBrowseMode = computed(() => !appliedKeyword.value)
@@ -58,53 +90,54 @@ const totalPages = computed(() => {
   return Math.max(Math.ceil(paginationTotal.value / pageSize.value), 1)
 })
 
-async function loadIndexInfo() {
+async function loadEntityTypes() {
+  const selectedSpace = space.value
   try {
-    const [typeItems, statusData] = await Promise.all([
-      getEntitySearchTypes(space.value || null),
-      getEntityIndexStatus(space.value || null),
-    ])
+    const typeItems = await getEntitySearchTypes(selectedSpace || null)
+    if (selectedSpace !== space.value) return
     types.value = typeItems
-    status.value = statusData
+    if (entityType.value && !typeItems.some(type => type.name === entityType.value)) {
+      entityType.value = ''
+    }
   } catch (error) {
     showToast(entitySearchErrorMessage(error), 'error')
   }
 }
 
 function resetPagingAndSearch() {
+  clearPageCache()
+  appliedKeyword.value = keyword.value.trim()
   page.value = 1
   void doSearch()
 }
 
 async function doSearch() {
-  if (loading.value) return
-  const trimmed = keyword.value.trim()
-  appliedKeyword.value = trimmed
+  const version = ++searchVersion
+  const request: PageRequest = {
+    keyword: appliedKeyword.value,
+    space: space.value || null,
+    entityType: entityType.value || null,
+    limit: pageSize.value,
+    offset: (page.value - 1) * pageSize.value,
+  }
   loading.value = true
   searchError.value = ''
   try {
-    if (trimmed) {
-      result.value = await searchEntities({
-        keyword: trimmed,
-        space: space.value || null,
-        entityType: entityType.value || null,
-        limit: pageSize.value,
-        offset: (page.value - 1) * pageSize.value,
-      })
-    } else {
-      // 空关键词：浏览模式——图空间直查分页（按 id 顺序取前几个）
-      result.value = await browseEntities({
-        space: space.value || null,
-        entityType: entityType.value || null,
-        limit: pageSize.value,
-        offset: (page.value - 1) * pageSize.value,
-      })
+    const nextResult = await loadPage(request)
+    if (version === searchVersion) {
+      result.value = nextResult
+      // 仅预取下一页；与用户翻页共享进行中的请求，失败不影响当前页。
+      if (request.offset + request.limit < (nextResult.total ?? 0)) {
+        void loadPage({ ...request, offset: request.offset + request.limit }).catch(() => {})
+      }
     }
   } catch (error) {
-    result.value = null
-    searchError.value = entitySearchErrorMessage(error)
+    if (version === searchVersion) {
+      result.value = null
+      searchError.value = entitySearchErrorMessage(error)
+    }
   } finally {
-    loading.value = false
+    if (version === searchVersion) loading.value = false
   }
 }
 
@@ -141,16 +174,24 @@ function propertyOverflow(item: EntityListResult['items'][number]): number {
 }
 
 onMounted(() => {
-  void loadIndexInfo().then(() => doSearch())
+  void loadEntityTypes().then(() => doSearch())
 })
 
 // 全局图空间切换：重置分页与关键词后按新空间重查
 watch(
   () => graphSpaceStore.current,
   () => {
+    clearPageCache()
+    ++searchVersion
+    result.value = null
+    loading.value = true
     page.value = 1
+    keyword.value = ''
     appliedKeyword.value = ''
-    void loadIndexInfo().then(() => doSearch())
+    const selectedSpace = space.value
+    void loadEntityTypes().then(() => {
+      if (selectedSpace === space.value) void doSearch()
+    })
   },
 )
 </script>
@@ -170,8 +211,8 @@ watch(
             :scrollbar="false"
             @change="onEntityTypeChange"
           >
-            <a-option v-for="t in types" :key="t.name" :value="t.name" :label="`${t.name}（${t.count}）`">
-              <span class="entity-type-option" :title="`${t.name}（${t.count}）`">{{ t.name }}（{{ t.count }}）</span>
+            <a-option v-for="t in types" :key="t.name" :value="t.name" :label="t.name">
+              <span class="entity-type-option" :title="t.name">{{ t.name }}</span>
             </a-option>
           </a-select>
         </div>
@@ -181,7 +222,7 @@ watch(
             v-model="keyword"
             class="entity-search-input"
             :max-length="SEARCH_KEYWORD_MAX_LENGTH"
-            aria-label="输入实体名称 / 属性关键词（语义 + 关键词混合检索）；留空则分页浏览全部实体"
+            aria-label="查询当前图空间的实体名称、ID或属性关键词；留空则分页浏览全部实体"
             placeholder="输入实体名称 / 属性关键词"
             @keyup.enter="resetPagingAndSearch"
           >
@@ -192,16 +233,10 @@ watch(
           </button>
         </div>
       </div>
-      <p v-if="status?.milvusReachable === false" class="entity-hint">
-        Milvus 当前不可用，已降级为 VID/已建图属性索引的精确查询。
-      </p>
-      <p v-else-if="status && !status.bm25Ready && status.indexed" class="entity-hint">
-        BM25 关键词条目缺失（仅语义检索可用），可通过图谱构建任务的实体索引重建恢复混合检索能力。
-      </p>
     </section>
 
     <section class="entity-shell entity-result-shell" aria-label="实体列表">
-      <div v-if="loading" class="entity-empty">加载中...</div>
+      <div v-if="loading && !items.length" class="entity-empty">加载中...</div>
       <div v-else-if="searchError" class="entity-empty" role="alert">
         <span>{{ searchError }}</span>
         <button class="kg-button" type="button" @click="doSearch">重试</button>
@@ -216,7 +251,8 @@ watch(
         </template>
       </div>
       <template v-else>
-        <div class="entity-table-wrap" :class="{ 'entity-scroll--active': tableScrollActive }" @scroll.passive="handleTableScroll">
+        <div class="entity-table-wrap" :class="{ 'entity-scroll--active': tableScrollActive }" :aria-busy="loading" @scroll.passive="handleTableScroll">
+          <div v-if="loading" class="entity-loading" role="status">加载中...</div>
           <table>
             <thead>
               <tr>
@@ -224,7 +260,6 @@ watch(
                 <th>ID</th>
                 <th>实体类型</th>
                 <th>公共属性</th>
-                <th>{{ isBrowseMode ? '' : '相关度' }}</th>
               </tr>
             </thead>
             <tbody>
@@ -277,30 +312,30 @@ watch(
                       <span v-if="!propertyEntries(item).length" class="entity-props__empty">—</span>
                     </div>
                   </td>
-                  <td>{{ item.score ?? '' }}</td>
                 </tr>
               </template>
             </tbody>
           </table>
         </div>
-        <ListPagination
-          :total="paginationTotal"
-          :page="page"
-          :page-size="pageSize"
-          :disabled="loading"
-          :show-jumper="false"
-          :size-at-end="true"
-          @change="goPage"
-          @change-size="onPageSizeChange"
-        >
-          <template #summary>
-            <span class="entity-pagination__info">
-              <template v-if="isBrowseMode && result?.total != null">共 {{ result.total }} 个实体</template>
-              <template v-else>共 {{ paginationTotal }} 条</template>
-            </span>
-          </template>
-        </ListPagination>
       </template>
+      <ListPagination
+        v-if="result && items.length"
+        :total="paginationTotal"
+        :page="page"
+        :page-size="pageSize"
+        :disabled="loading"
+        :show-jumper="false"
+        :size-at-end="true"
+        :sliding-pages="true"
+        @change="goPage"
+        @change-size="onPageSizeChange"
+      >
+        <template #summary>
+          <span class="entity-pagination__info">
+            共 {{ paginationTotal }} 个实体
+          </span>
+        </template>
+      </ListPagination>
     </section>
   </main>
 </template>
@@ -315,9 +350,9 @@ watch(
 .entity-toolbar__left{flex-wrap:wrap}
 .entity-toolbar button{flex-shrink:0;white-space:nowrap}
 .entity-toolbar__right{min-width:0;flex:1 1 320px;justify-content:flex-end}
-.entity-hint{margin:0;padding:8px 16px;border-top:1px dashed #ffe4ba;background:#fff7e8;color:#b54708;font-size:12px;line-height:20px}
 .entity-empty{flex:1;display:grid;place-items:center;padding:40px 16px;color:#86909c;font-size:13px;line-height:22px;text-align:center}
 .entity-table-wrap{flex:1;min-height:0;overflow:auto;scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:transparent transparent}
+.entity-loading{position:sticky;top:0;z-index:2;padding:6px 16px;background:#edf4ff;color:#165dff;font-size:12px;line-height:20px}
 .entity-table-wrap:hover,.entity-table-wrap.entity-scroll--active{scrollbar-color:rgba(78,89,105,.55) transparent}
 .entity-table-wrap::-webkit-scrollbar{width:8px;height:8px}
 .entity-table-wrap::-webkit-scrollbar-track{background:transparent}

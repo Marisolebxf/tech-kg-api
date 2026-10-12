@@ -399,11 +399,14 @@ class ManualReviewService:
                 flipped = self._flipped_rerun_failed_ids(q)
                 if flipped:
                     q.append(ReviewCase.id.notin_(flipped))
-        # 排序：updated_desc/updated_asc 按更新时间；默认 风险等级 + 创建时间
+        # 排序：updated_desc/updated_asc 按更新时间；默认 风险等级 + 创建时间。
+        # 三种排序统一补 id 唯一尾键：T_EXTRACT_FAIL 案例同一秒批量落库，风险/时间大量并列，
+        # 无唯一尾键时 LIMIT/OFFSET 翻页内容不稳定，同一行会在相邻页重复出现（前端表现为
+        # 批量勾选后翻到下一页仍有选中行）
         if f.get("sort") == "updated_desc":
-            order = [ReviewCase.updated_at.desc()]
+            order = [ReviewCase.updated_at.desc(), ReviewCase.id]
         elif f.get("sort") == "updated_asc":
-            order = [ReviewCase.updated_at.asc()]
+            order = [ReviewCase.updated_at.asc(), ReviewCase.id]
         else:
             order = [
                 case(
@@ -412,6 +415,7 @@ class ManualReviewService:
                     else_=ReviewCase.risk_level,
                 ),
                 ReviewCase.created_at,
+                ReviewCase.id,
             ]
         with self.sf() as s:
             total = s.scalar(select(func.count()).select_from(ReviewCase).where(*q)) or 0

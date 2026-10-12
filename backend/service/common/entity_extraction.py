@@ -7,16 +7,9 @@
 import json
 
 from dotenv import load_dotenv
-
-try:
-    from zai import ZhipuAiClient
-except ImportError:  # pragma: no cover - SDK may be absent or incompatible
-    ZhipuAiClient = None
+from openai import OpenAI
 
 load_dotenv()
-
-_client = None
-_model = None
 
 
 def get_client():
@@ -24,24 +17,20 @@ def get_client():
 
     配置来源由 service.llm_config.resolve_llm_settings 决定（DB 优先，env 回退）。
     """
-    global _client, _model
-    if _client is not None:
-        return _client, _model
-    from service.llm_config import resolve_llm_settings
+    from service.llm_context import resolve_request_llm_settings
 
-    settings = resolve_llm_settings()
+    settings = resolve_request_llm_settings()
     if settings is None:
         return None, None
-    api_key, _base_url, model = settings
-    if not ZhipuAiClient or not api_key:
+    api_key, base_url, model = settings
+    if not api_key:
         return None, None
     try:
-        _client = ZhipuAiClient(api_key=api_key)
-        _model = model
+        client = OpenAI(api_key=api_key, base_url=base_url)
     except Exception as e:
         print(f"[extraction] 客户端初始化失败: {e}")
         return None, None
-    return _client, _model
+    return client, model
 
 
 # 实体类型定义

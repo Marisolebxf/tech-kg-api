@@ -197,35 +197,22 @@ class EmbeddingClient:
         return result[0] if result else []
 
 
-_client: LLMClient | None = None
-
-
 def _resolve_settings() -> tuple[str, str, str] | None:
-    """通过 service.llm_config 解析当前 LLM 配置（DB 优先，env 回退）。失败返回 None。"""
-    try:
-        from service.llm_config import resolve_llm_settings
+    """Resolve this request's model; invalid selections must not silently fall back."""
+    from service.llm_context import resolve_request_llm_settings
 
-        return resolve_llm_settings()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("读取 LLM 配置失败，LLM 功能降级: %s", exc)
-        return None
+    return resolve_request_llm_settings()
 
 
 def get_llm_client() -> LLMClient | None:
-    """进程级单例。无 key 时返回 None（调用方走降级）。"""
-    global _client
-    if _client is not None:
-        return _client
+    """Create a call-local client so another business/default switch cannot reuse it."""
     settings = _resolve_settings()
     if settings is None:
         logger.info("未配置 LLM（DB 与 env 均无默认配置），LLM 功能降级")
         return None
     api_key, base_url, model = settings
-    _client = LLMClient(api_key=api_key, base_url=base_url, model=model)
-    return _client
+    return LLMClient(api_key=api_key, base_url=base_url, model=model)
 
 
 def reset_llm_client() -> None:
-    """重置单例。配置变更后由 service 层调用，下次 get_llm_client 重建。"""
-    global _client
-    _client = None
+    """Compatibility hook; clients are now scoped to each call instead of the process."""

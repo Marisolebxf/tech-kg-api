@@ -344,11 +344,11 @@ onBeforeUnmount(() => {
         </div>
 
         <nav class="app-nav" aria-label="平台功能导航">
-          <div v-if="!sidebarCollapsed && !businessOnly" class="app-nav__group">
+          <div v-if="!sidebarCollapsed && isAdminUser" class="app-nav__group">
             <span>工作台</span>
           </div>
             <RouterLink
-              v-if="!businessOnly"
+              v-if="isAdminUser"
               class="app-nav__item app-nav__item--top app-nav__item--leaf"
               active-class="app-nav__item--active"
               to="/overview"
@@ -430,7 +430,7 @@ onBeforeUnmount(() => {
             <div v-if="!sidebarCollapsed" class="app-nav__group">
               <span>知识图谱构建服务</span>
             </div>
-            <div v-if="!businessOnly" class="app-nav__query-group">
+            <div v-if="isAdminUser" class="app-nav__query-group">
               <button
                 class="app-nav__item app-nav__item--top app-nav__item--button"
                 :class="{

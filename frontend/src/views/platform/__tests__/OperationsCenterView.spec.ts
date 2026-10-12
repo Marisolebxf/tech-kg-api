@@ -137,16 +137,71 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     )
   })
 
-  it('C 类状态筛选只有 全部/待处理/已处理/重跑中——「重跑失败」是幽灵状态（无代码写入），已移除', async () => {
+  it('状态下拉与表格徽标 1:1：A 类 全部/待处理/已完成；C 类追加 重跑中/重跑失败', async () => {
     const wrapper = renderReview()
     await flushPromises()
-    // 状态下拉是筛选行第一个 a-select
+    // 状态下拉是筛选行第一个 a-select（已驳回/已撤销现网无案，不设幽灵选项）
     expect(wrapper.findAllComponents({ name: 'ASelect' })[0].props('options'))
-      .toEqual(['全部', '待处理', '已处理'])
+      .toEqual(['全部', '待处理', '已完成'])
 
     await switchToCategoryC(wrapper)
     expect(wrapper.findAllComponents({ name: 'ASelect' })[0].props('options'))
-      .toEqual(['全部', '待处理', '已处理', '重跑中'])
+      .toEqual(['全部', '待处理', '重跑中', '重跑失败', '已完成'])
+  })
+
+  it('状态筛选下发精确 status 参数（与徽标 1:1），重跑失败下发只读推导态 RERUN_FAILED', async () => {
+    const wrapper = renderReview()
+    await flushPromises()
+    wrapper.findAllComponents({ name: 'ASelect' })[0].vm.$emit('update:modelValue', '已完成')
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
+      expect.objectContaining({ category: 'A', status: 'RESOLVED' }),
+    )
+
+    await switchToCategoryC(wrapper)
+    wrapper.findAllComponents({ name: 'ASelect' })[0].vm.$emit('update:modelValue', '重跑失败')
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
+      expect.objectContaining({ category: 'C', status: 'RERUN_FAILED' }),
+    )
+
+    wrapper.findAllComponents({ name: 'ASelect' })[0].vm.$emit('update:modelValue', '待处理')
+    await flushPromises()
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
+      expect.objectContaining({ category: 'C', status: 'OPEN' }),
+    )
+  })
+
+  it('C 类待处理对象结构化两行：记录 ID 主体 + 来源表弱化小字；无来源字段时按 # 拆对象名兜底', async () => {
+    mocks.getProductionReviews.mockReset().mockResolvedValue({
+      items: [
+        caseRow('MR-1', 'OPEN'),
+        // 存量案缺 sourceTable/sourceRecordId：从 objectName「库.表#记录ID」兜底拆分
+        { ...caseRow('MR-2', 'OPEN'), objectName: 'gkx.t_paper#792f74d9', sourceTable: '', sourceRecordId: '' },
+      ],
+      total: 2, page: 1, pageSize: 10,
+    })
+
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+
+    // 后端回填来源字段：主体=sourceRecordId，小字=sourceTable
+    const first = wrapper.findAll('tbody tr')[0].get('.review-object-cell')
+    expect(first.get('.review-object-main').text()).toBe('R-MR-1')
+    expect(first.get('.review-object-sub').text()).toBe('t_paper')
+
+    // 缺来源字段：按 objectName 的 # 拆分，长短记录 ID 渲染同一结构
+    const second = wrapper.findAll('tbody tr')[1].get('.review-object-cell')
+    expect(second.get('.review-object-main').text()).toBe('792f74d9')
+    expect(second.get('.review-object-sub').text()).toBe('gkx.t_paper')
+
+    // A 类（入库决策）保持实体名单行，不套两行结构
+    await wrapper.findAll('.review-tabs nav button')[0].trigger('click')
+    await flushPromises()
+    const aCell = wrapper.findAll('tbody tr')[0].get('.review-object-cell')
+    expect(aCell.find('.review-object-main').exists()).toBe(false)
+    expect(aCell.get('strong').text()).toBe('对象MR-1')
   })
 
   it('?category=C 深链直达抽取失败重跑子页：首次加载即按 C 类请求且 Tab 高亮；带 keyword 时填入搜索定位该实例', async () => {
@@ -204,19 +259,19 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
   it('Tab 切换不影响筛选条件：A/C 各自独立记忆，切回原样恢复', async () => {
     const wrapper = renderReview()
     await flushPromises()
-    // A 页（入库决策）设筛选：状态=已处理 + 关键词「对齐」
-    wrapper.findAllComponents({ name: 'ASelect' })[0].vm.$emit('update:modelValue', '已处理')
+    // A 页（入库决策）设筛选：状态=已完成 + 关键词「对齐」
+    wrapper.findAllComponents({ name: 'ASelect' })[0].vm.$emit('update:modelValue', '已完成')
     await wrapper.get('.review-filter-search').setValue('对齐')
     await wrapper.get('.review-filter-row').trigger('submit')
     await flushPromises()
     expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
-      expect.objectContaining({ category: 'A', statusGroup: 'processed', keyword: '对齐' }),
+      expect.objectContaining({ category: 'A', status: 'RESOLVED', keyword: '对齐' }),
     )
 
-    // 切到 C：用 C 自己的默认筛选（不携带 A 的已处理/关键词，避免「重跑中」类错位），再设「重跑中」
+    // 切到 C：用 C 自己的默认筛选（不携带 A 的已完成/关键词，避免「重跑中」类错位），再设「重跑中」
     await switchToCategoryC(wrapper)
     expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
-      expect.objectContaining({ category: 'C', statusGroup: undefined, keyword: undefined }),
+      expect.objectContaining({ category: 'C', status: undefined, keyword: undefined }),
     )
     wrapper.findAllComponents({ name: 'ASelect' })[0].vm.$emit('update:modelValue', '重跑中')
     await flushPromises()
@@ -224,11 +279,11 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
       expect.objectContaining({ category: 'C', status: 'RERUNNING' }),
     )
 
-    // 切回 A：已处理 + 关键词原样恢复（含输入框文本）
+    // 切回 A：已完成 + 关键词原样恢复（含输入框文本）
     await wrapper.findAll('.review-tabs nav button')[0].trigger('click')
     await flushPromises()
     expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
-      expect.objectContaining({ category: 'A', templateId: 'T_LINK', statusGroup: 'processed', keyword: '对齐' }),
+      expect.objectContaining({ category: 'A', templateId: 'T_LINK', status: 'RESOLVED', keyword: '对齐' }),
     )
     expect((wrapper.get('.review-filter-search').element as HTMLInputElement).value).toBe('对齐')
 
@@ -307,7 +362,7 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     expect(resolvedRow).toHaveLength(3)
     expect(resolvedRow[1].attributes('disabled')).toBeDefined()
     expect(resolvedRow[2].attributes('disabled')).toBeDefined()
-    expect(resolvedRow[2].attributes('title')).toBe('已处理：仅「待处理 / 重跑失败」的记录可重跑或删除')
+    expect(resolvedRow[2].attributes('title')).toBe('仅「待处理 / 重跑失败」的记录可重跑或删除')
   })
 
   it('表头全选只勾选当前页可重跑行（OPEN/RERUN_FAILED），批量重跑按钮随之显示', async () => {
@@ -806,10 +861,10 @@ describe('来源记录跳图谱构建任务详情', () => {
 })
 
 describe('分页统计与页数收缩收敛（FUNC-00781）/ 处理实例 ID 纯文本（FUNC-00775）', () => {
-  /** 按 statusGroup 区分筛选前后：全部 41 条（3 页）；待处理 5 条（1 页）。 */
+  /** 按 status 精确值区分筛选前后：全部 41 条（3 页）；待处理 5 条（1 页）。 */
   const mockPaged = () => mocks.getProductionReviews.mockImplementation(
-    async (params: { page?: number; statusGroup?: string }) => {
-      if (params.statusGroup === 'pending') {
+    async (params: { page?: number; status?: string }) => {
+      if (params.status === 'OPEN') {
         return params.page && params.page > 1
           ? { items: [], total: 5, page: params.page, pageSize: 20 }
           : { items: C_ROWS.slice(0, 5), total: 5, page: 1, pageSize: 20 }
@@ -836,7 +891,7 @@ describe('分页统计与页数收缩收敛（FUNC-00781）/ 处理实例 ID 纯
 
     const pages = mocks.getProductionReviews.mock.calls.map((call) => call[0]?.page)
     expect(pages).toEqual([1, 3, 3, 1])
-    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, statusGroup: 'pending' }))
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, status: 'OPEN' }))
     // 统计文案与实际数据一致，且无空页（收敛后立即有数据行）
     expect(wrapper.get('.review-pagination .review-page-summary').text()).toBe('共 5 条')
     expect(wrapper.findAll('tbody tr td.review-id-cell').length).toBeGreaterThan(0)
@@ -857,7 +912,7 @@ describe('分页统计与页数收缩收敛（FUNC-00781）/ 处理实例 ID 纯
     await flushPromises()
 
     // 61 条 = 4 页，第 3 页仍有效：筛选后停在原页
-    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ page: 3, statusGroup: 'pending' }))
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ page: 3, status: 'OPEN' }))
     expect(wrapper.get('.review-pagination .review-page-summary').text()).toBe('共 61 条')
   })
 
@@ -874,7 +929,7 @@ describe('分页统计与页数收缩收敛（FUNC-00781）/ 处理实例 ID 纯
 
     // 重挂载后首次加载即按快照状态请求，且 C 类 Tab 高亮
     expect(mocks.getProductionReviews).toHaveBeenCalledWith(expect.objectContaining({
-      category: 'C', page: 3, pageSize: 50, statusGroup: 'pending', kind: 'entity',
+      category: 'C', page: 3, pageSize: 50, status: 'OPEN', kind: 'entity',
       updatedWithin: '7d', sort: 'updated_desc', keyword: '论文',
     }))
     expect(wrapper.get('.review-pagination .review-page-summary').text()).toBe('共 120 条')
@@ -889,7 +944,7 @@ describe('分页统计与页数收缩收敛（FUNC-00781）/ 处理实例 ID 纯
     await flushPromises()
 
     expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({
-      category: 'A', templateId: 'T_LINK', statusGroup: undefined, status: undefined,
+      category: 'A', templateId: 'T_LINK', status: undefined,
     }))
   })
 

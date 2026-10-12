@@ -68,6 +68,8 @@ export interface ProcessingInstance {
   steps: ProcessStep[]
   workflowType: string
   workflowId: string
+  /** 产生本任务行的图谱构建 job（job-xxx，任务详情圈定审核案用）。 */
+  jobId?: string
   runId?: string
   input?: Record<string, unknown>
   output?: Record<string, unknown>

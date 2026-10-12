@@ -226,8 +226,10 @@ def test_list_spaces_for_actor(session_factory, monkeypatch) -> None:
     service.bind(_actor(USER_A), "dev2")
 
     # 默认空间与已有绑定去重，保持真实绑定标记。
+    # RBAC 关闭路径补 groupKind=public：前端选择器按它分组并过滤未归属空间，
+    # 缺字段时全被误判 unassigned，下拉只剩 localStorage 记住的当前空间。
     assert service.list_spaces_for_actor(_actor(USER_A)) == [
-        {"name": "dev2", "bound": True, "mine": True, "description": ""}
+        {"name": "dev2", "bound": True, "mine": True, "description": "", "groupKind": "public"}
     ]
     # 管理员看全量 + 标记自己绑定的
     admin_view = service.list_spaces_for_actor(_actor("admin", is_admin=True))
@@ -245,21 +247,27 @@ def test_list_work_spaces_for_actor(session_factory, monkeypatch) -> None:
     # 管理员同样只见默认 + 自己绑定（未绑定时仅默认），而非全量
     admin = _actor("admin", is_admin=True)
     assert service.list_work_spaces_for_actor(admin) == [
-        {"name": "dev2", "bound": False, "mine": False, "description": ""}
+        {"name": "dev2", "bound": False, "mine": False, "description": "", "groupKind": "public"}
     ]
     service.bind(admin, "algo_test")
     assert service.list_work_spaces_for_actor(admin) == [
-        {"name": "dev2", "bound": False, "mine": False, "description": ""},
-        {"name": "algo_test", "bound": True, "mine": True, "description": ""},
+        {"name": "dev2", "bound": False, "mine": False, "description": "", "groupKind": "public"},
+        {
+            "name": "algo_test",
+            "bound": True,
+            "mine": True,
+            "description": "",
+            "groupKind": "public",
+        },
     ]
     # 普通用户同规则（默认 + 本人绑定）
     assert service.list_work_spaces_for_actor(_actor(USER_A)) == [
-        {"name": "dev2", "bound": False, "mine": False, "description": ""},
-        {"name": "techkg", "bound": True, "mine": True, "description": ""},
+        {"name": "dev2", "bound": False, "mine": False, "description": "", "groupKind": "public"},
+        {"name": "techkg", "bound": True, "mine": True, "description": "", "groupKind": "public"},
     ]
     # 未绑定任何空间的用户仅见默认
     assert service.list_work_spaces_for_actor(_actor(USER_B)) == [
-        {"name": "dev2", "bound": False, "mine": False, "description": ""}
+        {"name": "dev2", "bound": False, "mine": False, "description": "", "groupKind": "public"}
     ]
     # 全量列表（配置页绑定入口）不受影响：管理员仍可见全部空间
     assert {item["name"] for item in service.list_spaces_for_actor(admin)} == {
@@ -275,7 +283,13 @@ def test_new_user_reads_configured_default_without_binding(session_factory, monk
     service = _service(session_factory, client)
 
     assert service.list_spaces_for_actor(_actor(USER_A)) == [
-        {"name": "delivery_graph", "bound": False, "mine": False, "description": ""}
+        {
+            "name": "delivery_graph",
+            "bound": False,
+            "mine": False,
+            "description": "",
+            "groupKind": "public",
+        }
     ]
     assert service.bound_spaces(USER_A) == []
     assert client.statements == []
@@ -289,8 +303,20 @@ def test_shared_default_preserves_other_bound_spaces(session_factory, monkeypatc
     service.bind(_actor(USER_B), "another_users_graph")
 
     assert service.list_spaces_for_actor(_actor(USER_A)) == [
-        {"name": "delivery_graph", "bound": False, "mine": False, "description": ""},
-        {"name": "private_graph", "bound": True, "mine": True, "description": ""},
+        {
+            "name": "delivery_graph",
+            "bound": False,
+            "mine": False,
+            "description": "",
+            "groupKind": "public",
+        },
+        {
+            "name": "private_graph",
+            "bound": True,
+            "mine": True,
+            "description": "",
+            "groupKind": "public",
+        },
     ]
 
 

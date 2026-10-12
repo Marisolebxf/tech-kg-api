@@ -117,6 +117,9 @@ class GraphSpaceService:
                 "bound": name in bound,
                 "mine": name in bound,
                 "description": descriptions.get(name, ""),
+                # RBAC 关闭时无业务归属概念，一律公共——前端选择器按 groupKind
+                # 分组并过滤未归属空间，缺字段会被误判 unassigned 导致下拉全空
+                "groupKind": "public",
             }
             for name in names
         ]
@@ -175,6 +178,8 @@ class GraphSpaceService:
                 "bound": s in bound,
                 "mine": s in bound,
                 "description": descriptions.get(s, ""),
+                # 同上：RBAC 关闭路径补 groupKind，免被前端当未归属空间过滤掉
+                "groupKind": "public",
             }
             for s in all_spaces
         ]

@@ -1736,18 +1736,21 @@ def ngql_value_for_column(value: Any, col_type: str, nullable: bool) -> str:
 
 
 # —— 共享图库瞬态错误自愈（缺陷㉘/㉜）——
-# 图库通道（trs-graph → Nebula）的瞬态错误按「错误族」识别，目前三个实测签名：
+# 图库通道（trs-graph → Nebula）的瞬态错误按「错误族」识别，目前四个实测签名：
 # 1. 高压窗水位 "Used memory hits the high watermark(0.900000)"（㉘）；
 # 2. 高压窗尾部 storaged "Storage Error: RPC failure, probably timeout"
 #    （HTTP 400 内嵌，㉜ 第一发现——不在水位正则内曾终败整链）；
 # 3. 图库栈重启窗口 "java.net.ConnectException: Connection refused/reset"
 #    （HTTP 500 内嵌，㉜ 第二发现——trsgraph 容器被干净重启的分钟级窗口内
-#    两个活动终败整链，05:31 UTC 实锤）。
-# 三者同治：瞬态压力/重启随刷盘或服务上线回落（分钟级），默认活动重试窗口
+#    两个活动终败整链，05:31 UTC 实锤）；
+# 4. graphd 迁移/重启窗内 "create session failed"（HTTP 500 内嵌，㉜ 第三
+#    发现——宿主扩容迁移整栈重启窗口内终败整链，11 执行 EV#525 实锤）。
+# 四者同治：瞬态压力/重启随刷盘或服务上线回落（分钟级），默认活动重试窗口
 # （5 次 × backoff≤30s ≈ 96s）扛不住 → 活动内按本正则长退避（㉘ 包络），
 # 烧尽后 workflow 层 sleep 重发起（㉛ 包络）。新签名出现再扩。
 _GRAPH_TRANSIENT_RE = re.compile(
-    r"high watermark|RPC failure|Connection (?:refused|reset)", re.IGNORECASE
+    r"high watermark|RPC failure|Connection (?:refused|reset)|create session failed",
+    re.IGNORECASE,
 )
 _WATERMARK_RETRY_SLEEP_SECONDS = 20.0
 

@@ -451,6 +451,54 @@ LEADS/HAS_PARTICIPANT/FUNDED_BY/HAS_OUTPUT 是**图匹配器关系**（目标端
      不在正则内又漏过。修复 = `_GRAPH_TRANSIENT_RE` 并入 `Connection (refused|
      reset)`（错误族收敛第三签名）部署双容器 + **第十一次重触发**（执行
      `chain-…-94d177c5`，05:55:12 UTC）：100 秒 317 事件 51 活动 0 失败 0 超时。
+   - **第十一次执行 FAILED（宿主扩容迁移窗，㉜ 第四签名）**：执行起飞后不久宿主
+     整栈迁移重启，graphd 未上线窗口内 EV#525 `query/read 500: create session
+     failed` retry=4 终败整链。修复 = 正则并入 `create session failed`（02:43
+     UTC 10-12 部署双容器）。
+   - **宿主扩容迁移（~06:46 UTC 10-11，用户告知「服务器应该扩容了」）**：机器
+     62Gi/16C → **125Gi / 32 vCPU AMD EPYC**，kernel 5.15.0-113 → -186，盘
+     97G 不变；全部容器随宿主重启，仓库/工具幸存，链死 ~20h 后才被巡检发现。
+   - **水位线回退发现（只报不动）**：迁移用 stock 镜像重建 trsgraph 后，
+     `system_memory_high_watermark_ratio` 三份 conf 与运行时 flag 全部回落
+     **0.8**——2026-09-30 团队决议的 0.9 只活在旧容器里（conf-in-image 改法
+     不随镜像走）。新机 0.8 = 100Gi 绝对阈值（当前用量 ~22Gi），短期无害；
+     恢复 0.9 = 改 conf + 重启 trsgraph + 同步 tech-kg-db Dockerfile，属共享
+     基础设施团队动作，**待拍板，未擅动**。
+   - **第十二次执行秒败（半截部署，非图库错误）**：EV#9 `ACT_FAILED retry=4:
+     No module named 'biz.dependencies.shared_configs'`（19 个事件，首个活动
+     即倒）——并行会话提交 9c7980ca 给 `load_schema_extract_plan` 加了该惰性
+     import（经 merge 进本分支，宿主 temporal_workflows.py 与双容器 md5 一致），
+     但 02:43 热部署只 cp 了 temporal_workflows.py 一个文件，新模块没跟上。
+     修复 = `biz/dependencies/shared_configs.py` cp 双容器 + 28 个 import 闭包
+     全量冒烟 + worker 重启 + **第十三次重触发**（执行 `chain-…-791a08ce`，
+     02:53:06 UTC）：100 秒 337 事件 65 活动流转 0 失败。教训：**共享宿主上
+     并行会话合过代码后，热部署单文件前先 md5 三方核对（宿主/api/worker）并
+     扫部署文件的惰性 import 闭包**。
+   - **第十三次执行·共享图库「死亡循环」事件（03:0x–03:4x UTC 10-12，用户转同事
+     AI 反馈）**：Person 环 shareholder 长尾写图期，消歧同名召回的多列 OR 巨查
+     （4 名字列 × 150 名/块 × 16 块 × 4 并发槽）在共享 trsgraph 上全 tag 扫
+     （Person 147k 点），storaged CPU 394%→1772%、10 分钟 92 次 RPC 超时退避；
+     同期 trsgraph 容器（**cap 64GiB**）OOMKilled 一次（03:20 同事 `docker restart`
+     干净重启）+ dev2 同事的 `LOOKUP OFFSET 24000` / `Event SKIP 15400` 大查询
+     共载。处置：`pause_extraction` 暂停链（在飞活动排空，重试风暴停）→ 定位为
+     名字列无索引（§9 ㉝）→ gkx_verify_1 补 7 个名字列 TAG INDEX + REBUILD
+     （jobs 2509-2513/2527-2528 全 FINISHED；OR 查询 0.85s→0.018s = 47×）→
+     图库 CPU 回落 12% 后 `resume_extraction`。恢复后链健康：Person 环 rows
+     154k / written 103.9k 推进，事件 2841→3053 增长中，0 workflow task 失败，
+     图库 CPU 67% / 内存 4.4GiB / 64GiB。期间 `get_progress` 曾报
+     `[TMPRL1100] Nondeterminism`——实为探针硬编码**第九次执行** id：旧 run 死于
+     ㉜ 新签名，扩正则后其历史不可重放（§9 ㉝ 附带发现），当前执行查询正常。
+   - **第十三次执行被 history-service 强杀（06:25:19 UTC，缺陷㉞）+ 第十四次重触发**：
+     末环大源（975b9bb6，已写 2,280,000 行）推进中，链在 **51,201 事件**处被
+     Temporal 服务器以 `identity=history-service, reason='Workflow history count
+     exceeds limit.'` TERMINATED（auto-setup 1.29.2 默认 historyCountLimit≈50k；
+     该 Temporal 为共享容器，配置不擅调）。处置 = runbook 同款直接重触发
+     （按任务名反查 jobId：GET /workflow-system/jobs → POST …/trigger；
+     e2e state 文件已被 /tmp 清空，不再依赖）。**第十四次执行**
+     （`chain-…-c5487975`，06:4x UTC）：95 秒 722 事件、活动流转、0 失败——
+     已完成环秒过、大源从游标续读。按 ~355 行/s 与每轮 ~50k 事件 ≈ 300 万行
+     写入推算，剩余 ~1,600 万行 Event 域需 5–6 轮重触发循环（写入速率才是
+     真瓶颈 ≈ 12h，循环空转可控）。
    - **环境备忘（容器 /tmp 会丢）**：04:14–04:46 UTC 间 api 容器 /tmp 被清
      （`/tmp/gkx-e2e/` 状态目录与探针脚本全没了，原因未查明——api 容器本轮未被
      重启）。处置：探针从宿主 `~/.claude/jobs/6c9295e5/tmp/` 重 `docker cp`；
@@ -607,14 +655,55 @@ LEADS/HAS_PARTICIPANT/FUNDED_BY/HAS_OUTPUT 是**图匹配器关系**（目标端
      retry=4 终败（链死在压力窗退去前一刻）；
   2. **第三签名（图库栈重启窗口）**：`trsgraph` 容器被干净重启（ExitCode=0 非
      OOM，05:31 UTC 实锤）的分钟级窗口内 `query/read 500: java.net.
-     ConnectException: Connection refused`，第十次执行两个活动 retry=4 终败。
+     ConnectException: Connection refused`，第十次执行两个活动 retry=4 终败；
+  3. **第四签名（graphd 迁移/重启窗）**：宿主扩容整栈迁移重启窗口内
+     `query/read 500: create session failed`，第十一次执行 EV#525 retry=4 终败。
   修复（两层防线统一按错误族识别）：`_GRAPH_TRANSIENT_RE =
-  high watermark|RPC failure|Connection (refused|reset)`，㉘ 活动内退避与 ㉛
+  high watermark|RPC failure|Connection (refused|reset)|create session failed`，
+  ㉘ 活动内退避与 ㉛
   workflow 层 sleep 重发起共用；重试次数/包络不变（㉚ 的 STC 复核结论仍成立）。
   排障指纹：`ACTIVITY_TASK_FAILED` 且 failure 链含 Storage/RPC/Connect 字样 +
   整链 FAILED = 本型；修复后落入「遇图库瞬态错误（高水位/存储 RPC 超时）」退避
   日志（㉜ 第二签名已实战命中 5 次）。教训：**按错误文案逐签名建防线时，同因
   异签名的瞬态错误会从缝里漏过——识别条件按「错误族」而非单条文案收敛**。
+
+- **㉝ 消歧同名召回的多名字列 OR 查询无索引 → 全 tag 扫打爆共享 storaged
+  （「死亡循环」事件根因，2026-10-12 实锤）**：平台对 TAG 只自动建 `name` 单列
+  索引；`recall_same_name` 按目录 DESCRIBE 对**全部**名字列（Person =
+  name/name_cn/name_en/name_zh）发 `WHERE col1 IN […] OR col2 IN […] …`，
+  多列 OR 使 name 索引失效 → 每 150 名块全扫 147k Person 点，16 块/批 × 4 并发
+  槽把 storaged CPU 打满（394%→1772%；宿主内存反而 101Gi free——**是 CPU 问题
+  不是内存问题**），storaged RPC 超时 → 活动重试风暴 → 图库更忙（与 trsgraph
+  重启窗互相放大，即同事 AI 观测到的「你杀我、我拉你」）。**治本 = DDL 补名字列
+  索引**（gkx_verify_1：Person 3 + Organization 2 + Journal 2 共 7 个 `col(64)`
+  TAG INDEX + REBUILD；此后优化器对 OR 各列分别走 index seek，0.85s→0.018s =
+  47×），**零代码改动、召回语义不变**（多列召回必要：3 个测试名经 name 索引
+  0 命中、OR 四列 3 行命中）。**基础设施错配（待团队拍板，未擅动）**：trsgraph
+  容器 cap = 64GiB 而宿主 125Gi——Nebula 水位线按宿主内存算（0.8×125Gi=100Gi），
+  cgroup OOMKill 必然先于水位阀触发（03:0x 容器 OOMKilled 实锤），安全阀结构性
+  失效；修复二选一：容器 cap 提至 ≥ 水位绝对值（如 96GiB），或水位按容器可用
+  内存调整 + Dockerfile 同步 commit。**附带发现（排障乌龙 + 重放坑）**：㉜ 扩
+  正则后，死于新增签名的旧执行（第九次）历史**不可重放**——query/update 报
+  `[TMPRL1100] Nondeterminism`（新代码在旧终败点会走 sleep 重发起分支，Timer
+  machine 撞上历史里的 WorkflowExecutionFailed）；已终败 run 无实际影响，但
+  排障探针必须拿**当前执行** id，且对旧 run 的 replay 类操作（update/信号）
+  在该场景不可用。
+
+- **㉞ Temporal 历史事件数硬限（≈50k/执行）→ history-service 强杀长链（TERMINATED）**：
+  第十三次执行在 51,201 事件处被服务器以 `reason='Workflow history count exceeds
+  limit.'`（identity=history-service）终止——auto-setup 1.29.2 的默认
+  historyCountLimit，非人为操作（yft1-r2 审计「Temporal 事件硬限」的实锤复现，
+  小数据量 yft1 从未炸到）。触发面：单链全环事件累计 + ㉙ STS 重调度事件放大；
+  **单 Schema 抽取同样中招**（recruit 670 万行 ≈ 54k 事件，独跑也超限）。
+  处置（runbook 扩充）：`status=TERMINATED` 且 reason 为 history count →
+  **直接重触发**——水位幂等断点续跑，每轮可吃 ~50k 事件 ≈ 300 万行写入；
+  已完成环秒过、在飞源丢 ≤1 批幂等重做。治本方向（平台代码，待做）：链接近
+  事件限时 continue-as-new（启动态全在平台 DB，CAN 换新历史、同 workflow id），
+  或调大 dynamic config historyCountLimit（共享 Temporal 容器，团队动作）。
+  排障指纹：histogram 出现 **type 27 = WORKFLOW_EXECUTION_TERMINATED**（事件映射
+  表补一条）+ describe close_time；worker 日志尾随一条
+  `Activity not found on completion … workflow execution already completed`
+  （终杀后活动补完，写入已落地，幂等无害，勿当损伤）。
 
 已知风险：外部库走公网，大表分批拉取耗时波动；BELONGS 每批 185s（24 批）是已知长尾，
 若触发平台 activity 超时（read timeout 600s 内安全），可把该绑定单独拆任务跑。

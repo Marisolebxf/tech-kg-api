@@ -132,6 +132,7 @@ class ExtractExecutionInfo:
     window_hi: str = ""
     fallback_rows: list[AssetChangeRow] = field(default_factory=list)
     task_id: str | None = None
+    job_id: str | None = None
     started_at: str = ""
 
 
@@ -277,6 +278,9 @@ def parse_execution_records(
         # 明细时间列与日窗口同时区：北京时刻展示（完成串是进程本地钟，折算后展示）
         completed_time = completed_local.strftime("%m-%d %H:%M:%S")
         task_id = str(record.get("taskId") or "").strip() or None
+        # 执行记录由 job 下发时携带 jobId（调度/手动/重跑都有）；非 job 来源的
+        # 直跑执行没有，行点击只能退列表页
+        job_id = str(record.get("jobId") or "").strip() or None
         target_rows = entity_rows if kind == "entity" else relation_rows
         # 一次执行绑定多个来源表时按表拆行（来源列各自取本表名），只出 written>0 的表
         exec_rows: list[AssetChangeRow] = []
@@ -294,6 +298,7 @@ def parse_execution_records(
                 source=str(source.get("table") or source.get("source") or "-"),
                 time=completed_time,
                 task_id=task_id,
+                job_id=job_id,
                 is_aggregate=True,
             )
             target_rows.append((completed_at, row))
@@ -318,6 +323,7 @@ def parse_execution_records(
             window_hi=day_end_graph,
             fallback_rows=exec_rows,
             task_id=task_id,
+            job_id=job_id,
             started_at=str(record.get("startedAt") or ""),
         )
         if kind == "entity":
@@ -606,16 +612,16 @@ def _safe_vid(vid: Any) -> str:
     return str(vid or "").replace('"', "").strip()
 
 
-def _graph_row_task_id(
+def _graph_row_execution(
     execution: ExtractExecutionInfo,
     props: dict[str, Any],
     time_prop: str | None,
     executions: list[ExtractExecutionInfo],
-) -> str | None:
-    """反查窗可能覆盖同 Schema 的多次执行，按来源和写图时间关联任务。
+) -> ExtractExecutionInfo | None:
+    """反查窗可能覆盖同 Schema 的多次执行，按来源和写图时间定位本行所属执行。
 
-    不能把当前反查执行的 taskId 无条件贴到整日全部对象上；用执行起止时间
-    区分同来源重跑。只有源数据时间或无时间时要求候选唯一；并发歧义不猜测。
+    不能把当前反查执行的 taskId/jobId 无条件贴到整日全部对象上；用执行起止
+    时间区分同来源重跑。只有源数据时间或无时间时要求候选唯一；并发歧义不猜测。
     """
     source = str(props.get("source_table") or "")
     candidates = [
@@ -638,8 +644,8 @@ def _graph_row_task_id(
             )
             if max(item.window_lo, started_graph) <= stamp <= completed_graph:
                 timed.append(item)
-        return timed[0].task_id if len(timed) == 1 else None
-    return candidates[0].task_id if len(candidates) == 1 else None
+        return timed[0] if len(timed) == 1 else None
+    return candidates[0] if len(candidates) == 1 else None
 
 
 def _entity_object_rows(
@@ -683,6 +689,7 @@ def _entity_object_rows(
     for record in records:
         props = record.get("props") or {}
         vid = _safe_vid(record.get("vid"))
+        resolved = _graph_row_execution(execution, props, time_prop, executions)
         rows.append(
             AssetChangeRow(
                 type=type_label,
@@ -690,7 +697,8 @@ def _entity_object_rows(
                 change=f"新增 {type_label}",
                 source=str(props.get("source_table") or fallback_source),
                 time=_time_short(props.get(time_prop), _utc_slice_local(execution.completed_at)),
-                task_id=_graph_row_task_id(execution, props, time_prop, executions),
+                task_id=resolved.task_id if resolved else None,
+                job_id=resolved.job_id if resolved else None,
                 object_id=vid,
             )
         )
@@ -826,6 +834,7 @@ def _relation_object_rows(
     fallback_time = _utc_slice_local(execution.completed_at)
     rows: list[AssetChangeRow] = []
     for src, dst, edge_props in edges:
+        resolved = _graph_row_execution(execution, edge_props, time_prop, executions)
         rows.append(
             AssetChangeRow(
                 type=type_label,
@@ -835,7 +844,8 @@ def _relation_object_rows(
                 time=_time_short(edge_props.get(time_prop), fallback_time)
                 if time_prop
                 else fallback_time,
-                task_id=_graph_row_task_id(execution, edge_props, time_prop, executions),
+                task_id=resolved.task_id if resolved else None,
+                job_id=resolved.job_id if resolved else None,
                 object_id=json.dumps([edge_type, src, dst], ensure_ascii=False),
             )
         )

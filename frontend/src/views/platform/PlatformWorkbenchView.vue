@@ -1393,11 +1393,13 @@ function openProcessDetail(area: 'processing' | 'construction', taskId: string, 
 
 function openAssetChangeTask(row: AssetChangeRow) {
   if (!canEnterAdminPages.value) return
-  if (!row.taskId) {
-    showToast('该记录暂无关联更新任务', 'info')
+  if (!row.jobId) {
+    showToast('该记录未关联图谱构建任务', 'info')
     return
   }
-  openProcessDetail('construction', row.taskId)
+  // 跳图谱构建区内的正常任务详情页（与图谱构建列表点任务同一动线、导航高亮），
+  // 不再落 /task-detail 专用页——该路由不在左侧导航，落地后无归属无返回动线。
+  void router.push({ name: 'job-detail', params: { jobId: row.jobId } })
 }
 
 function handleExecuteService() {
@@ -2158,9 +2160,9 @@ print(response.json())</pre>
               <tr
                 v-for="(row, idx) in assetChangeRows[selectedAssetChange]"
                 :key="row.objectId || `${row.type}-${row.object}-${row.time}-${idx}`"
-                :class="{ 'is-clickable': canEnterAdminPages && row.taskId }"
-                :tabindex="canEnterAdminPages && row.taskId ? 0 : undefined"
-                :aria-label="canEnterAdminPages && row.taskId ? `查看${row.object}的更新任务` : undefined"
+                :class="{ 'is-clickable': canEnterAdminPages && row.jobId }"
+                :tabindex="canEnterAdminPages && row.jobId ? 0 : undefined"
+                :aria-label="canEnterAdminPages && row.jobId ? `查看${row.object}的图谱构建任务` : undefined"
                 @click="openAssetChangeTask(row)"
                 @keydown.enter.prevent="openAssetChangeTask(row)"
                 @keydown.space.prevent="openAssetChangeTask(row)"

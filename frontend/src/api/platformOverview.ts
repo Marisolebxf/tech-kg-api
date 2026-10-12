@@ -23,6 +23,8 @@ export interface AssetChangeRow {
   time: string
   /** 工作流控制库中的真实任务 ID；兼容没有任务关联的历史记录。 */
   taskId?: string | null
+  /** 同一条执行所属的图谱构建任务（job-xxx）；行点击跳 /graph-build/jobs 用。 */
+  jobId?: string | null
   /** 图对象唯一 ID；同名实体也各自展示一行。 */
   objectId?: string | null
 }

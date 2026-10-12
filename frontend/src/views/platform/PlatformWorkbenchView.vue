@@ -480,7 +480,7 @@ const algoJobStatus = computed(() => {
 const isAlgoJobRunning = computed(() => algoJob.value?.status === 'running')
 
 /** 作业时长：运行中随轮询刷新，终态使用服务端完成时间。 */
-const algoJobElapsedSeconds = computed<number | null>(() => {
+const algoJobElapsedMs = computed<number | null>(() => {
   const job = algoJob.value
   if (!job?.startedAt) return null
   const start = Date.parse(job.startedAt)
@@ -488,12 +488,20 @@ const algoJobElapsedSeconds = computed<number | null>(() => {
   const end =
     job.status === 'running' ? Date.now() : job.finishedAt ? Date.parse(job.finishedAt) : Number.NaN
   if (Number.isNaN(end)) return null
-  return Math.max(0, Math.round((end - start) / 1000))
+  return Math.max(0, end - start)
+})
+
+const algoJobElapsedSeconds = computed<number | null>(() => {
+  const ms = algoJobElapsedMs.value
+  return ms === null ? null : Math.floor(ms / 1000)
 })
 
 const algoJobElapsedText = computed(() => {
-  const seconds = algoJobElapsedSeconds.value
-  if (seconds === null) return ''
+  const ms = algoJobElapsedMs.value
+  if (ms === null) return ''
+  // 亚秒级作业（如 nGQL 度数计算几十毫秒完成）显示毫秒，避免「耗时 0 秒」被当成计时故障
+  if (ms < 1000) return `${Math.round(ms)} 毫秒`
+  const seconds = Math.floor(ms / 1000)
   return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${String(seconds % 60).padStart(2, '0')} 秒`
 })
 

@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from utils.time_display import utc_to_cst_str
+from utils.time_display import utc_to_cst_str, utc_to_cst_str_ms
 
 
 def test_utc_naive_datetime_to_cst():
@@ -36,3 +36,22 @@ def test_non_time_values_pass_through():
     assert utc_to_cst_str("2026-10-09") == "2026-10-09"  # 纯日期不动
     assert utc_to_cst_str("abc") == "abc"
     assert utc_to_cst_str(123) == 123
+
+
+def test_ms_keeps_milliseconds():
+    assert utc_to_cst_str_ms(datetime(2026, 10, 9, 14, 30, 5, 123000)) == "2026-10-09 22:30:05.123"
+    assert utc_to_cst_str_ms("2026-10-09T14:30:05.123456Z") == "2026-10-09 22:30:05.123"
+    assert utc_to_cst_str_ms("2026-10-09 14:30:05.499") == "2026-10-09 22:30:05.499"
+
+
+def test_ms_without_micros_pads_zeros():
+    assert utc_to_cst_str_ms("2026-10-09T14:30:05Z") == "2026-10-09 22:30:05.000"
+    assert utc_to_cst_str_ms(datetime(2026, 10, 9, 14, 30, 5)) == "2026-10-09 22:30:05.000"
+
+
+def test_ms_non_time_values_pass_through():
+    assert utc_to_cst_str_ms(None) is None
+    assert utc_to_cst_str_ms("") == ""
+    assert utc_to_cst_str_ms("2026-10-09") == "2026-10-09"
+    assert utc_to_cst_str_ms("abc") == "abc"
+    assert utc_to_cst_str_ms(123) == 123

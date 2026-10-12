@@ -21,7 +21,7 @@ from typing import Any
 import redis as redis_lib
 
 from service.platform_access import PlatformActor
-from utils.time_display import utc_to_cst_str
+from utils.time_display import utc_to_cst_str, utc_to_cst_str_ms
 
 logger = logging.getLogger(__name__)
 
@@ -123,8 +123,9 @@ def _job_to_data(job: Any) -> dict:
         "jobId": job.job_id,
         "status": "cancelled" if job.driver_state == "KILLED" else job.status,
         "createdAt": utc_to_cst_str(job.created_at),
-        "startedAt": utc_to_cst_str(job.started_at),
-        "finishedAt": utc_to_cst_str(job.finished_at),
+        # 开始/完成保留毫秒：亚秒级作业（如 nGQL 度数计算）秒精度会显示成「耗时 0 秒」
+        "startedAt": utc_to_cst_str_ms(job.started_at),
+        "finishedAt": utc_to_cst_str_ms(job.finished_at),
         "submissionId": job.submission_id,
         "driverState": job.driver_state,
         "error": job.error,
@@ -342,8 +343,9 @@ def _local_job_to_data(job: dict[str, Any]) -> dict:
         "jobId": job["job_id"],
         "status": job["status"],
         "createdAt": utc_to_cst_str(job["created_at"]),
-        "startedAt": utc_to_cst_str(job["created_at"]),
-        "finishedAt": utc_to_cst_str(job["finished_at"]),
+        # Degree 后台作业 startedAt 即提交时刻（任务随后即刻起算），毫秒精度同 Spark 口径
+        "startedAt": utc_to_cst_str_ms(job["created_at"]),
+        "finishedAt": utc_to_cst_str_ms(job["finished_at"]),
         "submissionId": None,
         "driverState": None,
         "error": job["error"],

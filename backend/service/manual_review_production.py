@@ -260,6 +260,39 @@ class ManualReviewService:
             "duplicate": duplicate,
         }
 
+    def _flipped_rerun_failed_ids(self, conditions: list) -> set[str]:
+        """圈定「库内 RESOLVED/RERUNNING 但有效状态=重跑失败」的 T_EXTRACT_FAIL 案 ID。
+
+        状态筛选与表格徽标 1:1 的支撑（conditions 为调用方已累积的基础过滤，
+        含精确 status 时即只核该状态候选）：RERUN_FAILED 不落库，过滤「重跑失败」
+        按执行概要圈定这批案；过滤「已完成/重跑中」用同一批反向剔除。控制面
+        不可达时返回空集（跳过推导，保留库内口径，与列表展示的保守行为一致）。
+        """
+        with self.sf() as s:
+            candidates = s.scalars(
+                select(ReviewCase).where(
+                    *conditions,
+                    ReviewCase.template_id == "T_EXTRACT_FAIL",
+                    ReviewCase.status.in_(("RESOLVED", "RERUNNING")),
+                )
+            ).all()
+            if not candidates:
+                return set()
+            snapshots = [(c, load(c.input_snapshot) or {}) for c in candidates]
+            exec_statuses = resolve_execution_statuses(
+                [snapshot.get("rerunExecutionId") for _, snapshot in snapshots]
+            )
+            if exec_statuses is None:
+                return set()
+            return {
+                c.id
+                for c, snapshot in snapshots
+                if effective_extract_fail_status(
+                    c.status, snapshot.get("rerunExecutionId"), exec_statuses
+                )
+                == "RERUN_FAILED"
+            }
+
     def list_cases(self, f, a):
         require_role(
             a,
@@ -283,7 +316,6 @@ class ManualReviewService:
         if f.get("graph_space"):
             q.append(ReviewCase.graph_space == f["graph_space"])
         for k, col in (
-            ("status", ReviewCase.status),
             ("risk", ReviewCase.risk_level),
             ("domain", ReviewCase.domain),
             ("template_id", ReviewCase.template_id),
@@ -354,6 +386,19 @@ class ManualReviewService:
                 ReviewCase.updated_at
                 >= datetime.now() - timedelta(hours=updated_within_hours[f["updated_within"]])
             )
+        # 状态精确过滤（队列页「状态」下拉与表格徽标 1:1）：RERUN_FAILED 是只读
+        # 推导态（库内不落值，见 effective_extract_fail_status），按执行概要把
+        # 「RESOLVED/RERUNNING 但重跑执行非成功」的案圈进来；反之过滤
+        # RESOLVED/RERUNNING 时把同一批剔出去——选什么状态表格就只出什么徽标。
+        requested_status = str(f.get("status") or "")
+        if requested_status == "RERUN_FAILED":
+            q.append(ReviewCase.id.in_(self._flipped_rerun_failed_ids(q)))
+        elif requested_status:
+            q.append(ReviewCase.status == requested_status)
+            if requested_status in ("RESOLVED", "RERUNNING"):
+                flipped = self._flipped_rerun_failed_ids(q)
+                if flipped:
+                    q.append(ReviewCase.id.notin_(flipped))
         # 排序：updated_desc/updated_asc 按更新时间；默认 风险等级 + 创建时间
         if f.get("sort") == "updated_desc":
             order = [ReviewCase.updated_at.desc()]

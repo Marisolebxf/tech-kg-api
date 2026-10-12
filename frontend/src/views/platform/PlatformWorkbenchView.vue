@@ -479,14 +479,36 @@ const algoJobStatus = computed(() => {
 /** 本页作业是否仍在运行：运行中禁用再次提交（共享引擎同时只跑一个作业，重复提交必然 429）。 */
 const isAlgoJobRunning = computed(() => algoJob.value?.status === 'running')
 
-/** 作业时长：运行中随轮询刷新，终态使用服务端完成时间。 */
+/** 运行中本地每秒跳秒：状态轮询 3 秒一次，只靠轮询回包刷新「已运行」会 3 秒一跳。 */
+const algoNowTick = ref(Date.now())
+let algoNowTimer: number | undefined
+
+function startAlgoNowTicker(): void {
+  if (algoNowTimer !== undefined) return
+  algoNowTimer = window.setInterval(() => {
+    algoNowTick.value = Date.now()
+  }, 1000)
+}
+
+function stopAlgoNowTicker(): void {
+  if (algoNowTimer === undefined) return
+  window.clearInterval(algoNowTimer)
+  algoNowTimer = undefined
+}
+
+watch(isAlgoJobRunning, (running) => {
+  if (running) startAlgoNowTicker()
+  else stopAlgoNowTicker()
+})
+
+/** 作业时长：运行中随本地跳秒走秒，终态使用服务端完成时间。 */
 const algoJobElapsedMs = computed<number | null>(() => {
   const job = algoJob.value
   if (!job?.startedAt) return null
   const start = Date.parse(job.startedAt)
   if (Number.isNaN(start)) return null
   const end =
-    job.status === 'running' ? Date.now() : job.finishedAt ? Date.parse(job.finishedAt) : Number.NaN
+    job.status === 'running' ? algoNowTick.value : job.finishedAt ? Date.parse(job.finishedAt) : Number.NaN
   if (Number.isNaN(end)) return null
   return Math.max(0, end - start)
 })
@@ -1300,6 +1322,7 @@ onUnmounted(() => {
   graphContextVersion += 1
   overviewCardsRequest += 1
   stopAlgoPoll()
+  stopAlgoNowTicker()
 })
 
 async function loadPlatformOverview(): Promise<void> {

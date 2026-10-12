@@ -3,9 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ProcessInstanceDetailView from '../ProcessInstanceDetailView.vue'
 
 /** 复刻用户实报场景（真实数据形态）：chain 任务（kg.schema.extract.chain）被
- *  Temporal 历史淘汰后 steps/pipeline/output 全空，144 条 C 类失败案按快照
- *  锚定在早前执行的 jobId/executionId 上；按「最新执行的任务」或被丢弃的
- *  sourceTaskId 参数圈案都会数出 0 条，误报「执行级失败，无失败行记录可重跑」。 */
+ *  Temporal 历史淘汰后 steps/pipeline/output 全空，失败案按快照锚定在各自
+ *  执行的 executionId 上。入口按当前选中的执行圈案：job 级圈案会把重跑两代
+ *  执行的案全算进去（job-2c7e048b4d53 两代各 1077 → 2154）；被丢弃的
+ *  sourceTaskId 参数/按「最新执行的任务」圈案则数出 0 条，误报「执行级失败，
+ *  无失败行记录可重跑」。任务直达视图任务先落、执行列表后解析：解析完成前
+ *  不出圈案词，否则会先按 job 兜底闪一次翻倍计数再跳回单代。 */
 const state = vi.hoisted(() => ({
   route: { params: {} as Record<string, string>, query: {} as Record<string, string> },
   currentSpace: 'gkx_verify_1',
@@ -74,7 +77,7 @@ describe('任务详情「进入人工处理」入口圈案', () => {
     state.reviewCalls = []
   })
 
-  it('job 详情按 jobId 圈全部执行的失败案：chain 任务无步骤数据仍显示入口与计数', async () => {
+  it('job 详情按当前选中的执行圈案：chain 任务无步骤数据仍显示入口与计数', async () => {
     state.route = { params: { jobId: 'job-9e84ebcd9fb1' }, query: {} }
     state.job = baseJob()
     state.executions = [{
@@ -86,13 +89,35 @@ describe('任务详情「进入人工处理」入口圈案', () => {
     const wrapper = mountView()
     await flushPromises()
     expect(state.reviewCalls).toHaveLength(1)
-    expect(state.reviewCalls[0]).toEqual({ category: 'C', keyword: 'job-9e84ebcd9fb1', page: 1, pageSize: 1, graphSpace: 'gkx_verify_1' })
+    expect(state.reviewCalls[0]).toEqual({ category: 'C', keyword: 'EXEC-17EABD5092224497', page: 1, pageSize: 1, graphSpace: 'gkx_verify_1' })
     const link = wrapper.get('.step-head-actions a')
-    expect(JSON.parse(link.attributes('data-to'))).toEqual({ path: '/manual-review', query: { category: 'C', keyword: 'job-9e84ebcd9fb1' } })
-    expect(link.text()).toContain('进入人工处理（本任务 144 条）')
+    expect(JSON.parse(link.attributes('data-to'))).toEqual({ path: '/manual-review', query: { category: 'C', keyword: 'EXEC-17EABD5092224497' } })
+    expect(link.text()).toContain('进入人工处理（本执行 144 条）')
     expect(wrapper.find('.step-head-review-note').exists()).toBe(false)
     // 任务回写「执行出错」= 跑崩：结果卡如实说未运行完成，不再落「执行成功」分支
     expect(wrapper.text()).toContain('任务未运行完成，尚未产生可验收结果')
+    wrapper.unmount()
+  })
+
+  it('job 两代执行各有一批失败案时按当前执行圈案，不再 job 级翻倍计数（2154→1077 实报）', async () => {
+    state.route = { params: { jobId: 'job-2c7e048b4d53' }, query: {} }
+    state.currentSpace = 'yunfei_test'
+    state.job = { ...baseJob(), id: 'job-2c7e048b4d53', name: '论文实体抽取', graphSpace: 'yunfei_test' }
+    // 执行历史最新在前：自动选中最新一代（E153，1077 案），上一代（5ED7，另 1077 案）不在本次口径里
+    state.executions = [
+      { id: 'EXEC-E153CD7C71DF4704', definitionId: 'wf-extract-paper', workflowId: 'chain-2c7e048b4d53-2', status: 'ABNORMAL', startedAt: '2026-09-25 09:00:00', triggerSource: 'RERUN', taskId: 'PI-20260924-2DF62B' },
+      { id: 'EXEC-5ED7B7565CBA498A', definitionId: 'wf-extract-paper', workflowId: 'chain-2c7e048b4d53-1', status: 'ABNORMAL', startedAt: '2026-09-24 15:40:46', triggerSource: 'MANUAL', taskId: 'PI-20260924-8A8AD2' },
+    ]
+    state.task = baseTask({ id: 'PI-20260924-2DF62B', taskStatus: '执行异常', jobId: 'job-2c7e048b4d53', graphSpace: 'yunfei_test' })
+    state.reviewTotal = 1077
+    const wrapper = mountView()
+    await flushPromises()
+    expect(state.reviewCalls).toHaveLength(1)
+    // 圈案词必须是当前选中的执行 id：job 级会圈出两代共 2154 条
+    expect(state.reviewCalls[0]).toEqual({ category: 'C', keyword: 'EXEC-E153CD7C71DF4704', page: 1, pageSize: 1, graphSpace: 'yunfei_test' })
+    const link = wrapper.get('.step-head-actions a')
+    expect(JSON.parse(link.attributes('data-to')).query.keyword).toBe('EXEC-E153CD7C71DF4704')
+    expect(link.text()).toContain('进入人工处理（本执行 1077 条）')
     wrapper.unmount()
   })
 
@@ -115,10 +140,31 @@ describe('任务详情「进入人工处理」入口圈案', () => {
     wrapper.unmount()
   })
 
-  it('任务直达视图按任务回写的 jobId 圈案，不误用定义下最新执行', async () => {
+  it('任务直达视图列表含本任务自己的执行时按该执行圈案，不误用别任务的最新执行', async () => {
     state.route = { params: { instanceId: 'PI-20261012-96E99E' }, query: {} }
     state.task = baseTask()
-    // 定义下最新执行属于另一个任务（重跑/新一轮触发场景）：按最新执行圈案会数出 0 条
+    // 定义下最新执行属于另一个任务（重跑/新一轮触发），本任务自己的执行是较早一代：
+    // 按最新执行圈案会数出 0 条，须从执行列表里认领本任务自己的执行
+    state.executions = [
+      { id: 'EXEC-8A7AC45649764301', definitionId: 'wf-chain-9e84', workflowId: 'chain-9e84ebcd9fb1-791a', status: 'TERMINATED', startedAt: '2026-10-12 18:15:44', triggerSource: 'MANUAL', taskId: 'PI-20261012-9360D4' },
+      { id: 'EXEC-17EABD5092224497', definitionId: 'wf-chain-9e84', workflowId: 'chain-9e84ebcd9fb1-791a', status: 'TERMINATED', startedAt: '2026-10-12 10:53:06', triggerSource: 'MANUAL', taskId: 'PI-20261012-96E99E' },
+    ]
+    state.reviewTotal = 144
+    const wrapper = mountView()
+    await flushPromises()
+    // 任务先落、执行列表后解析：解析完成前不出圈案词，只发这一次（执行级）计数请求
+    expect(state.reviewCalls).toHaveLength(1)
+    expect(state.reviewCalls[0]).toEqual({ category: 'C', keyword: 'EXEC-17EABD5092224497', page: 1, pageSize: 1, graphSpace: 'gkx_verify_1' })
+    const link = wrapper.get('.step-head-actions a')
+    expect(JSON.parse(link.attributes('data-to')).query.keyword).toBe('EXEC-17EABD5092224497')
+    expect(link.text()).toContain('本执行 144 条')
+    wrapper.unmount()
+  })
+
+  it('任务直达视图列表只有别任务的执行时退回任务回写的 jobId 圈案兜底', async () => {
+    state.route = { params: { instanceId: 'PI-20261012-96E99E' }, query: {} }
+    state.task = baseTask()
+    // 执行列表里认领不到本任务的执行（如执行未回写任务/历史淘汰）：退 job 级圈案兜底
     state.executions = [{
       id: 'EXEC-8A7AC45649764301', definitionId: 'wf-chain-9e84', workflowId: 'chain-9e84ebcd9fb1-791a',
       status: 'TERMINATED', startedAt: '2026-10-12 18:15:44', triggerSource: 'MANUAL', taskId: 'PI-20261012-9360D4',
@@ -130,6 +176,7 @@ describe('任务详情「进入人工处理」入口圈案', () => {
     expect(state.reviewCalls[0]).toEqual({ category: 'C', keyword: 'job-9e84ebcd9fb1', page: 1, pageSize: 1, graphSpace: 'gkx_verify_1' })
     const link = wrapper.get('.step-head-actions a')
     expect(JSON.parse(link.attributes('data-to')).query.keyword).toBe('job-9e84ebcd9fb1')
+    expect(link.text()).toContain('本任务 144 条')
     wrapper.unmount()
   })
 

@@ -835,3 +835,96 @@ def test_readonly_degree_does_not_create_or_rebuild_indexes(monkeypatch):
         graph_algorithm._degree_counts_for_label(client, "CITES", allow_index_writes=False)
     assert exc.value.status_code == 403
     assert writes == []
+
+
+def test_degree_reuses_existing_edge_index_when_create_is_swallowed(algo_backend, monkeypatch):
+    # 定制版 Nebula 按边去重零属性索引：边已有 {label}_idx 时，专用索引 CREATE
+    # 返回成功但 metad 判定 "Index {label}_idx has existed" 静默跳过，REBUILD
+    # 永远 not found。应改用已有索引重建，而不是等满超时后 504（dev2 ACQUIRES）。
+    class SwallowedCreateClient:
+        writes = []
+        rebuilt = False
+
+        def edge_types(self):
+            return ["ACQUIRES"]
+
+        def stats_snapshot(self):
+            return {"tags": {}, "edges": {"ACQUIRES": 0}}
+
+        def execute_read(self, query: str, params=None, *, timeout=None):
+            if query == "SHOW EDGE INDEXES":
+                return SimpleNamespace(
+                    records=[
+                        {"Index Name": "acquires_idx", "By Edge": "ACQUIRES", "Columns": []},
+                        # 带属性的索引只覆盖含该属性的边，不可复用
+                        {"Index Name": "idx_x", "By Edge": "ACQUIRES", "Columns": ["dt"]},
+                        {"Index Name": "other_idx", "By Edge": "PUBLISHED_IN", "Columns": []},
+                    ]
+                )
+            if query == "SHOW EDGE INDEX STATUS":
+                if self.rebuilt:
+                    return SimpleNamespace(
+                        records=[{"Name": "acquires_idx", "Index Status": "FINISHED"}]
+                    )
+                return SimpleNamespace(records=[])
+            return SimpleNamespace(records=[])  # 聚合/校验查询：该边无数据，空合法
+
+        def execute_write(self, query: str):
+            self.writes.append(query)
+            if query.startswith("REBUILD") and "acquires_idx" in query:
+                self.rebuilt = True
+                return
+            if query.startswith("REBUILD"):
+                raise GraphRequestError(
+                    "POST /api/v1/query/write -> 400: SemanticError: Index "
+                    f"{graph_algorithm._degree_index_name('ACQUIRES')} not found in space dev2",
+                    status_code=400,
+                    body="",
+                )
+
+    client = SwallowedCreateClient()
+    monkeypatch.setattr(graph_algorithm, "_DEGREE_INDEX_POLL_SECONDS", 0)
+    monkeypatch.setattr("infra.graph_db.get_space_client", lambda space: client)
+    data = submit_job(_actor(), "shared_business", "degreestatic", ["ACQUIRES"], {})
+    assert data["status"] == "succeeded"
+    result = get_result(_actor(), "shared_business", data["jobId"])
+    assert result["rows"] == []  # 无边数据是可信的空结果
+    assert result["count"] == 0
+    assert client.writes[0].startswith("CREATE EDGE INDEX IF NOT EXISTS")
+    assert client.writes[1].startswith("REBUILD EDGE INDEX `degree_")  # 专用索引 not found
+    assert client.writes[2].startswith("REBUILD EDGE INDEX `acquires_idx`")  # 复用已有索引
+    assert len(client.writes) == 3
+
+
+def test_degree_skips_ddl_when_existing_edge_index_finished(algo_backend, monkeypatch):
+    # 已有零属性索引且重建 FINISHED：直接复用，不发任何 CREATE/REBUILD
+    class ReadyIndexClient:
+        writes = []
+
+        def edge_types(self):
+            return ["ACQUIRES"]
+
+        def stats_snapshot(self):
+            return {"tags": {}, "edges": {"ACQUIRES": 0}}
+
+        def execute_read(self, query: str, params=None, *, timeout=None):
+            if query == "SHOW EDGE INDEXES":
+                return SimpleNamespace(
+                    records=[{"Index Name": "acquires_idx", "By Edge": "ACQUIRES", "Columns": []}]
+                )
+            if query == "SHOW EDGE INDEX STATUS":
+                return SimpleNamespace(
+                    records=[{"Name": "acquires_idx", "Index Status": "FINISHED"}]
+                )
+            return SimpleNamespace(records=[])
+
+        def execute_write(self, query: str):
+            self.writes.append(query)
+
+    client = ReadyIndexClient()
+    monkeypatch.setattr("infra.graph_db.get_space_client", lambda space: client)
+    data = submit_job(_actor(), "shared_business", "degreestatic", ["ACQUIRES"], {})
+    assert data["status"] == "succeeded"
+    result = get_result(_actor(), "shared_business", data["jobId"])
+    assert result["rows"] == []
+    assert client.writes == []

@@ -60,7 +60,7 @@ export const SINCE_RULE: TextRule = {
 export const SCHEMA_ENTITY_NAME_RULE: TextRule = {
   max: 128,
   pattern: /^[A-Z][A-Za-z0-9]*$/,
-  patternHint: '实体名需为 PascalCase 英文（首字母大写，如 Gadget）',
+  patternHint: '实体名需为英文，首字母大写（如 Gadget）',
 }
 
 /** 关系英文名：UPPER_SNAKE_CASE（nGQL EDGE 类型名，上限 64） */

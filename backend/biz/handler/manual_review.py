@@ -103,7 +103,12 @@ def _raise_production_error(exc: Exception) -> None:
 async def production_queue(
     identity: ReviewIdentityDep,
     queue: str | None = None,
-    status: str | None = None,
+    status: str | None = Query(
+        None,
+        description="状态精确过滤（与表格徽标 1:1）：OPEN=待处理/RERUNNING=重跑中/RESOLVED=已完成等；"
+        "RERUN_FAILED=重跑失败是只读推导态（库内不落值），按重跑执行概要圈定，"
+        "RESOLVED/RERUNNING 也会剔除推导为重跑失败的案",
+    ),
     status_group: str | None = Query(
         None,
         alias="statusGroup",
@@ -137,6 +142,12 @@ async def production_queue(
         None,
         description="排序：updated_desc/updated_asc（按更新时间）；不传=默认风险+创建时间",
     ),
+    source_task_id: str | None = Query(
+        None,
+        alias="sourceTaskId",
+        max_length=128,
+        description="按来源任务（PI- 处理实例）过滤——任务详情「进入人工处理」深链定位本任务产生的审核案；不传=全部",
+    ),
     page: int = 1,
     page_size: int = Query(50, alias="pageSize"),
 ):
@@ -163,6 +174,7 @@ async def production_queue(
                 keyword,
                 updated_within,
                 sort,
+                source_task_id,
                 page,
                 page_size,
             ],

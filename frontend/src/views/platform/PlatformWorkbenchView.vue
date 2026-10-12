@@ -59,6 +59,7 @@ import {
   type AlgorithmResultPayload,
   type GraphAlgorithmMetadata,
 } from '../../api/graphAlgorithm'
+import { getSchemaTopology } from '../../api/schemaManagement'
 import {
   GRAPH_ALGORITHMS,
   type AlgorithmParamDef,
@@ -305,6 +306,9 @@ const queryMode = ref<'ngql' | 'algo'>('ngql')
 const ngqlStatement = ref('')
 const ngqlLoading = ref(false)
 const ngqlResult = ref<GraphConsoleResult | null>(null)
+const ngqlError = ref('')
+// 优先使用服务端返回的当前空间 writeAllowed；兼容旧接口的权限回退由 store 统一处理。
+const ngqlCanWrite = computed(() => graphSpaceStore.canWrite(currentGraphSpace()))
 const executedNgqlStatement = ref('')
 // nGQL 结果客户端分页：后端不限制返回行数，大结果集翻页展示（表头徽标仍显示总行数）
 const ngqlRecords = computed(() => ngqlResult.value?.records ?? [])
@@ -355,6 +359,8 @@ const algoWeightCols = ref<Record<string, string>>({})
 const algoEncodeId = ref(true)
 const algoPartitionNum = ref(8)
 const algoMetadataLoading = ref(false)
+/** 手动「重新检测」的引擎状态请求中：按钮置灰、徽标出「检测中」反馈。 */
+const engineRefreshing = ref(false)
 const algoMetadata = ref<GraphAlgorithmMetadata | null>(null)
 const algoSubmitLoading = computed(() => activeAlgorithmState.value.submitting)
 const algoCancelLoading = computed(() => activeAlgorithmState.value.cancelling)
@@ -452,7 +458,7 @@ function exportAlgoCsv(): void {
 
 /** 引擎状态徽标（正常 / 不可用 / 检测中）。 */
 const algoEngineStatus = computed(() => {
-  if (algoMetadataLoading.value) return { label: '检测中', tone: 'is-运行中' }
+  if (algoMetadataLoading.value || engineRefreshing.value) return { label: '检测中', tone: 'is-运行中' }
   const engine = algoMetadata.value?.engine
   if (!engine) return { label: '未知', tone: 'is-运行中' }
   return engine.status === 'UP'
@@ -645,7 +651,10 @@ const visibleOverviewJobs = computed(() =>
 
 const overviewJobStats = computed(() => {
   const counts = countJobUnifiedStatuses(visibleOverviewJobs.value)
+  // 六态与 countJobUnifiedStatuses/JOB_STATUS_TONE 对齐（「未运行」此前漏展示，
+  // 与图谱构建页统计卡同一次修齐）
   return [
+    { label: '未运行', value: counts['未运行'], tone: JOB_STATUS_TONE['未运行'] },
     { label: '运行中', value: counts['运行中'], tone: JOB_STATUS_TONE['运行中'] },
     { label: '已完成', value: counts['已完成'], tone: JOB_STATUS_TONE['已完成'] },
     { label: '运行异常', value: counts['运行异常'], tone: JOB_STATUS_TONE['运行异常'] },
@@ -857,9 +866,16 @@ async function runWithLoading(message: string, action?: () => void) {
 /** 常见报错的精简中文文案：英文错误换中文、后端长校验文案收敛为一句（按序取第一条命中）。 */
 const NGQL_ERROR_ZH_RULES: Array<{ test: RegExp; text: (match: RegExpMatchArray) => string }> = [
   {
-    // 后端原文含全部允许清单与管理员说明，toast 只留开头类型 + 常用只读语句示例
-    test: /^不支持的语句开头/,
-    text: () => '不支持的语句开头；允许的只读语句：MATCH / LOOKUP / GO / SHOW 等',
+    test: /禁止执行.*DDL\/管理类语句|该页面禁止执行 DDL\/管理类语句/i,
+    text: () => '该页面禁止执行 DDL/管理类语句',
+  },
+  {
+    test: /仅.*(?:管理员|开发维护).*执行写语句|当前账号无权在该图空间执行写操作/,
+    text: () => '当前账号无权在该图空间执行写操作',
+  },
+  {
+    test: /^不支持的语句开头|^nGQL 语句(?:不能为空|不能只包含注释)|一次仅允许执行一条语句|不允许使用管道|SyntaxError|syntax error/i,
+    text: () => '请输入合法的 nGQL 语句',
   },
   {
     test: /Unknown column [`'"](.*?)[`'"]\s*in schema/i,
@@ -878,10 +894,6 @@ const NGQL_ERROR_ZH_RULES: Array<{ test: RegExp; text: (match: RegExpMatchArray)
     text: ([, schema]) => `标签或边类型「${schema}」不存在，请检查名称拼写`,
   },
   {
-    test: /SyntaxError:.*?near\s+[`'"](.*?)[`'"]/i,
-    text: ([, near]) => `语法错误：「${near.trim().slice(0, 20)}」附近有误，请检查语句写法`,
-  },
-  {
     test: /No valid index|The index of the (?:tag|edge)/i,
     text: () => '未找到可用索引，LOOKUP / FIND 语句需要标签或边类型已建立索引',
   },
@@ -889,18 +901,29 @@ const NGQL_ERROR_ZH_RULES: Array<{ test: RegExp; text: (match: RegExpMatchArray)
 
 /** nGQL 报错短文案：剥掉「语句执行失败」/HTTP 传输前缀与换行，常见英文错误换中文，
  *  其余超长截断（完整错误始终进控制台）。 */
-function conciseNgqlError(error: unknown): string {
+function conciseNgqlError(error: unknown, statement: string): string {
   const message = getErrorMessage(error, 'nGQL 执行失败')
     .replace(/^语句执行失败[:：]\s*/, '')
     .replace(/^(?:GET|POST|PUT|DELETE|PATCH)\s+\S+\s*->\s*\d+[:：]\s*/i, '')
     .replace(/\s+/g, ' ')
     .trim()
   if (!message) return 'nGQL 执行失败'
+  let reason = message
   for (const rule of NGQL_ERROR_ZH_RULES) {
     const match = message.match(rule.test)
-    if (match) return rule.text(match)
+    if (match) {
+      reason = rule.text(match)
+      break
+    }
   }
-  return message.length > 60 ? `${message.slice(0, 60)}…` : message
+  // 空间授权失败返回通用 403。仅在本次提交的是写语句时转换为写权限提示，
+  // 避免把 DDL 限制或只读查询权限错误误报为写权限问题。
+  const status = (error as { response?: { status?: number } } | null)?.response?.status
+  const body = statement.replace(/(--|\/\/)[^\n]*/g, '').trim()
+  if (reason === message && status === 403 && /^(INSERT|UPDATE|DELETE|UPSERT)\b/i.test(body)) {
+    reason = '当前账号无权在该图空间执行写操作'
+  }
+  return reason.length > 60 ? `${reason.slice(0, 60)}…` : reason
 }
 
 async function handleNgqlQuery(): Promise<void> {
@@ -910,9 +933,15 @@ async function handleNgqlQuery(): Promise<void> {
   const statement =
     ngqlStatement.value.trim()
 
+  ngqlError.value = ''
+  ngqlResult.value = null
+  executedNgqlStatement.value = ''
+  resetNgqlPage()
+
   if (!statement) {
+    ngqlError.value = '请输入合法的 nGQL 语句'
     showToast(
-      '请输入 nGQL 语句',
+      ngqlError.value,
       'info',
     )
 
@@ -920,9 +949,6 @@ async function handleNgqlQuery(): Promise<void> {
   }
 
   ngqlLoading.value = true
-  ngqlResult.value = null
-  executedNgqlStatement.value = ''
-  resetNgqlPage()
 
   try {
     // 图空间跟随平台总览页的全局选择器（后端按 X-Graph-Space 路由）
@@ -934,7 +960,8 @@ async function handleNgqlQuery(): Promise<void> {
     if (context !== graphContextVersion) return
     // 完整错误进控制台便于排查；右上角提示只保留单行短文案
     console.error('[nGQL] 执行失败:', error)
-    showToast(conciseNgqlError(error), 'warning')
+    ngqlError.value = conciseNgqlError(error, statement)
+    showToast(ngqlError.value, 'warning')
   } finally {
     if (context === graphContextVersion) ngqlLoading.value = false
   }
@@ -943,6 +970,26 @@ async function handleNgqlQuery(): Promise<void> {
 // ---------- 图算法：元数据 / 提交 / 轮询 ----------
 
 let algoMetadataLoadedFor = ''
+
+// 关系类型选项的 Schema 目录中文名（name=图库英文边类型 → label=中文）；
+// 目录拿不到/加载失败不阻塞算法面板，选项与已选标签回退英文原名。
+const algoEdgeTypeLabels = ref(new Map<string, string>())
+
+async function loadAlgoEdgeTypeLabels(space: string): Promise<void> {
+  const context = graphContextVersion
+  try {
+    const topology = await getSchemaTopology(space)
+    if (context !== graphContextVersion) return
+    algoEdgeTypeLabels.value = new Map(topology.edges.map((schema) => [schema.name, schema.label]))
+  } catch {
+    if (context !== graphContextVersion) return
+    algoEdgeTypeLabels.value = new Map()
+  }
+}
+
+function algoEdgeTypeLabel(name: string): string {
+  return algoEdgeTypeLabels.value.get(name) || name
+}
 
 async function loadAlgoMetadata(force = false): Promise<void> {
   if (!algoSpace.value) return
@@ -955,6 +1002,8 @@ async function loadAlgoMetadata(force = false): Promise<void> {
     if (context !== graphContextVersion) return
     algoMetadata.value = metadata
     algoMetadataLoadedFor = space
+    // 选项中文名与元数据并行加载（目录失败不告警，回退英文）
+    void loadAlgoEdgeTypeLabels(space)
     // 切换图空间后：剔除新空间已不存在的关系类型（连同其权重列配置），
     // 避免带着旧空间的选择（图库里已无此边）提交得到空结果
     const available = new Set(algoMetadata.value?.edgeTypes ?? [])
@@ -974,15 +1023,21 @@ async function loadAlgoMetadata(force = false): Promise<void> {
 }
 
 async function refreshAlgoEngine(): Promise<void> {
-  if (!algoSpace.value) return
+  if (!algoSpace.value || engineRefreshing.value) return
   const context = graphContextVersion
+  engineRefreshing.value = true
   try {
     const engine = await fetchGraphAlgorithmEngine(algoSpace.value)
     if (context !== graphContextVersion) return
     algoMetadata.value = { edgeTypes: algoMetadata.value?.edgeTypes ?? [], engine }
+    // 检测很快且状态常不变，静默更新看起来像「按了没反应」：成功也给明确反馈
+    if (engine.status === 'UP') showToast('算法引擎运行正常', 'success')
+    else showToast(`算法引擎不可用：${engine.message ?? '未提供原因'}`, 'warning')
   } catch (error) {
     if (context !== graphContextVersion) return
     showToast(getErrorMessage(error, '算法引擎状态检测失败'), 'warning')
+  } finally {
+    if (context === graphContextVersion) engineRefreshing.value = false
   }
 }
 
@@ -1218,6 +1273,7 @@ watch(algoSpace, () => {
   graphContextVersion += 1
   stopAlgoPoll()
   ngqlResult.value = null
+  ngqlError.value = ''
   executedNgqlStatement.value = ''
   ngqlLoading.value = false
   resetNgqlPage()
@@ -1303,6 +1359,15 @@ function openProcessDetail(area: 'processing' | 'construction', taskId: string, 
     params: { area, taskId },
     query: step ? { step } : undefined,
   })
+}
+
+function openAssetChangeTask(row: AssetChangeRow) {
+  if (!canEnterAdminPages.value) return
+  if (!row.taskId) {
+    showToast('该记录暂无关联更新任务', 'info')
+    return
+  }
+  openProcessDetail('construction', row.taskId)
 }
 
 function handleExecuteService() {
@@ -1628,8 +1693,7 @@ const pageMeta = computed(() => {
         <div v-if="queryMode === 'ngql'" class="platform-ngql-toolbar">
           <div class="platform-ngql-permission-hint" role="note">
             <IconInfoCircle aria-hidden="true" />
-            <span>只读语句所有用户可执行</span><i aria-hidden="true"></i>
-            <span>写语句仅平台管理员</span><i aria-hidden="true"></i>
+            <span>{{ ngqlCanWrite ? '当前图空间支持查询及数据写入' : '当前图空间仅支持查询' }}</span><i aria-hidden="true"></i>
             <span>DDL 禁止执行</span>
           </div>
           <div class="platform-ngql-header-actions">
@@ -1674,10 +1738,10 @@ const pageMeta = computed(() => {
               <button
                 class="kg-button kg-button--text platform-query-engine-refresh"
                 type="button"
-                :disabled="algoMetadataLoading || !algoSpace"
+                :disabled="algoMetadataLoading || engineRefreshing || !algoSpace"
                 @click="refreshAlgoEngine"
               >
-                重新检测
+                {{ engineRefreshing ? '检测中…' : '重新检测' }}
               </button>
             </div>
           </div>
@@ -1709,8 +1773,8 @@ const pageMeta = computed(() => {
                   :max-tag-count="4"
                   :scrollbar="false"
                 >
-                  <a-option v-for="item in algoMetadata?.edgeTypes ?? []" :key="item" :value="item">
-                    {{ item }}
+                  <a-option v-for="item in algoMetadata?.edgeTypes ?? []" :key="item" :value="item" :label="algoEdgeTypeLabel(item)">
+                    {{ algoEdgeTypeLabel(item) }}
                   </a-option>
                 </a-select>
               </AFormItem>
@@ -1824,7 +1888,7 @@ const pageMeta = computed(() => {
           <div class="platform-query-result__table">
             <QueryResultTable v-if="ngqlTotal" aria-label="nGQL 查询结果" :rows="pagedNgqlRecords" :columns="ngqlResult?.columns ?? []" :page="ngqlPage" :page-size="ngqlPageSize" :loading="ngqlLoading" :space="algoSpace" :query-statement="executedNgqlStatement" />
             <div v-else class="platform-query-result__empty" role="status" aria-live="polite">
-              <AEmpty :description="ngqlLoading ? '查询执行中，请稍候…' : ngqlResult ? '语句执行成功，无返回记录' : '暂无数据，执行 nGQL 语句后在此查看结果'" />
+              <AEmpty :description="ngqlLoading ? '查询执行中，请稍候…' : ngqlError ? `执行失败：${ngqlError}` : ngqlResult ? '语句执行成功，无返回记录' : '暂无数据，执行 nGQL 语句后在此查看结果'" />
             </div>
           </div>
           <ListPagination
@@ -2056,8 +2120,40 @@ print(response.json())</pre>
       <aside aria-label="辅助区域 4" v-if="selectedAssetChange && activeAssetOverview" class="asset-change-drawer">
         <header><div><span>昨日图谱数据变化</span><h2>{{ activeAssetOverview.title }}新增明细</h2><p>{{ activeAssetOverview.addedLabel }} {{ activeAssetOverview.added }} · 数据更新至 {{ overviewMeta.updatedAt }}</p></div><button type="button" aria-label="关闭新增数据详情" @click="selectedAssetChange = null">×</button></header>
         <section class="asset-change-summary"><article><span>当前总量</span><strong>{{ activeAssetOverview.total }}</strong></article><article><span>{{ activeAssetOverview.addedLabel }}</span><strong>{{ activeAssetOverview.added }}</strong></article></section>
-        <div class="asset-change-table"><table aria-label="数据表"><thead><tr><th>数据类型</th><th>具体对象</th><th>来源</th><th>识别时间</th></tr></thead><tbody><tr v-if="!assetChangeRows[selectedAssetChange].length"><td colspan="4">昨日暂无写图记录</td></tr><tr v-for="(row, idx) in assetChangeRows[selectedAssetChange]" :key="`${row.object}-${row.time}`"><td>{{ row.type }}</td><td><a-tooltip :popup-visible="assetTipVisible.has(`obj-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`obj-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><span class="asset-change-object" @mouseenter="showAssetTipIfTruncated(`obj-${idx}`, $event)" @mouseleave="hideAssetTip(`obj-${idx}`)"><strong>{{ row.object }}</strong></span><template #content>{{ row.object }}</template></a-tooltip></td><td><a-tooltip :popup-visible="assetTipVisible.has(`src-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`src-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><code class="asset-change-source" @mouseenter="showAssetTipIfTruncated(`src-${idx}`, $event)" @mouseleave="hideAssetTip(`src-${idx}`)">{{ row.source }}</code><template #content>{{ row.source }}</template></a-tooltip></td><td>{{ row.time }}</td></tr></tbody></table></div>
-        <footer><span>{{ assetChangeFooterText(selectedAssetChange) }}</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看对应更新任务</RouterLink></footer>
+        <div class="asset-change-table">
+          <table aria-label="数据表">
+            <thead><tr><th>数据类型</th><th>具体对象</th><th>来源</th><th>识别时间</th></tr></thead>
+            <tbody>
+              <tr v-if="!assetChangeRows[selectedAssetChange].length"><td colspan="4">昨日暂无写图记录</td></tr>
+              <tr
+                v-for="(row, idx) in assetChangeRows[selectedAssetChange]"
+                :key="`${row.object}-${row.time}`"
+                :class="{ 'is-clickable': canEnterAdminPages && row.taskId }"
+                :tabindex="canEnterAdminPages && row.taskId ? 0 : undefined"
+                :aria-label="canEnterAdminPages && row.taskId ? `查看${row.object}的更新任务` : undefined"
+                @click="openAssetChangeTask(row)"
+                @keydown.enter.prevent="openAssetChangeTask(row)"
+                @keydown.space.prevent="openAssetChangeTask(row)"
+              >
+                <td>{{ row.type }}</td>
+                <td>
+                  <a-tooltip :popup-visible="assetTipVisible.has(`obj-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`obj-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip">
+                    <span class="asset-change-object" @mouseenter="showAssetTipIfTruncated(`obj-${idx}`, $event)" @mouseleave="hideAssetTip(`obj-${idx}`)"><strong>{{ row.object }}</strong></span>
+                    <template #content>{{ row.object }}</template>
+                  </a-tooltip>
+                </td>
+                <td>
+                  <a-tooltip :popup-visible="assetTipVisible.has(`src-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`src-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip">
+                    <code class="asset-change-source" @mouseenter="showAssetTipIfTruncated(`src-${idx}`, $event)" @mouseleave="hideAssetTip(`src-${idx}`)">{{ row.source }}</code>
+                    <template #content>{{ row.source }}</template>
+                  </a-tooltip>
+                </td>
+                <td>{{ row.time }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <footer><span>{{ assetChangeFooterText(selectedAssetChange) }}</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看更新任务</RouterLink></footer>
       </aside>
     </Teleport>
 
@@ -2311,7 +2407,7 @@ print(response.json())</pre>
 .platform-jobs-panel .kg-panel__header>div,.platform-review-panel .kg-panel__header>div { display:grid;gap:2px; }
 .platform-jobs-panel .kg-panel__header span,.platform-review-panel .kg-panel__header span { color:#7b8aa1;font-size:12px;line-height:20px; }
 .platform-jobs-panel .kg-panel__header>a,.platform-review-panel .kg-panel__header>a { color:#004ecc;font-size:14px;line-height:22px;text-decoration:none; }
-.platform-jobs-stats { display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border-bottom:1px solid #e4ecf6; }
+.platform-jobs-stats { display:grid;grid-template-columns:repeat(6,minmax(0,1fr));border-bottom:1px solid #e4ecf6; }
 .platform-jobs-stats article { display:grid;gap:2px;padding:12px 8px;text-align:center;border-right:1px solid #edf2f8; }
 .platform-jobs-stats article:last-child { border-right:0; }
 .platform-jobs-stats article span { font-size:18px;font-weight:600; }
@@ -4585,7 +4681,7 @@ print(response.json())</pre>
 
   .platform-jobs-stats { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .platform-jobs-stats article:nth-child(2n) { border-right:0; }
-  .platform-jobs-stats article:nth-child(-n+2) { border-bottom:1px solid #edf2f8; }
+  .platform-jobs-stats article:nth-child(-n+4) { border-bottom:1px solid #edf2f8; }
 
   .platform-build-context {
     flex-direction: column;
@@ -4679,6 +4775,7 @@ print(response.json())</pre>
 .asset-change-drawer>header{display:flex;align-items:flex-start;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.asset-change-drawer>header span{color:#004ecc;font-size:11px}.asset-change-drawer h2{margin:6px 0 3px;font-size:20px}.asset-change-drawer header p{margin:0;color:#718098;font-size:12px}.asset-change-drawer header>button{width:31px;height:31px;border:0;border-radius:5px;background:transparent;color:#52647f;font-size:20px;cursor:pointer}
 .asset-change-summary{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:14px}.asset-change-summary article{display:grid;gap:5px;padding:14px;border:1px solid #c7dcfb;border-radius:7px;background:#fff}.asset-change-summary span{color:#718098;font-size:11px}.asset-change-summary strong{color:#004ecc;font-size:24px}.asset-change-summary article:last-child strong{color:#067647}
 .asset-change-table{min-height:0;overflow:auto;padding:0 14px 14px}.asset-change-table table{width:100%;border-collapse:collapse;border:1px solid #dce8f8;background:#fff;font-size:12px}.asset-change-table th,.asset-change-table td{height:48px;padding:10px 12px;border-bottom:1px solid #e3ebf6;text-align:left}.asset-change-table th{position:sticky;top:0;background:#f3f7fc;color:#62728a}.asset-change-table td{color:#344861}.asset-change-table code{color:#004ecc;font-family:inherit}.asset-change-table td .asset-change-object{display:inline-block;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}.asset-change-table td .asset-change-source{display:inline-block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
+.asset-change-table tr.is-clickable{cursor:pointer}.asset-change-table tr.is-clickable:hover,.asset-change-table tr.is-clickable:focus-visible{background:#eef5ff;outline:2px solid #004ecc;outline-offset:-2px}
 .asset-change-drawer>footer{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.asset-change-drawer>footer span{color:#718098;font-size:11px}.asset-change-drawer>footer a{height:32px;padding:0 12px;border-radius:5px;background:#004ecc;color:#fff;font-size:11px;line-height:32px;text-decoration:none}
 @media(max-width:760px){.asset-change-drawer{width:94vw}.asset-change-table table{min-width:700px}}
 

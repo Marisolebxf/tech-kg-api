@@ -1,4 +1,4 @@
-"""person_entity 抽取步（自包含单文件，平台喂数管道 kg.schema.extract 直传可用）。
+"""person 抽取步（自包含单文件，平台喂数管道 kg.schema.extract 直传可用）。
 
 由 script/tools/build_portable_steps.py 从 ``script.entity_extractors_one_entity.person_entity`` 及其依赖闭包自动生成；
 抽取口径与老脚本逐行一致，MySQL/图客户端改经平台 ctx 注入。请勿手改，
@@ -21,7 +21,7 @@ from typing import Any
 
 from kg_sdk import step
 
-logger = logging.getLogger("person_entity")
+logger = logging.getLogger("person")
 
 
 EntityBuilder = Callable[[str, Mapping[str, Any], str], Iterable[Any]]
@@ -204,7 +204,7 @@ def is_virtual_source_row(row: Mapping[str, Any]) -> bool:
     return False
 
 
-SOURCE_SYSTEM = "gkx_element"
+SOURCE_SYSTEM = "gkx"
 
 
 ORGANIZATION_ID_FIELDS: tuple[str, ...] = (
@@ -524,10 +524,33 @@ def legal_representative_person(
     return [EntityRecord("Person", vid, props, merge_protect=True)]
 
 
-_PERSON_ORG_TYPES = {"organization", "company", "enterprise", "机构", "企业", "公司"}
+_PERSON_ORG_TYPES = {
+    "organization",
+    "company",
+    "enterprise",
+    "机构",
+    "企业",
+    "公司",
+    # gkx 生产库工商口径词表（2026-10-11 实测 dwd_org_shareholder_info.owners_type
+    # 分布：企业法人/法人股东/合伙企业/内资合伙企业/外商投资*/外国（地区）*/
+    # 事业法人/机关法人/非自然人股东/其他投资者/单位——名字抽样全为机构）
+    "单位",
+    "企业法人",
+    "法人股东",
+    "非自然人股东",
+    "合伙企业",
+    "内资合伙企业",
+    "外商投资合伙企业",
+    "外商投资企业",
+    "外国（地区）企业",
+    "外国（地区）投资者",
+    "事业法人",
+    "机关法人",
+    "其他投资者",
+}
 
 
-_PERSON_TYPES = {"person", "individual", "natural person", "自然人", "个人"}
+_PERSON_TYPES = {"person", "individual", "natural person", "自然人", "个人", "自然人股东"}
 
 
 def organization_role_person(table: str, row: Mapping[str, Any], batch: str) -> list[EntityRecord]:
@@ -543,6 +566,11 @@ def organization_role_person(table: str, row: Mapping[str, Any], batch: str) -> 
     if spec.entity_kind == "shareholder":
         owner_type = (text_or_none(row.get("owners_type")) or "").casefold()
         if text_or_none(row.get("inv_org_id")) is not None or owner_type in _PERSON_ORG_TYPES:
+            return []
+        if not owner_type:
+            # 生产库 ~43% 行 owners_type 为空且 inv_org_id 空（owners_name 人企
+            # 混杂，无判别依据）：无类型证据即不产 Person（无源即 0 口径），
+            # 不算行失败——否则 17 万条涌进 T_EXTRACT_FAIL 审核队列
             return []
         if owner_type not in _PERSON_TYPES:
             raise ValueError("shareholder endpoint type does not identify a Person")
@@ -720,6 +748,6 @@ def _transform(payload: Mapping[str, Any]) -> dict[str, Any]:
     return entity_transform(payload, mapper_by_table=MAPPER_BY_TABLE)
 
 
-@step("person_entity")
+@step("person")
 def emit(payload):
     return _transform(payload)

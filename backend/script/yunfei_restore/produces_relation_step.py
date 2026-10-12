@@ -12,6 +12,7 @@ import json
 import logging
 import math
 import re
+import time
 import unicodedata
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -25,9 +26,6 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 logger = logging.getLogger("produces")
-
-
-RELATION_KEY = "product"
 
 
 VIRTUAL_SOURCE_FIELDS: tuple[str, ...] = ("data_source", "source_system")
@@ -210,7 +208,7 @@ class RelationEdgeSpec:
 SPECS_BY_KEY: dict[str, tuple[RelationEdgeSpec, ...]] = {}
 
 
-DEFAULT_DB = "gkx_element"
+DEFAULT_DB = "gkx"
 
 
 def _sdk_context():
@@ -331,10 +329,32 @@ class EdgeRecord:
     validate_endpoints: bool = True
 
 
-_ORG_TYPES = {"机构", "企业", "公司", "organization", "company", "enterprise"}
+_ORG_TYPES = {
+    "机构",
+    "企业",
+    "公司",
+    "organization",
+    "company",
+    "enterprise",
+    # gkx 生产库工商口径词表（与 entity 侧 _PERSON_ORG_TYPES 同源，
+    # 2026-10-11 实测 dwd_org_shareholder_info.owners_type 分布）
+    "单位",
+    "企业法人",
+    "法人股东",
+    "非自然人股东",
+    "合伙企业",
+    "内资合伙企业",
+    "外商投资合伙企业",
+    "外商投资企业",
+    "外国（地区）企业",
+    "外国（地区）投资者",
+    "事业法人",
+    "机关法人",
+    "其他投资者",
+}
 
 
-_PERSON_TYPES = {"自然人", "个人", "person", "individual", "natural person"}
+_PERSON_TYPES = {"自然人", "个人", "person", "individual", "natural person", "自然人股东"}
 
 
 def _first(row: Mapping[str, Any], *names: str) -> Any:
@@ -370,7 +390,7 @@ class ExactOrganizationResolver:
         self._by_name = {name: set(ids) for name, ids in by_name.items()}
 
     @classmethod
-    def load(cls, engine: Engine, database: str = "gkx_element") -> ExactOrganizationResolver:
+    def load(cls, engine: Engine, database: str = "gkx") -> ExactOrganizationResolver:
         by_name: dict[str, set[str]] = defaultdict(set)
         with engine.connect() as conn:
             for table, id_column, name_columns in cls._SOURCES:
@@ -637,6 +657,10 @@ def extract_edge(
             # 实体侧统一公式（旧关系侧不带 birth/country 且缺 external_id 回退）。
             source = person_vid_for_row(row, "shareholder", "owners_name")
             source_tag = "Person"
+        elif not owner_type:
+            # 空 owners_type 且无 inv_org_id：无判别依据即不出边（无源即 0），
+            # 与实体侧口径一致（生产库 ~43% 行如此）
+            return []
         else:
             raise ValueError("shareholder endpoint type is not explicit")
         props = edge_props(
@@ -885,17 +909,36 @@ def extract_edge(
     raise ValueError(f"unsupported extractor: {extractor}")
 
 
+_RESOLVER_CACHE: dict[tuple[str, str], tuple[float, ExactOrganizationResolver]] = {}
+
+
+_RESOLVER_CACHE_TTL_SECONDS = 600.0
+
+
+def load_resolver_cached(engine: Engine, database: str = "gkx") -> ExactOrganizationResolver:
+    """带 TTL 缓存的 ``ExactOrganizationResolver.load``（每批转换入口用）。"""
+    key = (str(getattr(engine, "url", "")), database)
+    now = time.monotonic()
+    hit = _RESOLVER_CACHE.get(key)
+    if hit is not None and now - hit[0] < _RESOLVER_CACHE_TTL_SECONDS:
+        return hit[1]
+    resolver = ExactOrganizationResolver.load(engine, database)
+    _RESOLVER_CACHE[key] = (now, resolver)
+    return resolver
+
+
 def transform_org_relation(key: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     """kg.schema.extract 转换入口：机构域边按 spec 驱动转换，只输出边 JSON。
 
-    resolver 每批从平台注入的 mysql ctx 构建一次（7 张机构表名称索引）；
-    端点不验存/不建点（实体侧脚本负责），逐行失败进 failures。
+    resolver 走进程级 TTL 缓存（7 张机构表名称索引全量快照，公网源库下
+    每批全拉会被字典装载淹没）；端点不验存/不建点（实体侧脚本负责），
+    逐行失败进 failures。
     """
 
-    database = (payload.get("source") or {}).get("databaseName") or "gkx_element"
+    database = (payload.get("source") or {}).get("databaseName") or "gkx"
     engine = mysql_engine(database)
     try:
-        resolver = ExactOrganizationResolver.load(engine, database)
+        resolver = load_resolver_cached(engine, database)
     finally:
         engine.dispose()
     specs = {spec.source_table: spec for spec in SPECS_BY_KEY[key]}
@@ -1314,6 +1357,9 @@ for _spec in RELATION_EDGE_SPECS:
 
 
 assert len(RELATION_EDGE_SPECS) == 32
+
+
+RELATION_KEY = "product"
 
 
 def _transform(payload: Mapping[str, Any]) -> dict[str, Any]:

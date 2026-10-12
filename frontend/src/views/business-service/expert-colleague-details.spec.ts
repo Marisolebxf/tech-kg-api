@@ -62,4 +62,19 @@ describe('同事关系详情', () => {
     expect(colleagueProvenanceCards(nodes, allEdges)).toHaveLength(5);
     expect(colleagueProvenanceCards(nodes, allEdges, 'nonexistent')).toEqual([]);
   });
+  it('传入关系名换算时溯源卡标题用换算后的中文关系名，未传保持原口径', () => {
+    const ledger: Record<string, string> = { AFFILIATED_WITH: '任职关系', 同事关系: '同事' };
+    const cards = colleagueProvenanceCards(
+      nodes,
+      [{ source: 'a', target: 'org', label: 'AFFILIATED_WITH' }, ...edges],
+      undefined,
+      undefined,
+      label => ledger[label] ?? label,
+    );
+    expect(cards[3]?.title).toBe('赵刚 → 共同机构 · 任职关系');
+    expect(cards[4]?.title).toBe('赵刚 → 朱保君 · 同事');
+    // 未传换算函数：保持既有行为（AFFILIATED_WITH 特例中文，其余原样）
+    const raw = colleagueProvenanceCards(nodes, [{ source: 'a', target: 'org', label: 'AUTHORED_BY' }]);
+    expect(raw[3]?.title).toBe('赵刚 → 共同机构 · AUTHORED_BY');
+  });
 });

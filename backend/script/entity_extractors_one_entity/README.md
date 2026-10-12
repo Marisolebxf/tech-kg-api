@@ -68,7 +68,7 @@ scope (separate relation scripts).
 Most scripts support:
 
 ```bash
---database gkx_element
+--database gkx
 --batch-size 500
 --limit 100
 --since 2026-01-01T00:00:00

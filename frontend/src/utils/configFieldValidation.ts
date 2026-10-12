@@ -74,9 +74,8 @@ export function numberOrNullForSubmit(value: unknown): number | null {
 
 export type ConfigKindKey = 'llm' | 'embedding' | 'mysql'
 
-/** 文本字段上限表（FUNC-00404～00638）：名称/模型/用户名/默认库 128；URL/主机/凭据 256 */
+/** 文本字段上限表（FUNC-00404～00638）：模型/用户名/默认库 128；URL/主机/凭据 256（名称按类型走 configNameMaxLength） */
 const CONFIG_TEXT_LIMITS = {
-  name: 128,
   baseUrl: 256,
   model: 128,
   host: 256,
@@ -85,6 +84,12 @@ const CONFIG_TEXT_LIMITS = {
   apiKey: 256,
   password: 256,
 } as const
+
+/** 配置名称上限：语言模型对齐后端 LlmConfig 的 64（前端原 128 会在 65~128 字被后端 422），
+ * 向量模型 / MySQL 数据源 128。输入框 maxlength 与提交校验共用同一口径。 */
+export function configNameMaxLength(kind: ConfigKindKey): number {
+  return kind === 'llm' ? 64 : 128
+}
 
 /** MySQL / 向量模型说明：新建表单 200（FUNC-00430/00492），详情抽屉 500（FUNC-00534～00536/00581～00583/00637） */
 export const CREATE_DESCRIPTION_MAX = 200
@@ -129,7 +134,7 @@ export function validateConfigFields(
     if (error) errors[field] = error
   }
 
-  put('name', validateTextField('配置名称', values.name, { required: true, requiredMessage: '请输入配置名称', max: limits.name }))
+  put('name', validateTextField('配置名称', values.name, { required: true, requiredMessage: '请输入配置名称', max: configNameMaxLength(kind) }))
   put(
     'description',
     validateTextField('说明', values.description, {

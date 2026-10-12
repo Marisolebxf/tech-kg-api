@@ -310,6 +310,78 @@ describe('配置管理 · 管理抽屉编辑隔离', () => {
   })
 })
 
+// 输入即校验的显示口径：空表单刚打开不弹必填红警（保存按钮仍置灰拦截），
+// 只有输入超限/非法的字段才亮红框红字，改回合法立即恢复。
+describe('新建弹窗红框提示时机', () => {
+  it('未输入不提示；名称超 64 字即时红字红框，改回合法恢复', async () => {
+    setActivePinia(createPinia())
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('.create-entry').trigger('click')
+    const dialog = wrapper.get('.config-create-dialog')
+    expect(dialog.find('.field-error').exists()).toBe(false)
+    expect(dialog.find('input[aria-invalid="true"]').exists()).toBe(false)
+    // 未触碰的空必填（API Key）不提示，但保存/验证按钮仍禁用
+    expect(dialog.text()).not.toContain('请输入配置名称')
+    expect(dialog.text()).not.toContain('请输入 API Key')
+
+    const nameInput = dialog.find('input[aria-label="例如：科技文本抽取大模型"]')
+    await nameInput.setValue('长'.repeat(65))
+    expect(dialog.get('.field-error').text()).toBe('输入长度不能超过64个字符')
+    expect(nameInput.attributes('aria-invalid')).toBe('true')
+
+    await nameInput.setValue('正常名称')
+    expect(dialog.find('.field-error').exists()).toBe(false)
+    expect(nameInput.attributes('aria-invalid')).not.toBe('true')
+    wrapper.unmount()
+  })
+})
+
+// 停用=退出使用：探活会真连库且结果盖掉「停用」徽标（停用配置有的库通/有的不通，
+// 表现随机翻转成 正常/异常），所以停用态测试连接置灰，启用后才可测。
+describe('停用配置的连接测试', () => {
+  it('停用数据源抽屉里测试连接置灰且不发探活请求；启用态可点', async () => {
+    setActivePinia(createPinia())
+    const { listMysqlDatasources, testMysqlDatasource } = await import('../../api/mysqlDatasource')
+    const base = {
+      description: '', owner: 'admin', updatedAt: '', isDefault: false,
+      host: '10.0.0.9', port: 3306, defaultDatabase: 'legacy', username: 'root',
+      hasPassword: true, passwordMasked: '••••••',
+    }
+    vi.mocked(listMysqlDatasources).mockResolvedValue([
+      { ...base, id: 'MY-DIS', name: '停用库', status: '停用' },
+      { ...base, id: 'MY-OK', name: '在用库', status: '正常' },
+    ])
+    const wrapper = mountView()
+    await flushPromises()
+    try {
+      await wrapper.findAll('.category-nav > button').find(b => b.text().includes('MySQL'))!.trigger('click')
+      await flushPromises()
+      const openDrawerByName = async (name: string) => {
+        const row = wrapper.findAll('.config-table-wrap tbody tr')
+          .find(r => r.get('.config-name strong').text() === name)!
+        await row.get('.row-actions button').trigger('click')
+        await flushPromises()
+      }
+      const testBtn = () => wrapper.findAll('.detail-drawer .health-card button')
+        .find(b => b.text().includes('测试连接'))!
+
+      await openDrawerByName('停用库')
+      expect(testBtn()!.attributes('disabled')).toBeDefined()
+      expect(testBtn()!.attributes('title')).toContain('请先启用')
+      await testBtn()!.trigger('click')
+      await flushPromises()
+      expect(testMysqlDatasource).not.toHaveBeenCalled()
+      await wrapper.find('.detail-drawer > header button').trigger('click')
+
+      await openDrawerByName('在用库')
+      expect(testBtn()!.attributes('disabled')).toBeUndefined()
+    } finally {
+      wrapper.unmount()
+    }
+  })
+})
+
 // 使用真实 Arco Textarea，验证计数随编辑更新且超长粘贴不能超过实际提交上限。
 describe('配置说明计数与输入上限', () => {
   it('语言模型：新建与管理显示 /64，回填说明和长文本粘贴均正确计数', async () => {

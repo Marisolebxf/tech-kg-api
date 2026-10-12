@@ -1,4 +1,4 @@
-"""patent_entity 抽取步（自包含单文件，平台喂数管道 kg.schema.extract 直传可用）。
+"""patent 抽取步（自包含单文件，平台喂数管道 kg.schema.extract 直传可用）。
 
 由 script/tools/build_portable_steps.py 从 ``script.entity_extractors_one_entity.patent_entity`` 及其依赖闭包自动生成；
 抽取口径与老脚本逐行一致，MySQL/图客户端改经平台 ctx 注入。请勿手改，
@@ -18,7 +18,79 @@ from typing import Any
 
 from kg_sdk import step
 
-logger = logging.getLogger("patent_entity")
+logger = logging.getLogger("patent")
+
+
+EntityBuilder = Callable[[str, Mapping[str, Any], str], Iterable[Any]]
+
+
+def _record_id(row: Mapping[str, Any], pk_column: str | None) -> str:
+    if pk_column and row.get(pk_column) is not None:
+        return str(row[pk_column])
+    digest = hashlib.sha256(
+        json.dumps(row, ensure_ascii=False, default=str, sort_keys=True).encode()
+    ).hexdigest()
+    return f"row:{digest[:16]}"
+
+
+def _split_source(payload: Mapping[str, Any]) -> tuple[str, str, str]:
+    source = payload.get("source") or {}
+    source_table = str(payload.get("source_table") or source.get("tableName") or "")
+    table = source_table.rsplit(".", 1)[-1]
+    pk_column = str(source.get("pkColumn") or "id")
+    batch = f"se-{str(source.get('id') or 'x')[:8]}"
+    return table, pk_column, batch
+
+
+def _run(
+    payload: Mapping[str, Any],
+    *,
+    builder: EntityBuilder | None,
+    mapper_by_table: dict[str, EntityBuilder] | None,
+    to_json: Callable[[Any], dict[str, Any]],
+    key: str,
+) -> dict[str, Any]:
+    table, pk_column, batch = _split_source(payload)
+    if builder is None and mapper_by_table:
+        builder = mapper_by_table.get(table)
+    if builder is None:
+        raise RuntimeError(f"来源表 {table} 没有对应的转换 mapper")
+    rows = payload.get("rows") or []
+    records: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    for row in rows:
+        record_id = _record_id(row, pk_column)
+        try:
+            mapped = list(builder(table, row, batch) or [])
+            records.extend(to_json(r) for r in mapped)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("行转换失败 table=%s record=%s: %s", table, record_id, exc)
+            failures.append({"recordId": record_id, "error": f"{type(exc).__name__}: {exc}"[:1000]})
+    output: dict[str, Any] = {key: records, "failures": failures}
+    if table:
+        output["stats"] = {
+            "table": table,
+            "rows": len(rows),
+            key: len(records),
+            "failed": len(failures),
+        }
+    return output
+
+
+def entity_transform(
+    payload: Mapping[str, Any],
+    *,
+    builder: EntityBuilder | None = None,
+    mapper_by_table: dict[str, EntityBuilder] | None = None,
+) -> dict[str, Any]:
+    """实体转换：行 → ``{"id": vid, "props": properties}``。"""
+
+    def to_json(record: Any) -> dict[str, Any]:
+        return {"id": record.vid, "props": record.properties}
+
+    return _run(
+        payload, builder=builder, mapper_by_table=mapper_by_table, to_json=to_json, key="entities"
+    )
 
 
 @dataclass(frozen=True)
@@ -92,7 +164,7 @@ def original_text(value: Any) -> str:
     return str(value or "")
 
 
-SOURCE_SYSTEM = "gkx_element"
+SOURCE_SYSTEM = "gkx"
 
 
 MAX_TEXT_LENGTH = 20_000
@@ -170,23 +242,13 @@ def patent_record(table: str, row: Mapping[str, Any], batch: str) -> list[Entity
         "publication_date": to_int_or_zero(row.get("publication_date")),
         "application_date": to_int_or_zero(row.get("application_date")),
         "granted_number": str_or_empty(row.get("granted_number")),
-        "grant_date": str_or_empty(row.get("grant_date")),
-        "status": str_or_empty(row.get("status")),
-        "anticipated_expiration": to_int_or_zero(row.get("anticipated_expiration")),
-        "title_original": original_text(row.get("titles")),
-        "title_en": str_or_empty(row.get("title_en")),
-        "title_zh": str_or_empty(row.get("title_zh")),
-        "abstract_zh": str_or_empty(row.get("abstract_zh")),
         "language": normalized_language(row.get("language")),
         "main_ipcr": str_or_empty(row.get("main_ipcr")),
         "further_ipcr": json_snapshot(row.get("further_ipcr")),
         "main_cpc": str_or_empty(row.get("main_cpc")),
         "further_cpc": json_snapshot(row.get("further_cpc")),
         "keywords": json_snapshot(row.get("keywords")),
-        "citation_nums": to_int_or_zero(row.get("citation_nums")),
-        "cited_by_nums": to_int_or_zero(row.get("cited_by_nums")),
         "patent_value": to_int_or_zero(row.get("patent_value")),
-        "simple_family_number": str_or_empty(row.get("simple_family_number")),
         "db_source": str_or_empty(row.get("db_source")),
         "create_time": datetime_text(row.get("create_time")),
         "update_time": datetime_text(row.get("update_time")),
@@ -200,79 +262,26 @@ def patent_record(table: str, row: Mapping[str, Any], batch: str) -> list[Entity
             source_update_time=datetime_text(row.get("update_time")),
         ),
     }
+    # gkx 生产库双源绑定：A 源（裸表）行不含子表列 → 只写 p 表原生属性；
+    # B 源（子表 UNION 富集）行恒含 titles 列（缺子表行为 ""，老 LEFT JOIN 口径）。
+    # 两源属性集不相交，同 Schema 并发抽取（asyncio.gather）下谁后写都不覆盖对方
+    # （INSERT VERTEX 列级 upsert，未列出的属性保留原值）。
+    if "titles" in row:
+        props.update(
+            {
+                "grant_date": str_or_empty(row.get("grant_date")),
+                "status": str_or_empty(row.get("status")),
+                "anticipated_expiration": to_int_or_zero(row.get("anticipated_expiration")),
+                "title_original": original_text(row.get("titles")),
+                "title_en": str_or_empty(row.get("title_en")),
+                "title_zh": str_or_empty(row.get("title_zh")),
+                "abstract_zh": str_or_empty(row.get("abstract_zh")),
+                "citation_nums": to_int_or_zero(row.get("citation_nums")),
+                "cited_by_nums": to_int_or_zero(row.get("cited_by_nums")),
+                "simple_family_number": str_or_empty(row.get("simple_family_number")),
+            }
+        )
     return [EntityRecord("Patent", f"patent_{pid}", props)]
-
-
-EntityBuilder = Callable[[str, Mapping[str, Any], str], Iterable[Any]]
-
-
-def _record_id(row: Mapping[str, Any], pk_column: str | None) -> str:
-    if pk_column and row.get(pk_column) is not None:
-        return str(row[pk_column])
-    digest = hashlib.sha256(
-        json.dumps(row, ensure_ascii=False, default=str, sort_keys=True).encode()
-    ).hexdigest()
-    return f"row:{digest[:16]}"
-
-
-def _split_source(payload: Mapping[str, Any]) -> tuple[str, str, str]:
-    source = payload.get("source") or {}
-    source_table = str(payload.get("source_table") or source.get("tableName") or "")
-    table = source_table.rsplit(".", 1)[-1]
-    pk_column = str(source.get("pkColumn") or "id")
-    batch = f"se-{str(source.get('id') or 'x')[:8]}"
-    return table, pk_column, batch
-
-
-def _run(
-    payload: Mapping[str, Any],
-    *,
-    builder: EntityBuilder | None,
-    mapper_by_table: dict[str, EntityBuilder] | None,
-    to_json: Callable[[Any], dict[str, Any]],
-    key: str,
-) -> dict[str, Any]:
-    table, pk_column, batch = _split_source(payload)
-    if builder is None and mapper_by_table:
-        builder = mapper_by_table.get(table)
-    if builder is None:
-        raise RuntimeError(f"来源表 {table} 没有对应的转换 mapper")
-    rows = payload.get("rows") or []
-    records: list[dict[str, Any]] = []
-    failures: list[dict[str, Any]] = []
-    for row in rows:
-        record_id = _record_id(row, pk_column)
-        try:
-            mapped = list(builder(table, row, batch) or [])
-            records.extend(to_json(r) for r in mapped)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("行转换失败 table=%s record=%s: %s", table, record_id, exc)
-            failures.append({"recordId": record_id, "error": f"{type(exc).__name__}: {exc}"[:1000]})
-    output: dict[str, Any] = {key: records, "failures": failures}
-    if table:
-        output["stats"] = {
-            "table": table,
-            "rows": len(rows),
-            key: len(records),
-            "failed": len(failures),
-        }
-    return output
-
-
-def entity_transform(
-    payload: Mapping[str, Any],
-    *,
-    builder: EntityBuilder | None = None,
-    mapper_by_table: dict[str, EntityBuilder] | None = None,
-) -> dict[str, Any]:
-    """实体转换：行 → ``{"id": vid, "props": properties}``。"""
-
-    def to_json(record: Any) -> dict[str, Any]:
-        return {"id": record.vid, "props": record.properties}
-
-    return _run(
-        payload, builder=builder, mapper_by_table=mapper_by_table, to_json=to_json, key="entities"
-    )
 
 
 def _transform(payload: dict[str, Any]) -> dict[str, Any]:
@@ -280,6 +289,6 @@ def _transform(payload: dict[str, Any]) -> dict[str, Any]:
     return entity_transform(payload, builder=patent_record)
 
 
-@step("patent_entity")
+@step("patent")
 def emit(payload):
     return _transform(payload)

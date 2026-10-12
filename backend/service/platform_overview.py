@@ -128,6 +128,8 @@ class ExtractExecutionInfo:
     # 推到本执行完成之后，按完成时刻封顶会把这些对象挡在窗外、退回聚合行
     window_hi: str = ""
     fallback_rows: list[AssetChangeRow] = field(default_factory=list)
+    task_id: str | None = None
+    started_at: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,6 +273,7 @@ def parse_execution_records(
         change = f"新增 {schema_key}"
         # 明细时间列与日窗口同时区：北京时刻展示（完成串是进程本地钟，折算后展示）
         completed_time = completed_local.strftime("%m-%d %H:%M:%S")
+        task_id = str(record.get("taskId") or "").strip() or None
         target_rows = entity_rows if kind == "entity" else relation_rows
         # 一次执行绑定多个来源表时按表拆行（来源列各自取本表名），只出 written>0 的表
         exec_rows: list[AssetChangeRow] = []
@@ -287,6 +290,7 @@ def parse_execution_records(
                 change=change,
                 source=str(source.get("table") or source.get("source") or "-"),
                 time=completed_time,
+                task_id=task_id,
             )
             target_rows.append((completed_at, row))
             exec_rows.append(row)
@@ -309,6 +313,8 @@ def parse_execution_records(
             window_lo=min(watermarks) if watermarks else day_start_graph,
             window_hi=day_end_graph,
             fallback_rows=exec_rows,
+            task_id=task_id,
+            started_at=str(record.get("startedAt") or ""),
         )
         if kind == "entity":
             entity_added += written
@@ -527,12 +533,49 @@ def _safe_vid(vid: Any) -> str:
     return str(vid or "").replace('"', "").strip()
 
 
+def _graph_row_task_id(
+    execution: ExtractExecutionInfo,
+    props: dict[str, Any],
+    time_prop: str | None,
+    executions: list[ExtractExecutionInfo],
+) -> str | None:
+    """反查窗可能覆盖同 Schema 的多次执行，按来源和写图时间关联任务。
+
+    不能把当前反查执行的 taskId 无条件贴到整日全部对象上；用执行起止时间
+    区分同来源重跑。只有源数据时间或无时间时要求候选唯一；并发歧义不猜测。
+    """
+    source = str(props.get("source_table") or "")
+    candidates = [
+        item
+        for item in executions
+        if item.schema_key == execution.schema_key
+        and (not source or any(row.source == source for row in item.fallback_rows))
+    ]
+    stamp = str(props.get(time_prop) or "").replace("T", " ", 1) if time_prop else ""
+    if time_prop in ("update_time", "create_time") and stamp:
+        timed = []
+        for item in candidates:
+            completed = _completed_in_day_tz(item.completed_at)
+            if completed is None:
+                continue
+            completed_graph = completed.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
+            started = _completed_in_day_tz(item.started_at)
+            started_graph = (
+                started.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S") if started else item.window_lo
+            )
+            if max(item.window_lo, started_graph) <= stamp <= completed_graph:
+                timed.append(item)
+        return timed[0].task_id if len(timed) == 1 else None
+    return candidates[0].task_id if len(candidates) == 1 else None
+
+
 def _entity_object_rows(
     client: Any,
     execution: ExtractExecutionInfo,
     schema_name: str,
     time_props: dict[tuple[str, str], str | None],
     schema_labels: dict[str, str],
+    executions: list[ExtractExecutionInfo],
 ) -> tuple[list[AssetChangeRow] | None, list[str]]:
     """按 tag + 时间窗反查当日写入的实体顶点，逐对象一行；查不到返回 None 走聚合降级。"""
     tag = _safe_identifier(schema_name)
@@ -571,6 +614,7 @@ def _entity_object_rows(
                 change=f"新增 {type_label}",
                 source=str(props.get("source_table") or fallback_source),
                 time=_time_short(props.get(time_prop), _utc_slice_local(execution.completed_at)),
+                task_id=_graph_row_task_id(execution, props, time_prop, executions),
             )
         )
         vids.append(vid)
@@ -681,6 +725,7 @@ def _relation_object_rows(
     time_props: dict[tuple[str, str], str | None],
     seed_vids: list[str],
     schema_labels: dict[str, str],
+    executions: list[ExtractExecutionInfo],
 ) -> list[AssetChangeRow] | None:
     """按边类型反查当日关系边，具体对象 = 起点实体名 → 终点实体名。"""
     edge_type = _safe_identifier(schema_name)
@@ -712,6 +757,7 @@ def _relation_object_rows(
                 time=_time_short(edge_props.get(time_prop), fallback_time)
                 if time_prop
                 else fallback_time,
+                task_id=_graph_row_task_id(execution, edge_props, time_prop, executions),
             )
         )
     return rows
@@ -834,7 +880,14 @@ def enrich_day_rows_with_graph(
         ):
             schema_name = schema_names.get(execution.schema_key)
             rows, vids = (
-                _entity_object_rows(client, execution, schema_name, time_props, schema_labels)
+                _entity_object_rows(
+                    client,
+                    execution,
+                    schema_name,
+                    time_props,
+                    schema_labels,
+                    snapshot.entity_executions,
+                )
                 if schema_name
                 else (None, [])
             )
@@ -853,7 +906,13 @@ def enrich_day_rows_with_graph(
             schema_name = schema_names.get(execution.schema_key)
             rows = (
                 _relation_object_rows(
-                    client, execution, schema_name, time_props, seed_vids, schema_labels
+                    client,
+                    execution,
+                    schema_name,
+                    time_props,
+                    seed_vids,
+                    schema_labels,
+                    snapshot.relation_executions,
                 )
                 if schema_name
                 else None

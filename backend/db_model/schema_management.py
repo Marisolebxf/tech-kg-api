@@ -219,12 +219,15 @@ class GraphSchemaSource(Base):
 
     __tablename__ = "kg_schema_source"
     __table_args__ = (
-        UniqueConstraint(
+        # 不加 DB 级唯一约束：同表多 querySql 绑定合法（如专利域 A+B 拆分——
+        # 裸表线性 keyset 源与子表富集源同表名并行抽取）；真重复由
+        # sources 全量替换入口的应用层校验拦截。2026-10-12 缺陷⑳。
+        Index(
+            "idx_kg_schema_source_table",
             "schema_id",
             "datasource_id",
             "database_name",
             "table_name",
-            name="uk_kg_schema_source_table",
         ),
         Index("idx_kg_schema_source_schema", "schema_id"),
         {"comment": "Schema 来源表绑定"},

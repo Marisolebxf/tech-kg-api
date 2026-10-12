@@ -1,4 +1,4 @@
-"""paper_entity 抽取步（自包含单文件，平台喂数管道 kg.schema.extract 直传可用）。
+"""paper 抽取步（自包含单文件，平台喂数管道 kg.schema.extract 直传可用）。
 
 由 script/tools/build_portable_steps.py 从 ``script.entity_extractors_one_entity.paper_entity`` 及其依赖闭包自动生成；
 抽取口径与老脚本逐行一致，MySQL/图客户端改经平台 ctx 注入。请勿手改，
@@ -18,121 +18,7 @@ from typing import Any
 
 from kg_sdk import step
 
-logger = logging.getLogger("paper_entity")
-
-
-@dataclass(frozen=True)
-class EntityRecord:
-    tag: str
-    vid: str
-    properties: dict[str, Any]
-    # 机构域实体置 True：写前读取已有节点并复刻旧的属性合并保护。
-    merge_protect: bool = False
-    # merge_node 的 identity 匹配键；缺省 {"vid": vid}。
-    identity: dict[str, Any] | None = field(default=None, compare=False)
-
-
-def json_safe(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return {str(k): json_safe(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [json_safe(v) for v in value]
-    if isinstance(value, Decimal):
-        return float(value)
-    if isinstance(value, datetime):
-        return value.isoformat(sep=" ")
-    if isinstance(value, date):
-        return value.isoformat()
-    return value
-
-
-def extra_json(row: Mapping[str, Any]) -> str:
-    """新架构：完整源行进 extra_json。"""
-    return json.dumps(json_safe(dict(row)), ensure_ascii=False, sort_keys=True)
-
-
-def text_or_empty(value: Any) -> str:
-    """学者/论文/项目/专利域旧口径：``value or ""``，保留原文（含内部空白）。"""
-    return str(value) if value else ""
-
-
-def paper_text(value: Any) -> str:
-    """论文工作流旧口径：仅把换行替换为空格，其余保留原文。"""
-    return text_or_empty(value).replace("\n", " ").replace("\r", " ")
-
-
-SOURCE_SYSTEM = "gkx_element"
-
-
-MAX_TEXT_LENGTH = 20_000
-
-
-def text_or_none(value: Any, *, max_length: int = MAX_TEXT_LENGTH) -> str | None:
-    """机构域旧口径（organization_etl_common.clean_text）：strip + 截断，空白返回 None。"""
-    if value is None:
-        return None
-    if isinstance(value, bytes):
-        value = value.decode("utf-8", errors="replace")
-    if isinstance(value, datetime):
-        result = value.isoformat(sep=" ")
-    elif isinstance(value, date):
-        result = value.isoformat()
-    else:
-        result = str(value).strip()
-    if not result:
-        return None
-    if len(result) > max_length:
-        logger.warning("truncate overlong value from %d to %d characters", len(result), max_length)
-        result = result[:max_length]
-    return result
-
-
-def provenance(
-    *,
-    table: str,
-    record_id: str,
-    ingest_batch: str,
-    source_url: Any = None,
-    source_update_time: Any = None,
-    confidence: float = 1.0,
-    source_system: str = SOURCE_SYSTEM,
-) -> dict[str, Any]:
-    return {
-        "source_system": source_system,
-        "source_table": table,
-        "source_record_id": record_id,
-        "source_url": text_or_none(source_url),
-        "ingest_batch": ingest_batch,
-        "ingest_time": datetime.now(UTC).isoformat(timespec="seconds"),
-        "source_update_time": text_or_none(source_update_time),
-        "confidence": confidence,
-        "match_method": "source_primary_key",
-        "match_evidence": f"{table}.{record_id} 主键/稳定键直接抽取",
-    }
-
-
-def paper_record(table: str, row: Mapping[str, Any], batch: str) -> list[EntityRecord]:
-    pid = text_or_empty(row.get("id"))
-    if not pid:
-        return []
-    vid = f"paper_{pid}"
-    props = {
-        "doi": paper_text(row.get("doi")),
-        "title_zh": paper_text(row.get("zh_name") or row.get("title_zh")),
-        "title_en": paper_text(row.get("en_name") or row.get("title_en")),
-        "publication_year": text_or_empty(row.get("publication_year")),
-        # 旧口径：publication_name 固定写 publication_id 列的值。
-        "publication_name": paper_text(row.get("publication_id")),
-        "source": "gkx",
-        "extra_json": extra_json(row),
-        **provenance(
-            table=table,
-            record_id=vid,
-            ingest_batch=batch,
-            source_update_time=row.get("updated_time"),
-        ),
-    }
-    return [EntityRecord("Paper", vid, props)]
+logger = logging.getLogger("paper")
 
 
 EntityBuilder = Callable[[str, Mapping[str, Any], str], Iterable[Any]]
@@ -207,11 +93,125 @@ def entity_transform(
     )
 
 
+@dataclass(frozen=True)
+class EntityRecord:
+    tag: str
+    vid: str
+    properties: dict[str, Any]
+    # 机构域实体置 True：写前读取已有节点并复刻旧的属性合并保护。
+    merge_protect: bool = False
+    # merge_node 的 identity 匹配键；缺省 {"vid": vid}。
+    identity: dict[str, Any] | None = field(default=None, compare=False)
+
+
+def json_safe(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(k): json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(v) for v in value]
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, datetime):
+        return value.isoformat(sep=" ")
+    if isinstance(value, date):
+        return value.isoformat()
+    return value
+
+
+def extra_json(row: Mapping[str, Any]) -> str:
+    """新架构：完整源行进 extra_json。"""
+    return json.dumps(json_safe(dict(row)), ensure_ascii=False, sort_keys=True)
+
+
+def text_or_empty(value: Any) -> str:
+    """学者/论文/项目/专利域旧口径：``value or ""``，保留原文（含内部空白）。"""
+    return str(value) if value else ""
+
+
+def paper_text(value: Any) -> str:
+    """论文工作流旧口径：仅把换行替换为空格，其余保留原文。"""
+    return text_or_empty(value).replace("\n", " ").replace("\r", " ")
+
+
+SOURCE_SYSTEM = "gkx"
+
+
+MAX_TEXT_LENGTH = 20_000
+
+
+def text_or_none(value: Any, *, max_length: int = MAX_TEXT_LENGTH) -> str | None:
+    """机构域旧口径（organization_etl_common.clean_text）：strip + 截断，空白返回 None。"""
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    if isinstance(value, datetime):
+        result = value.isoformat(sep=" ")
+    elif isinstance(value, date):
+        result = value.isoformat()
+    else:
+        result = str(value).strip()
+    if not result:
+        return None
+    if len(result) > max_length:
+        logger.warning("truncate overlong value from %d to %d characters", len(result), max_length)
+        result = result[:max_length]
+    return result
+
+
+def provenance(
+    *,
+    table: str,
+    record_id: str,
+    ingest_batch: str,
+    source_url: Any = None,
+    source_update_time: Any = None,
+    confidence: float = 1.0,
+    source_system: str = SOURCE_SYSTEM,
+) -> dict[str, Any]:
+    return {
+        "source_system": source_system,
+        "source_table": table,
+        "source_record_id": record_id,
+        "source_url": text_or_none(source_url),
+        "ingest_batch": ingest_batch,
+        "ingest_time": datetime.now(UTC).isoformat(timespec="seconds"),
+        "source_update_time": text_or_none(source_update_time),
+        "confidence": confidence,
+        "match_method": "source_primary_key",
+        "match_evidence": f"{table}.{record_id} 主键/稳定键直接抽取",
+    }
+
+
+def paper_record(table: str, row: Mapping[str, Any], batch: str) -> list[EntityRecord]:
+    pid = text_or_empty(row.get("id"))
+    if not pid:
+        return []
+    vid = f"paper_{pid}"
+    props = {
+        "doi": paper_text(row.get("doi")),
+        "title_zh": paper_text(row.get("zh_name") or row.get("title_zh")),
+        "title_en": paper_text(row.get("en_name") or row.get("title_en")),
+        "publication_year": text_or_empty(row.get("publication_year")),
+        # 旧口径：publication_name 固定写 publication_id 列的值。
+        "publication_name": paper_text(row.get("publication_id")),
+        "source": "gkx",
+        "extra_json": extra_json(row),
+        **provenance(
+            table=table,
+            record_id=vid,
+            ingest_batch=batch,
+            source_update_time=row.get("updated_time"),
+        ),
+    }
+    return [EntityRecord("Paper", vid, props)]
+
+
 def _transform(payload: dict[str, Any]) -> dict[str, Any]:
     """kg.schema.extract 转换入口：payload["rows"] → {"entities": [...], "failures": [...]}。"""
     return entity_transform(payload, builder=paper_record)
 
 
-@step("paper_entity")
+@step("paper")
 def emit(payload):
     return _transform(payload)

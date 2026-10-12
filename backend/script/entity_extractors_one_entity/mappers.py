@@ -302,8 +302,31 @@ def product_record(table: str, row: Mapping[str, Any], batch: str) -> list[Entit
 # Person（机构角色人员，机构域旧口径）
 # ---------------------------------------------------------------------------
 
-_PERSON_ORG_TYPES = {"organization", "company", "enterprise", "机构", "企业", "公司"}
-_PERSON_TYPES = {"person", "individual", "natural person", "自然人", "个人"}
+_PERSON_ORG_TYPES = {
+    "organization",
+    "company",
+    "enterprise",
+    "机构",
+    "企业",
+    "公司",
+    # gkx 生产库工商口径词表（2026-10-11 实测 dwd_org_shareholder_info.owners_type
+    # 分布：企业法人/法人股东/合伙企业/内资合伙企业/外商投资*/外国（地区）*/
+    # 事业法人/机关法人/非自然人股东/其他投资者/单位——名字抽样全为机构）
+    "单位",
+    "企业法人",
+    "法人股东",
+    "非自然人股东",
+    "合伙企业",
+    "内资合伙企业",
+    "外商投资合伙企业",
+    "外商投资企业",
+    "外国（地区）企业",
+    "外国（地区）投资者",
+    "事业法人",
+    "机关法人",
+    "其他投资者",
+}
+_PERSON_TYPES = {"person", "individual", "natural person", "自然人", "个人", "自然人股东"}
 
 
 def organization_role_person(table: str, row: Mapping[str, Any], batch: str) -> list[EntityRecord]:
@@ -319,6 +342,11 @@ def organization_role_person(table: str, row: Mapping[str, Any], batch: str) -> 
     if spec.entity_kind == "shareholder":
         owner_type = (text_or_none(row.get("owners_type")) or "").casefold()
         if text_or_none(row.get("inv_org_id")) is not None or owner_type in _PERSON_ORG_TYPES:
+            return []
+        if not owner_type:
+            # 生产库 ~43% 行 owners_type 为空且 inv_org_id 空（owners_name 人企
+            # 混杂，无判别依据）：无类型证据即不产 Person（无源即 0 口径），
+            # 不算行失败——否则 17 万条涌进 T_EXTRACT_FAIL 审核队列
             return []
         if owner_type not in _PERSON_TYPES:
             raise ValueError("shareholder endpoint type does not identify a Person")
@@ -599,23 +627,13 @@ def patent_record(table: str, row: Mapping[str, Any], batch: str) -> list[Entity
         "publication_date": to_int_or_zero(row.get("publication_date")),
         "application_date": to_int_or_zero(row.get("application_date")),
         "granted_number": str_or_empty(row.get("granted_number")),
-        "grant_date": str_or_empty(row.get("grant_date")),
-        "status": str_or_empty(row.get("status")),
-        "anticipated_expiration": to_int_or_zero(row.get("anticipated_expiration")),
-        "title_original": original_text(row.get("titles")),
-        "title_en": str_or_empty(row.get("title_en")),
-        "title_zh": str_or_empty(row.get("title_zh")),
-        "abstract_zh": str_or_empty(row.get("abstract_zh")),
         "language": normalized_language(row.get("language")),
         "main_ipcr": str_or_empty(row.get("main_ipcr")),
         "further_ipcr": json_snapshot(row.get("further_ipcr")),
         "main_cpc": str_or_empty(row.get("main_cpc")),
         "further_cpc": json_snapshot(row.get("further_cpc")),
         "keywords": json_snapshot(row.get("keywords")),
-        "citation_nums": to_int_or_zero(row.get("citation_nums")),
-        "cited_by_nums": to_int_or_zero(row.get("cited_by_nums")),
         "patent_value": to_int_or_zero(row.get("patent_value")),
-        "simple_family_number": str_or_empty(row.get("simple_family_number")),
         "db_source": str_or_empty(row.get("db_source")),
         "create_time": datetime_text(row.get("create_time")),
         "update_time": datetime_text(row.get("update_time")),
@@ -629,6 +647,25 @@ def patent_record(table: str, row: Mapping[str, Any], batch: str) -> list[Entity
             source_update_time=datetime_text(row.get("update_time")),
         ),
     }
+    # gkx 生产库双源绑定：A 源（裸表）行不含子表列 → 只写 p 表原生属性；
+    # B 源（子表 UNION 富集）行恒含 titles 列（缺子表行为 ""，老 LEFT JOIN 口径）。
+    # 两源属性集不相交，同 Schema 并发抽取（asyncio.gather）下谁后写都不覆盖对方
+    # （INSERT VERTEX 列级 upsert，未列出的属性保留原值）。
+    if "titles" in row:
+        props.update(
+            {
+                "grant_date": str_or_empty(row.get("grant_date")),
+                "status": str_or_empty(row.get("status")),
+                "anticipated_expiration": to_int_or_zero(row.get("anticipated_expiration")),
+                "title_original": original_text(row.get("titles")),
+                "title_en": str_or_empty(row.get("title_en")),
+                "title_zh": str_or_empty(row.get("title_zh")),
+                "abstract_zh": str_or_empty(row.get("abstract_zh")),
+                "citation_nums": to_int_or_zero(row.get("citation_nums")),
+                "cited_by_nums": to_int_or_zero(row.get("cited_by_nums")),
+                "simple_family_number": str_or_empty(row.get("simple_family_number")),
+            }
+        )
     return [EntityRecord("Patent", f"patent_{pid}", props)]
 
 

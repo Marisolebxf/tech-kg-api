@@ -30,6 +30,23 @@ const { showToast } = useToast()
 
 const PROPERTY_CHIP_LIMIT = 4
 
+/** 系统/治理字段：标识与入库簿记，不是实体的业务属性，公共属性区不展示
+ *  （实体名称/ID 已有专列；溯源信息走各自的溯源面板数据位）。 */
+const SYSTEM_PROPERTY_KEYS = new Set([
+  'id',
+  'name',
+  'vid',
+  'create_time',
+  'update_time',
+  'ingest_time',
+  'ingest_batch',
+  'raw_id',
+  'source_record_id',
+  'source_update_time',
+  'source_system',
+  'source_table',
+])
+
 const keyword = ref('')
 const appliedKeyword = ref('')
 const entityType = ref('')
@@ -158,7 +175,7 @@ function goPage(next: number) {
 }
 
 function propertyEntries(item: EntityListResult['items'][number]): Array<[string, string]> {
-  return Object.entries(item.properties || {})
+  return Object.entries(item.properties || {}).filter(([key]) => !SYSTEM_PROPERTY_KEYS.has(key))
 }
 
 function visiblePropertyEntries(item: EntityListResult['items'][number]): Array<[string, string]> {
@@ -171,6 +188,18 @@ function hiddenPropertyEntries(item: EntityListResult['items'][number]): Array<[
 
 function propertyOverflow(item: EntityListResult['items'][number]): number {
   return hiddenPropertyEntries(item).length
+}
+
+/** 类型显示名：优先 Schema 目录实体中文名（label），目录无该类型时回退英文 TAG 名 */
+function typeDisplayName(name: string | null | undefined): string {
+  if (!name) return ''
+  return types.value.find(type => type.name === name)?.label || name
+}
+
+/** 悬浮提示：有中文名时「中文名（英文 TAG）」，否则原名 */
+function typeTitle(name: string | null | undefined): string {
+  const label = typeDisplayName(name)
+  return label && label !== name ? `${label}（${name}）` : label
 }
 
 onMounted(() => {
@@ -209,10 +238,14 @@ watch(
             aria-label="实体类型"
             allow-clear
             :scrollbar="false"
+            :trigger-props="{ contentStyle: { width: '240px' } }"
             @change="onEntityTypeChange"
           >
-            <a-option v-for="t in types" :key="t.name" :value="t.name" :label="t.name">
-              <span class="entity-type-option" :title="t.name">{{ t.name }}</span>
+            <a-option v-for="t in types" :key="t.name" :value="t.name" :label="t.label || t.name">
+              <span class="entity-type-option" :title="typeTitle(t.name)">
+                <span class="entity-type-option__text">{{ t.label || t.name }}</span>
+                <span v-if="t.label && t.label !== t.name" class="entity-type-option__en">{{ t.name }}</span>
+              </span>
             </a-option>
           </a-select>
         </div>
@@ -222,9 +255,11 @@ watch(
             v-model="keyword"
             class="entity-search-input"
             :max-length="SEARCH_KEYWORD_MAX_LENGTH"
+            allow-clear
             aria-label="查询当前图空间的实体名称、ID或属性关键词；留空则分页浏览全部实体"
             placeholder="输入实体名称 / 属性关键词"
             @keyup.enter="resetPagingAndSearch"
+            @clear="resetPagingAndSearch"
           >
             <template #prefix><IconSearch /></template>
           </a-input>
@@ -243,11 +278,11 @@ watch(
       </div>
       <div v-else-if="!items.length" class="entity-empty">
         <template v-if="isBrowseMode">
-          <template v-if="entityType">类型 {{ entityType }} 下暂无实体</template>
+          <template v-if="entityType">类型 {{ typeDisplayName(entityType) }} 下暂无实体</template>
           <template v-else>当前图空间暂无实体</template>
         </template>
         <template v-else>
-          未找到匹配「{{ appliedKeyword }}」的实体{{ entityType ? `（类型 ${entityType}）` : '' }}
+          未找到匹配「{{ appliedKeyword }}」的实体{{ entityType ? `（类型 ${typeDisplayName(entityType)}）` : '' }}
         </template>
       </div>
       <template v-else>
@@ -267,7 +302,12 @@ watch(
                 <tr>
                   <td><b>{{ item.name || '（未命名）' }}</b></td>
                   <td><code>{{ item.entityId || item.vid }}</code></td>
-                  <td><span class="entity-type-chip">{{ item.entityType }}</span></td>
+                  <td>
+                    <span
+                      class="entity-type-chip"
+                      :title="item.entityType ? typeTitle(item.entityType) : undefined"
+                    >{{ typeDisplayName(item.entityType) }}</span>
+                  </td>
                   <td class="entity-props-cell">
                     <div class="entity-props">
                       <span
@@ -407,5 +447,8 @@ watch(
 .entity-property-popover__item b{flex:0 1 auto;min-width:0;overflow:hidden;color:#4e5969;font-weight:500;text-overflow:ellipsis}
 .entity-property-popover__item b::after{content:":"}
 .entity-property-popover__item em{flex:1;min-width:0;overflow:hidden;color:#1d2129;font-style:normal;text-overflow:ellipsis}
-.entity-type-option{display:block;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 中文名优先占满所需宽度（不因英文让位）；英文填充剩余空间、空间不足时先被压缩省略 */
+.entity-type-option{display:flex;align-items:center;gap:6px;min-width:0;max-width:100%;overflow:hidden}
+.entity-type-option__text{flex:0 0 auto;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.entity-type-option__en{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#86909c;font-size:12px;line-height:18px}
 </style>

@@ -1,4 +1,4 @@
-"""product_entity 抽取步（自包含单文件，平台喂数管道 kg.schema.extract 直传可用）。
+"""product 抽取步（自包含单文件，平台喂数管道 kg.schema.extract 直传可用）。
 
 由 script/tools/build_portable_steps.py 从 ``script.entity_extractors_one_entity.product_entity`` 及其依赖闭包自动生成；
 抽取口径与老脚本逐行一致，MySQL/图客户端改经平台 ctx 注入。请勿手改，
@@ -20,7 +20,7 @@ from typing import Any
 
 from kg_sdk import step
 
-logger = logging.getLogger("product_entity")
+logger = logging.getLogger("product")
 
 
 EntityBuilder = Callable[[str, Mapping[str, Any], str], Iterable[Any]]
@@ -203,7 +203,7 @@ def is_virtual_source_row(row: Mapping[str, Any]) -> bool:
     return False
 
 
-SOURCE_SYSTEM = "gkx_element"
+SOURCE_SYSTEM = "gkx"
 
 
 ORGANIZATION_ID_FIELDS: tuple[str, ...] = (
@@ -528,6 +528,6 @@ def _transform(payload: dict[str, Any]) -> dict[str, Any]:
     return entity_transform(payload, builder=product_record)
 
 
-@step("product_entity")
+@step("product")
 def emit(payload):
     return _transform(payload)

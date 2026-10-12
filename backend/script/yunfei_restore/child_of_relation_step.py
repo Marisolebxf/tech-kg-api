@@ -19,31 +19,6 @@ from kg_sdk import step
 logger = logging.getLogger("child_of")
 
 
-@dataclass(frozen=True)
-class EdgeRecord:
-    edge_type: str
-    source_vid: str
-    target_vid: str
-    properties: dict[str, Any]
-    # nGQL 确定性 rank 模式；None 走 REST merge 模式。
-    rank: int | None = None
-    # REST merge 的 identityProps；缺省取 properties["source_record_id"]。
-    identity: dict[str, Any] | None = field(default=None, compare=False)
-    # 端点验存用的 tag；None 表示该端点不验存。
-    source_tag: str | None = None
-    target_tag: str | None = None
-    # False 表示允许悬空端点（机构名桩 / DOI 桩等旧口径）。
-    validate_endpoints: bool = True
-
-
-def child_of(table: str, row: Mapping[str, Any], batch: str) -> list[EdgeRecord]:
-    node_id = str(row.get("node_id") or "").strip()
-    parent_id = str(row.get("parent_id") or "").strip()
-    if not node_id or not parent_id:
-        return []
-    return [EdgeRecord("CHILD_OF", f"node_{node_id}", f"node_{parent_id}", {}, rank=0)]
-
-
 EntityBuilder = Callable[[str, Mapping[str, Any], str], Iterable[Any]]
 
 
@@ -118,6 +93,31 @@ def edge_transform(
     return _run(
         payload, builder=builder, mapper_by_table=mapper_by_table, to_json=to_json, key="edges"
     )
+
+
+@dataclass(frozen=True)
+class EdgeRecord:
+    edge_type: str
+    source_vid: str
+    target_vid: str
+    properties: dict[str, Any]
+    # nGQL 确定性 rank 模式；None 走 REST merge 模式。
+    rank: int | None = None
+    # REST merge 的 identityProps；缺省取 properties["source_record_id"]。
+    identity: dict[str, Any] | None = field(default=None, compare=False)
+    # 端点验存用的 tag；None 表示该端点不验存。
+    source_tag: str | None = None
+    target_tag: str | None = None
+    # False 表示允许悬空端点（机构名桩 / DOI 桩等旧口径）。
+    validate_endpoints: bool = True
+
+
+def child_of(table: str, row: Mapping[str, Any], batch: str) -> list[EdgeRecord]:
+    node_id = str(row.get("node_id") or "").strip()
+    parent_id = str(row.get("parent_id") or "").strip()
+    if not node_id or not parent_id:
+        return []
+    return [EdgeRecord("CHILD_OF", f"node_{node_id}", f"node_{parent_id}", {}, rank=0)]
 
 
 def _transform(payload: Mapping[str, Any]) -> dict[str, Any]:

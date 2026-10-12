@@ -4,6 +4,10 @@ import { http } from './http'
 
 export interface LlmConfig {
   id: string
+  visibility?: 'public' | 'business'
+  businessId?: string | null
+  businessName?: string
+  canManage?: boolean
   name: string
   description: string
   baseUrl: string

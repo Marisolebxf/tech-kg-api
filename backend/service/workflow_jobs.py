@@ -151,9 +151,14 @@ def authorize_workflow_resource(actor, resource, action="read"):
                         if row is None:
                             raise HTTPException(status_code=403, detail="任务配置不存在或不可访问")
                         if dao_type in (LlmConfigDAO, MysqlDatasourceDAO):
-                            from biz.dependencies.shared_configs import ensure_shared_config_read
+                            from service.config_ownership import ensure_config_access
 
-                            ensure_shared_config_read(actor)
+                            ensure_config_access(
+                                session,
+                                actor,
+                                "llm" if dao_type is LlmConfigDAO else "mysql",
+                                row.id,
+                            )
                         else:
                             ensure_owner_access(actor, row.owner or "")
 

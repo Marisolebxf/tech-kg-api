@@ -273,6 +273,7 @@ def test_gateway_uses_current_membership_and_persisted_source(monkeypatch):
         BusinessMembershipState,
         BusinessSpacePolicy,
     )
+    from db_model.config_ownership import ConfigOwnership
     from db_model.mysql_datasource import MysqlDatasource
     from db_model.platform_governance import PlatformUser, PlatformUserRole
     from infra import mysql, workflow_mysql
@@ -295,6 +296,7 @@ def test_gateway_uses_current_membership_and_persisted_source(monkeypatch):
                 PlatformUser,
                 PlatformUserRole,
                 MysqlDatasource,
+                ConfigOwnership,
             )
         ],
     )

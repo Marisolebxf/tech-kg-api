@@ -1061,8 +1061,9 @@ onMounted(() => {
 /* 待处理对象：单行省略，超长对象名不再撑高行；完整内容悬浮查看 */
 .ops-review-table-scroll .review-object-cell{padding-top:8px;padding-bottom:8px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .ops-review-table-scroll .review-object-cell>strong{display:inline-block;box-sizing:border-box;max-width:100%;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom;word-break:normal;overflow-wrap:normal}
-/* 完整对象名悬浮层（teleport 到 body）：限宽换行，超长在浮层内滚动 */
-:global(.review-object-tooltip){box-sizing:border-box;max-width:min(420px,calc(100vw - 32px))!important;padding:8px 6px 8px 12px!important}
+/* 完整对象名悬浮层（teleport 到 body）：常态单行——对象名多为「表名#32位主键」（约 450px），
+ *  限宽 420px 会恰好折成两行（悬浮还是两排的根因），放宽到 720px；更长的内容仍在浮层内换行/滚动 */
+:global(.review-object-tooltip){box-sizing:border-box;max-width:min(720px,calc(100vw - 32px))!important;padding:8px 6px 8px 12px!important}
 .review-object-tooltip-content{max-height:min(260px,50vh);padding-right:6px;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;white-space:pre-wrap;word-break:break-word}
 .ops-review-table-scroll td{white-space:normal}
 .ops-review-table-scroll :is(code,.review-id-cell,.review-status){white-space:nowrap}

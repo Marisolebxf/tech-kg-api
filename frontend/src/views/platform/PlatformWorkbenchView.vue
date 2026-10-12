@@ -59,6 +59,7 @@ import {
   type AlgorithmResultPayload,
   type GraphAlgorithmMetadata,
 } from '../../api/graphAlgorithm'
+import { getSchemaTopology } from '../../api/schemaManagement'
 import {
   GRAPH_ALGORITHMS,
   type AlgorithmParamDef,
@@ -358,6 +359,8 @@ const algoWeightCols = ref<Record<string, string>>({})
 const algoEncodeId = ref(true)
 const algoPartitionNum = ref(8)
 const algoMetadataLoading = ref(false)
+/** 手动「重新检测」的引擎状态请求中：按钮置灰、徽标出「检测中」反馈。 */
+const engineRefreshing = ref(false)
 const algoMetadata = ref<GraphAlgorithmMetadata | null>(null)
 const algoSubmitLoading = computed(() => activeAlgorithmState.value.submitting)
 const algoCancelLoading = computed(() => activeAlgorithmState.value.cancelling)
@@ -455,7 +458,7 @@ function exportAlgoCsv(): void {
 
 /** 引擎状态徽标（正常 / 不可用 / 检测中）。 */
 const algoEngineStatus = computed(() => {
-  if (algoMetadataLoading.value) return { label: '检测中', tone: 'is-运行中' }
+  if (algoMetadataLoading.value || engineRefreshing.value) return { label: '检测中', tone: 'is-运行中' }
   const engine = algoMetadata.value?.engine
   if (!engine) return { label: '未知', tone: 'is-运行中' }
   return engine.status === 'UP'
@@ -968,6 +971,26 @@ async function handleNgqlQuery(): Promise<void> {
 
 let algoMetadataLoadedFor = ''
 
+// 关系类型选项的 Schema 目录中文名（name=图库英文边类型 → label=中文）；
+// 目录拿不到/加载失败不阻塞算法面板，选项与已选标签回退英文原名。
+const algoEdgeTypeLabels = ref(new Map<string, string>())
+
+async function loadAlgoEdgeTypeLabels(space: string): Promise<void> {
+  const context = graphContextVersion
+  try {
+    const topology = await getSchemaTopology(space)
+    if (context !== graphContextVersion) return
+    algoEdgeTypeLabels.value = new Map(topology.edges.map((schema) => [schema.name, schema.label]))
+  } catch {
+    if (context !== graphContextVersion) return
+    algoEdgeTypeLabels.value = new Map()
+  }
+}
+
+function algoEdgeTypeLabel(name: string): string {
+  return algoEdgeTypeLabels.value.get(name) || name
+}
+
 async function loadAlgoMetadata(force = false): Promise<void> {
   if (!algoSpace.value) return
   if (!force && algoMetadataLoadedFor === algoSpace.value) return
@@ -979,6 +1002,8 @@ async function loadAlgoMetadata(force = false): Promise<void> {
     if (context !== graphContextVersion) return
     algoMetadata.value = metadata
     algoMetadataLoadedFor = space
+    // 选项中文名与元数据并行加载（目录失败不告警，回退英文）
+    void loadAlgoEdgeTypeLabels(space)
     // 切换图空间后：剔除新空间已不存在的关系类型（连同其权重列配置），
     // 避免带着旧空间的选择（图库里已无此边）提交得到空结果
     const available = new Set(algoMetadata.value?.edgeTypes ?? [])
@@ -998,15 +1023,21 @@ async function loadAlgoMetadata(force = false): Promise<void> {
 }
 
 async function refreshAlgoEngine(): Promise<void> {
-  if (!algoSpace.value) return
+  if (!algoSpace.value || engineRefreshing.value) return
   const context = graphContextVersion
+  engineRefreshing.value = true
   try {
     const engine = await fetchGraphAlgorithmEngine(algoSpace.value)
     if (context !== graphContextVersion) return
     algoMetadata.value = { edgeTypes: algoMetadata.value?.edgeTypes ?? [], engine }
+    // 检测很快且状态常不变，静默更新看起来像「按了没反应」：成功也给明确反馈
+    if (engine.status === 'UP') showToast('算法引擎运行正常', 'success')
+    else showToast(`算法引擎不可用：${engine.message ?? '未提供原因'}`, 'warning')
   } catch (error) {
     if (context !== graphContextVersion) return
     showToast(getErrorMessage(error, '算法引擎状态检测失败'), 'warning')
+  } finally {
+    if (context === graphContextVersion) engineRefreshing.value = false
   }
 }
 
@@ -1698,10 +1729,10 @@ const pageMeta = computed(() => {
               <button
                 class="kg-button kg-button--text platform-query-engine-refresh"
                 type="button"
-                :disabled="algoMetadataLoading || !algoSpace"
+                :disabled="algoMetadataLoading || engineRefreshing || !algoSpace"
                 @click="refreshAlgoEngine"
               >
-                重新检测
+                {{ engineRefreshing ? '检测中…' : '重新检测' }}
               </button>
             </div>
           </div>
@@ -1733,8 +1764,8 @@ const pageMeta = computed(() => {
                   :max-tag-count="4"
                   :scrollbar="false"
                 >
-                  <a-option v-for="item in algoMetadata?.edgeTypes ?? []" :key="item" :value="item">
-                    {{ item }}
+                  <a-option v-for="item in algoMetadata?.edgeTypes ?? []" :key="item" :value="item" :label="algoEdgeTypeLabel(item)">
+                    {{ algoEdgeTypeLabel(item) }}
                   </a-option>
                 </a-select>
               </AFormItem>

@@ -17,6 +17,8 @@ export interface ApiResponse<T> {
 export interface EntityTypeCount {
   name: string
   count: number
+  /** 实体中文名（Schema 目录同空间未删除实体 Schema 的 label；目录无行时缺省，展示回退 name） */
+  label?: string
 }
 
 export interface EntitySearchItem {

@@ -32,6 +32,7 @@ from itertools import islice
 from typing import Any
 
 from sqlalchemy import inspect, select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from infra.entity_response_cache import EntityResponseCache
@@ -369,6 +370,40 @@ def _sorted_type_items(counts: dict[str, int]) -> list[dict[str, Any]]:
         {"name": name, "count": count}
         for name, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     ]
+
+
+def _attach_type_labels(
+    session: Session, space: str, items: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """给类型项补 Schema 目录里的实体中文名（``label`` 字段）。
+
+    中文名只取本空间未删除的实体 Schema（``kg_schema_definition.label``，
+    与 Nebula TAG 同名的 ``name`` 对应），目录无行或表不可用时原样返回——
+    前端回退显示英文 TAG 名，不在这里编造翻译。
+    """
+    if not items:
+        return items
+    from db_model.schema_management import GraphSchemaDefinition
+
+    try:
+        rows = session.execute(
+            select(GraphSchemaDefinition.name, GraphSchemaDefinition.label).where(
+                GraphSchemaDefinition.kind == "entity",
+                GraphSchemaDefinition.is_deleted.is_(False),
+                GraphSchemaDefinition.graph_space == space,
+                GraphSchemaDefinition.name.in_([item["name"] for item in items]),
+            )
+        ).all()
+        labels = {name: label for name, label in rows if label}
+    except SQLAlchemyError:
+        logger.warning(
+            "查询 Schema 目录实体中文名失败（space=%s），回退英文名", space, exc_info=True
+        )
+        return items
+    for item in items:
+        if item["name"] in labels:
+            item["label"] = labels[item["name"]]
+    return items
 
 
 def _state_type_counts(session: Session, space: str, labels: list[str]) -> dict[str, int] | None:
@@ -1472,6 +1507,9 @@ class EntitySearchService:
         结果按空间做短 TTL 进程缓存（reindex 后随 clear_entity_caches 失效）：
         实体列表页每次加载都调本接口，无快照空间的逐标签计数不该跟着页面
         访问频率打共享图服务。
+
+        每项在计数之外附 Schema 目录的实体中文名（``label``，命中才有该键），
+        供前端类型下拉显示中文；目录查不到的类型保持英文 TAG 名。
         """
         resolved_space = space or _default_space()
         cached = _types_cache.get(resolved_space)
@@ -1489,7 +1527,12 @@ class EntitySearchService:
                     except ValueError:
                         counts = {}
                     if counts:
-                        return _remember_types(resolved_space, _sorted_type_items(counts))
+                        return _remember_types(
+                            resolved_space,
+                            _attach_type_labels(
+                                self._session, resolved_space, _sorted_type_items(counts)
+                            ),
+                        )
             except Exception:  # noqa: BLE001 - Milvus 故障不拖垮类型下拉，走图直查
                 logger.warning(
                     "校验实体索引类型失败（space=%s），回退图直查", resolved_space, exc_info=True
@@ -1501,7 +1544,10 @@ class EntitySearchService:
         except Exception:  # noqa: BLE001 - 图不可达时返回空，前端下拉降级为不可过滤
             logger.warning("图直查实体类型失败（space=%s）", resolved_space, exc_info=True)
             return []  # 失败不缓存，下次加载重试
-        return _remember_types(resolved_space, _sorted_type_items(counts))
+        return _remember_types(
+            resolved_space,
+            _attach_type_labels(self._session, resolved_space, _sorted_type_items(counts)),
+        )
 
     def status(self, *, space: str | None = None) -> dict[str, Any]:
         """索引状态：同时校验控制库快照和 Milvus 当前空间的真实数据。"""

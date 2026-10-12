@@ -46,6 +46,13 @@ export interface GraphEdgeData {
   to: string
   label: string
   category: string
+
+  /**
+   * 边的展示名（中文）。label 是内部键（关系台账/筛选按英文边类型索引），
+   * 业务模块构边时把英文边类型换算成中文放到这里，画布只读它显示；
+   * 未提供时画布回退 label 原文。
+   */
+  displayText?: string
   dimensions?: string[]
   sharedInstitutions?: string[]
   summary?: string

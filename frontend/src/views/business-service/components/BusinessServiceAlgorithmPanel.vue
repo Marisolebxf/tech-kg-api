@@ -998,7 +998,8 @@ function derivedGraphFromResponse(
       y: 340 + row * 50,
       radius: 13,
       confidence: entityConfidenceById.get(item.id) ?? 0.6,
-      relations: item.subtitle || item.type || visual.entityType,
+      // 无副标题时回退归一化中文类别，不再透出后端英文类型码
+      relations: item.subtitle || visual.entityType,
       evidence: [`子图扩展 · depth=${resp.input?.depth ?? "—"}`],
       level: 4 + row,
       // 展开层节点在证据列表里没有对应记录，带上入图溯源字段，
@@ -1615,6 +1616,9 @@ const liveModuleGraph = computed(() => {
         from: edge.source,
         to: edge.target,
         label: edge.label,
+        // 画布展示名：后端同事图边 label 是英文边类型（AFFILIATED_WITH 等），
+        // 换算成对照表中文名；label 本身是关系台账/筛选的内部键，保持原值。
+        displayText: displayRelationDetail({ label: edge.label, category: edge.label }),
         category: edge.label === "同事关系" ? "同事" : edge.label,
         confidence: edge.data?.confidence,
         inferred: edge.label === "同事关系",
@@ -1968,7 +1972,7 @@ const displayRelationType = (value?: string) =>
   value ||
   "—";
 
-const displayRelationDetail = (edge: GraphEdgeData) => {
+const displayRelationDetail = (edge: Pick<GraphEdgeData, "label" | "category">) => {
   const specs = relationSpecsByModule[props.moduleInfo.key];
   const spec = specs?.[edge.label || edge.category || ""];
   if (spec) return spec.detail;
@@ -2809,6 +2813,8 @@ const colleagueProvenance = computed(() =>
           label: selectedEdge.value.label,
         }
       : undefined,
+    // 溯源卡标题的关系名换算成中文（与画布边展示名同口径）
+    (label: string) => displayRelationDetail({ label, category: label }),
   ),
 );
 

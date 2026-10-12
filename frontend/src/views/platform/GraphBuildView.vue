@@ -12,6 +12,7 @@ import {
   countJobUnifiedStatuses,
   deleteJob,
   deriveJobUnifiedStatus,
+  executionStatusLabel,
   getExecution,
   getTask,
   JOB_STATUS_TONE,
@@ -494,7 +495,7 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
                 <span v-else class="muted">—</span>
               </td>
               <td>
-                <span v-if="job.lastExecutionStatus" :class="executionStatusClass(job.lastExecutionStatus)">{{ job.lastExecutionStatus }}</span>
+                <span v-if="job.lastExecutionStatus" :class="executionStatusClass(job.lastExecutionStatus)">{{ executionStatusLabel(job.lastExecutionStatus) }}</span>
                 <span v-else class="idle">未执行</span>
                 <small v-if="job.lastRunAt" class="gb-last-run">{{ job.lastRunAt }}</small>
               </td>

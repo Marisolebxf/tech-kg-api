@@ -25,7 +25,7 @@ beforeEach(() => {
 
 async function setup() {
   const wrapper = mount(EntityListView, { global: { stubs: {
-    'a-input': { props: ['modelValue'], emits: ['update:modelValue'], template: '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />' },
+    'a-input': { props: ['modelValue'], emits: ['update:modelValue', 'clear'], template: '<div class="stub-input-wrap"><input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" /><button v-if="modelValue" type="button" class="stub-clear" aria-label="一键清除" @click="$emit(\'update:modelValue\', \'\'); $emit(\'clear\')">×</button></div>' },
     'a-select': { props: ['modelValue'], emits: ['update:modelValue', 'change'], template: '<select :value="modelValue" @change="$emit(\'update:modelValue\', $event.target.value); $emit(\'change\')"><slot /></select>' },
     'a-option': { props: ['value'], template: '<option :value="value"><slot /></option>' },
     Popover: { props: ['trigger', 'position', 'contentClass'], template: '<div class="popover-stub"><slot /><div class="popover-content"><slot name="content" /></div></div>' },
@@ -46,6 +46,27 @@ describe('实体搜索结果', () => {
     expect(option.text()).toBe(name)
     expect(option.attributes('title')).toBe(name)
     expect(wrapper.text()).not.toContain('（123）')
+    wrapper.unmount()
+  })
+
+  it('类型筛选项与类型列 chip 优先显示 Schema 实体中文名，目录无中文名回退英文 TAG 名', async () => {
+    vi.mocked(getEntitySearchTypes).mockResolvedValue([
+      { name: 'Expert', count: 5, label: '专家 / 人才 / 学者' },
+      { name: 'DataSource', count: 1 },
+    ])
+    vi.mocked(browseEntities).mockResolvedValue({ items: [{ ...row, entityType: 'Expert' }], total: 1, offset: 0, limit: 10, entityType: null, mode: 'browse' })
+    const wrapper = await setup()
+    const options = wrapper.findAll('.entity-type-option')
+    expect(options[0].get('.entity-type-option__text').text()).toBe('专家 / 人才 / 学者')
+    expect(options[0].get('.entity-type-option__en').text()).toBe('Expert')
+    expect(options[0].attributes('title')).toBe('专家 / 人才 / 学者（Expert）')
+    expect(options[1].text()).toBe('DataSource')
+    expect(options[1].attributes('title')).toBe('DataSource')
+    expect(options[1].find('.entity-type-option__en').exists()).toBe(false)
+    // 类型列 chip 同口径：中文名 + 悬浮「中文名（英文 TAG）」
+    const chip = wrapper.get('.entity-type-chip')
+    expect(chip.text()).toBe('专家 / 人才 / 学者')
+    expect(chip.attributes('title')).toBe('专家 / 人才 / 学者（Expert）')
     wrapper.unmount()
   })
 
@@ -148,6 +169,44 @@ describe('实体搜索结果', () => {
       .toEqual(['fifth: 5', 'sixth: 6'])
     await more.trigger('click')
     expect(wrapper.find('.entity-detail-row').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('公共属性区过滤 id/create_time/ingest 等系统字段，仅展示业务属性', async () => {
+    vi.mocked(browseEntities).mockResolvedValue({
+      items: [{
+        ...row,
+        properties: {
+          id: 'EVT-1', name: '事件甲', vid: 'evt-vid-1',
+          create_time: '2026-10-01 00:00:00', update_time: '2026-10-02 00:00:00',
+          ingest_time: '2026-10-03 00:00:00', ingest_batch: 'b-01',
+          raw_id: 'r-9', source_record_id: 's-9', source_update_time: '2026-10-04 00:00:00',
+          source_system: 'gkx', source_table: 'dwd_event',
+          title: '完成融资', event_type: '融资',
+        },
+      }],
+      total: 1, offset: 0, limit: 10, entityType: null, mode: 'browse',
+    })
+    const wrapper = await setup()
+    const chips = wrapper.findAll('.entity-props__chip')
+    expect(chips.map(chip => chip.get('b').text())).toEqual(['title', 'event_type'])
+    // 全部属性都是系统字段时不显示「+N」浮层，属性区显示空态占位
+    expect(wrapper.find('.entity-props__more').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('搜索框带一键清除，清除后立即回到全部实体浏览', async () => {
+    const wrapper = await setup()
+    expect(wrapper.get('.stub-input-wrap').attributes('allow-clear')).toBeDefined()
+    await wrapper.findAll('button').find(button => button.text() === '查询')!.trigger('click')
+    await flushPromises()
+    expect(searchEntityList).toHaveBeenCalledTimes(1)
+    await wrapper.get('.stub-clear').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('input').element.value).toBe('')
+    // 清除即触发重新查询：关键词为空走浏览接口（挂载时 1 次 + 清除后 1 次）
+    expect(browseEntities).toHaveBeenCalledTimes(2)
+    expect(browseEntities).toHaveBeenLastCalledWith({ space: 'dev2', entityType: null, offset: 0, limit: 10 })
     wrapper.unmount()
   })
 

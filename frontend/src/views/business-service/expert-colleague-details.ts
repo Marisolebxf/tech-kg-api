@@ -56,12 +56,17 @@ export function colleagueProvenanceCards(
   nodes: ColleagueGraphNode[], edges: ColleagueGraphEdge[],
   selectedId?: string,
   selectedEdge?: Pick<ColleagueGraphEdge, 'source' | 'target' | 'label'>,
+  edgeLabelDisplay?: (label: string) => string,
 ): Array<{ id: string; title: string; sections: ProvenanceSection[] }> {
   const byId = new Map(nodes.map(node => [node.id, node]));
   const visibleNodes = selectedId ? nodes.filter(node => node.id === selectedId) : selectedEdge ? [] : nodes;
   const visibleEdges = selectedId ? [] : selectedEdge
     ? edges.filter(edge => edge.source === selectedEdge.source && edge.target === selectedEdge.target && edge.label === selectedEdge.label)
     : edges;
+  // 关系名展示：调用方传入中文换算（与画布边展示名同口径）时优先；
+  // 未传保持原 label + 单点特例，独立使用与既有测试不受影响。
+  const edgeTitle = (label: string) =>
+    edgeLabelDisplay ? edgeLabelDisplay(label) : label === 'AFFILIATED_WITH' ? '机构任职关系' : label;
   return [
     ...visibleNodes.map(node => ({
       id: `node:${node.id}`,
@@ -73,7 +78,7 @@ export function colleagueProvenanceCards(
       const target = byId.get(edge.target) ?? { id: edge.target, label: edge.target, type: '' };
       return {
         id: `edge:${edge.id ?? index}:${edge.source}:${edge.target}`,
-        title: `${source.label} → ${target.label} · ${edge.label === 'AFFILIATED_WITH' ? '机构任职关系' : edge.label}`,
+        title: `${source.label} → ${target.label} · ${edgeTitle(edge.label)}`,
         sections: [
           provenanceSection(source, `源实体：${source.label}`),
           provenanceSection(target, `目标实体：${target.label}`),

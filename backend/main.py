@@ -77,6 +77,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # 间接关系人工标注）。
         # MySQL 不可达时跳过建表：CI 无 MySQL 服务，运行期访问配置接口会单独报错。
         from db_model.base import Base
+        from db_model.config_ownership import ConfigOwnership
         from db_model.embedding_config import EmbeddingConfig
         from db_model.indirect_relation_annotation import IndirectRelationAnnotation
         from db_model.llm_config import LlmConfig
@@ -105,6 +106,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     GraphSpaceProfile.__table__,
                     GraphSpaceVectorDatabase.__table__,
                     IndirectRelationAnnotation.__table__,
+                    ConfigOwnership.__table__,
                 ],
             )
         except Exception as exc:

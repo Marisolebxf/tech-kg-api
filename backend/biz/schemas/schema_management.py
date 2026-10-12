@@ -146,7 +146,7 @@ class EntitySchemaCreate(SchemaCreateBase):
     @classmethod
     def validate_entity_name(cls, value: str) -> str:
         if not ENTITY_NAME_PATTERN.fullmatch(value):
-            raise ValueError("实体 Schema 名称必须使用 PascalCase")
+            raise ValueError("实体 Schema 名称必须为英文且首字母大写")
         return value
 
 
@@ -170,7 +170,7 @@ class RelationSchemaCreate(SchemaCreateBase):
     @classmethod
     def validate_relation_name(cls, value: str) -> str:
         if not RELATION_NAME_PATTERN.fullmatch(value):
-            raise ValueError("关系 Schema 名称必须使用 UPPER_SNAKE_CASE")
+            raise ValueError("关系 Schema 名称必须为大写字母加下划线")
         return value
 
     @model_validator(mode="after")

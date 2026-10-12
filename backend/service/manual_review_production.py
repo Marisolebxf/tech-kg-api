@@ -329,14 +329,16 @@ class ManualReviewService:
             # 「来源记录」信息一并可搜（失败重跑队列此前只搜案号/对象/记录 id，
             # 搜来源记录列展示的 jobId 或抽取执行 EXEC 一律空）：来源表 +
             # 快照里的 jobId/executionId——快照是紧凑 JSON（separators=(",",":")），
-            # 锚定 "key":"value" 形态匹配，避免整段快照模糊误伤
+            # 锚定 "key":"value" 形态匹配。值必须紧跟键引号（键后不留 %）：
+            # 值模糊会从 executionId 键出发跨过中间 JSON 落到 rerunOfExecutionId
+            # 的值上——重跑两代案互相命中，搜一个执行翻倍出两代的案
             keyword_match = [
                 ReviewCase.id.like(x),
                 ReviewCase.object_name.like(x),
                 ReviewCase.source_record_id.like(x),
                 ReviewCase.source_table.like(x),
-                ReviewCase.input_snapshot.like(f'%"jobId":"%{kw}%"%'),
-                ReviewCase.input_snapshot.like(f'%"executionId":"%{kw}%"%'),
+                ReviewCase.input_snapshot.like(f'%"jobId":"{kw}"%'),
+                ReviewCase.input_snapshot.like(f'%"executionId":"{kw}"%'),
             ]
             # 存量案快照没写 jobId（来源记录列靠控制面 EXEC→job 解析展示）：
             # 反向按 job 关键词解出执行 ID，回快照精确匹配，搜展示值才能命中

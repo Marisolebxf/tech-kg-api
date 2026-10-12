@@ -400,6 +400,23 @@ def test_queue_keyword_matches_source_record_info(service, monkeypatch):
     assert service.list_cases({"category": "C", "keyword": "job-404"}, reviewer)["total"] == 0
 
 
+def test_queue_keyword_by_execution_excludes_rerun_generation(service, monkeypatch):
+    # 重跑仍失败：同一记录两代案并存（旧代 RESOLVED + attempt2 新案，后者快照带
+    # rerunOfExecutionId=原执行）。按执行搜只命中该执行建的那一代——值模糊匹配
+    # 会从 executionId 键出发跨过中间 JSON 落到 rerunOfExecutionId 的值上，
+    # 搜任一代执行 ID 都翻倍出两代案（1077 失败记录搜出 2154 的实例）
+    import service.manual_review_production as mrp
+
+    monkeypatch.setattr(mrp, "resolve_execution_ids_by_job_keyword", lambda kw: [])
+    case1 = _make_extract_fail_case(service, domain="talent")  # EXEC-1 / job-1 / w3
+    _refail_once(service, case1, "EXEC-R1")  # 旧案 RESOLVED + attempt2 新案（EXEC-R1）
+    reviewer = actor("r", ("reviewer",))
+    assert service.list_cases({"category": "C", "keyword": "EXEC-1"}, reviewer)["total"] == 1
+    assert service.list_cases({"category": "C", "keyword": "EXEC-R1"}, reviewer)["total"] == 1
+    # jobId 两代相同，任务级搜索仍两代都命中（语义不变）
+    assert service.list_cases({"category": "C", "keyword": "job-1"}, reviewer)["total"] == 2
+
+
 def test_queue_keyword_matches_legacy_job_via_control_db(service, monkeypatch):
     # 存量案快照没写 jobId（来源记录列靠控制面 EXEC→job 解析展示）：
     # 搜该 jobId 时按 job→执行反解回快照匹配，搜展示值能命中

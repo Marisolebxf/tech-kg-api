@@ -314,38 +314,17 @@ const visiblePhase = computed<'数据处理' | '图谱构建'>(() => steps.value
 const visibleSteps = computed(() => steps.value)
 const needsReview = computed(() => needsTaskReview.value && selectedStep.value.abnormal !== '0' && selectedStep.value.abnormal !== '-')
 /** 「进入人工处理」入口：平台喂数抽取（含 chain）的逐行失败落「抽取失败重跑」
- *  C 类队列，并带 sourceTaskId 深链把队列限定到本任务产生的审核案（队列页亮
- *  「来源任务」徽标）；其余待复核任务落人工审核处理中心首页。
- *  旧实现跳 /manual-review/task/<任务ID>——该路由只认审核案 MR- ID，任务/作业
- *  详情页拿不到（job 路由下 taskId 曾回落演示常量），点击必 404 空白页。 */
+ *  C 类队列，并把选中执行的 EXEC- ID 填进队列搜索框（keyword 精确命中该执行
+ *  产生的审核案——页面加载即默认选中最新执行）；其余待复核任务落人工审核
+ *  处理中心首页。注意不能用页面上的 PI- 处理实例 ID——那是读取侧每次随机
+ *  合成的临时 ID，与建案写入的 source_task_id 永远对不上。 */
 const reviewEntryTarget = computed(() => {
   if (processingInstance.value?.workflowType !== 'kg.schema.extract' && !isChainTask.value) return '/manual-review'
-  const sourceTaskId = processingInstance.value?.id || taskId.value
-  return sourceTaskId
-    ? { path: '/manual-review', query: { category: 'C', sourceTaskId } }
+  const sourceExecId = selectedExecution.value?.id
+  return sourceExecId
+    ? { path: '/manual-review', query: { category: 'C', keyword: sourceExecId } }
     : { path: '/manual-review', query: { category: 'C' } }
 })
-/** 本任务在审核队列里的关联案数量（T_EXTRACT_FAIL 按来源任务聚合；null=未加载/拉取失败）。
- *  执行级失败（如脚本运行器未配置，批次转换前即失败）不建逐行案 → 计数为 0，
- *  此时「进入人工处理」改为说明文案，不再跳到一个与本任务无关的 C 类队列误导排查。 */
-const relatedReviewCount = ref<number | null>(null)
-let relatedReviewLoadedTask = ''
-async function loadRelatedReviewCount() {
-  const sourceTaskId = processingInstance.value?.id || taskId.value
-  if (!sourceTaskId || (processingInstance.value?.workflowType !== 'kg.schema.extract' && !isChainTask.value)) return
-  if (relatedReviewLoadedTask === sourceTaskId) return
-  relatedReviewLoadedTask = sourceTaskId
-  relatedReviewCount.value = null
-  try {
-    const page = await getProductionReviews({ category: 'C', sourceTaskId, page: 1, pageSize: 1 })
-    relatedReviewCount.value = Number(page.total ?? 0)
-  } catch {
-    relatedReviewLoadedTask = '' // 拉取失败退回普通入口（不显示计数），下次触发可重试
-  }
-}
-watch([() => processingInstance.value?.id, needsReview], () => {
-  if (needsReview.value) void loadRelatedReviewCount()
-}, { immediate: true })
 const attentionLabel = computed(() => selectedStep.value.risk === '高风险' ? '重点关注' : selectedStep.value.risk === '中风险' ? '一般关注' : '常规节点')
 const isProcessLevelIncident = computed(() => ['模型批量输出异常', 'Schema 批量映射失败', '公共字典配置异常'].includes(processingInstance.value?.reviewType ?? ''))
 const isTaskExecutionFailure = computed(() => processingInstance.value?.reviewType === '单任务执行失败')
@@ -464,6 +443,28 @@ const {
 } = useClientPagination(jobExecutions, 10)
 const selectedExecutionId = ref('')
 const selectedExecution = ref<WorkflowExecution | null>(null)
+/** 选中执行在审核队列里的关联案数量（T_EXTRACT_FAIL 按 EXEC- 搜索聚合；null=未加载/拉取失败）。
+ *  与「进入人工处理」同口径用 keyword=执行ID 搜索（PI- 处理实例 ID 是读取侧随机合成的，
+ *  按它过滤恒为空）。执行级失败（如脚本运行器未配置，批次转换前即失败）不建逐行案
+ *  → 计数为 0，此时入口改为说明文案，不再跳到一个与本任务无关的 C 类队列误导排查。 */
+const relatedReviewCount = ref<number | null>(null)
+let relatedReviewLoadedExec = ''
+async function loadRelatedReviewCount() {
+  const sourceExecId = selectedExecution.value?.id
+  if (!sourceExecId || (processingInstance.value?.workflowType !== 'kg.schema.extract' && !isChainTask.value)) return
+  if (relatedReviewLoadedExec === sourceExecId) return
+  relatedReviewLoadedExec = sourceExecId
+  relatedReviewCount.value = null
+  try {
+    const page = await getProductionReviews({ category: 'C', keyword: sourceExecId, page: 1, pageSize: 1 })
+    relatedReviewCount.value = Number(page.total ?? 0)
+  } catch {
+    relatedReviewLoadedExec = '' // 拉取失败退回普通入口（不显示计数），下次触发可重试
+  }
+}
+watch([() => selectedExecution.value?.id, needsReview], () => {
+  if (needsReview.value) void loadRelatedReviewCount()
+}, { immediate: true })
 /** 执行仍在进行：任务回写「执行中」，或任务记录尚未生成而选中执行仍在 RUNNING。
  *  结果卡此前只有「需人工确认/已通过」两分支——运行中任务（列表显示运行中）落到
  *  成功分支，详情页绿底「已通过」，与列表状态矛盾；必须先判进行中。 */

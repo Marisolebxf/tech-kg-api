@@ -10,7 +10,8 @@ import os
 import re
 import sys
 import tempfile
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -47,6 +48,106 @@ ACTIVITY_RETRY_POLICY = RetryPolicy(
     maximum_interval=timedelta(seconds=30),
     maximum_attempts=5,
 )
+
+# 活动排队自愈窗口（缺陷㉙）：worker 重启与调度竞态下，Temporal 匹配层可能把
+# Scheduled 任务卡住永不投递（实测 33+ 分钟无 Started、无超时事件，worker poller
+# 健康、input 仅 1KB 亦不投递；服务端 matching 反复报 "Workflow task already
+# started"）。不设 schedule_to_start_timeout 时该兜底不存在，asyncio.gather 上
+# 的来源协程永久挂起 → 整链冻结。注意 **SCHEDULE_TO_START 超时不受 RetryPolicy
+# 保护**（Temporal 文档行为：STS 超时立即终败活动、不进重试策略）——所以单靠
+# 调 STS 时长只会在「楔子冻结」与「背压饿死」之间换口味：STS 短则高水位退避期
+# 4 个活动槽位被占满的排队任务 5 分钟即整链 FAILED（实测 300s 死于 16:04），
+# STS 长则楔子要等更久。治本 = 下面 _execute_activity 的 workflow 层重调度：
+# STS 取 5 分钟快速换任务位（新任务重新进匹配，绕开单个卡死的匹配槽），
+# 背压由重调度预算兜住（24 次 × 5 分钟 = 2 小时排队容忍）。
+ACTIVITY_SCHEDULE_TO_START = timedelta(seconds=300)
+# 96 次 × 5 分钟 = 8 小时排队容忍：16 来源 × (reader+3 worker) 并发争 4 个活动槽，
+# 叠加图库高压窗（水位退避期槽位被慢活动长占），实测任务链可连续排队 12+ 轮
+# （每轮 5 分钟）才等到槽位——24 次（2h）曾被打穿到评估线，08 执行放宽到 48；
+# 09 执行实测存在**单任务饥饿型**排队（某 resolve 调用 33 次换位重发 165 分钟
+# 无投递，同期其他任务 1-8 深度正常轮转）——换位旁路对持续过载下的个体任务
+# 不保证公平，48（4h）结构性不够，放宽到 96。常数上界改动重放安全（已记录的
+# 重调度决策全在小区间，新旧代码同判 continue）。
+_STS_RESCHEDULE_ATTEMPTS = 96
+# 图库内存高水位的 workflow 层重发起（缺陷㉛）：㉘ 的活动内水位退避（各活动
+# 4-18 次 × 20s）只够「分钟级瞬态窗」，实测共享宿主高压窗可持续 2h+，活动内
+# 退避 + RetryPolicy 5 次 ≈ 20 分钟总容忍被打穿终败（08 执行 resolve 实锤）。
+# 活动终败后由 workflow 层歇 _SLEEP 再重发起：sleep 是 durable timer，不占活动
+# 槽位（终败的活动已释放槽）、不烧 RetryPolicy；30 次 × (120s + 活动内退避
+# 包络) ≈ 2-3h 持续窗容忍。幂等活动（读源/消歧/INSERT VERTEX upsert）重发起安全。
+_WATERMARK_RESCHEDULE_ATTEMPTS = 30
+_WATERMARK_RESCHEDULE_SLEEP = 120.0
+
+
+def _watermark_failure(exc: ActivityError) -> bool:
+    """活动失败链（本体+最多 3 层 cause）里是否图库瞬态错误（㉘ 水位/㉜ 存储 RPC 超时）。"""
+    seen = exc.failure
+    depth = 0
+    while seen is not None and depth < 4:
+        if _GRAPH_TRANSIENT_RE.search(seen.message or ""):
+            return True
+        if not seen.HasField("cause"):
+            break
+        seen = seen.cause
+        depth += 1
+    return False
+
+
+async def _execute_activity(fn: Any, arg: Any, **kwargs: Any) -> Any:
+    """``workflow.execute_activity`` 的两类可自愈失败重发起封装（workflow 内用）。
+
+    - SCHEDULE_TO_START 排队超时（缺陷㉙）：STS 超时不进 RetryPolicy，活动立即
+      终败——catch 后**重新发起**同一活动（新任务号重进匹配队列，绕开卡死的
+      匹配槽；槽位背压由 ``_STS_RESCHEDULE_ATTEMPTS`` × STS 时长预算兜住）。
+    - 图库内存高水位终败（缺陷㉛）：catch 后 ``workflow.sleep`` 再重发起
+      （durable timer，sleep 期间活动槽位归还给其他任务）。
+    两预算独立计数，同一任务可交替消耗。异常驱动的循环控制流在重放时按历史
+    确定性复现（同一历史产生同一异常序列），重放安全；其他失败（含 STC 超时/
+    应用错误）原样上抛交 RetryPolicy 之外的原语义。
+    """
+    from temporalio.api.enums.v1 import TimeoutType
+
+    sts_budget = kwargs.pop("sts_attempts", _STS_RESCHEDULE_ATTEMPTS)
+    wm_budget = kwargs.pop("wm_attempts", _WATERMARK_RESCHEDULE_ATTEMPTS)
+    sts_used = 0
+    wm_used = 0
+    while True:
+        try:
+            return await workflow.execute_activity(fn, arg, **kwargs)
+        except ActivityError as exc:
+            cause = (
+                exc.failure.cause
+                if exc.failure is not None and exc.failure.HasField("cause")
+                else None
+            )
+            if (
+                sts_used < sts_budget
+                and cause is not None
+                and cause.HasField("timeout_failure_info")
+                and cause.timeout_failure_info.timeout_type
+                == TimeoutType.TIMEOUT_TYPE_SCHEDULE_TO_START
+            ):
+                sts_used += 1
+                logger.warning(
+                    "活动 %s 排队 %s 超时（第 %d/%d 次重调度），重新发起",
+                    getattr(fn, "__name__", fn),
+                    ACTIVITY_SCHEDULE_TO_START,
+                    sts_used,
+                    sts_budget,
+                )
+                continue
+            if wm_used < wm_budget and _watermark_failure(exc):
+                wm_used += 1
+                logger.warning(
+                    "活动 %s 图库内存高水位终败（第 %d/%d 次），workflow 层歇 %.0fs 后重发起",
+                    getattr(fn, "__name__", fn),
+                    wm_used,
+                    wm_budget,
+                    _WATERMARK_RESCHEDULE_SLEEP,
+                )
+                await workflow.sleep(_WATERMARK_RESCHEDULE_SLEEP)
+                continue
+            raise
 
 
 def _resolve_resources(
@@ -1287,23 +1388,29 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
         return fetched
 
     engine = source_client.engine
-    try:
-        rows: list[dict[str, Any]] = []
+
+    # 源库读取整体下放线程：async 活动体内做公网 MySQL 同步读（秒级起步）会
+    # 冻结 worker 事件循环——workflow task TMPRL1104 超时、活动重投递延迟的
+    # 根因（gkx_verify_1 实测 12 分钟「假死」）。语义与原循环逐行一致
+    def _read_rows() -> tuple[list[dict[str, Any]], int]:
         if cursor_kind == "ids":
+            rows_acc: list[dict[str, Any]] = []
             for sql, sql_binds in sqls:
                 with engine.connect() as conn:
                     for raw in conn.execute(text(sql), sql_binds).mappings().all():
-                        rows.append({k: _jsonable(v) for k, v in dict(raw).items()})
-        else:
-            n = batch_size
-            while True:
-                rows = _fetch(n)
-                effective_batch = n
-                if n <= 1:
-                    break
-                if len(json.dumps(rows, ensure_ascii=False, default=str).encode()) <= budget:
-                    break
-                n = max(1, n // 2)
+                        rows_acc.append({k: _jsonable(v) for k, v in dict(raw).items()})
+            return rows_acc, batch_size
+        n = batch_size
+        while True:
+            fetched = _fetch(n)
+            if n <= 1:
+                return fetched, 1
+            if len(json.dumps(fetched, ensure_ascii=False, default=str).encode()) <= budget:
+                return fetched, n
+            n = max(1, n // 2)
+
+    try:
+        rows, effective_batch = await asyncio.to_thread(_read_rows)
     finally:
         source_client.dispose()
 
@@ -1628,6 +1735,64 @@ def ngql_value_for_column(value: Any, col_type: str, nullable: bool) -> str:
     return json.dumps(str(value), ensure_ascii=False)
 
 
+# —— 共享图库瞬态错误自愈（缺陷㉘/㉜）——
+# 图库通道（trs-graph → Nebula）的瞬态错误按「错误族」识别，目前三个实测签名：
+# 1. 高压窗水位 "Used memory hits the high watermark(0.900000)"（㉘）；
+# 2. 高压窗尾部 storaged "Storage Error: RPC failure, probably timeout"
+#    （HTTP 400 内嵌，㉜ 第一发现——不在水位正则内曾终败整链）；
+# 3. 图库栈重启窗口 "java.net.ConnectException: Connection refused/reset"
+#    （HTTP 500 内嵌，㉜ 第二发现——trsgraph 容器被干净重启的分钟级窗口内
+#    两个活动终败整链，05:31 UTC 实锤）。
+# 三者同治：瞬态压力/重启随刷盘或服务上线回落（分钟级），默认活动重试窗口
+# （5 次 × backoff≤30s ≈ 96s）扛不住 → 活动内按本正则长退避（㉘ 包络），
+# 烧尽后 workflow 层 sleep 重发起（㉛ 包络）。新签名出现再扩。
+_GRAPH_TRANSIENT_RE = re.compile(
+    r"high watermark|RPC failure|Connection (?:refused|reset)", re.IGNORECASE
+)
+_WATERMARK_RETRY_SLEEP_SECONDS = 20.0
+
+
+def _with_watermark_retry(fn: Callable[[], Any], *, label: str, max_attempts: int = 18) -> Any:
+    """图库高水位错误的专用退避重试；非水位错误原样上抛（活动层重试兜底）。
+
+    默认 18 × 20s = 6 分钟窗口（write_records STC 600s：2000 条限步调写入
+    ~20s + 退避上限 360s 仍有余量）；调用方活动 STC 更紧时显式传小
+    max_attempts（消歧召回 300s 内用 10、碰撞探测 120s 内用 4）。
+    """
+    from infra.graph_db.exceptions import GraphRequestError
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return fn()
+        except GraphRequestError as exc:
+            if not _GRAPH_TRANSIENT_RE.search(str(exc)):
+                raise
+            logger.warning(
+                "%s 遇图库瞬态错误（高水位/存储 RPC 超时，第 %d/%d 次），%.0fs 后重试",
+                label,
+                attempt,
+                max_attempts,
+                _WATERMARK_RETRY_SLEEP_SECONDS,
+            )
+            time.sleep(_WATERMARK_RETRY_SLEEP_SECONDS)
+    return fn()
+
+
+def _write_pacing() -> tuple[int, float]:
+    """写图步调（env 可调，activity 内读）：每 every 条歇 sleep 秒。
+
+    默认 100 条 / 0.5s ≈ 单活动 ~110 条/s，4 并发下聚合 ~450 条/s——共享
+    图库宿主静态内存已 ~87%，全速写入（~1400 条/s）分钟级打穿 0.9 高水位
+    （缺陷㉘），限步调把突发压在水位线以下（0.35s 实测仍锯齿打线，收紧到 0.5）。
+    """
+    try:
+        every = max(0, int(os.getenv("SCHEMA_EXTRACT_WRITE_PACE_EVERY", "100")))
+        sleep_s = max(0.0, float(os.getenv("SCHEMA_EXTRACT_WRITE_PACE_SLEEP", "0.5")))
+    except ValueError:
+        return 100, 0.5
+    return every, sleep_s
+
+
 @activity.defn
 async def write_records(request: dict[str, Any]) -> dict[str, Any]:
     """把转换结果写图：实体 nGQL INSERT VERTEX / 关系 merge_edge。
@@ -1673,7 +1838,7 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
         return json.dumps(str(value), ensure_ascii=False)
 
     try:
-        client.connect()
+        _with_watermark_retry(client.connect, label=f"写图连接 {name}")
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         # 列类型感知序列化：脚本输出的值类型与注册 schema 声明的列类型并不总一致
@@ -1684,8 +1849,12 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
         column_types: dict[str, str] = {}
         not_null_cols: set[str] = set()
         try:
-            described = client.execute_read(
-                f"DESCRIBE {'TAG' if kind == 'entity' else 'EDGE'} `{name}`"
+            described = _with_watermark_retry(
+                lambda: client.execute_read(
+                    f"DESCRIBE {'TAG' if kind == 'entity' else 'EDGE'} `{name}`"
+                ),
+                label=f"DESCRIBE {name}",
+                max_attempts=8,
             )
             for row in described.records or []:
                 col = str(row.get("Field"))
@@ -1767,7 +1936,6 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                         continue
                     raise
 
-        written = 0
         if kind == "relation" and records:
             # 关系写图前端点消歧（跨执行兜底）：端点命中未决 T_LINK case 的边
             # 暂存进 case 快照（裁决时补写，不产生悬挂点）；已裁决 merge 的端点
@@ -1785,21 +1953,40 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                     logger.info("关系端点实体已被驳回，丢弃 %s 条", parked["dropped"])
             except Exception as exc:  # noqa: BLE001
                 logger.warning("关系端点消歧查询失败，按原样写图: %s", exc)
-        for record in records:
-            props = filtered(record.get("props"))
-            if kind == "entity" and not props:
-                continue
-            if (
-                kind == "entity"
-                and (not active_props or "id" in active_props)
-                and not str(props.get("id") or "").strip()
-            ):
-                # 身份列 id 平台兜底：vid 即记录 id，脚本未显式输出（或输出空串）时
-                # 补齐——id 是 Schema 注入的 NOT NULL 身份列，落空串会让身份失去意义。
-                # 仅在 id 属于白名单时注入，避免给未声明 id 列的 Schema 加未知列。
-                props["id"] = str(record["id"])
-            write_with_self_heal(record, props)
-            written += 1
+
+        # 逐记录写图下放线程：async 活动体内一批 2000 次同步 HTTP INSERT 会把
+        # worker 事件循环占满数秒（read_source_batch 同款根因），并发批次下互斥
+        # 串行化成「假死」。写路径本身无 await 点，整体挪线程不改变语义。
+        # 高水位错误走专用退避（_with_watermark_retry），每 pace_every 条歇
+        # pace_sleep 秒（默认 ~600 条/s 聚合，压住共享图库水位，缺陷㉘）。
+        pace_every, pace_sleep = _write_pacing()
+
+        def _write_all() -> int:
+            written_local = 0
+            for record in records:
+                props = filtered(record.get("props"))
+                if kind == "entity" and not props:
+                    continue
+                if (
+                    kind == "entity"
+                    and (not active_props or "id" in active_props)
+                    and not str(props.get("id") or "").strip()
+                ):
+                    # 身份列 id 平台兜底：vid 即记录 id，脚本未显式输出（或输出
+                    # 空串）时补齐——id 是 Schema 注入的 NOT NULL 身份列，落空串
+                    # 会让身份失去意义。仅在 id 属于白名单时注入，避免给未声明
+                    # id 列的 Schema 加未知列。
+                    props["id"] = str(record["id"])
+                _with_watermark_retry(
+                    lambda record=record, props=props: write_with_self_heal(record, props),
+                    label=f"写图 {name} {record.get('id') or record.get('fromId')}",
+                )
+                written_local += 1
+                if pace_every and written_local % pace_every == 0:
+                    time.sleep(pace_sleep)
+            return written_local
+
+        written = await asyncio.to_thread(_write_all)
         return {"written": written}
     finally:
         try:
@@ -1867,9 +2054,19 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
         if graph.get("space"):
             settings.space = graph["space"]
         client = TRSGraphClient(settings)
+
+        # 同名召回整体下放线程（同步 HTTP 批量 LOOKUP；read_source_batch 同款根因）；
+        # 高水位走专用退避（本活动 STC 300s，max_attempts=10 ≈ 200s 内安全，缺陷㉘）
+        def _recall() -> dict[str, list[dict[str, Any]]]:
+            _with_watermark_retry(client.connect, label="消歧召回连接", max_attempts=10)
+            return _with_watermark_retry(
+                lambda: recall_same_name(client, name_tag, list(by_name)),
+                label="消歧同名召回",
+                max_attempts=10,
+            )
+
         try:
-            client.connect()
-            existing = recall_same_name(client, name_tag, list(by_name))
+            existing = await asyncio.to_thread(_recall)
         finally:
             try:
                 client.close()
@@ -2010,23 +2207,39 @@ async def detect_extract_collisions(request: dict[str, Any]) -> dict[str, Any]:
         settings.space = graph["space"]
     client = TRSGraphClient(settings)
     existing: dict[str, list[str]] = {}
+
+    # 同名碰撞探测整体下放线程（同步 HTTP MATCH；read_source_batch 同款根因）；
+    # 名单分块（同 recall_same_name 的 _RECALL_NAME_CHUNK 口径——批次 2000 的
+    # 单条 IN 巨查会撑爆共享 graphd，缺陷㉘）；高水位走专用退避
+    # （STC 120s，max_attempts=4 ≈ 80s 内安全）
+    def _probe_existing() -> dict[str, list[str]]:
+        _with_watermark_retry(client.connect, label="碰撞探测连接", max_attempts=4)
+        all_names = list(by_name)
+        found: dict[str, list[str]] = {}
+        for start in range(0, len(all_names), 150):
+            names = all_names[start : start + 150]
+            name_list = ",".join(json.dumps(n, ensure_ascii=False) for n in names)
+            # 名称列必须 tag 限定（同 recall_same_name 的口径）：空间里多个 tag
+            # 都有 name 属性时（Person/Organization…），未限定的 v.name 被引擎
+            # 解析成 NULL，WHERE 静默不命中——同名碰撞永远查空，碰撞 case 建不出来。
+            ngql = (
+                f"MATCH (v:`{name_tag}`) WHERE v.`{name_tag}`.`name` IN [{name_list}] "
+                f"RETURN id(v) AS vid, v.`{name_tag}`.`name` AS nm LIMIT 200"
+            )
+            result = _with_watermark_retry(
+                lambda ngql=ngql: client.execute_read(ngql),
+                label="同名碰撞探测",
+                max_attempts=4,
+            )
+            for rec in result.records or []:
+                nm = str(rec.get("nm") or "")
+                vid = str(rec.get("vid") or "")
+                if nm and vid:
+                    found.setdefault(nm, []).append(vid)
+        return found
+
     try:
-        client.connect()
-        names = list(by_name)
-        name_list = ",".join(json.dumps(n, ensure_ascii=False) for n in names)
-        # 名称列必须 tag 限定（同 recall_same_name 的口径）：空间里多个 tag 都有
-        # name 属性时（Person/Organization…），未限定的 v.name 被引擎解析成 NULL，
-        # WHERE 静默不命中——同名碰撞永远查空，碰撞 case 建不出来。
-        ngql = (
-            f"MATCH (v:`{name_tag}`) WHERE v.`{name_tag}`.`name` IN [{name_list}] "
-            f"RETURN id(v) AS vid, v.`{name_tag}`.`name` AS nm LIMIT 200"
-        )
-        result = client.execute_read(ngql)
-        for rec in result.records or []:
-            nm = str(rec.get("nm") or "")
-            vid = str(rec.get("vid") or "")
-            if nm and vid:
-                existing.setdefault(nm, []).append(vid)
+        existing = await asyncio.to_thread(_probe_existing)
     finally:
         try:
             client.close()
@@ -2286,7 +2499,7 @@ async def _register_scheduled_run(request: dict[str, Any]) -> None:
     if not schedule_id:
         return
     info = workflow.info()
-    await workflow.execute_activity(
+    await _execute_activity(
         register_scheduled_execution,
         {
             "definitionId": request["definitionId"],
@@ -2297,6 +2510,7 @@ async def _register_scheduled_run(request: dict[str, Any]) -> None:
         },
         start_to_close_timeout=timedelta(seconds=30),
         retry_policy=ACTIVITY_RETRY_POLICY,
+        schedule_to_start_timeout=ACTIVITY_SCHEDULE_TO_START,
     )
 
 
@@ -2313,11 +2527,12 @@ async def _finalize_scheduled_run(
         return
     info = workflow.info()
     try:
-        await workflow.execute_activity(
+        await _execute_activity(
             finalize_scheduled_execution,
             {"runId": info.run_id, "result": result, "error": error},
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=ACTIVITY_RETRY_POLICY,
+            schedule_to_start_timeout=ACTIVITY_SCHEDULE_TO_START,
         )
     except ActivityError:
         workflow.logger.warning("调度执行收尾回写失败: %s", info.run_id)
@@ -2335,11 +2550,12 @@ class ConfigurableWorkflow:
     async def run(self, request: dict[str, Any]) -> dict[str, Any]:
         await _register_scheduled_run(request)
         try:
-            definition = await workflow.execute_activity(
+            definition = await _execute_activity(
                 load_workflow_definition,
                 request["definitionId"],
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=ACTIVITY_RETRY_POLICY,
+                schedule_to_start_timeout=ACTIVITY_SCHEDULE_TO_START,
             )
             payload = request.get("payload", {})
             results = [
@@ -2427,7 +2643,7 @@ class SchemaExtractWorkflow:
     async def _report_script_run(self, schema_id: str, *, ok: bool, error: str | None) -> None:
         """收尾回写脚本健康信号（best-effort，失败不影响主流程状态）。"""
         try:
-            await workflow.execute_activity(
+            await _execute_activity(
                 record_schema_script_run,
                 {
                     "schemaId": schema_id,
@@ -2438,6 +2654,7 @@ class SchemaExtractWorkflow:
                 },
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=ACTIVITY_RETRY_POLICY,
+                schedule_to_start_timeout=ACTIVITY_SCHEDULE_TO_START,
             )
         except ActivityError:
             workflow.logger.warning("回写脚本运行状态失败: %s", schema_id)
@@ -2487,7 +2704,7 @@ class SchemaExtractWorkflow:
             # 再被调用——不回滚会永远滞留（队列不可见、无法再次重跑）
             if request.get("recordIdsBySource"):
                 try:
-                    await workflow.execute_activity(
+                    await _execute_activity(
                         revert_rerun_failure_cases,
                         {
                             "rerunCaseIds": request.get("rerunCaseIds") or [],
@@ -2495,6 +2712,7 @@ class SchemaExtractWorkflow:
                         },
                         start_to_close_timeout=timedelta(seconds=60),
                         retry_policy=ACTIVITY_RETRY_POLICY,
+                        schedule_to_start_timeout=ACTIVITY_SCHEDULE_TO_START,
                     )
                 except ActivityError:
                     workflow.logger.warning("重跑 case 回滚 OPEN 失败（可能滞留 RERUNING）")
@@ -2606,7 +2824,7 @@ class SchemaExtractWorkflow:
         graph_space = request.get("graphSpace") or request.get("graph_space")
         batch_size = min(max(int(request.get("batchSize", 500)), 1), 5000)
         graph = {"space": graph_space} if graph_space else {}
-        plan = await workflow.execute_activity(
+        plan = await _execute_activity(
             load_schema_extract_plan,
             (
                 {**request, "schemaId": schema_id}
@@ -2615,6 +2833,7 @@ class SchemaExtractWorkflow:
             ),
             start_to_close_timeout=timedelta(seconds=120),
             retry_policy=ACTIVITY_RETRY_POLICY,
+            schedule_to_start_timeout=ACTIVITY_SCHEDULE_TO_START,
         )
         if workflow.patched("business-rbac-context-v1") and not graph_space:
             graph_space = plan.get("graphSpace")
@@ -2637,7 +2856,7 @@ class SchemaExtractWorkflow:
         schedule_id = request.get("_scheduleId")
         if schedule_id:
             info = workflow.info()
-            await workflow.execute_activity(
+            await _execute_activity(
                 register_scheduled_execution,
                 {
                     "definitionId": request.get("chainDefinitionId") or definition_id,
@@ -2648,6 +2867,7 @@ class SchemaExtractWorkflow:
                 },
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=ACTIVITY_RETRY_POLICY,
+                schedule_to_start_timeout=ACTIVITY_SCHEDULE_TO_START,
             )
 
         rerun_ids: dict[str, list[Any]] = request.get("recordIdsBySource") or {}
@@ -2727,11 +2947,12 @@ class SchemaExtractWorkflow:
                 if rerun_mode:
                     read_base["recordIds"] = rerun_ids.get(source_id)
                     try:
-                        batch = await workflow.execute_activity(
+                        batch = await _execute_activity(
                             read_source_batch,
                             read_base,
                             start_to_close_timeout=timedelta(seconds=600),
                             retry_policy=ACTIVITY_RETRY_POLICY,
+                            schedule_to_start_timeout=ACTIVITY_SCHEDULE_TO_START,
                         )
                     except ActivityError:
                         # 读源失败也是重跑失败：整批 id 记为失败，case 由 resolve 关闭并重建
@@ -2752,11 +2973,12 @@ class SchemaExtractWorkflow:
                 # 首批回传的读取起点水位（活动内由控制库解析），空批也要带上
                 start_wm: str | None = None
                 while True:
-                    batch = await workflow.execute_activity(
+                    batch = await _execute_activity(
                         read_source_batch,
                         {**read_base, "batchIdx": idx, **cursor},
                         start_to_close_timeout=timedelta(seconds=600),
                         retry_policy=ACTIVITY_RETRY_POLICY,
+                        schedule_to_start_timeout=ACTIVITY_SCHEDULE_TO_START,
                     )
                     if idx == 0:
                         start_wm = batch.get("startWatermark")
@@ -2894,11 +3116,12 @@ class SchemaExtractWorkflow:
                                 else:
                                     # 第 1 步：消费平台读的源表行
                                     transform_request["rows"] = chunk["rows"]
-                                transformed = await workflow.execute_activity(
+                                transformed = await _execute_activity(
                                     execute_transform,
                                     transform_request,
                                     start_to_close_timeout=timedelta(seconds=timeout_seconds + 60),
                                     retry_policy=ACTIVITY_RETRY_POLICY,
+                                    schedule_to_start_timeout=ACTIVITY_SCHEDULE_TO_START,
                                 )
                                 # 转换结果双形状：S3 中转（outKey 元数据）或内联（重放兼容）。
                                 # records_arg 随形状携带：中转传 recordsKey（全量输出对象，
@@ -2939,7 +3162,7 @@ class SchemaExtractWorkflow:
                                     # 消歧 v2（写前判定）：同名召回+评分，改写 vid 并入 /
                                     # 灰区扣留建 T_LINK case / 其余原样——灰区记录从本批
                                     # 剔除（不写图），后续由人工裁决执行器补写
-                                    resolved = await workflow.execute_activity(
+                                    resolved = await _execute_activity(
                                         resolve_entity_batch,
                                         {
                                             "name": plan["name"],
@@ -2951,8 +3174,13 @@ class SchemaExtractWorkflow:
                                             "chunkIdx": chunk["index"],
                                             **records_arg,
                                         },
-                                        start_to_close_timeout=timedelta(seconds=300),
+                                        # STC 900s（缺陷㉚）：批 2000 名按 150 分块召回 16 条
+                                        # 查询 + 水位退避（10×20s）在图库高压期合法超 300s，
+                                        # 原 300s 窗口在 RetryPolicy 5 次内同撞墙 → 终败整链
+                                        # （第七次执行 21:11 实锤 2 个任务烧尽）。留 3 倍余量。
+                                        start_to_close_timeout=timedelta(seconds=900),
                                         retry_policy=ACTIVITY_RETRY_POLICY,
+                                        schedule_to_start_timeout=ACTIVITY_SCHEDULE_TO_START,
                                     )
                                     if "outKey" in resolved:
                                         records_count = int(resolved.get("keptCount") or 0)
@@ -2961,7 +3189,7 @@ class SchemaExtractWorkflow:
                                         records_count = len(resolved.get("records") or [])
                                         records_arg = {"records": resolved.get("records") or []}
                                 if records_count:
-                                    write_result = await workflow.execute_activity(
+                                    write_result = await _execute_activity(
                                         write_records,
                                         {
                                             "kind": kind,
@@ -2973,10 +3201,11 @@ class SchemaExtractWorkflow:
                                         },
                                         start_to_close_timeout=timedelta(seconds=600),
                                         retry_policy=ACTIVITY_RETRY_POLICY,
+                                        schedule_to_start_timeout=ACTIVITY_SCHEDULE_TO_START,
                                     )
                                     step_written = int(write_result.get("written", 0))
                                 if kind == "entity" and records_count and detect_collisions:
-                                    await workflow.execute_activity(
+                                    await _execute_activity(
                                         detect_extract_collisions,
                                         {
                                             "name": plan["name"],
@@ -2985,8 +3214,11 @@ class SchemaExtractWorkflow:
                                             "stepId": f"{step_id}#{step['id']}",
                                             **records_arg,
                                         },
-                                        start_to_close_timeout=timedelta(seconds=120),
+                                        # STC 120→300s（缺陷㉚预防）：碰撞探测 150 名/块分块
+                                        # 查询 + 水位退避 4×20s，与 resolve 同型的高压期风险
+                                        start_to_close_timeout=timedelta(seconds=300),
                                         retry_policy=ACTIVITY_RETRY_POLICY,
+                                        schedule_to_start_timeout=ACTIVITY_SCHEDULE_TO_START,
                                     )
                                 written += step_written
                                 step_finished = workflow.now().astimezone()
@@ -3089,11 +3321,12 @@ class SchemaExtractWorkflow:
                 if read_summary.get("pkCursor") is not None:
                     advance_req["checkpoint"] = {"pkCursor": str(read_summary["pkCursor"])}
                 if "watermark" in advance_req or "checkpoint" in advance_req:
-                    await workflow.execute_activity(
+                    await _execute_activity(
                         advance_schema_extract_watermark,
                         advance_req,
                         start_to_close_timeout=timedelta(seconds=30),
                         retry_policy=ACTIVITY_RETRY_POLICY,
+                        schedule_to_start_timeout=ACTIVITY_SCHEDULE_TO_START,
                     )
 
             self._sources[step_id] = {
@@ -3154,7 +3387,7 @@ class SchemaExtractWorkflow:
         index_summary: Any = None
         if rerun_mode:
             # 重跑：resolve 必调且拿全量失败键（未截断），仍失败记录由服务端重建 case
-            await workflow.execute_activity(
+            await _execute_activity(
                 resolve_failure_cases,
                 {
                     "rerunCaseIds": rerun_case_ids,
@@ -3168,6 +3401,7 @@ class SchemaExtractWorkflow:
                 },
                 start_to_close_timeout=timedelta(seconds=300),
                 retry_policy=ACTIVITY_RETRY_POLICY,
+                schedule_to_start_timeout=ACTIVITY_SCHEDULE_TO_START,
             )
         else:
             do_index = request.get("buildIndex")
@@ -3184,17 +3418,18 @@ class SchemaExtractWorkflow:
                 # 警告吞掉——重试耗尽后 ActivityError 上抛，整链失败，执行详情
                 # 的失败原因带上索引 activity 的报错信息。显式关闭
                 # （buildIndexEnabled=False）属计划内跳过，不算失败。
-                index_result = await workflow.execute_activity(
+                index_result = await _execute_activity(
                     build_entity_index,
                     {"space": graph_space},
                     start_to_close_timeout=timedelta(
                         seconds=int(plan.get("indexTimeoutSeconds", 1800))
                     ),
                     retry_policy=ACTIVITY_RETRY_POLICY,
+                    schedule_to_start_timeout=ACTIVITY_SCHEDULE_TO_START,
                 )
                 index_summary = (index_result or {}).get("reindexed")
             if failures_total:
-                fail_resp = await workflow.execute_activity(
+                fail_resp = await _execute_activity(
                     record_extract_failures,
                     {
                         "failures": inline_failures,
@@ -3209,6 +3444,7 @@ class SchemaExtractWorkflow:
                     },
                     start_to_close_timeout=timedelta(seconds=600),
                     retry_policy=ACTIVITY_RETRY_POLICY,
+                    schedule_to_start_timeout=ACTIVITY_SCHEDULE_TO_START,
                 )
                 recorded_count = int((fail_resp or {}).get("recorded") or 0)
                 no_record_id_count = int((fail_resp or {}).get("skippedNoRecordId") or 0)
@@ -3216,11 +3452,12 @@ class SchemaExtractWorkflow:
             # 写图后触发图库 stats job：SHOW STATS（平台总览实体/关系总量的数据源）
             # 只反映最近一次 SUBMIT JOB STATS 预计算，不触发则总览不随抽取更新（00918）。
             # activity 内部吞异常降级，失败不影响执行终态。
-            await workflow.execute_activity(
+            await _execute_activity(
                 refresh_graph_stats,
                 {"space": graph_space},
                 start_to_close_timeout=timedelta(seconds=60),
                 retry_policy=ACTIVITY_RETRY_POLICY,
+                schedule_to_start_timeout=ACTIVITY_SCHEDULE_TO_START,
             )
 
         # 多步脚本（及 chain 模式）的全局分步聚合计数（跨来源求和）。status 供任务

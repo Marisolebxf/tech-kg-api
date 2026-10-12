@@ -25,6 +25,90 @@ from kg_sdk import step
 logger = logging.getLogger("funded_by")
 
 
+def resolve_report_dir(payload: Mapping[str, Any], batch: str) -> Path:
+    """Resolve an explicit report directory or a private runtime default."""
+    configured = payload.get("report_dir")
+    return (
+        Path(str(configured)) if configured else private_state_dir("project-ingest-reports", batch)
+    )
+
+
+EntityBuilder = Callable[[str, Mapping[str, Any], str], Iterable[Any]]
+
+
+def _record_id(row: Mapping[str, Any], pk_column: str | None) -> str:
+    if pk_column and row.get(pk_column) is not None:
+        return str(row[pk_column])
+    digest = hashlib.sha256(
+        json.dumps(row, ensure_ascii=False, default=str, sort_keys=True).encode()
+    ).hexdigest()
+    return f"row:{digest[:16]}"
+
+
+def _split_source(payload: Mapping[str, Any]) -> tuple[str, str, str]:
+    source = payload.get("source") or {}
+    source_table = str(payload.get("source_table") or source.get("tableName") or "")
+    table = source_table.rsplit(".", 1)[-1]
+    pk_column = str(source.get("pkColumn") or "id")
+    batch = f"se-{str(source.get('id') or 'x')[:8]}"
+    return table, pk_column, batch
+
+
+def _run(
+    payload: Mapping[str, Any],
+    *,
+    builder: EntityBuilder | None,
+    mapper_by_table: dict[str, EntityBuilder] | None,
+    to_json: Callable[[Any], dict[str, Any]],
+    key: str,
+) -> dict[str, Any]:
+    table, pk_column, batch = _split_source(payload)
+    if builder is None and mapper_by_table:
+        builder = mapper_by_table.get(table)
+    if builder is None:
+        raise RuntimeError(f"来源表 {table} 没有对应的转换 mapper")
+    rows = payload.get("rows") or []
+    records: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    for row in rows:
+        record_id = _record_id(row, pk_column)
+        try:
+            mapped = list(builder(table, row, batch) or [])
+            records.extend(to_json(r) for r in mapped)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("行转换失败 table=%s record=%s: %s", table, record_id, exc)
+            failures.append({"recordId": record_id, "error": f"{type(exc).__name__}: {exc}"[:1000]})
+    output: dict[str, Any] = {key: records, "failures": failures}
+    if table:
+        output["stats"] = {
+            "table": table,
+            "rows": len(rows),
+            key: len(records),
+            "failed": len(failures),
+        }
+    return output
+
+
+def edge_transform(
+    payload: Mapping[str, Any],
+    *,
+    builder: EntityBuilder | None = None,
+    mapper_by_table: dict[str, EntityBuilder] | None = None,
+) -> dict[str, Any]:
+    """关系转换：行 → ``{"fromId", "toId", "props"}``。"""
+
+    def to_json(record: Any) -> dict[str, Any]:
+        return {
+            "fromId": record.source_vid,
+            "toId": record.target_vid,
+            "props": record.properties,
+        }
+
+    return _run(
+        payload, builder=builder, mapper_by_table=mapper_by_table, to_json=to_json, key="edges"
+    )
+
+
 @dataclass(frozen=True)
 class MatchResult:
     status: str
@@ -342,6 +426,172 @@ class ProjectEntityMatcher:
         return self.report_title.match(title, method="title_exact")
 
 
+def _ngql_identifier(value: str) -> str:
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+        raise ValueError(f"unsafe nGQL identifier: {value!r}")
+    return f"`{value}`"
+
+
+def ensure_edge_schema(
+    graph: Any,
+    edge_type: str,
+    properties: Mapping[str, str],
+    *,
+    wait_seconds: float = 2.0,
+) -> list[str]:
+    """DESCRIBE EDGE 后对缺失属性做幂等 ALTER EDGE ADD（merge 接口对 schema 外属性 400）。"""
+    try:
+        result = graph.execute_read(f"DESCRIBE EDGE {_ngql_identifier(edge_type)};")
+    except Exception:
+        logger.warning("DESCRIBE EDGE %s failed; skip schema ensure", edge_type)
+        return []
+    existing = set()
+    for record in result.records:
+        field = record.get("Field")
+        if field is not None:
+            existing.add(str(field))
+    missing = [(name, prop_type) for name, prop_type in properties.items() if name not in existing]
+    if not missing:
+        return []
+    columns = ",".join(f"{_ngql_identifier(name)} {prop_type}" for name, prop_type in missing)
+    graph.execute_write(f"ALTER EDGE {_ngql_identifier(edge_type)} ADD ({columns});")
+    if wait_seconds:
+        import time
+
+        time.sleep(wait_seconds)
+    return [name for name, _ in missing]
+
+
+def _sdk_context():
+    """任务运行时注入的 kg_sdk 上下文；CLI 独立运行 / 未注入时返回 None。"""
+    try:
+        from kg_sdk import current_context
+
+        return current_context()
+    except ImportError:
+        return None
+
+
+class _LeasedGraphClient:
+    """ctx 图客户端的租用视图：属性透传，close/connect 为 no-op。
+
+    老脚本每次 ``graph_client()`` 都新建客户端并在 finally 里 close；平台 ctx
+    客户端是任务进程共享的，直接 close 会让本步后续查询全部失败。
+    """
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def connect(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+def graph_client() -> Any:
+    """平台注入版：任务所选图空间的 trs-graph 客户端（租用视图，close 无害）。"""
+    from kg_sdk import current_context
+
+    ctx = current_context()
+    client = getattr(ctx, "graph", None) if ctx is not None else None
+    if client is None:
+        raise RuntimeError("本抽取脚本需要平台注入图客户端（任务/Schema 抽取请在触发时选择图空间）")
+    return _LeasedGraphClient(client)
+
+
+EDGE_SCHEMA = {
+    "source_table": "string",
+    "source_record_id": "string",
+    "ingest_batch": "string",
+    "ingest_time": "string",
+    "funded_amount": "double",
+    "fund_category": "string",
+    "match_method": "string",
+    "match_evidence": "string",
+    "confidence": "double",
+    "organization_id": "string",
+    "organization_source_table": "string",
+}
+
+
+EMPTY_CANDIDATES: dict[str, set[str]] = {
+    "organization": set(),
+    "person": set(),
+    "paper_doi": set(),
+    "paper_title": set(),
+    "patent_number": set(),
+    "patent_title": set(),
+    "report_title": set(),
+}
+
+
+def _load_matcher(candidates: set[str], dry_run: bool) -> ProjectEntityMatcher:
+    """连图加载 matcher；dry_run 时也连图（matcher.from_graph 不写图）。"""
+    graph = graph_client()
+    try:
+        matcher = ProjectEntityMatcher.from_graph(
+            graph, {**EMPTY_CANDIDATES, "organization": candidates}
+        )
+        if not dry_run:
+            ensure_edge_schema(graph, "FUNDED_BY", EDGE_SCHEMA)
+    finally:
+        graph.close()
+    return matcher
+
+
+_HAN_RE = re.compile(r"[\u4e00-\u9fff]")
+
+
+def normalize_name(value: str | None) -> str:
+    if not value:
+        return ""
+    return re.sub(r"\s+", " ", value.strip())
+
+
+def parse_list(raw: Any) -> list[str]:
+    """解析 JSON 数组 / 逗号分隔 / 单字符串 → 非空字符串列表。"""
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [normalize_name(str(x)) for x in raw if normalize_name(str(x))]
+    text = str(raw).strip()
+    if not text:
+        return []
+    if text.startswith("["):
+        try:
+            data = json.loads(text)
+            if isinstance(data, list):
+                return [normalize_name(str(x)) for x in data if normalize_name(str(x))]
+        except json.JSONDecodeError:
+            pass
+    if "," in text:
+        return [normalize_name(p) for p in text.split(",") if normalize_name(p)]
+    # 中文分隔符（全角逗号/分号、顿号、半角分号）串起的多个值同样切分，
+    # 否则整串被当成一个名字必然 not_found（participants/机构/关键词常见此形态）。
+    if any(sep in text for sep in ("，", "；", "、", ";")):
+        return [p for p in (normalize_name(part) for part in re.split(r"[，；、;]", text)) if p]
+    return [normalize_name(text)]
+
+
+def parse_name_list(raw: Any) -> list[str]:
+    """人名/机构名单值解析：含汉字的串按分隔符拆，纯西文串不拆。
+
+    西文里逗号/分号常是名字内部（"BO， Zhang"、"University of California;Riverside"），
+    拆开会生成残名候选，图上恰有同名 Person/Organization 时会写出错边；
+    汉语多值（"张三，李四"）则必须拆。纯西文多值宁可整串 not_found 进复核目录。
+    """
+    if isinstance(raw, list):
+        return parse_list(raw)
+    text = str(raw or "").strip()
+    if text and not _HAN_RE.search(text):
+        return [normalize_name(text)] if normalize_name(text) else []
+    return parse_list(raw)
+
+
 ORGANIZATION_SOURCE_TABLE = "organization_base"
 
 
@@ -385,55 +635,6 @@ def match_audit_props(method: str, evidence: str = "") -> dict[str, Any]:
         "match_evidence": evidence or "",
         "confidence": confidence_from_method(method or "", evidence or ""),
     }
-
-
-def normalize_name(value: str | None) -> str:
-    if not value:
-        return ""
-    return re.sub(r"\s+", " ", value.strip())
-
-
-def parse_list(raw: Any) -> list[str]:
-    """解析 JSON 数组 / 逗号分隔 / 单字符串 → 非空字符串列表。"""
-    if raw is None:
-        return []
-    if isinstance(raw, list):
-        return [normalize_name(str(x)) for x in raw if normalize_name(str(x))]
-    text = str(raw).strip()
-    if not text:
-        return []
-    if text.startswith("["):
-        try:
-            data = json.loads(text)
-            if isinstance(data, list):
-                return [normalize_name(str(x)) for x in data if normalize_name(str(x))]
-        except json.JSONDecodeError:
-            pass
-    if "," in text:
-        return [normalize_name(p) for p in text.split(",") if normalize_name(p)]
-    # 中文分隔符（全角逗号/分号、顿号、半角分号）串起的多个值同样切分，
-    # 否则整串被当成一个名字必然 not_found（participants/机构/关键词常见此形态）。
-    if any(sep in text for sep in ("，", "；", "、", ";")):
-        return [p for p in (normalize_name(part) for part in re.split(r"[，；、;]", text)) if p]
-    return [normalize_name(text)]
-
-
-_HAN_RE = re.compile(r"[\u4e00-\u9fff]")
-
-
-def parse_name_list(raw: Any) -> list[str]:
-    """人名/机构名单值解析：含汉字的串按分隔符拆，纯西文串不拆。
-
-    西文里逗号/分号常是名字内部（"BO， Zhang"、"University of California;Riverside"），
-    拆开会生成残名候选，图上恰有同名 Person/Organization 时会写出错边；
-    汉语多值（"张三，李四"）则必须拆。纯西文多值宁可整串 not_found 进复核目录。
-    """
-    if isinstance(raw, list):
-        return parse_list(raw)
-    text = str(raw or "").strip()
-    if text and not _HAN_RE.search(text):
-        return [normalize_name(text)] if normalize_name(text) else []
-    return parse_list(raw)
 
 
 def to_float(value: Any) -> float:
@@ -598,207 +799,6 @@ def make_funded_by_mapper(
         return records
 
     return funded_by
-
-
-def _ngql_identifier(value: str) -> str:
-    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
-        raise ValueError(f"unsafe nGQL identifier: {value!r}")
-    return f"`{value}`"
-
-
-def ensure_edge_schema(
-    graph: Any,
-    edge_type: str,
-    properties: Mapping[str, str],
-    *,
-    wait_seconds: float = 2.0,
-) -> list[str]:
-    """DESCRIBE EDGE 后对缺失属性做幂等 ALTER EDGE ADD（merge 接口对 schema 外属性 400）。"""
-    try:
-        result = graph.execute_read(f"DESCRIBE EDGE {_ngql_identifier(edge_type)};")
-    except Exception:
-        logger.warning("DESCRIBE EDGE %s failed; skip schema ensure", edge_type)
-        return []
-    existing = set()
-    for record in result.records:
-        field = record.get("Field")
-        if field is not None:
-            existing.add(str(field))
-    missing = [(name, prop_type) for name, prop_type in properties.items() if name not in existing]
-    if not missing:
-        return []
-    columns = ",".join(f"{_ngql_identifier(name)} {prop_type}" for name, prop_type in missing)
-    graph.execute_write(f"ALTER EDGE {_ngql_identifier(edge_type)} ADD ({columns});")
-    if wait_seconds:
-        import time
-
-        time.sleep(wait_seconds)
-    return [name for name, _ in missing]
-
-
-def _sdk_context():
-    """任务运行时注入的 kg_sdk 上下文；CLI 独立运行 / 未注入时返回 None。"""
-    try:
-        from kg_sdk import current_context
-
-        return current_context()
-    except ImportError:
-        return None
-
-
-class _LeasedGraphClient:
-    """ctx 图客户端的租用视图：属性透传，close/connect 为 no-op。
-
-    老脚本每次 ``graph_client()`` 都新建客户端并在 finally 里 close；平台 ctx
-    客户端是任务进程共享的，直接 close 会让本步后续查询全部失败。
-    """
-
-    def __init__(self, inner: Any) -> None:
-        self._inner = inner
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._inner, name)
-
-    def connect(self) -> None:
-        pass
-
-    def close(self) -> None:
-        pass
-
-
-def graph_client() -> Any:
-    """平台注入版：任务所选图空间的 trs-graph 客户端（租用视图，close 无害）。"""
-    from kg_sdk import current_context
-
-    ctx = current_context()
-    client = getattr(ctx, "graph", None) if ctx is not None else None
-    if client is None:
-        raise RuntimeError("本抽取脚本需要平台注入图客户端（任务/Schema 抽取请在触发时选择图空间）")
-    return _LeasedGraphClient(client)
-
-
-EDGE_SCHEMA = {
-    "source_table": "string",
-    "source_record_id": "string",
-    "ingest_batch": "string",
-    "ingest_time": "string",
-    "funded_amount": "double",
-    "fund_category": "string",
-    "match_method": "string",
-    "match_evidence": "string",
-    "confidence": "double",
-    "organization_id": "string",
-    "organization_source_table": "string",
-}
-
-
-EMPTY_CANDIDATES: dict[str, set[str]] = {
-    "organization": set(),
-    "person": set(),
-    "paper_doi": set(),
-    "paper_title": set(),
-    "patent_number": set(),
-    "patent_title": set(),
-    "report_title": set(),
-}
-
-
-def _load_matcher(candidates: set[str], dry_run: bool) -> ProjectEntityMatcher:
-    """连图加载 matcher；dry_run 时也连图（matcher.from_graph 不写图）。"""
-    graph = graph_client()
-    try:
-        matcher = ProjectEntityMatcher.from_graph(
-            graph, {**EMPTY_CANDIDATES, "organization": candidates}
-        )
-        if not dry_run:
-            ensure_edge_schema(graph, "FUNDED_BY", EDGE_SCHEMA)
-    finally:
-        graph.close()
-    return matcher
-
-
-EntityBuilder = Callable[[str, Mapping[str, Any], str], Iterable[Any]]
-
-
-def _record_id(row: Mapping[str, Any], pk_column: str | None) -> str:
-    if pk_column and row.get(pk_column) is not None:
-        return str(row[pk_column])
-    digest = hashlib.sha256(
-        json.dumps(row, ensure_ascii=False, default=str, sort_keys=True).encode()
-    ).hexdigest()
-    return f"row:{digest[:16]}"
-
-
-def _split_source(payload: Mapping[str, Any]) -> tuple[str, str, str]:
-    source = payload.get("source") or {}
-    source_table = str(payload.get("source_table") or source.get("tableName") or "")
-    table = source_table.rsplit(".", 1)[-1]
-    pk_column = str(source.get("pkColumn") or "id")
-    batch = f"se-{str(source.get('id') or 'x')[:8]}"
-    return table, pk_column, batch
-
-
-def _run(
-    payload: Mapping[str, Any],
-    *,
-    builder: EntityBuilder | None,
-    mapper_by_table: dict[str, EntityBuilder] | None,
-    to_json: Callable[[Any], dict[str, Any]],
-    key: str,
-) -> dict[str, Any]:
-    table, pk_column, batch = _split_source(payload)
-    if builder is None and mapper_by_table:
-        builder = mapper_by_table.get(table)
-    if builder is None:
-        raise RuntimeError(f"来源表 {table} 没有对应的转换 mapper")
-    rows = payload.get("rows") or []
-    records: list[dict[str, Any]] = []
-    failures: list[dict[str, Any]] = []
-    for row in rows:
-        record_id = _record_id(row, pk_column)
-        try:
-            mapped = list(builder(table, row, batch) or [])
-            records.extend(to_json(r) for r in mapped)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("行转换失败 table=%s record=%s: %s", table, record_id, exc)
-            failures.append({"recordId": record_id, "error": f"{type(exc).__name__}: {exc}"[:1000]})
-    output: dict[str, Any] = {key: records, "failures": failures}
-    if table:
-        output["stats"] = {
-            "table": table,
-            "rows": len(rows),
-            key: len(records),
-            "failed": len(failures),
-        }
-    return output
-
-
-def edge_transform(
-    payload: Mapping[str, Any],
-    *,
-    builder: EntityBuilder | None = None,
-    mapper_by_table: dict[str, EntityBuilder] | None = None,
-) -> dict[str, Any]:
-    """关系转换：行 → ``{"fromId", "toId", "props"}``。"""
-
-    def to_json(record: Any) -> dict[str, Any]:
-        return {
-            "fromId": record.source_vid,
-            "toId": record.target_vid,
-            "props": record.properties,
-        }
-
-    return _run(
-        payload, builder=builder, mapper_by_table=mapper_by_table, to_json=to_json, key="edges"
-    )
-
-
-def resolve_report_dir(payload: Mapping[str, Any], batch: str) -> Path:
-    """Resolve an explicit report directory or a private runtime default."""
-    configured = payload.get("report_dir")
-    return (
-        Path(str(configured)) if configured else private_state_dir("project-ingest-reports", batch)
-    )
 
 
 def _transform(payload: dict[str, Any]) -> dict[str, Any]:

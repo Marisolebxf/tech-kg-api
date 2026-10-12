@@ -216,7 +216,7 @@ SOURCES = [
 
 def transform(payload: dict[str, Any]) -> dict[str, Any]:
     """kg.schema.extract 转换入口：rows → edges JSON；歧义申请人/权利人挂实体进 pendingReview（写前消歧改道）。"""
-    database = (payload.get("source") or {}).get("databaseName") or "gkx_element"
+    database = (payload.get("source") or {}).get("databaseName") or "gkx"
     vid_by_id, person_index, org_index = _load_indexes(database, dry_run=False)
     pendings: list[PendingEntity] = []
     stats: Counter = Counter()

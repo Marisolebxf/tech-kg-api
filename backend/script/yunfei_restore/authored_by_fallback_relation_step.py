@@ -20,6 +20,56 @@ from kg_sdk import step
 logger = logging.getLogger("authored_by_fallback")
 
 
+@dataclass(frozen=True)
+class EdgeRecord:
+    edge_type: str
+    source_vid: str
+    target_vid: str
+    properties: dict[str, Any]
+    # nGQL 确定性 rank 模式；None 走 REST merge 模式。
+    rank: int | None = None
+    # REST merge 的 identityProps；缺省取 properties["source_record_id"]。
+    identity: dict[str, Any] | None = field(default=None, compare=False)
+    # 端点验存用的 tag；None 表示该端点不验存。
+    source_tag: str | None = None
+    target_tag: str | None = None
+    # False 表示允许悬空端点（机构名桩 / DOI 桩等旧口径）。
+    validate_endpoints: bool = True
+
+
+def now_utc() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def authored_by_fallback(table: str, row: Mapping[str, Any], batch: str) -> list[EdgeRecord]:
+    paper_id = str(row.get("paper_id") or "").strip()
+    scholar_id = str(row.get("scholar_id") or "").strip()
+    if not paper_id or not scholar_id:
+        return []
+    record_id = f"{paper_id}_{scholar_id}"
+    props = {
+        "citations": int(row.get("citations") or 0),
+        "source_table": table,
+        "source_record_id": record_id,
+        "ingest_batch": batch,
+        "ingest_time": now_utc(),
+        "confidence": 0.9,
+        "match_method": "cross_domain_id_match",
+        "match_evidence": "paper_id 与 scholar_id 分别命中已存在的 Paper、Person 顶点",
+    }
+    return [
+        EdgeRecord(
+            "AUTHORED_BY",
+            f"paper_{paper_id}",
+            f"person_{scholar_id}",
+            props,
+            identity={"source_record_id": record_id},
+            source_tag="Paper",
+            target_tag="Person",
+        )
+    ]
+
+
 EntityBuilder = Callable[[str, Mapping[str, Any], str], Iterable[Any]]
 
 
@@ -94,56 +144,6 @@ def edge_transform(
     return _run(
         payload, builder=builder, mapper_by_table=mapper_by_table, to_json=to_json, key="edges"
     )
-
-
-@dataclass(frozen=True)
-class EdgeRecord:
-    edge_type: str
-    source_vid: str
-    target_vid: str
-    properties: dict[str, Any]
-    # nGQL 确定性 rank 模式；None 走 REST merge 模式。
-    rank: int | None = None
-    # REST merge 的 identityProps；缺省取 properties["source_record_id"]。
-    identity: dict[str, Any] | None = field(default=None, compare=False)
-    # 端点验存用的 tag；None 表示该端点不验存。
-    source_tag: str | None = None
-    target_tag: str | None = None
-    # False 表示允许悬空端点（机构名桩 / DOI 桩等旧口径）。
-    validate_endpoints: bool = True
-
-
-def now_utc() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
-
-
-def authored_by_fallback(table: str, row: Mapping[str, Any], batch: str) -> list[EdgeRecord]:
-    paper_id = str(row.get("paper_id") or "").strip()
-    scholar_id = str(row.get("scholar_id") or "").strip()
-    if not paper_id or not scholar_id:
-        return []
-    record_id = f"{paper_id}_{scholar_id}"
-    props = {
-        "citations": int(row.get("citations") or 0),
-        "source_table": table,
-        "source_record_id": record_id,
-        "ingest_batch": batch,
-        "ingest_time": now_utc(),
-        "confidence": 0.9,
-        "match_method": "cross_domain_id_match",
-        "match_evidence": "paper_id 与 scholar_id 分别命中已存在的 Paper、Person 顶点",
-    }
-    return [
-        EdgeRecord(
-            "AUTHORED_BY",
-            f"paper_{paper_id}",
-            f"person_{scholar_id}",
-            props,
-            identity={"source_record_id": record_id},
-            source_tag="Paper",
-            target_tag="Person",
-        )
-    ]
 
 
 def _transform(payload: Mapping[str, Any]) -> dict[str, Any]:

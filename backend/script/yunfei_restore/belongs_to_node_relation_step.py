@@ -20,6 +20,55 @@ from kg_sdk import step
 logger = logging.getLogger("belongs_to_node")
 
 
+@dataclass(frozen=True)
+class EdgeRecord:
+    edge_type: str
+    source_vid: str
+    target_vid: str
+    properties: dict[str, Any]
+    # nGQL 确定性 rank 模式；None 走 REST merge 模式。
+    rank: int | None = None
+    # REST merge 的 identityProps；缺省取 properties["source_record_id"]。
+    identity: dict[str, Any] | None = field(default=None, compare=False)
+    # 端点验存用的 tag；None 表示该端点不验存。
+    source_tag: str | None = None
+    target_tag: str | None = None
+    # False 表示允许悬空端点（机构名桩 / DOI 桩等旧口径）。
+    validate_endpoints: bool = True
+
+
+def now_utc() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def belongs_to_node(table: str, row: Mapping[str, Any], batch: str) -> list[EdgeRecord]:
+    antitypic = str(row.get("antitypic") or "").strip()
+    node_id = str(row.get("node_id") or "").strip()
+    if not antitypic or not node_id:
+        return []
+    try:
+        chain_score = float(row.get("chain_score") or 0)
+    except (TypeError, ValueError):
+        chain_score = 0.0
+    return [
+        EdgeRecord(
+            "BELONGS_TO_NODE",
+            f"org_{antitypic}",
+            f"node_{node_id}",
+            {
+                "chain_score": chain_score,
+                "source_table": table,
+                "source_record_id": antitypic,
+                "ingest_batch": batch,
+                "ingest_time": now_utc(),
+            },
+            rank=0,
+            source_tag="Organization",
+            target_tag="IndustryNode",
+        )
+    ]
+
+
 EntityBuilder = Callable[[str, Mapping[str, Any], str], Iterable[Any]]
 
 
@@ -94,55 +143,6 @@ def edge_transform(
     return _run(
         payload, builder=builder, mapper_by_table=mapper_by_table, to_json=to_json, key="edges"
     )
-
-
-@dataclass(frozen=True)
-class EdgeRecord:
-    edge_type: str
-    source_vid: str
-    target_vid: str
-    properties: dict[str, Any]
-    # nGQL 确定性 rank 模式；None 走 REST merge 模式。
-    rank: int | None = None
-    # REST merge 的 identityProps；缺省取 properties["source_record_id"]。
-    identity: dict[str, Any] | None = field(default=None, compare=False)
-    # 端点验存用的 tag；None 表示该端点不验存。
-    source_tag: str | None = None
-    target_tag: str | None = None
-    # False 表示允许悬空端点（机构名桩 / DOI 桩等旧口径）。
-    validate_endpoints: bool = True
-
-
-def now_utc() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
-
-
-def belongs_to_node(table: str, row: Mapping[str, Any], batch: str) -> list[EdgeRecord]:
-    antitypic = str(row.get("antitypic") or "").strip()
-    node_id = str(row.get("node_id") or "").strip()
-    if not antitypic or not node_id:
-        return []
-    try:
-        chain_score = float(row.get("chain_score") or 0)
-    except (TypeError, ValueError):
-        chain_score = 0.0
-    return [
-        EdgeRecord(
-            "BELONGS_TO_NODE",
-            f"org_{antitypic}",
-            f"node_{node_id}",
-            {
-                "chain_score": chain_score,
-                "source_table": table,
-                "source_record_id": antitypic,
-                "ingest_batch": batch,
-                "ingest_time": now_utc(),
-            },
-            rank=0,
-            source_tag="Organization",
-            target_tag="IndustryNode",
-        )
-    ]
 
 
 def _transform(payload: Mapping[str, Any]) -> dict[str, Any]:

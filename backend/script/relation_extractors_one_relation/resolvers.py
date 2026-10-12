@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 import unicodedata
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
@@ -87,7 +88,7 @@ class ExactOrganizationResolver:
         self._by_name = {name: set(ids) for name, ids in by_name.items()}
 
     @classmethod
-    def load(cls, engine: Engine, database: str = "gkx_element") -> ExactOrganizationResolver:
+    def load(cls, engine: Engine, database: str = "gkx") -> ExactOrganizationResolver:
         by_name: dict[str, set[str]] = defaultdict(set)
         with engine.connect() as conn:
             for table, id_column, name_columns in cls._SOURCES:
@@ -114,6 +115,25 @@ class ExactOrganizationResolver:
         return next(iter(candidates))
 
     resolve = resolve_exact
+
+
+# 进程级 TTL 缓存：机构名称索引是 7 张维表全量快照（本地库几十 ms 无所谓，
+# 公网源库下每批全拉 ~几十 MB——recruit 670 万行 ÷ 批 1000 = 6700 批会被
+# 字典装载淹没）。维表低频变更，TTL 内复用快照，解析口径不变。
+_RESOLVER_CACHE: dict[tuple[str, str], tuple[float, ExactOrganizationResolver]] = {}
+_RESOLVER_CACHE_TTL_SECONDS = 600.0
+
+
+def load_resolver_cached(engine: Engine, database: str = "gkx") -> ExactOrganizationResolver:
+    """带 TTL 缓存的 ``ExactOrganizationResolver.load``（每批转换入口用）。"""
+    key = (str(getattr(engine, "url", "")), database)
+    now = time.monotonic()
+    hit = _RESOLVER_CACHE.get(key)
+    if hit is not None and now - hit[0] < _RESOLVER_CACHE_TTL_SECONDS:
+        return hit[1]
+    resolver = ExactOrganizationResolver.load(engine, database)
+    _RESOLVER_CACHE[key] = (now, resolver)
+    return resolver
 
 
 def resolved_organization_vid(

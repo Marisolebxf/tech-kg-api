@@ -24,79 +24,42 @@ from kg_sdk import step
 logger = logging.getLogger("leads")
 
 
-EntityBuilder = Callable[[str, Mapping[str, Any], str], Iterable[Any]]
+def normalize_name(value: str | None) -> str:
+    if not value:
+        return ""
+    return re.sub(r"\s+", " ", value.strip())
 
 
-def _record_id(row: Mapping[str, Any], pk_column: str | None) -> str:
-    if pk_column and row.get(pk_column) is not None:
-        return str(row[pk_column])
-    digest = hashlib.sha256(
-        json.dumps(row, ensure_ascii=False, default=str, sort_keys=True).encode()
-    ).hexdigest()
-    return f"row:{digest[:16]}"
-
-
-def _split_source(payload: Mapping[str, Any]) -> tuple[str, str, str]:
-    source = payload.get("source") or {}
-    source_table = str(payload.get("source_table") or source.get("tableName") or "")
-    table = source_table.rsplit(".", 1)[-1]
-    pk_column = str(source.get("pkColumn") or "id")
-    batch = f"se-{str(source.get('id') or 'x')[:8]}"
-    return table, pk_column, batch
-
-
-def _run(
-    payload: Mapping[str, Any],
-    *,
-    builder: EntityBuilder | None,
-    mapper_by_table: dict[str, EntityBuilder] | None,
-    to_json: Callable[[Any], dict[str, Any]],
-    key: str,
-) -> dict[str, Any]:
-    table, pk_column, batch = _split_source(payload)
-    if builder is None and mapper_by_table:
-        builder = mapper_by_table.get(table)
-    if builder is None:
-        raise RuntimeError(f"来源表 {table} 没有对应的转换 mapper")
-    rows = payload.get("rows") or []
-    records: list[dict[str, Any]] = []
-    failures: list[dict[str, Any]] = []
-    for row in rows:
-        record_id = _record_id(row, pk_column)
+def parse_list(raw: Any) -> list[str]:
+    """解析 JSON 数组 / 逗号分隔 / 单字符串 → 非空字符串列表。"""
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [normalize_name(str(x)) for x in raw if normalize_name(str(x))]
+    text = str(raw).strip()
+    if not text:
+        return []
+    if text.startswith("["):
         try:
-            mapped = list(builder(table, row, batch) or [])
-            records.extend(to_json(r) for r in mapped)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("行转换失败 table=%s record=%s: %s", table, record_id, exc)
-            failures.append({"recordId": record_id, "error": f"{type(exc).__name__}: {exc}"[:1000]})
-    output: dict[str, Any] = {key: records, "failures": failures}
-    if table:
-        output["stats"] = {
-            "table": table,
-            "rows": len(rows),
-            key: len(records),
-            "failed": len(failures),
-        }
-    return output
+            data = json.loads(text)
+            if isinstance(data, list):
+                return [normalize_name(str(x)) for x in data if normalize_name(str(x))]
+        except json.JSONDecodeError:
+            pass
+    if "," in text:
+        return [normalize_name(p) for p in text.split(",") if normalize_name(p)]
+    # 中文分隔符（全角逗号/分号、顿号、半角分号）串起的多个值同样切分，
+    # 否则整串被当成一个名字必然 not_found（participants/机构/关键词常见此形态）。
+    if any(sep in text for sep in ("，", "；", "、", ";")):
+        return [p for p in (normalize_name(part) for part in re.split(r"[，；、;]", text)) if p]
+    return [normalize_name(text)]
 
 
-def edge_transform(
-    payload: Mapping[str, Any],
-    *,
-    builder: EntityBuilder | None = None,
-    mapper_by_table: dict[str, EntityBuilder] | None = None,
-) -> dict[str, Any]:
-    """关系转换：行 → ``{"fromId", "toId", "props"}``。"""
-
-    def to_json(record: Any) -> dict[str, Any]:
-        return {
-            "fromId": record.source_vid,
-            "toId": record.target_vid,
-            "props": record.properties,
-        }
-
-    return _run(
-        payload, builder=builder, mapper_by_table=mapper_by_table, to_json=to_json, key="edges"
+def resolve_report_dir(payload: Mapping[str, Any], batch: str) -> Path:
+    """Resolve an explicit report directory or a private runtime default."""
+    configured = payload.get("report_dir")
+    return (
+        Path(str(configured)) if configured else private_state_dir("project-ingest-reports", batch)
     )
 
 
@@ -528,46 +491,83 @@ def _load_matcher(candidates: set[str], dry_run: bool) -> ProjectEntityMatcher:
     return matcher
 
 
-def resolve_report_dir(payload: Mapping[str, Any], batch: str) -> Path:
-    """Resolve an explicit report directory or a private runtime default."""
-    configured = payload.get("report_dir")
-    return (
-        Path(str(configured)) if configured else private_state_dir("project-ingest-reports", batch)
+EntityBuilder = Callable[[str, Mapping[str, Any], str], Iterable[Any]]
+
+
+def _record_id(row: Mapping[str, Any], pk_column: str | None) -> str:
+    if pk_column and row.get(pk_column) is not None:
+        return str(row[pk_column])
+    digest = hashlib.sha256(
+        json.dumps(row, ensure_ascii=False, default=str, sort_keys=True).encode()
+    ).hexdigest()
+    return f"row:{digest[:16]}"
+
+
+def _split_source(payload: Mapping[str, Any]) -> tuple[str, str, str]:
+    source = payload.get("source") or {}
+    source_table = str(payload.get("source_table") or source.get("tableName") or "")
+    table = source_table.rsplit(".", 1)[-1]
+    pk_column = str(source.get("pkColumn") or "id")
+    batch = f"se-{str(source.get('id') or 'x')[:8]}"
+    return table, pk_column, batch
+
+
+def _run(
+    payload: Mapping[str, Any],
+    *,
+    builder: EntityBuilder | None,
+    mapper_by_table: dict[str, EntityBuilder] | None,
+    to_json: Callable[[Any], dict[str, Any]],
+    key: str,
+) -> dict[str, Any]:
+    table, pk_column, batch = _split_source(payload)
+    if builder is None and mapper_by_table:
+        builder = mapper_by_table.get(table)
+    if builder is None:
+        raise RuntimeError(f"来源表 {table} 没有对应的转换 mapper")
+    rows = payload.get("rows") or []
+    records: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    for row in rows:
+        record_id = _record_id(row, pk_column)
+        try:
+            mapped = list(builder(table, row, batch) or [])
+            records.extend(to_json(r) for r in mapped)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("行转换失败 table=%s record=%s: %s", table, record_id, exc)
+            failures.append({"recordId": record_id, "error": f"{type(exc).__name__}: {exc}"[:1000]})
+    output: dict[str, Any] = {key: records, "failures": failures}
+    if table:
+        output["stats"] = {
+            "table": table,
+            "rows": len(rows),
+            key: len(records),
+            "failed": len(failures),
+        }
+    return output
+
+
+def edge_transform(
+    payload: Mapping[str, Any],
+    *,
+    builder: EntityBuilder | None = None,
+    mapper_by_table: dict[str, EntityBuilder] | None = None,
+) -> dict[str, Any]:
+    """关系转换：行 → ``{"fromId", "toId", "props"}``。"""
+
+    def to_json(record: Any) -> dict[str, Any]:
+        return {
+            "fromId": record.source_vid,
+            "toId": record.target_vid,
+            "props": record.properties,
+        }
+
+    return _run(
+        payload, builder=builder, mapper_by_table=mapper_by_table, to_json=to_json, key="edges"
     )
 
 
 _HAN_RE = re.compile(r"[\u4e00-\u9fff]")
-
-
-def normalize_name(value: str | None) -> str:
-    if not value:
-        return ""
-    return re.sub(r"\s+", " ", value.strip())
-
-
-def parse_list(raw: Any) -> list[str]:
-    """解析 JSON 数组 / 逗号分隔 / 单字符串 → 非空字符串列表。"""
-    if raw is None:
-        return []
-    if isinstance(raw, list):
-        return [normalize_name(str(x)) for x in raw if normalize_name(str(x))]
-    text = str(raw).strip()
-    if not text:
-        return []
-    if text.startswith("["):
-        try:
-            data = json.loads(text)
-            if isinstance(data, list):
-                return [normalize_name(str(x)) for x in data if normalize_name(str(x))]
-        except json.JSONDecodeError:
-            pass
-    if "," in text:
-        return [normalize_name(p) for p in text.split(",") if normalize_name(p)]
-    # 中文分隔符（全角逗号/分号、顿号、半角分号）串起的多个值同样切分，
-    # 否则整串被当成一个名字必然 not_found（participants/机构/关键词常见此形态）。
-    if any(sep in text for sep in ("，", "；", "、", ";")):
-        return [p for p in (normalize_name(part) for part in re.split(r"[，；、;]", text)) if p]
-    return [normalize_name(text)]
 
 
 def parse_name_list(raw: Any) -> list[str]:

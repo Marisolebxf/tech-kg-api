@@ -34,17 +34,6 @@ from kg_sdk import step
 logger = logging.getLogger("organization_base_mixin")
 
 
-def clean_text(value: Any) -> str:
-    """内部键/VID 用：strip + 折叠空白，空白返回空串。"""
-    if value is None:
-        return ""
-    if isinstance(value, datetime):
-        return value.isoformat(sep=" ")
-    if isinstance(value, date):
-        return value.isoformat()
-    return " ".join(str(value).strip().split())
-
-
 def json_safe(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {str(k): json_safe(v) for k, v in value.items()}
@@ -59,15 +48,9 @@ def json_safe(value: Any) -> Any:
     return value
 
 
-def source_record_id(row: Mapping[str, Any], *fields: str) -> str:
-    """新架构候选链稳定键（非机构域口径）。"""
-    parts = [
-        clean_text(row.get(field_name)) for field_name in fields if clean_text(row.get(field_name))
-    ]
-    if parts:
-        return "|".join(parts)
-    payload = json.dumps(json_safe(dict(row)), ensure_ascii=False, sort_keys=True)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
+def extra_json(row: Mapping[str, Any]) -> str:
+    """新架构：完整源行进 extra_json。"""
+    return json.dumps(json_safe(dict(row)), ensure_ascii=False, sort_keys=True)
 
 
 def _try_parse_json(value: str) -> Any:
@@ -105,12 +88,7 @@ class EntityRecord:
     identity: dict[str, Any] | None = field(default=None, compare=False)
 
 
-def extra_json(row: Mapping[str, Any]) -> str:
-    """新架构：完整源行进 extra_json。"""
-    return json.dumps(json_safe(dict(row)), ensure_ascii=False, sort_keys=True)
-
-
-SOURCE_SYSTEM = "gkx_element"
+SOURCE_SYSTEM = "gkx"
 
 
 MAX_TEXT_LENGTH = 20_000
@@ -160,6 +138,17 @@ def provenance(
     }
 
 
+def clean_text(value: Any) -> str:
+    """内部键/VID 用：strip + 折叠空白，空白返回空串。"""
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.isoformat(sep=" ")
+    if isinstance(value, date):
+        return value.isoformat()
+    return " ".join(str(value).strip().split())
+
+
 def first(row: Mapping[str, Any], *fields: str) -> Any:
     """新架构候选链：按 clean_text 判空，返回原始值。"""
     for field_name in fields:
@@ -167,6 +156,17 @@ def first(row: Mapping[str, Any], *fields: str) -> Any:
         if clean_text(value):
             return value
     return None
+
+
+def source_record_id(row: Mapping[str, Any], *fields: str) -> str:
+    """新架构候选链稳定键（非机构域口径）。"""
+    parts = [
+        clean_text(row.get(field_name)) for field_name in fields if clean_text(row.get(field_name))
+    ]
+    if parts:
+        return "|".join(parts)
+    payload = json.dumps(json_safe(dict(row)), ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
 
 
 def normalize_key(value: Any) -> str:

@@ -1153,7 +1153,8 @@ class SchemaManagementService:
             _validate_datasource_exists(item["datasource_id"])
         try:
             # 先删后插：同一 flush 里「新行 INSERT 早于旧行 DELETE」会撞
-            # uk_kg_schema_source_table 唯一键（重跑幂等必需）
+            # 同表绑定索引的旧唯一键（历史遗留，已降为普通索引，见
+            # db_model 注释）；保留 flush 顺序使重跑幂等不依赖约束存在
             definition.sources.clear()
             self._session.flush()
             definition.sources = [

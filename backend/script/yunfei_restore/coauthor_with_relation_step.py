@@ -20,6 +20,66 @@ from kg_sdk import step
 logger = logging.getLogger("coauthor_with")
 
 
+@dataclass(frozen=True)
+class EdgeRecord:
+    edge_type: str
+    source_vid: str
+    target_vid: str
+    properties: dict[str, Any]
+    # nGQL 确定性 rank 模式；None 走 REST merge 模式。
+    rank: int | None = None
+    # REST merge 的 identityProps；缺省取 properties["source_record_id"]。
+    identity: dict[str, Any] | None = field(default=None, compare=False)
+    # 端点验存用的 tag；None 表示该端点不验存。
+    source_tag: str | None = None
+    target_tag: str | None = None
+    # False 表示允许悬空端点（机构名桩 / DOI 桩等旧口径）。
+    validate_endpoints: bool = True
+
+
+def now_utc() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def edge_provenance(
+    *,
+    source_table: str,
+    source_record_id: str,
+    ingest_batch: str,
+) -> dict[str, Any]:
+    """REST merge 模式边溯源（学者/项目域旧口径的最小集）。"""
+    return {
+        "source_table": source_table,
+        "source_record_id": source_record_id,
+        "ingest_batch": ingest_batch,
+        "ingest_time": now_utc(),
+    }
+
+
+def coauthor_with(table: str, row: Mapping[str, Any], batch: str) -> list[EdgeRecord]:
+    sid = str(row.get("scholar_id") or "").strip()
+    co_sid = str(row.get("co_scholar_id") or "").strip()
+    if not sid or not co_sid:
+        return []
+    record_id = f"{sid}_{co_sid}"
+    props = {
+        "co_paper_count": int(row.get("co_paper_count") or 0),
+        "confidence": 1.0,
+        "match_method": "source_primary_key",
+        "match_evidence": "dwd_scholar_coauthor.scholar_id 主键直接抽取，未经推断",
+        **edge_provenance(source_table=table, source_record_id=record_id, ingest_batch=batch),
+    }
+    return [
+        EdgeRecord(
+            "COAUTHOR_WITH",
+            f"person_{sid}",
+            f"person_{co_sid}",
+            props,
+            identity={"source_record_id": record_id},
+        )
+    ]
+
+
 EntityBuilder = Callable[[str, Mapping[str, Any], str], Iterable[Any]]
 
 
@@ -94,66 +154,6 @@ def edge_transform(
     return _run(
         payload, builder=builder, mapper_by_table=mapper_by_table, to_json=to_json, key="edges"
     )
-
-
-@dataclass(frozen=True)
-class EdgeRecord:
-    edge_type: str
-    source_vid: str
-    target_vid: str
-    properties: dict[str, Any]
-    # nGQL 确定性 rank 模式；None 走 REST merge 模式。
-    rank: int | None = None
-    # REST merge 的 identityProps；缺省取 properties["source_record_id"]。
-    identity: dict[str, Any] | None = field(default=None, compare=False)
-    # 端点验存用的 tag；None 表示该端点不验存。
-    source_tag: str | None = None
-    target_tag: str | None = None
-    # False 表示允许悬空端点（机构名桩 / DOI 桩等旧口径）。
-    validate_endpoints: bool = True
-
-
-def now_utc() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
-
-
-def edge_provenance(
-    *,
-    source_table: str,
-    source_record_id: str,
-    ingest_batch: str,
-) -> dict[str, Any]:
-    """REST merge 模式边溯源（学者/项目域旧口径的最小集）。"""
-    return {
-        "source_table": source_table,
-        "source_record_id": source_record_id,
-        "ingest_batch": ingest_batch,
-        "ingest_time": now_utc(),
-    }
-
-
-def coauthor_with(table: str, row: Mapping[str, Any], batch: str) -> list[EdgeRecord]:
-    sid = str(row.get("scholar_id") or "").strip()
-    co_sid = str(row.get("co_scholar_id") or "").strip()
-    if not sid or not co_sid:
-        return []
-    record_id = f"{sid}_{co_sid}"
-    props = {
-        "co_paper_count": int(row.get("co_paper_count") or 0),
-        "confidence": 1.0,
-        "match_method": "source_primary_key",
-        "match_evidence": "dwd_scholar_coauthor.scholar_id 主键直接抽取，未经推断",
-        **edge_provenance(source_table=table, source_record_id=record_id, ingest_batch=batch),
-    }
-    return [
-        EdgeRecord(
-            "COAUTHOR_WITH",
-            f"person_{sid}",
-            f"person_{co_sid}",
-            props,
-            identity={"source_record_id": record_id},
-        )
-    ]
 
 
 def _transform(payload: Mapping[str, Any]) -> dict[str, Any]:

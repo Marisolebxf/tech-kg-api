@@ -1,4 +1,4 @@
-"""journal_entity 抽取步（自包含单文件，平台喂数管道 kg.schema.extract 直传可用）。
+"""journal 抽取步（自包含单文件，平台喂数管道 kg.schema.extract 直传可用）。
 
 由 script/tools/build_portable_steps.py 从 ``script.entity_extractors_one_entity.journal_entity`` 及其依赖闭包自动生成；
 抽取口径与老脚本逐行一致，MySQL/图客户端改经平台 ctx 注入。请勿手改，
@@ -18,7 +18,7 @@ from typing import Any
 
 from kg_sdk import step
 
-logger = logging.getLogger("journal_entity")
+logger = logging.getLogger("journal")
 
 
 EntityBuilder = Callable[[str, Mapping[str, Any], str], Iterable[Any]]
@@ -133,7 +133,7 @@ def paper_text(value: Any) -> str:
     return text_or_empty(value).replace("\n", " ").replace("\r", " ")
 
 
-SOURCE_SYSTEM = "gkx_element"
+SOURCE_SYSTEM = "gkx"
 
 
 MAX_TEXT_LENGTH = 20_000
@@ -209,6 +209,6 @@ def _transform(payload: dict[str, Any]) -> dict[str, Any]:
     return entity_transform(payload, builder=journal_record)
 
 
-@step("journal_entity")
+@step("journal")
 def emit(payload):
     return _transform(payload)

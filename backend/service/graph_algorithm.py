@@ -605,15 +605,52 @@ def _degree_edge_index_status(client: Any, index_name: str) -> str | None:
     return None
 
 
-def _ensure_degree_edge_index(client: Any, label: str) -> None:
-    """为无索引边类型创建并重建 Degree 专用索引，等待到 LOOKUP 可用。
+def _existing_degree_edge_index(client: Any, label: str) -> str | None:
+    """找出该边类型已有的零属性边索引名（schema 同步建的 ``{label}_idx`` 等）。
 
+    LOOKUP 聚合不区分索引名，任一零属性索引即可枚举全部边；带属性的索引
+    只覆盖含该属性的边，不能保证枚举完整，不参与复用。
+    """
+    result = _execute_degree_read(
+        client,
+        "SHOW EDGE INDEXES",
+        timeout=30.0,
+        context=f"枚举关系类型 {label} 的边索引",
+    )
+    for record in result.records or []:
+        if not isinstance(record, dict):
+            continue
+        normalized = {
+            str(key).strip().lower().replace("_", " "): value for key, value in record.items()
+        }
+        edge = str(normalized.get("by edge") or "").strip("\"'`").upper()
+        name = str(normalized.get("index name") or normalized.get("name") or "").strip("\"'`")
+        if edge == label.upper() and name and normalized.get("columns") == []:
+            return name
+    return None
+
+
+def _ensure_degree_edge_index(client: Any, label: str) -> None:
+    """确保边类型有可用的零属性边索引并重建到 FINISHED，等待到 LOOKUP 可用。
+
+    优先复用平台上已有的零属性索引：定制版 Nebula 对零属性索引按边去重，
+    边已有零属性索引（schema 同步建的 ``{label}_idx`` 等）时，专用索引的
+    ``CREATE ... IF NOT EXISTS`` 返回成功但 metad 判定 "Index {label}_idx has
+    existed" 静默跳过，专用索引永远不出现（dev2 的 ACQUIRES 即此现象），
+    只能 REBUILD 空等到超时。LOOKUP 聚合不区分索引名，任一零属性索引可用。
     Degree 在 FastAPI BackgroundTasks 中运行，索引重建期间前端保持 running；
-    不再回退两次全空间 MATCH，从根源上避免共享图库 90 秒扫描超时。
+    不再回退全空间 MATCH，从根源上避免共享图库 90 秒扫描超时。
     """
     from infra.graph_db.exceptions import GraphRequestError
 
     index_name = _degree_index_name(label)
+    existing_name = _existing_degree_edge_index(client, label)
+    if existing_name == index_name:
+        existing_name = None  # 专用索引自身已存在，走下方正常创建/重建流程
+    if existing_name and _degree_edge_index_status(client, existing_name) == "FINISHED":
+        logger.info("Degree 复用已有边索引: label=%s index=%s", label, existing_name)
+        return
+
     deadline = time.monotonic() + _DEGREE_INDEX_BUILD_TIMEOUT_SECONDS
     try:
         _check_degree_cancelled()
@@ -626,10 +663,11 @@ def _ensure_degree_edge_index(client: Any, label: str) -> None:
         ) from exc
 
     # CREATE DDL 需要短暂传播；并发 worker 可能发现同一索引已在重建，均转入可用性轮询。
+    rebuild_name = index_name
     while True:
         _check_degree_cancelled()
         try:
-            client.execute_write(f"REBUILD EDGE INDEX `{index_name}`")
+            client.execute_write(f"REBUILD EDGE INDEX `{rebuild_name}`")
             break
         except GraphRequestError as exc:
             # 另一 worker 已触发相同索引的重建时，不再重复提交，直接等待可用。
@@ -637,27 +675,38 @@ def _ensure_degree_edge_index(client: Any, label: str) -> None:
                 break
             if not _is_transient_index_error(exc):
                 raise GraphAlgorithmError(
-                    f"关系类型 {label} 的索引 {index_name} 重建失败: {exc}", status_code=502
+                    f"关系类型 {label} 的索引 {rebuild_name} 重建失败: {exc}", status_code=502
                 ) from exc
+            # 专用索引的 CREATE 被定制版 Nebula 静默吞掉（见 docstring）时，
+            # REBUILD 永远报 not found；改用已存在的零属性索引重建。
+            if rebuild_name == index_name and existing_name:
+                logger.warning(
+                    "Degree 专用索引未落库，改用已有索引重建: label=%s index=%s error=%s",
+                    label,
+                    existing_name,
+                    exc,
+                )
+                rebuild_name = existing_name
+                continue
             if time.monotonic() >= deadline:
                 raise GraphAlgorithmError(
-                    f"关系类型 {label} 的索引 {index_name} 在创建后未及时可见，请稍后重试",
+                    f"关系类型 {label} 的索引 {rebuild_name} 在创建后未及时可见，请稍后重试",
                     status_code=504,
                 ) from exc
             _degree_pause(_DEGREE_INDEX_POLL_SECONDS)
 
     while True:
         try:
-            status = _degree_edge_index_status(client, index_name)
+            status = _degree_edge_index_status(client, rebuild_name)
             if status in {"FAILED", "STOPPED", "INVALID"}:
                 raise GraphAlgorithmError(
-                    f"关系类型 {label} 的索引 {index_name} 重建状态为 {status}",
+                    f"关系类型 {label} 的索引 {rebuild_name} 重建状态为 {status}",
                     status_code=502,
                 )
             if status != "FINISHED":
                 if time.monotonic() >= deadline:
                     raise GraphAlgorithmError(
-                        f"关系类型 {label} 的索引 {index_name} 重建超过 "
+                        f"关系类型 {label} 的索引 {rebuild_name} 重建超过 "
                         f"{int(_DEGREE_INDEX_BUILD_TIMEOUT_SECONDS)} 秒，请稍后重试",
                         status_code=504,
                     )
@@ -670,16 +719,16 @@ def _ensure_degree_edge_index(client: Any, label: str) -> None:
                 timeout=30.0,
                 context=f"校验关系类型 {label} 的索引",
             )
-            logger.info("Degree 边索引已可用: label=%s index=%s", label, index_name)
+            logger.info("Degree 边索引已可用: label=%s index=%s", label, rebuild_name)
             return
         except GraphRequestError as exc:
             if not _is_transient_index_error(exc):
                 raise GraphAlgorithmError(
-                    f"关系类型 {label} 的索引 {index_name} 校验失败: {exc}", status_code=502
+                    f"关系类型 {label} 的索引 {rebuild_name} 校验失败: {exc}", status_code=502
                 ) from exc
             if time.monotonic() >= deadline:
                 raise GraphAlgorithmError(
-                    f"关系类型 {label} 的索引 {index_name} 重建超过 "
+                    f"关系类型 {label} 的索引 {rebuild_name} 重建超过 "
                     f"{int(_DEGREE_INDEX_BUILD_TIMEOUT_SECONDS)} 秒，请稍后重试",
                     status_code=504,
                 ) from exc

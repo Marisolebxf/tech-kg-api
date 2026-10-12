@@ -637,6 +637,10 @@ function defaultLabel(item: ConfigItem) {
 function defaultProtected(item: ConfigItem) {
   return item.kind === 'llm' ? item.defaultReferenced === true || item.isDefault : item.kind === 'embedding' && item.isDefault
 }
+// 归属小字：业务配置显示业务（图空间）名，公共配置按类型显示公共语言模型/公共数据库
+function ownershipLabel(item: ConfigItem) {
+  return item.visibility === 'business' ? item.businessName : item.kind === 'llm' ? '公共语言模型' : '公共数据库'
+}
 async function toggleItem(item: ConfigItem) {
   if (!canManageConfig(item)) return
   if (item.status !== '停用' && defaultProtected(item)) return
@@ -801,11 +805,11 @@ onUnmounted(() => {
         </div>
         <div v-else ref="configTableRef" class="table-wrap config-table-wrap" :class="{ 'has-scroll-right': tableHasMoreToScroll, 'config-scroll--active': tableScrollActive }" @scroll.passive="handleConfigTableScroll">
           <table>
-            <thead><tr><th>配置名称 / 说明</th><th>标识</th><th>类型 / 地址</th><th class="config-status-col">状态</th><th v-if="isModelKind" class="config-usage-col">引用情况</th><th class="config-time-col">更新时间</th><th class="config-action-col">操作</th></tr></thead>
+            <thead><tr><th>配置名称 / 说明</th><th>标识 / 归属</th><th>类型 / 地址</th><th class="config-status-col">状态</th><th v-if="isModelKind" class="config-usage-col">引用情况</th><th class="config-time-col">更新时间</th><th class="config-action-col">操作</th></tr></thead>
             <tbody>
               <tr v-for="item in pagedItems" :key="item.id">
                 <td><div class="config-name"><span><strong>{{ item.name }}<b v-if="item.isDefault && isModelKind" class="default-tag">{{ defaultLabel(item) }}</b></strong><small v-if="item.description">{{ item.description }}</small></span></div></td>
-                <td class="config-id-col">{{ item.id }}<small v-if="item.kind !== 'embedding'" class="config-ownership">{{ item.visibility === 'business' ? item.businessName : item.kind === 'llm' ? '公共语言模型' : '公共数据库' }}</small></td>
+                <td class="config-id-col">{{ item.id }}<small v-if="item.kind !== 'embedding'" class="config-ownership">{{ ownershipLabel(item) }}</small></td>
                 <td><strong class="type-name">{{ item.type }}<template v-if="item.model"> · {{ item.model }}</template></strong><code>{{ item.baseUrl || item.host && `${item.host}:${item.port}` || item.endpoint }}</code></td>
                 <td class="config-status-col"><span class="status" :class="`is-${item.status}`"><i />{{ item.status }}</span></td>
                 <td v-if="isModelKind" class="config-usage-col">
@@ -866,6 +870,7 @@ onUnmounted(() => {
         <a-form :model="selected" class="detail-form" layout="vertical">
           <a-form-item field="name" label="配置名称" required><input :disabled="!canManageConfig(selected)" aria-label="name" v-model="selected.name" :aria-invalid="Boolean(detailFieldErrors.name)" /><small v-if="detailFieldErrors.name" class="field-error">{{ detailFieldErrors.name }}</small></a-form-item>
           <a-form-item label="服务类型"><input :disabled="!canManageConfig(selected)" aria-label="input-field" :value="selected.type" readonly /></a-form-item>
+          <a-form-item v-if="selected.kind !== 'embedding'" label="归属"><input :disabled="!canManageConfig(selected)" aria-label="input-field" :value="ownershipLabel(selected)" readonly /></a-form-item>
           <template v-if="selected.kind === 'llm' || selected.kind === 'embedding'">
             <a-form-item class="wide" field="baseUrl" label="Base URL" required><input :disabled="!canManageConfig(selected)" aria-label="baseUrl" v-model="selected.baseUrl" :aria-invalid="Boolean(detailFieldErrors.baseUrl)" /><small v-if="detailFieldErrors.baseUrl" class="field-error">{{ detailFieldErrors.baseUrl }}</small></a-form-item>
             <a-form-item field="model" label="模型" required><input :disabled="!canManageConfig(selected)" aria-label="model" v-model="selected.model" :aria-invalid="Boolean(detailFieldErrors.model)" /><small v-if="detailFieldErrors.model" class="field-error">{{ detailFieldErrors.model }}</small></a-form-item>

@@ -538,6 +538,7 @@ describe('业务配置权限与归属', () => {
         await flushPromises()
       }
       expect(wrapper.get('.config-ownership').text()).toBe('亿级知识图谱')
+      expect(wrapper.findAll('.config-table-wrap thead th')[1]!.text()).toBe('标识 / 归属')
       const actions = wrapper.findAll('.row-actions button')
       expect(actions[0]!.text()).toBe('管理')
       expect(actions[1]!.attributes('disabled')).toBeUndefined()
@@ -545,6 +546,7 @@ describe('业务配置权限与归属', () => {
       if (kind === 'llm') expect(wrapper.get('.config-default-toggle').attributes('disabled')).toBeUndefined()
       await actions[0]!.trigger('click')
       expect(wrapper.get('.detail-form input').attributes('disabled')).toBeUndefined()
+      expect(wrapper.findAll('.detail-form input').map(i => (i.element as HTMLInputElement).value)).toContain('亿级知识图谱')
       expect(wrapper.get('.detail-drawer footer button').attributes('disabled')).toBeUndefined()
       expect(wrapper.get('.health-card button').attributes('disabled')).toBeUndefined()
       await wrapper.get('.detail-drawer header button').trigger('click')

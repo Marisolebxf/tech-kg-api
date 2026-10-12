@@ -314,16 +314,17 @@ const visiblePhase = computed<'数据处理' | '图谱构建'>(() => steps.value
 const visibleSteps = computed(() => steps.value)
 const needsReview = computed(() => needsTaskReview.value && selectedStep.value.abnormal !== '0' && selectedStep.value.abnormal !== '-')
 /** 「进入人工处理」入口：平台喂数抽取（含 chain）的逐行失败落「抽取失败重跑」
- *  C 类队列，并带 sourceTaskId 深链把队列限定到本任务产生的审核案（队列页亮
- *  「来源任务」徽标）；其余待复核任务落人工审核处理中心首页。
+ *  C 类队列（category 深链直达），并按当前选中的执行 ID 预填搜索——队列
+ *  keyword 会匹配快照 executionId，落地即筛出本次执行产生的失败案；拿不到
+ *  执行 ID 时退回纯 category 深链。其余待复核任务落人工审核处理中心首页。
  *  旧实现跳 /manual-review/task/<任务ID>——该路由只认审核案 MR- ID，任务/作业
  *  详情页拿不到（job 路由下 taskId 曾回落演示常量），点击必 404 空白页。 */
 const reviewEntryTarget = computed(() => {
-  if (processingInstance.value?.workflowType !== 'kg.schema.extract' && !isChainTask.value) return '/manual-review'
-  const sourceTaskId = processingInstance.value?.id || taskId.value
-  return sourceTaskId
-    ? { path: '/manual-review', query: { category: 'C', sourceTaskId } }
-    : { path: '/manual-review', query: { category: 'C' } }
+  const isExtractTask = processingInstance.value?.workflowType === 'kg.schema.extract' || isChainTask.value
+  if (!isExtractTask) return '/manual-review'
+  const executionId = selectedExecutionId.value
+  if (!executionId.startsWith('EXEC-')) return { path: '/manual-review', query: { category: 'C' } }
+  return { path: '/manual-review', query: { category: 'C', keyword: executionId } }
 })
 /** 本任务在审核队列里的关联案数量（T_EXTRACT_FAIL 按来源任务聚合；null=未加载/拉取失败）。
  *  执行级失败（如脚本运行器未配置，批次转换前即失败）不建逐行案 → 计数为 0，

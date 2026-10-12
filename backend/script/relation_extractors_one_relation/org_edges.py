@@ -43,12 +43,27 @@ from script.relation_extractors_one_relation.resolvers import (
 )
 
 _ORG_TYPES = {
-    "机构", "企业", "公司", "organization", "company", "enterprise",
+    "机构",
+    "企业",
+    "公司",
+    "organization",
+    "company",
+    "enterprise",
     # gkx 生产库工商口径词表（与 entity 侧 _PERSON_ORG_TYPES 同源，
     # 2026-10-11 实测 dwd_org_shareholder_info.owners_type 分布）
-    "单位", "企业法人", "法人股东", "非自然人股东", "合伙企业", "内资合伙企业",
-    "外商投资合伙企业", "外商投资企业", "外国（地区）企业", "外国（地区）投资者",
-    "事业法人", "机关法人", "其他投资者",
+    "单位",
+    "企业法人",
+    "法人股东",
+    "非自然人股东",
+    "合伙企业",
+    "内资合伙企业",
+    "外商投资合伙企业",
+    "外商投资企业",
+    "外国（地区）企业",
+    "外国（地区）投资者",
+    "事业法人",
+    "机关法人",
+    "其他投资者",
 }
 _PERSON_TYPES = {"自然人", "个人", "person", "individual", "natural person", "自然人股东"}
 

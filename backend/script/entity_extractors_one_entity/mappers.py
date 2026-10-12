@@ -303,13 +303,28 @@ def product_record(table: str, row: Mapping[str, Any], batch: str) -> list[Entit
 # ---------------------------------------------------------------------------
 
 _PERSON_ORG_TYPES = {
-    "organization", "company", "enterprise", "机构", "企业", "公司",
+    "organization",
+    "company",
+    "enterprise",
+    "机构",
+    "企业",
+    "公司",
     # gkx 生产库工商口径词表（2026-10-11 实测 dwd_org_shareholder_info.owners_type
     # 分布：企业法人/法人股东/合伙企业/内资合伙企业/外商投资*/外国（地区）*/
     # 事业法人/机关法人/非自然人股东/其他投资者/单位——名字抽样全为机构）
-    "单位", "企业法人", "法人股东", "非自然人股东", "合伙企业", "内资合伙企业",
-    "外商投资合伙企业", "外商投资企业", "外国（地区）企业", "外国（地区）投资者",
-    "事业法人", "机关法人", "其他投资者",
+    "单位",
+    "企业法人",
+    "法人股东",
+    "非自然人股东",
+    "合伙企业",
+    "内资合伙企业",
+    "外商投资合伙企业",
+    "外商投资企业",
+    "外国（地区）企业",
+    "外国（地区）投资者",
+    "事业法人",
+    "机关法人",
+    "其他投资者",
 }
 _PERSON_TYPES = {"person", "individual", "natural person", "自然人", "个人", "自然人股东"}
 
@@ -637,18 +652,20 @@ def patent_record(table: str, row: Mapping[str, Any], batch: str) -> list[Entity
     # 两源属性集不相交，同 Schema 并发抽取（asyncio.gather）下谁后写都不覆盖对方
     # （INSERT VERTEX 列级 upsert，未列出的属性保留原值）。
     if "titles" in row:
-        props.update({
-            "grant_date": str_or_empty(row.get("grant_date")),
-            "status": str_or_empty(row.get("status")),
-            "anticipated_expiration": to_int_or_zero(row.get("anticipated_expiration")),
-            "title_original": original_text(row.get("titles")),
-            "title_en": str_or_empty(row.get("title_en")),
-            "title_zh": str_or_empty(row.get("title_zh")),
-            "abstract_zh": str_or_empty(row.get("abstract_zh")),
-            "citation_nums": to_int_or_zero(row.get("citation_nums")),
-            "cited_by_nums": to_int_or_zero(row.get("cited_by_nums")),
-            "simple_family_number": str_or_empty(row.get("simple_family_number")),
-        })
+        props.update(
+            {
+                "grant_date": str_or_empty(row.get("grant_date")),
+                "status": str_or_empty(row.get("status")),
+                "anticipated_expiration": to_int_or_zero(row.get("anticipated_expiration")),
+                "title_original": original_text(row.get("titles")),
+                "title_en": str_or_empty(row.get("title_en")),
+                "title_zh": str_or_empty(row.get("title_zh")),
+                "abstract_zh": str_or_empty(row.get("abstract_zh")),
+                "citation_nums": to_int_or_zero(row.get("citation_nums")),
+                "cited_by_nums": to_int_or_zero(row.get("cited_by_nums")),
+                "simple_family_number": str_or_empty(row.get("simple_family_number")),
+            }
+        )
     return [EntityRecord("Patent", f"patent_{pid}", props)]
 
 

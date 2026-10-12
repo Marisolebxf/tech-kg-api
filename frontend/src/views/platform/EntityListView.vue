@@ -173,6 +173,18 @@ function propertyOverflow(item: EntityListResult['items'][number]): number {
   return hiddenPropertyEntries(item).length
 }
 
+/** 类型显示名：优先 Schema 目录实体中文名（label），目录无该类型时回退英文 TAG 名 */
+function typeDisplayName(name: string | null | undefined): string {
+  if (!name) return ''
+  return types.value.find(type => type.name === name)?.label || name
+}
+
+/** 悬浮提示：有中文名时「中文名（英文 TAG）」，否则原名 */
+function typeTitle(name: string | null | undefined): string {
+  const label = typeDisplayName(name)
+  return label && label !== name ? `${label}（${name}）` : label
+}
+
 onMounted(() => {
   void loadEntityTypes().then(() => doSearch())
 })
@@ -211,8 +223,11 @@ watch(
             :scrollbar="false"
             @change="onEntityTypeChange"
           >
-            <a-option v-for="t in types" :key="t.name" :value="t.name" :label="t.name">
-              <span class="entity-type-option" :title="t.name">{{ t.name }}</span>
+            <a-option v-for="t in types" :key="t.name" :value="t.name" :label="t.label || t.name">
+              <span class="entity-type-option" :title="typeTitle(t.name)">
+                <span class="entity-type-option__text">{{ t.label || t.name }}</span>
+                <span v-if="t.label && t.label !== t.name" class="entity-type-option__en">{{ t.name }}</span>
+              </span>
             </a-option>
           </a-select>
         </div>
@@ -243,11 +258,11 @@ watch(
       </div>
       <div v-else-if="!items.length" class="entity-empty">
         <template v-if="isBrowseMode">
-          <template v-if="entityType">类型 {{ entityType }} 下暂无实体</template>
+          <template v-if="entityType">类型 {{ typeDisplayName(entityType) }} 下暂无实体</template>
           <template v-else>当前图空间暂无实体</template>
         </template>
         <template v-else>
-          未找到匹配「{{ appliedKeyword }}」的实体{{ entityType ? `（类型 ${entityType}）` : '' }}
+          未找到匹配「{{ appliedKeyword }}」的实体{{ entityType ? `（类型 ${typeDisplayName(entityType)}）` : '' }}
         </template>
       </div>
       <template v-else>
@@ -267,7 +282,12 @@ watch(
                 <tr>
                   <td><b>{{ item.name || '（未命名）' }}</b></td>
                   <td><code>{{ item.entityId || item.vid }}</code></td>
-                  <td><span class="entity-type-chip">{{ item.entityType }}</span></td>
+                  <td>
+                    <span
+                      class="entity-type-chip"
+                      :title="item.entityType ? typeTitle(item.entityType) : undefined"
+                    >{{ typeDisplayName(item.entityType) }}</span>
+                  </td>
                   <td class="entity-props-cell">
                     <div class="entity-props">
                       <span
@@ -407,5 +427,7 @@ watch(
 .entity-property-popover__item b{flex:0 1 auto;min-width:0;overflow:hidden;color:#4e5969;font-weight:500;text-overflow:ellipsis}
 .entity-property-popover__item b::after{content:":"}
 .entity-property-popover__item em{flex:1;min-width:0;overflow:hidden;color:#1d2129;font-style:normal;text-overflow:ellipsis}
-.entity-type-option{display:block;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.entity-type-option{display:flex;align-items:center;gap:6px;min-width:0;max-width:100%}
+.entity-type-option__text{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.entity-type-option__en{flex:0 0 auto;color:#86909c;font-size:12px;line-height:18px;white-space:nowrap}
 </style>

@@ -1516,6 +1516,92 @@ def test_types_falls_back_to_graph_labels_without_index(state_session, monkeypat
     ]
 
 
+def _create_schema_definition_table(session: Session) -> None:
+    from db_model.schema_management import GraphSchemaDefinition
+
+    GraphSchemaDefinition.__table__.create(session.get_bind(), checkfirst=True)
+
+
+def _add_schema_entity(
+    session: Session,
+    *,
+    name: str,
+    label: str,
+    graph_space: str = "dev2",
+    kind: str = "entity",
+    is_deleted: bool = False,
+) -> None:
+    from db_model.schema_management import GraphSchemaDefinition
+
+    session.add(
+        GraphSchemaDefinition(
+            schema_key=f"{kind}_{name}_{graph_space}_{label}",
+            graph_space=graph_space,
+            kind=kind,
+            name=name,
+            label=label,
+            is_deleted=is_deleted,
+        )
+    )
+    session.commit()
+
+
+def test_types_attaches_schema_chinese_labels(state_session, monkeypatch) -> None:
+    """图直查路径附 Schema 目录实体中文名：仅同空间未删除的实体 Schema 命中；
+    目录缺行的类型不加 label 键（前端回退英文 TAG 名，不编造翻译）。"""
+    _create_schema_definition_table(state_session)
+    _add_schema_entity(state_session, name="Expert", label="专家 / 人才 / 学者")
+    # 其他空间 / 已删除 / 关系 kind 的行都不命中（(name, graph_space) 唯一，
+    # 同空间同名不能重复造，过滤维度各用一行覆盖）
+    _add_schema_entity(state_session, name="Expert", label="不应出现", graph_space="other")
+    _add_schema_entity(state_session, name="Org", label="已删除不命中", is_deleted=True)
+    _add_schema_entity(state_session, name="Paper", label="关系行不命中", kind="relation")
+
+    graph = FakeGraph(["Expert", "Org"], {}, counts={"Expert": 4, "Org": 7})
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: FakeMilvusClient())
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+    monkeypatch.setattr("service.entity_search._node_count_cache", {})
+
+    items = EntitySearchService(state_session).types()
+
+    assert items == [
+        {"name": "Org", "count": 7},
+        {"name": "Expert", "count": 4, "label": "专家 / 人才 / 学者"},
+    ]
+
+
+def test_types_snapshot_path_attaches_schema_chinese_labels(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """索引快照路径（有状态行 + Milvus 有本空间行）同样附 Schema 实体中文名。"""
+    _create_schema_definition_table(state_session)
+    _add_schema_entity(state_session, name="Expert", label="专家 / 人才 / 学者")
+
+    graph = FakeGraph(
+        ["Expert", "Paper"],
+        {
+            "Expert": [FakeNode("expert_1", {"id": "E-1", "name": "张三"})],
+            "Paper": [
+                FakeNode("paper_1", {"id": "P-1", "title": "深度学习综述"}),
+                FakeNode("paper_2", {"id": "P-2", "title": "知识图谱构建"}),
+            ],
+        },
+    )
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: FakeMilvusClient())
+    monkeypatch.setattr("service.entity_search._embedding_client", lambda: FakeEmbeddingClient())
+    monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+
+    service = EntitySearchService(state_session)
+    service.reindex()
+
+    assert service.types() == [
+        {"name": "Paper", "count": 2},
+        {"name": "Expert", "count": 1, "label": "专家 / 人才 / 学者"},
+    ]
+
+
 class _CountingGraph(FakeGraph):
     """统计 labels() 调用次数的替身：验证 types() 的短 TTL 进程缓存。"""
 

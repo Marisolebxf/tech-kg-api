@@ -49,6 +49,27 @@ describe('实体搜索结果', () => {
     wrapper.unmount()
   })
 
+  it('类型筛选项与类型列 chip 优先显示 Schema 实体中文名，目录无中文名回退英文 TAG 名', async () => {
+    vi.mocked(getEntitySearchTypes).mockResolvedValue([
+      { name: 'Expert', count: 5, label: '专家 / 人才 / 学者' },
+      { name: 'DataSource', count: 1 },
+    ])
+    vi.mocked(browseEntities).mockResolvedValue({ items: [{ ...row, entityType: 'Expert' }], total: 1, offset: 0, limit: 10, entityType: null, mode: 'browse' })
+    const wrapper = await setup()
+    const options = wrapper.findAll('.entity-type-option')
+    expect(options[0].get('.entity-type-option__text').text()).toBe('专家 / 人才 / 学者')
+    expect(options[0].get('.entity-type-option__en').text()).toBe('Expert')
+    expect(options[0].attributes('title')).toBe('专家 / 人才 / 学者（Expert）')
+    expect(options[1].text()).toBe('DataSource')
+    expect(options[1].attributes('title')).toBe('DataSource')
+    expect(options[1].find('.entity-type-option__en').exists()).toBe(false)
+    // 类型列 chip 同口径：中文名 + 悬浮「中文名（英文 TAG）」
+    const chip = wrapper.get('.entity-type-chip')
+    expect(chip.text()).toBe('专家 / 人才 / 学者')
+    expect(chip.attributes('title')).toBe('专家 / 人才 / 学者（Expert）')
+    wrapper.unmount()
+  })
+
   it('使用文字匹配接口，并按实际匹配数分页', async () => {
     vi.mocked(searchEntityList).mockResolvedValue({ items: [row], total: 21, offset: 0, limit: 10, entityType: null, mode: 'keyword' })
     const wrapper = await setup()

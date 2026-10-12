@@ -608,16 +608,14 @@ const assetChangeRows = ref<Record<AssetOverviewKey, AssetChangeRow[]>>({
   entity: [],
   relation: [],
 })
-// 昨日新增数值合计（与资产卡徽标同源）：图反查逐对象成功时=明细行数（徽标与
-// 抽屉同数）；图反查降级成聚合行时=控制库 Σwritten，行数 < 合计时页脚标注
-// 「共 N 条 · 展示前 n 条」
+// 合计与逐对象明细同源；无法完整读取时显示错误，不能把写入合计当成明细数。
 const assetChangeTotals = ref<Partial<Record<AssetOverviewKey, number>>>({})
+const assetChangeErrors = ref<Partial<Record<AssetOverviewKey, string>>>({})
 function assetChangeFooterText(key: AssetOverviewKey | null): string {
   if (!key) return ''
   const shown = assetChangeRows.value[key].length
-  const total = assetChangeTotals.value[key]
-  if (total === undefined || total <= shown) return `${shown} 条变化`
-  return `共 ${total.toLocaleString()} 条 · 展示前 ${shown} 条`
+  if (assetChangeErrors.value[key]) return shown ? `已读取 ${shown} 条明细，部分明细暂不可读取` : '新增明细暂不可读取'
+  return `${shown} 条变化`
 }
 // 新增明细对象/来源列的悬浮浮窗只在文本确实被截断时出现（未截断不出框）：
 // mouseenter 时量 scrollWidth>clientWidth 才置位，mouseleave 复位
@@ -1310,6 +1308,7 @@ async function loadPlatformOverview(): Promise<void> {
     assetOverviewGroups.value = data.assetOverviewGroups
     assetChangeRows.value = data.assetChangeRows
     assetChangeTotals.value = data.assetChangeTotals ?? {}
+    assetChangeErrors.value = data.assetChangeErrors ?? {}
     entityStructure.value = data.entityStructure
     relationStructure.value = data.relationStructure
   } catch (error) {
@@ -2124,10 +2123,10 @@ print(response.json())</pre>
           <table aria-label="数据表">
             <thead><tr><th>数据类型</th><th>具体对象</th><th>来源</th><th>识别时间</th></tr></thead>
             <tbody>
-              <tr v-if="!assetChangeRows[selectedAssetChange].length"><td colspan="4">昨日暂无写图记录</td></tr>
+              <tr v-if="!assetChangeRows[selectedAssetChange].length"><td colspan="4">{{ assetChangeErrors[selectedAssetChange] || '昨日暂无写图记录' }}</td></tr>
               <tr
                 v-for="(row, idx) in assetChangeRows[selectedAssetChange]"
-                :key="`${row.object}-${row.time}`"
+                :key="row.objectId || `${row.type}-${row.object}-${row.time}-${idx}`"
                 :class="{ 'is-clickable': canEnterAdminPages && row.taskId }"
                 :tabindex="canEnterAdminPages && row.taskId ? 0 : undefined"
                 :aria-label="canEnterAdminPages && row.taskId ? `查看${row.object}的更新任务` : undefined"
@@ -2416,7 +2415,7 @@ print(response.json())</pre>
 .platform-jobs-list { display:grid;flex:1;grid-template-rows:repeat(5,minmax(44px,1fr));overflow-y:auto; }
 .platform-jobs-list a { display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:10px;min-height:44px;padding:9px 14px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
 .platform-jobs-list a:nth-child(5):last-child { border-bottom:0; }
-.platform-jobs-list a:hover { background:#f4f8ff; }
+.platform-jobs-list a:hover,.asset-change-table tbody tr:hover { background:#f4f8ff; }
 .platform-jobs-list strong { overflow:hidden;color:#253752;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap; }
 .platform-jobs-list a>span { display:inline-flex;align-items:center;gap:6px;padding:0;border-radius:0;background:transparent;color:#004ecc;font-size:14px;line-height:22px;white-space:nowrap; }
 .platform-jobs-list a>span::before { flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor;content:""; }
@@ -4775,7 +4774,7 @@ print(response.json())</pre>
 .asset-change-drawer>header{display:flex;align-items:flex-start;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.asset-change-drawer>header span{color:#004ecc;font-size:11px}.asset-change-drawer h2{margin:6px 0 3px;font-size:20px}.asset-change-drawer header p{margin:0;color:#718098;font-size:12px}.asset-change-drawer header>button{width:31px;height:31px;border:0;border-radius:5px;background:transparent;color:#52647f;font-size:20px;cursor:pointer}
 .asset-change-summary{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:14px}.asset-change-summary article{display:grid;gap:5px;padding:14px;border:1px solid #c7dcfb;border-radius:7px;background:#fff}.asset-change-summary span{color:#718098;font-size:11px}.asset-change-summary strong{color:#004ecc;font-size:24px}.asset-change-summary article:last-child strong{color:#067647}
 .asset-change-table{min-height:0;overflow:auto;padding:0 14px 14px}.asset-change-table table{width:100%;border-collapse:collapse;border:1px solid #dce8f8;background:#fff;font-size:12px}.asset-change-table th,.asset-change-table td{height:48px;padding:10px 12px;border-bottom:1px solid #e3ebf6;text-align:left}.asset-change-table th{position:sticky;top:0;background:#f3f7fc;color:#62728a}.asset-change-table td{color:#344861}.asset-change-table code{color:#004ecc;font-family:inherit}.asset-change-table td .asset-change-object{display:inline-block;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}.asset-change-table td .asset-change-source{display:inline-block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
-.asset-change-table tr.is-clickable{cursor:pointer}.asset-change-table tr.is-clickable:hover,.asset-change-table tr.is-clickable:focus-visible{background:#eef5ff;outline:2px solid #004ecc;outline-offset:-2px}
+.asset-change-table tr.is-clickable{cursor:pointer}.asset-change-table tr.is-clickable:focus-visible{background:#f4f8ff;outline:2px solid #004ecc;outline-offset:-2px}
 .asset-change-drawer>footer{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.asset-change-drawer>footer span{color:#718098;font-size:11px}.asset-change-drawer>footer a{height:32px;padding:0 12px;border-radius:5px;background:#004ecc;color:#fff;font-size:11px;line-height:32px;text-decoration:none}
 @media(max-width:760px){.asset-change-drawer{width:94vw}.asset-change-table table{min-width:700px}}
 

@@ -23,6 +23,8 @@ export interface AssetChangeRow {
   time: string
   /** 工作流控制库中的真实任务 ID；兼容没有任务关联的历史记录。 */
   taskId?: string | null
+  /** 图对象唯一 ID；同名实体也各自展示一行。 */
+  objectId?: string | null
 }
 
 export interface StructureMember {
@@ -48,10 +50,9 @@ export interface PlatformOverviewData {
   updatedAt: string
   assetOverviewGroups: AssetOverviewGroup[]
   assetChangeRows: Record<AssetOverviewKey, AssetChangeRow[]>
-  /** 昨日新增计数（与资产卡徽标同源）：图反查逐对象成功时=明细行数（去重后，
-   *  与抽屉同数同口径）；图反查降级成聚合行的空间/日子=工作流控制库 Σwritten，
-   *  行数 < 合计时用它展示「共 N 条 · 展示前 n 条」 */
+  /** 昨日新增的实际逐对象记录数，与侧栏明细同源。 */
   assetChangeTotals?: Partial<Record<AssetOverviewKey, number>>
+  assetChangeErrors?: Partial<Record<AssetOverviewKey, string>>
   entityStructure: StructureItem[]
   relationStructure: StructureItem[]
   dataMode: 'partial' | 'mock'

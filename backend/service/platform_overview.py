@@ -25,6 +25,9 @@ from infra.graph_db.client import is_known_no_index, is_no_index_error, mark_no_
 # 今日新增图反查的单条查询读超时（秒）：反查任一环失败只是该执行退回聚合降级行，
 # 不该用默认 30s 在共享图服务拥塞窗口里把总览冷算拖到分钟级（0924 实测 30s×2=60s+）。
 _SWEEP_QUERY_TIMEOUT_SECONDS = float(os.getenv("PLATFORM_OVERVIEW_QUERY_TIMEOUT_SECONDS", "8"))
+_MATCH_PAGE_SIZE = 1000
+_MATCH_BUDGET_SECONDS = float(os.getenv("PLATFORM_OVERVIEW_MATCH_BUDGET_SECONDS", "8"))
+_DAY_CHANGES_RETRY_SECONDS = 60
 
 logger = logging.getLogger(__name__)
 
@@ -139,8 +142,8 @@ class DayChangesSnapshot:
     entity/relation_added 为昨日完成执行的 ``output.sources[].written`` 合计；
     ``*_rows_exact`` 表示该类执行是否全部反查成逐对象明细行（含如实 0 命中）——
     True 时行数即昨日图内真实写入对象数（去重后），「昨日新增」徽标按行数计数、
-    与抽屉明细同数；False 表示有执行退回聚合降级行，行数不可作计数，徽标仍用
-    written 合计。running_count 为当前 RUNNING 执行数；*_rows 为新增明细行——
+    与抽屉明细同数；False 表示有执行退回内部聚合行，页面去除汇总行并提示明细
+    未完整读取，不以 written 合计冒充新增实体数。running_count 为当前 RUNNING 执行数；
     图反查成功时为逐对象行（数据类型=五类桶、具体对象=name/两端名、
     来源=source_table），失败时退回 ``*_executions`` 里各执行携带的聚合降级行。
     """
@@ -291,6 +294,7 @@ def parse_execution_records(
                 source=str(source.get("table") or source.get("source") or "-"),
                 time=completed_time,
                 task_id=task_id,
+                is_aggregate=True,
             )
             target_rows.append((completed_at, row))
             exec_rows.append(row)
@@ -310,7 +314,7 @@ def parse_execution_records(
             schema_label=schema_label or display_label,
             completed_at=completed_at,
             # 源表水位（读取起点）必然早于写图时刻，作反查窗下界；缺省统计日起点
-            window_lo=min(watermarks) if watermarks else day_start_graph,
+            window_lo=max(day_start_graph, min(watermarks)) if watermarks else day_start_graph,
             window_hi=day_end_graph,
             fallback_rows=exec_rows,
             task_id=task_id,
@@ -342,8 +346,8 @@ class WorkflowControlDayChangesProvider:
     覆盖平台唯一写图通道 ``kg.schema.extract`` 的执行记录；直连 ETL 脚本与
     T_DIRECT 审核直写不经过控制库，不计入（明细行口径即任务中心执行历史）。
     昨日是闭合窗口——统计日结束后不会再有新执行落进该窗口，结果按
-    (空间, 日期) 进程内缓存到当天结束：每个 worker 每天最多冷算一次
-    （~秒级图反查），其后全天命中缓存，替代此前 60s 缓存每分钟可能重付全款。
+    (空间, 日期) 进程内缓存到当天结束；反查失败的快照仅短缓存 60 秒后重试，
+    避免临时故障导致全天不显示明细。
     """
 
     # 抽取执行最长可跑数小时：取 7 天窗口兜住跨日完成的长执行
@@ -352,6 +356,7 @@ class WorkflowControlDayChangesProvider:
     def __init__(self) -> None:
         self._cached_day: str | None = None
         self._cached: dict[str | None, DayChangesSnapshot] = {}
+        self._retry_at: dict[str | None, float] = {}
 
     def _current_day(self) -> str:
         """统计日 = 日窗口时区（默认北京）自然日的昨天；北京 00:00 翻日。"""
@@ -361,14 +366,23 @@ class WorkflowControlDayChangesProvider:
         day = self._current_day()
         if self._cached_day == day:
             cached = self._cached.get(space)
-            if cached is not None:
+            if cached is not None and time.monotonic() < self._retry_at.get(space, float("inf")):
                 return cached
         snapshot = self._load(day, space)
         if self._cached_day != day:
             # 跨日翻页：旧统计日的缓存整体作废
             self._cached_day = day
             self._cached = {}
+            self._retry_at = {}
         self._cached[space] = snapshot
+        complete = (not snapshot.entity_executions or snapshot.entity_rows_exact) and (
+            not snapshot.relation_executions or snapshot.relation_rows_exact
+        )
+        # 临时故障/无索引的降级快照不能冻结一整天；失败后短缓存并重试。
+        if complete:
+            self._retry_at.pop(space, None)
+        else:
+            self._retry_at[space] = time.monotonic() + _DAY_CHANGES_RETRY_SECONDS
         return snapshot
 
     def running_count(self, space: str | None = None) -> int:
@@ -463,7 +477,7 @@ def _time_short(value: Any, fallback: str) -> str:
     """识别时间带月日（MM-DD HH:MM:SS）：昨日窗口跨天后只剩时分秒有歧义。
     图侧时间戳按 api 进程钟（UTC）写入，展示前折算到日窗口时区（北京），
     与明细完成时刻同口径；解析失败退原串切片。"""
-    raw = str(value or "")
+    raw = str(value or "").replace("T", " ", 1)
     local = _completed_in_day_tz(raw)
     if local is not None:
         return local.strftime("%m-%d %H:%M:%S")
@@ -491,16 +505,19 @@ def _flatten_vertex_props(vertex: Any) -> dict[str, Any]:
     return props
 
 
-def _graph_time_prop(
-    client: Any, kind: str, name: str, cache: dict[tuple[str, str], str | None]
-) -> str | None:
-    """tag/边类型上可进时间窗 LOOKUP 的写入时间属性（仅 string 型列）。
+@dataclass(frozen=True, slots=True)
+class GraphTimeProperty:
+    name: str
+    value_type: str
 
-    候选优先序：update_time → create_time → source_update_time（溯源列兜底，
-    专利的 update_time/create_time 建成 datetime 型——datetime 列上字符串
-    边界比较会 Column type error，datetime("...") 字面量又索引失效查空，
-    只有 string 型列能吃 ``>= "下界" AND <= "上界"`` 的字符串比较）。
-    DESCRIBE 未返回 Type 时按 string 兜底（与旧按名匹配行为一致）。
+
+def _graph_time_prop(
+    client: Any, kind: str, name: str, cache: dict[tuple[str, str], GraphTimeProperty | None]
+) -> GraphTimeProperty | None:
+    """时间字段优先使用 string/fixed_string，再支持 datetime 的类型化边界。
+
+    string 源时间仍保留旧优先级；只有 datetime 字段的 Schema 也可反查，
+    LOOKUP 不可执行时实体转 MATCH 分页。DESCRIBE 未返回 Type 时按 string 处理。
     """
     cache_key = (kind, name)
     if cache_key in cache:
@@ -513,7 +530,7 @@ def _graph_time_prop(
         }
     except Exception:
         types = {}
-    prop = next(
+    prop_name = next(
         (
             candidate
             for candidate in ("update_time", "create_time", "source_update_time")
@@ -521,8 +538,64 @@ def _graph_time_prop(
         ),
         None,
     )
+    if prop_name is None:
+        prop_name = next(
+            (
+                name
+                for name in ("update_time", "create_time", "source_update_time")
+                if types.get(name) == "datetime"
+            ),
+            None,
+        )
+    prop = GraphTimeProperty(prop_name, types[prop_name]) if prop_name else None
     cache[cache_key] = prop
     return prop
+
+
+def _time_window_predicate(
+    prefix: str, prop: GraphTimeProperty, execution: ExtractExecutionInfo
+) -> str:
+    def literal(value: str) -> str:
+        quoted = json.dumps(value, ensure_ascii=False)
+        return f"datetime({quoted})" if prop.value_type == "datetime" else quoted
+
+    return (
+        f"{prefix}.`{prop.name}` >= {literal(execution.window_lo)} "
+        f"AND {prefix}.`{prop.name}` <= {literal(execution.window_hi or execution.completed_at)}"
+    )
+
+
+def _match_entity_records(
+    client: Any, tag: str, prop: GraphTimeProperty, execution: ExtractExecutionInfo
+) -> list[dict[str, Any]] | None:
+    """无索引时按标签分页取真实对象，再按时间窗过滤。
+
+    旧图引擎的 MATCH WHERE 属性条件仍可能要求索引，兜底仅扫描标签，
+    不使用附带全量 COUNT 的 REST 分页。未完成枚举时不能把部分页当成全部明细。
+    """
+    records: list[dict[str, Any]] = []
+    deadline = time.monotonic() + _MATCH_BUDGET_SECONDS
+    offset = 0
+    try:
+        while True:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("昨日新增 MATCH 明细查询超出时间预算")
+            page = client.execute_query(
+                f"MATCH (v:`{tag}`) "
+                f"RETURN id(v) AS vid, properties(v) AS props ORDER BY vid SKIP {offset} LIMIT {_MATCH_PAGE_SIZE}",
+                timeout=min(_SWEEP_QUERY_TIMEOUT_SECONDS, max(0.1, deadline - time.monotonic())),
+            ).records
+            for record in page:
+                props = record.get("props") or {}
+                stamp = str(props.get(prop.name) or "").replace("T", " ", 1)[:19]
+                if execution.window_lo <= stamp <= (execution.window_hi or execution.completed_at):
+                    records.append(record)
+            if len(page) < _MATCH_PAGE_SIZE:
+                return records
+            offset += len(page)
+    except Exception:
+        logger.warning("昨日新增逐对象反查失败 tag=%s，MATCH 明细未完整读取", tag, exc_info=True)
+        return None
 
 
 def _safe_identifier(name: str) -> str:
@@ -551,7 +624,7 @@ def _graph_row_task_id(
         if item.schema_key == execution.schema_key
         and (not source or any(row.source == source for row in item.fallback_rows))
     ]
-    stamp = str(props.get(time_prop) or "").replace("T", " ", 1) if time_prop else ""
+    stamp = str(props.get(time_prop) or "").replace("T", " ", 1)[:19] if time_prop else ""
     if time_prop in ("update_time", "create_time") and stamp:
         timed = []
         for item in candidates:
@@ -573,30 +646,33 @@ def _entity_object_rows(
     client: Any,
     execution: ExtractExecutionInfo,
     schema_name: str,
-    time_props: dict[tuple[str, str], str | None],
+    time_props: dict[tuple[str, str], GraphTimeProperty | None],
     schema_labels: dict[str, str],
     executions: list[ExtractExecutionInfo],
 ) -> tuple[list[AssetChangeRow] | None, list[str]]:
     """按 tag + 时间窗反查当日写入的实体顶点，逐对象一行；查不到返回 None 走聚合降级。"""
     tag = _safe_identifier(schema_name)
-    time_prop = _graph_time_prop(client, "entity", tag, time_props)
-    if not time_prop:
+    time_spec = _graph_time_prop(client, "entity", tag, time_props)
+    if not time_spec:
+        logger.warning("昨日新增逐对象反查失败 tag=%s：没有可用写入时间字段", tag)
         return None, []
+    time_prop = time_spec.name
     space = getattr(client, "space", "")
     # 无索引负缓存：-1005 是确定性失败（图服务侧还自动重试放大），TTL 内不再重发
-    if space and is_known_no_index(space, "lookup", f"{tag}.{time_prop}"):
-        return None, []
-    statement = (
-        f'LOOKUP ON `{tag}` WHERE `{tag}`.`{time_prop}` >= "{execution.window_lo}" '
-        f'AND `{tag}`.`{time_prop}` <= "{execution.window_hi or execution.completed_at}" '
-        "YIELD id(vertex) AS vid, properties(vertex) AS props"
-    )
-    try:
-        records = client.execute_query(statement, timeout=_SWEEP_QUERY_TIMEOUT_SECONDS).records
-    except Exception as exc:
-        # tag 无任何索引（LOOKUP 400）或属性形态不符——退回聚合行
-        if space and is_no_index_error(exc):
-            mark_no_index(space, "lookup", f"{tag}.{time_prop}")
+    records = None
+    if not (space and is_known_no_index(space, "lookup", f"{tag}.{time_prop}")):
+        statement = (
+            f"LOOKUP ON `{tag}` WHERE {_time_window_predicate(f'`{tag}`', time_spec, execution)} "
+            "YIELD id(vertex) AS vid, properties(vertex) AS props"
+        )
+        try:
+            records = client.execute_query(statement, timeout=_SWEEP_QUERY_TIMEOUT_SECONDS).records
+        except Exception as exc:
+            if space and is_no_index_error(exc):
+                mark_no_index(space, "lookup", f"{tag}.{time_prop}")
+    if records is None:
+        records = _match_entity_records(client, tag, time_spec, execution)
+    if records is None:
         return None, []
     # 数据类型/变更内容列都用单个 Schema 的目录中文名（与图谱资产构成图同口径），
     # 查不到目录名时退原 tag 名
@@ -615,6 +691,7 @@ def _entity_object_rows(
                 source=str(props.get("source_table") or fallback_source),
                 time=_time_short(props.get(time_prop), _utc_slice_local(execution.completed_at)),
                 task_id=_graph_row_task_id(execution, props, time_prop, executions),
+                object_id=vid,
             )
         )
         vids.append(vid)
@@ -627,7 +704,7 @@ def _relation_edges(
     client: Any,
     execution: ExtractExecutionInfo,
     edge_type: str,
-    time_prop: str | None,
+    time_spec: GraphTimeProperty | None,
     seed_vids: list[str],
 ) -> tuple[list[tuple[str, str, dict[str, Any]]], bool]:
     """当日关系边收集：①边属性时间窗 LOOKUP（需边索引）②退而求其次从当日
@@ -639,6 +716,7 @@ def _relation_edges(
     seen: set[tuple[str, str]] = set()
     enumerated = False
     window_hi = execution.window_hi or execution.completed_at
+    time_prop = time_spec.name if time_spec else None
 
     def _collect(records: Any, *, window_filter: bool) -> None:
         for record in records:
@@ -661,8 +739,7 @@ def _relation_edges(
         # 无索引负缓存：-1005 是确定性失败（图服务侧还自动重试放大），TTL 内不再重发
         if not (space and is_known_no_index(space, "lookup", f"{edge_type}.{time_prop}")):
             statement = (
-                f'LOOKUP ON `{edge_type}` WHERE `{edge_type}`.`{time_prop}` >= "{execution.window_lo}" '
-                f'AND `{edge_type}`.`{time_prop}` <= "{window_hi}" '
+                f"LOOKUP ON `{edge_type}` WHERE {_time_window_predicate(f'`{edge_type}`', time_spec, execution)} "
                 "YIELD src(edge) AS src, dst(edge) AS dst, properties(edge) AS eprops"
             )
             try:
@@ -722,15 +799,16 @@ def _relation_object_rows(
     client: Any,
     execution: ExtractExecutionInfo,
     schema_name: str,
-    time_props: dict[tuple[str, str], str | None],
+    time_props: dict[tuple[str, str], GraphTimeProperty | None],
     seed_vids: list[str],
     schema_labels: dict[str, str],
     executions: list[ExtractExecutionInfo],
 ) -> list[AssetChangeRow] | None:
     """按边类型反查当日关系边，具体对象 = 起点实体名 → 终点实体名。"""
     edge_type = _safe_identifier(schema_name)
-    time_prop = _graph_time_prop(client, "relation", edge_type, time_props)
-    edges, enumerated = _relation_edges(client, execution, edge_type, time_prop, seed_vids)
+    time_spec = _graph_time_prop(client, "relation", edge_type, time_props)
+    time_prop = time_spec.name if time_spec else None
+    edges, enumerated = _relation_edges(client, execution, edge_type, time_spec, seed_vids)
     if not edges:
         # 枚举完成但 0 命中：如实不出行（对象已被统计日后的执行改写出窗/删除），
         # 只有结构性失败（无法枚举）才退回聚合降级行
@@ -758,6 +836,7 @@ def _relation_object_rows(
                 if time_prop
                 else fallback_time,
                 task_id=_graph_row_task_id(execution, edge_props, time_prop, executions),
+                object_id=json.dumps([edge_type, src, dst], ensure_ascii=False),
             )
         )
     return rows
@@ -848,9 +927,8 @@ def enrich_day_rows_with_graph(
     原名）、具体对象=name 公共字段、来源=source_table 公共字段、变更内容=新增
     Schema 名、时间=写入时间。关系行：具体对象=起点实体名 → 终点实体名，其余
     同实体口径。图不可达、schema 名缺失、tag 无索引等任一环节失败都退回该执行
-    的聚合降级行。``*_rows_exact`` 随之置位：该类执行全部拿到逐对象行（含如实
-    0 命中）时行数可作「昨日新增」徽标计数，任一执行降级则行数不可信、徽标
-    回退控制库 written 合计。
+    的内部聚合行；无索引的实体先尝试 MATCH。``*_rows_exact`` 随之置位：
+    完整读取时按真实记录计数，任一执行失败则页面提示明细未完整读取。
     """
     if not snapshot.entity_executions and not snapshot.relation_executions:
         return snapshot
@@ -870,7 +948,7 @@ def enrich_day_rows_with_graph(
     except Exception:
         logger.warning("昨日新增图反查：图客户端连接失败，明细行退回聚合展示", exc_info=True)
         return snapshot
-    time_props: dict[tuple[str, str], str | None] = {}
+    time_props: dict[tuple[str, str], GraphTimeProperty | None] = {}
     entity_rows: list[AssetChangeRow] = []
     seed_vids: list[str] = []
     entity_exact = True
@@ -928,7 +1006,7 @@ def enrich_day_rows_with_graph(
                 close()
             except Exception:  # noqa: BLE001
                 logger.exception("关闭昨日新增反查图客户端失败")
-    # 同一对象常被当日多次执行触碰（重跑/补写），明细按 (类型, 对象) 去重；
+    # 同一对象常被当日多次执行触碰（重跑/补写），优先按 (类型, ID) 去重；
     # 执行按完成时间降序遍历，先到的行即最新一次写入的口径。随后统一按识别
     # 时间倒序全量展示（不截断：有多少条数据就展示多少条）
     entity_rows = _sort_rows_newest_first(_dedupe_rows(entity_rows))
@@ -943,11 +1021,11 @@ def enrich_day_rows_with_graph(
 
 
 def _dedupe_rows(rows: list[AssetChangeRow]) -> list[AssetChangeRow]:
-    """同一 (类型, 对象) 只保留第一行（去重保序）。"""
+    """同一 (类型, ID) 只保留第一行；历史无 ID 行回退对象名。同名不同 ID 保留。"""
     seen: set[tuple[str, str]] = set()
     unique: list[AssetChangeRow] = []
     for row in rows:
-        key = (row.type, row.object)
+        key = (row.type, row.object_id or row.object)
         if key in seen:
             continue
         seen.add(key)
@@ -1128,6 +1206,10 @@ class PlatformOverviewService:
                     "warnings": [
                         "图数据库统计不可用，资产总量、构成图与昨日新增明细暂时无法展示。"
                     ],
+                    "asset_change_errors": {
+                        "entity": "实体新增明细暂不可读取，请稍后重试",
+                        "relation": "关系新增明细暂不可读取，请稍后重试",
+                    },
                 }
             )
         else:
@@ -1139,32 +1221,46 @@ class PlatformOverviewService:
             except Exception as exc:
                 logger.warning("首页昨日新增读取失败（工作流控制库不可用）: %s", exc)
             if changes is not None:
-                # 徽标与抽屉同数：图反查拿到逐对象明细时按行数计数——时间窗圈住的
-                # 是图内昨日真实写入对象（含 FAILED 中途已写图、审核直写等控制库
-                # 未计入的通道，ewrdf 实测 +4 vs 13 条即此偏差）；反查降级成聚合行
-                # 的空间/日子才退回控制库 written 合计
-                entity_count = (
-                    len(changes.entity_rows) if changes.entity_rows_exact else changes.entity_added
-                )
-                relation_count = (
-                    len(changes.relation_rows)
-                    if changes.relation_rows_exact
-                    else changes.relation_added
-                )
+                # 侧栏只展示真实逐对象明细；Σwritten 包含更新/重跑，不可冒充新增实体数。
+                change_rows = {
+                    "entity": [row for row in changes.entity_rows if not row.is_aggregate],
+                    "relation": [row for row in changes.relation_rows if not row.is_aggregate],
+                }
+                change_errors = {}
+                for key, exact, written in (
+                    ("entity", changes.entity_rows_exact, changes.entity_added),
+                    ("relation", changes.relation_rows_exact, changes.relation_added),
+                ):
+                    if not exact and written > 0:
+                        label = "实体" if key == "entity" else "关系"
+                        change_errors[key] = f"{label}新增明细暂未完整读取，请稍后重试"
+                entity_count = len(change_rows["entity"])
+                relation_count = len(change_rows["relation"])
                 # 有数才显示 +N；当日为 0 或读不到一律占位 --，标签统一不带括号说明
                 added_label = "昨日新增"
-                entity_added = f"+{_format_count(entity_count)}" if entity_count else "--"
-                relation_added = f"+{_format_count(relation_count)}" if relation_count else "--"
-                change_rows = {"entity": changes.entity_rows, "relation": changes.relation_rows}
+                entity_added = (
+                    f"+{_format_count(entity_count)}"
+                    if entity_count and "entity" not in change_errors
+                    else "--"
+                )
+                relation_added = (
+                    f"+{_format_count(relation_count)}"
+                    if relation_count and "relation" not in change_errors
+                    else "--"
+                )
                 change_totals = {"entity": entity_count, "relation": relation_count}
                 day_source = "workflow-control-live"
-                extra_warnings: list[str] = []
+                extra_warnings = list(change_errors.values())
             else:
                 added_label = "昨日新增"
                 entity_added = "--"
                 relation_added = "--"
                 change_rows = {"entity": [], "relation": []}
                 change_totals = {"entity": 0, "relation": 0}
+                change_errors = {
+                    "entity": "实体新增明细暂不可读取，请稍后重试",
+                    "relation": "关系新增明细暂不可读取，请稍后重试",
+                }
                 day_source = "unavailable"
                 extra_warnings = ["昨日新增暂时不可读：工作流控制库不可用。"]
             # 运行中执行数实时短查（不随日快照冻结一整天）；控制库不可读回退快照值
@@ -1205,6 +1301,7 @@ class PlatformOverviewService:
                     "asset_overview_groups": groups,
                     "asset_change_rows": change_rows,
                     "asset_change_totals": change_totals,
+                    "asset_change_errors": change_errors,
                     "entity_structure": _build_structure(
                         stats.nodes, entity=True, labels=_schema_labels_by_name(space, "entity")
                     ),

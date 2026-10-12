@@ -305,6 +305,9 @@ const queryMode = ref<'ngql' | 'algo'>('ngql')
 const ngqlStatement = ref('')
 const ngqlLoading = ref(false)
 const ngqlResult = ref<GraphConsoleResult | null>(null)
+const ngqlError = ref('')
+// 优先使用服务端返回的当前空间 writeAllowed；兼容旧接口的权限回退由 store 统一处理。
+const ngqlCanWrite = computed(() => graphSpaceStore.canWrite(currentGraphSpace()))
 const executedNgqlStatement = ref('')
 // nGQL 结果客户端分页：后端不限制返回行数，大结果集翻页展示（表头徽标仍显示总行数）
 const ngqlRecords = computed(() => ngqlResult.value?.records ?? [])
@@ -860,9 +863,16 @@ async function runWithLoading(message: string, action?: () => void) {
 /** 常见报错的精简中文文案：英文错误换中文、后端长校验文案收敛为一句（按序取第一条命中）。 */
 const NGQL_ERROR_ZH_RULES: Array<{ test: RegExp; text: (match: RegExpMatchArray) => string }> = [
   {
-    // 后端原文含全部允许清单与管理员说明，toast 只留开头类型 + 常用只读语句示例
-    test: /^不支持的语句开头/,
-    text: () => '不支持的语句开头；允许的只读语句：MATCH / LOOKUP / GO / SHOW 等',
+    test: /禁止执行.*DDL\/管理类语句|该页面禁止执行 DDL\/管理类语句/i,
+    text: () => '该页面禁止执行 DDL/管理类语句',
+  },
+  {
+    test: /仅.*(?:管理员|开发维护).*执行写语句|当前账号无权在该图空间执行写操作/,
+    text: () => '当前账号无权在该图空间执行写操作',
+  },
+  {
+    test: /^不支持的语句开头|^nGQL 语句(?:不能为空|不能只包含注释)|一次仅允许执行一条语句|不允许使用管道|SyntaxError|syntax error/i,
+    text: () => '请输入合法的 nGQL 语句',
   },
   {
     test: /Unknown column [`'"](.*?)[`'"]\s*in schema/i,
@@ -881,10 +891,6 @@ const NGQL_ERROR_ZH_RULES: Array<{ test: RegExp; text: (match: RegExpMatchArray)
     text: ([, schema]) => `标签或边类型「${schema}」不存在，请检查名称拼写`,
   },
   {
-    test: /SyntaxError:.*?near\s+[`'"](.*?)[`'"]/i,
-    text: ([, near]) => `语法错误：「${near.trim().slice(0, 20)}」附近有误，请检查语句写法`,
-  },
-  {
     test: /No valid index|The index of the (?:tag|edge)/i,
     text: () => '未找到可用索引，LOOKUP / FIND 语句需要标签或边类型已建立索引',
   },
@@ -892,18 +898,29 @@ const NGQL_ERROR_ZH_RULES: Array<{ test: RegExp; text: (match: RegExpMatchArray)
 
 /** nGQL 报错短文案：剥掉「语句执行失败」/HTTP 传输前缀与换行，常见英文错误换中文，
  *  其余超长截断（完整错误始终进控制台）。 */
-function conciseNgqlError(error: unknown): string {
+function conciseNgqlError(error: unknown, statement: string): string {
   const message = getErrorMessage(error, 'nGQL 执行失败')
     .replace(/^语句执行失败[:：]\s*/, '')
     .replace(/^(?:GET|POST|PUT|DELETE|PATCH)\s+\S+\s*->\s*\d+[:：]\s*/i, '')
     .replace(/\s+/g, ' ')
     .trim()
   if (!message) return 'nGQL 执行失败'
+  let reason = message
   for (const rule of NGQL_ERROR_ZH_RULES) {
     const match = message.match(rule.test)
-    if (match) return rule.text(match)
+    if (match) {
+      reason = rule.text(match)
+      break
+    }
   }
-  return message.length > 60 ? `${message.slice(0, 60)}…` : message
+  // 空间授权失败返回通用 403。仅在本次提交的是写语句时转换为写权限提示，
+  // 避免把 DDL 限制或只读查询权限错误误报为写权限问题。
+  const status = (error as { response?: { status?: number } } | null)?.response?.status
+  const body = statement.replace(/(--|\/\/)[^\n]*/g, '').trim()
+  if (reason === message && status === 403 && /^(INSERT|UPDATE|DELETE|UPSERT)\b/i.test(body)) {
+    reason = '当前账号无权在该图空间执行写操作'
+  }
+  return reason.length > 60 ? `${reason.slice(0, 60)}…` : reason
 }
 
 async function handleNgqlQuery(): Promise<void> {
@@ -913,9 +930,15 @@ async function handleNgqlQuery(): Promise<void> {
   const statement =
     ngqlStatement.value.trim()
 
+  ngqlError.value = ''
+  ngqlResult.value = null
+  executedNgqlStatement.value = ''
+  resetNgqlPage()
+
   if (!statement) {
+    ngqlError.value = '请输入合法的 nGQL 语句'
     showToast(
-      '请输入 nGQL 语句',
+      ngqlError.value,
       'info',
     )
 
@@ -923,9 +946,6 @@ async function handleNgqlQuery(): Promise<void> {
   }
 
   ngqlLoading.value = true
-  ngqlResult.value = null
-  executedNgqlStatement.value = ''
-  resetNgqlPage()
 
   try {
     // 图空间跟随平台总览页的全局选择器（后端按 X-Graph-Space 路由）
@@ -937,7 +957,8 @@ async function handleNgqlQuery(): Promise<void> {
     if (context !== graphContextVersion) return
     // 完整错误进控制台便于排查；右上角提示只保留单行短文案
     console.error('[nGQL] 执行失败:', error)
-    showToast(conciseNgqlError(error), 'warning')
+    ngqlError.value = conciseNgqlError(error, statement)
+    showToast(ngqlError.value, 'warning')
   } finally {
     if (context === graphContextVersion) ngqlLoading.value = false
   }
@@ -1221,6 +1242,7 @@ watch(algoSpace, () => {
   graphContextVersion += 1
   stopAlgoPoll()
   ngqlResult.value = null
+  ngqlError.value = ''
   executedNgqlStatement.value = ''
   ngqlLoading.value = false
   resetNgqlPage()
@@ -1631,8 +1653,7 @@ const pageMeta = computed(() => {
         <div v-if="queryMode === 'ngql'" class="platform-ngql-toolbar">
           <div class="platform-ngql-permission-hint" role="note">
             <IconInfoCircle aria-hidden="true" />
-            <span>只读语句所有用户可执行</span><i aria-hidden="true"></i>
-            <span>写语句仅平台管理员</span><i aria-hidden="true"></i>
+            <span>{{ ngqlCanWrite ? '当前图空间支持查询及数据写入' : '当前图空间仅支持查询' }}</span><i aria-hidden="true"></i>
             <span>DDL 禁止执行</span>
           </div>
           <div class="platform-ngql-header-actions">
@@ -1827,7 +1848,7 @@ const pageMeta = computed(() => {
           <div class="platform-query-result__table">
             <QueryResultTable v-if="ngqlTotal" aria-label="nGQL 查询结果" :rows="pagedNgqlRecords" :columns="ngqlResult?.columns ?? []" :page="ngqlPage" :page-size="ngqlPageSize" :loading="ngqlLoading" :space="algoSpace" :query-statement="executedNgqlStatement" />
             <div v-else class="platform-query-result__empty" role="status" aria-live="polite">
-              <AEmpty :description="ngqlLoading ? '查询执行中，请稍候…' : ngqlResult ? '语句执行成功，无返回记录' : '暂无数据，执行 nGQL 语句后在此查看结果'" />
+              <AEmpty :description="ngqlLoading ? '查询执行中，请稍候…' : ngqlError ? `执行失败：${ngqlError}` : ngqlResult ? '语句执行成功，无返回记录' : '暂无数据，执行 nGQL 语句后在此查看结果'" />
             </div>
           </div>
           <ListPagination

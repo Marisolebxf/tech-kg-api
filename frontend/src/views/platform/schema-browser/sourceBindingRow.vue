@@ -173,7 +173,7 @@ function applyColumnDefaults() {
       popup-container=".schema-modal"
       @change="onDatasourceChange"
     >
-      <a-option v-for="ds in datasources" :key="ds.id" :value="ds.id" :label="`${ds.name}（${ds.host}）`" :title="`${ds.name}（${ds.host}）`">
+      <a-option v-for="ds in datasources" :key="ds.id" :value="ds.id" :label="`${ds.name}（${ds.host}）`" :disabled="ds.status === '停用'" :title="ds.status === '停用' ? `${ds.name}（${ds.host}）已停用，启用后才能选择` : `${ds.name}（${ds.host}）`">
         {{ ds.name }}（{{ ds.host }}）
       </a-option>
     </a-select>

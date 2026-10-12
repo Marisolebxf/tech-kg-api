@@ -133,6 +133,14 @@ describe('validateConfigFields 整表（新建/详情两套口径）', () => {
     expect(validateConfigFields('mysql', values, 'create').username).toBe('请输入用户名')
   })
 
+  it('配置名称上限按类型：语言模型 64（对齐后端 LlmConfig），向量模型 / MySQL 128', () => {
+    expect(validateConfigFields('llm', { ...validLlm(), name: repeat('A', 64) }, 'create').name).toBeUndefined()
+    expect(validateConfigFields('llm', { ...validLlm(), name: repeat('A', 65) }, 'create').name).toBe('输入长度不能超过64个字符')
+    expect(validateConfigFields('embedding', { ...validEmbedding(), name: repeat('A', 128) }, 'create').name).toBeUndefined()
+    expect(validateConfigFields('embedding', { ...validEmbedding(), name: repeat('A', 129) }, 'create').name).toBe('输入长度不能超过128个字符')
+    expect(validateConfigFields('mysql', { ...validMysql(), name: repeat('A', 128) }, 'create').name).toBeUndefined()
+  })
+
   it('向量模型详情：模型为空报必填（FUNC-00553），更新 API Key 留空合法（FUNC-00526）', () => {
     const values = { ...validEmbedding(), model: '', apiKey: '' }
     const errors = validateConfigFields('embedding', values, 'detail')

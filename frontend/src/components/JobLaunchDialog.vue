@@ -356,7 +356,7 @@ async function submit() {
           <div class="job-field">
             <span>MySQL 数据源（默认跟随 Schema 绑定）</span>
             <a-select v-model="mysqlDatasourceId" class="job-select" aria-label="MySQL 数据源" placeholder="跟随 Schema 来源绑定" allow-clear @change="() => { mysqlDatabase = ''; void loadMysqlResources(mysqlDatasourceId) }">
-              <a-option v-for="ds in mysqlDatasources" :key="ds.id" :value="ds.id" :title="`${ds.name}（${ds.host}）`">{{ ds.name }}（{{ ds.host }}）</a-option>
+              <a-option v-for="ds in mysqlDatasources" :key="ds.id" :value="ds.id" :disabled="ds.status === '停用'" :title="ds.status === '停用' ? `${ds.name}（${ds.host}）已停用，启用后才能选择` : `${ds.name}（${ds.host}）`">{{ ds.name }}（{{ ds.host }}）</a-option>
             </a-select>
           </div>
           <div class="job-field">

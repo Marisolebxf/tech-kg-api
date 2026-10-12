@@ -20,6 +20,8 @@ from sqlalchemy.pool import StaticPool
 from biz.dependencies.auth import require_platform_actor
 from biz.handler import embedding_config, llm_config, milvus_config, mysql_datasource
 from db_model.base import Base
+from db_model.business_access import BusinessClient
+from db_model.config_ownership import ConfigOwnership
 from db_model.embedding_config import EmbeddingConfig
 from db_model.llm_config import LlmConfig
 from db_model.milvus_config import MilvusConfig
@@ -52,6 +54,8 @@ def session_factory():
     Base.metadata.create_all(
         engine,
         tables=[
+            ConfigOwnership.__table__,
+            BusinessClient.__table__,
             LlmConfig.__table__,
             MysqlDatasource.__table__,
             MilvusConfig.__table__,
@@ -343,3 +347,187 @@ async def test_admin_business_context_does_not_filter_legacy_configuration(
         response = await client.put(f"{path}/LLM-LEGACY", json={"description": "updated"})
         assert response.status_code == 200
         assert response.json()["data"]["owner"] == "former-admin"
+
+
+@pytest.mark.parametrize(
+    "kind,path,payload",
+    [
+        (
+            "llm",
+            "/api/v1/llm-config/llm-configs",
+            {"name": "开发者测试", "baseUrl": "http://llm", "model": "m", "apiKey": "secret"},
+        ),
+        (
+            "mysql",
+            "/api/v1/mysql-datasources",
+            {"name": "开发者测试", "host": "host", "username": "user", "password": "secret"},
+        ),
+    ],
+)
+async def test_business_creation_shared_management_and_cross_business_denial(
+    session_factory, monkeypatch, kind, path, payload
+):
+    monkeypatch.setenv("BUSINESS_RBAC_ENABLED", "true")
+    with session_factory.begin() as session:
+        session.add_all(
+            [
+                BusinessClient(client_id="a", name="业务甲"),
+                BusinessClient(client_id="b", name="业务乙"),
+            ]
+        )
+    dev = replace(
+        _actor("dev-a"),
+        business_id="a",
+        business_role="developer",
+        context_graph_space="public-space",
+    )
+    peer = replace(dev, user_id="peer-a")
+    other = replace(dev, user_id="dev-b", business_id="b")
+    admin = _actor("admin", True)
+    monkeypatch.setattr(
+        f"application.{'llm_config.LlmConfigApplication' if kind == 'llm' else 'mysql_datasource.MysqlDatasourceApplication'}.test_connection",
+        lambda self, config_id: {"ok": True},
+    )
+
+    async with _client(_make_app(session_factory, admin)) as client:
+        response = await client.post(path, json=payload)
+        assert response.status_code == 200
+        public = response.json()["data"]
+        assert public["visibility"] == "public" and public["businessId"] is None
+
+    async with _client(_make_app(session_factory, dev)) as client:
+        # Incoming ownership/actor metadata cannot assign the new config to someone else.
+        response = await client.post(
+            path, json={**payload, "owner": "other", "businessId": "b", "visibility": "public"}
+        )
+        assert response.status_code == 200
+        private = response.json()["data"]
+        assert private["visibility"] == "business"
+        assert private["businessId"] == "a" and private["businessName"] == "业务甲"
+        assert private["owner"] == dev.user_id and private["canManage"]
+        assert "apiKey" not in private and "password" not in private
+        response = await client.get(path)
+        rows = {row["id"]: row for row in response.json()["data"]}
+        assert not rows[public["id"]]["canManage"]
+        for verb in ("put", "delete", "post"):
+            url = f"{path}/{public['id']}" + ("/test" if verb == "post" else "")
+            response = await getattr(client, verb)(
+                url, **({"json": {"name": "forbidden"}} if verb == "put" else {})
+            )
+            assert response.status_code == 403
+        assert (await client.post(path, json={**payload, "isDefault": True})).status_code == 403
+        assert (
+            await client.put(f"{path}/{private['id']}", json={"isDefault": True})
+        ).status_code == 403
+        assert (await client.post(f"{path}/{private['id']}/set-default")).status_code == 403
+
+    async with _client(_make_app(session_factory, peer)) as client:
+        row = (await client.get(f"{path}/{private['id']}")).json()["data"]
+        assert row["canManage"]
+        result = await client.put(
+            f"{path}/{private['id']}",
+            json={"name": "共同维护", "owner": "hijack", "businessId": "b", "status": "停用"},
+        )
+        assert result.status_code == 200
+        updated = result.json()["data"]
+        assert updated["businessId"] == "a" and updated["owner"] == dev.user_id
+        assert (await client.post(f"{path}/{private['id']}/test")).status_code == 200
+
+    async with _client(_make_app(session_factory, other)) as client:
+        assert {row["id"] for row in (await client.get(path)).json()["data"]} == {public["id"]}
+        target = f"{path}/{private['id']}"
+        assert (await client.get(target)).status_code == 403
+        assert (await client.put(target, json={"name": "forbidden"})).status_code == 403
+        assert (await client.delete(target)).status_code == 403
+        assert (await client.post(f"{target}/test")).status_code == 403
+        if kind == "mysql":
+            for suffix in ["databases", "tables", "tables/example/columns"]:
+                assert (await client.get(f"{target}/{suffix}")).status_code == 403
+
+    async with _client(_make_app(session_factory, admin)) as client:
+        assert len((await client.get(path)).json()["data"]) == 2
+        assert (
+            await client.put(f"{path}/{private['id']}", json={"description": "管理维护"})
+        ).status_code == 200
+
+    # Role/business changes are effective immediately, without waiting for a config cache.
+    with session_factory.begin() as session:
+        session.get(BusinessClient, "a").enabled = False
+    async with _client(_make_app(session_factory, peer)) as client:
+        assert {row["id"] for row in (await client.get(path)).json()["data"]} == {public["id"]}
+        assert (await client.get(f"{path}/{private['id']}")).status_code == 403
+        assert (await client.post(path, json=payload)).status_code == 403
+    with session_factory.begin() as session:
+        session.get(BusinessClient, "a").enabled = True
+    async with _client(_make_app(session_factory, peer)) as client:
+        assert (await client.delete(f"{path}/{private['id']}")).status_code == 200
+
+
+async def test_developer_can_verify_new_model_and_foreign_context_cannot_assign_it(
+    session_factory, monkeypatch
+):
+    with session_factory.begin() as session:
+        session.add(BusinessClient(client_id="a", name="业务甲"))
+    actor = replace(
+        _actor("dev"), business_id="a", business_role="developer", context_business_id="b"
+    )
+    monkeypatch.setattr(
+        "application.llm_config.LlmConfigApplication.verify_connection",
+        lambda self, **kw: {"ok": True},
+    )
+    async with _client(_make_app(session_factory, actor)) as client:
+        result = await client.post(
+            "/api/v1/llm-config/llm-configs/verify",
+            json={"baseUrl": "http://llm", "model": "m", "apiKey": "secret"},
+        )
+        assert result.status_code == 200
+    # Membership determines creation; a spoofed context must not change it.
+    from service.config_ownership import assigned_config_business
+
+    with session_factory() as session:
+        assert assigned_config_business(session, actor) == "a"
+
+
+@pytest.mark.parametrize(
+    "kind,path",
+    [
+        ("llm", "/api/v1/llm-config/llm-configs"),
+        ("mysql", "/api/v1/mysql-datasources"),
+    ],
+)
+async def test_deleted_private_config_never_reappears_public_from_another_workers_cache(
+    session_factory, monkeypatch, kind, path
+):
+    monkeypatch.setenv("BUSINESS_RBAC_ENABLED", "false")
+    llm_config._config_cache_clear()
+    mysql_datasource._config_cache_clear()
+    model = LlmConfig if kind == "llm" else MysqlDatasource
+    now = datetime.now()
+    with session_factory.begin() as session:
+        session.add_all(
+            [BusinessClient(client_id="a", name="A"), BusinessClient(client_id="b", name="B")]
+        )
+        fields = (
+            {"base_url": "http://example.invalid", "model": "m", "api_key": "secret"}
+            if kind == "llm"
+            else {"host": "private.invalid", "username": "u", "password": "secret"}
+        )
+        session.add(
+            model(
+                id="PRIVATE-CACHED",
+                name="private",
+                owner="creator",
+                created_at=now,
+                updated_at=now,
+                **fields,
+            )
+        )
+        session.add(ConfigOwnership(config_kind=kind, config_id="PRIVATE-CACHED", business_id="a"))
+    other = replace(_actor("b-dev"), business_id="b", business_role="developer")
+    async with _client(_make_app(session_factory, other)) as client:
+        assert (await client.get(path)).json()["data"] == []
+        # A different worker deleted the row: local process caches were not cleared.
+        with session_factory.begin() as session:
+            session.delete(session.get(model, "PRIVATE-CACHED"))
+            session.delete(session.get(ConfigOwnership, (kind, "PRIVATE-CACHED")))
+        assert (await client.get(path)).json()["data"] == []

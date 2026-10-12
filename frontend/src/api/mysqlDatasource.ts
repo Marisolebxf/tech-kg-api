@@ -5,6 +5,10 @@ import { currentUserId } from './llmConfig'
 
 export interface MysqlDatasource {
   id: string
+  visibility?: 'public' | 'business'
+  businessId?: string | null
+  businessName?: string
+  canManage?: boolean
   name: string
   description: string
   host: string

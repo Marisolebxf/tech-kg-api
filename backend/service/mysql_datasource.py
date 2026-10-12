@@ -66,6 +66,15 @@ class MysqlDatasourceService:
     ) -> dict[str, Any]:
         now = datetime.now(UTC)
         config_id = f"MYSQL-{uuid.uuid4().hex[:8].upper()}"
+        # Register visibility in the same commit as the configuration itself.
+        if "_business_id" in payload:
+            from db_model.config_ownership import ConfigOwnership
+
+            self._session.add(
+                ConfigOwnership(
+                    config_kind="mysql", config_id=config_id, business_id=payload["_business_id"]
+                )
+            )
         row = self._dao.create(
             id=config_id,
             name=payload["name"],

@@ -94,6 +94,15 @@ class LlmConfigService:
     def create_config(self, payload: dict, *, scope_owner: str | None = None) -> dict:
         now = _utcnow_naive()
         config_id = f"LLM-{uuid.uuid4().hex[:8].upper()}"
+        # Register visibility in the same commit as the configuration itself.
+        if "_business_id" in payload:
+            from db_model.config_ownership import ConfigOwnership
+
+            self._session.add(
+                ConfigOwnership(
+                    config_kind="llm", config_id=config_id, business_id=payload["_business_id"]
+                )
+            )
         row = self._dao.create(
             id=config_id,
             name=payload["name"],

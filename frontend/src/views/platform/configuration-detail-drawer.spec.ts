@@ -102,7 +102,7 @@ describe('配置管理 · 管理抽屉编辑隔离', () => {
     const wrapper = mountView()
     await flushPromises()
     const row = wrapper.get('.config-table-wrap tbody tr')
-    expect(row.get('.config-id-col').text()).toBe('LLM-E2E')
+    expect(row.get('.config-id-col').text()).toBe('LLM-E2E公共图空间')
     expect(row.get('.config-name').text()).not.toContain('LLM-E2E')
     await row.get('.config-name').trigger('click')
     expect(wrapper.find('.detail-drawer').exists()).toBe(false)
@@ -479,15 +479,19 @@ describe('图空间说明', () => {
 })
 
 describe('开发人员共享配置只读', () => {
-  it('可查看配置详情，禁用所有修改动作，仍能打开新建图空间', async () => {
+  it.each([false, true])('公共配置只读（权限字段缺省：%s），仍能新建配置与图空间', async (legacy) => {
     setActivePinia(createPinia())
     vi.mocked(currentUserIsAdmin).mockReturnValue(false)
     const auth = useAuthStore()
     auth.profile = { isAdmin: false, businessRbacEnabled: true, canDevelop: true } as typeof auth.profile
+    if (!legacy) {
+      const { listLlmConfigs } = await import('../../api/llmConfig')
+      vi.mocked(listLlmConfigs).mockResolvedValueOnce([{ ...state.current, visibility: 'public', businessId: null, businessName: '', canManage: false }])
+    }
     const wrapper = mountView()
     try {
       await flushPromises()
-      expect(wrapper.get('.create-entry').attributes('disabled')).toBeDefined()
+      expect(wrapper.get('.create-entry').attributes('disabled')).toBeUndefined()
       const actions = wrapper.findAll('.row-actions button')
       expect(actions[0]!.text()).toBe('查看')
       expect(actions[0]!.attributes('disabled')).toBeUndefined()
@@ -506,5 +510,64 @@ describe('开发人员共享配置只读', () => {
       wrapper.unmount()
       vi.mocked(currentUserIsAdmin).mockReturnValue(true)
     }
+  })
+})
+
+describe('业务配置权限与归属', () => {
+  it.each(['llm', 'mysql'] as const)('%s：开发人员复用新建表单并管理本业务配置，默认权限不变', async (kind) => {
+    setActivePinia(createPinia())
+    vi.mocked(currentUserIsAdmin).mockReturnValue(false)
+    const auth = useAuthStore()
+    auth.profile = { isAdmin: false, businessRbacEnabled: true, canDevelop: true } as typeof auth.profile
+    const { listLlmConfigs } = await import('../../api/llmConfig')
+    const { listMysqlDatasources } = await import('../../api/mysqlDatasource')
+    const ownership = { visibility: 'business' as const, businessId: 'business-1', businessName: '亿级知识图谱', canManage: true }
+    if (kind === 'llm') vi.mocked(listLlmConfigs).mockResolvedValueOnce([{ ...state.current, ...ownership, isDefault: false }])
+    else vi.mocked(listMysqlDatasources).mockResolvedValueOnce([{
+      id: 'MYSQL-BIZ', name: '业务数据库', description: '', host: 'localhost', port: 3306,
+      username: 'root', defaultDatabase: '', owner: 'other-developer', isDefault: false,
+      status: '正常', hasPassword: true, passwordMasked: '***', createdAt: '', updatedAt: '', ...ownership,
+    }])
+    const wrapper = mountView()
+    try {
+      await flushPromises()
+      if (kind === 'mysql') {
+        await wrapper.findAll('.category-nav > button')[1]!.trigger('click')
+        await flushPromises()
+      }
+      expect(wrapper.get('.config-ownership').text()).toBe('亿级知识图谱')
+      const actions = wrapper.findAll('.row-actions button')
+      expect(actions[0]!.text()).toBe('管理')
+      expect(actions[1]!.attributes('disabled')).toBeUndefined()
+      expect(actions[2]!.attributes('disabled')).toBeUndefined()
+      if (kind === 'llm') expect(wrapper.get('.config-default-toggle').attributes('disabled')).toBeDefined()
+      await actions[0]!.trigger('click')
+      expect(wrapper.get('.detail-form input').attributes('disabled')).toBeUndefined()
+      expect(wrapper.get('.detail-drawer footer button').attributes('disabled')).toBeUndefined()
+      expect(wrapper.get('.health-card button').attributes('disabled')).toBeUndefined()
+      await wrapper.get('.detail-drawer header button').trigger('click')
+      await wrapper.get('.create-entry').trigger('click')
+      expect(wrapper.find('.config-create-dialog').exists()).toBe(true)
+      expect(wrapper.get('.default-config-checkbox').attributes('disabled')).toBeDefined()
+    } finally {
+      wrapper.unmount()
+      vi.mocked(currentUserIsAdmin).mockReturnValue(true)
+    }
+  })
+
+  it('图空间在名称与绑定状态之间显示公共或业务标识', async () => {
+    setActivePinia(createPinia())
+    const { listGraphSpaceItems } = await import('../../api/graphSpace')
+    vi.mocked(listGraphSpaceItems).mockResolvedValueOnce([
+      { name: 'public_space', mine: true, bound: true, groupKind: 'public' },
+      { name: 'business_space', mine: true, bound: true, groupKind: 'business', businessName: '亿级知识图谱' },
+    ])
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.findAll('.category-nav > button')[2]!.trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('.space-table th').map(cell => cell.text())).toEqual(['图空间名称 / 说明', '标识', '绑定状态', '操作'])
+    expect(wrapper.findAll('.space-table tbody tr').map(row => row.findAll('td')[1]!.text())).toEqual(['亿级知识图谱', '公共图空间'])
+    wrapper.unmount()
   })
 })

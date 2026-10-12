@@ -187,9 +187,10 @@ function labelLines(node: GraphNodeData): string[] {
   return [first, second]
 }
 
-/** 边名称过长时截断，防止长关系名压住相邻元素；ASCII 名称（如 AUTHORED_BY）字符窄，放宽上限。 */
+/** 边名称过长时截断，防止长关系名压住相邻元素；ASCII 名称（如 AUTHORED_BY）字符窄，放宽上限。
+ *  业务模块给了中文展示名（displayText）时优先展示，label 保持内部键。 */
 function displayEdgeLabel(edge: GraphEdgeData) {
-  const label = edge.label
+  const label = edge.displayText || edge.label
   const max = /^[\x20-\x7e]+$/.test(label) ? 16 : 8
   return label.length > max ? `${label.slice(0, max)}…` : label
 }

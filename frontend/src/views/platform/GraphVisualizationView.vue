@@ -284,7 +284,7 @@ const relationRows = computed<Array<[string, string]>>(() => {
       ['源实体', `${from?.label || selected.from} / ${entityTypeLabel(from?.entityType)}`],
       ['目标实体', `${to?.label || selected.to} / ${entityTypeLabel(to?.entityType)}`],
       ['关系类型', selected.label],
-      ['关系分类', selected.category],
+      ['关系分类', edgeTypeLabel(selected.category)],
       ['置信度', formatConfidence(selected.confidence)],
       ['匹配证据', selected.matchEvidence || '—'],
       ['匹配方式', selected.matchMethod || '—'],
@@ -787,7 +787,7 @@ onUnmounted(() => {
 
         <p v-if="searchMessage" class="graphviz-form__message">
           {{ searchMessage }}
-          <template v-if="startNode">｜已选起点：<b>{{ startNode.name || startNode.vid }}</b>（{{ startNode.entityType || '未知类型' }}）</template>
+          <template v-if="startNode">｜已选起点：<b>{{ startNode.name || startNode.vid }}</b>（{{ startNode.entityType ? entityTypeLabel(startNode.entityType) : '未知类型' }}）</template>
           <button
             v-if="!startListVisible && searchResults.length"
             type="button"
@@ -1028,7 +1028,7 @@ onUnmounted(() => {
                 <div class="graphviz-provenance__endpoints">
                   <article v-for="endpoint in provenance.relationEndpoints" :key="endpoint.role">
                     <header>{{ endpoint.role }} · {{ endpoint.name }}</header>
-                    <span>实体类型：{{ endpoint.entityType }}</span>
+                    <span>实体类型：{{ entityTypeLabel(endpoint.entityType) }}</span>
                     <span>源数据表：<code>{{ endpoint.technicalTable }}</code></span>
                     <span>图空间 VID：<code>{{ endpoint.graphVid }}</code></span>
                   </article>

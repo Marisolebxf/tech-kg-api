@@ -59,6 +59,7 @@ import {
   type AlgorithmResultPayload,
   type GraphAlgorithmMetadata,
 } from '../../api/graphAlgorithm'
+import { getSchemaTopology } from '../../api/schemaManagement'
 import {
   GRAPH_ALGORITHMS,
   type AlgorithmParamDef,
@@ -947,6 +948,26 @@ async function handleNgqlQuery(): Promise<void> {
 
 let algoMetadataLoadedFor = ''
 
+// 关系类型选项的 Schema 目录中文名（name=图库英文边类型 → label=中文）；
+// 目录拿不到/加载失败不阻塞算法面板，选项与已选标签回退英文原名。
+const algoEdgeTypeLabels = ref(new Map<string, string>())
+
+async function loadAlgoEdgeTypeLabels(space: string): Promise<void> {
+  const context = graphContextVersion
+  try {
+    const topology = await getSchemaTopology(space)
+    if (context !== graphContextVersion) return
+    algoEdgeTypeLabels.value = new Map(topology.edges.map((schema) => [schema.name, schema.label]))
+  } catch {
+    if (context !== graphContextVersion) return
+    algoEdgeTypeLabels.value = new Map()
+  }
+}
+
+function algoEdgeTypeLabel(name: string): string {
+  return algoEdgeTypeLabels.value.get(name) || name
+}
+
 async function loadAlgoMetadata(force = false): Promise<void> {
   if (!algoSpace.value) return
   if (!force && algoMetadataLoadedFor === algoSpace.value) return
@@ -958,6 +979,8 @@ async function loadAlgoMetadata(force = false): Promise<void> {
     if (context !== graphContextVersion) return
     algoMetadata.value = metadata
     algoMetadataLoadedFor = space
+    // 选项中文名与元数据并行加载（目录失败不告警，回退英文）
+    void loadAlgoEdgeTypeLabels(space)
     // 切换图空间后：剔除新空间已不存在的关系类型（连同其权重列配置），
     // 避免带着旧空间的选择（图库里已无此边）提交得到空结果
     const available = new Set(algoMetadata.value?.edgeTypes ?? [])
@@ -1712,8 +1735,8 @@ const pageMeta = computed(() => {
                   :max-tag-count="4"
                   :scrollbar="false"
                 >
-                  <a-option v-for="item in algoMetadata?.edgeTypes ?? []" :key="item" :value="item">
-                    {{ item }}
+                  <a-option v-for="item in algoMetadata?.edgeTypes ?? []" :key="item" :value="item" :label="algoEdgeTypeLabel(item)">
+                    {{ algoEdgeTypeLabel(item) }}
                   </a-option>
                 </a-select>
               </AFormItem>

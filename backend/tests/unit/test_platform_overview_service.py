@@ -523,6 +523,7 @@ def _execution_record(
     trigger: str = "SCHEDULE",
     sources: list[dict] | None = None,
     task_id: str | None = "TASK-overview-test",
+    job_id: str | None = "job-overview-test",
     started_at: str | None = None,
 ) -> str:
     import json
@@ -532,6 +533,7 @@ def _execution_record(
         "completedAt": completed_at,
         "triggerSource": trigger,
         "taskId": task_id,
+        "jobId": job_id,
         "startedAt": started_at,
         "payload": {payload_space_key: payload_space} if payload_space else {},
         "output": {
@@ -546,37 +548,42 @@ def _execution_record(
 
 def test_parse_execution_records_without_task_id_keeps_rows_unlinked() -> None:
     snapshot = parse_execution_records(
-        [_execution_record(task_id=None)],
+        [_execution_record(task_id=None, job_id=None)],
         day="2026-09-22",
         target_space="dev2",
         default_space="dev2",
     )
     assert len(snapshot.entity_rows) == 1
     assert snapshot.entity_rows[0].task_id is None
+    assert snapshot.entity_rows[0].job_id is None
     assert snapshot.entity_executions[0].task_id is None
+    assert snapshot.entity_executions[0].job_id is None
 
 
 def test_graph_row_task_id_distinguishes_sources_and_reruns_without_guessing() -> None:
     from dataclasses import replace
 
-    from service.platform_overview import _graph_row_task_id
+    from service.platform_overview import _graph_row_execution
 
     snapshot = parse_execution_records(
         [
             _execution_record(
                 task_id="TASK-old",
+                job_id="job-old",
                 table="paper",
                 started_at="2026-09-22 09:00:00",
                 completed_at="2026-09-22 10:00:00",
             ),
             _execution_record(
                 task_id="TASK-new",
+                job_id="job-new",
                 table="paper",
                 started_at="2026-09-22 11:00:00",
                 completed_at="2026-09-22 12:00:00",
             ),
             _execution_record(
                 task_id="TASK-other-source",
+                job_id="job-other",
                 table="patent",
                 started_at="2026-09-22 11:00:00",
                 completed_at="2026-09-22 12:00:00",
@@ -589,20 +596,23 @@ def test_graph_row_task_id_distinguishes_sources_and_reruns_without_guessing() -
     executions = snapshot.entity_executions
 
     # 即使正在反查最新执行的整日时间窗，旧对象也应关联旧任务。
-    def resolve(source: str, stamp: str, time_prop: str = "update_time") -> str | None:
-        return _graph_row_task_id(
+    def resolve(
+        source: str, stamp: str, time_prop: str = "update_time"
+    ) -> tuple[str | None, str | None]:
+        resolved = _graph_row_execution(
             executions[1], {"source_table": source, time_prop: stamp}, time_prop, executions
         )
+        return (resolved.task_id, resolved.job_id) if resolved else (None, None)
 
-    assert resolve("paper", "2026-09-22 09:30:00") == "TASK-old"
-    assert resolve("paper", "2026-09-22 11:30:00") == "TASK-new"
-    assert resolve("patent", "2026-09-22 11:30:00") == "TASK-other-source"
-    assert resolve("unknown", "2026-09-22 11:30:00") is None
-    assert resolve("paper", "2026-09-22 13:00:00") is None
+    assert resolve("paper", "2026-09-22 09:30:00") == ("TASK-old", "job-old")
+    assert resolve("paper", "2026-09-22 11:30:00") == ("TASK-new", "job-new")
+    assert resolve("patent", "2026-09-22 11:30:00") == ("TASK-other-source", "job-other")
+    assert resolve("unknown", "2026-09-22 11:30:00") == (None, None)
+    assert resolve("paper", "2026-09-22 13:00:00") == (None, None)
     # 源数据更新时间不能用于区分图写入任务；并发同来源同 Schema 也不能猜。
-    assert resolve("paper", "2026-09-22 09:30:00", "source_update_time") is None
+    assert resolve("paper", "2026-09-22 09:30:00", "source_update_time") == (None, None)
     executions.append(replace(executions[1], task_id="TASK-concurrent"))
-    assert resolve("paper", "2026-09-22 11:30:00") is None
+    assert resolve("paper", "2026-09-22 11:30:00") == (None, None)
 
 
 def test_parse_execution_records_aggregates_day_by_kind_and_space() -> None:
@@ -643,7 +653,9 @@ def test_parse_execution_records_aggregates_day_by_kind_and_space() -> None:
     assert row.change == "新增 review-widget-64d0d5"
     assert row.source == "techkg_e2e_liz.review_widgets"
     assert row.task_id == "TASK-overview-test"
+    assert row.job_id == "job-overview-test"
     assert row.model_dump(by_alias=True)["taskId"] == "TASK-overview-test"
+    assert row.model_dump(by_alias=True)["jobId"] == "job-overview-test"
     assert row.time == "09-22 18:30:00"  # 完成时刻按北京展示（UTC+8），带月日（跨天歧义）
     assert len(snapshot.relation_rows) == 1
     assert snapshot.relation_rows[0].source == "techkg_e2e_liz.review_widgets"
@@ -974,6 +986,7 @@ def test_enrich_day_rows_lists_graph_objects_per_vertex() -> None:
     assert result.entity_rows[0].source == "techkg_e2e_liz.review_widgets"
     assert result.entity_rows[0].time == "09-23 11:00:35"  # 图侧 UTC 时间戳折算北京展示
     assert {row.task_id for row in result.entity_rows} == {"TASK-entity"}
+    assert {row.job_id for row in result.entity_rows} == {"job-overview-test"}
     # 关系行：边类型无索引 LOOKUP 失败 → GO FROM 当日实体 vid 兜底，无序对去重后 2 条
     assert [(row.type, row.object) for row in result.relation_rows] == [
         ("审测关联", "总览造数-实体01 → 总览造数-实体02"),
@@ -983,6 +996,7 @@ def test_enrich_day_rows_lists_graph_objects_per_vertex() -> None:
     assert result.relation_rows[0].source == "techkg_e2e_liz.review_widgets"
     assert result.relation_rows[0].time == "09-23 11:44:48"
     assert {row.task_id for row in result.relation_rows} == {"TASK-relation"}
+    assert {row.job_id for row in result.relation_rows} == {"job-overview-test"}
     # 快照保留控制库 written 合计；两类反查均为逐对象行（关系 LOOKUP 无索引走
     # GO FROM 兜底也算枚举完成）——exact 置位后装配层改按行数计徽标
     assert result.entity_added == 3

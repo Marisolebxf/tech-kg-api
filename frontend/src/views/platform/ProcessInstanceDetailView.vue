@@ -88,11 +88,17 @@ const headerSubtitle = computed(() => {
   return [action && action !== '-' ? action : '', source].filter(Boolean).join(' · ')
 })
 const isConstructionTask = computed(() => processingInstance.value?.stage === '图谱构建' || String(route.params.area) === 'construction')
+/** 任务级待复核口径：后端回写「执行出错」（跑崩）/「执行异常」（完成但含失败行）。
+ *  同时是「进入人工处理」入口的开关——行级失败是否入了审核队列由关联案计数说话，
+ *  不再按选中步骤的 abnormal 判断（chain 任务被 Temporal 历史淘汰后 steps/pipeline
+ *  全空，步骤级口径会把入口整个藏掉）。 */
 const needsTaskReview = computed(() => ['执行出错', '执行异常'].includes(processingInstance.value?.taskStatus ?? ''))
 const activeTab = ref<DetailTab>('overview')
 const isPipelineTask = computed(() => ['kg.custom.steps', 'kg.custom.chain', 'kg.schema.extract.chain'].includes(processingInstance.value?.workflowType ?? ''))
 /** 多脚本串行任务：流程里每个 step 是一个 Schema 抽取（旧版为一个脚本），点击在按钮下方展开其 activity steps。 */
 const isChainTask = computed(() => ['kg.custom.chain', 'kg.schema.extract.chain'].includes(processingInstance.value?.workflowType ?? ''))
+/** 平台喂数抽取任务（单 Schema kg.schema.extract / chain 多脚本串行）：逐行失败按记录 id 落「抽取失败重跑」C 类审核队列。 */
+const isExtractTask = computed(() => processingInstance.value?.workflowType === 'kg.schema.extract' || isChainTask.value)
 /** chain 内联展开：当前展开的脚本 step 与选中的 activity step。 */
 const selectedActivityId = ref(String(route.query.activity || ''))
 const expandedScriptId = ref(selectedActivityId.value ? String(route.query.step || '') : '')
@@ -312,48 +318,77 @@ const selectedStep = computed<Step>(() => {
 })
 const visiblePhase = computed<'数据处理' | '图谱构建'>(() => steps.value[0]?.phase ?? (isConstructionTask.value ? '图谱构建' : '数据处理'))
 const visibleSteps = computed(() => steps.value)
-const needsReview = computed(() => needsTaskReview.value && selectedStep.value.abnormal !== '0' && selectedStep.value.abnormal !== '-')
-/** 「进入人工处理」入口：平台喂数抽取（含 chain）的逐行失败落「抽取失败重跑」
- *  C 类队列（category 深链直达），并按当前选中的执行 ID 预填搜索——队列
- *  keyword 会匹配快照 executionId，落地即筛出本次执行产生的失败案；拿不到
- *  执行 ID 时退回纯 category 深链。其余待复核任务落人工审核处理中心首页。
- *  旧实现跳 /manual-review/task/<任务ID>——该路由只认审核案 MR- ID，任务/作业
- *  详情页拿不到（job 路由下 taskId 曾回落演示常量），点击必 404 空白页。 */
-const reviewEntryTarget = computed(() => {
-  const isExtractTask = processingInstance.value?.workflowType === 'kg.schema.extract' || isChainTask.value
-  if (!isExtractTask) return '/manual-review'
+/** 圈案词：job 详情按 jobId 圈本任务全部执行的失败案；任务详情用任务回写的
+ *  jobId（队列 keyword 按快照锚定的 jobId/executionId 命中）。不能按「最新
+ *  执行的任务」圈案——一个 job 多次执行，重跑仍失败的记录按 dedupe 归在原
+ *  执行的任务名下，最新执行任务名下常为 0 案（ewrdf/gkx 验证实测），会误报
+ *  「执行级失败，无失败行记录可重跑」；也不能传任务 ID 过滤——队列接口没有
+ *  sourceTaskId 参数（传了也被静默丢弃），数出来的是当前空间全量 C 案。 */
+const reviewScopeKeyword = computed(() => {
+  if (!isExtractTask.value) return ''
+  if (jobId.value) return jobId.value
+  const taskJobId = processingInstance.value?.jobId
+  if (taskJobId?.startsWith('job-')) return taskJobId
   const executionId = selectedExecutionId.value
-  if (!executionId.startsWith('EXEC-')) return { path: '/manual-review', query: { category: 'C' } }
-  return { path: '/manual-review', query: { category: 'C', keyword: executionId } }
+  return executionId.startsWith('EXEC-') ? executionId : ''
 })
-/** 本任务在审核队列里的关联案数量（T_EXTRACT_FAIL 按来源任务聚合；null=未加载/拉取失败）。
+/** 「进入人工处理」入口：平台喂数抽取（含 chain）的逐行失败落「抽取失败重跑」
+ *  C 类队列（category 深链直达），并按圈案词预填搜索，落地即筛出本任务的
+ *  失败案；拿不到圈案词时退回纯 category 深链。其余待复核任务落人工审核
+ *  处理中心首页。旧实现跳 /manual-review/task/<任务ID>——该路由只认审核案
+ *  MR- ID，任务/作业详情页拿不到（job 路由下 taskId 曾回落演示常量），点击
+ *  必 404 空白页。 */
+const reviewEntryTarget = computed(() => {
+  const keyword = reviewScopeKeyword.value
+  if (isExtractTask.value) {
+    return keyword
+      ? { path: '/manual-review', query: { category: 'C', keyword } }
+      : { path: '/manual-review', query: { category: 'C' } }
+  }
+  return '/manual-review'
+})
+/** 本任务在审核队列里的关联案数量（按圈案词计数；null=未加载/不可用）。
  *  执行级失败（如脚本运行器未配置，批次转换前即失败）不建逐行案 → 计数为 0，
  *  此时「进入人工处理」改为说明文案，不再跳到一个与本任务无关的 C 类队列误导排查。 */
 const relatedReviewCount = ref<number | null>(null)
-let relatedReviewLoadedTask = ''
+let relatedReviewLoadedKey = ''
 async function loadRelatedReviewCount() {
-  const sourceTaskId = processingInstance.value?.id || taskId.value
-  if (!sourceTaskId || (processingInstance.value?.workflowType !== 'kg.schema.extract' && !isChainTask.value)) return
-  if (relatedReviewLoadedTask === sourceTaskId) return
-  relatedReviewLoadedTask = sourceTaskId
+  const scope = reviewScopeKeyword.value
+  if (!scope) return
+  const space = job.value?.graphSpace || processingInstance.value?.graphSpace || ''
+  // 认证栈上队列会被 X-Graph-Space 请求头强制过滤到当前全局空间（参数空间不一致
+  // 直接 403）：全局空间与任务空间不一致时计数必为 0，跳过请求退化为不带计数，
+  // 避免误报「执行级失败」/在门户 iframe 里弹无权限提示。
+  if (space && spaces.current && space !== spaces.current) {
+    relatedReviewLoadedKey = `${scope}|skip`
+    relatedReviewCount.value = null
+    return
+  }
+  if (relatedReviewLoadedKey === `${scope}|${space}`) return
+  relatedReviewLoadedKey = `${scope}|${space}`
   relatedReviewCount.value = null
   try {
-    const page = await getProductionReviews({ category: 'C', sourceTaskId, page: 1, pageSize: 1 })
+    const params: Record<string, unknown> = { category: 'C', keyword: scope, page: 1, pageSize: 1 }
+    if (space) params.graphSpace = space
+    const page = await getProductionReviews(params)
     relatedReviewCount.value = Number(page.total ?? 0)
   } catch {
-    relatedReviewLoadedTask = '' // 拉取失败退回普通入口（不显示计数），下次触发可重试
+    relatedReviewLoadedKey = '' // 拉取失败退回普通入口（不显示计数），下次触发可重试
   }
 }
-watch([() => processingInstance.value?.id, needsReview], () => {
-  if (needsReview.value) void loadRelatedReviewCount()
+watch([reviewScopeKeyword, needsTaskReview, () => spaces.current], () => {
+  if (needsTaskReview.value) void loadRelatedReviewCount()
 }, { immediate: true })
 const attentionLabel = computed(() => selectedStep.value.risk === '高风险' ? '重点关注' : selectedStep.value.risk === '中风险' ? '一般关注' : '常规节点')
 const isProcessLevelIncident = computed(() => ['模型批量输出异常', 'Schema 批量映射失败', '公共字典配置异常'].includes(processingInstance.value?.reviewType ?? ''))
 const isTaskExecutionFailure = computed(() => processingInstance.value?.reviewType === '单任务执行失败')
-const isExecutionInterrupted = computed(() => isProcessLevelIncident.value || isTaskExecutionFailure.value)
+/** 执行被打断（未运行完成）：流程级事故 / 单任务执行失败回写 / 任务回写「执行出错」
+ *  （跑崩，无完整输出）。「执行异常」= 完成但含失败行，不算打断。此前只认 reviewType，
+ *  抽取任务崩溃（如 chain 环节异常终止）会落进「执行成功：程序正常结束」的成功卡。 */
+const isExecutionInterrupted = computed(() => isProcessLevelIncident.value || isTaskExecutionFailure.value || (processingInstance.value?.taskStatus ?? '') === '执行出错')
 // 无任务记录时的兜底口径：执行中如实显示「执行中」，未跑过显示「未执行」——不再一律当作「执行完成」
 const taskStatus = computed(() => processingInstance.value?.taskStatus ?? (isExecutionInterrupted.value ? '执行出错' : isTaskRunning.value ? '执行中' : '未执行'))
-const resultStatus = computed(() => isProcessLevelIncident.value ? '流程已阻断' : isTaskExecutionFailure.value ? '未产生结果' : isTaskRunning.value ? '尚未产生结果' : !processingInstance.value ? '暂无结果' : processingInstance.value?.status === '人工处理完成' ? '人工确认通过' : needsTaskReview.value ? '结果待确认' : '结果已通过')
+const resultStatus = computed(() => isProcessLevelIncident.value ? '流程已阻断' : isExecutionInterrupted.value ? '未产生结果' : isTaskRunning.value ? '尚未产生结果' : !processingInstance.value ? '暂无结果' : processingInstance.value?.status === '人工处理完成' ? '人工确认通过' : needsTaskReview.value ? '结果待确认' : '结果已通过')
 const incidentScope = computed(() => isProcessLevelIncident.value ? '流程级·高风险（P0）' : needsTaskReview.value ? '任务级·中风险（P1）' : '无异常')
 const blockingStrategy = computed(() => isProcessLevelIncident.value ? '阻断当前节点及下游，调整后恢复' : needsTaskReview.value ? '只隔离当前任务，其他任务继续执行' : '无需阻断')
 
@@ -810,14 +845,14 @@ const publicSpaceReadOnly = computed(() => {
       </aside>
 
       <main class="step-detail">
-        <header class="step-head"><div><h2>{{ selectedStep.name }}</h2><p>{{ selectedStep.description }}</p></div><div class="step-head-actions"><button v-if="isChainTask && selectedActivityId" type="button" class="step-head-back" @click="clearActivitySelection()">← 返回脚本级信息</button><button v-if="isPipelineTask && isPipelineFailed" type="button" class="step-head-retry" :disabled="retrySubmitting || !canRetry" @click="handlePipelineRetry">{{ retrySubmitting ? '提交中…' : '重试（reset 回放）' }}</button><RouterLink v-else-if="!isPipelineTask && needsReview && relatedReviewCount !== 0" :to="reviewEntryTarget">进入人工处理{{ relatedReviewCount !== null ? `（本任务 ${relatedReviewCount} 条）` : '' }} →</RouterLink><span v-else-if="!isPipelineTask && needsReview" class="step-head-review-note">本次执行未产生逐行审核任务（执行级失败，无失败行记录可重跑）——请按执行历史中的失败原因修复后重新执行</span></div></header>
+        <header class="step-head"><div><h2>{{ selectedStep.name }}</h2><p>{{ selectedStep.description }}</p></div><div class="step-head-actions"><button v-if="isChainTask && selectedActivityId" type="button" class="step-head-back" @click="clearActivitySelection()">← 返回脚本级信息</button><button v-if="isPipelineTask && isPipelineFailed" type="button" class="step-head-retry" :disabled="retrySubmitting || !canRetry" @click="handlePipelineRetry">{{ retrySubmitting ? '提交中…' : '重试（reset 回放）' }}</button><RouterLink v-else-if="isExtractTask && needsTaskReview && relatedReviewCount !== 0" :to="reviewEntryTarget">进入人工处理{{ relatedReviewCount !== null ? `（本任务 ${relatedReviewCount} 条）` : '' }} →</RouterLink><span v-else-if="isExtractTask && needsTaskReview" class="step-head-review-note">本次执行未产生逐行审核任务（执行级失败，无失败行记录可重跑）——请按执行历史中的失败原因修复后重新执行</span></div></header>
         <nav class="detail-tabs"><button v-for="tab in ([['overview','概况与结果'],['io','输入输出'],['logs','异常与日志'],['lineage','数据溯源']] as const)" :key="tab[0]" type="button" :class="{ active: activeTab === tab[0] }" @click="activeTab = tab[0]">{{ tab[1] }}</button></nav>
 
         <div v-if="activeTab === 'overview'" class="overview-content">
           <section class="metric-card"><h3>节点结果</h3><dl><div v-for="row in genericMetrics" :key="row[0]"><dt>{{ row[0] }}</dt><dd>{{ row[1] }}</dd></div></dl></section>
           <AppAlert v-if="isTaskRunning" type="info" class="result-card" title="执行结果与业务验收"><p><strong>执行进行中：</strong>程序尚未运行结束，暂无可验收结果。</p><p><strong>当前进度：</strong>左侧流程卡片实时展示各环节状态；页面会自动刷新，执行完成后此处更新为验收结论（通过 / 需人工确认 / 异常）。</p></AppAlert>
           <AppAlert v-else-if="!processingInstance" type="info" class="result-card" title="执行结果与业务验收"><p><strong>执行结果：</strong>暂无可验收结果——任务尚未执行，或本次执行未回写任务记录（可在「异常与日志」页签查看执行备注）。</p></AppAlert>
-          <AppAlert v-else-if="needsReview" type="warning" class="result-card" title="执行结果与业务验收"><template v-if="isExecutionInterrupted"><p><strong>执行结果：</strong>任务未运行完成，尚未产生可验收结果。</p><p><strong>置信度：</strong>无，因为没有模型结果。</p></template><template v-else><p><strong>执行结果：</strong>程序已正常运行完成并生成输出。</p><p><strong>验收结果：</strong>{{ processingInstance?.result }}，当前不能视为正确结果。</p></template><p><strong>后续处理：</strong>{{ blockingStrategy }}。</p></AppAlert>
+          <AppAlert v-else-if="needsTaskReview" type="warning" class="result-card" title="执行结果与业务验收"><template v-if="isExecutionInterrupted"><p><strong>执行结果：</strong>任务未运行完成，尚未产生可验收结果。</p><p><strong>置信度：</strong>无，因为没有模型结果。</p></template><template v-else><p><strong>执行结果：</strong>程序已正常运行完成并生成输出。</p><p><strong>验收结果：</strong>{{ processingInstance?.result }}，当前不能视为正确结果。</p></template><p><strong>后续处理：</strong>{{ blockingStrategy }}。</p></AppAlert>
           <AppAlert v-else type="success" class="result-card" title="执行结果与业务验收"><p><strong>执行成功：</strong>程序正常结束。 <strong>结果已通过：</strong>{{ resultVerdict }}。两项状态分别记录，不相互替代。</p></AppAlert>
         </div>
 

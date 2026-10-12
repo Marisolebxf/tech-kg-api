@@ -39,6 +39,9 @@ class AssetChangeRow(CamelCaseModel):
     time: str
     # 真实工作流任务 ID；旧执行未记录任务时留空，不按来源名称猜测任务。
     task_id: str | None = None
+    # 同一条执行所属的图谱构建任务（job-xxx）：行点击跳 /graph-build/jobs 用；
+    # 与 task_id 同源（同一条执行记录），旧执行未记录时留空。
+    job_id: str | None = None
     object_id: str | None = None
     # 控制库写入合计仅供内部诊断，不作为逐对象明细交给页面。
     is_aggregate: bool = Field(default=False, exclude=True)

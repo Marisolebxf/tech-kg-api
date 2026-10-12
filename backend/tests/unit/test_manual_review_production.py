@@ -313,32 +313,6 @@ def test_queue_rows_expose_execution_and_workflow_id(service):
     assert row["workflowId"] is None or isinstance(row["workflowId"], str)
 
 
-def test_queue_filters_by_source_task(service):
-    # 来源任务深链：任务详情「进入人工处理」带 sourceTaskId 只看本任务产生的案；
-    # 执行级失败（如脚本沙箱未配置）不建案 → 该任务过滤出空列表
-    service.create_direct_case(**link_case_kwargs(task_id="PI-20261010-AAAA"))
-    service.create_direct_case(
-        **link_case_kwargs(
-            task_id="PI-20261010-BBBB",
-            execution_id="EXEC-2",
-            object_id="S-2",
-            candidate={
-                "scholar_id": "S-2",
-                "name_zh": "李四",
-                "existingCandidates": [{"id": "E-1"}],
-            },
-        )
-    )
-    reviewer = actor("r", ("reviewer",))
-    only = service.list_cases({"source_task_id": "PI-20261010-AAAA"}, reviewer)
-    assert only["total"] == 1
-    assert only["items"][0]["sourceTaskId"] == "PI-20261010-AAAA"
-    # 无案任务（执行级失败）→ 空队列，前端据此展示「未产生关联审核任务」说明
-    assert service.list_cases({"source_task_id": "PI-19700101-XXXX"}, reviewer)["total"] == 0
-    # 不传=全部
-    assert service.list_cases({}, reviewer)["total"] == 2
-
-
 def test_queue_filters_by_graph_space(service):
     # 队列跟随全局图空间选择：graph_space 只看该空间；不传=跨空间全量（含 NULL 空间存量案）
     service.create_direct_case(**link_case_kwargs(graph_space="dev2"))
@@ -424,6 +398,23 @@ def test_queue_keyword_matches_source_record_info(service, monkeypatch):
     assert service.list_cases({"category": "C", "keyword": "EXEC-1"}, reviewer)["total"] == 1
     assert service.list_cases({"category": "C", "keyword": "db.widgets"}, reviewer)["total"] == 1
     assert service.list_cases({"category": "C", "keyword": "job-404"}, reviewer)["total"] == 0
+
+
+def test_queue_keyword_by_execution_excludes_rerun_generation(service, monkeypatch):
+    # 重跑仍失败：同一记录两代案并存（旧代 RESOLVED + attempt2 新案，后者快照带
+    # rerunOfExecutionId=原执行）。按执行搜只命中该执行建的那一代——值模糊匹配
+    # 会从 executionId 键出发跨过中间 JSON 落到 rerunOfExecutionId 的值上，
+    # 搜任一代执行 ID 都翻倍出两代案（1077 失败记录搜出 2154 的实例）
+    import service.manual_review_production as mrp
+
+    monkeypatch.setattr(mrp, "resolve_execution_ids_by_job_keyword", lambda kw: [])
+    case1 = _make_extract_fail_case(service, domain="talent")  # EXEC-1 / job-1 / w3
+    _refail_once(service, case1, "EXEC-R1")  # 旧案 RESOLVED + attempt2 新案（EXEC-R1）
+    reviewer = actor("r", ("reviewer",))
+    assert service.list_cases({"category": "C", "keyword": "EXEC-1"}, reviewer)["total"] == 1
+    assert service.list_cases({"category": "C", "keyword": "EXEC-R1"}, reviewer)["total"] == 1
+    # jobId 两代相同，任务级搜索仍两代都命中（语义不变）
+    assert service.list_cases({"category": "C", "keyword": "job-1"}, reviewer)["total"] == 2
 
 
 def test_queue_keyword_matches_legacy_job_via_control_db(service, monkeypatch):

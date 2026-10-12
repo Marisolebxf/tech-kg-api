@@ -1308,6 +1308,15 @@ function openProcessDetail(area: 'processing' | 'construction', taskId: string, 
   })
 }
 
+function openAssetChangeTask(row: AssetChangeRow) {
+  if (!canEnterAdminPages.value) return
+  if (!row.taskId) {
+    showToast('该记录暂无关联更新任务', 'info')
+    return
+  }
+  openProcessDetail('construction', row.taskId)
+}
+
 function handleExecuteService() {
   // 测试页签是接口示例控制台：执行按钮不发起真实调用，只如实提示。
   showToast('当前为接口示例，未发起真实调用；请到对应业务功能页发起真实查询', 'info')
@@ -2059,8 +2068,40 @@ print(response.json())</pre>
       <aside aria-label="辅助区域 4" v-if="selectedAssetChange && activeAssetOverview" class="asset-change-drawer">
         <header><div><span>昨日图谱数据变化</span><h2>{{ activeAssetOverview.title }}新增明细</h2><p>{{ activeAssetOverview.addedLabel }} {{ activeAssetOverview.added }} · 数据更新至 {{ overviewMeta.updatedAt }}</p></div><button type="button" aria-label="关闭新增数据详情" @click="selectedAssetChange = null">×</button></header>
         <section class="asset-change-summary"><article><span>当前总量</span><strong>{{ activeAssetOverview.total }}</strong></article><article><span>{{ activeAssetOverview.addedLabel }}</span><strong>{{ activeAssetOverview.added }}</strong></article></section>
-        <div class="asset-change-table"><table aria-label="数据表"><thead><tr><th>数据类型</th><th>具体对象</th><th>来源</th><th>识别时间</th></tr></thead><tbody><tr v-if="!assetChangeRows[selectedAssetChange].length"><td colspan="4">昨日暂无写图记录</td></tr><tr v-for="(row, idx) in assetChangeRows[selectedAssetChange]" :key="`${row.object}-${row.time}`"><td>{{ row.type }}</td><td><a-tooltip :popup-visible="assetTipVisible.has(`obj-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`obj-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><span class="asset-change-object" @mouseenter="showAssetTipIfTruncated(`obj-${idx}`, $event)" @mouseleave="hideAssetTip(`obj-${idx}`)"><strong>{{ row.object }}</strong></span><template #content>{{ row.object }}</template></a-tooltip></td><td><a-tooltip :popup-visible="assetTipVisible.has(`src-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`src-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip"><code class="asset-change-source" @mouseenter="showAssetTipIfTruncated(`src-${idx}`, $event)" @mouseleave="hideAssetTip(`src-${idx}`)">{{ row.source }}</code><template #content>{{ row.source }}</template></a-tooltip></td><td>{{ row.time }}</td></tr></tbody></table></div>
-        <footer><span>{{ assetChangeFooterText(selectedAssetChange) }}</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看对应更新任务</RouterLink></footer>
+        <div class="asset-change-table">
+          <table aria-label="数据表">
+            <thead><tr><th>数据类型</th><th>具体对象</th><th>来源</th><th>识别时间</th></tr></thead>
+            <tbody>
+              <tr v-if="!assetChangeRows[selectedAssetChange].length"><td colspan="4">昨日暂无写图记录</td></tr>
+              <tr
+                v-for="(row, idx) in assetChangeRows[selectedAssetChange]"
+                :key="`${row.object}-${row.time}`"
+                :class="{ 'is-clickable': canEnterAdminPages && row.taskId }"
+                :tabindex="canEnterAdminPages && row.taskId ? 0 : undefined"
+                :aria-label="canEnterAdminPages && row.taskId ? `查看${row.object}的更新任务` : undefined"
+                @click="openAssetChangeTask(row)"
+                @keydown.enter.prevent="openAssetChangeTask(row)"
+                @keydown.space.prevent="openAssetChangeTask(row)"
+              >
+                <td>{{ row.type }}</td>
+                <td>
+                  <a-tooltip :popup-visible="assetTipVisible.has(`obj-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`obj-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip">
+                    <span class="asset-change-object" @mouseenter="showAssetTipIfTruncated(`obj-${idx}`, $event)" @mouseleave="hideAssetTip(`obj-${idx}`)"><strong>{{ row.object }}</strong></span>
+                    <template #content>{{ row.object }}</template>
+                  </a-tooltip>
+                </td>
+                <td>
+                  <a-tooltip :popup-visible="assetTipVisible.has(`src-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`src-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip">
+                    <code class="asset-change-source" @mouseenter="showAssetTipIfTruncated(`src-${idx}`, $event)" @mouseleave="hideAssetTip(`src-${idx}`)">{{ row.source }}</code>
+                    <template #content>{{ row.source }}</template>
+                  </a-tooltip>
+                </td>
+                <td>{{ row.time }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <footer><span>{{ assetChangeFooterText(selectedAssetChange) }}</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看更新任务</RouterLink></footer>
       </aside>
     </Teleport>
 
@@ -4682,6 +4723,7 @@ print(response.json())</pre>
 .asset-change-drawer>header{display:flex;align-items:flex-start;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.asset-change-drawer>header span{color:#004ecc;font-size:11px}.asset-change-drawer h2{margin:6px 0 3px;font-size:20px}.asset-change-drawer header p{margin:0;color:#718098;font-size:12px}.asset-change-drawer header>button{width:31px;height:31px;border:0;border-radius:5px;background:transparent;color:#52647f;font-size:20px;cursor:pointer}
 .asset-change-summary{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:14px}.asset-change-summary article{display:grid;gap:5px;padding:14px;border:1px solid #c7dcfb;border-radius:7px;background:#fff}.asset-change-summary span{color:#718098;font-size:11px}.asset-change-summary strong{color:#004ecc;font-size:24px}.asset-change-summary article:last-child strong{color:#067647}
 .asset-change-table{min-height:0;overflow:auto;padding:0 14px 14px}.asset-change-table table{width:100%;border-collapse:collapse;border:1px solid #dce8f8;background:#fff;font-size:12px}.asset-change-table th,.asset-change-table td{height:48px;padding:10px 12px;border-bottom:1px solid #e3ebf6;text-align:left}.asset-change-table th{position:sticky;top:0;background:#f3f7fc;color:#62728a}.asset-change-table td{color:#344861}.asset-change-table code{color:#004ecc;font-family:inherit}.asset-change-table td .asset-change-object{display:inline-block;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}.asset-change-table td .asset-change-source{display:inline-block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
+.asset-change-table tr.is-clickable{cursor:pointer}.asset-change-table tr.is-clickable:hover,.asset-change-table tr.is-clickable:focus-visible{background:#eef5ff;outline:2px solid #004ecc;outline-offset:-2px}
 .asset-change-drawer>footer{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.asset-change-drawer>footer span{color:#718098;font-size:11px}.asset-change-drawer>footer a{height:32px;padding:0 12px;border-radius:5px;background:#004ecc;color:#fff;font-size:11px;line-height:32px;text-decoration:none}
 @media(max-width:760px){.asset-change-drawer{width:94vw}.asset-change-table table{min-width:700px}}
 

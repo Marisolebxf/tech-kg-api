@@ -37,6 +37,8 @@ class AssetChangeRow(CamelCaseModel):
     change: str
     source: str
     time: str
+    # 真实工作流任务 ID；旧执行未记录任务时留空，不按来源名称猜测任务。
+    task_id: str | None = None
 
 
 class StructureMember(CamelCaseModel):

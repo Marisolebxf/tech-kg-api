@@ -21,6 +21,8 @@ export interface AssetChangeRow {
   change: string
   source: string
   time: string
+  /** 工作流控制库中的真实任务 ID；兼容没有任务关联的历史记录。 */
+  taskId?: string | null
 }
 
 export interface StructureMember {

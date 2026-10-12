@@ -137,6 +137,12 @@ async def production_queue(
         None,
         description="排序：updated_desc/updated_asc（按更新时间）；不传=默认风险+创建时间",
     ),
+    source_task_id: str | None = Query(
+        None,
+        alias="sourceTaskId",
+        max_length=128,
+        description="按来源任务（PI- 处理实例）过滤——任务详情「进入人工处理」深链定位本任务产生的审核案；不传=全部",
+    ),
     page: int = 1,
     page_size: int = Query(50, alias="pageSize"),
 ):
@@ -163,6 +169,7 @@ async def production_queue(
                 keyword,
                 updated_within,
                 sort,
+                source_task_id,
                 page,
                 page_size,
             ],

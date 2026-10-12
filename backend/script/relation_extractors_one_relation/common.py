@@ -36,7 +36,7 @@ from utils.runtime_paths import private_state_dir
 
 logger = logging.getLogger("relation_extractors_one_relation")
 
-DEFAULT_DB = "gkx_element"
+DEFAULT_DB = "gkx"
 DEFAULT_BATCH_SIZE = 500
 
 
@@ -115,6 +115,8 @@ def _sdk_context():
 
 def mysql_engine(database: str = DEFAULT_DB) -> Engine:
     # 任务下发时选择的数据源优先；无上下文（CLI / 本地）回退 MYSQL_* env
+    # socket 级读/写超时与 infra.mysql.MySQLClient 同口径（防公网半开连接挂死）
+    connect_args = {"connect_timeout": 10, "read_timeout": 600, "write_timeout": 600}
     context = _sdk_context()
     params = context.to_dict().get("mysql") if context is not None else None
     if params:
@@ -124,13 +126,13 @@ def mysql_engine(database: str = DEFAULT_DB) -> Engine:
             f"@{params.get('host', '127.0.0.1')}:{params.get('port', 3306)}"
             f"/{database}?charset=utf8mb4"
         )
-        return create_engine(url, pool_pre_ping=True)
+        return create_engine(url, pool_pre_ping=True, connect_args=connect_args)
     user = os.getenv("MYSQL_USERNAME", "root")
     password = os.getenv("MYSQL_PASSWORD", "")
     host = os.getenv("MYSQL_HOST", "127.0.0.1")
     port = os.getenv("MYSQL_PORT", "3306")
     url = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}?charset=utf8mb4"
-    return create_engine(url, pool_pre_ping=True)
+    return create_engine(url, pool_pre_ping=True, connect_args=connect_args)
 
 
 def graph_client() -> TRSGraphClient:

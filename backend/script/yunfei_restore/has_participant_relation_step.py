@@ -24,6 +24,45 @@ from kg_sdk import step
 logger = logging.getLogger("has_participant")
 
 
+def normalize_name(value: str | None) -> str:
+    if not value:
+        return ""
+    return re.sub(r"\s+", " ", value.strip())
+
+
+def parse_list(raw: Any) -> list[str]:
+    """解析 JSON 数组 / 逗号分隔 / 单字符串 → 非空字符串列表。"""
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [normalize_name(str(x)) for x in raw if normalize_name(str(x))]
+    text = str(raw).strip()
+    if not text:
+        return []
+    if text.startswith("["):
+        try:
+            data = json.loads(text)
+            if isinstance(data, list):
+                return [normalize_name(str(x)) for x in data if normalize_name(str(x))]
+        except json.JSONDecodeError:
+            pass
+    if "," in text:
+        return [normalize_name(p) for p in text.split(",") if normalize_name(p)]
+    # 中文分隔符（全角逗号/分号、顿号、半角分号）串起的多个值同样切分，
+    # 否则整串被当成一个名字必然 not_found（participants/机构/关键词常见此形态）。
+    if any(sep in text for sep in ("，", "；", "、", ";")):
+        return [p for p in (normalize_name(part) for part in re.split(r"[，；、;]", text)) if p]
+    return [normalize_name(text)]
+
+
+def resolve_report_dir(payload: Mapping[str, Any], batch: str) -> Path:
+    """Resolve an explicit report directory or a private runtime default."""
+    configured = payload.get("report_dir")
+    return (
+        Path(str(configured)) if configured else private_state_dir("project-ingest-reports", batch)
+    )
+
+
 EntityBuilder = Callable[[str, Mapping[str, Any], str], Iterable[Any]]
 
 
@@ -527,14 +566,6 @@ def _load_matcher(candidates: set[str], dry_run: bool) -> ProjectEntityMatcher:
     return matcher
 
 
-def resolve_report_dir(payload: Mapping[str, Any], batch: str) -> Path:
-    """Resolve an explicit report directory or a private runtime default."""
-    configured = payload.get("report_dir")
-    return (
-        Path(str(configured)) if configured else private_state_dir("project-ingest-reports", batch)
-    )
-
-
 EXACT_MATCH_METHODS = frozenset(
     {
         "name_exact",
@@ -568,37 +599,6 @@ def match_audit_props(method: str, evidence: str = "") -> dict[str, Any]:
         "match_evidence": evidence or "",
         "confidence": confidence_from_method(method or "", evidence or ""),
     }
-
-
-def normalize_name(value: str | None) -> str:
-    if not value:
-        return ""
-    return re.sub(r"\s+", " ", value.strip())
-
-
-def parse_list(raw: Any) -> list[str]:
-    """解析 JSON 数组 / 逗号分隔 / 单字符串 → 非空字符串列表。"""
-    if raw is None:
-        return []
-    if isinstance(raw, list):
-        return [normalize_name(str(x)) for x in raw if normalize_name(str(x))]
-    text = str(raw).strip()
-    if not text:
-        return []
-    if text.startswith("["):
-        try:
-            data = json.loads(text)
-            if isinstance(data, list):
-                return [normalize_name(str(x)) for x in data if normalize_name(str(x))]
-        except json.JSONDecodeError:
-            pass
-    if "," in text:
-        return [normalize_name(p) for p in text.split(",") if normalize_name(p)]
-    # 中文分隔符（全角逗号/分号、顿号、半角分号）串起的多个值同样切分，
-    # 否则整串被当成一个名字必然 not_found（participants/机构/关键词常见此形态）。
-    if any(sep in text for sep in ("，", "；", "、", ";")):
-        return [p for p in (normalize_name(part) for part in re.split(r"[，；、;]", text)) if p]
-    return [normalize_name(text)]
 
 
 class ProjectIngestReport:

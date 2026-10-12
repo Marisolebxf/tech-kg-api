@@ -52,7 +52,7 @@ def test_mysql_engine_uses_ctx_params(monkeypatch):
 
 
 def test_mysql_engine_ctx_database_wins_over_default_arg(monkeypatch):
-    """任务触发时选的数据库优先于脚本默认 gkx_element。"""
+    """任务触发时选的数据库优先于脚本默认 gkx。"""
     from script.relation_extractors_one_relation import common
 
     _set_ctx(
@@ -83,7 +83,7 @@ def test_mysql_engine_env_fallback_without_ctx(monkeypatch):
     monkeypatch.setenv("MYSQL_PORT", "33061")
     engine = common.mysql_engine()
     assert engine.url.render_as_string(hide_password=False).startswith(
-        "mysql+pymysql://envuser:envpass@127.0.0.2:33061/gkx_element"
+        "mysql+pymysql://envuser:envpass@127.0.0.2:33061/gkx?charset=utf8mb4"
     )
 
 

@@ -20,56 +20,6 @@ from kg_sdk import step
 logger = logging.getLogger("authored_by")
 
 
-@dataclass(frozen=True)
-class EdgeRecord:
-    edge_type: str
-    source_vid: str
-    target_vid: str
-    properties: dict[str, Any]
-    # nGQL 确定性 rank 模式；None 走 REST merge 模式。
-    rank: int | None = None
-    # REST merge 的 identityProps；缺省取 properties["source_record_id"]。
-    identity: dict[str, Any] | None = field(default=None, compare=False)
-    # 端点验存用的 tag；None 表示该端点不验存。
-    source_tag: str | None = None
-    target_tag: str | None = None
-    # False 表示允许悬空端点（机构名桩 / DOI 桩等旧口径）。
-    validate_endpoints: bool = True
-
-
-_PAPER_SUFFIX_RE = re.compile(r"__\d+$")
-
-
-def paper_source_id(raw_id: Any) -> str:
-    """论文端点旧口径：去掉 ``__数字`` 后缀（仅用于关系端点）。"""
-    raw = str(raw_id or "")
-    return _PAPER_SUFFIX_RE.sub("", raw) if raw else ""
-
-
-def authored_by(table: str, row: Mapping[str, Any], batch: str) -> list[EdgeRecord]:
-    pid = paper_source_id(row.get("paper_id"))
-    aid = str(row.get("author_id")) if row.get("author_id") else ""
-    if not pid or not aid:
-        return []
-    return [
-        EdgeRecord(
-            "AUTHORED_BY",
-            f"paper_{pid}",
-            f"person_{aid}",
-            {
-                "author_order": str(row.get("author_sequence"))
-                if row.get("author_sequence") is not None
-                else "",
-                "is_corresponding": str(row.get("correspond"))
-                if row.get("correspond") is not None
-                else "",
-                "confidence": 1.0,
-            },
-            rank=0,
-        )
-    ]
-
-
 EntityBuilder = Callable[[str, Mapping[str, Any], str], Iterable[Any]]
 
 
@@ -144,6 +94,56 @@ def edge_transform(
     return _run(
         payload, builder=builder, mapper_by_table=mapper_by_table, to_json=to_json, key="edges"
     )
+
+
+@dataclass(frozen=True)
+class EdgeRecord:
+    edge_type: str
+    source_vid: str
+    target_vid: str
+    properties: dict[str, Any]
+    # nGQL 确定性 rank 模式；None 走 REST merge 模式。
+    rank: int | None = None
+    # REST merge 的 identityProps；缺省取 properties["source_record_id"]。
+    identity: dict[str, Any] | None = field(default=None, compare=False)
+    # 端点验存用的 tag；None 表示该端点不验存。
+    source_tag: str | None = None
+    target_tag: str | None = None
+    # False 表示允许悬空端点（机构名桩 / DOI 桩等旧口径）。
+    validate_endpoints: bool = True
+
+
+_PAPER_SUFFIX_RE = re.compile(r"__\d+$")
+
+
+def paper_source_id(raw_id: Any) -> str:
+    """论文端点旧口径：去掉 ``__数字`` 后缀（仅用于关系端点）。"""
+    raw = str(raw_id or "")
+    return _PAPER_SUFFIX_RE.sub("", raw) if raw else ""
+
+
+def authored_by(table: str, row: Mapping[str, Any], batch: str) -> list[EdgeRecord]:
+    pid = paper_source_id(row.get("paper_id"))
+    aid = str(row.get("author_id")) if row.get("author_id") else ""
+    if not pid or not aid:
+        return []
+    return [
+        EdgeRecord(
+            "AUTHORED_BY",
+            f"paper_{pid}",
+            f"person_{aid}",
+            {
+                "author_order": str(row.get("author_sequence"))
+                if row.get("author_sequence") is not None
+                else "",
+                "is_corresponding": str(row.get("correspond"))
+                if row.get("correspond") is not None
+                else "",
+                "confidence": 1.0,
+            },
+            rank=0,
+        )
+    ]
 
 
 def _transform(payload: Mapping[str, Any]) -> dict[str, Any]:

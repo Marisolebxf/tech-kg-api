@@ -40,10 +40,10 @@ from infra.graph_db.config import TRSGraphSettings
 
 logger = logging.getLogger("entity_extractors_one_entity")
 
-DEFAULT_DB = "gkx_element"
+DEFAULT_DB = "gkx"
 DEFAULT_BATCH_SIZE = 500
 
-SOURCE_SYSTEM = "gkx_element"
+SOURCE_SYSTEM = "gkx"
 MAX_TEXT_LENGTH = 20_000
 MAX_EXTRA_JSON_LENGTH = 64_000
 VID_MAX_BYTES = 64

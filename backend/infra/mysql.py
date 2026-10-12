@@ -138,6 +138,15 @@ class MySQLClient:
             if not self.url.startswith("sqlite"):
                 kwargs["pool_size"] = self.pool_size
                 kwargs["max_overflow"] = self.max_overflow
+                # 半开连接防线：公网源库上 NAT 静默丢映射时连接写得出读不回，
+                # pre-ping 自身就会无限阻塞（pool_pre_ping 救不了这种），
+                # activity 线程挂死。socket 级读/写超时兜底——读超时须高于
+                # 最长服务端查询（抽取源库大 join 单批实测 ~185s），取 600s。
+                kwargs["connect_args"] = {
+                    "connect_timeout": 10,
+                    "read_timeout": 600,
+                    "write_timeout": 600,
+                }
             self._engine = create_engine(self.url, **kwargs)
         return self._engine
 

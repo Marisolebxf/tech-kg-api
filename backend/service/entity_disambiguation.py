@@ -138,6 +138,14 @@ def decide(scored: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+# 同名召回的名字分块：单条 MATCH 的 IN 列表与名单长度成比例地撑大 graphd
+# 查询内存（抽取批次 2000 时每批两条 2000 名巨查 ×4 并发，实测把共享图库
+# 推过内存高水位，缺陷㉘）。分块后单查询形状有界，结果按块合并；每块各自
+# LIMIT 200，召回总量相对旧的全批一条 LIMIT 200 只多不少（旧实现本就是任意
+# 截断，分块反而更完整）。
+_RECALL_NAME_CHUNK = 150
+
+
 def recall_same_name(client: Any, tag: str, names: list[str]) -> dict[str, list[dict[str, Any]]]:
     """图库同名召回：``{显示名: [{"vid", "name", "props"}...]}``。
 
@@ -147,6 +155,7 @@ def recall_same_name(client: Any, tag: str, names: list[str]) -> dict[str, list[
     多证据评分）；``properties()`` 失败降级为仅名称比对（props 为空 dict，属性
     分走 0.5 中性）。tag 无显示名列时返回空 dict（调用方拿不到候选即按低分
     处理）。只依赖传入 client，同步函数，异常语义由调用方决定。
+    名单按 ``_RECALL_NAME_CHUNK`` 分块查询后合并（见其注释）。
 
     名称列一律 tag 限定（``v.`{tag}`.`{col}```）：ETL 混入共享 tag（如
     organization_base）的顶点是多 tag 顶点，非限定属性访问会被引擎按另一 tag
@@ -167,32 +176,38 @@ def recall_same_name(client: Any, tag: str, names: list[str]) -> dict[str, list[
     if not name_cols:
         logger.info("tag %s 无显示名列（name/name_cn/name_en/name_zh），跳过同名召回", tag)
         return {}
-    name_list = ",".join(json.dumps(n, ensure_ascii=False) for n in names)
-    where = " OR ".join(f"v.`{tag}`.`{col}` IN [{name_list}]" for col in name_cols)
-    select_names = ", ".join(f"v.`{tag}`.`{col}` AS `nm{idx}`" for idx, col in enumerate(name_cols))
-    base_match = f"MATCH (v:`{tag}`) WHERE {where} RETURN id(v) AS vid, {select_names}"
-    try:
-        result = client.execute_read(f"{base_match}, properties(v) AS props LIMIT 200")
-        name_only = False
-    except Exception:  # noqa: BLE001
-        logger.warning("同名召回 properties() 失败，降级为仅名称比对")
-        result = client.execute_read(f"{base_match} LIMIT 200")
-        name_only = True
     existing: dict[str, list[dict[str, Any]]] = {}
-    for rec in result.records or []:
-        vid = str(rec.get("vid") or "")
-        props = {} if name_only else (rec.get("props") or {})
-        if name_only:
-            display = next(
-                (
-                    str(rec.get(f"nm{idx}") or "")
-                    for idx in range(len(name_cols))
-                    if rec.get(f"nm{idx}")
-                ),
-                "",
-            )
-        else:
-            display = display_name(props)
-        if display and vid:
-            existing.setdefault(display, []).append({"vid": vid, "name": display, "props": props})
+    for start in range(0, len(names), _RECALL_NAME_CHUNK):
+        chunk = names[start : start + _RECALL_NAME_CHUNK]
+        name_list = ",".join(json.dumps(n, ensure_ascii=False) for n in chunk)
+        where = " OR ".join(f"v.`{tag}`.`{col}` IN [{name_list}]" for col in name_cols)
+        select_names = ", ".join(
+            f"v.`{tag}`.`{col}` AS `nm{idx}`" for idx, col in enumerate(name_cols)
+        )
+        base_match = f"MATCH (v:`{tag}`) WHERE {where} RETURN id(v) AS vid, {select_names}"
+        try:
+            result = client.execute_read(f"{base_match}, properties(v) AS props LIMIT 200")
+            name_only = False
+        except Exception:  # noqa: BLE001
+            logger.warning("同名召回 properties() 失败，降级为仅名称比对")
+            result = client.execute_read(f"{base_match} LIMIT 200")
+            name_only = True
+        for rec in result.records or []:
+            vid = str(rec.get("vid") or "")
+            props = {} if name_only else (rec.get("props") or {})
+            if name_only:
+                display = next(
+                    (
+                        str(rec.get(f"nm{idx}") or "")
+                        for idx in range(len(name_cols))
+                        if rec.get(f"nm{idx}")
+                    ),
+                    "",
+                )
+            else:
+                display = display_name(props)
+            if display and vid:
+                existing.setdefault(display, []).append(
+                    {"vid": vid, "name": display, "props": props}
+                )
     return existing

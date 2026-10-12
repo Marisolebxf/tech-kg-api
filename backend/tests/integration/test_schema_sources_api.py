@@ -251,6 +251,37 @@ async def test_replace_sources_duplicate_binding_rejected(sources_api) -> None:
 
 
 @pytest.mark.asyncio
+async def test_replace_sources_same_table_different_querysql_allowed(sources_api) -> None:
+    """同表 + 不同 querySql 的多源绑定合法（A 裸表 + B 富集模式），不应被去重拒绝。"""
+    _, _set_actor, _ = sources_api
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        entity = await _create_entity(client)
+        response = await client.put(
+            f"/api/v1/schema-management/schemas/{entity['id']}/sources",
+            json={
+                "sources": [
+                    {
+                        "datasourceId": "MYSQL-1",
+                        "databaseName": "gkx",
+                        "tableName": "scholar",
+                        "pkColumn": "dwd_id",
+                        "querySql": "SELECT t.* FROM `scholar` t WHERE t.is_deleted = 0",
+                    },
+                    {
+                        "datasourceId": "MYSQL-1",
+                        "databaseName": "gkx",
+                        "tableName": "scholar",
+                        "pkColumn": "dwd_id",
+                        "querySql": "SELECT t.dwd_id AS row_pk, t.name FROM `scholar` t",
+                    },
+                ]
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["code"] == 200
+
+
+@pytest.mark.asyncio
 async def test_replace_sources_identifier_injection_rejected(sources_api) -> None:
     _, _set_actor, _ = sources_api
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

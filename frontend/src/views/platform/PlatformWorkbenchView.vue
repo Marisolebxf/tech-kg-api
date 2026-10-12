@@ -645,7 +645,10 @@ const visibleOverviewJobs = computed(() =>
 
 const overviewJobStats = computed(() => {
   const counts = countJobUnifiedStatuses(visibleOverviewJobs.value)
+  // 六态与 countJobUnifiedStatuses/JOB_STATUS_TONE 对齐（「未运行」此前漏展示，
+  // 与图谱构建页统计卡同一次修齐）
   return [
+    { label: '未运行', value: counts['未运行'], tone: JOB_STATUS_TONE['未运行'] },
     { label: '运行中', value: counts['运行中'], tone: JOB_STATUS_TONE['运行中'] },
     { label: '已完成', value: counts['已完成'], tone: JOB_STATUS_TONE['已完成'] },
     { label: '运行异常', value: counts['运行异常'], tone: JOB_STATUS_TONE['运行异常'] },
@@ -2311,7 +2314,7 @@ print(response.json())</pre>
 .platform-jobs-panel .kg-panel__header>div,.platform-review-panel .kg-panel__header>div { display:grid;gap:2px; }
 .platform-jobs-panel .kg-panel__header span,.platform-review-panel .kg-panel__header span { color:#7b8aa1;font-size:12px;line-height:20px; }
 .platform-jobs-panel .kg-panel__header>a,.platform-review-panel .kg-panel__header>a { color:#004ecc;font-size:14px;line-height:22px;text-decoration:none; }
-.platform-jobs-stats { display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border-bottom:1px solid #e4ecf6; }
+.platform-jobs-stats { display:grid;grid-template-columns:repeat(6,minmax(0,1fr));border-bottom:1px solid #e4ecf6; }
 .platform-jobs-stats article { display:grid;gap:2px;padding:12px 8px;text-align:center;border-right:1px solid #edf2f8; }
 .platform-jobs-stats article:last-child { border-right:0; }
 .platform-jobs-stats article span { font-size:18px;font-weight:600; }
@@ -4585,7 +4588,7 @@ print(response.json())</pre>
 
   .platform-jobs-stats { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .platform-jobs-stats article:nth-child(2n) { border-right:0; }
-  .platform-jobs-stats article:nth-child(-n+2) { border-bottom:1px solid #edf2f8; }
+  .platform-jobs-stats article:nth-child(-n+4) { border-bottom:1px solid #edf2f8; }
 
   .platform-build-context {
     flex-direction: column;

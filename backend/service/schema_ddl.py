@@ -23,7 +23,11 @@ FIXED_STRING_RE = re.compile(r"^fixed_string\((\d+)\)$")
 # Nebula FIXED_STRING 长度上限 1024（FBSTRING 实现），0 无意义
 FIXED_STRING_MAX_LENGTH = 1024
 
-DDL_MAX_RETRIES = 3
+# 新建图空间后 DDL 有秒级到十秒级的传播延迟（CREATE SPACE 返回 ≠ schema 可见），
+# 3 次 × 1-2s 间隔实测扛不住（gkx_verify_1 实测：首两批 TAG 静默建丢）；
+# 5 次 × 2-10s 递增共 ~30s 窗口
+DDL_MAX_RETRIES = 5
+DDL_BACKOFF_SECONDS = (2, 4, 6, 8, 10)
 
 # 实体 TAG name 属性索引长度：string 列的索引必须显式给长度；64 与实体检索
 # graph-exact 名称查找、消歧 recall_same_name 的口径一致（idx_*_name 同款）
@@ -100,7 +104,7 @@ def execute_schema_ddl(
             last_err = str(exc)
             logger.warning("DDL 执行失败（第 %d 次）: %s", attempt + 1, last_err)
             if attempt < DDL_MAX_RETRIES - 1:
-                time.sleep(1 + attempt)
+                time.sleep(DDL_BACKOFF_SECONDS[min(attempt, len(DDL_BACKOFF_SECONDS) - 1)])
         except Exception as exc:  # noqa: BLE001
             last_err = str(exc)
             logger.exception("DDL 执行异常")

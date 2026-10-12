@@ -106,7 +106,7 @@ SOURCES = [
 
 def transform(payload: dict[str, Any]) -> dict[str, Any]:
     """kg.schema.extract 转换入口：rows → edges JSON（专利号精确唯一匹配）。"""
-    database = (payload.get("source") or {}).get("databaseName") or "gkx_element"
+    database = (payload.get("source") or {}).get("databaseName") or "gkx"
     patent_index = _load_index(database, dry_run=False)
     stats: Counter = Counter()
     result = edge_transform(payload, builder=cites_mapper(patent_index, stats))

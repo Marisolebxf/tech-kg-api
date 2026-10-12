@@ -347,6 +347,32 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     expect(wrapper.find('.rerun-batch-action').exists()).toBe(false)
   })
 
+  it('表头全选后翻页：勾选与批量按钮整体清空，下一页（含排序并列重复出现的行）不再有选中行', async () => {
+    // 两页返回同批行：模拟默认排序（风险+创建时间）并列时 LIMIT/OFFSET 翻页不稳定、
+    // 同一行在第 2 页重复出现——翻页必须清空勾选，重复行也不能再带选中态
+    mocks.getProductionReviews.mockImplementation(
+      async (params: { page?: number }) => ({ items: C_ROWS, total: 41, page: params.page ?? 1, pageSize: 20 }),
+    )
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+
+    const header = headerCheckbox(wrapper)
+    ;(header.element as HTMLInputElement).checked = true
+    await header.trigger('change')
+    expect(rowCheckboxes(wrapper).map((input) => (input.element as HTMLInputElement).checked)).toEqual([true, true, false, false])
+    expect(wrapper.find('.rerun-confirm-bar').text()).toContain('已选 2 条失败记录')
+
+    wrapper.findComponent(ListPagination).vm.$emit('change', 2)
+    await flushPromises()
+
+    expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 }))
+    expect(rowCheckboxes(wrapper).map((input) => (input.element as HTMLInputElement).checked)).toEqual([false, false, false, false])
+    expect((headerCheckbox(wrapper).element as HTMLInputElement).checked).toBe(false)
+    expect(wrapper.find('.rerun-batch-action').exists()).toBe(false)
+    expect(wrapper.find('.rerun-confirm-bar').exists()).toBe(false)
+  })
+
   it('部分勾选时表头呈半选态；点批量重跑按勾选集合下发', async () => {
     const wrapper = renderReview()
     await flushPromises()

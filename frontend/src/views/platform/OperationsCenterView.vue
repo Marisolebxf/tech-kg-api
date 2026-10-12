@@ -223,7 +223,7 @@ const reviewStatusOptions = computed(() => (
     : ['全部', '待处理', '已处理']
 ))
 
-/** 当前页可重跑行的全选/半选态（跨页勾选由 rerunSelection 保持，按钮数字展示总数）。 */
+/** 当前页可重跑行的全选/半选态（勾选只对当前列表数据有效，任何重拉都会清空，见 loadReviews）。 */
 const rerunPageEligibleIds = computed(() => reviewRows.value.filter(isRerunnable).map((row) => row.id))
 const rerunAllChecked = computed(() => rerunPageEligibleIds.value.length > 0 && rerunPageEligibleIds.value.every((id) => rerunSelection.value.has(id)))
 const rerunSomeChecked = computed(() => !rerunAllChecked.value && rerunPageEligibleIds.value.some((id) => rerunSelection.value.has(id)))
@@ -243,7 +243,7 @@ function toggleRerunPick(id: string, checked: boolean) {
   else rerunSelection.value.delete(id)
 }
 
-/** 表头全选/取消：只作用于当前页可重跑行（不可重跑行禁用不勾选）；跨页勾选保持，按钮数字展示总数。 */
+/** 表头全选/取消：只作用于当前页可重跑行（不可重跑行禁用不勾选）；翻页/筛选等任何重拉都会清空勾选。 */
 function toggleRerunPickAll(event: Event) {
   if (!rerunPageEligibleIds.value.length || reviewLoading.value || rerunSubmitting.value || batchDeleteSubmitting.value) return
   const checked = (event.target as HTMLInputElement).checked
@@ -530,6 +530,10 @@ onUnmounted(() => {
 
 async function loadReviews() {
   if (props.mode !== 'review' || reviewDisposed) return
+  // 列表数据即将整体更换（翻页/改页大小/筛选/排序/搜索/删除或重跑后刷新）：先清空批量勾选。
+  // 旧勾选对应的行已不在即将展示的列表里——保留会让翻页后仍出现选中行（后端排序并列时
+  // 同一行还会在下一页重复出现），且看不见的行会被隐性带进批量重跑/删除
+  rerunSelection.value = new Set()
   // 拉取前把当前视图状态落快照：跳详情返回 / 手动刷新都能回到本页
   try {
     sessionStorage.setItem(QUEUE_SNAPSHOT_KEY, JSON.stringify({

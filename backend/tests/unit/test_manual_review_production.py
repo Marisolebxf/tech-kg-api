@@ -780,6 +780,80 @@ def test_non_extract_templates_unaffected_by_execution_map(service, monkeypatch)
     assert [x["status"] for x in out["items"]] == ["RESOLVED"]
 
 
+# ----------------------------------------------------------------------
+# 状态精确过滤与表格徽标 1:1（队列页「状态」下拉对齐）：RERUN_FAILED 不落库，
+# 按执行概要圈定；RESOLVED/RERUNNING 反向剔除推导为重跑失败的案——
+# 选什么状态，表格就只出什么徽标。
+# ----------------------------------------------------------------------
+
+
+def test_queue_filter_status_matches_derived_badge(service, monkeypatch):
+    open_case = _make_extract_fail_case(service, record_id=f"w{next(_RID)}")
+    done = _bound_extract_fail_case(service, status="RESOLVED", rerun_execution_id="EXEC-OK")
+    abnormal = _bound_extract_fail_case(service, status="RESOLVED", rerun_execution_id="EXEC-BAD")
+    gone = _bound_extract_fail_case(service, status="RESOLVED", rerun_execution_id="EXEC-GONE")
+    stuck = _bound_extract_fail_case(service, status="RERUNNING", rerun_execution_id="EXEC-STUCK")
+    running = _bound_extract_fail_case(service, status="RERUNNING", rerun_execution_id="EXEC-RUN")
+    _patch_execution_statuses(
+        monkeypatch,
+        {
+            "EXEC-OK": "COMPLETED",
+            "EXEC-BAD": "ABNORMAL",
+            "EXEC-STUCK": "FAILED",
+            "EXEC-RUN": "RUNNING",
+        },
+    )  # EXEC-GONE 故意不在映射里 = 执行记录缺失
+
+    def ids(out):
+        return {x["id"] for x in out["items"]}
+
+    # 重跑失败 = 三台推导案（异常/执行缺失/滞留重跑中），不含库内 OPEN
+    rerun_failed = service.list_cases(
+        {"template_id": "T_EXTRACT_FAIL", "status": "RERUN_FAILED"}, _admin()
+    )
+    assert ids(rerun_failed) == {abnormal, gone, stuck}
+    assert rerun_failed["total"] == 3
+    # 已完成 = 仅执行概要成功的 RESOLVED 案（abnormal/gone 被剔除，不冒进已完成）
+    resolved = service.list_cases({"template_id": "T_EXTRACT_FAIL", "status": "RESOLVED"}, _admin())
+    assert ids(resolved) == {done}
+    # 重跑中 = 仅执行仍在跑的 RERUNNING 案（stuck 滞留案被剔出）
+    rerunning = service.list_cases(
+        {"template_id": "T_EXTRACT_FAIL", "status": "RERUNNING"}, _admin()
+    )
+    assert ids(rerunning) == {running}
+    # 通用精确值（OPEN 等库内状态）不受推导影响
+    assert ids(
+        service.list_cases({"template_id": "T_EXTRACT_FAIL", "status": "OPEN"}, _admin())
+    ) == {open_case}
+    # 不筛状态仍是全量 6 台
+    assert service.list_cases({"template_id": "T_EXTRACT_FAIL"}, _admin())["total"] == 6
+
+
+def test_queue_filter_skips_derivation_when_control_plane_unreachable(service, monkeypatch):
+    done = _bound_extract_fail_case(service, status="RESOLVED", rerun_execution_id="EXEC-OK")
+    abnormal = _bound_extract_fail_case(service, status="RESOLVED", rerun_execution_id="EXEC-BAD")
+    stuck = _bound_extract_fail_case(service, status="RERUNNING", rerun_execution_id="EXEC-STUCK")
+    _patch_execution_statuses(monkeypatch, None)  # 控制面不可达
+
+    def ids(out):
+        return {x["id"] for x in out["items"]}
+
+    # 与列表展示同款保守口径：不可核验就不推导——重跑失败筛不出（无库内值），
+    # 已完成/重跑中按库内状态原样返回，不误剔除
+    assert (
+        service.list_cases({"template_id": "T_EXTRACT_FAIL", "status": "RERUN_FAILED"}, _admin())[
+            "total"
+        ]
+        == 0
+    )
+    assert ids(
+        service.list_cases({"template_id": "T_EXTRACT_FAIL", "status": "RESOLVED"}, _admin())
+    ) == {done, abnormal}
+    assert ids(
+        service.list_cases({"template_id": "T_EXTRACT_FAIL", "status": "RERUNNING"}, _admin())
+    ) == {stuck}
+
+
 def test_rerun_gates_accept_derived_rerunnable(service, monkeypatch):
     reopened = _bound_extract_fail_case(service, status="RESOLVED", rerun_execution_id="EXEC-BAD")
     done = _bound_extract_fail_case(service, status="RESOLVED", rerun_execution_id="EXEC-OK")

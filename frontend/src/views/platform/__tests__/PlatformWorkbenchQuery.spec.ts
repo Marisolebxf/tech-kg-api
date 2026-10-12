@@ -18,6 +18,8 @@ import {
   type GraphAlgorithmMetadata,
 } from '../../../api/graphAlgorithm'
 import { useGraphSpaceStore } from '../../../stores/graphSpace'
+import { useAuthStore } from '../../../stores/auth'
+import type { AuthProfile } from '../../../api/auth'
 import PlatformWorkbenchView from '../PlatformWorkbenchView.vue'
 
 // 提升 showToast mock，便于在用例里断言右上角提示文案。
@@ -54,8 +56,9 @@ const PaginationStub = defineComponent({
 
 function deferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>((done) => { resolve = done })
-  return { promise, resolve }
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail })
+  return { promise, resolve, reject }
 }
 
 function queryResult(value: string): GraphConsoleResult {
@@ -128,6 +131,34 @@ async function switchSpace(space = 'space-b') {
 }
 
 describe('PlatformWorkbench query graph-space context', () => {
+  it('shows current-space writeAllowed instead of a fixed administrator-only hint', async () => {
+    useAuthStore().profile = { isAdmin: true } as AuthProfile
+    store.items = [
+      { name: 'space-a', bound: true, mine: true, writeAllowed: false },
+      { name: 'space-b', bound: true, mine: true, writeAllowed: true },
+    ]
+    await nextTick()
+    expect(wrapper.get('.platform-ngql-permission-hint').text()).toContain('当前图空间仅支持查询')
+    expect(wrapper.get('.platform-ngql-permission-hint').text()).toContain('DDL 禁止执行')
+    expect(wrapper.get('.platform-ngql-permission-hint').text()).not.toContain('写语句仅平台管理员')
+
+    await switchSpace()
+    expect(wrapper.get('.platform-ngql-permission-hint').text()).toContain('当前图空间支持查询及数据写入')
+    expect(wrapper.get('.platform-ngql-permission-hint').text()).toContain('DDL 禁止执行')
+    useAuthStore().profile = { isAdmin: false, canDevelop: true, businessRbacEnabled: true } as AuthProfile
+    await nextTick()
+    expect(wrapper.get('.platform-ngql-permission-hint').text()).toContain('当前图空间支持查询及数据写入')
+  })
+
+  it('updates the hint when server permissions change without switching space', async () => {
+    store.items = [{ name: 'space-a', bound: true, mine: true, writeAllowed: true }]
+    await nextTick()
+    expect(wrapper.get('.platform-ngql-permission-hint').text()).toContain('当前图空间支持查询及数据写入')
+    store.items[0]!.writeAllowed = false
+    await nextTick()
+    expect(wrapper.get('.platform-ngql-permission-hint').text()).toContain('当前图空间仅支持查询')
+  })
+
   it('executes nGQL in the global space and clears completed results when that space changes', async () => {
     vi.mocked(runNgql).mockResolvedValueOnce(queryResult('result-a')).mockResolvedValueOnce(queryResult('result-b'))
     await wrapper.get('textarea').setValue('  MATCH (v) RETURN v  ')
@@ -709,11 +740,11 @@ describe('nGQL error toast stays concise and in Chinese', () => {
     consoleError.mockRestore()
   })
 
-  async function runFailingQuery(detail: string): Promise<void> {
+  async function runFailingQuery(detail: string, status = 400, statement = 'MATCH (v) RETURN v'): Promise<void> {
     vi.mocked(runNgql).mockRejectedValueOnce(
-      Object.assign(new Error(detail), { response: { status: 400, data: { detail } } }),
+      Object.assign(new Error(detail), { response: { status, data: { detail } } }),
     )
-    await wrapper.get('textarea').setValue('MATCH (v) RETURN v')
+    await wrapper.get('textarea').setValue(statement)
     await clickButton('执行 nGQL')
     await flushPromises()
   }
@@ -725,7 +756,7 @@ describe('nGQL error toast stays concise and in Chinese', () => {
     ["语句执行失败: POST /api/v1/query/read -> 400: SemanticError: Unknown column 'bad_prop' in schema", '属性「bad_prop」不存在'],
     ['语句执行失败: POST /api/v1/query/read -> 400: SemanticError: no_such_edge not found in space [dev2].', '边类型「no_such_edge」不存在'],
     ['语句执行失败: POST /api/v1/query/read -> 400: Schema not exist: Aaa', '标签或边类型「Aaa」不存在'],
-    ["语句执行失败: POST /api/v1/query/read -> 400: SyntaxError: syntax error near `= 1 RETU'", '语法错误：「= 1 RETU」附近有误'],
+    ["语句执行失败: POST /api/v1/query/read -> 400: SyntaxError: syntax error near `= 1 RETU'", '请输入合法的 nGQL 语句'],
     ['语句执行失败: POST /api/v1/query/read -> 400: -1005: No valid index found by LOOKUP', '未找到可用索引'],
   ])('translates %s into a Chinese hint', async (detail, hint) => {
     await runFailingQuery(detail)
@@ -734,6 +765,7 @@ describe('nGQL error toast stays concise and in Chinese', () => {
     expect(shown).toContain(hint)
     expect(shown).toContain('warning')
     expect(shown).not.toMatch(/SemanticError|SyntaxError|TagNotFound|Schema not exist|No valid index|->/)
+    expect(wrapper.get('.platform-query-result').text()).toContain(`执行失败：${showToast.mock.calls[0]![0]}`)
   })
 
   it('truncates unrecognized errors to one short line without transport prefixes', async () => {
@@ -748,9 +780,89 @@ describe('nGQL error toast stays concise and in Chinese', () => {
     await runFailingQuery('不支持的语句开头 “MATCHH”；允许的只读语句：MATCH / LOOKUP / GO / SHOW / DESCRIBE / FIND / FETCH / GET / UNWIND 等，管理员另可执行 INSERT / UPDATE / DELETE / UPSERT')
     expect(showToast).toHaveBeenCalledTimes(1)
     expect(showToast.mock.calls[0]).toEqual([
-      '不支持的语句开头；允许的只读语句：MATCH / LOOKUP / GO / SHOW 等',
+      '请输入合法的 nGQL 语句',
       'warning',
     ])
+  })
+
+  it.each([
+    'nGQL 语句不能只包含注释',
+    '一次仅允许执行一条语句',
+    '不允许使用管道',
+  ])('separates invalid input from permission errors: %s', async (detail) => {
+    await runFailingQuery(detail)
+    expect(showToast).toHaveBeenLastCalledWith('请输入合法的 nGQL 语句', 'warning')
+    expect(wrapper.get('.platform-query-result').text()).toContain('执行失败：请输入合法的 nGQL 语句')
+  })
+
+  it('shows invalid empty input as a failed attempt without submitting it', async () => {
+    await wrapper.get('textarea').setValue('   ')
+    await clickButton('执行 nGQL')
+    expect(runNgql).not.toHaveBeenCalled()
+    expect(showToast).toHaveBeenLastCalledWith('请输入合法的 nGQL 语句', 'info')
+    expect(wrapper.get('.platform-query-result').text()).toContain('执行失败：请输入合法的 nGQL 语句')
+  })
+
+  it.each([
+    ['仅平台管理员可以执行写语句', 'DELETE VERTEX "p1"'],
+    ['无权对该图空间执行此操作', '-- 注释\nINSERT VERTEX paper(name) VALUES "p1":("x")'],
+    ['无权对该图空间执行此操作', '// 注释\nUPDATE VERTEX ON paper "p1" SET name = "x"'],
+  ])('shows a write-permission reason for %s', async (detail, statement) => {
+    await runFailingQuery(detail, 403, statement)
+    expect(showToast).toHaveBeenLastCalledWith('当前账号无权在该图空间执行写操作', 'warning')
+    expect(wrapper.get('.platform-query-result').text()).toContain('执行失败：当前账号无权在该图空间执行写操作')
+  })
+
+  it('keeps DDL rejection distinct from write-permission rejection', async () => {
+    await runFailingQuery('禁止执行 DDL/管理类语句（DROP）；图空间与 Schema 请通过配置页 / Schema 管理维护', 403, 'DROP TAG paper')
+    expect(showToast).toHaveBeenLastCalledWith('该页面禁止执行 DDL/管理类语句', 'warning')
+    expect(wrapper.get('.platform-query-result').text()).toContain('执行失败：该页面禁止执行 DDL/管理类语句')
+  })
+
+  it('does not label a read-space permission error as a write error', async () => {
+    await runFailingQuery('无权访问未绑定的图空间', 403, 'MATCH (v) RETURN v')
+    expect(showToast).toHaveBeenLastCalledWith('无权访问未绑定的图空间', 'warning')
+  })
+
+  it('clears old rows on failure and clears the failure on a successful empty write', async () => {
+    vi.mocked(runNgql).mockResolvedValueOnce(queryResult('old-record'))
+    await wrapper.get('textarea').setValue('MATCH (v) RETURN v')
+    await clickButton('执行 nGQL')
+    await flushPromises()
+    expect(wrapper.get('.platform-query-result').text()).toContain('old-record')
+    await runFailingQuery('无权对该图空间执行此操作', 403, 'DELETE VERTEX "p1"')
+    expect(wrapper.get('.platform-query-result').text()).not.toContain('old-record')
+    expect(wrapper.find('.list-pagination-stub').exists()).toBe(false)
+
+    const retry = deferred<GraphConsoleResult>()
+    vi.mocked(runNgql).mockReturnValueOnce(retry.promise)
+    await clickButton('执行 nGQL')
+    expect(wrapper.get('.platform-query-result').text()).toContain('查询执行中，请稍候…')
+    expect(wrapper.get('.platform-query-result').text()).not.toContain('执行失败')
+    retry.resolve({ records: [], columns: [], summary: {} })
+    await flushPromises()
+    expect(wrapper.get('.platform-query-result').text()).toContain('语句执行成功，无返回记录')
+    expect(wrapper.get('.platform-query-result').text()).not.toContain('执行失败')
+  })
+
+  it('clears failure on a space switch and ignores a late rejection from the old space', async () => {
+    await runFailingQuery('无权对该图空间执行此操作', 403, 'DELETE VERTEX "p1"')
+    await switchSpace()
+    expect(wrapper.get('.platform-query-result').text()).not.toContain('执行失败')
+    const oldRequest = deferred<GraphConsoleResult>()
+    vi.mocked(runNgql).mockReturnValueOnce(oldRequest.promise)
+    await clickButton('执行 nGQL')
+    await switchSpace('space-c')
+    vi.mocked(runNgql).mockResolvedValueOnce(queryResult('current-record'))
+    await wrapper.get('textarea').setValue('MATCH (v) RETURN v')
+    await clickButton('执行 nGQL')
+    await flushPromises()
+    const toastCount = showToast.mock.calls.length
+    oldRequest.reject(new Error('旧空间错误'))
+    await flushPromises()
+    expect(showToast).toHaveBeenCalledTimes(toastCount)
+    expect(wrapper.get('.platform-query-result').text()).toContain('current-record')
+    expect(wrapper.get('.platform-query-result').text()).not.toContain('旧空间错误')
   })
 })
 

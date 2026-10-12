@@ -164,9 +164,11 @@ def _validate_resource_selectors(actor: PlatformActor, selectors: dict) -> None:
                 continue
             row = dao.get(config_id)
             if isinstance(dao, (LlmConfigDAO, MysqlDatasourceDAO)):
-                from biz.dependencies.shared_configs import ensure_shared_config_read
+                from service.config_ownership import ensure_config_access
 
-                ensure_shared_config_read(actor)
+                ensure_config_access(
+                    session, actor, "llm" if isinstance(dao, LlmConfigDAO) else "mysql", config_id
+                )
                 if row is None:
                     raise HTTPException(404, "共享配置不存在")
                 continue

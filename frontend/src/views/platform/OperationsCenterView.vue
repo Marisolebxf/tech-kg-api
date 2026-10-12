@@ -28,11 +28,28 @@ const graphSpaceStore = useGraphSpaceStore()
 /** 队列视图状态快照（sessionStorage）：点「查看记录」跳详情再返回时恢复页码/页大小/分类/筛选/排序，
  *  不再回落第 1 页。每次拉取前落盘（兼覆盖手动刷新场景）；显式深链 query（category/keyword）优先于快照。 */
 const QUEUE_SNAPSHOT_KEY = 'techkg.manual-review-queue.v1'
+
+/** 状态筛选词与表格徽标（extractCaseStatusBadge）同款，选什么表格就只出什么；
+ *  C 类独有 重跑中/重跑失败（重跑失败是只读推导态，后端按执行概要精确过滤）。
+ *  「已驳回/已撤销」不设筛选项：现网 A/C 队列均无该终态案，避免幽灵选项。 */
+type ReviewStatusFilter = '全部' | '待处理' | '重跑中' | '重跑失败' | '已完成'
+const REVIEW_STATUS_OPTIONS_A: ReviewStatusFilter[] = ['全部', '待处理', '已完成']
+const REVIEW_STATUS_OPTIONS_C: ReviewStatusFilter[] = ['全部', '待处理', '重跑中', '重跑失败', '已完成']
+const REVIEW_STATUS_OPTIONS_ALL: ReviewStatusFilter[] = ['全部', '待处理', '重跑中', '重跑失败', '已完成']
+/** 筛选词 → 后端 status 精确值（OPEN/RERUNNING/RERUN_FAILED/RESOLVED，与徽标 1:1）。 */
+const REVIEW_STATUS_PARAM: Record<ReviewStatusFilter, string | undefined> = {
+  '全部': undefined,
+  '待处理': 'OPEN',
+  '重跑中': 'RERUNNING',
+  '重跑失败': 'RERUN_FAILED',
+  '已完成': 'RESOLVED',
+}
+
 type QueueSnapshot = {
   category: 'A' | 'C'
   page: number
   pageSize: number
-  status: '全部' | '待处理' | '已处理' | '重跑中'
+  status: ReviewStatusFilter
   kind: '全部' | '实体' | '关系'
   time: '全部' | '近1小时' | '近24小时' | '近7天' | '近30天'
   sort: 'default' | 'desc' | 'asc'
@@ -54,10 +71,10 @@ const queueSnapshot = readQueueSnapshot()
 
 const keyword = ref(clampSearchKeyword(String(route.query.keyword || queueSnapshot?.keyword || '')))
 const submittedKeyword = ref(keyword.value)
-/** 人工审核筛选：状态分组（待处理/已处理）与对象种类（实体/关系/都看）；C 类额外支持 重跑中 精确过滤。
- *  重跑仍失败的记录会重建为新待处理案（attempt+1），不存在「重跑失败」状态，故不提供该筛选项。
- *  undefined = 未选择（清空），语义等同「全部」。 */
-const reviewStatusFilter = ref<'全部' | '待处理' | '已处理' | '重跑中' | undefined>(pickSnapshotOption(queueSnapshot?.status, ['全部', '待处理', '已处理', '重跑中'] as const, '全部'))
+/** 人工审核筛选：状态精确过滤（下拉词=表格徽标词，1:1 对齐）与对象种类（实体/关系/都看）。
+ *  待处理=OPEN；重跑中=RERUNNING；重跑失败=RERUN_FAILED（只读推导态，后端按执行概要圈定）；
+ *  已完成=RESOLVED。undefined = 未选择（清空），语义等同「全部」。 */
+const reviewStatusFilter = ref<ReviewStatusFilter | undefined>(pickSnapshotOption(queueSnapshot?.status, REVIEW_STATUS_OPTIONS_ALL, '全部'))
 const reviewKindFilter = ref<'全部' | '实体' | '关系' | undefined>(pickSnapshotOption(queueSnapshot?.kind, ['全部', '实体', '关系'] as const, '全部'))
 /** 时间过滤（按更新时间）：全部/近1小时/近24小时/近7天/近30天 → updatedWithin 查询参数。 */
 const reviewTimeFilter = ref<'全部' | '近1小时' | '近24小时' | '近7天' | '近30天' | undefined>(pickSnapshotOption(queueSnapshot?.time, ['全部', '近1小时', '近24小时', '近7天', '近30天'] as const, '全部'))
@@ -67,7 +84,12 @@ const REVIEW_TIME_PARAMS: Record<string, string | undefined> = { '全部': undef
 const reviewTimeSort = ref<'default' | 'desc' | 'asc'>(pickSnapshotOption(queueSnapshot?.sort, ['default', 'desc', 'asc'] as const, 'default'))
 const reviewTotal = ref(0)
 /** 队列行 = manual-review-data 的 ReviewRecord + 重跑/删除/跳转所需的原始字段。 */
-type ReviewRow = ReviewRecord & { templateId?: string; rawStatus?: string; jobId?: string; canOperate?: boolean }
+type ReviewRow = ReviewRecord & {
+  templateId?: string
+  rawStatus?: string
+  jobId?: string
+  canOperate?: boolean
+}
 
 /** 可重跑/可删除：与后端 rerun 门控同口径（未处理）；查看档只读行（canOperate=false，
  *  如开发维护看共享生产空间）同样不可操作，后端对操作档仍强校验 403。
@@ -79,7 +101,7 @@ const isRerunnable = (row: ReviewRow) =>
 function rerunDisabledReason(row: ReviewRow): string {
   if (row.canOperate === false) return '共享生产空间：仅可查看，操作需管理员'
   if (row.rawStatus === 'RERUNNING') return '重跑中：等待本次重跑完成后再操作'
-  return '已处理：仅「待处理 / 重跑失败」的记录可重跑或删除'
+  return '仅「待处理 / 重跑失败」的记录可重跑或删除'
 }
 
 /** 类型列：objectType（entity/relation）→ 实体/关系；T_LINK 是实体对齐，恒实体。 */
@@ -156,13 +178,13 @@ watch([reviewRows, reviewCategory], async () => {
   await nextTick()
   updateReviewTableScrollState()
 }, { flush: 'post' })
-// A 类没有「重跑中」筛选项：快照恢复后按当前分类收敛，避免 Select 挂着不属于该分类的选项
-if (reviewCategory.value === 'A' && reviewStatusFilter.value === '重跑中') reviewStatusFilter.value = '全部'
+// A 类没有「重跑中/重跑失败」筛选项：快照恢复后按当前分类收敛，避免 Select 挂着不属于该分类的选项
+if (reviewCategory.value === 'A' && !REVIEW_STATUS_OPTIONS_A.includes(reviewStatusFilter.value ?? '全部')) reviewStatusFilter.value = '全部'
 /** Tab 切换不携带筛选条件：入库决策（A）/抽取失败重跑（C）各自独立记忆
  *  状态/类型/时间/排序/关键词/页码，切走再切回按原样恢复（C 的「重跑中」不会带到 A，
  *  A 的筛选也不会带到 C）。页大小与勾选不拆分：页大小是全局偏好，勾选跨 Tab 无意义（切换即清）。 */
 type ReviewTabFilters = {
-  status: '全部' | '待处理' | '已处理' | '重跑中'
+  status: ReviewStatusFilter
   kind: '全部' | '实体' | '关系'
   time: '全部' | '近1小时' | '近24小时' | '近7天' | '近30天'
   sort: 'default' | 'desc' | 'asc'
@@ -216,14 +238,12 @@ const rerunFeedback = ref<{ type: 'success' | 'warning' | 'error'; text: string;
 const rerunConfirmVisible = ref(false)
 let rerunFeedbackTimer: number | undefined
 
-/** A 类只有 全部/待处理/已处理；C 类追加 重跑中（后端 status 精确过滤）。 */
-const reviewStatusOptions = computed(() => (
-  reviewCategory.value === 'C'
-    ? ['全部', '待处理', '已处理', '重跑中']
-    : ['全部', '待处理', '已处理']
+/** 状态筛选选项=表格徽标词：A 类 全部/待处理/已完成；C 类追加 重跑中/重跑失败。 */
+const reviewStatusOptions = computed<ReviewStatusFilter[]>(() => (
+  reviewCategory.value === 'C' ? REVIEW_STATUS_OPTIONS_C : REVIEW_STATUS_OPTIONS_A
 ))
 
-/** 当前页可重跑行的全选/半选态（跨页勾选由 rerunSelection 保持，按钮数字展示总数）。 */
+/** 当前页可重跑行的全选/半选态（勾选只对当前列表数据有效，任何重拉都会清空，见 loadReviews）。 */
 const rerunPageEligibleIds = computed(() => reviewRows.value.filter(isRerunnable).map((row) => row.id))
 const rerunAllChecked = computed(() => rerunPageEligibleIds.value.length > 0 && rerunPageEligibleIds.value.every((id) => rerunSelection.value.has(id)))
 const rerunSomeChecked = computed(() => !rerunAllChecked.value && rerunPageEligibleIds.value.some((id) => rerunSelection.value.has(id)))
@@ -243,7 +263,7 @@ function toggleRerunPick(id: string, checked: boolean) {
   else rerunSelection.value.delete(id)
 }
 
-/** 表头全选/取消：只作用于当前页可重跑行（不可重跑行禁用不勾选）；跨页勾选保持，按钮数字展示总数。 */
+/** 表头全选/取消：只作用于当前页可重跑行（不可重跑行禁用不勾选）；翻页/筛选等任何重拉都会清空勾选。 */
 function toggleRerunPickAll(event: Event) {
   if (!rerunPageEligibleIds.value.length || reviewLoading.value || rerunSubmitting.value || batchDeleteSubmitting.value) return
   const checked = (event.target as HTMLInputElement).checked
@@ -530,6 +550,10 @@ onUnmounted(() => {
 
 async function loadReviews() {
   if (props.mode !== 'review' || reviewDisposed) return
+  // 列表数据即将整体更换（翻页/改页大小/筛选/排序/搜索/删除或重跑后刷新）：先清空批量勾选。
+  // 旧勾选对应的行已不在即将展示的列表里——保留会让翻页后仍出现选中行（后端排序并列时
+  // 同一行还会在下一页重复出现），且看不见的行会被隐性带进批量重跑/删除
+  rerunSelection.value = new Set()
   // 拉取前把当前视图状态落快照：跳详情返回 / 手动刷新都能回到本页
   try {
     sessionStorage.setItem(QUEUE_SNAPSHOT_KEY, JSON.stringify({
@@ -558,8 +582,7 @@ async function loadReviews() {
       category: reviewCategory.value,
       templateId: reviewCategory.value === 'A' ? 'T_LINK' : undefined,
       keyword: submittedKeyword.value || undefined,
-      statusGroup: reviewStatusFilter.value === '待处理' ? 'pending' : reviewStatusFilter.value === '已处理' ? 'processed' : undefined,
-      status: reviewStatusFilter.value === '重跑中' ? 'RERUNNING' : undefined,
+      status: REVIEW_STATUS_PARAM[reviewStatusFilter.value ?? '全部'],
       kind: !reviewKindFilter.value || reviewKindFilter.value === '全部' ? undefined : reviewKindFilter.value === '实体' ? 'entity' : 'relation',
       updatedWithin: REVIEW_TIME_PARAMS[reviewTimeFilter.value || '全部'],
       sort: reviewTimeSort.value === 'default' ? undefined : `updated_${reviewTimeSort.value}`,
@@ -735,9 +758,7 @@ onMounted(() => {
               @change="((event?: Event) => toggleRerunPick(row.id, Boolean((event?.target as HTMLInputElement)?.checked)))"
             /></td>
             <td class="review-id-cell"><code class="review-id-plain" :title="row.id">{{ row.id }}</code></td>
-            <td class="review-object-cell">
-              <strong>{{ row.object || '—' }}</strong>
-            </td>
+            <td class="review-object-cell"><strong>{{ row.object || '—' }}</strong></td>
             <td><span :class="['review-kind-badge', `is-${rowKindLabel(row)}`]">{{ rowKindLabel(row) }}</span></td>
             <td class="review-id-cell">
               <!-- 来源记录：统一 job 维度，跳图谱构建任务详情（含执行历史）；
@@ -945,7 +966,7 @@ onMounted(() => {
 .ops-review-table-scroll table{min-width:1288px;font-size:14px;line-height:22px}.ops-review-table-scroll th,.ops-review-table-scroll td{height:40px;padding:0 16px}.ops-review-table-scroll th{background:#f7f8fa;color:#1d2129;font-weight:500}
 .ops-review-table-scroll td small,.review-source-cell strong,.review-question-cell strong,.review-confidence-cell>b{font-size:12px;line-height:20px}
 .review-status{display:inline-flex;align-items:center;gap:6px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.review-status::before{display:block;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
-.review-status.is-待处理,.review-status.is-已完成,.review-status.is-已撤销,.review-status.is-已驳回{background:transparent}
+.review-status.is-待处理,.review-status.is-已完成,.review-status.is-已撤销,.review-status.is-已驳回,.review-status.is-已过期{background:transparent}
 .review-risk-explain{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:16px}.review-risk-explain>div{gap:4px;padding:8px 16px;border-radius:6px;background:#f7f8fa}.review-risk-explain strong{font-size:14px;line-height:22px}.review-risk-explain span,.review-confidence-cell>span{font-size:12px;line-height:20px}
 .review-drawer{width:min(640px,calc(100vw - 48px));background:#fff}.review-drawer>header{height:56px;box-sizing:border-box;padding:8px 24px}.review-body{padding:24px}.review-body section,.review-compare article{padding:16px;border-radius:6px}.review-compare{gap:16px;margin:16px 0}
 .review-drawer>footer{height:64px;box-sizing:border-box;gap:16px;padding:0 24px}.review-drawer>footer button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
@@ -1000,6 +1021,8 @@ onMounted(() => {
 .review-status.is-已完成{color:var(--status-success)}
 .review-status.is-排队中{color:var(--status-neutral)}
 .review-status.is-已取消{color:var(--status-neutral)}
+/* 已过期（EXPIRED）：终态枚举的防御性徽标，中性灰，无对应筛选项 */
+.review-status.is-已过期{color:var(--status-neutral)}
 
 /* 人工审核页排版、间距与控件合同。 */
 .ops-page,.ops-page :deep(*){font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;letter-spacing:0}

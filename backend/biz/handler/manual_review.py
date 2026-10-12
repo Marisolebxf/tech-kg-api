@@ -103,7 +103,12 @@ def _raise_production_error(exc: Exception) -> None:
 async def production_queue(
     identity: ReviewIdentityDep,
     queue: str | None = None,
-    status: str | None = None,
+    status: str | None = Query(
+        None,
+        description="状态精确过滤（与表格徽标 1:1）：OPEN=待处理/RERUNNING=重跑中/RESOLVED=已完成等；"
+        "RERUN_FAILED=重跑失败是只读推导态（库内不落值），按重跑执行概要圈定，"
+        "RESOLVED/RERUNNING 也会剔除推导为重跑失败的案",
+    ),
     status_group: str | None = Query(
         None,
         alias="statusGroup",

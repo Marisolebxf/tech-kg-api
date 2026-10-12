@@ -60,6 +60,9 @@ type ConfigStatus = '正常' | '停用' | '异常'
 
 type ConfigItem = {
   id: string
+  visibility?: 'public' | 'business'
+  businessName?: string
+  canManage?: boolean
   kind: ConfigKind
   category: string
   name: string
@@ -190,6 +193,14 @@ const verified = ref(false)
 const createFieldErrors = computed<ConfigFieldErrors>(() =>
   formKind.value ? validateConfigFields(formKind.value, form.value, 'create') : {})
 const hasCreateErrors = computed(() => Object.keys(createFieldErrors.value).length > 0)
+// 红框/红字只给「输入过」的字段：刚打开的空表单不弹必填红警（保存按钮仍由 hasCreateErrors 拦），
+// 输入超限/非法才即时提示，口径同九大业务面板
+const createTouched = ref(new Set<string>())
+function touchCreate(field: string) {
+  if (!createTouched.value.has(field)) createTouched.value.add(field)
+}
+const visibleCreateErrors = computed<ConfigFieldErrors>(() =>
+  Object.fromEntries(Object.entries(createFieldErrors.value).filter(([key]) => createTouched.value.has(key))) as ConfigFieldErrors)
 const detailFieldErrors = computed<ConfigFieldErrors>(() =>
   selected.value && !isGraphSpaceCategory.value
     ? validateConfigFields(selected.value.kind, selected.value, 'detail')
@@ -227,6 +238,11 @@ const formKind = computed<ConfigKind | null>(() => {
       return null
   }
 })
+
+const canCreateConfig = computed(() => isAdmin.value || (auth.canDevelop && (formKind.value === 'llm' || formKind.value === 'mysql')))
+function canManageConfig(item: ConfigItem) {
+  return isAdmin.value || (auth.canDevelop && item.kind !== 'embedding' && item.canManage === true)
+}
 
 const visibleItems = computed(() => items.value.filter((item) => {
   const matchCategory = item.category === activeCategory.value
@@ -321,7 +337,7 @@ function toConfigItem(kind: ConfigKind, cfg: LlmConfig | MysqlDatasource | Embed
   }
   if (kind === 'llm') {
     const c = cfg as LlmConfig
-    return { ...common, category: '语言模型', type: 'LLM API', endpoint: c.baseUrl, baseUrl: c.baseUrl, model: c.model, hasApiKey: c.hasApiKey, apiKeyMasked: c.apiKeyMasked }
+    return { ...common, visibility: c.visibility, businessName: c.businessName, canManage: c.canManage, category: '语言模型', type: 'LLM API', endpoint: c.baseUrl, baseUrl: c.baseUrl, model: c.model, hasApiKey: c.hasApiKey, apiKeyMasked: c.apiKeyMasked }
   }
   if (kind === 'embedding') {
     const c = cfg as EmbeddingConfig
@@ -329,7 +345,7 @@ function toConfigItem(kind: ConfigKind, cfg: LlmConfig | MysqlDatasource | Embed
   }
   if (kind === 'mysql') {
     const c = cfg as MysqlDatasource
-    return { ...common, category: 'MySQL 数据源', type: 'MySQL 数据源', endpoint: `${c.host}:${c.port}`, host: c.host, port: c.port, defaultDatabase: c.defaultDatabase, username: c.username, hasPassword: c.hasPassword, passwordMasked: c.passwordMasked }
+    return { ...common, visibility: c.visibility, businessName: c.businessName, canManage: c.canManage, category: 'MySQL 数据源', type: 'MySQL 数据源', endpoint: `${c.host}:${c.port}`, host: c.host, port: c.port, defaultDatabase: c.defaultDatabase, username: c.username, hasPassword: c.hasPassword, passwordMasked: c.passwordMasked }
   }
   throw new Error(`未知配置类型：${kind}`)
 }
@@ -452,7 +468,7 @@ function emptyForm(kind: ConfigKind): ConfigForm {
 }
 
 function openCreate() {
-  if (!isAdmin.value) return
+  if (!canCreateConfig.value) return
   if (isGraphSpaceCategory.value) {
     newSpaceName.value = ''
     newSpaceDescription.value = ''
@@ -461,11 +477,13 @@ function openCreate() {
     return
   }
   form.value = emptyForm(formKind.value || 'llm')
+  createTouched.value = new Set()
   verified.value = false
   dialogOpen.value = true
 }
 
 async function verifyForm() {
+  if (!canCreateConfig.value) return
   const kind = formKind.value
   if (kind !== 'llm' && kind !== 'embedding') return
   if (hasCreateErrors.value) return
@@ -495,7 +513,7 @@ async function verifyForm() {
 }
 
 async function saveConfig() {
-  if (!isAdmin.value) return
+  if (!canCreateConfig.value) return
   if (hasCreateErrors.value) return
   const kind = formKind.value
   if (!kind) return
@@ -545,8 +563,7 @@ async function saveConfig() {
 }
 
 async function saveDetail() {
-  if (!isAdmin.value) return
-  if (!selected.value) return
+  if (!selected.value || !canManageConfig(selected.value)) return
   if (hasDetailErrors.value) return
   const item = selected.value
   saving.value = true
@@ -581,7 +598,9 @@ async function saveDetail() {
 }
 
 async function testConnection(item: ConfigItem) {
-  if (!isAdmin.value) return
+  if (!canManageConfig(item)) return
+  // 停用=已退出使用：不做真实探活（探活会真连库且结果会盖掉「停用」徽标），启用后才可测
+  if (item.status === '停用') return
   testingId.value = item.id
   try {
     let result: { ok: boolean; latencyMs: number | null; error: string | null }
@@ -597,7 +616,7 @@ async function testConnection(item: ConfigItem) {
       showToast(`${item.name} 连接测试成功，延迟 ${result.latencyMs ?? '-'} ms。`, 'success')
     } else {
       item.status = '异常'
-      showToast(`${item.name} 连接失败：${result.error ?? '未知错误'}`, 'error')
+      showToast(`${item.name} 连接失败`, 'error')
     }
     // 探活结果同步列表卡片（抽屉编辑副本不再共享列表项引用）
     const listed = items.value.find((i) => i.id === item.id)
@@ -610,7 +629,7 @@ async function testConnection(item: ConfigItem) {
 }
 
 async function toggleItem(item: ConfigItem) {
-  if (!isAdmin.value) return
+  if (!canManageConfig(item)) return
   const nextStatus: ConfigStatus = item.status === '停用' ? '正常' : '停用'
   try {
     if (item.kind === 'llm') {
@@ -668,7 +687,7 @@ const deleteVisible = ref(false)
 const deleteSubmitting = ref(false)
 const deleteError = ref('')
 function removeConfig(item: ConfigItem) {
-  if (!isAdmin.value) return
+  if (!canManageConfig(item)) return
   if ((item.kind === 'llm' || item.kind === 'embedding') && item.isDefault) {
     showToast('默认配置不能删除：请先将其他配置设为默认。', 'info')
     return
@@ -678,9 +697,8 @@ function removeConfig(item: ConfigItem) {
   deleteVisible.value = true
 }
 async function confirmDeleteConfig() {
-  if (!isAdmin.value) return
   const item = deleteTarget.value
-  if (!item || deleteSubmitting.value) return
+  if (!item || !canManageConfig(item) || deleteSubmitting.value) return
   deleteSubmitting.value = true
   deleteError.value = ''
 
@@ -742,13 +760,14 @@ onUnmounted(() => {
       </aside>
 
       <main class="config-list">
-        <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" :disabled="!isAdmin" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilter" allow-clear placeholder="全部状态"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><form class="config-search-form" role="search" @submit.prevent="submitConfigSearch"><a-input v-model="keyword" class="config-search-input" allow-clear :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识、类型或地址" placeholder="搜索名称、标识、类型或地址"><template #prefix><IconSearch /></template></a-input><button class="primary config-search-button" type="submit">查询</button></form></nav><nav v-else class="config-list-actions"><button class="primary create-entry" type="button" :disabled="!canManageSpaces" @click="spaceDialogOpen = true">＋ 新建图数据空间</button><form class="config-search-form" role="search" @submit.prevent="submitSpaceSearch"><a-input v-model="spaceKeyword" class="config-search-input" allow-clear :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索图空间名称" placeholder="搜索图空间名称"><template #prefix><IconSearch /></template></a-input><button class="primary config-search-button" type="submit">查询</button></form></nav></header>
+        <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" :disabled="!canCreateConfig" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilter" allow-clear placeholder="全部状态"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><form class="config-search-form" role="search" @submit.prevent="submitConfigSearch"><a-input v-model="keyword" class="config-search-input" allow-clear :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识、类型或地址" placeholder="搜索名称、标识、类型或地址"><template #prefix><IconSearch /></template></a-input><button class="primary config-search-button" type="submit">查询</button></form></nav><nav v-else class="config-list-actions"><button class="primary create-entry" type="button" :disabled="!canManageSpaces" @click="spaceDialogOpen = true">＋ 新建图数据空间</button><form class="config-search-form" role="search" @submit.prevent="submitSpaceSearch"><a-input v-model="spaceKeyword" class="config-search-input" allow-clear :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索图空间名称" placeholder="搜索图空间名称"><template #prefix><IconSearch /></template></a-input><button class="primary config-search-button" type="submit">查询</button></form></nav></header>
         <div v-if="isGraphSpaceCategory" class="table-wrap space-table">
           <table>
-            <thead><tr><th>图空间名称 / 说明</th><th class="config-status-col">绑定状态</th><th class="config-action-col">操作</th></tr></thead>
+            <thead><tr><th>图空间名称 / 说明</th><th>标识</th><th class="config-status-col">绑定状态</th><th class="config-action-col">操作</th></tr></thead>
             <tbody>
               <tr v-for="space in pagedSpaces" :key="space.name">
                 <td><div class="config-name"><span><strong>{{ space.name }}</strong><small v-if="space.description">{{ space.description }}</small></span></div></td>
+                <td>{{ space.groupKind === 'business' ? space.businessName : space.groupKind === 'public' ? '公共图空间' : '' }}</td>
                 <td class="config-status-col"><span class="status" :class="space.mine ? 'is-正常' : 'is-停用'"><i />{{ space.mine ? '已绑定' : '已解绑' }}</span></td>
                 <td class="config-action-col">
                   <div class="row-actions">
@@ -762,7 +781,7 @@ onUnmounted(() => {
                   </div>
                 </td>
               </tr>
-              <tr v-if="!visibleSpaces.length"><td class="empty" colspan="3">{{ graphSpaces.length ? '没有符合条件的图空间' : '还没有图数据空间，点击右上角“新建图数据空间”创建一个' }}</td></tr>
+              <tr v-if="!visibleSpaces.length"><td class="empty" colspan="4">{{ graphSpaces.length ? '没有符合条件的图空间' : '还没有图数据空间，点击右上角“新建图数据空间”创建一个' }}</td></tr>
             </tbody>
           </table>
         </div>
@@ -772,7 +791,7 @@ onUnmounted(() => {
             <tbody>
               <tr v-for="item in pagedItems" :key="item.id">
                 <td><div class="config-name"><span><strong>{{ item.name }}<b v-if="item.isDefault && isModelKind" class="default-tag">默认</b></strong><small v-if="item.description">{{ item.description }}</small></span></div></td>
-                <td class="config-id-col">{{ item.id }}</td>
+                <td class="config-id-col">{{ item.id }}<small v-if="item.kind !== 'embedding'" class="config-ownership">{{ item.visibility === 'business' ? item.businessName : '公共图空间' }}</small></td>
                 <td><strong class="type-name">{{ item.type }}<template v-if="item.model"> · {{ item.model }}</template></strong><code>{{ item.baseUrl || item.host && `${item.host}:${item.port}` || item.endpoint }}</code></td>
                 <td class="config-status-col"><span class="status" :class="`is-${item.status}`"><i />{{ item.status }}</span></td>
                 <td v-if="isModelKind" class="config-usage-col">
@@ -791,9 +810,9 @@ onUnmounted(() => {
                 <td class="config-time-col"><small class="updated">{{ item.updatedAt }}</small></td>
                 <td class="config-action-col">
                   <div class="row-actions">
-                    <button class="link" type="button" @click.stop="openDetail(item)">{{ isAdmin ? '管理' : '查看' }}</button>
-                    <button class="link" type="button" :disabled="!isAdmin || isModelKind && item.isDefault && item.status !== '停用'" :title="isModelKind && item.isDefault && item.status !== '停用' ? '默认配置不能停用' : ''" @click.stop="toggleItem(item)">{{ item.status === '停用' ? '启用' : '停用' }}</button>
-                    <button class="link danger" type="button" :disabled="!isAdmin || isModelKind && item.isDefault" :title="isModelKind && item.isDefault ? '默认配置不能删除，请先将其他配置设为默认' : ''" @click.stop="removeConfig(item)">删除</button>
+                    <button class="link" type="button" @click.stop="openDetail(item)">{{ canManageConfig(item) ? '管理' : '查看' }}</button>
+                    <button class="link" type="button" :disabled="!canManageConfig(item) || isModelKind && item.isDefault && item.status !== '停用'" :title="isModelKind && item.isDefault && item.status !== '停用' ? '默认配置不能停用' : ''" @click.stop="toggleItem(item)">{{ item.status === '停用' ? '启用' : '停用' }}</button>
+                    <button class="link danger" type="button" :disabled="!canManageConfig(item) || isModelKind && item.isDefault" :title="isModelKind && item.isDefault ? '默认配置不能删除，请先将其他配置设为默认' : ''" @click.stop="removeConfig(item)">删除</button>
                   </div>
                 </td>
               </tr>
@@ -829,31 +848,31 @@ onUnmounted(() => {
       <aside v-if="selected" class="detail-drawer">
       <header><div><h2>{{ selected.name }}<b v-if="selected.isDefault" class="default-tag">默认</b></h2><span class="config-id">{{ selected.id }}</span></div><button type="button" @click="selected=null">×</button></header>
       <div class="detail-drawer-body">
-        <section class="health-card"><i :class="`is-${selected.status}`" /><div><strong>{{ selected.status === '正常' ? '配置可用' : selected.status === '异常' ? '连接存在异常' : '配置已停用' }}</strong><span>后端真实探活</span></div><button type="button" :disabled="!isAdmin || testingId === selected.id" @click="testConnection(selected)">{{ testingId === selected.id ? '测试中…' : '测试连接' }}</button></section>
+        <section class="health-card"><i :class="`is-${selected.status}`" /><div><strong>{{ selected.status === '正常' ? '配置可用' : selected.status === '异常' ? '连接存在异常' : '配置已停用' }}</strong><span>{{ selected.status === '停用' ? '停用期间不进行连接测试，启用后可测' : '后端真实探活' }}</span></div><button type="button" :disabled="!canManageConfig(selected) || testingId === selected.id || selected.status === '停用'" :title="selected.status === '停用' ? '停用状态下不可测试连接，请先启用' : ''" @click="testConnection(selected)">{{ testingId === selected.id ? '测试中…' : '测试连接' }}</button></section>
         <a-form :model="selected" class="detail-form" layout="vertical">
-          <a-form-item field="name" label="配置名称" required><input :disabled="!isAdmin" aria-label="name" v-model="selected.name" /><small v-if="detailFieldErrors.name" class="field-error">{{ detailFieldErrors.name }}</small></a-form-item>
-          <a-form-item label="服务类型"><input :disabled="!isAdmin" aria-label="input-field" :value="selected.type" readonly /></a-form-item>
+          <a-form-item field="name" label="配置名称" required><input :disabled="!canManageConfig(selected)" aria-label="name" v-model="selected.name" :aria-invalid="Boolean(detailFieldErrors.name)" /><small v-if="detailFieldErrors.name" class="field-error">{{ detailFieldErrors.name }}</small></a-form-item>
+          <a-form-item label="服务类型"><input :disabled="!canManageConfig(selected)" aria-label="input-field" :value="selected.type" readonly /></a-form-item>
           <template v-if="selected.kind === 'llm' || selected.kind === 'embedding'">
-            <a-form-item class="wide" field="baseUrl" label="Base URL" required><input :disabled="!isAdmin" aria-label="baseUrl" v-model="selected.baseUrl" /><small v-if="detailFieldErrors.baseUrl" class="field-error">{{ detailFieldErrors.baseUrl }}</small></a-form-item>
-            <a-form-item field="model" label="模型" required><input :disabled="!isAdmin" aria-label="model" v-model="selected.model" /><small v-if="detailFieldErrors.model" class="field-error">{{ detailFieldErrors.model }}</small></a-form-item>
-            <a-form-item v-if="selected.kind === 'embedding'" label="维度"><input :disabled="!isAdmin" aria-label="number-input" :value="selected.dimensions ?? ''" type="number" @input="selected.dimensions = ($event.target as HTMLInputElement).value" /><small v-if="detailFieldErrors.dimensions" class="field-error">{{ detailFieldErrors.dimensions }}</small></a-form-item>
-            <a-form-item label="访问凭据"><input :disabled="!isAdmin" aria-label="input-field" :value="selected.apiKeyMasked || (selected.hasApiKey ? '••••••••' : '未设置')" readonly /></a-form-item>
-            <a-form-item class="wide" label="更新 API Key（留空保留原值）"><input :disabled="!isAdmin" aria-label="输入新 Key 覆盖原值" v-model="selected.apiKey" type="password" placeholder="输入新 Key 覆盖原值" /><small v-if="detailFieldErrors.apiKey" class="field-error">{{ detailFieldErrors.apiKey }}</small></a-form-item>
+            <a-form-item class="wide" field="baseUrl" label="Base URL" required><input :disabled="!canManageConfig(selected)" aria-label="baseUrl" v-model="selected.baseUrl" :aria-invalid="Boolean(detailFieldErrors.baseUrl)" /><small v-if="detailFieldErrors.baseUrl" class="field-error">{{ detailFieldErrors.baseUrl }}</small></a-form-item>
+            <a-form-item field="model" label="模型" required><input :disabled="!canManageConfig(selected)" aria-label="model" v-model="selected.model" :aria-invalid="Boolean(detailFieldErrors.model)" /><small v-if="detailFieldErrors.model" class="field-error">{{ detailFieldErrors.model }}</small></a-form-item>
+            <a-form-item v-if="selected.kind === 'embedding'" label="维度"><input :disabled="!canManageConfig(selected)" aria-label="number-input" :value="selected.dimensions ?? ''" type="number" :aria-invalid="Boolean(detailFieldErrors.dimensions)" @input="selected.dimensions = ($event.target as HTMLInputElement).value" /><small v-if="detailFieldErrors.dimensions" class="field-error">{{ detailFieldErrors.dimensions }}</small></a-form-item>
+            <a-form-item label="访问凭据"><input :disabled="!canManageConfig(selected)" aria-label="input-field" :value="selected.apiKeyMasked || (selected.hasApiKey ? '••••••••' : '未设置')" readonly /></a-form-item>
+            <a-form-item class="wide" label="更新 API Key（留空保留原值）"><input :disabled="!canManageConfig(selected)" aria-label="输入新 Key 覆盖原值" v-model="selected.apiKey" type="password" placeholder="输入新 Key 覆盖原值" :aria-invalid="Boolean(detailFieldErrors.apiKey)" /><small v-if="detailFieldErrors.apiKey" class="field-error">{{ detailFieldErrors.apiKey }}</small></a-form-item>
           </template>
           <template v-else>
-            <a-form-item field="host" label="主机" required><input :disabled="!isAdmin" aria-label="host" v-model="selected.host" /><small v-if="detailFieldErrors.host" class="field-error">{{ detailFieldErrors.host }}</small></a-form-item>
-            <a-form-item label="端口"><input :disabled="!isAdmin" aria-label="number-input" :value="selected.port ?? ''" type="number" @input="selected.port = ($event.target as HTMLInputElement).value" /><small v-if="detailFieldErrors.port" class="field-error">{{ detailFieldErrors.port }}</small></a-form-item>
-            <a-form-item label="默认库"><input :disabled="!isAdmin" aria-label="defaultDatabase" v-model="selected.defaultDatabase" /><small v-if="detailFieldErrors.defaultDatabase" class="field-error">{{ detailFieldErrors.defaultDatabase }}</small></a-form-item>
-            <a-form-item field="username" label="用户名" required><input :disabled="!isAdmin" aria-label="username" v-model="selected.username" /><small v-if="detailFieldErrors.username" class="field-error">{{ detailFieldErrors.username }}</small></a-form-item>
-            <a-form-item label="访问凭据"><input :disabled="!isAdmin" aria-label="input-field" :value="selected.passwordMasked || (selected.hasPassword ? '••••••••' : '未设置')" readonly /></a-form-item>
-            <a-form-item class="wide" label="更新密码（留空保留原值）"><input :disabled="!isAdmin" aria-label="输入新密码覆盖原值" v-model="selected.password" type="password" placeholder="输入新密码覆盖原值" /><small v-if="detailFieldErrors.password" class="field-error">{{ detailFieldErrors.password }}</small></a-form-item>
+            <a-form-item field="host" label="主机" required><input :disabled="!canManageConfig(selected)" aria-label="host" v-model="selected.host" :aria-invalid="Boolean(detailFieldErrors.host)" /><small v-if="detailFieldErrors.host" class="field-error">{{ detailFieldErrors.host }}</small></a-form-item>
+            <a-form-item label="端口"><input :disabled="!canManageConfig(selected)" aria-label="number-input" :value="selected.port ?? ''" type="number" :aria-invalid="Boolean(detailFieldErrors.port)" @input="selected.port = ($event.target as HTMLInputElement).value" /><small v-if="detailFieldErrors.port" class="field-error">{{ detailFieldErrors.port }}</small></a-form-item>
+            <a-form-item label="默认库"><input :disabled="!canManageConfig(selected)" aria-label="defaultDatabase" v-model="selected.defaultDatabase" :aria-invalid="Boolean(detailFieldErrors.defaultDatabase)" /><small v-if="detailFieldErrors.defaultDatabase" class="field-error">{{ detailFieldErrors.defaultDatabase }}</small></a-form-item>
+            <a-form-item field="username" label="用户名" required><input :disabled="!canManageConfig(selected)" aria-label="username" v-model="selected.username" :aria-invalid="Boolean(detailFieldErrors.username)" /><small v-if="detailFieldErrors.username" class="field-error">{{ detailFieldErrors.username }}</small></a-form-item>
+            <a-form-item label="访问凭据"><input :disabled="!canManageConfig(selected)" aria-label="input-field" :value="selected.passwordMasked || (selected.hasPassword ? '••••••••' : '未设置')" readonly /></a-form-item>
+            <a-form-item class="wide" label="更新密码（留空保留原值）"><input :disabled="!canManageConfig(selected)" aria-label="输入新密码覆盖原值" v-model="selected.password" type="password" placeholder="输入新密码覆盖原值" :aria-invalid="Boolean(detailFieldErrors.password)" /><small v-if="detailFieldErrors.password" class="field-error">{{ detailFieldErrors.password }}</small></a-form-item>
           </template>
-          <a-form-item class="wide" label="配置说明"><a-textarea :disabled="!isAdmin" v-model="selected.description" class="config-description-textarea" :max-length="configDescriptionMaxLength(selected.kind, 'detail')" show-word-limit :auto-size="{ minRows: 3, maxRows: 5 }" /><small v-if="detailFieldErrors.description" class="field-error">{{ detailFieldErrors.description }}</small></a-form-item>
+          <a-form-item class="wide" label="配置说明"><a-textarea :disabled="!canManageConfig(selected)" v-model="selected.description" class="config-description-textarea" :max-length="configDescriptionMaxLength(selected.kind, 'detail')" show-word-limit :auto-size="{ minRows: 3, maxRows: 5 }" /><small v-if="detailFieldErrors.description" class="field-error">{{ detailFieldErrors.description }}</small></a-form-item>
         </a-form>
         <section class="reference-card"><header><strong>引用关系</strong><span>{{ selected.usage }}</span></header><p>配置变更将在下次脚本调用时生效（context 按触发时所选数据源 / 图空间 / LLM / embedding 注入；向量库随图空间自动同名创建）。</p></section>
       </div>
       <footer>
-        <button class="primary" type="button" :disabled="!isAdmin || saving || hasDetailErrors" @click="saveDetail">{{ saving ? '保存中…' : '保存修改' }}</button>
+        <button class="primary" type="button" :disabled="!canManageConfig(selected) || saving || hasDetailErrors" @click="saveDetail">{{ saving ? '保存中…' : '保存修改' }}</button>
       </footer>
       </aside>
     </Teleport>
@@ -881,22 +900,22 @@ onUnmounted(() => {
       <header><div><span>NEW CONFIGURATION</span><h2>新建{{ categories.find(item => item.key === activeCategory)?.label }}</h2></div><button type="button" @click="dialogOpen=false">×</button></header>
       <a-form :model="form" class="dialog-form config-create-form" layout="vertical">
         <template v-if="formKind === 'llm' || formKind === 'embedding'">
-          <a-form-item class="wide" field="name" label="配置名称" required><input aria-label="例如：科技文本抽取大模型" v-model="form.name" placeholder="例如：科技文本抽取大模型" /></a-form-item>
-          <a-form-item class="wide" field="baseUrl" label="Base URL" required><input aria-label="baseUrl" v-model="form.baseUrl" /><small v-if="createFieldErrors.baseUrl" class="field-error">{{ createFieldErrors.baseUrl }}</small></a-form-item>
-          <a-form-item class="wide" field="model" label="模型" required><input aria-label="model" v-model="form.model" /><small v-if="createFieldErrors.model" class="field-error">{{ createFieldErrors.model }}</small></a-form-item>
-          <a-form-item v-if="formKind === 'embedding'" field="dimensions" label="维度"><input aria-label="number-input" :value="form.dimensions ?? ''" type="number" @input="form.dimensions = ($event.target as HTMLInputElement).value" /><small v-if="createFieldErrors.dimensions" class="field-error">{{ createFieldErrors.dimensions }}</small></a-form-item>
-          <a-form-item class="wide" field="apiKey" label="API Key" required><input aria-label="必填；验证通过后才能保存，明文入库脱敏展示" v-model="form.apiKey" type="password" placeholder="必填；验证通过后才能保存，明文入库脱敏展示" /></a-form-item>
+          <a-form-item class="wide" field="name" label="配置名称" required><input aria-label="例如：科技文本抽取大模型" v-model="form.name" placeholder="例如：科技文本抽取大模型" :aria-invalid="Boolean(visibleCreateErrors.name)" @input="touchCreate('name')" /><small v-if="visibleCreateErrors.name" class="field-error">{{ visibleCreateErrors.name }}</small></a-form-item>
+          <a-form-item class="wide" field="baseUrl" label="Base URL" required><input aria-label="baseUrl" v-model="form.baseUrl" :aria-invalid="Boolean(visibleCreateErrors.baseUrl)" @input="touchCreate('baseUrl')" /><small v-if="visibleCreateErrors.baseUrl" class="field-error">{{ visibleCreateErrors.baseUrl }}</small></a-form-item>
+          <a-form-item class="wide" field="model" label="模型" required><input aria-label="model" v-model="form.model" :aria-invalid="Boolean(visibleCreateErrors.model)" @input="touchCreate('model')" /><small v-if="visibleCreateErrors.model" class="field-error">{{ visibleCreateErrors.model }}</small></a-form-item>
+          <a-form-item v-if="formKind === 'embedding'" field="dimensions" label="维度"><input aria-label="number-input" :value="form.dimensions ?? ''" type="number" :aria-invalid="Boolean(visibleCreateErrors.dimensions)" @input="form.dimensions = ($event.target as HTMLInputElement).value; touchCreate('dimensions')" /><small v-if="visibleCreateErrors.dimensions" class="field-error">{{ visibleCreateErrors.dimensions }}</small></a-form-item>
+          <a-form-item class="wide" field="apiKey" label="API Key" required><input aria-label="必填；验证通过后才能保存，明文入库脱敏展示" v-model="form.apiKey" type="password" placeholder="必填；验证通过后才能保存，明文入库脱敏展示" :aria-invalid="Boolean(visibleCreateErrors.apiKey)" @input="touchCreate('apiKey')" /><small v-if="visibleCreateErrors.apiKey" class="field-error">{{ visibleCreateErrors.apiKey }}</small></a-form-item>
         </template>
         <template v-else>
-          <a-form-item class="wide" field="name" label="配置名称" required><input aria-label="name" v-model="form.name" /></a-form-item>
-          <a-form-item field="host" label="主机" required><input aria-label="host" v-model="form.host" /><small v-if="createFieldErrors.host" class="field-error">{{ createFieldErrors.host }}</small></a-form-item>
-          <a-form-item label="端口"><input aria-label="number-input" :value="form.port ?? ''" type="number" @input="form.port = ($event.target as HTMLInputElement).value" /><small v-if="createFieldErrors.port" class="field-error">{{ createFieldErrors.port }}</small></a-form-item>
-          <a-form-item label="默认库"><input aria-label="defaultDatabase" v-model="form.defaultDatabase" /><small v-if="createFieldErrors.defaultDatabase" class="field-error">{{ createFieldErrors.defaultDatabase }}</small></a-form-item>
-          <a-form-item field="username" label="用户名" required><input aria-label="username" v-model="form.username" /><small v-if="createFieldErrors.username" class="field-error">{{ createFieldErrors.username }}</small></a-form-item>
-          <a-form-item class="wide" label="密码"><input aria-label="password" v-model="form.password" type="password" /><small v-if="createFieldErrors.password" class="field-error">{{ createFieldErrors.password }}</small></a-form-item>
+          <a-form-item class="wide" field="name" label="配置名称" required><input aria-label="name" v-model="form.name" :aria-invalid="Boolean(visibleCreateErrors.name)" @input="touchCreate('name')" /><small v-if="visibleCreateErrors.name" class="field-error">{{ visibleCreateErrors.name }}</small></a-form-item>
+          <a-form-item field="host" label="主机" required><input aria-label="host" v-model="form.host" :aria-invalid="Boolean(visibleCreateErrors.host)" @input="touchCreate('host')" /><small v-if="visibleCreateErrors.host" class="field-error">{{ visibleCreateErrors.host }}</small></a-form-item>
+          <a-form-item label="端口"><input aria-label="number-input" :value="form.port ?? ''" type="number" :aria-invalid="Boolean(visibleCreateErrors.port)" @input="form.port = ($event.target as HTMLInputElement).value; touchCreate('port')" /><small v-if="visibleCreateErrors.port" class="field-error">{{ visibleCreateErrors.port }}</small></a-form-item>
+          <a-form-item label="默认库"><input aria-label="defaultDatabase" v-model="form.defaultDatabase" :aria-invalid="Boolean(visibleCreateErrors.defaultDatabase)" @input="touchCreate('defaultDatabase')" /><small v-if="visibleCreateErrors.defaultDatabase" class="field-error">{{ visibleCreateErrors.defaultDatabase }}</small></a-form-item>
+          <a-form-item field="username" label="用户名" required><input aria-label="username" v-model="form.username" :aria-invalid="Boolean(visibleCreateErrors.username)" @input="touchCreate('username')" /><small v-if="visibleCreateErrors.username" class="field-error">{{ visibleCreateErrors.username }}</small></a-form-item>
+          <a-form-item class="wide" label="密码"><input aria-label="password" v-model="form.password" type="password" :aria-invalid="Boolean(visibleCreateErrors.password)" @input="touchCreate('password')" /><small v-if="visibleCreateErrors.password" class="field-error">{{ visibleCreateErrors.password }}</small></a-form-item>
         </template>
-        <a-form-item class="wide" label="说明"><a-textarea v-model="form.description" class="config-description-textarea" :max-length="configDescriptionMaxLength(formKind || 'llm', 'create')" show-word-limit :auto-size="{ minRows: 3, maxRows: 5 }" /><small v-if="createFieldErrors.description" class="field-error">{{ createFieldErrors.description }}</small></a-form-item>
-        <a-form-item class="wide" field="isDefault"><a-checkbox v-model="form.isDefault" :disabled="hasCategoryDefault || defaultUpdating" class="default-config-checkbox">设为默认（同一类别仅一条默认生效）</a-checkbox></a-form-item>
+        <a-form-item class="wide" label="说明"><a-textarea v-model="form.description" class="config-description-textarea" :max-length="configDescriptionMaxLength(formKind || 'llm', 'create')" show-word-limit :auto-size="{ minRows: 3, maxRows: 5 }" @input="touchCreate('description')" /><small v-if="visibleCreateErrors.description" class="field-error">{{ visibleCreateErrors.description }}</small></a-form-item>
+        <a-form-item class="wide" field="isDefault"><a-checkbox v-model="form.isDefault" :disabled="!isAdmin || hasCategoryDefault || defaultUpdating" class="default-config-checkbox">设为默认（同一类别仅一条默认生效）</a-checkbox></a-form-item>
       </a-form>
       <footer>
         <button type="button" @click="dialogOpen=false">取消</button>
@@ -913,6 +932,7 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.config-ownership{display:block;margin-top:4px;color:#8290a7;font-size:12px}
 .configuration-page button:disabled,.detail-drawer button:disabled{cursor:not-allowed;opacity:.5}
 .detail-form input:disabled{background:#f2f3f5;color:#86909c;cursor:not-allowed}
 
@@ -1001,8 +1021,11 @@ onUnmounted(() => {
 .create-dialog>footer{margin-top:auto}
 .space-dialog-hint{grid-column:1/-1;margin:0;color:#86909c;font-size:12px;line-height:20px}
 .space-name-field{display:flex;width:100%;min-width:0;flex-direction:column;gap:4px}
-/* 字段级校验提示（输入即校验，超长/异常字符/范围/必填） */
+/* 字段级校验提示（输入即校验，超长/异常字符/范围/必填）：红字 + 输入框红边，
+   口径同九大业务面板（aria-invalid 由 createFieldErrors/detailFieldErrors/spaceNameError 驱动） */
 .dialog-form .field-error,.detail-form .field-error{display:block;color:#e4322d;font-size:12px;line-height:18px}
+.dialog-form input[aria-invalid='true'],.detail-form input[aria-invalid='true'],.space-name-field input[aria-invalid='true']{border-color:#e4322d;box-shadow:0 0 0 1px #e4322d inset}
+.dialog-form input[aria-invalid='true']:focus,.detail-form input[aria-invalid='true']:focus{border-color:#e4322d;box-shadow:0 0 0 2px rgba(228,50,45,.15)}
 
 /* 新建配置弹窗文字层级：主 / 次 / 三级 / 禁用。 */
 .config-create-dialog,.config-create-dialog :deep(*){font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;letter-spacing:0}
@@ -1033,9 +1056,10 @@ onUnmounted(() => {
 /* 详情抽屉右上角关闭按钮：去掉灰色底块（与新建弹窗关闭按钮一致） */
 .detail-drawer>header>button{border:0;background:transparent;color:#4e5969;font-size:20px;line-height:1}
 .detail-drawer>header>button:hover{background:transparent;color:#165dff}
-/* 详情抽屉头部：黑色标题在上，蓝色唯一标识在标题下方 */
-.detail-drawer>header h2{margin:0}
-.detail-drawer>header .config-id{display:block;margin-top:2px;color:#165dff;font-size:12px;line-height:20px;font-weight:400}
+/* 详情抽屉头部：黑色标题在上，蓝色唯一标识在标题下方；超长名称/标识自动换行，不撑破抽屉 */
+.detail-drawer>header>div{min-width:0}
+.detail-drawer>header h2{margin:0;word-break:break-all;overflow-wrap:anywhere}
+.detail-drawer>header .config-id{display:block;margin-top:2px;color:#165dff;font-size:12px;line-height:20px;font-weight:400;word-break:break-all;overflow-wrap:anywhere}
 .health-card{grid-template-columns:8px minmax(0,1fr) auto;gap:16px;margin:16px 24px 0;padding:16px;border-color:#e5e6eb;border-radius:6px;box-shadow:none}.health-card>i{width:8px;height:8px}.health-card>div{gap:4px}.health-card strong{font-size:14px;line-height:22px;font-weight:600}.health-card span{font-size:12px;line-height:20px;font-weight:400}.health-card button{height:32px;padding:0 16px;border-color:#e5e6eb;border-radius:4px;font-size:14px;line-height:22px;font-weight:400}
 .detail-form,.dialog-form{gap:16px;padding:24px}.detail-form label,.dialog-form label{gap:8px}.detail-form label span,.dialog-form label span{font-size:14px;line-height:22px;font-weight:400}
 .reference-card{margin:0 24px;padding:16px;border-color:#e5e6eb;border-radius:6px;box-shadow:none}.reference-card strong{font-size:14px;line-height:22px;font-weight:600}.reference-card span,.reference-card p,.space-dialog-hint{font-size:12px;line-height:20px;font-weight:400}

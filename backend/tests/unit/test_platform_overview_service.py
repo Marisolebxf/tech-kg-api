@@ -356,54 +356,33 @@ def test_stats_provider_rest_fallback_when_cache_missing() -> None:
     assert snapshot.edges == {"PUBLISH": 5}
 
 
-def test_overview_uses_control_plane_day_changes() -> None:
-    """昨日新增/运行中执行数来自工作流控制库，明细行替换演示数据。"""
+def test_overview_does_not_present_control_plane_totals_as_individual_changes() -> None:
     from biz.schemas.platform_overview import AssetChangeRow
 
-    entity_rows = [
-        AssetChangeRow(
-            type="审测挂件",
-            object="审测挂件 · 61 条",
-            change="新增 review-widget-64d0d5",
-            source="techkg_e2e_liz.review_widgets",
-            time="10:30:00",
-        )
-    ]
+    aggregate = AssetChangeRow(
+        type="论文",
+        object="论文 · 32 条",
+        change="新增 Paper",
+        source="paper",
+        time="10:30:00",
+        is_aggregate=True,
+    )
     changes = FakeChangesProvider(
         DayChangesSnapshot(
-            entity_added=61,
-            relation_added=7,
-            running_count=3,
-            entity_rows=entity_rows,
-            relation_rows=[],
+            entity_added=32, relation_added=7, running_count=3, entity_rows=[aggregate]
         )
     )
-    service = PlatformOverviewService(stats_provider=FakeStatsProvider(), changes_provider=changes)
-
-    result = service.get_overview("dev2")
-
-    # 控制库查询随全局图空间选择器传递（与图统计同空间口径）
+    result = PlatformOverviewService(
+        stats_provider=FakeStatsProvider(), changes_provider=changes
+    ).get_overview("dev2")
     assert changes.spaces == ["dev2"]
-    entity = result.asset_overview_groups[0]
-    assert entity.added == "+61"
-    assert entity.added_label == "昨日新增"
-    assert result.asset_overview_groups[1].added == "+7"
+    assert [group.added for group in result.asset_overview_groups] == ["--", "--"]
     assert result.pending_batch_count == 3
-    assert result.data_sources["dayChanges"] == "workflow-control-live"
-    assert result.asset_change_rows["entity"] == entity_rows
-    assert result.asset_change_rows["relation"] == []
-    # 数值合计与徽标同源（Σwritten），与明细行数解耦：抽屉用它展示
-    # 「共 N 条 · 展示前 n 条」，行数受单执行 50 条上限截断
-    assert result.asset_change_totals == {"entity": 61, "relation": 7}
-    # 经响应模型真实序列化（驼峰别名字段已声明，不是 model_copy 透传的裸属性）
-    import json
-
-    serialized = json.loads(result.model_dump_json(by_alias=True))
-    assert serialized["assetChangeTotals"] == {"entity": 61, "relation": 7}
-    assert len(result.asset_change_rows["entity"]) == 1
-    assert len(result.asset_change_rows["relation"]) == 0
-    # 属性值占位卡与演示行已删：明细只剩实体/关系两类
-    assert set(result.asset_change_rows) == {"entity", "relation"}
+    assert result.asset_change_rows == {"entity": [], "relation": []}
+    assert result.asset_change_totals == {"entity": 0, "relation": 0}
+    assert set(result.asset_change_errors) == {"entity", "relation"}
+    assert "assetChangeErrors" in result.model_dump(by_alias=True)
+    assert all("暂未完整读取" in message for message in result.asset_change_errors.values())
 
 
 def test_overview_badge_counts_graph_rows_when_lookup_exact() -> None:
@@ -444,8 +423,9 @@ def test_overview_badge_counts_graph_rows_when_lookup_exact() -> None:
             DayChangesSnapshot(entity_added=4, relation_added=0, entity_rows=entity_rows)
         ),
     ).get_overview("ewrdf")
-    assert degraded.asset_overview_groups[0].added == "+4"  # exact=False 回退 written 合计
-    assert degraded.asset_change_totals == {"entity": 4, "relation": 0}
+    assert degraded.asset_overview_groups[0].added == "--"  # 未完整读取时不冒充新增总数
+    assert degraded.asset_change_totals == {"entity": 13, "relation": 0}
+    assert "entity" in degraded.asset_change_errors
 
 
 def test_overview_running_count_is_live_not_frozen_in_day_snapshot() -> None:
@@ -542,6 +522,8 @@ def _execution_record(
     table: str = "techkg_e2e_liz.review_widgets",
     trigger: str = "SCHEDULE",
     sources: list[dict] | None = None,
+    task_id: str | None = "TASK-overview-test",
+    started_at: str | None = None,
 ) -> str:
     import json
 
@@ -549,6 +531,8 @@ def _execution_record(
         "status": status,
         "completedAt": completed_at,
         "triggerSource": trigger,
+        "taskId": task_id,
+        "startedAt": started_at,
         "payload": {payload_space_key: payload_space} if payload_space else {},
         "output": {
             "kind": kind,
@@ -558,6 +542,67 @@ def _execution_record(
         },
     }
     return json.dumps(record, ensure_ascii=False)
+
+
+def test_parse_execution_records_without_task_id_keeps_rows_unlinked() -> None:
+    snapshot = parse_execution_records(
+        [_execution_record(task_id=None)],
+        day="2026-09-22",
+        target_space="dev2",
+        default_space="dev2",
+    )
+    assert len(snapshot.entity_rows) == 1
+    assert snapshot.entity_rows[0].task_id is None
+    assert snapshot.entity_executions[0].task_id is None
+
+
+def test_graph_row_task_id_distinguishes_sources_and_reruns_without_guessing() -> None:
+    from dataclasses import replace
+
+    from service.platform_overview import _graph_row_task_id
+
+    snapshot = parse_execution_records(
+        [
+            _execution_record(
+                task_id="TASK-old",
+                table="paper",
+                started_at="2026-09-22 09:00:00",
+                completed_at="2026-09-22 10:00:00",
+            ),
+            _execution_record(
+                task_id="TASK-new",
+                table="paper",
+                started_at="2026-09-22 11:00:00",
+                completed_at="2026-09-22 12:00:00",
+            ),
+            _execution_record(
+                task_id="TASK-other-source",
+                table="patent",
+                started_at="2026-09-22 11:00:00",
+                completed_at="2026-09-22 12:00:00",
+            ),
+        ],
+        day="2026-09-22",
+        target_space="dev2",
+        default_space="dev2",
+    )
+    executions = snapshot.entity_executions
+
+    # 即使正在反查最新执行的整日时间窗，旧对象也应关联旧任务。
+    def resolve(source: str, stamp: str, time_prop: str = "update_time") -> str | None:
+        return _graph_row_task_id(
+            executions[1], {"source_table": source, time_prop: stamp}, time_prop, executions
+        )
+
+    assert resolve("paper", "2026-09-22 09:30:00") == "TASK-old"
+    assert resolve("paper", "2026-09-22 11:30:00") == "TASK-new"
+    assert resolve("patent", "2026-09-22 11:30:00") == "TASK-other-source"
+    assert resolve("unknown", "2026-09-22 11:30:00") is None
+    assert resolve("paper", "2026-09-22 13:00:00") is None
+    # 源数据更新时间不能用于区分图写入任务；并发同来源同 Schema 也不能猜。
+    assert resolve("paper", "2026-09-22 09:30:00", "source_update_time") is None
+    executions.append(replace(executions[1], task_id="TASK-concurrent"))
+    assert resolve("paper", "2026-09-22 11:30:00") is None
 
 
 def test_parse_execution_records_aggregates_day_by_kind_and_space() -> None:
@@ -597,6 +642,8 @@ def test_parse_execution_records_aggregates_day_by_kind_and_space() -> None:
     assert row.object == "审测挂件 · 5 条"
     assert row.change == "新增 review-widget-64d0d5"
     assert row.source == "techkg_e2e_liz.review_widgets"
+    assert row.task_id == "TASK-overview-test"
+    assert row.model_dump(by_alias=True)["taskId"] == "TASK-overview-test"
     assert row.time == "09-22 18:30:00"  # 完成时刻按北京展示（UTC+8），带月日（跨天歧义）
     assert len(snapshot.relation_rows) == 1
     assert snapshot.relation_rows[0].source == "techkg_e2e_liz.review_widgets"
@@ -678,6 +725,7 @@ def test_parse_execution_records_splits_rows_by_source() -> None:
     # 变更内容与识别时间在同一执行的各行保持一致
     assert {row.change for row in snapshot.entity_rows} == {"新增 review-widget-64d0d5"}
     assert {row.time for row in snapshot.entity_rows} == {"09-22 18:30:00"}
+    assert {row.task_id for row in snapshot.entity_rows} == {"TASK-overview-test"}
 
 
 def test_parse_execution_records_change_falls_back_without_schema_key() -> None:
@@ -772,6 +820,7 @@ def test_parse_execution_records_collects_graph_lookup_descriptors() -> None:
     # 不至于把对象挡在窗外；比本执行完成时刻（03:41:54）更宽
     assert entity_exec.window_hi == "2026-09-23 15:59:59"
     assert [row.object for row in entity_exec.fallback_rows] == ["审测挂件 · 3 条"]
+    assert entity_exec.task_id == "TASK-overview-test"
 
     relation_exec = snapshot.relation_executions[0]
     assert relation_exec.schema_key == "review-linked-196fe7"
@@ -786,6 +835,7 @@ def test_enrich_day_rows_lists_graph_objects_per_vertex() -> None:
         [
             _execution_record(
                 written=3,
+                task_id="TASK-entity",
                 completed_at="2026-09-23 03:41:54",
                 sources=[
                     {
@@ -797,6 +847,7 @@ def test_enrich_day_rows_lists_graph_objects_per_vertex() -> None:
             ),
             _execution_record(
                 kind="relation",
+                task_id="TASK-relation",
                 schema_key="review-linked-196fe7",
                 schema_label="审测关联",
                 written=3,
@@ -922,6 +973,7 @@ def test_enrich_day_rows_lists_graph_objects_per_vertex() -> None:
     ]
     assert result.entity_rows[0].source == "techkg_e2e_liz.review_widgets"
     assert result.entity_rows[0].time == "09-23 11:00:35"  # 图侧 UTC 时间戳折算北京展示
+    assert {row.task_id for row in result.entity_rows} == {"TASK-entity"}
     # 关系行：边类型无索引 LOOKUP 失败 → GO FROM 当日实体 vid 兜底，无序对去重后 2 条
     assert [(row.type, row.object) for row in result.relation_rows] == [
         ("审测关联", "总览造数-实体01 → 总览造数-实体02"),
@@ -930,6 +982,7 @@ def test_enrich_day_rows_lists_graph_objects_per_vertex() -> None:
     assert result.relation_rows[0].change == "新增 审测关联"
     assert result.relation_rows[0].source == "techkg_e2e_liz.review_widgets"
     assert result.relation_rows[0].time == "09-23 11:44:48"
+    assert {row.task_id for row in result.relation_rows} == {"TASK-relation"}
     # 快照保留控制库 written 合计；两类反查均为逐对象行（关系 LOOKUP 无索引走
     # GO FROM 兜底也算枚举完成）——exact 置位后装配层改按行数计徽标
     assert result.entity_added == 3
@@ -1027,7 +1080,14 @@ def test_dedupe_rows_keeps_first_occurrence() -> None:
     from service.platform_overview import AssetChangeRow, _dedupe_rows
 
     def row(obj: str, time: str) -> AssetChangeRow:
-        return AssetChangeRow(type="专利", object=obj, change="新增 专利", source="-", time=time)
+        return AssetChangeRow(
+            type="专利",
+            object=obj,
+            change="新增 专利",
+            source="-",
+            time=time,
+            task_id=f"TASK-{time}",
+        )
 
     rows = [row("熔丝元件", "20:01:00"), row("旋转电机", "20:01:01"), row("熔丝元件", "20:05:00")]
     deduped = _dedupe_rows(rows)
@@ -1036,6 +1096,7 @@ def test_dedupe_rows_keeps_first_occurrence() -> None:
         ("熔丝元件", "20:01:00"),
         ("旋转电机", "20:01:01"),
     ]
+    assert deduped[0].task_id == "TASK-20:01:00"
 
 
 def test_sort_rows_newest_first_keeps_all_rows() -> None:
@@ -1467,3 +1528,198 @@ def test_overview_serves_stale_value_and_refreshes_in_background() -> None:
         time.sleep(0.02)
     assert provider.calls == 2
     assert service.get_overview("dev2") is not first  # 新值已入缓存
+
+
+def test_no_index_match_pages_return_32_real_records_and_matching_badge(monkeypatch) -> None:
+    import re
+
+    import service.platform_overview as overview
+
+    monkeypatch.setattr(overview, "_MATCH_PAGE_SIZE", 7)
+    monkeypatch.setattr(overview, "_schema_labels_by_name", lambda *_: {})
+    snapshot = parse_execution_records(
+        [_execution_record(written=32, table="ewrdf_test.t_paper", schema_label="论文")],
+        day="2026-09-22",
+        target_space="dev2",
+        default_space="dev2",
+    )
+    records = [
+        {
+            "vid": f"paper-{i:02}",
+            "props": {
+                "name": "同名论文",
+                "source_table": "ewrdf_test.t_paper",
+                "update_time": "2026-09-22 10:00:00",
+            },
+        }
+        for i in range(32)
+    ]
+    records = [
+        {"vid": "old-paper", "props": {"name": "往年论文", "update_time": "2020-01-01 00:00:00"}},
+        *records,
+        {"vid": "today-paper", "props": {"name": "今日论文", "update_time": "2026-09-23 01:00:00"}},
+    ]
+
+    class PagedClient(_ScriptedGraphClient):
+        def execute_query(self, statement, timeout=None):
+            if statement.startswith("MATCH"):
+                self.queries.append(statement)
+                offset = int(re.search(r"SKIP (\d+)", statement).group(1))
+                return _GraphResult(records[offset : offset + 7])
+            return super().execute_query(statement, timeout)
+
+    client = PagedClient(
+        [
+            ("DESC TAG `Paper`", [{"Field": "name"}, {"Field": "update_time"}]),
+            ("LOOKUP ON `Paper`", RuntimeError("There is no index to use at runtime")),
+        ]
+    )
+    result = enrich_day_rows_with_graph(
+        snapshot,
+        "dev2",
+        connect_client=lambda _: client,
+        schema_names={"review-widget-64d0d5": "Paper"},
+        schema_labels={"Paper": "论文"},
+    )
+    assert result.entity_rows_exact is True
+    assert len(result.entity_rows) == 32  # 相同名称、相同写入时刻，仍按真实 VID 保留 32 行。
+    assert {r.object_id for r in result.entity_rows} == {f"paper-{i:02}" for i in range(32)}
+    assert {r.task_id for r in result.entity_rows} == {"TASK-overview-test"}
+    assert all(not r.is_aggregate for r in result.entity_rows)
+    matches = [q for q in client.queries if q.startswith("MATCH")]
+    assert len(matches) == 5
+    assert "WHERE" not in matches[0]  # 兜底不使用可能需要属性索引的 WHERE。
+    assert all(row.object not in {"往年论文", "今日论文"} for row in result.entity_rows)
+    assert "ORDER BY vid SKIP 28 LIMIT 7" in matches[-1]
+    assert client.closed
+    payload = PlatformOverviewService(
+        stats_provider=FakeStatsProvider(), changes_provider=FakeChangesProvider(result)
+    ).get_overview("dev2")
+    assert payload.asset_overview_groups[0].added == "+32"
+    assert payload.asset_change_totals["entity"] == len(payload.asset_change_rows["entity"]) == 32
+    assert payload.asset_change_errors == {}
+    assert len(payload.model_dump(by_alias=True)["assetChangeRows"]["entity"]) == 32
+
+
+def test_datetime_only_tag_can_use_typed_match_without_index() -> None:
+    snapshot = parse_execution_records(
+        [_execution_record(written=1)], day="2026-09-22", target_space="dev2", default_space="dev2"
+    )
+    client = _ScriptedGraphClient(
+        [
+            ("DESC TAG `Paper`", [{"Field": "update_time", "Type": "datetime"}]),
+            ("LOOKUP ON `Paper`", RuntimeError("There is no index to use at runtime")),
+            (
+                "MATCH (v:`Paper`)",
+                [
+                    {
+                        "vid": "p1",
+                        "props": {"name": "真实论文", "update_time": "2026-09-22T10:00:00"},
+                    }
+                ],
+            ),
+        ]
+    )
+    result = enrich_day_rows_with_graph(
+        snapshot,
+        "dev2",
+        connect_client=lambda _: client,
+        schema_names={"review-widget-64d0d5": "Paper"},
+        schema_labels={},
+    )
+    assert result.entity_rows_exact
+    assert result.entity_rows[0].object == "真实论文"
+    assert result.entity_rows[0].time == "09-22 18:00:00"
+    assert any(
+        '`Paper`.`update_time` >= datetime("2026-09-21 16:00:00")' in q
+        for q in client.queries
+        if q.startswith("LOOKUP")
+    )
+    assert "WHERE" not in client.queries[-1]
+
+
+def test_match_budget_expiry_never_reports_a_partial_page_as_complete(monkeypatch) -> None:
+    from dataclasses import replace
+
+    import service.platform_overview as overview
+
+    clock = [0.0]
+    monkeypatch.setattr(overview.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(overview, "_MATCH_PAGE_SIZE", 2)
+    snapshot = parse_execution_records(
+        [_execution_record(written=32)], day="2026-09-22", target_space="dev2", default_space="dev2"
+    )
+
+    class SlowClient(_ScriptedGraphClient):
+        def execute_query(self, statement, timeout=None):
+            if statement.startswith("MATCH"):
+                self.queries.append(statement)
+                clock[0] = 9
+                return _GraphResult([{"vid": "p1", "props": {}}, {"vid": "p2", "props": {}}])
+            return super().execute_query(statement, timeout)
+
+    client = SlowClient(
+        [
+            ("DESC TAG `Paper`", [{"Field": "update_time"}]),
+            ("LOOKUP ON `Paper`", RuntimeError("There is no index to use at runtime")),
+        ]
+    )
+    result = enrich_day_rows_with_graph(
+        snapshot,
+        "dev2",
+        connect_client=lambda _: client,
+        schema_names={"review-widget-64d0d5": "Paper"},
+        schema_labels={},
+    )
+    assert not result.entity_rows_exact
+    assert len([q for q in client.queries if q.startswith("MATCH")]) == 1
+    assert all(r.is_aggregate for r in result.entity_rows)
+    assert (
+        replace(result, entity_rows=[]).entity_added == 32
+    )  # 内部写入统计保留，不伪装成逐对象行。
+
+
+def test_failed_day_snapshot_retries_then_caches_recovered_details(monkeypatch) -> None:
+    from dataclasses import replace
+
+    import service.platform_overview as overview
+
+    clock = [0.0]
+    monkeypatch.setattr(overview.time, "monotonic", lambda: clock[0])
+    failed = parse_execution_records(
+        [_execution_record(written=32)], day="2026-09-22", target_space="dev2", default_space="dev2"
+    )
+    recovered = replace(failed, entity_rows_exact=True, entity_rows=[])
+    loads = []
+
+    class Provider(overview.WorkflowControlDayChangesProvider):
+        def _current_day(self):
+            return "2026-09-22"
+
+        def _load(self, day, space):
+            loads.append((day, space))
+            return failed if len(loads) == 1 else recovered
+
+    provider = Provider()
+    assert provider.get_day_changes("dev2") is failed
+    clock[0] = 30
+    assert provider.get_day_changes("dev2") is failed
+    clock[0] = 61
+    assert provider.get_day_changes("dev2") is recovered
+    clock[0] = 10000
+    assert provider.get_day_changes("dev2") is recovered
+    assert len(loads) == 2
+
+
+def test_old_source_watermark_cannot_include_objects_before_yesterday() -> None:
+    snapshot = parse_execution_records(
+        [
+            _execution_record(
+                sources=[{"table": "paper", "written": 32, "startWatermark": "2020-01-01 00:00:00"}]
+            )
+        ],
+        day="2026-09-22",
+        target_space="dev2",
+        default_space="dev2",
+    )
+    assert snapshot.entity_executions[0].window_lo == "2026-09-21 16:00:00"

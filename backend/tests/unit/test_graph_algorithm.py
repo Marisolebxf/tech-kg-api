@@ -331,6 +331,31 @@ def test_get_job_returns_camel_snapshot(algo_backend) -> None:
     assert data["driverState"] == "FINISHED"
 
 
+def test_job_snapshot_keeps_millisecond_precision() -> None:
+    """开始/完成带毫秒：亚秒级作业（nGQL 度数几十毫秒）秒精度会显示成「耗时 0 秒」。"""
+    from service.graph_algorithm import _job_to_data, _local_job_to_data
+
+    spark_like = _job_snapshot(
+        status="succeeded",
+        started_at="2026-10-12T06:36:00.062235+00:00",
+        finished_at="2026-10-12T06:36:00.081466+00:00",
+    )
+    data = _job_to_data(spark_like)
+    assert data["startedAt"] == "2026-10-12 14:36:00.062"
+    assert data["finishedAt"] == "2026-10-12 14:36:00.081"
+
+    local = {
+        "job_id": "degree-job",
+        "status": "succeeded",
+        "created_at": "2026-10-12T06:49:48.479917+00:00",
+        "finished_at": "2026-10-12T06:49:48.499342+00:00",
+        "error": None,
+    }
+    data = _local_job_to_data(local)
+    assert data["startedAt"] == "2026-10-12 14:49:48.479"
+    assert data["finishedAt"] == "2026-10-12 14:49:48.499"
+
+
 def test_get_job_not_found_maps_404(algo_backend) -> None:
     def raise_not_found(job_id):
         raise GraphNotFoundError(f"GET /api/v1/algorithms/jobs/{job_id} -> 404")

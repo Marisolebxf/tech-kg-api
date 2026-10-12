@@ -37,6 +37,11 @@ class AssetChangeRow(CamelCaseModel):
     change: str
     source: str
     time: str
+    # 真实工作流任务 ID；旧执行未记录任务时留空，不按来源名称猜测任务。
+    task_id: str | None = None
+    object_id: str | None = None
+    # 控制库写入合计仅供内部诊断，不作为逐对象明细交给页面。
+    is_aggregate: bool = Field(default=False, exclude=True)
 
 
 class StructureMember(CamelCaseModel):
@@ -64,9 +69,9 @@ class PlatformOverviewData(CamelCaseModel):
     updated_at: str
     asset_overview_groups: list[AssetOverviewGroup]
     asset_change_rows: dict[AssetOverviewKey, list[AssetChangeRow]]
-    # 昨日新增真实计数（Σwritten，与资产卡徽标同源）：抽屉明细行有单执行
-    # 50 条上限，行数 ≠ 徽标数时前端用它展示「共 N 条 · 展示前 n 条」
+    # 与逐对象明细同源：完整读取时，徽标、合计和实际记录数一致。
     asset_change_totals: dict[AssetOverviewKey, int] = Field(default_factory=dict)
+    asset_change_errors: dict[AssetOverviewKey, str] = Field(default_factory=dict)
     entity_structure: list[StructureItem]
     relation_structure: list[StructureItem]
     data_mode: Literal["partial", "mock"] = "mock"

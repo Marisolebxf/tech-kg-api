@@ -94,6 +94,15 @@ class LlmConfigService:
     def create_config(self, payload: dict, *, scope_owner: str | None = None) -> dict:
         now = _utcnow_naive()
         config_id = f"LLM-{uuid.uuid4().hex[:8].upper()}"
+        # Register visibility in the same commit as the configuration itself.
+        if "_business_id" in payload:
+            from db_model.config_ownership import ConfigOwnership
+
+            self._session.add(
+                ConfigOwnership(
+                    config_kind="llm", config_id=config_id, business_id=payload["_business_id"]
+                )
+            )
         row = self._dao.create(
             id=config_id,
             name=payload["name"],
@@ -158,8 +167,17 @@ class LlmConfigService:
         if row is None:
             return {"ok": False, "latencyMs": None, "error": "配置不存在"}
         if not row.api_key:
+            self._record_probe_status(config_id, row.status, False)
             return {"ok": False, "latencyMs": None, "error": "未配置 API Key"}
-        return _ping_llm(row.base_url, row.model, row.api_key)
+        result = _ping_llm(row.base_url, row.model, row.api_key)
+        self._record_probe_status(config_id, row.status, bool(result.get("ok")))
+        return result
+
+    def _record_probe_status(self, config_id: str, current_status: str, ok: bool) -> None:
+        """探活结果落库（失败→异常 / 成功→正常）：徽标与探活结果一致，刷新不回跳；停用态不覆盖（启停只由人工切换）。"""
+        if current_status == "停用":
+            return
+        self._dao.update(config_id, status="正常" if ok else "异常")
 
     def verify_connection(self, base_url: str, model: str, api_key: str) -> dict:
         """未保存前的验证：直接用弹窗里的原始参数探活。"""

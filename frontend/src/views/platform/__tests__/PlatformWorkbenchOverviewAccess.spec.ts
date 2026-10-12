@@ -3,18 +3,20 @@ import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { AuthProfile } from '../../../api/auth'
-import { getPlatformOverview } from '../../../api/platformOverview'
+import { getPlatformOverview, type PlatformOverviewData } from '../../../api/platformOverview'
 import { useAuthStore } from '../../../stores/auth'
 import { useGraphSpaceStore } from '../../../stores/graphSpace'
 import { getProductionReviews, listJobs } from '../../../api/workflowOperations'
 import PlatformWorkbenchView from '../PlatformWorkbenchView.vue'
+
+const { routerPush, showToast } = vi.hoisted(() => ({ routerPush: vi.fn(), showToast: vi.fn() }))
 
 // 模拟线上误配：关闭前端认证不能覆盖后端返回的普通用户身份。
 vi.mock('../../../config', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../../config')>(), authDisabled: true,
 }))
 
-vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }), RouterLink: { template: '<a><slot /></a>' } }))
+vi.mock('vue-router', () => ({ useRouter: () => ({ push: routerPush }), RouterLink: { template: '<a><slot /></a>' } }))
 vi.mock('../../../api/graphConsole', () => ({ runNgql: vi.fn() }))
 vi.mock('../../../api/graphAlgorithm', () => ({
   fetchGraphAlgorithmMetadata: vi.fn(),
@@ -33,7 +35,7 @@ vi.mock('../../../api/workflowOperations', () => ({
   JOB_STATUS_TONE: { 未运行: 'idle', 运行中: 'run', 已暂停: 'idle', 已完成: 'ok', 运行异常: 'warn', 运行失败: 'err' },
 }))
 vi.mock('../../../api/platformOverview', () => ({ getPlatformOverview: vi.fn() }))
-vi.mock('../../../composables/use-toast', () => ({ useToast: () => ({ showToast: vi.fn() }) }))
+vi.mock('../../../composables/use-toast', () => ({ useToast: () => ({ showToast }) }))
 vi.mock('@arco-design/web-vue/es/icon', () => ({ IconInfoCircle: { template: '<i />' }, IconRefresh: { template: '<i />' } }))
 
 function makeProfile(isAdmin: boolean): AuthProfile {
@@ -56,7 +58,10 @@ let pinia: ReturnType<typeof createPinia>
 function mountOverview(): VueWrapper {
   return mount(PlatformWorkbenchView, {
     props: {},
-    global: { plugins: [pinia] },
+    global: {
+      plugins: [pinia],
+      stubs: { teleport: true, 'a-tooltip': { template: '<span><slot /></span>' }, 'a-select': true, 'a-option': true },
+    },
   })
 }
 
@@ -139,5 +144,123 @@ describe('平台总览管理入口按角色隐藏', () => {
     expect(text).toContain('人工审核')
     expect(listJobs).toHaveBeenCalled()
     expect(getProductionReviews).toHaveBeenCalled()
+  })
+})
+
+describe('昨日新增明细跳转更新任务', () => {
+  function withAssetChanges(overrides: Partial<PlatformOverviewData> = {}) {
+    vi.mocked(getPlatformOverview).mockResolvedValue({
+      platformStatus: '平台运行正常', pendingBatchCount: 0, updatedAt: '02:00',
+      dataMode: 'partial', warnings: [], dataSources: {},
+      entityStructure: [], relationStructure: [],
+      assetOverviewGroups: [
+        { key: 'entity', title: '实体数据', total: '2', totalLabel: '实体总量', added: '+2', addedLabel: '昨日新增' },
+        { key: 'relation', title: '关系数据', total: '1', totalLabel: '关系总量', added: '+1', addedLabel: '昨日新增' },
+      ],
+      assetChangeRows: {
+        entity: [
+          { type: '论文', object: '论文甲', change: '新增', source: 'paper', time: '10-11 02:00:00', taskId: 'TASK-paper-a' },
+          { type: '论文', object: '论文乙', change: '新增', source: 'paper', time: '10-11 02:00:00', taskId: 'TASK-paper-b' },
+          { type: '论文', object: '历史论文', change: '新增', source: 'paper', time: '10-11 01:00:00' },
+        ],
+        relation: [
+          { type: '作者', object: '专家 → 论文', change: '新增', source: 'paper', time: '10-11 02:00:00', taskId: 'TASK-author' },
+        ],
+      },
+      ...overrides,
+    })
+  }
+
+  async function openChanges(index = 0) {
+    wrapper = mountOverview()
+    await flushPromises()
+    const buttons = wrapper.findAll('button').filter(button => button.text() === '查看昨日新增')
+    await buttons[index]!.trigger('click')
+  }
+
+  it('新增32时展示32条真实记录，同名同时间记录各自保留', async () => {
+    useAuthStore().profile = makeProfile(true)
+    withAssetChanges({
+      assetOverviewGroups: [{ key: 'entity', title: '实体数据', total: '137', totalLabel: '实体总量', added: '+32', addedLabel: '昨日新增' }],
+      assetChangeRows: {
+        entity: Array.from({ length: 32 }, (_, index) => ({ type: '论文', object: '同名论文', objectId: `p-${index}`, taskId: `TASK-${index}`, change: '新增', source: 'paper', time: '10-11 02:00:00' })),
+        relation: [],
+      },
+      assetChangeTotals: { entity: 32, relation: 0 },
+    })
+    await openChanges()
+    expect(wrapper.find('.asset-change-drawer').text()).toContain('+32')
+    const rows = wrapper.findAll('.asset-change-table tbody tr')
+    expect(rows).toHaveLength(32)
+    expect(wrapper.find('.asset-change-drawer footer').text()).toContain('32 条变化')
+    expect(wrapper.find('.asset-change-drawer').text()).not.toContain('展示前')
+    await rows[31]!.trigger('click')
+    expect(routerPush).toHaveBeenLastCalledWith({ name: 'task-detail', params: { area: 'construction', taskId: 'TASK-31' }, query: undefined })
+  })
+
+  it('明细暂不可读时显示读取失败，不显示汇总行或暂无新增', async () => {
+    useAuthStore().profile = makeProfile(true)
+    withAssetChanges({
+      assetOverviewGroups: [{ key: 'entity', title: '实体数据', total: '137', totalLabel: '实体总量', added: '--', addedLabel: '昨日新增' }],
+      assetChangeRows: { entity: [], relation: [] },
+      assetChangeErrors: { entity: '实体新增明细暂未完整读取，请稍后重试' },
+      assetChangeTotals: { entity: 0, relation: 0 },
+    })
+    await openChanges()
+    const drawer = wrapper.find('.asset-change-drawer')
+    expect(drawer.text()).toContain('实体新增明细暂未完整读取，请稍后重试')
+    expect(drawer.text()).not.toContain('昨日暂无写图记录')
+    expect(drawer.text()).not.toContain('展示前')
+    expect(drawer.find('footer').text()).toContain('新增明细暂不可读取')
+  })
+
+  it('按钮显示查看更新任务；点击不同实体行按各自任务 ID 直达详情', async () => {
+    useAuthStore().profile = makeProfile(true)
+    withAssetChanges()
+    await openChanges()
+    expect(wrapper.find('.asset-change-drawer footer a').text()).toBe('查看更新任务')
+    expect(wrapper.find('.asset-change-drawer footer a').attributes('to')).toBe('/graph-build')
+    const rows = wrapper.findAll('.asset-change-table tbody tr')
+    await rows[0]!.find('strong').trigger('click')
+    expect(routerPush).toHaveBeenLastCalledWith({ name: 'task-detail', params: { area: 'construction', taskId: 'TASK-paper-a' }, query: undefined })
+    await rows[1]!.trigger('click')
+    expect(routerPush).toHaveBeenLastCalledWith({ name: 'task-detail', params: { area: 'construction', taskId: 'TASK-paper-b' }, query: undefined })
+  })
+
+  it('关系行支持 Enter 和空格键进入对应任务', async () => {
+    useAuthStore().profile = makeProfile(true)
+    withAssetChanges()
+    await openChanges(1)
+    const row = wrapper.find('.asset-change-table tbody tr')
+    expect(row.attributes('tabindex')).toBe('0')
+    await row.trigger('keydown', { key: 'Enter' })
+    await row.trigger('keydown', { key: ' ' })
+    expect(routerPush).toHaveBeenCalledTimes(2)
+    expect(routerPush).toHaveBeenLastCalledWith({ name: 'task-detail', params: { area: 'construction', taskId: 'TASK-author' }, query: undefined })
+  })
+
+  it('缺少任务 ID 的历史记录给出提示，不猜测或跳转任务', async () => {
+    useAuthStore().profile = makeProfile(true)
+    withAssetChanges()
+    await openChanges()
+    const row = wrapper.findAll('.asset-change-table tbody tr')[2]!
+    expect(row.classes()).not.toContain('is-clickable')
+    expect(row.attributes('tabindex')).toBeUndefined()
+    await row.trigger('click')
+    expect(routerPush).not.toHaveBeenCalled()
+    expect(showToast).toHaveBeenCalledWith('该记录暂无关联更新任务', 'info')
+  })
+
+  it('普通用户仍可看新增明细，但没有管理跳转入口', async () => {
+    useAuthStore().profile = makeProfile(false)
+    withAssetChanges()
+    await openChanges()
+    expect(wrapper.find('.asset-change-drawer footer a').exists()).toBe(false)
+    const row = wrapper.find('.asset-change-table tbody tr')
+    expect(row.classes()).not.toContain('is-clickable')
+    expect(row.attributes('tabindex')).toBeUndefined()
+    await row.trigger('click')
+    await row.trigger('keydown', { key: 'Enter' })
+    expect(routerPush).not.toHaveBeenCalled()
   })
 })

@@ -15,10 +15,18 @@ from biz.dependencies.auth import CurrentActor
 from biz.dependencies.shared_configs import ensure_shared_config_manage, ensure_shared_config_read
 from biz.schemas.common import ApiResponse
 from biz.schemas.mysql_datasource import MysqlDatasourceCreate, MysqlDatasourceUpdate
+from db_model.config_ownership import ConfigOwnership
 from infra.mysql import get_session
+from service.config_ownership import (
+    assigned_config_business,
+    config_output,
+    ensure_config_access,
+    guard_default_change,
+    visible_configurations,
+)
 
 # 数据源列表为读多写少的轻查询，加短 TTL 响应缓存扛读并发；键含用户身份
-# 管理员和开发人员共享配置列表；读取前始终校验角色。
+# 缓存仅保存脱敏配置原始数据；每次返回前重新校验业务归属，不缓存授权结果。
 # 配置创建/更新/删除后缓存最长 15s 内滞后。TTL 环境变量 CONFIG_CACHE_SECONDS 可调，0=关闭。
 _CONFIG_CACHE_SECONDS = float(os.getenv("CONFIG_CACHE_SECONDS", "15"))
 _config_payload_cache: dict[str, tuple[float, str]] = {}
@@ -50,12 +58,20 @@ def _application(session: Session) -> MysqlDatasourceApplication:
     return MysqlDatasourceApplication(session)
 
 
-def _readable_config(app: MysqlDatasourceApplication, actor: CurrentActor, config_id: str) -> dict:
+def _readable_config(
+    app: MysqlDatasourceApplication,
+    actor: CurrentActor,
+    config_id: str,
+    session: Session,
+    *,
+    manage: bool = False,
+) -> dict:
     ensure_shared_config_read(actor)
     data = app.get_config(config_id)
     if data is None:
         raise HTTPException(status_code=404, detail="数据源不存在")
-    return data
+    ensure_config_access(session, actor, "mysql", config_id, manage=manage)
+    return config_output(session, actor, "mysql", data)
 
 
 @router.get("")
@@ -68,20 +84,24 @@ def list_mysql_datasources(
     cache_key = f"mysql-datasources:{owner}:{actor.user_id}:{actor.is_admin}"
     from service.business_access_control import rbac_enabled
 
-    cached = None if rbac_enabled() else _config_cache_get(cache_key)
-    if cached is not None:
-        return Response(cached, media_type="application/json")
+    cached = None if rbac_enabled() or not actor.is_admin else _config_cache_get(cache_key)
+    configs = (
+        json.loads(cached)
+        if cached is not None
+        else _application(session).list_configs(owner=owner)
+    )
+    if cached is None:
+        _config_cache_put(cache_key, json.dumps(configs, ensure_ascii=False, default=str))
     payload = json.dumps(
         {
             "code": 200,
             "success": True,
-            "data": _application(session).list_configs(owner=owner),
+            "data": visible_configurations(session, actor, "mysql", configs),
             "msg": "success",
         },
         ensure_ascii=False,
         default=str,
     )
-    _config_cache_put(cache_key, payload)
     return Response(payload, media_type="application/json")
 
 
@@ -91,11 +111,7 @@ def get_mysql_datasource(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
-    ensure_shared_config_read(actor)
-    data = _application(session).get_config(datasource_id)
-    if data is None:
-        raise HTTPException(status_code=404, detail="数据源不存在")
-    return ApiResponse(data=data)
+    return ApiResponse(data=_readable_config(_application(session), actor, datasource_id, session))
 
 
 @router.post("", response_model=ApiResponse)
@@ -104,12 +120,16 @@ def create_mysql_datasource(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
-    ensure_shared_config_manage(actor)
+    business_id = assigned_config_business(session, actor)
     _config_cache_clear()
     data = payload.model_dump()
+    guard_default_change(actor, data)
     data["owner"] = actor.user_id
+    data["_business_id"] = business_id
     result = _application(session).create_config(data, scope_owner=None)
-    return ApiResponse(data=result, msg="MySQL 数据源已创建")
+    return ApiResponse(
+        data=config_output(session, actor, "mysql", result), msg="MySQL 数据源已创建"
+    )
 
 
 @router.put("/{datasource_id}", response_model=ApiResponse)
@@ -119,16 +139,18 @@ def update_mysql_datasource(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
-    ensure_shared_config_manage(actor)
     _config_cache_clear()
-    _readable_config(_application(session), actor, datasource_id)
+    current = _readable_config(_application(session), actor, datasource_id, session, manage=True)
     data = payload.model_dump(exclude_unset=True)
+    guard_default_change(actor, data, current)
     # Keep historical ownership metadata; it no longer grants configuration access.
     data.pop("owner", None)
     updated = _application(session).update_config(datasource_id, data, scope_owner=None)
     if updated is None:
         raise HTTPException(status_code=404, detail="数据源不存在")
-    return ApiResponse(data=updated, msg="MySQL 数据源已更新")
+    return ApiResponse(
+        data=config_output(session, actor, "mysql", updated), msg="MySQL 数据源已更新"
+    )
 
 
 @router.delete("/{datasource_id}", response_model=ApiResponse)
@@ -137,9 +159,11 @@ def delete_mysql_datasource(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
-    ensure_shared_config_manage(actor)
     _config_cache_clear()
-    _readable_config(_application(session), actor, datasource_id)
+    _readable_config(_application(session), actor, datasource_id, session, manage=True)
+    policy = session.get(ConfigOwnership, ("mysql", datasource_id))
+    if policy is not None:
+        session.delete(policy)
     ok = _application(session).delete_config(datasource_id)
     if not ok:
         raise HTTPException(status_code=404, detail="数据源不存在")
@@ -154,11 +178,11 @@ def set_default_mysql_datasource(
 ) -> ApiResponse:
     ensure_shared_config_manage(actor)
     _config_cache_clear()
-    _readable_config(_application(session), actor, datasource_id)
+    _readable_config(_application(session), actor, datasource_id, session)
     data = _application(session).set_default(datasource_id, scope_owner=None)
     if data is None:
         raise HTTPException(status_code=404, detail="数据源不存在")
-    return ApiResponse(data=data, msg="已设为默认")
+    return ApiResponse(data=config_output(session, actor, "mysql", data), msg="已设为默认")
 
 
 @router.post("/{datasource_id}/test", response_model=ApiResponse)
@@ -167,8 +191,7 @@ def test_mysql_datasource(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
-    ensure_shared_config_manage(actor)
-    _readable_config(_application(session), actor, datasource_id)
+    _readable_config(_application(session), actor, datasource_id, session, manage=True)
     return ApiResponse(data=_application(session).test_connection(datasource_id))
 
 
@@ -178,7 +201,7 @@ def list_mysql_databases(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
-    _readable_config(_application(session), actor, datasource_id)
+    _readable_config(_application(session), actor, datasource_id, session)
     return ApiResponse(data={"items": _application(session).list_databases(datasource_id)})
 
 
@@ -190,7 +213,7 @@ def list_mysql_tables(
     database: Annotated[str | None, Query(max_length=128)] = None,
 ) -> ApiResponse:
     """列出指定库（缺省为数据源默认库）的表，供 Schema 来源表绑定选择。"""
-    _readable_config(_application(session), actor, datasource_id)
+    _readable_config(_application(session), actor, datasource_id, session)
     return ApiResponse(data={"items": _application(session).list_tables(datasource_id, database)})
 
 
@@ -203,7 +226,7 @@ def list_mysql_table_columns(
     database: Annotated[str | None, Query(max_length=128)] = None,
 ) -> ApiResponse:
     """列出指定表的列，供选主键列/时间列。"""
-    _readable_config(_application(session), actor, datasource_id)
+    _readable_config(_application(session), actor, datasource_id, session)
     return ApiResponse(
         data={"items": _application(session).list_columns(datasource_id, table_name, database)}
     )

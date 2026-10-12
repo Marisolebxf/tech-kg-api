@@ -82,38 +82,50 @@ def deep_cst(obj):
     return obj
 
 
-def utc_to_cst_str(value):
-    """UTC 裸时间 → 北京时间字符串；None/空串/非时间值原样返回。
+def _to_cst(value):
+    """可识别的 UTC 时间 → 北京时区 datetime；None/不可识别返回 None（调用方原样回传）。
 
     - datetime：naive 视为 UTC（存储约定），aware 按自带时区
     - 字符串：``YYYY-MM-DD[ T]HH:MM:SS[.f]`` 视为 UTC；
-      结尾带 ``Z`` 或 ``±HH:MM`` 按自带时区；其余（日期串、空串、非时间）原样
+      结尾带 ``Z`` 或 ``±HH:MM`` 按自带时区
     """
-    if value is None:
-        return None
     if isinstance(value, datetime):
         aware = value if value.tzinfo else value.replace(tzinfo=_UTC)
-        return aware.astimezone(_CST).strftime(_CST_FMT)
+        return aware.astimezone(_CST)
     if isinstance(value, str):
         stripped = value.strip()
         if not stripped:
-            return value
+            return None
         # 带时区标记的 ISO 串：交给 datetime 解析后转北京
         if stripped.endswith(("Z", "z")) or re.search(r"[+-]\d{2}:?\d{2}$", stripped):
             try:
-                return (
-                    datetime.fromisoformat(stripped.replace("Z", "+00:00"))
-                    .astimezone(_CST)
-                    .strftime(_CST_FMT)
-                )
+                return datetime.fromisoformat(stripped.replace("Z", "+00:00")).astimezone(_CST)
             except ValueError:
-                return value
-        match = _TS_RE.match(stripped)
-        if match:
+                return None
+        if _TS_RE.match(stripped):
             try:
                 naive = datetime.fromisoformat(stripped.replace("T", " "))
-                return naive.replace(tzinfo=_UTC).astimezone(_CST).strftime(_CST_FMT)
+                return naive.replace(tzinfo=_UTC).astimezone(_CST)
             except ValueError:
-                return value
-        return value
-    return value
+                return None
+    return None
+
+
+def utc_to_cst_str(value):
+    """UTC 裸时间 → 北京时间字符串（秒精度）；None/空串/非时间值原样返回。"""
+    if value is None:
+        return None
+    cst = _to_cst(value)
+    return value if cst is None else cst.strftime(_CST_FMT)
+
+
+def utc_to_cst_str_ms(value):
+    """同 utc_to_cst_str，但保留毫秒（``YYYY-MM-DD HH:MM:SS.fff``）。
+
+    供算法作业 startedAt/finishedAt 等需要亚秒差的字段：秒精度会把
+    几十毫秒完成的任务显示成「开始=完成、耗时 0 秒」，看似计时故障。
+    """
+    if value is None:
+        return None
+    cst = _to_cst(value)
+    return value if cst is None else f"{cst.strftime(_CST_FMT)}.{cst.microsecond // 1000:03d}"

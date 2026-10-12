@@ -318,20 +318,36 @@ const selectedStep = computed<Step>(() => {
 })
 const visiblePhase = computed<'数据处理' | '图谱构建'>(() => steps.value[0]?.phase ?? (isConstructionTask.value ? '图谱构建' : '数据处理'))
 const visibleSteps = computed(() => steps.value)
-/** 圈案词：job 详情按 jobId 圈本任务全部执行的失败案；任务详情用任务回写的
- *  jobId（队列 keyword 按快照锚定的 jobId/executionId 命中）。不能按「最新
- *  执行的任务」圈案——一个 job 多次执行，重跑仍失败的记录按 dedupe 归在原
- *  执行的任务名下，最新执行任务名下常为 0 案（ewrdf/gkx 验证实测），会误报
- *  「执行级失败，无失败行记录可重跑」；也不能传任务 ID 过滤——队列接口没有
- *  sourceTaskId 参数（传了也被静默丢弃），数出来的是当前空间全量 C 案。 */
+/** 执行历史是否已解析（含失败与空结果）。任务直达视图先落任务、后解析执行，
+ *  中间态按 jobId 兜底圈案会先发一次 job 级计数——重跑多代时入口先闪现翻倍
+ *  数字再跳回单代，解析完成前不出圈案词。 */
+const executionsResolved = ref(false)
+/** 圈案词：按「正在看什么」定口径。执行直达/job/周期视图按当前选中的执行
+ *  （含自动选中的最新执行）→ EXEC id；任务直达视图的选中执行可能是同 job
+ *  其他任务的（按定义列执行、自动选最新），改圈本任务自己的最新执行，列表
+ *  里没有再退任务回写的 jobId。不能按 jobId 圈整个 job：多次执行（重跑/补写）
+ *  各代失败案都按各自执行锚定，job 级会把各代全算进去（job-2c7e048b4d53 两代
+ *  各 1077 条，job 级圈出 2154，正看着其中一代却看到翻倍计数）。队列 keyword
+ *  按快照锚定的 executionId/jobId 命中，不支持任务 ID（PI- 实测 0 命中），
+ *  也没有 sourceTaskId 参数（传了也被静默丢弃）。 */
 const reviewScopeKeyword = computed(() => {
-  if (!isExtractTask.value) return ''
-  if (jobId.value) return jobId.value
+  if (!isExtractTask.value || !executionsResolved.value) return ''
+  const selected = selectedExecution.value
+  const displayedTaskId = processingInstance.value?.id
+  // 选中执行就是当前展示任务的执行（job/周期/执行直达视图构造上必然成立；
+  // 执行未落任务记录时 displayedTaskId 为空也放行——执行级失败的案就锚在执行上）
+  if (selected?.id?.startsWith('EXEC-') && (!displayedTaskId || selected.taskId === displayedTaskId)) {
+    return selected.id
+  }
+  if (displayedTaskId) {
+    const own = jobExecutions.value.find((item) => item.taskId === displayedTaskId)
+    if (own?.id) return own.id
+  }
   const taskJobId = processingInstance.value?.jobId
-  if (taskJobId?.startsWith('job-')) return taskJobId
-  const executionId = selectedExecutionId.value
-  return executionId.startsWith('EXEC-') ? executionId : ''
+  return taskJobId?.startsWith('job-') ? taskJobId : ''
 })
+/** 入口计数标签跟着圈案口径走：按执行圈案说「本执行」，job 兜底说「本任务」。 */
+const reviewScopeLabel = computed(() => (reviewScopeKeyword.value.startsWith('EXEC-') ? '本执行' : '本任务'))
 /** 「进入人工处理」入口：平台喂数抽取（含 chain）的逐行失败落「抽取失败重跑」
  *  C 类队列（category 深链直达），并按圈案词预填搜索，落地即筛出本任务的
  *  失败案；拿不到圈案词时退回纯 category 深链。其余待复核任务落人工审核
@@ -656,6 +672,7 @@ async function loadLatestExecution() {
       jobExecutions.value = execution ? [execution] : []
       selectedExecutionId.value = execution?.id ?? ''
       latestExecutionMessage.value = [executionStatusLabel(execution?.status), execution?.message].filter(Boolean).join(' · ')
+      executionsResolved.value = true
       return
     }
   } catch {
@@ -663,6 +680,7 @@ async function loadLatestExecution() {
   }
   jobExecutions.value = executions
   resetExecPage()
+  executionsResolved.value = true
   if (!executions.length) return
   await selectExecution(executions[0].id)
 }
@@ -845,7 +863,7 @@ const publicSpaceReadOnly = computed(() => {
       </aside>
 
       <main class="step-detail">
-        <header class="step-head"><div><h2>{{ selectedStep.name }}</h2><p>{{ selectedStep.description }}</p></div><div class="step-head-actions"><button v-if="isChainTask && selectedActivityId" type="button" class="step-head-back" @click="clearActivitySelection()">← 返回脚本级信息</button><button v-if="isPipelineTask && isPipelineFailed" type="button" class="step-head-retry" :disabled="retrySubmitting || !canRetry" @click="handlePipelineRetry">{{ retrySubmitting ? '提交中…' : '重试（reset 回放）' }}</button><RouterLink v-else-if="isExtractTask && needsTaskReview && relatedReviewCount !== 0" :to="reviewEntryTarget">进入人工处理{{ relatedReviewCount !== null ? `（本任务 ${relatedReviewCount} 条）` : '' }} →</RouterLink><span v-else-if="isExtractTask && needsTaskReview" class="step-head-review-note">本次执行未产生逐行审核任务（执行级失败，无失败行记录可重跑）——请按执行历史中的失败原因修复后重新执行</span></div></header>
+        <header class="step-head"><div><h2>{{ selectedStep.name }}</h2><p>{{ selectedStep.description }}</p></div><div class="step-head-actions"><button v-if="isChainTask && selectedActivityId" type="button" class="step-head-back" @click="clearActivitySelection()">← 返回脚本级信息</button><button v-if="isPipelineTask && isPipelineFailed" type="button" class="step-head-retry" :disabled="retrySubmitting || !canRetry" @click="handlePipelineRetry">{{ retrySubmitting ? '提交中…' : '重试（reset 回放）' }}</button><RouterLink v-else-if="isExtractTask && needsTaskReview && relatedReviewCount !== 0" :to="reviewEntryTarget">进入人工处理{{ relatedReviewCount !== null ? `（${reviewScopeLabel} ${relatedReviewCount} 条）` : '' }} →</RouterLink><span v-else-if="isExtractTask && needsTaskReview" class="step-head-review-note">本次执行未产生逐行审核任务（执行级失败，无失败行记录可重跑）——请按执行历史中的失败原因修复后重新执行</span></div></header>
         <nav class="detail-tabs"><button v-for="tab in ([['overview','概况与结果'],['io','输入输出'],['logs','异常与日志'],['lineage','数据溯源']] as const)" :key="tab[0]" type="button" :class="{ active: activeTab === tab[0] }" @click="activeTab = tab[0]">{{ tab[1] }}</button></nav>
 
         <div v-if="activeTab === 'overview'" class="overview-content">

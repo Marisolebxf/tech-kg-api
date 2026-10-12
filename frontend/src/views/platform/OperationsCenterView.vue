@@ -7,6 +7,7 @@ import AppAlert from '../../components/AppAlert.vue'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { IconRefresh, IconSearch } from '@arco-design/web-vue/es/icon'
+import { Tooltip as ATooltip } from '@arco-design/web-vue'
 
 import { batchDeleteProductionReviews, deleteProductionReview, getExecution, getProductionReview, getProductionReviews, getTask, rerunExtractFailures, TRIGGER_SOURCE_LABEL, type ProcessingInstance, type ProcessStep, type ProductionReviewCase, type WorkflowExecution } from '../../api/workflowOperations'
 import { currentGraphSpace } from '../../api/currentGraphSpace'
@@ -758,7 +759,14 @@ onMounted(() => {
               @change="((event?: Event) => toggleRerunPick(row.id, Boolean((event?.target as HTMLInputElement)?.checked)))"
             /></td>
             <td class="review-id-cell"><code class="review-id-plain" :title="row.id">{{ row.id }}</code></td>
-            <td class="review-object-cell"><strong>{{ row.object || '—' }}</strong></td>
+            <!-- 待处理对象：超长对象名单行省略（不再撑高行），悬浮查看完整内容 -->
+            <td class="review-object-cell">
+              <a-tooltip v-if="row.object" position="top" content-class="review-object-tooltip">
+                <strong class="review-object-text">{{ row.object }}</strong>
+                <template #content><div class="review-object-tooltip-content">{{ row.object }}</div></template>
+              </a-tooltip>
+              <strong v-else class="review-object-text">—</strong>
+            </td>
             <td><span :class="['review-kind-badge', `is-${rowKindLabel(row)}`]">{{ rowKindLabel(row) }}</span></td>
             <td class="review-id-cell">
               <!-- 来源记录：统一 job 维度，跳图谱构建任务详情（含执行历史）；
@@ -1050,7 +1058,13 @@ onMounted(() => {
 /* 固定列合计 1076px，最小表宽为对象列保留 268px；勾选列额外占 52px。 */
 .ops-review-table-scroll table.review-case-table{width:100%;min-width:1288px;table-layout:fixed}
 .ops-review-table-scroll table.review-case-table--selectable{min-width:1340px}
-.ops-review-table-scroll .review-object-cell{padding-top:8px;padding-bottom:8px;overflow-wrap:anywhere;word-break:normal}
+/* 待处理对象：单行省略，超长对象名不再撑高行；完整内容悬浮查看 */
+.ops-review-table-scroll .review-object-cell{padding-top:8px;padding-bottom:8px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.ops-review-table-scroll .review-object-cell>strong{display:inline-block;box-sizing:border-box;max-width:100%;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom;word-break:normal;overflow-wrap:normal}
+/* 完整对象名悬浮层（teleport 到 body）：常态单行——对象名多为「表名#32位主键」（约 450px），
+ *  限宽 420px 会恰好折成两行（悬浮还是两排的根因），放宽到 720px；更长的内容仍在浮层内换行/滚动 */
+:global(.review-object-tooltip){box-sizing:border-box;max-width:min(720px,calc(100vw - 32px))!important;padding:8px 6px 8px 12px!important}
+.review-object-tooltip-content{max-height:min(260px,50vh);padding-right:6px;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;white-space:pre-wrap;word-break:break-word}
 .ops-review-table-scroll td{white-space:normal}
 .ops-review-table-scroll :is(code,.review-id-cell,.review-status){white-space:nowrap}
 .ops-review-table-scroll :is(th,td):last-child{white-space:nowrap}

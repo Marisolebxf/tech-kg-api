@@ -639,7 +639,7 @@ function defaultProtected(item: ConfigItem) {
 }
 // 归属小字：业务配置显示业务（图空间）名，公共配置按类型显示公共语言模型/公共数据库
 function ownershipLabel(item: ConfigItem) {
-  return item.visibility === 'business' ? item.businessName : item.kind === 'llm' ? '公共语言模型' : '公共数据库'
+  return item.visibility === 'business' ? `${item.businessName || ''}${item.kind === 'llm' ? '语言模型' : '数据库'}` : item.kind === 'llm' ? '公共语言模型' : '公共数据库'
 }
 async function toggleItem(item: ConfigItem) {
   if (!canManageConfig(item)) return
@@ -785,7 +785,7 @@ onUnmounted(() => {
             <tbody>
               <tr v-for="space in pagedSpaces" :key="space.name">
                 <td><div class="config-name"><span><strong>{{ space.name }}</strong><small v-if="space.description">{{ space.description }}</small></span></div></td>
-                <td>{{ space.groupKind === 'business' ? space.businessName : space.groupKind === 'public' ? '公共图空间' : '' }}</td>
+                <td>{{ space.groupKind === 'business' ? `${space.businessName || ''}图空间` : space.groupKind === 'public' ? '公共图空间' : '' }}</td>
                 <td class="config-status-col"><span class="status" :class="space.mine ? 'is-正常' : 'is-停用'"><i />{{ space.mine ? '已绑定' : '已解绑' }}</span></td>
                 <td class="config-action-col">
                   <div class="row-actions">

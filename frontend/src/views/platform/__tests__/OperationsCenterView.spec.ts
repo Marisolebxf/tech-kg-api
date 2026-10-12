@@ -172,38 +172,6 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     )
   })
 
-  it('C 类待处理对象结构化两行：记录 ID 主体 + 来源表弱化小字；无来源字段时按 # 拆对象名兜底', async () => {
-    mocks.getProductionReviews.mockReset().mockResolvedValue({
-      items: [
-        caseRow('MR-1', 'OPEN'),
-        // 存量案缺 sourceTable/sourceRecordId：从 objectName「库.表#记录ID」兜底拆分
-        { ...caseRow('MR-2', 'OPEN'), objectName: 'gkx.t_paper#792f74d9', sourceTable: '', sourceRecordId: '' },
-      ],
-      total: 2, page: 1, pageSize: 10,
-    })
-
-    const wrapper = renderReview()
-    await flushPromises()
-    await switchToCategoryC(wrapper)
-
-    // 后端回填来源字段：主体=sourceRecordId，小字=sourceTable
-    const first = wrapper.findAll('tbody tr')[0].get('.review-object-cell')
-    expect(first.get('.review-object-main').text()).toBe('R-MR-1')
-    expect(first.get('.review-object-sub').text()).toBe('t_paper')
-
-    // 缺来源字段：按 objectName 的 # 拆分，长短记录 ID 渲染同一结构
-    const second = wrapper.findAll('tbody tr')[1].get('.review-object-cell')
-    expect(second.get('.review-object-main').text()).toBe('792f74d9')
-    expect(second.get('.review-object-sub').text()).toBe('gkx.t_paper')
-
-    // A 类（入库决策）保持实体名单行，不套两行结构
-    await wrapper.findAll('.review-tabs nav button')[0].trigger('click')
-    await flushPromises()
-    const aCell = wrapper.findAll('tbody tr')[0].get('.review-object-cell')
-    expect(aCell.find('.review-object-main').exists()).toBe(false)
-    expect(aCell.get('strong').text()).toBe('对象MR-1')
-  })
-
   it('?category=C 深链直达抽取失败重跑子页：首次加载即按 C 类请求且 Tab 高亮；带 keyword 时填入搜索定位该实例', async () => {
     routeState.query = { category: 'C' }
     const wrapper = renderReview()

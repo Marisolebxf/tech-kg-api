@@ -90,17 +90,6 @@ type ReviewRow = ReviewRecord & {
   rawStatus?: string
   jobId?: string
   canOperate?: boolean
-  /** C 类待处理对象的结构化展示（记录 ID 主体 + 来源表弱化小字）；A 类为 undefined。 */
-  objectParts?: { id: string; table: string }
-}
-
-/** C 类待处理对象=「库.表#记录ID」拆两行：优先用后端回填的 sourceTable/sourceRecordId，
- *  缺失时从 objectName 兜底按 # 拆分，保证长短记录 ID 渲染同一结构不再折行错乱。 */
-function splitObjectParts(objectName?: string | null, sourceTable?: string | null, sourceRecordId?: string | null): { id: string; table: string } {
-  const object = objectName || ''
-  if (sourceRecordId || sourceTable) return { id: sourceRecordId || object, table: sourceTable || '' }
-  const hashIndex = object.indexOf('#')
-  return hashIndex >= 0 ? { id: object.slice(hashIndex + 1), table: object.slice(0, hashIndex) } : { id: object, table: '' }
 }
 
 /** 可重跑/可删除：与后端 rerun 门控同口径（未处理）；查看档只读行（canOperate=false，
@@ -624,7 +613,7 @@ async function loadReviews() {
       return loadReviews()
     }
     reviewRecords.value = response.items.map((row: ProductionReviewCase) => ({
-      id: row.id, templateId: row.templateId, rawStatus: row.status, jobId: row.jobId || '', canOperate: row.canOperate !== false, objectParts: reviewCategory.value === 'C' ? splitObjectParts(row.objectName, row.sourceTable, row.sourceRecordId) : undefined, batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待处理', status: extractCaseStatusBadge(row.status), updatedAt: fmtReviewTime(row.updatedAt), sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,
+      id: row.id, templateId: row.templateId, rawStatus: row.status, jobId: row.jobId || '', canOperate: row.canOperate !== false, batch: row.batchId || '-', module: row.phase, node: row.nodeId, type: row.errorType, category: row.category, domain: row.domain, objectType: row.objectType, objectId: row.objectId, object: row.objectName, ruleId: row.templateId, evidence: `${row.evidence?.length || 0} 项`, score: row.riskLevel, handler: row.assigneeName || '待处理', status: extractCaseStatusBadge(row.status), updatedAt: fmtReviewTime(row.updatedAt), sourceResult: row.diagnosis, suggestion: row.scope, sourceTable: row.sourceTable || '-', sourceRecordId: row.sourceRecordId || '-', confidenceValue: row.riskLevel, confidenceLabel: row.status,
     }))
     reviewLoadError.value = ''
   } catch (error) {
@@ -789,15 +778,7 @@ onMounted(() => {
               @change="((event?: Event) => toggleRerunPick(row.id, Boolean((event?.target as HTMLInputElement)?.checked)))"
             /></td>
             <td class="review-id-cell"><code class="review-id-plain" :title="row.id">{{ row.id }}</code></td>
-            <td class="review-object-cell">
-              <!-- C 类待处理对象=「库.表#记录ID」：结构化两行（记录 ID 主体 + 来源表弱化小字），
-                   长短记录 ID 渲染同一结构；A 类保持实体名单行 -->
-              <template v-if="row.objectParts && row.objectParts.id">
-                <strong class="review-object-main" :title="row.object || row.objectParts.id">{{ row.objectParts.id }}</strong>
-                <span v-if="row.objectParts.table" class="review-object-sub">{{ row.objectParts.table }}</span>
-              </template>
-              <strong v-else>{{ row.object || '—' }}</strong>
-            </td>
+            <td class="review-object-cell"><strong>{{ row.object || '—' }}</strong></td>
             <td><span :class="['review-kind-badge', `is-${rowKindLabel(row)}`]">{{ rowKindLabel(row) }}</span></td>
             <td class="review-id-cell">
               <!-- 来源记录：统一 job 维度，跳图谱构建任务详情（含执行历史）；
@@ -1095,9 +1076,6 @@ onMounted(() => {
 .ops-review-table-scroll table.review-case-table{width:100%;min-width:1288px;table-layout:fixed}
 .ops-review-table-scroll table.review-case-table--selectable{min-width:1340px}
 .ops-review-table-scroll .review-object-cell{padding-top:8px;padding-bottom:8px;overflow-wrap:anywhere;word-break:normal}
-/* C 类待处理对象结构化两行：记录 ID 主体 + 来源表弱化小字（同一结构，长短 ID 不再折行错乱） */
-.ops-review-table-scroll .review-object-cell:has(.review-object-main){display:flex;flex-direction:column;gap:1px}
-.ops-review-table-scroll .review-object-sub{font-size:12px;line-height:18px;font-weight:400;color:#8592a6}
 .ops-review-table-scroll td{white-space:normal}
 .ops-review-table-scroll :is(code,.review-id-cell,.review-status){white-space:nowrap}
 .ops-review-table-scroll :is(th,td):last-child{white-space:nowrap}

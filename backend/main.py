@@ -81,6 +81,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from db_model.embedding_config import EmbeddingConfig
         from db_model.indirect_relation_annotation import IndirectRelationAnnotation
         from db_model.llm_config import LlmConfig
+        from db_model.llm_default import BusinessLlmDefault
         from db_model.milvus_config import MilvusConfig
         from db_model.mysql_datasource import MysqlDatasource
         from db_model.platform_governance import (
@@ -97,6 +98,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 get_engine(),
                 tables=[
                     LlmConfig.__table__,
+                    BusinessLlmDefault.__table__,
                     MysqlDatasource.__table__,
                     MilvusConfig.__table__,
                     EmbeddingConfig.__table__,

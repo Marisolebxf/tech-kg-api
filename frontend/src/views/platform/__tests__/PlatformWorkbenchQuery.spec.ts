@@ -7,12 +7,14 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { runNgql, type GraphConsoleResult } from '../../../api/graphConsole'
 import {
   cancelAlgorithmJob,
+  fetchGraphAlgorithmEngine,
   fetchGraphAlgorithmMetadata,
   getAlgorithmJob,
   getAlgorithmJobResult,
   submitAlgorithmJob,
   type AlgorithmJobSnapshot,
   type AlgorithmResultPayload,
+  type GraphAlgorithmEngineStatus,
   type GraphAlgorithmMetadata,
 } from '../../../api/graphAlgorithm'
 import { useGraphSpaceStore } from '../../../stores/graphSpace'
@@ -844,5 +846,31 @@ describe('Algorithm job cancellation', () => {
     expect(wrapper.find('.platform-query-algo__job-meta').exists()).toBe(false)
     await clickButton('PageRank算法')
     expect(wrapper.text()).toContain('已终止')
+  })
+
+  it('重新检测有过程与结果反馈：请求中按钮置灰徽标检测中，完成后按状态提示', async () => {
+    await enterAlgorithms()
+    const pending = deferred<GraphAlgorithmEngineStatus>()
+    vi.mocked(fetchGraphAlgorithmEngine).mockReturnValueOnce(pending.promise)
+    await clickButton('重新检测')
+    // 请求中：按钮变「检测中…」并置灰，徽标随之为检测中
+    const refreshing = wrapper.findAll('button').find((item) => item.text() === '检测中…')
+    expect(refreshing).toBeDefined()
+    expect(refreshing!.attributes('disabled')).toBeDefined()
+    expect(wrapper.get('.platform-query-algo__engine .platform-status').text()).toBe('算法引擎检测中')
+    pending.resolve({ status: 'DOWN', message: 'Spark 运行器未就绪' })
+    await flushPromises()
+    expect(showToast).toHaveBeenLastCalledWith('算法引擎不可用：Spark 运行器未就绪', 'warning')
+    expect(wrapper.get('.platform-query-algo__engine .platform-status').text()).toBe('算法引擎不可用')
+    expect(wrapper.findAll('button').some((item) => item.text() === '重新检测')).toBe(true)
+  })
+
+  it('重新检测引擎正常时给出成功提示，避免状态未变看似无反应', async () => {
+    await enterAlgorithms()
+    vi.mocked(fetchGraphAlgorithmEngine).mockResolvedValueOnce({ status: 'UP', activeJobs: 0 })
+    await clickButton('重新检测')
+    await flushPromises()
+    expect(showToast).toHaveBeenLastCalledWith('算法引擎运行正常', 'success')
+    expect(wrapper.get('.platform-query-algo__engine .platform-status').text()).toBe('算法引擎正常')
   })
 })

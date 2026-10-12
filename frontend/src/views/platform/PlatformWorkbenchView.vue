@@ -356,6 +356,8 @@ const algoWeightCols = ref<Record<string, string>>({})
 const algoEncodeId = ref(true)
 const algoPartitionNum = ref(8)
 const algoMetadataLoading = ref(false)
+/** 手动「重新检测」的引擎状态请求中：按钮置灰、徽标出「检测中」反馈。 */
+const engineRefreshing = ref(false)
 const algoMetadata = ref<GraphAlgorithmMetadata | null>(null)
 const algoSubmitLoading = computed(() => activeAlgorithmState.value.submitting)
 const algoCancelLoading = computed(() => activeAlgorithmState.value.cancelling)
@@ -453,7 +455,7 @@ function exportAlgoCsv(): void {
 
 /** 引擎状态徽标（正常 / 不可用 / 检测中）。 */
 const algoEngineStatus = computed(() => {
-  if (algoMetadataLoading.value) return { label: '检测中', tone: 'is-运行中' }
+  if (algoMetadataLoading.value || engineRefreshing.value) return { label: '检测中', tone: 'is-运行中' }
   const engine = algoMetadata.value?.engine
   if (!engine) return { label: '未知', tone: 'is-运行中' }
   return engine.status === 'UP'
@@ -1000,15 +1002,21 @@ async function loadAlgoMetadata(force = false): Promise<void> {
 }
 
 async function refreshAlgoEngine(): Promise<void> {
-  if (!algoSpace.value) return
+  if (!algoSpace.value || engineRefreshing.value) return
   const context = graphContextVersion
+  engineRefreshing.value = true
   try {
     const engine = await fetchGraphAlgorithmEngine(algoSpace.value)
     if (context !== graphContextVersion) return
     algoMetadata.value = { edgeTypes: algoMetadata.value?.edgeTypes ?? [], engine }
+    // 检测很快且状态常不变，静默更新看起来像「按了没反应」：成功也给明确反馈
+    if (engine.status === 'UP') showToast('算法引擎运行正常', 'success')
+    else showToast(`算法引擎不可用：${engine.message ?? '未提供原因'}`, 'warning')
   } catch (error) {
     if (context !== graphContextVersion) return
     showToast(getErrorMessage(error, '算法引擎状态检测失败'), 'warning')
+  } finally {
+    if (context === graphContextVersion) engineRefreshing.value = false
   }
 }
 
@@ -1700,10 +1708,10 @@ const pageMeta = computed(() => {
               <button
                 class="kg-button kg-button--text platform-query-engine-refresh"
                 type="button"
-                :disabled="algoMetadataLoading || !algoSpace"
+                :disabled="algoMetadataLoading || engineRefreshing || !algoSpace"
                 @click="refreshAlgoEngine"
               >
-                重新检测
+                {{ engineRefreshing ? '检测中…' : '重新检测' }}
               </button>
             </div>
           </div>

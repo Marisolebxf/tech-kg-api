@@ -517,9 +517,94 @@ LEADS/HAS_PARTICIPANT/FUNDED_BY/HAS_OUTPUT 是**图匹配器关系**（目标端
      RetryPolicy 第 2 次重试，16:04:21 整链 FAILED）。单调 STS 时长无解（短=背压误伤、
      长=楔子久等），治本为 workflow 层重调度（§9 ㉙）：STS=300s 快速换任务位 +
      24 次重调度预算 = 2h 排队容忍。
-6. ⏳ 跑完对账：§7 锚点逐项 + 抽查 VID 公式/属性集（能用前端就用前端——8093 平台 UI
-   看任务进度与图查询）。监控：`~/.claude/jobs/6c9295e5/tmp/chain_monitor.log`
-   （每 5 分钟任务状态 + LOOKUP 直数 + 高水位计数 + worker 错误尾）。
+   - **实体链终局（第十八次执行 COMPLETED）**：㉞ 重触发循环按 runbook 走完；
+     环 1-10 全量口径（News 1,776,466 等），环 11-16 已在封顶切换后跑（Event
+     124,999 / Keyword 237,552——keyword 每行爆炸多条，封顶 6 万行源可产 23 万实体；
+     详见下面对账）。16 环全过 COMPLETED。
+   - **关系链A（job-c999aeddcf85，14 环 COMPLETED，~50 分钟）**：实体链完成后串行
+     触发，全部 14 环通过零终败；零输出定案环实测与 §7 预期一致（DOWNSTREAM_OF=0、
+     PUBLISHED_IN(en)=0 等）。
+   - **验证口径切封顶（用户拍板）**：「只需验证脚本能正确地跑」——关系链每绑定首
+     1 万行（33 Schema 的 querySql 追加 `LIMIT 10000`），实体链环 1-10 保持全量
+     （已跑完，更强验证）。全量版绑定快照 `artifacts/gkx-prod-bindings/
+     sources_live_full_20260113.json` 留档，收尾已 PUT 恢复（见下）。
+   - **关系链B 三连 CANCELED + graphd OOM 击杀链（2026-10-13，环 5 卡死根因）**：
+     根因三层——① trsgraph 容器（metad+graphd+storaged 单容器）cgroup 64Gi 限额被
+     kernel OOM-killer 反复击杀 graphd（memory.events oom_kill 2→6）；② entrypoint
+     一次性拉起（`set -e` + 后台守护进程，无 supervisor），graphd 死后无人重启；
+     ③ 自激励环：链B 重试中的 `execute_transform` 在 graphd 一接受连接即经 Java
+     SessionPool 灌入查询洪峰，9s–3min 内再被击杀。**脚本侧实锤**：
+     `project_entity_matcher._candidate_rows` 名池 IN 字面量 5000/块，HAS_PARTICIPANT
+     的 `participants` 列表字段（~5-20 名/行）使批级名池达两万级 → ~12 条巨型
+     MATCH/批 × 最多 6 并发转换进程，执行计划内存瞬间顶穿限额（关系链A 名池 ~1/行
+     ≤2000 单块幸免）。**修复**：chunk_size 5000→150（平台召回/碰撞探测同款口径，
+     ㉝ 实测 0.018s/块）——`project_entity_matcher.py` 源模块 + 4 个生成脚本
+     （has_participant/leads/funded_by/has_output）手术补丁 + PUT 重传；版本核验
+     四方一致（S3 对象 sha256 = DB 行 sha256 = 下载端点 = 宿主补丁文件，均含
+     `chunk_size: int = 150`；`uploaded_at` 列不随重传刷新属显示层小毛病）。
+   - **处置实录（用户逐项批准）**：① `docker exec -d` 原地拉起 graphd（entrypoint
+     同款 flags：flagfile + meta_server_addrs + local_ip + port 9669 + ws_http_port
+     19669；不重启容器、不动 metad/storaged、不改 conf）；② `docker update
+     --memory 80g --memory-swap 80g trsgraph`（在线生效；容器重建会回弹 64G，
+     需团队固化进 compose，见 §9 ㉟）。**顺序不可反**：先取消链B 等静默窗再拉
+     graphd，否则自激励环立刻复燃。
+   - **关系链B 第四次执行 COMPLETED（22:53–23:11，13 环全过零失败）**：环 5
+     HAS_PARTICIPANT rows 20,000 → 边 14,264；环 6 HAS_NODE 1,261（锚点精确）；
+     环 7 法定代表 22,074→20,597；环 8 LEADS 20,000→2,707；环 9 高管任职
+     20,000→18,416；环 10 任职 10,000→8,827；环 11 归属 10,000→10,000；
+     环 12 收购 3,444→3,444；环 13 署名 11,387→6,431；FUNDED_BY 再次 0 行
+     （零输出定案）。graphd 全程存活（oom_kill 停 6、内存 ~9.4GiB/80GiB）、
+     零水位退避。**三链全通：45 脚本 e2e 验证完成。**
+   - **第 7 次 OOM 击杀与二次恢复（23:5x CST 巡检发现）**：graphd 再次被 cgroup
+     击杀（oom_kill 6→7）且无守护未自愈——这次的引信**不是抽取任务**（三链已
+     COMPLETED、无运行中执行），而是 api 侧前端巡览查询：图浏览分页
+     `LOOKUP 分页无索引（label=Person），回退 MATCH 全扫`，对大 tag 的 MATCH
+     全扫把 graphd 顶穿 80G 限额（水位 0.8×宿主 125Gi=100Gi 永远追不上 cgroup
+     死点，㉟ 错配的又一实证）。处置：确认无活动任务后按同款 flags 原地拉起，
+     Product 锚点复查 47,956 精确。**即抽取链之外，纯前端巡览也是 graphd OOM
+     向量**——巡览大空间尽量带过滤条件/小分页。
+6. ✅ 跑完对账（2026-10-13，封顶口径，锚点=§7 样本库实测）：
+   - 实体 LOOKUP 直数全中：Product **47,956** / IndustryChain **12** /
+     IndustryNode **1,261** 精确；News·产业链子集 **108,052** 精确（过滤列是
+     `source_system='dwd_industry_chain_news_info'`，**不是 source_table**）；
+     News 全量 1,776,466（= 产业链 108,052 + 企业资讯 ~1.67M，环 10 全量口径）；
+     封顶环 Event 124,999 / Keyword 237,552 / Journal 3,381 >0。
+   - 边精确数（边型无索引，`LOOKUP ON <edge>` 不可用——用 `LOOKUP ON <tag> YIELD
+     id(vertex) | GO FROM $-.vid OVER <edge> [REVERSELY] | YIELD COUNT(*)`）：
+     CHILD_OF **1,261** / HAS_NODE **1,261** 精确；BELONGS_TO_NODE 9,998（封顶写入
+     10,000，(org,node) 幂等去重 2 条；全量锚点 ≈116,180 属全量模式）。零输出定案
+     全部 0：DOWNSTREAM_OF / HAS_OUTPUT / FUNDED_BY / ACTUAL_CONTROLLER_OF /
+     BENEFICIAL_OWNER_OF。
+   - ⚠ `/api/v1/edges/type/{X}` 的 `page.total` 不可信：BELONGS_TO_NODE 报 0
+     （实测反向 15 边/节点）、CHILD_OF 报 1,220（管道 GO 精确 1,261）——对账一律
+     用 LOOKUP 管道 GO 直数。
+   - 边存在性抽查：HAS_NODE（chain 样本出边 184）、COVERS_CHAIN（反向 481/链）、
+     BELONGS_TO_NODE（反向 15/节点）、HAS_PARTICIPANT（5 project 样本合计 9 边）、
+     LEADS（20 project 样本命中 4）、CHILD_OF（节点样本 1）。封顶窗口外的随机
+     样本 0 出边属预期（写入集中在首 1 万行 pk 窗口），以管道 GO 总数为准。
+   - VID/属性抽查：`report_{report_id}` ✓、`source_system="gkx"` ✓、
+     `match_method=source_primary_key`、`confidence=1.0` ✓（Report 样例全对）。
+   - 收尾绑定恢复：151/151 从 `sources_live_full_20260113.json` PUT 回全量
+     querySql（49/49 schema 成功；复查 querySql 与快照逐字一致、null 保持 null、
+     零 `LIMIT 10000` 残留）。⚠ PUT 体必须 `{"sources":[...]}`——裸列表返回
+     HTTP 200 + `{code:422, success:false}` 信封（§9 ㊱），极易误判成功。
+   - ㉔ 修复（schema_ddl 退避 5×2-10s）随收尾重建部署到 api+worker 双容器
+     （2026-10-13 重建，非 cp 热修）。
+7. ✅ 写路径提速落地（2026-10-14，部署手册 §7 提速项 ①）：`write_records` 改批量
+   多行 `INSERT VERTEX/EDGE`（按属性列集分组，一条语句 64 行、2MB 语句上限；语义
+   与逐条写等价——组内同目标去重保最后、组间按原始序；unknown column 整组剔列、
+   行级错误回退逐条）。限步调按行计 `EVERY` 100→500 / `SLEEP` 0.5（单活动 1000 行/s
+   上限），新旋钮 `SCHEMA_EXTRACT_WRITE_BATCH_ROWS`（默认 64）。验证三件套：
+   ① 单测 12 个（分组/去重/组间序/自愈/回退/坏行上抛）+ 全量单测通过；
+   ② 合成基准 2000 行/1.8s = **1113 行/s 单活动**（旧逐条被步调硬顶 200 行/s，
+   5.6×），跑完即删零残留；③ 真实管道 mini e2e：克隆 IndustryChain 为
+   IndustryChainBench（12 行小源；**vid 加 `icbench:` 前缀与真实点隔离——DELETE
+   Schema 会物理 DELETE VERTEX，共享 vid 会连带删掉真实产业链点**），querySql/keyset
+   读源 → S3 claim-check 转换 → 消歧 → recordsKey 批量写图 → 冲突探测全链
+   COMPLETED、written=12、图侧 LOOKUP=12，清场后锚点 IndustryChain 12 /
+   Product 47,956 不动、绑定 151/151 与快照逐字段一致（快照本身 39 schema 带
+   querySql，另 10 个本就是占位/普通表绑定）。未做提速项：② 独占宿主+16 槽
+   （团队决议）、㉞ continue-as-new、④ 哈希 VID 跳召回。
 
 ## 9. 本轮新增缺陷（沿用 yft1-r2 编号续排）
 
@@ -704,6 +789,27 @@ LEADS/HAS_PARTICIPANT/FUNDED_BY/HAS_OUTPUT 是**图匹配器关系**（目标端
   表补一条）+ describe close_time；worker 日志尾随一条
   `Activity not found on completion … workflow execution already completed`
   （终杀后活动补完，写入已落地，幂等无害，勿当损伤）。
+
+- **㉟ trsgraph 容器三件套（graphd OOM 击杀链的设施面，2026-10-13 定案）**：
+  ① entrypoint 一次性拉起（`set -e` + 后台守护进程，无 supervisor）——graphd 被
+  OOM 击杀后无人重启，只能人工 `docker exec -d` 原地拉起（graphd 无状态、可原地
+  重启，flags 见 §8 处置实录）；② Nebula 内存预算
+  （`memory_tracker_limit_ratio=0.8` / `system_memory_high_watermark_ratio=0.8`）
+  按宿主 /proc/meminfo（125Gi）视图计算，**超出任何 cgroup 限额**——扩容只是把
+  死点后移，击杀规模随限额同步放大（64G→80G 实测 oom_kill 仍 +1，max +558MiB）；
+  ③ `docker update` 的内存限额不进容器定义，重建即回弹。团队项：compose 固化
+  80G；entrypoint 加守护/重启环；共享场景下调两 ratio 或按 cgroup 限额计算。
+  排障指纹：`memory.events` 的 `oom_kill` 计数上涨 + graphd 日志突发大量
+  `172.18.0.4` 认证后 ~9s–3min 内消失 + 写入侧 Connection refused /
+  create session failed 洪峰（⚠ worker 日志 WARNING 标签「图库内存高水位终败」
+  是**硬编码文案**，实际匹配整个 `_GRAPH_TRANSIENT_RE` 族——排障必须 grep 原始
+  GraphRequestError 文本，勿信标签）。
+- **㊱ `PUT /schemas/{id}/sources` 校验失败包在 HTTP 200 信封里（2026-10-13 实锤）**：
+  请求体形状错（如发裸列表，正确为 `{"sources":[...]}`）返回 **HTTP 200** +
+  body `{code:422, success:false, data:[{loc,msg,type}]}`——自动化脚本按
+  status_code 判成功会静默丢失全部写入（本次首轮回灌 49/49「成功」实际全 422，
+  复查才发现）。调用方必须判 `success` 字段。平台侧建议：校验失败别降成 200
+  信封，或至少 ApiResponse.msg 与 HTTP 码一致。
 
 已知风险：外部库走公网，大表分批拉取耗时波动；BELONGS 每批 185s（24 批）是已知长尾，
 若触发平台 activity 超时（read timeout 600s 内安全），可把该绑定单独拆任务跑。

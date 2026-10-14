@@ -449,6 +449,9 @@ def fake_graph(monkeypatch: pytest.MonkeyPatch) -> list[FakeGraphClient]:
         return client
 
     monkeypatch.setattr("infra.graph_db.client.TRSGraphClient", factory)
+    # 消歧近邻路关掉：本文件桩掉图库，带真实 embedding/Milvus 配置的容器里
+    # （dev2 栈）不该让 resolve_entity_batch 打到线上索引
+    monkeypatch.setenv("ENTITY_DISAMBIGUATION_MILVUS_RECALL", "0")
     return clients
 
 

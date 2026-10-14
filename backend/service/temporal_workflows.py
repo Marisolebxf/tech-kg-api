@@ -777,7 +777,7 @@ def _enqueue_entity_pending_item(
     workflow_run_id: str | None,
     job_id: str | None = None,
 ) -> None:
-    """单个挂起实体项 → 图库同名召回 + 评分 → T_LINK case（强制灰区人裁）。
+    """单个挂起实体项 → 多路召回（同名精确∪Milvus近邻）+ 评分 → T_LINK case（强制灰区人裁）。
 
     与 ``resolve_entity_batch`` 灰区分支同构（_incoming/existingCandidates/
     _pendingRelations），前端与 _apply_link_verdict 直接复用；但**不走 decide 的
@@ -799,7 +799,7 @@ def _enqueue_entity_pending_item(
     incoming_props = dict(candidate.get("props") or {})
     incoming_props.setdefault("name", display)
     scored: list[dict[str, Any]] = []
-    for cand in ed.recall_same_name(client, node_label, [display]).get(display, []):
+    for cand in ed.recall_candidates(client, node_label, [display], space=space).get(display, []):
         if cand["vid"] == vid:
             continue
         score, detail = ed.score_candidate(display, incoming_props, cand["name"], cand.get("props"))
@@ -807,9 +807,7 @@ def _enqueue_entity_pending_item(
             {"vid": cand["vid"], "name": cand["name"], "score": round(score, 3), **detail}
         )
     top = sorted(scored, key=lambda x: x["score"], reverse=True)[:TOP_K]
-    reason = (
-        f"脚本挂起改道消歧：{item.get('reason') or '歧义实体待人工确认'}；同名候选 {len(scored)} 个"
-    )
+    reason = f"脚本挂起改道消歧：{item.get('reason') or '歧义实体待人工确认'}；召回候选 {len(scored)} 个（同名+近邻）"
     if top:
         reason += f"，最高得分 {top[0]['score']:.2f}"
     manual_review_service.create_direct_case(
@@ -833,6 +831,7 @@ def _enqueue_entity_pending_item(
             "_graphSpace": space,
             "_resolution": {
                 "policyVersion": "script-pending-gray-v1",
+                "recallPolicy": "exact+milvus-dense-v1",
                 "scriptReason": item.get("reason"),
                 "thresholds": {"merge": MERGE_THRESHOLD, "grayLow": GRAY_LOW},
             },
@@ -2021,9 +2020,7 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                 prepared_rows.append((idx, record, props))
             return prepared_rows
 
-        def _row_segment(
-            record: dict[str, Any], props: dict[str, Any], cols: list[str]
-        ) -> str:
+        def _row_segment(record: dict[str, Any], props: dict[str, Any], cols: list[str]) -> str:
             values = ", ".join(ngql_value_typed(props.get(col), col) for col in cols)
             if kind == "entity":
                 vid = json.dumps(str(record["id"]), ensure_ascii=False)
@@ -2037,9 +2034,7 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
         ) -> int:
             while True:
                 cols_sql = ", ".join(f"`{col}`" for col in cols)
-                values_sql = ", ".join(
-                    _row_segment(record, props, cols) for record, props in chunk
-                )
+                values_sql = ", ".join(_row_segment(record, props, cols) for record, props in chunk)
                 if kind == "entity":
                     stmt = f"INSERT VERTEX `{name}`({cols_sql}) VALUES {values_sql}"
                 else:
@@ -2133,7 +2128,7 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
 
 @activity.defn
 async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
-    """消歧 v2（写前判定）：转换产出的实体在写图前先做同名召回 + 多证据评分。
+    """消歧 v2（写前判定）：转换产出的实体在写图前先做多路召回 + 多证据评分。
 
     三分支：得分 ≥0.85 且分差足够 → 改写 vid 并入已有实体（后续 INSERT VERTEX
     幂等 upsert，"合并"=属性覆盖到目标节点）；灰区 [0.65, 0.85) → 扣留该记录
@@ -2151,7 +2146,7 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
         decide,
         display_name,
         normalize_display_name,
-        recall_same_name,
+        recall_candidates,
         score_candidate,
     )
 
@@ -2177,7 +2172,8 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
             record["id"] = first_vid
             deduped += 1
 
-    # 2) 图库同名召回（带候选完整属性供评分；properties() 失败降级为仅名称）
+    # 2) 多路召回（图库同名精确 ∪ Milvus 近邻；带候选完整属性供评分，
+    #    近邻路 fail-open 不可用即退化为仅同名精确——properties() 失败降级为仅名称）
     by_name: dict[str, list[dict[str, Any]]] = {}
     for record in records:
         display = display_name(record.get("props"))
@@ -2191,13 +2187,15 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
             settings.space = graph["space"]
         client = TRSGraphClient(settings)
 
-        # 同名召回整体下放线程（同步 HTTP 批量 LOOKUP；read_source_batch 同款根因）；
-        # 高水位走专用退避（本活动 STC 300s，max_attempts=10 ≈ 200s 内安全，缺陷㉘）
+        # 多路召回整体下放线程（同步 HTTP 批量 LOOKUP / Milvus 检索；read_source_batch
+        # 同款根因）；高水位走专用退避（本活动 STC 300s，max_attempts=10 ≈ 200s 内安全，缺陷㉘）
         def _recall() -> dict[str, list[dict[str, Any]]]:
             _with_watermark_retry(client.connect, label="消歧召回连接", max_attempts=10)
             return _with_watermark_retry(
-                lambda: recall_same_name(client, name_tag, list(by_name)),
-                label="消歧同名召回",
+                lambda: recall_candidates(
+                    client, name_tag, list(by_name), space=graph.get("space")
+                ),
+                label="消歧多路召回",
                 max_attempts=10,
             )
 
@@ -2266,6 +2264,7 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
                             "matchScore": outcome["score"],
                             "margin": outcome["margin"],
                             "policyVersion": "disambiguation-gray-v1",
+                            "recallPolicy": "exact+milvus-dense-v1",
                             "thresholds": {"merge": MERGE_THRESHOLD, "grayLow": GRAY_LOW},
                         },
                     },

@@ -195,6 +195,9 @@ def review_service(monkeypatch):
     Base.metadata.create_all(engine)
     service = ManualReviewService(sessionmaker(engine, expire_on_commit=False))
     monkeypatch.setattr("service.manual_review_production.manual_review_service", service)
+    # 本文件只验证同名召回路：关掉 Milvus 近邻路，避免带真实 embedding/Milvus
+    # 配置的容器里（dev2 栈）单测打到线上索引引入非确定候选
+    monkeypatch.setenv("ENTITY_DISAMBIGUATION_MILVUS_RECALL", "0")
     # execution 查询不桩：_enqueue_pending_review 内部 import 失败自带 try/except
     # 兜底（host 无控制库 → task_id 走 PI-kgstep- 前缀，确定性不影响断言）
     return service

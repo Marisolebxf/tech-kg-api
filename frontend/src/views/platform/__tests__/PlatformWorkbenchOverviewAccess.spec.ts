@@ -227,7 +227,7 @@ describe('昨日新增聚合格式展示', () => {
     expect(routerPush).toHaveBeenCalledWith({
       name: 'job-detail',
       params: { jobId: 'job-paper-a' },
-      query: { tab: 'lineage', exec: 'EXEC-paper-01' },
+      query: { tab: 'lineage', exec: 'EXEC-paper-01', src: 'gkx.dwd_paper', n: 200000 },
     })
     await rows[0]!.trigger('keydown', { key: 'Enter' })
     expect(routerPush).toHaveBeenCalledTimes(2)
@@ -235,7 +235,7 @@ describe('昨日新增聚合格式展示', () => {
     expect(rows[1]!.classes()).toContain('is-clickable')
     await rows[1]!.trigger('click')
     expect(routerPush).toHaveBeenLastCalledWith({
-      name: 'job-detail', params: { jobId: 'job-journal' }, query: { tab: 'lineage' },
+      name: 'job-detail', params: { jobId: 'job-journal' }, query: { tab: 'lineage', src: 'gkx.dwd_journal', n: 37000 },
     })
     // 有 taskId 无 jobId：非任务通道执行（回填或中断），提示而非跳转
     expect(rows[2]!.classes()).not.toContain('is-clickable')

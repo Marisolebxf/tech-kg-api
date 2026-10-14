@@ -1426,12 +1426,17 @@ function openAssetChangeTask(row: AssetChangeRow) {
   // 聚合格式下一行属于恰好一个执行、执行属于唯一任务（2026-10-14 恢复行级跳转）——
   // 落图谱构建区任务详情页（与图谱构建列表点任务同一动线）；带 execId 直达该行
   // 所属的那一次执行——任务可多次运行，任务页默认展示最新执行，昨日行点开会张冠李戴。
-  // tab=lineage 直落「数据溯源」页签：行上的数是单来源块计数，默认「概况与结果」
-  // 页签只给整次执行的合计写入数，在那里找不到行上的数。
+  // tab=lineage 直落「数据溯源」页签；src+n 锚定点击的那条来源行（同名来源表可能
+  // 来自多个 Schema，带写入数才唯一），目标页高亮并滚动到它，落地即见行上的数。
   void router.push({
     name: 'job-detail',
     params: { jobId: row.jobId },
-    query: { tab: 'lineage', ...(row.execId ? { exec: row.execId } : {}) },
+    query: {
+      tab: 'lineage',
+      ...(row.execId ? { exec: row.execId } : {}),
+      src: row.source,
+      n: row.count,
+    },
   })
 }
 

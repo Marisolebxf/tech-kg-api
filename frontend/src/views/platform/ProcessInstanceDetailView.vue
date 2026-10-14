@@ -2,7 +2,7 @@
 import { useSpacePermissions } from "../../composables/use-space-permissions"
 const { spaces } = useSpacePermissions()
 
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { IconCheckCircleFill, IconClockCircle, IconCloseCircleFill, IconExclamationCircleFill, IconInfoCircleFill } from '@arco-design/web-vue/es/icon'
 import { useRoute, useRouter } from 'vue-router'
 import { deriveJobUnifiedStatus, executionStatusLabel, getExecution, getJob, getProductionReviews, getTask, listExecutions, retryTask, TRIGGER_SOURCE_LABEL, type AccessReport, type PipelineActivityInfo, type PipelineStepInfo, type ProcessingInstance, type UpdateBatch, type WorkflowExecution, type WorkflowJob } from '../../api/workflowOperations'
@@ -643,6 +643,32 @@ const lineageResultRows = computed(() => (extractOutput.value?.sources ?? []).ma
   failed: source.failed ?? 0,
   cursor: source.watermark || (source.pkCursor ? `pk > ${source.pkCursor}` : '未推进'),
 })))
+/** 昨日新增行级跳转带来的来源锚点（?src=来源表&n=写入数）：来源结果表里同名
+ *  来源表可能来自多个 Schema（chain 同表多 Schema 抽取），带上写入数才能唯一定位
+ *  到点击的那一行；行渲染后高亮并滚动到它，用户落地即见「行上的数」。 */
+const pinnedSource = computed(() => {
+  const src = String(route.query.src || '').trim()
+  if (!src) return null
+  const count = Number(route.query.n ?? NaN)
+  return { src, count: Number.isFinite(count) ? count : null }
+})
+function isPinnedSourceRow(row: { table: string; written: number | string }) {
+  const pin = pinnedSource.value
+  if (!pin || row.table !== pin.src) return false
+  return pin.count === null || Number(row.written) === pin.count
+}
+// 锚行滚动须同时满足两个异步条件：执行详情（来源结果行）与任务详情（溯源页签
+// 渲染前提 processingInstance）都到位——只盯行数会先触发后扑空（任务详情晚到时
+// 表还没渲染），故双源监听，各自到达时都尝试一次（重复滚动无害）。
+watch(
+  [() => lineageResultRows.value.length, () => processingInstance.value?.id ?? ''],
+  async () => {
+    if (!pinnedSource.value || !lineageResultRows.value.length || !processingInstance.value) return
+    await nextTick()
+    // jsdom 无 scrollIntoView：可选调用兜底（真实浏览器滚动到视口中部）
+    document.querySelector('.lineage-result-table tr.is-pinned')?.scrollIntoView?.({ block: 'center' })
+  },
+)
 const lineageResultSummary = computed(() => {
   const output = extractOutput.value
   if (!output) return processingInstance.value?.rule || ''
@@ -923,7 +949,7 @@ const publicSpaceReadOnly = computed(() => {
             </section>
             <section v-if="lineageResultRows.length" class="lineage-compare">
               <header><div><h3>本次执行来源结果</h3><p>工作流回写的真实分批统计与水位推进（游标在来源全部批次成功后一次性推进）</p></div><span>{{ lineageResultRows.length }} 个来源</span></header>
-              <table class="lineage-result-table"><colgroup><col class="lineage-result-source" /><col class="lineage-result-count" span="4" /><col class="lineage-result-cursor" /></colgroup><thead><tr><th>来源表</th><th>批次</th><th>读取行</th><th>写入行</th><th>失败行</th><th>推进水位 / 游标</th></tr></thead><tbody><tr v-for="row in lineageResultRows" :key="row.table"><td><code>{{ row.table }}</code></td><td>{{ row.batches }}</td><td>{{ row.rows }}</td><td>{{ row.written }}</td><td :class="{ danger: Number(row.failed) > 0 }">{{ row.failed }}</td><td class="raw-value cursor-value"><a-tooltip position="top" content-class="lineage-value-tooltip"><span class="raw-value-text">{{ row.cursor }}</span><template #content><div class="lineage-tooltip-content">{{ row.cursor }}</div></template></a-tooltip></td></tr></tbody></table>
+              <table class="lineage-result-table"><colgroup><col class="lineage-result-source" /><col class="lineage-result-count" span="4" /><col class="lineage-result-cursor" /></colgroup><thead><tr><th>来源表</th><th>批次</th><th>读取行</th><th>写入行</th><th>失败行</th><th>推进水位 / 游标</th></tr></thead><tbody><tr v-for="row in lineageResultRows" :key="row.table" :class="{ 'is-pinned': isPinnedSourceRow(row) }"><td><code>{{ row.table }}</code></td><td>{{ row.batches }}</td><td>{{ row.rows }}</td><td>{{ row.written }}</td><td :class="{ danger: Number(row.failed) > 0 }">{{ row.failed }}</td><td class="raw-value cursor-value"><a-tooltip position="top" content-class="lineage-value-tooltip"><span class="raw-value-text">{{ row.cursor }}</span><template #content><div class="lineage-tooltip-content">{{ row.cursor }}</div></template></a-tooltip></td></tr></tbody></table>
             </section>
             <section><h3>处理链路</h3><div class="lineage"><span>{{ lineageChainSource }}<small>{{ schemaDetail?.label || schemaDetail?.key || 'Schema 未关联或已删除' }}</small></span><b>→</b><span>{{ schemaDetail?.script?.filename || processingInstance.objectName || '转换脚本' }}<small>脚本转换（只输出 JSON）</small></span><b>→</b><span>写入图空间<small>{{ lineageGraphSpace }} · nGQL INSERT</small></span><template v-if="isExecutionInterrupted"><b>→</b><span>下游未执行<small>游标停在上一轮</small></span></template><template v-else><b>→</b><span>{{ selectedExecution ? executionStatusLabel(selectedExecution.status) : taskStatus }}<small>{{ lineageResultSummary }}</small></span></template></div></section>
           </template>
@@ -1053,6 +1079,12 @@ const publicSpaceReadOnly = computed(() => {
 .lineage-result-table .lineage-result-count{width:11%}
 .lineage-result-table .lineage-result-cursor{width:32%}
 .lineage-result-table .cursor-value{white-space:nowrap}
+/* 昨日新增行级跳转锚中的来源行：琥珀色底 + 左侧色条 + 一次落点脉冲，落地即见 */
+.lineage-result-table tr.is-pinned td{background:#fff6dc;box-shadow:inset 3px 0 0 #f59e0b}
+.lineage-result-table tr.is-pinned td code{font-weight:600}
+.lineage-result-table tr.is-pinned{animation:lineage-pin-pulse 1.6s ease-out 1}
+@keyframes lineage-pin-pulse{0%{background:#ffe9ad}100%{background:transparent}}
+@media (prefers-reduced-motion: reduce){.lineage-result-table tr.is-pinned{animation:none}}
 /* 处理链路仅用浅色背景区分节点，箭头继续表达流向。 */
 .lineage span{border:0}
 /* 节点结果利用完整内容宽度，两列展示且指标值统一左对齐。 */

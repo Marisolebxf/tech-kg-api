@@ -178,6 +178,37 @@ def extract_fail_rerunnable(snapshot: dict[str, Any], exec_statuses: dict[str, s
 logger = logging.getLogger("service.manual_review")
 
 
+def ensure_review_queue_indexes() -> None:
+    """幂等补人工审核队列索引（无迁移框架，仅 MySQL 方言；启动 best-effort 调用）。
+
+    跨空间队列查询按 category（template_id 集合）过滤后计数+分页：存量表只有
+    status/graph_space 索引，50 万行时 template_id 过滤走全表扫描×2，实测单请求
+    约 3s。补 (template_id, status, created_at) 后走索引区间扫描（实测 0.4s 内）。
+    新建表由 create_all 按 __table_args__ 自带该索引；本函数只兜存量环境。
+    """
+    from sqlalchemy import inspect, text
+
+    from infra.mysql import get_engine
+
+    engine = get_engine()
+    if engine.dialect.name != "mysql":
+        return
+    inspector = inspect(engine)
+    if "manual_review_case" not in inspector.get_table_names():
+        return
+    names = {index["name"] for index in inspector.get_indexes("manual_review_case")}
+    if "ix_review_template" in names:
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE INDEX ix_review_template "
+                "ON manual_review_case (template_id, status, created_at)"
+            )
+        )
+    logger.info("已补人工审核队列索引 ix_review_template (template_id, status, created_at)")
+
+
 # 存量 T_DIRECT 案例的 risk_level 是中文"中/高"（旧口径），序列化时归一到 P1/P0，
 # 保证展示与过滤口径统一；排序用同款 CASE 归一，避免"高"按码点沉底。
 _RISK_NORMALIZE = {"中": "P1", "高": "P0"}
@@ -419,9 +450,27 @@ class ManualReviewService:
             ]
         with self.sf() as s:
             total = s.scalar(select(func.count()).select_from(ReviewCase).where(*q)) or 0
-            rows = s.scalars(
-                select(ReviewCase).where(*q).order_by(*order).offset((page - 1) * size).limit(size)
+            # 两步取页（延迟关联）：排序键含 CASE 表达式走不了索引序，直接对整行
+            # 排序会把匹配集（跨空间 4 万+ 行、含大 TEXT 快照）整体物化进
+            # filesort，实测单页 5s+；先窄列排序取当页主键再按主键回表取整行，
+            # 结果顺序不变，实测 1.5s 内
+            page_ids = s.scalars(
+                select(ReviewCase.id)
+                .where(*q)
+                .order_by(*order)
+                .offset((page - 1) * size)
+                .limit(size)
             ).all()
+            if page_ids:
+                found = {
+                    row.id: row
+                    for row in s.scalars(
+                        select(ReviewCase).where(ReviewCase.id.in_(page_ids))
+                    ).all()
+                }
+                rows = [found[case_id] for case_id in page_ids if case_id in found]
+            else:
+                rows = []
             # 来源记录跳任务详情：一次 IN 查询批量解析本页 EXEC→jobId（快照已有 jobId 的行跳过）
             job_map = resolve_job_ids(
                 [(load(x.input_snapshot) or {}).get("executionId") for x in rows]

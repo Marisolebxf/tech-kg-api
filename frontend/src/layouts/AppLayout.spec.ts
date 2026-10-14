@@ -25,7 +25,7 @@ vi.mock('../api/graphSearch', () => ({
 }))
 vi.mock('@arco-design/web-vue/es/icon', () => ({ IconHistory: { template: '<i />' }, IconHome: { template: '<i />' } }))
 
-// 普通用户可见工作台（平台总览）、图谱查询与业务服务组；图谱建设与治理/平台管理仅管理员。
+// 普通用户仅显示九大业务；管理员与开发维护保留管理和查询入口。
 const sharedPaths = [
   '/expert-direct', '/node-indirect', '/two-point-achievement',
   '/expert-colleague', '/expert-alumni', '/paper-cooperation', '/enterprise-relation',
@@ -95,16 +95,17 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
     expect(navigation.text()).not.toContain('工作台')
   })
 
-  it('普通用户可见工作台/平台总览与业务服务，管理菜单隐藏', async () => {
+  it('普通用户仅可见九大业务菜单', async () => {
     const { wrapper } = await renderLayout(false)
     const navigation = wrapper.get('.app-nav')
-    expect(navigation.text()).toContain('工作台')
+    expect(navigation.text()).not.toContain('工作台')
     expect(navigation.text()).not.toContain('图谱建设与治理')
     expect(navigation.text()).not.toContain('平台管理')
     expect(navigation.text()).toContain('知识图谱构建服务')
     expect(navigation.text()).toContain('科技专家/人才知识推理构建服务')
-    expect(navigation.find('a[href="/overview"]').exists()).toBe(true)
-    for (const path of [...queryPaths, ...sharedPaths]) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(true)
+    expect(navigation.find('a[href="/overview"]').exists()).toBe(false)
+    for (const path of sharedPaths) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(true)
+    for (const path of queryPaths) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(false)
     for (const path of managementPaths) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(false)
   })
 
@@ -132,7 +133,8 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
     const { wrapper } = await renderLayout(false, '/expert-direct', true)
     const navigation = wrapper.get('.app-nav')
     for (const path of managementPaths) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(false)
-    for (const path of ['/overview', ...queryPaths, ...sharedPaths]) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(true)
+    for (const path of sharedPaths) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(true)
+    for (const path of ['/overview', ...queryPaths]) expect(navigation.find(`a[href="${path}"]`).exists()).toBe(false)
   })
 
   it('有效角色刷新为普通用户后现有管理菜单立即隐藏', async () => {

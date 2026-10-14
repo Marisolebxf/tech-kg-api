@@ -385,28 +385,7 @@ class LLMExtractor:
         self.base_url = base_url
 
     def _call_llm(self, prompt: str) -> str:
-        """调用LLM API（优先使用 zhipuai SDK，回退到 openai）"""
-        import os
-
-        _proxy_vars = ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]
-        _saved = {v: os.environ.pop(v, None) for v in _proxy_vars}
-
-        try:
-            from zhipuai import ZhipuAI
-
-            client = ZhipuAI(api_key=self.api_key)
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=2048,
-            )
-            return response.choices[0].message.content
-        except ImportError:
-            pass
-        except Exception:
-            logger.exception("zhipuai调用失败")
-
+        """始终使用所选配置的地址和模型，不回退到其他供应商。"""
         try:
             from openai import OpenAI
 
@@ -424,10 +403,6 @@ class LLMExtractor:
         except Exception:
             logger.exception("LLM调用失败")
             return ""
-        finally:
-            for v, val in _saved.items():
-                if val is not None:
-                    os.environ[v] = val
 
     def extract(self, text: str) -> tuple[list[Entity], list[Relation]]:
         """使用LLM从文本中抽取实体和关系"""

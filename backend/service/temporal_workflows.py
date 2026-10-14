@@ -204,14 +204,19 @@ def _resolve_resources(
 
     llm_id = payload.get("llm_config_id")
     if llm_id:
-        try:
-            from service.llm_config import get_llm_settings_by_id
+        from service.llm_config import get_llm_settings_by_id
 
-            params = get_llm_settings_by_id(llm_id)
-            if params:
-                resources["llm"] = params
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("解析 LLM 配置 %s 失败: %s", llm_id, exc)
+        params = get_llm_settings_by_id(llm_id, business_id=payload.get("_llm_business_id"))
+        if params is None:
+            raise ValueError("任务指定的语言模型不可用")
+        resources["llm"] = params
+    elif payload.get("_llm_env"):
+        # Only the non-secret endpoint/model are fixed in history; credentials stay on worker.
+        snapshot = payload["_llm_env"]
+        key = (os.getenv("LLM_API_KEY") or os.getenv("ZHIPUAI_API_KEY") or "").strip()
+        if not key:
+            raise ValueError("任务启动时使用的环境语言模型凭据已失效")
+        resources["llm"] = {"api_key": key, **snapshot}
 
     emb_id = payload.get("embedding_config_id")
     if emb_id:
@@ -1585,8 +1590,15 @@ async def execute_transform(request: dict[str, Any]) -> dict[str, Any]:
             "kind": kind,
             "source": source,
         }
+    resource_selectors = dict(request.get("selectors") or {})
+    if rbac_enabled():
+        from service.workflow_jobs import _job_business
+
+        resource_selectors["_llm_business_id"] = _job_business(None, request)
+    else:
+        resource_selectors["_llm_business_id"] = None
     resolved = _resolve_resources(
-        request.get("selectors") or {},
+        resource_selectors,
         request.get("definitionId"),
         request.get("stepId") or "_default",
     )
@@ -2701,6 +2713,49 @@ class ConfigurableWorkflow:
         return result
 
 
+@activity.defn
+async def resolve_execution_llm(request: dict[str, Any]) -> dict[str, Any]:
+    """Resolve once per run; Temporal records only IDs and non-secret env model metadata."""
+    from fastapi import HTTPException
+
+    try:
+        return _resolve_execution_llm(request)
+    except HTTPException as exc:
+        raise ApplicationError(
+            str(exc.detail), type="ModelSelectionDenied", non_retryable=True
+        ) from exc
+
+
+def _resolve_execution_llm(request: dict[str, Any]) -> dict[str, Any]:
+    from infra.mysql import session_scope
+    from service.business_access_control import rbac_enabled
+    from service.llm_config import DEFAULT_BASE_URL, DEFAULT_MODEL
+    from service.llm_defaults import resolve_default_config
+    from service.workflow_jobs import _job_business, authorize_background_execution
+
+    actor = authorize_background_execution(request) if rbac_enabled() else None
+    business_id = _job_business(actor, request) if rbac_enabled() else None
+    if rbac_enabled() and request.get("clientId") and request["clientId"] != business_id:
+        raise ApplicationError("任务业务与目标图空间不一致", non_retryable=True)
+    with session_scope() as session:
+        row = resolve_default_config(
+            session,
+            business_id=business_id,
+            config_id=request.get("llm_config_id") or request.get("llmConfigId"),
+        )
+        result = {
+            "llm_config_id": row.id if row else None,
+            "_llm_business_id": business_id,
+            "_llm_env": None,
+        }
+    if row is None and (os.getenv("LLM_API_KEY") or os.getenv("ZHIPUAI_API_KEY") or "").strip():
+        result["_llm_env"] = {
+            "base_url": os.getenv("LLM_BASE_URL", DEFAULT_BASE_URL),
+            "model": os.getenv("LLM_MODEL", DEFAULT_MODEL),
+        }
+    return result
+
+
 _EXTRACT_SELECTOR_KEYS = (
     "mysql_datasource_id",
     "mysql_database",
@@ -2708,6 +2763,8 @@ _EXTRACT_SELECTOR_KEYS = (
     "milvus_database",
     "graph_space",
     "llm_config_id",
+    "_llm_business_id",
+    "_llm_env",
     "embedding_config_id",
     "since",
 )
@@ -2802,6 +2859,15 @@ class SchemaExtractWorkflow:
 
     async def _run_dispatch(self, request: dict[str, Any]) -> dict[str, Any]:
         """原 run() 分发体：单 Schema / chain（kg.schema.extract.chain）。"""
+        if workflow.patched("business-llm-default-v1"):
+            selected = await _execute_activity(
+                resolve_execution_llm,
+                request,
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=ACTIVITY_RETRY_POLICY,
+                schedule_to_start_timeout=ACTIVITY_SCHEDULE_TO_START,
+            )
+            request = {**request, **selected}
         schema_ids = request.get("schemaIds") or []
         if len(schema_ids) >= 2:
             # chain 模式（kg.schema.extract.chain）：多 Schema 严格串行。
@@ -3784,6 +3850,7 @@ WORKFLOW_CLASSES = [
 ]
 
 ACTIVITIES = [
+    resolve_execution_llm,
     load_workflow_definition,
     register_scheduled_execution,
     finalize_scheduled_execution,

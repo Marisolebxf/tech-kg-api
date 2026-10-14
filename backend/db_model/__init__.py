@@ -75,6 +75,7 @@ from db_model.industry_chain import (
     DwdOrgIndustryChainPatDtl,
     DwdOrgIndustryChainProdDtl,
 )
+from db_model.llm_default import BusinessLlmDefault
 from db_model.paper_common import (
     DwdAuthorAffiliation,
     DwdAuthorInfo,
@@ -129,6 +130,7 @@ from db_model.scholar import (
 )
 
 __all__ = [
+    "BusinessLlmDefault",
     "Base",
     "DwdScholar",
     "DwdScholarCoauthor",

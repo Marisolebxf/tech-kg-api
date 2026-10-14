@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Form, FormItem } from '@arco-design/web-vue'
 
 import {
-  backfillSchemaHistory,
   deleteSchema,
   getSchemaDeleteImpact,
   getSchemaOverview,
@@ -19,7 +18,6 @@ import SourceBindings from '../schema-browser/sourceBindings.vue'
 
 vi.mock('../../../api/schemaManagement', () => ({
   addSchemaProperty: vi.fn(),
-  backfillSchemaHistory: vi.fn(),
   createEntitySchema: vi.fn(),
   createRelationSchema: vi.fn(),
   deleteSchema: vi.fn(),
@@ -181,17 +179,14 @@ describe('来源弹窗权限与抽取入口合并回归', () => {
     expect(modal.findAll('button').some(button => button.text() === '触发抽取')).toBe(false)
     expect(view.getComponent(SourceBindings).props('readonly')).toBe(!writable)
     const save = modal.findAll('footer button').find(button => button.text() === '保存绑定')!
-    const backfill = modal.findAll('footer button').find(button => button.text() === '回填历史数据')!
+    // 「回填历史数据」入口已下线：footer 只剩取消/保存绑定
+    expect(modal.findAll('button').some(button => button.text() === '回填历史数据')).toBe(false)
     if (writable) {
       expect(save.attributes('disabled')).toBeUndefined()
-      expect(backfill.attributes('disabled')).toBeUndefined()
     } else {
       expect(save.attributes('disabled')).toBeDefined()
-      expect(backfill.attributes('disabled')).toBeDefined()
       await save.trigger('click')
-      await backfill.trigger('click')
       expect(replaceSchemaSources).not.toHaveBeenCalled()
-      expect(backfillSchemaHistory).not.toHaveBeenCalled()
     }
   })
 })

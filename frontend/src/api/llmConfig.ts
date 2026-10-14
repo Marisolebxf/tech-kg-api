@@ -8,6 +8,9 @@ export interface LlmConfig {
   businessId?: string | null
   businessName?: string
   canManage?: boolean
+  canSetDefault?: boolean
+  defaultSource?: 'business' | 'public'
+  defaultReferenced?: boolean
   name: string
   description: string
   baseUrl: string

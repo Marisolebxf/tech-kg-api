@@ -8,7 +8,9 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from fastapi import HTTPException
 from openai import OpenAI
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from dao.llm_config import LlmConfigDAO
@@ -19,6 +21,12 @@ from infra.llm import (
     DEFAULT_TIMEOUT,
     reset_llm_client,
     thinking_extra_body,
+)
+from service.llm_defaults import (
+    config_business,
+    guard_default_removal,
+    public_default,
+    resolve_default_config,
 )
 from utils.time_display import utc_to_cst_str
 
@@ -82,7 +90,7 @@ class LlmConfigService:
         self._dao = LlmConfigDAO(session)
 
     def list_configs(self, owner: str | None = None) -> list[dict]:
-        rows = self._dao.list(order_by=LlmConfig.updated_at.desc(), limit=1000)
+        rows = list(self._session.scalars(select(LlmConfig).order_by(LlmConfig.updated_at.desc())))
         if owner is not None:
             rows = [r for r in rows if r.owner == owner]
         return [_to_out(r) for r in rows]
@@ -92,6 +100,12 @@ class LlmConfigService:
         return _to_out(row) if row else None
 
     def create_config(self, payload: dict, *, scope_owner: str | None = None) -> dict:
+        if payload.get("is_default") and not payload.get("api_key"):
+            raise HTTPException(409, "未配置 API Key 的语言模型不能设为默认")
+        if payload.get("is_default") and payload.get("_business_id"):
+            raise HTTPException(403, "公共默认只能选择公共语言模型")
+        if payload.get("is_default") and payload.get("status") == "停用":
+            raise HTTPException(409, "停用的语言模型不能设为默认")
         now = _utcnow_naive()
         config_id = f"LLM-{uuid.uuid4().hex[:8].upper()}"
         # Register visibility in the same commit as the configuration itself.
@@ -103,7 +117,16 @@ class LlmConfigService:
                     config_kind="llm", config_id=config_id, business_id=payload["_business_id"]
                 )
             )
-        row = self._dao.create(
+        if payload.get("is_default"):
+            list(
+                self._session.scalars(
+                    select(LlmConfig)
+                    .order_by(LlmConfig.id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            )
+        row = LlmConfig(
             id=config_id,
             name=payload["name"],
             description=payload.get("description", ""),
@@ -116,17 +139,45 @@ class LlmConfigService:
             created_at=now,
             updated_at=now,
         )
+        self._session.add(row)
+        self._session.flush()
         if row.is_default:
-            self._dao.clear_other_defaults(row.id, owner=scope_owner)
+            for other in self._session.scalars(select(LlmConfig).where(LlmConfig.id != row.id)):
+                other.is_default = False
+        self._session.commit()
         reset_llm_client()
         return _to_out(row)
 
     def update_config(
         self, config_id: str, payload: dict, *, scope_owner: str | None = None
     ) -> dict | None:
-        row = self._dao.get(config_id)
+        if payload.get("is_default"):
+            rows = list(
+                self._session.scalars(
+                    select(LlmConfig)
+                    .order_by(LlmConfig.id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            )
+            row = next((item for item in rows if item.id == config_id), None)
+        else:
+            row = self._session.scalar(
+                select(LlmConfig)
+                .where(LlmConfig.id == config_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
         if row is None:
             return None
+        if payload.get("status") == "停用":
+            guard_default_removal(self._session, config_id)
+        if payload.get("is_default") and not (payload.get("api_key") or row.api_key):
+            raise HTTPException(409, "未配置 API Key 的语言模型不能设为默认")
+        if payload.get("is_default") and config_business(self._session, config_id):
+            raise HTTPException(403, "公共默认只能选择公共语言模型")
+        if payload.get("is_default") and payload.get("status", row.status) == "停用":
+            raise HTTPException(409, "停用的语言模型不能设为默认")
         updates: dict = {"updated_at": _utcnow_naive()}
         for field in ("name", "description", "base_url", "model", "owner", "is_default", "status"):
             if field in payload and payload[field] is not None:
@@ -135,9 +186,18 @@ class LlmConfigService:
         new_key = payload.get("api_key")
         if new_key:
             updates["api_key"] = new_key
-        updated = self._dao.update(config_id, **updates)
-        if updated and updated.is_default:
-            self._dao.clear_other_defaults(updated.id, owner=scope_owner)
+        if updates.get("is_default"):
+            for other in self._session.scalars(
+                select(LlmConfig)
+                .order_by(LlmConfig.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            ):
+                other.is_default = other.id == config_id
+        for key, value in updates.items():
+            setattr(row, key, value)
+        self._session.commit()
+        updated = row
         reset_llm_client()
         return _to_out(updated) if updated else None
 
@@ -145,8 +205,7 @@ class LlmConfigService:
         row = self._dao.get(config_id)
         if row is None:
             return False
-        if row.is_default:
-            logger.warning("删除默认 LLM 配置 %s，删除后无默认配置生效（将回退 env）", config_id)
+        guard_default_removal(self._session, config_id)
         ok = self._dao.delete(config_id)
         if ok:
             reset_llm_client()
@@ -156,11 +215,11 @@ class LlmConfigService:
         row = self._dao.get(config_id)
         if row is None:
             return None
-        # 默认互斥范围＝操作者可见范围：scope_owner=None（管理员）全局唯一，普通用户仅自身范围
-        self._dao.clear_other_defaults(config_id, owner=scope_owner)
-        updated = self._dao.update(config_id, is_default=True, updated_at=_utcnow_naive())
-        reset_llm_client()
-        return _to_out(updated) if updated else None
+        if config_business(self._session, config_id):
+            raise HTTPException(403, "公共默认只能选择公共语言模型")
+        if row.status == "停用":
+            raise HTTPException(409, "停用的语言模型不能设为默认")
+        return self.update_config(config_id, {"is_default": True})
 
     def test_connection(self, config_id: str) -> dict:
         row = self._dao.get(config_id)
@@ -187,7 +246,7 @@ class LlmConfigService:
 
     def get_active_config(self) -> LlmConfig | None:
         """返回当前默认 LLM 配置；DB 无记录时返回 None（由调用方回退 env）。"""
-        return self._dao.get_default()
+        return public_default(self._session)
 
 
 def get_active_llm_config() -> LlmConfig | None:
@@ -196,24 +255,24 @@ def get_active_llm_config() -> LlmConfig | None:
 
     session = create_session()
     try:
-        return LlmConfigDAO(session).get_default()
+        return public_default(session)
     finally:
         session.close()
 
 
-def resolve_llm_settings() -> tuple[str, str, str] | None:
-    """返回 (api_key, base_url, model)。DB 优先，DB 无记录**或缺 api_key** 回退 env。
-
-    DB 默认配置缺 key（如建配置时未填、后续被清空）时直接返回空 key 客户端
-    会让所有 LLM 调用报 "Missing credentials"——env 明明配了可用 key 却被
-    空配置屏蔽，必须跳过无效 DB 配置继续走 env。
-    """
+def resolve_llm_settings(
+    business_id: str | None = None, config_id: str | None = None
+) -> tuple[str, str, str] | None:
+    """Resolve explicit > business > public; only an unset default falls back to env."""
     import os
 
+    from infra.mysql import create_session
+
+    with create_session() as session:
+        cfg = resolve_default_config(session, business_id, config_id)
+        if cfg is not None:
+            return cfg.api_key, cfg.base_url, cfg.model
     env_key = os.getenv("LLM_API_KEY") or os.getenv("ZHIPUAI_API_KEY")
-    cfg = get_active_llm_config()
-    if cfg is not None and (cfg.api_key or not env_key):
-        return cfg.api_key, cfg.base_url, cfg.model
     if not env_key:
         return None
     return (
@@ -223,20 +282,14 @@ def resolve_llm_settings() -> tuple[str, str, str] | None:
     )
 
 
-def get_llm_settings_by_id(config_id: str | None) -> dict[str, Any] | None:
-    """供 activity 解析：按 id 查 LlmConfig 返回参数 dict（api_key/base_url/model）。
-
-    配置不存在或缺 api_key 返回 None（SDK ctx.llm 为 None，回退全局默认）。
-    """
+def get_llm_settings_by_id(
+    config_id: str | None, business_id: str | None = None
+) -> dict[str, Any] | None:
+    """Explicit model lookup; invalid selected models never silently fall back."""
     if not config_id:
         return None
-    from infra.mysql import create_session
-
-    session = create_session()
-    try:
-        row = LlmConfigDAO(session).get(config_id)
-        if row is None or not row.api_key:
-            return None
-        return {"api_key": row.api_key, "base_url": row.base_url, "model": row.model}
-    finally:
-        session.close()
+    settings = resolve_llm_settings(business_id=business_id, config_id=config_id)
+    if settings is None:
+        return None
+    api_key, base_url, model = settings
+    return {"api_key": api_key, "base_url": base_url, "model": model}

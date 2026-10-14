@@ -240,6 +240,7 @@ async def test_business_dependency_scopes_readonly_access_and_restores_context(m
 
     monkeypatch.setattr(business_access_control, "ensure_space_access", ensure)
     monkeypatch.setattr(business_access_control, "rbac_enabled", lambda: True)
+    monkeypatch.setattr("service.llm_context.request_llm_business", lambda actor, space: "b")
     request = Request(
         {"type": "http", "query_string": b"", "headers": [(b"x-graph-space", b"dev2")]}
     )

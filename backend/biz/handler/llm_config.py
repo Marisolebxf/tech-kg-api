@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from application.llm_config import LlmConfigApplication
 from biz.dependencies.auth import CurrentActor
-from biz.dependencies.shared_configs import ensure_shared_config_manage, ensure_shared_config_read
+from biz.dependencies.shared_configs import ensure_shared_config_read
 from biz.schemas.common import ApiResponse
 from biz.schemas.llm_config import LlmConfigCreate, LlmConfigUpdate, LlmConfigVerifyRequest
 from db_model.config_ownership import ConfigOwnership
@@ -24,6 +24,7 @@ from service.config_ownership import (
     guard_default_change,
     visible_configurations,
 )
+from service.llm_defaults import decorate_defaults, set_default_for_actor
 
 LLM_CONFIG_NOT_FOUND = "LLM 配置不存在"
 
@@ -74,7 +75,7 @@ def _readable_config(
     if data is None:
         raise HTTPException(status_code=404, detail=LLM_CONFIG_NOT_FOUND)
     ensure_config_access(session, actor, "llm", config_id, manage=manage)
-    return config_output(session, actor, "llm", data)
+    return decorate_defaults(session, actor, [config_output(session, actor, "llm", data)])[0]
 
 
 @router.get("/llm-configs")
@@ -99,7 +100,9 @@ def list_llm_configs(
         {
             "code": 200,
             "success": True,
-            "data": visible_configurations(session, actor, "llm", configs),
+            "data": decorate_defaults(
+                session, actor, visible_configurations(session, actor, "llm", configs)
+            ),
             "msg": "success",
         },
         ensure_ascii=False,
@@ -130,7 +133,10 @@ def create_llm_config(
     data["_business_id"] = business_id
     result = _application(session).create_config(data, scope_owner=None)
     _config_cache_clear()
-    return ApiResponse(data=config_output(session, actor, "llm", result), msg="LLM 配置已创建")
+    return ApiResponse(
+        data=decorate_defaults(session, actor, [config_output(session, actor, "llm", result)])[0],
+        msg="LLM 配置已创建",
+    )
 
 
 @router.put("/llm-configs/{config_id}", responses={404: {"description": "请求的资源不存在"}})
@@ -140,16 +146,21 @@ def update_llm_config(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
-    current = _readable_config(_application(session), actor, config_id, session, manage=True)
+    _readable_config(_application(session), actor, config_id, session, manage=True)
     data = payload.model_dump(exclude_unset=True)
-    guard_default_change(actor, data, current)
+    guard_default_change(actor, data)
+    if not actor.is_admin:
+        data.pop("is_default", None)
     # Keep historical ownership metadata; it no longer grants configuration access.
     data.pop("owner", None)
     updated = _application(session).update_config(config_id, data, scope_owner=None)
     if updated is None:
         raise HTTPException(status_code=404, detail=LLM_CONFIG_NOT_FOUND)
     _config_cache_clear()
-    return ApiResponse(data=config_output(session, actor, "llm", updated), msg="LLM 配置已更新")
+    return ApiResponse(
+        data=decorate_defaults(session, actor, [config_output(session, actor, "llm", updated)])[0],
+        msg="LLM 配置已更新",
+    )
 
 
 @router.delete(
@@ -163,7 +174,7 @@ def delete_llm_config(
 ) -> ApiResponse:
     config = _readable_config(_application(session), actor, config_id, session, manage=True)
     # 默认必须恒有一条：删掉当前默认会让"全都不是默认"，LLM 只能回退 env——先转移默认再删
-    if config.get("isDefault"):
+    if config.get("defaultReferenced"):
         raise HTTPException(status_code=409, detail="默认配置不能删除：请先将其他配置设为默认")
     policy = session.get(ConfigOwnership, ("llm", config_id))
     if policy is not None:
@@ -183,13 +194,16 @@ def set_default_llm_config(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
-    ensure_shared_config_manage(actor)
     _readable_config(_application(session), actor, config_id, session)
-    data = _application(session).set_default(config_id, scope_owner=None)
+    set_default_for_actor(session, actor, config_id)
+    data = _application(session).get_config(config_id)
     if data is None:
         raise HTTPException(status_code=404, detail=LLM_CONFIG_NOT_FOUND)
     _config_cache_clear()
-    return ApiResponse(data=config_output(session, actor, "llm", data), msg="已设为默认")
+    return ApiResponse(
+        data=decorate_defaults(session, actor, [config_output(session, actor, "llm", data)])[0],
+        msg="已设为默认",
+    )
 
 
 @router.post("/llm-configs/{config_id}/test")

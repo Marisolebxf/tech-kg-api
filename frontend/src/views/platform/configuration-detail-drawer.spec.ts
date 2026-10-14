@@ -27,6 +27,7 @@ const { state } = vi.hoisted(() => {
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     model: 'glm-4.7-flash',
     owner: 'admin',
+    canSetDefault: true,
     isDefault: true,
     status: '正常',
     hasApiKey: true,
@@ -102,7 +103,7 @@ describe('配置管理 · 管理抽屉编辑隔离', () => {
     const wrapper = mountView()
     await flushPromises()
     const row = wrapper.get('.config-table-wrap tbody tr')
-    expect(row.get('.config-id-col').text()).toBe('LLM-E2E公共图空间')
+    expect(row.get('.config-id-col').text()).toBe('LLM-E2E公共语言模型')
     expect(row.get('.config-name').text()).not.toContain('LLM-E2E')
     await row.get('.config-name').trigger('click')
     expect(wrapper.find('.detail-drawer').exists()).toBe(false)
@@ -193,6 +194,7 @@ describe('配置管理 · 管理抽屉编辑隔离', () => {
     // set-default 返回服务端视角：新默认开启，原默认已被 clear_other_defaults 关闭
     vi.mocked(setDefaultLlmConfig).mockImplementationOnce(async (id: string) => {
       state.current = { ...state.current, isDefault: false }
+      vi.mocked(listLlmConfigs).mockResolvedValueOnce([state.current, { ...other, isDefault: true }])
       return { ...other, isDefault: id === 'LLM-2' }
     })
     const wrapper = mountView()
@@ -204,7 +206,7 @@ describe('配置管理 · 管理抽屉编辑隔离', () => {
     await flushPromises()
     expect(setDefaultLlmConfig).toHaveBeenCalledWith('LLM-2', 'user-e2e')
     expect(updateLlmConfig).not.toHaveBeenCalled()
-    // 列表就地更新：新默认置顶显示「默认」，原默认变「设为默认」
+    // 重新拉取列表：新默认置顶显示「默认」，原默认变「设为默认」
     const toggles = wrapper.findAll('.config-usage-col .config-default-toggle').map((t) => t.text())
     expect(toggles[0]).toBe('默认')
     expect(toggles).toContain('设为默认')
@@ -514,7 +516,7 @@ describe('开发人员共享配置只读', () => {
 })
 
 describe('业务配置权限与归属', () => {
-  it.each(['llm', 'mysql'] as const)('%s：开发人员复用新建表单并管理本业务配置，默认权限不变', async (kind) => {
+  it.each(['llm', 'mysql'] as const)('%s：开发人员复用新建表单并管理本业务配置，模型可设置本业务默认', async (kind) => {
     setActivePinia(createPinia())
     vi.mocked(currentUserIsAdmin).mockReturnValue(false)
     const auth = useAuthStore()
@@ -536,13 +538,15 @@ describe('业务配置权限与归属', () => {
         await flushPromises()
       }
       expect(wrapper.get('.config-ownership').text()).toBe('亿级知识图谱')
+      expect(wrapper.findAll('.config-table-wrap thead th')[1]!.text()).toBe('标识 / 归属')
       const actions = wrapper.findAll('.row-actions button')
       expect(actions[0]!.text()).toBe('管理')
       expect(actions[1]!.attributes('disabled')).toBeUndefined()
       expect(actions[2]!.attributes('disabled')).toBeUndefined()
-      if (kind === 'llm') expect(wrapper.get('.config-default-toggle').attributes('disabled')).toBeDefined()
+      if (kind === 'llm') expect(wrapper.get('.config-default-toggle').attributes('disabled')).toBeUndefined()
       await actions[0]!.trigger('click')
       expect(wrapper.get('.detail-form input').attributes('disabled')).toBeUndefined()
+      expect(wrapper.findAll('.detail-form input').map(i => (i.element as HTMLInputElement).value)).toContain('亿级知识图谱')
       expect(wrapper.get('.detail-drawer footer button').attributes('disabled')).toBeUndefined()
       expect(wrapper.get('.health-card button').attributes('disabled')).toBeUndefined()
       await wrapper.get('.detail-drawer header button').trigger('click')
@@ -568,6 +572,59 @@ describe('业务配置权限与归属', () => {
     await flushPromises()
     expect(wrapper.findAll('.space-table th').map(cell => cell.text())).toEqual(['图空间名称 / 说明', '标识', '绑定状态', '操作'])
     expect(wrapper.findAll('.space-table tbody tr').map(row => row.findAll('td')[1]!.text())).toEqual(['亿级知识图谱', '公共图空间'])
+    wrapper.unmount()
+  })
+})
+
+
+describe('业务默认模型交互', () => {
+  it('开发人员可将继承的公共默认固定为业务默认，公共配置仍只读，状态以重拉结果为准', async () => {
+    setActivePinia(createPinia())
+    vi.mocked(currentUserIsAdmin).mockReturnValue(false)
+    useAuthStore().profile = { isAdmin: false, businessRbacEnabled: true, canDevelop: true } as ReturnType<typeof useAuthStore>['profile']
+    const { listLlmConfigs, setDefaultLlmConfig } = await import('../../api/llmConfig')
+    const inherited = { ...state.current, visibility: 'public' as const, canManage: false, canSetDefault: true, defaultReferenced: true, defaultSource: 'public' as const, isDefault: true }
+    vi.mocked(listLlmConfigs).mockResolvedValueOnce([inherited])
+    vi.mocked(setDefaultLlmConfig).mockImplementationOnce(async () => {
+      vi.mocked(listLlmConfigs).mockResolvedValueOnce([{ ...inherited, defaultSource: 'business' }])
+      return { ...inherited, defaultSource: 'business' }
+    })
+    const wrapper = mountView()
+    try {
+      await flushPromises()
+      const button = wrapper.get('.config-default-toggle')
+      expect(button.text()).toBe('跟随公共默认')
+      expect(button.attributes('disabled')).toBeUndefined()
+      expect(wrapper.get('.config-name .default-tag').text()).toBe('跟随公共默认')
+      const actions = wrapper.findAll('.row-actions button')
+      expect(actions[0]!.text()).toBe('查看')
+      expect(actions[1]!.attributes('disabled')).toBeDefined()
+      expect(actions[2]!.attributes('disabled')).toBeDefined()
+      await actions[0]!.trigger('click')
+      expect(wrapper.get('.detail-drawer .default-tag').text()).toBe('跟随公共默认')
+      await button.trigger('click')
+      await flushPromises()
+      expect(setDefaultLlmConfig).toHaveBeenLastCalledWith(inherited.id, 'user-e2e')
+      expect(wrapper.get('.config-default-toggle').text()).toBe('默认')
+      expect(wrapper.get('.config-default-toggle').attributes('disabled')).toBeDefined()
+      expect(wrapper.get('.detail-drawer .default-tag').text()).toBe('默认')
+    } finally {
+      wrapper.unmount()
+      vi.mocked(currentUserIsAdmin).mockReturnValue(true)
+    }
+  })
+
+  it('管理员不能把业务模型设为公共默认，被业务引用的非公共默认模型不能停用删除', async () => {
+    setActivePinia(createPinia())
+    const { listLlmConfigs } = await import('../../api/llmConfig')
+    vi.mocked(listLlmConfigs).mockResolvedValueOnce([{ ...state.current, visibility: 'business', canManage: true, canSetDefault: false, isDefault: false, defaultReferenced: true }])
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.get('.config-default-toggle').attributes('disabled')).toBeDefined()
+    const actions = wrapper.findAll('.row-actions button')
+    expect(actions[0]!.text()).toBe('管理')
+    expect(actions[1]!.attributes('disabled')).toBeDefined()
+    expect(actions[2]!.attributes('disabled')).toBeDefined()
     wrapper.unmount()
   })
 })

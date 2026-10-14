@@ -63,6 +63,9 @@ type ConfigItem = {
   visibility?: 'public' | 'business'
   businessName?: string
   canManage?: boolean
+  canSetDefault?: boolean
+  defaultSource?: 'business' | 'public'
+  defaultReferenced?: boolean
   kind: ConfigKind
   category: string
   name: string
@@ -337,7 +340,7 @@ function toConfigItem(kind: ConfigKind, cfg: LlmConfig | MysqlDatasource | Embed
   }
   if (kind === 'llm') {
     const c = cfg as LlmConfig
-    return { ...common, visibility: c.visibility, businessName: c.businessName, canManage: c.canManage, category: '语言模型', type: 'LLM API', endpoint: c.baseUrl, baseUrl: c.baseUrl, model: c.model, hasApiKey: c.hasApiKey, apiKeyMasked: c.apiKeyMasked }
+    return { ...common, visibility: c.visibility, businessName: c.businessName, canManage: c.canManage, canSetDefault: c.canSetDefault, defaultSource: c.defaultSource, defaultReferenced: c.defaultReferenced, category: '语言模型', type: 'LLM API', endpoint: c.baseUrl, baseUrl: c.baseUrl, model: c.model, hasApiKey: c.hasApiKey, apiKeyMasked: c.apiKeyMasked }
   }
   if (kind === 'embedding') {
     const c = cfg as EmbeddingConfig
@@ -628,8 +631,19 @@ async function testConnection(item: ConfigItem) {
   }
 }
 
+function defaultLabel(item: ConfigItem) {
+  return item.kind === 'llm' && !isAdmin.value && item.defaultSource === 'public' ? '跟随公共默认' : '默认'
+}
+function defaultProtected(item: ConfigItem) {
+  return item.kind === 'llm' ? item.defaultReferenced === true || item.isDefault : item.kind === 'embedding' && item.isDefault
+}
+// 归属小字：业务配置显示业务（图空间）名，公共配置按类型显示公共语言模型/公共数据库
+function ownershipLabel(item: ConfigItem) {
+  return item.visibility === 'business' ? item.businessName : item.kind === 'llm' ? '公共语言模型' : '公共数据库'
+}
 async function toggleItem(item: ConfigItem) {
   if (!canManageConfig(item)) return
+  if (item.status !== '停用' && defaultProtected(item)) return
   const nextStatus: ConfigStatus = item.status === '停用' ? '正常' : '停用'
   try {
     if (item.kind === 'llm') {
@@ -649,32 +663,36 @@ async function toggleItem(item: ConfigItem) {
 const defaultUpdating = ref(false)
 const hasCategoryDefault = computed(() => items.value.some(item => item.category === activeCategory.value && item.isDefault))
 function defaultSwitchDisabled(item: ConfigItem) {
-  // 默认必须恒有一条：当前默认不可取消（只能被"设为默认"替换），非默认随时可直接切换
+  if (item.kind === 'llm') return item.canSetDefault !== true || defaultUpdating.value || (item.isDefault && (isAdmin.value || item.defaultSource !== 'public')) || item.status === '停用'
   return !isAdmin.value || defaultUpdating.value || item.isDefault
 }
 async function toggleDefault(item: ConfigItem, value: unknown) {
   const enabled = value === true
-  if (!enabled || defaultSwitchDisabled(item) || enabled === item.isDefault) return
+  if (!enabled || defaultSwitchDisabled(item)) return
   defaultUpdating.value = true
   try {
-    let updated: ConfigItem
     if (item.kind === 'llm') {
-      updated = toConfigItem('llm', await setDefaultLlmConfig(item.id, currentUserId()))
-    } else if (item.kind === 'embedding') {
-      updated = toConfigItem('embedding', await setDefaultEmbeddingConfig(item.id, currentUserId()))
+      await setDefaultLlmConfig(item.id, currentUserId())
+      await loadByCategory(item.category)
+      if (selected.value?.kind === item.kind) {
+        const refreshed = items.value.find(other => other.id === selected.value?.id && other.kind === item.kind)
+        if (refreshed) selected.value = { ...selected.value, isDefault: refreshed.isDefault, defaultSource: refreshed.defaultSource, defaultReferenced: refreshed.defaultReferenced, usage: refreshed.usage }
+      }
     } else {
-      updated = toConfigItem('mysql', await setDefaultMysqlDatasource(item.id, currentUserId()))
-    }
-    items.value = items.value.map(other => {
-      if (other.id === item.id && other.kind === item.kind) return updated
-      if (other.kind === item.kind) return { ...other, isDefault: false, usage: buildUsage(other.kind, false) }
-      return other
-    })
-    if (selected.value?.id === item.id && selected.value.kind === item.kind) {
-      selected.value = { ...selected.value, isDefault: updated.isDefault, usage: updated.usage }
+      const updated = item.kind === 'embedding'
+        ? toConfigItem('embedding', await setDefaultEmbeddingConfig(item.id, currentUserId()))
+        : toConfigItem('mysql', await setDefaultMysqlDatasource(item.id, currentUserId()))
+      items.value = items.value.map(other => {
+        if (other.id === item.id && other.kind === item.kind) return updated
+        if (other.kind === item.kind) return { ...other, isDefault: false, usage: buildUsage(other.kind, false) }
+        return other
+      })
+      if (selected.value?.id === item.id && selected.value.kind === item.kind) {
+        selected.value = { ...selected.value, isDefault: updated.isDefault, usage: updated.usage }
+      }
     }
     resetConfigPage()
-    showToast(`“${item.name}”已设为默认，原默认已自动取消。`, 'success')
+    showToast(`“${item.name}”已设为${item.kind === 'llm' ? isAdmin.value ? '公共默认' : '本业务默认' : '默认'}。`, 'success')
   } catch (err) {
     showToast(`更新默认配置失败：${(err as Error).message}`, 'error')
   } finally {
@@ -688,7 +706,7 @@ const deleteSubmitting = ref(false)
 const deleteError = ref('')
 function removeConfig(item: ConfigItem) {
   if (!canManageConfig(item)) return
-  if ((item.kind === 'llm' || item.kind === 'embedding') && item.isDefault) {
+  if (defaultProtected(item)) {
     showToast('默认配置不能删除：请先将其他配置设为默认。', 'info')
     return
   }
@@ -787,11 +805,11 @@ onUnmounted(() => {
         </div>
         <div v-else ref="configTableRef" class="table-wrap config-table-wrap" :class="{ 'has-scroll-right': tableHasMoreToScroll, 'config-scroll--active': tableScrollActive }" @scroll.passive="handleConfigTableScroll">
           <table>
-            <thead><tr><th>配置名称 / 说明</th><th>标识</th><th>类型 / 地址</th><th class="config-status-col">状态</th><th v-if="isModelKind" class="config-usage-col">引用情况</th><th class="config-time-col">更新时间</th><th class="config-action-col">操作</th></tr></thead>
+            <thead><tr><th>配置名称 / 说明</th><th>标识 / 归属</th><th>类型 / 地址</th><th class="config-status-col">状态</th><th v-if="isModelKind" class="config-usage-col">引用情况</th><th class="config-time-col">更新时间</th><th class="config-action-col">操作</th></tr></thead>
             <tbody>
               <tr v-for="item in pagedItems" :key="item.id">
-                <td><div class="config-name"><span><strong>{{ item.name }}<b v-if="item.isDefault && isModelKind" class="default-tag">默认</b></strong><small v-if="item.description">{{ item.description }}</small></span></div></td>
-                <td class="config-id-col">{{ item.id }}<small v-if="item.kind !== 'embedding'" class="config-ownership">{{ item.visibility === 'business' ? item.businessName : '公共图空间' }}</small></td>
+                <td><div class="config-name"><span><strong>{{ item.name }}<b v-if="item.isDefault && isModelKind" class="default-tag">{{ defaultLabel(item) }}</b></strong><small v-if="item.description">{{ item.description }}</small></span></div></td>
+                <td class="config-id-col">{{ item.id }}<small v-if="item.kind !== 'embedding'" class="config-ownership">{{ ownershipLabel(item) }}</small></td>
                 <td><strong class="type-name">{{ item.type }}<template v-if="item.model"> · {{ item.model }}</template></strong><code>{{ item.baseUrl || item.host && `${item.host}:${item.port}` || item.endpoint }}</code></td>
                 <td class="config-status-col"><span class="status" :class="`is-${item.status}`"><i />{{ item.status }}</span></td>
                 <td v-if="isModelKind" class="config-usage-col">
@@ -803,16 +821,16 @@ onUnmounted(() => {
                     :aria-pressed="item.isDefault"
                     :aria-busy="defaultUpdating"
                     :aria-label="item.isDefault ? `当前默认：${item.name}` : `将${item.name}设为默认配置`"
-                    :title="item.isDefault ? '默认配置必须保留一条；如需更换，请将其他配置设为默认' : '设为默认配置（自动替换当前默认）'"
+                    :title="item.kind === 'llm' && !isAdmin ? item.defaultSource === 'public' && item.isDefault ? '当前跟随公共默认；点击将此模型固定为本业务默认' : '设为本业务默认，不影响其他业务' : item.isDefault ? '如需更换，请将其他配置设为默认' : '设为默认配置'"
                     @click.stop="toggleDefault(item, true)"
-                  ><span class="config-default-toggle__dot" aria-hidden="true" />{{ item.isDefault ? '默认' : '设为默认' }}</button>
+                  ><span class="config-default-toggle__dot" aria-hidden="true" />{{ item.isDefault ? defaultLabel(item) : '设为默认' }}</button>
                 </td>
                 <td class="config-time-col"><small class="updated">{{ item.updatedAt }}</small></td>
                 <td class="config-action-col">
                   <div class="row-actions">
                     <button class="link" type="button" @click.stop="openDetail(item)">{{ canManageConfig(item) ? '管理' : '查看' }}</button>
-                    <button class="link" type="button" :disabled="!canManageConfig(item) || isModelKind && item.isDefault && item.status !== '停用'" :title="isModelKind && item.isDefault && item.status !== '停用' ? '默认配置不能停用' : ''" @click.stop="toggleItem(item)">{{ item.status === '停用' ? '启用' : '停用' }}</button>
-                    <button class="link danger" type="button" :disabled="!canManageConfig(item) || isModelKind && item.isDefault" :title="isModelKind && item.isDefault ? '默认配置不能删除，请先将其他配置设为默认' : ''" @click.stop="removeConfig(item)">删除</button>
+                    <button class="link" type="button" :disabled="!canManageConfig(item) || defaultProtected(item) && item.status !== '停用'" :title="defaultProtected(item) && item.status !== '停用' ? '默认配置不能停用' : ''" @click.stop="toggleItem(item)">{{ item.status === '停用' ? '启用' : '停用' }}</button>
+                    <button class="link danger" type="button" :disabled="!canManageConfig(item) || defaultProtected(item)" :title="defaultProtected(item) ? '默认配置不能删除，请先将其他配置设为默认' : ''" @click.stop="removeConfig(item)">删除</button>
                   </div>
                 </td>
               </tr>
@@ -846,12 +864,13 @@ onUnmounted(() => {
     <Teleport to="body">
       <button v-if="selected" class="mask" type="button" aria-label="关闭" @click="selected=null" />
       <aside v-if="selected" class="detail-drawer">
-      <header><div><h2>{{ selected.name }}<b v-if="selected.isDefault" class="default-tag">默认</b></h2><span class="config-id">{{ selected.id }}</span></div><button type="button" @click="selected=null">×</button></header>
+      <header><div><h2>{{ selected.name }}<b v-if="selected.isDefault" class="default-tag">{{ defaultLabel(selected) }}</b></h2><span class="config-id">{{ selected.id }}</span></div><button type="button" @click="selected=null">×</button></header>
       <div class="detail-drawer-body">
         <section class="health-card"><i :class="`is-${selected.status}`" /><div><strong>{{ selected.status === '正常' ? '配置可用' : selected.status === '异常' ? '连接存在异常' : '配置已停用' }}</strong><span>{{ selected.status === '停用' ? '停用期间不进行连接测试，启用后可测' : '后端真实探活' }}</span></div><button type="button" :disabled="!canManageConfig(selected) || testingId === selected.id || selected.status === '停用'" :title="selected.status === '停用' ? '停用状态下不可测试连接，请先启用' : ''" @click="testConnection(selected)">{{ testingId === selected.id ? '测试中…' : '测试连接' }}</button></section>
         <a-form :model="selected" class="detail-form" layout="vertical">
           <a-form-item field="name" label="配置名称" required><input :disabled="!canManageConfig(selected)" aria-label="name" v-model="selected.name" :aria-invalid="Boolean(detailFieldErrors.name)" /><small v-if="detailFieldErrors.name" class="field-error">{{ detailFieldErrors.name }}</small></a-form-item>
           <a-form-item label="服务类型"><input :disabled="!canManageConfig(selected)" aria-label="input-field" :value="selected.type" readonly /></a-form-item>
+          <a-form-item v-if="selected.kind !== 'embedding'" label="归属"><input :disabled="!canManageConfig(selected)" aria-label="input-field" :value="ownershipLabel(selected)" readonly /></a-form-item>
           <template v-if="selected.kind === 'llm' || selected.kind === 'embedding'">
             <a-form-item class="wide" field="baseUrl" label="Base URL" required><input :disabled="!canManageConfig(selected)" aria-label="baseUrl" v-model="selected.baseUrl" :aria-invalid="Boolean(detailFieldErrors.baseUrl)" /><small v-if="detailFieldErrors.baseUrl" class="field-error">{{ detailFieldErrors.baseUrl }}</small></a-form-item>
             <a-form-item field="model" label="模型" required><input :disabled="!canManageConfig(selected)" aria-label="model" v-model="selected.model" :aria-invalid="Boolean(detailFieldErrors.model)" /><small v-if="detailFieldErrors.model" class="field-error">{{ detailFieldErrors.model }}</small></a-form-item>

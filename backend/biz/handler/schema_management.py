@@ -457,7 +457,18 @@ async def verify_and_save_script(
     流前失败（schema 不存在 / 无权限）→ HTTP 4xx；流中失败 → ``type=error`` 事件。
     整个校验/保存流程在单一专用线程中驱动，使用独立 Session，避免跨线程会话。
     """
-    _schema_access(actor, session, schema_id, "write")
+    definition = _schema_access(actor, session, schema_id, "write")
+    from service.llm_context import (
+        request_llm_business,
+        request_llm_settings,
+        selected_llm_business,
+    )
+
+    business_id = (
+        await asyncio.to_thread(request_llm_business, actor, definition.graph_space)
+        if definition is not None
+        else None
+    )
     app = _application(session)
     script_data = await script.read(max_script_bytes() + 1)
 
@@ -465,6 +476,9 @@ async def verify_and_save_script(
     loop = asyncio.get_running_loop()
 
     def run() -> None:
+        # run_in_executor does not copy the async request's context. Bind and reset in this worker.
+        business_token = selected_llm_business.set(business_id)
+        settings_token = request_llm_settings.set({})
         try:
             for event in app.verify_and_save_script(
                 schema_id=schema_id,
@@ -487,6 +501,8 @@ async def verify_and_save_script(
                 },
             )
         finally:
+            request_llm_settings.reset(settings_token)
+            selected_llm_business.reset(business_token)
             loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
 
     worker = loop.run_in_executor(None, run)

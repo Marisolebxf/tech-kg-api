@@ -297,10 +297,10 @@ describe('平台总览构成饼图随数据驱动', () => {
         { key: 'entity', title: '实体数据', total: '900', totalLabel: '实体总量', added: '+5', addedLabel: '昨日新增' },
       ],
       assetChangeRows: {
-        entity: Array.from({ length: 30 }, (_, idx) => ({
+        // 聚合格式：行 = 写入块（执行 × 来源），数量列 = 该块 written 计数
+        entity: Array.from({ length: 30 }, () => ({
           type: '审测挂件',
-          object: `总览造数-实体${String(idx + 1).padStart(2, '0')}`,
-          change: '新增 ReviewWidget',
+          count: 1,
           source: 'techkg_e2e_liz.review_widgets',
           time: '11:57:41',
         })),

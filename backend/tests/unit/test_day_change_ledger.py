@@ -201,6 +201,9 @@ def test_snapshot_from_ledger_builds_totals_and_descriptors(monkeypatch):
     # 明细按完成时刻倒序（事件 15:47:06 在专家 15:47:04 前）
     assert snap.entity_rows[0].object.startswith("事件 · 200")
     assert snap.entity_rows[1].object == "科技专家 · 100 条"
+    # 聚合格式：数量列 = 台账 object_count 精确计数
+    assert snap.entity_rows[0].count == 200
+    assert snap.entity_rows[1].count == 100
     assert snap.entity_rows[1].time == "10-13 15:47:04"  # 展示格式 MM-DD HH:MM:SS
     assert snap.entity_rows[1].is_aggregate is True
     assert snap.relation_rows[0].exec_status == "ABNORMAL"
@@ -242,29 +245,28 @@ class _FakeEngine:
 
 
 def test_load_prefers_ledger_snapshot(monkeypatch):
-    """台账有账：_load 直接构造快照进 enrich，不查 workflow_executions。"""
+    """台账有账：_load 直接返回台账快照——不查 workflow_executions、也不连图
+    （聚合格式 2026-10-14：反查链路未接线，连图即视为回归）。"""
     import infra.workflow_mysql as wfm
 
     def _no_engine():
         raise AssertionError("台账命中时不应再查执行记录表")
 
     monkeypatch.setattr(wfm, "get_workflow_engine", _no_engine)
+
+    def _no_enrich(snapshot, space, connect_client=None):  # pragma: no cover - 到这里即失败
+        raise AssertionError("聚合格式下 _load 不应再连图反查")
+
+    monkeypatch.setattr(overview, "enrich_day_rows_with_graph", _no_enrich)
     monkeypatch.setattr(overview, "load_ledger_day", lambda *a, **k: [_ledger_row()])
-    seen = {}
-
-    def _capture(snapshot, space, connect_client=None):
-        seen["snapshot"] = snapshot
-        return snapshot
-
-    monkeypatch.setattr(overview, "enrich_day_rows_with_graph", _capture)
     provider = overview.WorkflowControlDayChangesProvider()
     snap = provider._load("2026-10-13", "gkx_verify_1")
     assert snap.entity_added == 100
-    assert seen["snapshot"] is snap  # 台账快照原样交给 enrich（闸门/反查语义不变）
+    assert snap.entity_rows[0].count == 100  # 数量列 = 台账精确计数
 
 
 def test_load_falls_back_to_payload_parsing_when_ledger_empty(monkeypatch):
-    """台账无账：回落 payload 现算（旧执行/未部署栈的兜底路径不变）。"""
+    """台账无账：回落 payload 现算（旧执行/未部署栈的兜底路径），同样不连图。"""
     monkeypatch.setattr(overview, "load_ledger_day", lambda *a, **k: [])
     import infra.workflow_mysql as wfm
 
@@ -275,16 +277,14 @@ def test_load_falls_back_to_payload_parsing_when_ledger_empty(monkeypatch):
         "parse_execution_records",
         lambda *a, **k: marker,
     )
-    seen = {}
 
-    def _capture(snapshot, space, connect_client=None):
-        seen["snapshot"] = snapshot
-        return snapshot
+    def _no_enrich(snapshot, space, connect_client=None):  # pragma: no cover - 到这里即失败
+        raise AssertionError("聚合格式下 _load 不应再连图反查")
 
-    monkeypatch.setattr(overview, "enrich_day_rows_with_graph", _capture)
+    monkeypatch.setattr(overview, "enrich_day_rows_with_graph", _no_enrich)
     provider = overview.WorkflowControlDayChangesProvider()
     snap = provider._load("2026-10-13", "dev2")
-    assert snap is marker and seen["snapshot"] is marker
+    assert snap is marker
 
 
 def test_ledger_snapshot_still_respects_lookup_gate(monkeypatch):

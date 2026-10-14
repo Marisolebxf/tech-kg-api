@@ -641,45 +641,22 @@ const assetChangeRows = ref<Record<AssetOverviewKey, AssetChangeRow[]>>({
   entity: [],
   relation: [],
 })
-// 合计与逐对象明细同源；无法完整读取时显示错误，不能把写入合计当成明细数。
+// 聚合格式（2026-10-14）：一行 = 一个写入块（执行×来源），合计按控制库 written
+// 精确计数（对象数口径，与行数是两回事）；控制库不可读时显示错误占位。
 const assetChangeTotals = ref<Partial<Record<AssetOverviewKey, number>>>({})
 const assetChangeErrors = ref<Partial<Record<AssetOverviewKey, string>>>({})
-// 明细搜索：只筛「已加载」的行（大写入日明细截断到上限），不触发后端查询
-const assetChangeKeyword = ref('')
-watch(selectedAssetChange, () => {
-  assetChangeKeyword.value = ''
-})
-const assetChangeFilteredRows = computed(() => {
+const activeAssetChangeRows = computed(() => {
   const key = selectedAssetChange.value
-  if (!key) return []
-  const keyword = assetChangeKeyword.value.trim().toLowerCase()
-  const rows = assetChangeRows.value[key]
-  if (!keyword) return rows
-  return rows.filter(
-    (row) =>
-      row.object.toLowerCase().includes(keyword) ||
-      row.type.toLowerCase().includes(keyword) ||
-      row.source.toLowerCase().includes(keyword),
-  )
+  return key ? assetChangeRows.value[key] ?? [] : []
 })
-// 截断提示：合计精确、明细行受上限保护时如实告知（共 N 条，展示前 M 条）
-function assetChangeTruncatedText(key: AssetOverviewKey | null): string {
-  if (!key) return ''
-  const total = assetChangeTotals.value[key]
-  const shown = assetChangeRows.value[key]?.length ?? 0
-  if (!total || shown >= total) return ''
-  return `共 ${total.toLocaleString()} 条，展示前 ${shown.toLocaleString()} 条`
-}
 function assetChangeFooterText(key: AssetOverviewKey | null): string {
   if (!key) return ''
-  const truncated = assetChangeTruncatedText(key)
-  if (truncated) return truncated
   if (assetChangeErrors.value[key]) {
     const shown = assetChangeRows.value[key].length
-    return shown ? `已读取 ${shown} 条明细，部分明细暂不可读取` : '新增明细暂不可读取'
+    return shown ? `已读取 ${shown} 条变化，部分暂不可读取` : '新增明细暂不可读取'
   }
   const total = assetChangeTotals.value[key] ?? assetChangeRows.value[key].length
-  return `${total.toLocaleString()} 条变化`
+  return `共 ${total.toLocaleString()} 条变化`
 }
 // 中断/失败执行也计入昨日新增（已落图批次是真实写入）：行内标注终态，
 // 不与正常完成行混淆；ABNORMAL 是含行级失败记录，标「部分失败」
@@ -1447,24 +1424,6 @@ function openProcessDetail(area: 'processing' | 'construction', taskId: string, 
   })
 }
 
-function openAssetChangeTask(row: AssetChangeRow) {
-  if (!canEnterAdminPages.value) return
-  if (!row.jobId) {
-    // 有 taskId 说明控制库有执行记录、但不是 job 通道下发（回填/中断执行）——
-    // 与「旧执行未记录任务」区分提示，指向不同排查方向
-    showToast(
-      row.taskId
-        ? '该记录来自非任务通道执行（回填或中断），未关联图谱构建任务'
-        : '该记录未关联图谱构建任务',
-      'info',
-    )
-    return
-  }
-  // 跳图谱构建区内的正常任务详情页（与图谱构建列表点任务同一动线、导航高亮），
-  // 不再落 /task-detail 专用页——该路由不在左侧导航，落地后无归属无返回动线。
-  void router.push({ name: 'job-detail', params: { jobId: row.jobId } })
-}
-
 function handleExecuteService() {
   // 测试页签是接口示例控制台：执行按钮不发起真实调用，只如实提示。
   showToast('当前为接口示例，未发起真实调用；请到对应业务功能页发起真实查询', 'info')
@@ -2216,33 +2175,16 @@ print(response.json())</pre>
         <header><div><span>昨日图谱数据变化</span><h2>{{ activeAssetOverview.title }}新增明细</h2><p>{{ activeAssetOverview.addedLabel }} {{ activeAssetOverview.added }} · 统计日 {{ overviewMeta.statsDay || '—' }} · 数据更新至 {{ overviewMeta.updatedAt }}</p></div><button type="button" aria-label="关闭新增数据详情" @click="selectedAssetChange = null">×</button></header>
         <section class="asset-change-summary"><article><span>当前总量</span><strong>{{ activeAssetOverview.total }}</strong></article><article><span>{{ activeAssetOverview.addedLabel }}</span><strong>{{ activeAssetOverview.added }}</strong></article></section>
         <div class="asset-change-toolbar">
-          <input v-model="assetChangeKeyword" type="text" placeholder="搜索已加载明细（对象 / 类型 / 来源）" aria-label="搜索昨日新增明细" />
-          <span v-if="assetChangeErrors[selectedAssetChange] || assetChangeTruncatedText(selectedAssetChange)" class="asset-change-hint">{{ assetChangeErrors[selectedAssetChange] || assetChangeTruncatedText(selectedAssetChange) }}</span>
+          <span v-if="assetChangeErrors[selectedAssetChange]" class="asset-change-hint">{{ assetChangeErrors[selectedAssetChange] }}</span>
         </div>
         <div class="asset-change-table">
           <table aria-label="数据表">
-            <thead><tr><th>数据类型</th><th>具体对象</th><th>来源</th><th>识别时间</th></tr></thead>
+            <thead><tr><th>数据类型</th><th>数量</th><th>来源</th><th>识别时间</th></tr></thead>
             <tbody>
-              <tr v-if="!assetChangeRows[selectedAssetChange].length"><td colspan="4">{{ assetChangeErrors[selectedAssetChange] || '昨日暂无写图记录' }}</td></tr>
-              <tr v-else-if="!assetChangeFilteredRows.length"><td colspan="4">已加载明细中没有匹配「{{ assetChangeKeyword }}」的记录</td></tr>
-              <tr
-                v-else
-                v-for="(row, idx) in assetChangeFilteredRows"
-                :key="row.objectId || `${row.type}-${row.object}-${row.time}-${idx}`"
-                :class="{ 'is-clickable': canEnterAdminPages && row.jobId }"
-                :tabindex="canEnterAdminPages && row.jobId ? 0 : undefined"
-                :aria-label="canEnterAdminPages && row.jobId ? `查看${row.object}的图谱构建任务` : undefined"
-                @click="openAssetChangeTask(row)"
-                @keydown.enter.prevent="openAssetChangeTask(row)"
-                @keydown.space.prevent="openAssetChangeTask(row)"
-              >
+              <tr v-if="!activeAssetChangeRows.length"><td colspan="4">{{ assetChangeErrors[selectedAssetChange] || '昨日暂无写图记录' }}</td></tr>
+              <tr v-else v-for="(row, idx) in activeAssetChangeRows" :key="`${row.type}-${row.source}-${row.time}-${idx}`">
                 <td>{{ row.type }}<em v-if="interruptedStatusTone(row.execStatus)" class="asset-change-status" :class="{ 'is-failed': row.execStatus === 'FAILED' }">{{ interruptedStatusTone(row.execStatus) }}</em></td>
-                <td>
-                  <a-tooltip :popup-visible="assetTipVisible.has(`obj-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`obj-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip">
-                    <span class="asset-change-object" @mouseenter="showAssetTipIfTruncated(`obj-${idx}`, $event)" @mouseleave="hideAssetTip(`obj-${idx}`)"><strong>{{ row.object }}</strong></span>
-                    <template #content>{{ row.object }}</template>
-                  </a-tooltip>
-                </td>
+                <td class="asset-change-count">{{ row.count.toLocaleString() }}</td>
                 <td>
                   <a-tooltip :popup-visible="assetTipVisible.has(`src-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`src-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip">
                     <code class="asset-change-source" @mouseenter="showAssetTipIfTruncated(`src-${idx}`, $event)" @mouseleave="hideAssetTip(`src-${idx}`)">{{ row.source }}</code>
@@ -4877,9 +4819,9 @@ print(response.json())</pre>
 .asset-change-drawer{position:fixed;z-index:50;top:0;right:0;display:grid;grid-template-rows:auto auto auto minmax(0,1fr) auto;width:min(820px,78vw);height:100vh;background:#f8fbff;box-shadow:-18px 0 42px rgba(34,74,132,.22)}
 .asset-change-drawer>header{display:flex;align-items:flex-start;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.asset-change-drawer>header span{color:#004ecc;font-size:11px}.asset-change-drawer h2{margin:6px 0 3px;font-size:20px}.asset-change-drawer header p{margin:0;color:#718098;font-size:12px}.asset-change-drawer header>button{width:31px;height:31px;border:0;border-radius:5px;background:transparent;color:#52647f;font-size:20px;cursor:pointer}
 .asset-change-summary{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:14px}.asset-change-summary article{display:grid;gap:5px;padding:14px;border:1px solid #c7dcfb;border-radius:7px;background:#fff}.asset-change-summary span{color:#718098;font-size:11px}.asset-change-summary strong{color:#004ecc;font-size:24px}.asset-change-summary article:last-child strong{color:#067647}
-.asset-change-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 14px 12px;flex-wrap:wrap}.asset-change-toolbar input{flex:0 0 280px;height:32px;padding:0 10px;border:1px solid #c7dcfb;border-radius:5px;background:#fff;color:#344861;font-size:12px}.asset-change-toolbar input:focus{border-color:#004ecc;outline:2px solid rgba(0,78,204,.18);outline-offset:-1px}.asset-change-hint{color:#8a6116;font-size:11px}
+.asset-change-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 14px 12px;flex-wrap:wrap}.asset-change-hint{color:#8a6116;font-size:11px}
 .asset-change-status{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:4px;background:#fff4e5;color:#8a6116;font-size:10px;font-style:normal;line-height:16px;vertical-align:1px}.asset-change-status.is-failed{background:#fdecea;color:#b42318}
-.asset-change-table{min-height:0;overflow:auto;padding:0 14px 14px}.asset-change-table table{width:100%;border-collapse:collapse;border:1px solid #dce8f8;background:#fff;font-size:12px}.asset-change-table th,.asset-change-table td{height:48px;padding:10px 12px;border-bottom:1px solid #e3ebf6;text-align:left}.asset-change-table th{position:sticky;top:0;background:#f3f7fc;color:#62728a}.asset-change-table td{color:#344861}.asset-change-table code{color:#004ecc;font-family:inherit}.asset-change-table td .asset-change-object{display:inline-block;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}.asset-change-table td .asset-change-source{display:inline-block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
+.asset-change-table{min-height:0;overflow:auto;padding:0 14px 14px}.asset-change-table table{width:100%;border-collapse:collapse;border:1px solid #dce8f8;background:#fff;font-size:12px}.asset-change-table th,.asset-change-table td{height:48px;padding:10px 12px;border-bottom:1px solid #e3ebf6;text-align:left}.asset-change-table th{position:sticky;top:0;background:#f3f7fc;color:#62728a}.asset-change-table td{color:#344861}.asset-change-table code{color:#004ecc;font-family:inherit}.asset-change-table td.asset-change-count{font-weight:600;font-variant-numeric:tabular-nums}.asset-change-table td .asset-change-source{display:inline-block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 .asset-change-table tr.is-clickable{cursor:pointer}.asset-change-table tr.is-clickable:focus-visible{background:#f4f8ff;outline:2px solid #004ecc;outline-offset:-2px}
 .asset-change-drawer>footer{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.asset-change-drawer>footer span{color:#718098;font-size:11px}.asset-change-drawer>footer a{height:32px;padding:0 12px;border-radius:5px;background:#004ecc;color:#fff;font-size:11px;line-height:32px;text-decoration:none}
 @media(max-width:760px){.asset-change-drawer{width:94vw}.asset-change-table table{min-width:700px}}

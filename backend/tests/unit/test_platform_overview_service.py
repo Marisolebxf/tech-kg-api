@@ -356,11 +356,15 @@ def test_stats_provider_rest_fallback_when_cache_missing() -> None:
     assert snapshot.edges == {"PUBLISH": 5}
 
 
-def test_overview_does_not_present_control_plane_totals_as_individual_changes() -> None:
+def test_overview_presents_aggregate_blocks_with_written_totals() -> None:
+    """聚合格式（2026-10-14）：写入块行如实展示，徽标/合计按控制库 written 精确
+    计数（对象数口径，与行数是两回事）；不再有「聚合行藏起来等图反查」「未完整
+    读取」的中间态。"""
     from biz.schemas.platform_overview import AssetChangeRow
 
     aggregate = AssetChangeRow(
         type="论文",
+        count=32,
         object="论文 · 32 条",
         change="新增 Paper",
         source="paper",
@@ -376,56 +380,45 @@ def test_overview_does_not_present_control_plane_totals_as_individual_changes() 
         stats_provider=FakeStatsProvider(), changes_provider=changes
     ).get_overview("dev2")
     assert changes.spaces == ["dev2"]
-    assert [group.added for group in result.asset_overview_groups] == ["--", "--"]
+    assert [group.added for group in result.asset_overview_groups] == ["+32", "+7"]
     assert result.pending_batch_count == 3
-    assert result.asset_change_rows == {"entity": [], "relation": []}
-    assert result.asset_change_totals == {"entity": 0, "relation": 0}
-    assert set(result.asset_change_errors) == {"entity", "relation"}
-    assert "assetChangeErrors" in result.model_dump(by_alias=True)
-    assert all("暂未完整读取" in message for message in result.asset_change_errors.values())
+    assert result.asset_change_rows == {"entity": [aggregate], "relation": []}
+    assert result.asset_change_totals == {"entity": 32, "relation": 7}
+    assert result.asset_change_errors == {}
+    # 数量列随接口序列化；逐对象时代的 object/change 不再外发
+    dumped = result.model_dump(by_alias=True)["assetChangeRows"]["entity"]
+    assert dumped[0]["count"] == 32
+    assert "object" not in dumped[0] and "change" not in dumped[0]
 
 
-def test_overview_badge_counts_graph_rows_when_lookup_exact() -> None:
-    """徽标与抽屉同数：图反查逐对象成功（exact）时徽标/合计=明细行数——控制库
-    written 只数 COMPLETED/ABNORMAL 的抽取，时间窗反查圈住的是图内昨日真实
-    写入对象（ewrdf 实测 written 合计 +4 vs 图内 13 条）；反查降级才回退
-    written 合计。"""
+def test_overview_badge_uses_written_totals_regardless_of_row_shape() -> None:
+    """徽标/合计=控制库 written 合计（聚合格式 2026-10-14 口径）：不再依赖
+    rows_exact/gated 标志（反查闸门随逐对象展示一并退役），行集原样透传。"""
     from biz.schemas.platform_overview import AssetChangeRow
 
     entity_rows = [
         AssetChangeRow(
             type="专家",
-            object=f"专家{index:02d}",
+            count=4,
+            object="专家 · 4 条",
             change="新增 expert",
             source="ewrdf_test.t_expert",
             time="10-10 04:20:02",
+            is_aggregate=True,
         )
-        for index in range(1, 14)
     ]
     result = PlatformOverviewService(
         stats_provider=FakeStatsProvider(),
         changes_provider=FakeChangesProvider(
-            DayChangesSnapshot(
-                entity_added=4,
-                relation_added=0,
-                entity_rows_exact=True,
-                entity_rows=entity_rows,
-            )
-        ),
-    ).get_overview("ewrdf")
-
-    assert result.asset_overview_groups[0].added == "+13"  # 与抽屉 13 行同数
-    assert result.asset_change_totals == {"entity": 13, "relation": 0}
-
-    degraded = PlatformOverviewService(
-        stats_provider=FakeStatsProvider(),
-        changes_provider=FakeChangesProvider(
+            # exact/gated 均为默认 False：聚合格式下装配层不再读这两个标志
             DayChangesSnapshot(entity_added=4, relation_added=0, entity_rows=entity_rows)
         ),
     ).get_overview("ewrdf")
-    assert degraded.asset_overview_groups[0].added == "--"  # 未完整读取时不冒充新增总数
-    assert degraded.asset_change_totals == {"entity": 13, "relation": 0}
-    assert "entity" in degraded.asset_change_errors
+
+    assert result.asset_overview_groups[0].added == "+4"  # written 精确计数
+    assert result.asset_change_totals == {"entity": 4, "relation": 0}
+    assert result.asset_change_rows["entity"] == entity_rows
+    assert result.asset_change_errors == {}
 
 
 def test_overview_running_count_is_live_not_frozen_in_day_snapshot() -> None:
@@ -650,6 +643,7 @@ def test_parse_execution_records_aggregates_day_by_kind_and_space() -> None:
     row = snapshot.entity_rows[0]
     assert row.type == "审测挂件"
     assert row.object == "审测挂件 · 5 条"
+    assert row.count == 5  # 聚合格式：数量列 = 该来源 written 精确计数
     assert row.change == "新增 review-widget-64d0d5"
     assert row.source == "techkg_e2e_liz.review_widgets"
     assert row.task_id == "TASK-overview-test"
@@ -1693,18 +1687,13 @@ def test_match_budget_expiry_never_reports_a_partial_page_as_complete(monkeypatc
     )  # 内部写入统计保留，不伪装成逐对象行。
 
 
-def test_failed_day_snapshot_retries_then_caches_recovered_details(monkeypatch) -> None:
-    from dataclasses import replace
-
+def test_day_changes_failure_propagates_then_success_freezes(monkeypatch) -> None:
+    """聚合格式（2026-10-14）：快照只来自控制库——读失败直接上抛（由总览装配
+    层兜底占位），不再有「反查降级短缓存 60s 重试」的中间态；读成即冻结到当天。"""
     import service.platform_overview as overview
 
-    clock = [0.0]
-    monkeypatch.setattr(overview.time, "monotonic", lambda: clock[0])
-    failed = parse_execution_records(
-        [_execution_record(written=32)], day="2026-09-22", target_space="dev2", default_space="dev2"
-    )
-    recovered = replace(failed, entity_rows_exact=True, entity_rows=[])
-    loads = []
+    snapshot = overview.DayChangesSnapshot(day="2026-09-22", entity_added=1)
+    loads: list[tuple[str, str | None]] = []
 
     class Provider(overview.WorkflowControlDayChangesProvider):
         def _current_day(self):
@@ -1712,16 +1701,15 @@ def test_failed_day_snapshot_retries_then_caches_recovered_details(monkeypatch) 
 
         def _load(self, day, space):
             loads.append((day, space))
-            return failed if len(loads) == 1 else recovered
+            if len(loads) == 1:
+                raise RuntimeError("control db down")
+            return snapshot
 
     provider = Provider()
-    assert provider.get_day_changes("dev2") is failed
-    clock[0] = 30
-    assert provider.get_day_changes("dev2") is failed
-    clock[0] = 61
-    assert provider.get_day_changes("dev2") is recovered
-    clock[0] = 10000
-    assert provider.get_day_changes("dev2") is recovered
+    with pytest.raises(RuntimeError):
+        provider.get_day_changes("dev2")
+    assert provider.get_day_changes("dev2") is snapshot
+    assert provider.get_day_changes("dev2") is snapshot  # 读成后冻结到当天，不再重算
     assert len(loads) == 2
 
 
@@ -2022,17 +2010,20 @@ def test_overview_caps_change_rows_and_keeps_full_totals() -> None:
     assert "entity" not in result.asset_change_errors
 
 
-def test_overview_gated_day_shows_written_total_and_aggregate_rows() -> None:
-    """闸门日：徽标按控制库写图计数给出，明细保留聚合行并明确提示口径。"""
+def test_overview_large_write_day_shows_written_total_without_gate_text() -> None:
+    """大写入日（原闸门日）：聚合格式下反查闸门退役——徽标/合计按控制库写图
+    计数精确给出，写入块行如实展示，不再有「超出反查上限」的降级文案。"""
     from biz.schemas.platform_overview import AssetChangeRow as Row
 
     snapshot = DayChangesSnapshot(
         entity_added=6_170_000,
+        # exact/gated 是逐对象时代标志：装配层已不再读取（反查闸门随聚合格式退役）
         entity_rows_exact=False,
         entity_gated=True,
         entity_rows=[
             Row(
                 type="专利",
+                count=6_170_000,
                 object="专利 · 6,170,000 条",
                 change="新增 tag-patent",
                 source="gkx.dwd_patent",
@@ -2050,10 +2041,10 @@ def test_overview_gated_day_shows_written_total_and_aggregate_rows() -> None:
 
     assert result.asset_change_totals["entity"] == 6_170_000
     assert result.asset_overview_groups[0].added == "+617.00 万"
-    # 聚合行保留（闸门日不隐藏）
+    # 写入块行保留（大写入日不隐藏），中断终态行内标注
     assert len(result.asset_change_rows["entity"]) == 1
     assert result.asset_change_rows["entity"][0].exec_status == "TERMINATED"
-    assert "超出逐对象反查上限" in result.asset_change_errors["entity"]
+    assert result.asset_change_errors == {}
 
 
 def test_overview_cache_hard_limit_forces_sync_recompute() -> None:

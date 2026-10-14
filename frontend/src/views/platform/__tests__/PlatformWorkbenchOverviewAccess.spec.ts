@@ -147,27 +147,27 @@ describe('平台总览管理入口按角色隐藏', () => {
   })
 })
 
-describe('昨日新增明细跳转更新任务', () => {
+describe('昨日新增聚合格式展示', () => {
   function withAssetChanges(overrides: Partial<PlatformOverviewData> = {}) {
     vi.mocked(getPlatformOverview).mockResolvedValue({
       platformStatus: '平台运行正常', pendingBatchCount: 0, updatedAt: '02:00',
       dataMode: 'partial', warnings: [], dataSources: {},
       entityStructure: [], relationStructure: [],
       assetOverviewGroups: [
-        { key: 'entity', title: '实体数据', total: '2', totalLabel: '实体总量', added: '+2', addedLabel: '昨日新增' },
-        { key: 'relation', title: '关系数据', total: '1', totalLabel: '关系总量', added: '+1', addedLabel: '昨日新增' },
+        { key: 'entity', title: '实体数据', total: '237', totalLabel: '实体总量', added: '+23.7万', addedLabel: '昨日新增' },
+        { key: 'relation', title: '关系数据', total: '64', totalLabel: '关系总量', added: '+64', addedLabel: '昨日新增' },
       ],
       assetChangeRows: {
         entity: [
-          { type: '论文', object: '论文甲', change: '新增', source: 'paper', time: '10-11 02:00:00', taskId: 'TASK-paper-a', jobId: 'job-paper-a' },
-          { type: '论文', object: '论文乙', change: '新增', source: 'paper', time: '10-11 02:00:00', taskId: 'TASK-paper-b', jobId: 'job-paper-b' },
-          { type: '论文', object: '直跑论文', change: '新增', source: 'paper', time: '10-11 01:30:00', taskId: 'TASK-direct' },
-          { type: '论文', object: '历史论文', change: '新增', source: 'paper', time: '10-11 01:00:00' },
+          { type: '论文', count: 200000, source: 'gkx.dwd_paper', time: '10-11 02:00:00', taskId: 'TASK-paper-a', jobId: 'job-paper-a' },
+          { type: '论文', count: 37000, source: 'gkx.dwd_paper_en', time: '10-11 01:30:00', taskId: 'TASK-direct' },
+          { type: '专利', count: 5, source: 'legacy.patent', time: '10-11 01:00:00', execStatus: 'TERMINATED' },
         ],
         relation: [
-          { type: '作者', object: '专家 → 论文', change: '新增', source: 'paper', time: '10-11 02:00:00', taskId: 'TASK-author', jobId: 'job-author' },
+          { type: '作者', count: 64, source: 'gkx.dwd_author', time: '10-11 02:00:00', taskId: 'TASK-author', jobId: 'job-author' },
         ],
       },
+      assetChangeTotals: { entity: 237005, relation: 64 },
       ...overrides,
     })
   }
@@ -179,24 +179,21 @@ describe('昨日新增明细跳转更新任务', () => {
     await buttons[index]!.trigger('click')
   }
 
-  it('新增32时展示32条真实记录，同名同时间记录各自保留', async () => {
+  it('行=写入块：数量列展示精确计数，合计按对象数口径，不再逐对象展示', async () => {
     useAuthStore().profile = makeProfile(true)
-    withAssetChanges({
-      assetOverviewGroups: [{ key: 'entity', title: '实体数据', total: '137', totalLabel: '实体总量', added: '+32', addedLabel: '昨日新增' }],
-      assetChangeRows: {
-        entity: Array.from({ length: 32 }, (_, index) => ({ type: '论文', object: '同名论文', objectId: `p-${index}`, taskId: `TASK-${index}`, jobId: `job-${index}`, change: '新增', source: 'paper', time: '10-11 02:00:00' })),
-        relation: [],
-      },
-      assetChangeTotals: { entity: 32, relation: 0 },
-    })
+    withAssetChanges()
     await openChanges()
-    expect(wrapper.find('.asset-change-drawer').text()).toContain('+32')
+    const drawer = wrapper.find('.asset-change-drawer')
+    // 表头为聚合格式四列，不再有「具体对象」列
+    expect(drawer.find('thead').text()).toContain('数量')
+    expect(drawer.find('thead').text()).not.toContain('具体对象')
     const rows = wrapper.findAll('.asset-change-table tbody tr')
-    expect(rows).toHaveLength(32)
-    expect(wrapper.find('.asset-change-drawer footer').text()).toContain('32 条变化')
-    expect(wrapper.find('.asset-change-drawer').text()).not.toContain('展示前')
-    await rows[31]!.trigger('click')
-    expect(routerPush).toHaveBeenLastCalledWith({ name: 'job-detail', params: { jobId: 'job-31' } })
+    expect(rows).toHaveLength(3)
+    // 数量列千分位格式，中断执行行内标注
+    expect(rows[0]!.text()).toContain('200,000')
+    expect(rows[2]!.text()).toContain('已中断')
+    // 左下角合计 = 控制库 written 精确计数（对象数口径，与行数 3 是两回事）
+    expect(drawer.find('footer').text()).toContain('共 237,005 条变化')
   })
 
   it('明细暂不可读时显示读取失败，不显示汇总行或暂无新增', async () => {
@@ -204,55 +201,31 @@ describe('昨日新增明细跳转更新任务', () => {
     withAssetChanges({
       assetOverviewGroups: [{ key: 'entity', title: '实体数据', total: '137', totalLabel: '实体总量', added: '--', addedLabel: '昨日新增' }],
       assetChangeRows: { entity: [], relation: [] },
-      assetChangeErrors: { entity: '实体新增明细暂未完整读取，请稍后重试' },
+      assetChangeErrors: { entity: '实体新增明细暂不可读取，请稍后重试' },
       assetChangeTotals: { entity: 0, relation: 0 },
     })
     await openChanges()
     const drawer = wrapper.find('.asset-change-drawer')
-    expect(drawer.text()).toContain('实体新增明细暂未完整读取，请稍后重试')
+    expect(drawer.text()).toContain('实体新增明细暂不可读取，请稍后重试')
     expect(drawer.text()).not.toContain('昨日暂无写图记录')
-    expect(drawer.text()).not.toContain('展示前')
     expect(drawer.find('footer').text()).toContain('新增明细暂不可读取')
   })
 
-  it('按钮显示查看更新任务；点击不同实体行按各自任务直达图谱构建任务详情', async () => {
+  it('行不再可点击跳转任务；底部保留查看更新任务入口', async () => {
     useAuthStore().profile = makeProfile(true)
     withAssetChanges()
     await openChanges()
     expect(wrapper.find('.asset-change-drawer footer a').text()).toBe('查看更新任务')
     expect(wrapper.find('.asset-change-drawer footer a').attributes('to')).toBe('/graph-build')
     const rows = wrapper.findAll('.asset-change-table tbody tr')
-    await rows[0]!.find('strong').trigger('click')
-    expect(routerPush).toHaveBeenLastCalledWith({ name: 'job-detail', params: { jobId: 'job-paper-a' } })
-    await rows[1]!.trigger('click')
-    expect(routerPush).toHaveBeenLastCalledWith({ name: 'job-detail', params: { jobId: 'job-paper-b' } })
-  })
-
-  it('关系行支持 Enter 和空格键进入对应任务', async () => {
-    useAuthStore().profile = makeProfile(true)
-    withAssetChanges()
-    await openChanges(1)
-    const row = wrapper.find('.asset-change-table tbody tr')
-    expect(row.attributes('tabindex')).toBe('0')
-    await row.trigger('keydown', { key: 'Enter' })
-    await row.trigger('keydown', { key: ' ' })
-    expect(routerPush).toHaveBeenCalledTimes(2)
-    expect(routerPush).toHaveBeenLastCalledWith({ name: 'job-detail', params: { jobId: 'job-author' } })
-  })
-
-  it('缺少图谱构建任务的记录给出提示，不猜测或跳转任务', async () => {
-    useAuthStore().profile = makeProfile(true)
-    withAssetChanges()
-    await openChanges()
-    // 行2：直跑执行有 taskId 但无 jobId；行3：历史记录两者皆无——都不再跳转
-    const rows = wrapper.findAll('.asset-change-table tbody tr')
-    for (const row of [rows[2]!, rows[3]!]) {
+    for (const row of rows) {
       expect(row.classes()).not.toContain('is-clickable')
       expect(row.attributes('tabindex')).toBeUndefined()
       await row.trigger('click')
+      await row.trigger('keydown', { key: 'Enter' })
     }
     expect(routerPush).not.toHaveBeenCalled()
-    expect(showToast).toHaveBeenCalledWith('该记录未关联图谱构建任务', 'info')
+    expect(showToast).not.toHaveBeenCalled()
   })
 
   it('普通用户仍可看新增明细，但没有管理跳转入口', async () => {
@@ -264,7 +237,6 @@ describe('昨日新增明细跳转更新任务', () => {
     expect(row.classes()).not.toContain('is-clickable')
     expect(row.attributes('tabindex')).toBeUndefined()
     await row.trigger('click')
-    await row.trigger('keydown', { key: 'Enter' })
     expect(routerPush).not.toHaveBeenCalled()
   })
 })

@@ -26,39 +26,35 @@ class _IntegrationStatsProvider:
 
 
 class _IntegrationChangesProvider:
-    """控制库昨日增量替身：避免集成测试依赖真实 techkg_control 数据。"""
+    """控制库昨日增量替身：避免集成测试依赖真实 techkg_control 数据。
+
+    聚合格式（2026-10-14）：一行 = 一个写入块（执行 × 来源），数量列 = 该块
+    written 精确计数，徽标/合计同口径。"""
 
     def get_day_changes(self, space: str | None = None) -> DayChangesSnapshot:
-        # 逐对象反查成功的真实形状：rows_exact=True 时徽标/合计与明细行数同口径
         return DayChangesSnapshot(
             entity_added=5,
             relation_added=2,
-            entity_rows_exact=True,
-            relation_rows_exact=True,
             running_count=1,
             entity_rows=[
                 AssetChangeRow(
                     type="审测挂件",
-                    object=f"总览造数-挂件{index:02d}",
-                    change="新增 审测挂件",
+                    count=5,
                     source="techkg_e2e_liz.review_widgets",
                     time="09-22 10:30:00",
                     task_id="TASK-overview-test",
                     job_id="job-overview-test",
                 )
-                for index in range(1, 6)
             ],
             relation_rows=[
                 AssetChangeRow(
                     type="审测关联",
-                    object=f"总览造数-挂件{index:02d} → 总览造数-挂件{index + 1:02d}",
-                    change="新增 审测关联",
+                    count=2,
                     source="techkg_e2e_liz.review_widgets",
                     time="09-22 10:30:00",
                     task_id="TASK-overview-test",
                     job_id="job-overview-test",
                 )
-                for index in range(1, 3)
             ],
         )
 
@@ -97,16 +93,19 @@ async def test_platform_overview_returns_frontend_contract(
     assert data["updatedAt"][2] == ":"
     # 资产卡只有实体/关系两类（属性值占位卡随演示数据清理一并删除）
     assert [item["key"] for item in data["assetOverviewGroups"]] == ["entity", "relation"]
-    # 昨日新增来自工作流控制库替身：rows_exact=True 时徽标与明细行数同口径
+    # 昨日新增来自工作流控制库替身：徽标/合计按 written 精确计数（聚合格式）
     assert data["assetOverviewGroups"][0]["added"] == "+5"
     assert data["assetOverviewGroups"][0]["addedLabel"] == "昨日新增"
     assert data["assetOverviewGroups"][1]["added"] == "+2"
-    assert len(data["assetChangeRows"]["entity"]) == 5
-    assert data["assetChangeRows"]["entity"][0]["change"] == "新增 审测挂件"
-    # 明细行携带图谱构建任务 ID：行点击跳 /graph-build/jobs 用
+    assert len(data["assetChangeRows"]["entity"]) == 1
+    # 数量列 = 写入块 written 计数；行携带图谱构建任务 ID
+    assert data["assetChangeRows"]["entity"][0]["count"] == 5
     assert data["assetChangeRows"]["entity"][0]["jobId"] == "job-overview-test"
     assert data["assetChangeRows"]["entity"][0]["taskId"] == "TASK-overview-test"
-    assert len(data["assetChangeRows"]["relation"]) == 2
+    # 逐对象时代的 object/change 列不再随接口序列化
+    assert "object" not in data["assetChangeRows"]["entity"][0]
+    assert "change" not in data["assetChangeRows"]["entity"][0]
+    assert len(data["assetChangeRows"]["relation"]) == 1
     assert set(data["assetChangeRows"]) == {"entity", "relation"}
     # 纯演示字段已删：响应里不再有最新动态/管理风险/环形图中心数
     assert "latestChanges" not in data

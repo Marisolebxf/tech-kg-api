@@ -41,14 +41,13 @@ from service.day_change_ledger import (
 _SWEEP_QUERY_TIMEOUT_SECONDS = float(os.getenv("PLATFORM_OVERVIEW_QUERY_TIMEOUT_SECONDS", "8"))
 _MATCH_PAGE_SIZE = 1000
 _MATCH_BUDGET_SECONDS = float(os.getenv("PLATFORM_OVERVIEW_MATCH_BUDGET_SECONDS", "8"))
-_DAY_CHANGES_RETRY_SECONDS = 60
 # 计入昨日新增的终态集合（2026-10-14 口径）：ABNORMAL = 抽取完成但含行级失败
 # 记录，图已写入；TERMINATED/CANCELED/FAILED 是中断终态，已落图的批次同样是
 # 真实写入（gkx_verify_1 案例：中断执行写了数百万实体却整段不可见）——统一按
 # written>0 过滤噪声，不再只认 COMPLETED/ABNORMAL。
 _TERMINAL_STATUSES = ("COMPLETED", "ABNORMAL", "TERMINATED", "CANCELED", "FAILED")
-# 明细展示上限（2026-10-14 口径）：大写入日全量序列化会拖垮接口与页面渲染；
-# 合计仍按全量精确计数，明细行截断到上限，页面提示「共 N 条，展示前 M 条」。
+# 明细展示上限（2026-10-14 口径）：聚合格式下一行是一个写入块（执行×来源），
+# 全天行数与执行数同量级、天然几十行封顶，此上限仅作序列化保险丝。
 _CHANGE_ROWS_MAX = int(os.getenv("PLATFORM_OVERVIEW_CHANGE_ROWS_MAX", "1000"))
 # 逐对象反查闸门：控制库 written 合计超过该量时跳过该类图反查——百万级写入的
 # LOOKUP 全窗扫描会长时间占住共享图会话池并把冷算拖到分钟级，聚合行 + 明确
@@ -169,17 +168,18 @@ class ExtractExecutionInfo:
 class DayChangesSnapshot:
     """昨日写图增量（来自工作流控制库，按图空间过滤）。
 
-    entity/relation_added 为昨日完成执行的 ``output.sources[].written`` 合计；
-    ``*_rows_exact`` 表示该类执行是否全部反查成逐对象明细行（含如实 0 命中）——
-    True 时行数即昨日图内真实写入对象数（去重后），「昨日新增」徽标按行数计数、
-    与抽屉明细同数；False 表示有执行退回内部聚合行，页面去除汇总行并提示明细
-    未完整读取，不以 written 合计冒充新增实体数。running_count 为当前 RUNNING 执行数；
-    图反查成功时为逐对象行（数据类型=五类桶、具体对象=name/两端名、
-    来源=source_table），失败时退回 ``*_executions`` 里各执行携带的聚合降级行。
+    2026-10-14 起页面按**聚合格式**展示：``*_rows`` 一行 = 一个写入块
+    （统计日 × 空间 × kind × Schema × 执行 × 来源），``count`` 为该块 written
+    精确计数，不再对图做逐对象反查（反查链路 ``enrich_day_rows_with_graph``
+    保留在库、单测覆盖，恢复对象级明细时重新接线）。entity/relation_added
+    为昨日完成执行的 ``output.sources[].written`` 合计——徽标与左下角合计
+    直接用它，与行数（写入块数）是两个口径。running_count 为当前 RUNNING 执行数。
     """
 
     entity_added: int = 0
     relation_added: int = 0
+    # 逐对象时代遗留标志：聚合格式下装配层不再依赖（快照来自控制库，读成即定局）；
+    # 仍由反查链路内部维护，字段保留以免大改 enrich 语义
     entity_rows_exact: bool = False
     relation_rows_exact: bool = False
     running_count: int = 0
@@ -190,8 +190,8 @@ class DayChangesSnapshot:
     # 统计日（日窗口时区自然日，YYYY-MM-DD）：随快照透出，页面「统计日」标签与
     # 缓存核对直接用它，不再靠前端自行推算「昨天」
     day: str = ""
-    # 逐对象反查被闸门跳过（written 合计超 _LOOKUP_WRITTEN_LIMIT）：徽标按控制库
-    # 写图计数精确给出，明细为执行聚合行——与「反查失败」的降级语义区分开
+    # 逐对象反查闸门标志（written 合计超 _LOOKUP_WRITTEN_LIMIT 时反查跳过）：
+    # 聚合格式下反查不再接线，装配层不再读取；由 enrich 内部维护
     entity_gated: bool = False
     relation_gated: bool = False
 
@@ -241,9 +241,9 @@ def parse_execution_records(
     """从控制库执行记录 JSON 解析统计日（昨日）写图增量（纯函数，便于单测）。
 
     只统计 ``target_space`` 空间的执行；未记录空间的旧执行按默认空间归属。
-    明细行列语义对齐 kgetl 演示行：类型 = Schema 名、变更内容 = 新增 + schemaKey、
-    来源 = 物理源表名、时间 = 完成时刻；具体对象因执行 output 无逐对象清单，
-    以「Schema 名 · N 条」聚合描述。
+    聚合格式（2026-10-14 转正）：一行 = 一个写入块（执行 × 来源表），
+    类型 = Schema 名、数量 = 该来源 written 计数、来源 = 物理源表名、
+    时间 = 完成时刻；执行 output 无逐对象清单，不做对象级展示。
     """
     entity_added = 0
     relation_added = 0
@@ -286,10 +286,8 @@ def parse_execution_records(
             if kind not in ("entity", "relation") or written <= 0:
                 continue
             schema_label = str(output.get("schemaLabel") or output.get("schemaKey") or "")
-            # 明细行列语义对齐 kgetl 演示行：变更内容 = 新增 + Schema 英文标识（schemaKey），
-            # 来源 = 物理源表名。执行 output 只携带 written 计数、无逐对象清单
-            # （载荷 S3 中转默认关闭，无 records artifact 可查），故具体对象列降级为
-            # 「Schema 名 · N 条」的诚实聚合描述，不编造对象名。
+            # 聚合格式：数量列 = 该来源表的 written 精确计数；object/change 是逐对象
+            # 时代的内部描述字段（不序列化），反查链路与单测仍在用
             schema_key = str(
                 output.get("schemaKey") or schema_label or ("实体" if kind == "entity" else "关系")
             )
@@ -309,6 +307,7 @@ def parse_execution_records(
                     continue
                 row = AssetChangeRow(
                     type=display_label,
+                    count=source_written,
                     object=f"{display_label} · {source_written:,} 条",
                     change=change,
                     source=str(source.get("table") or source.get("source") or "-"),
@@ -370,11 +369,10 @@ def _snapshot_from_ledger(
 ) -> DayChangesSnapshot | None:
     """从写图台账（P1 写时记账）构造统计日快照；当日无账返回 None 回落现算。
 
-    台账行自带精确计数（save_execution 覆盖式落账），聚合行直接成表；
-    图反查描述由台账行按（执行 × kind × Schema）聚合而成——window_hi 仍放宽
-    到统计日终点、台账未记水位故 window_lo 退统计日起点（比水位窗宽，宁可
-    多查靠归属匹配兜底），enrich 的反查/闸门/降级语义与现算路径完全一致：
-    量小于闸门仍逐对象反查（明细带对象名），超限走聚合行。"""
+    台账行自带精确计数（save_execution 覆盖式落账），聚合格式下直接成表——
+    一行 = 一个写入块（执行 × 来源），count 即台账 object_count，无需再查图。
+    图反查描述仍按（执行 × kind × Schema）聚合保留（反查链路未接线时的重接
+    挂点）：window_hi 放宽到统计日终点、台账未记水位故 window_lo 退统计日起点。"""
     rows = load_ledger_day(day, target_space, default_space)
     if not rows:
         return None
@@ -404,6 +402,7 @@ def _snapshot_from_ledger(
             relation_added += count
         row = AssetChangeRow(
             type=label,
+            count=count,
             object=f"{label} · {count:,} 条",
             change=f"新增 {schema_key}",
             source=str(row_data.get("source") or "-"),
@@ -485,8 +484,9 @@ class WorkflowControlDayChangesProvider:
     覆盖平台唯一写图通道 ``kg.schema.extract`` 的执行记录；直连 ETL 脚本与
     T_DIRECT 审核直写不经过控制库，不计入（明细行口径即任务中心执行历史）。
     昨日是闭合窗口——统计日结束后不会再有新执行落进该窗口，结果按
-    (空间, 日期) 进程内缓存到当天结束；反查失败的快照仅短缓存 60 秒后重试，
-    避免临时故障导致全天不显示明细。
+    (空间, 日期) 进程内缓存到当天结束。聚合格式（2026-10-14）下快照只来自
+    控制库（台账或 payload 现算），读成即定局、不再有「反查降级短缓存重试」
+    的中间态；控制库不可读直接上抛，由总览装配层兜底占位。
     """
 
     # 抽取执行最长可跑数小时：取 7 天窗口兜住跨日完成的长执行
@@ -495,7 +495,6 @@ class WorkflowControlDayChangesProvider:
     def __init__(self) -> None:
         self._cached_day: str | None = None
         self._cached: dict[str | None, DayChangesSnapshot] = {}
-        self._retry_at: dict[str | None, float] = {}
 
     def _current_day(self) -> str:
         """统计日 = 日窗口时区（默认北京）自然日的昨天；北京 00:00 翻日。"""
@@ -505,28 +504,14 @@ class WorkflowControlDayChangesProvider:
         day = self._current_day()
         if self._cached_day == day:
             cached = self._cached.get(space)
-            if cached is not None and time.monotonic() < self._retry_at.get(space, float("inf")):
+            if cached is not None:
                 return cached
         snapshot = self._load(day, space)
         if self._cached_day != day:
             # 跨日翻页：旧统计日的缓存整体作废
             self._cached_day = day
             self._cached = {}
-            self._retry_at = {}
         self._cached[space] = snapshot
-        # 闸门跳过反查的类同样算「已定局」：大写入日的聚合展示不随 60s 重试重算
-        complete = (
-            not snapshot.entity_executions or snapshot.entity_rows_exact or snapshot.entity_gated
-        ) and (
-            not snapshot.relation_executions
-            or snapshot.relation_rows_exact
-            or snapshot.relation_gated
-        )
-        # 临时故障/无索引的降级快照不能冻结一整天；失败后短缓存并重试。
-        if complete:
-            self._retry_at.pop(space, None)
-        else:
-            self._retry_at[space] = time.monotonic() + _DAY_CHANGES_RETRY_SECONDS
         return snapshot
 
     def running_count(self, space: str | None = None) -> int:
@@ -568,12 +553,15 @@ class WorkflowControlDayChangesProvider:
 
         target_space = space or TRSGraphSettings.from_env().space
         default_space = TRSGraphSettings.from_env().space
-        # P1 快路径：写图台账有当日账（save_execution 写时记账）则直接构造快照，
-        # 仍走同一 enrich（量小于反查闸门时逐对象反查出对象名）；台账无账
-        # （旧执行 / 未部署本代码的栈写入）回落 payload 现算，两条路径同口径
+        # P1 快路径：写图台账有当日账（save_execution 写时记账）则直接构造快照；
+        # 台账无账（旧执行 / 未部署本代码的栈写入）回落 payload 现算，两条路径
+        # 同口径。聚合格式（2026-10-14）下两路产出的写入块行即最终明细，**不再
+        # 连图反查**——页面与图库彻底解耦，大写入日也不再有闸门/降级分支；
+        # 反查链路（enrich_day_rows_with_graph 及其辅助）保留在库、单测覆盖，
+        # 恢复对象级明细时在此重新接线。
         ledger_snapshot = _snapshot_from_ledger(day, target_space, default_space)
         if ledger_snapshot is not None:
-            return enrich_day_rows_with_graph(ledger_snapshot, space)
+            return ledger_snapshot
         now = datetime.now().astimezone()
         since = (now - timedelta(days=self._LOOKBACK_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
         engine = get_workflow_engine()
@@ -587,20 +575,17 @@ class WorkflowControlDayChangesProvider:
                 {"since": since},
             )
             payloads = [row[0] for row in result.fetchall()]
-        return enrich_day_rows_with_graph(
-            parse_execution_records(
-                payloads,
-                day=day,
-                target_space=target_space,
-                default_space=default_space,
-            ),
-            space,
+        return parse_execution_records(
+            payloads,
+            day=day,
+            target_space=target_space,
+            default_space=default_space,
         )
 
 
-# ---- 昨日新增明细行：按图内对象逐行展示（图反查） ------------------------------
-# 明细全量展示不截断（2026-10-10 用户口径：有多少条数据就展示多少条），仅保留
-# 端点名批量 FETCH 的分批大小：合并此前逐 vid 一次 FETCH 的 ~百次串行 HTTP
+# ---- 昨日新增逐对象反查链路（2026-10-14 起未接线，单测覆盖保留能力） ----------
+# 聚合格式转正后 _load 不再调用本节；页面不再做图反查。对象级明细若恢复
+# （如 P2 后台收割式方案落地），在此把 enrich_day_rows_with_graph 接回 _load 即可。
 _FETCH_PROP_BATCH = 50
 # 顶点「对象名」取值候选：公共字段 name 优先，历史 ETL tag 无字面 name 时按
 # 域定制键回退（Person=name_cn、Keyword=keyword、Paper=title_zh…）
@@ -1434,57 +1419,24 @@ class PlatformOverviewService:
             except Exception as exc:
                 logger.warning("首页昨日新增读取失败（工作流控制库不可用）: %s", exc)
             if changes is not None:
-                # 侧栏只展示真实逐对象明细；Σwritten 包含更新/重跑，不可冒充新增实体数。
-                # 明细行截断到展示上限，合计仍按全量精确计数（2026-10-14 口径）；
-                # 反查闸门跳过的类例外——聚合行如实展示，徽标按控制库写图计数给出。
+                # 聚合格式（2026-10-14）：行 = 写入块（执行 × 来源），徽标与左下角
+                # 合计按控制库 written 精确计数（台账/现算同口径），不再有反查闸门、
+                # 逐对象行数对账与「未完整读取」中间态——控制库读成即定局。
                 change_rows: dict[str, list[AssetChangeRow]] = {}
                 change_totals: dict[str, int] = {}
                 change_errors: dict[str, str] = {}
-                for key, rows, exact, gated, written in (
-                    (
-                        "entity",
-                        changes.entity_rows,
-                        changes.entity_rows_exact,
-                        changes.entity_gated,
-                        changes.entity_added,
-                    ),
-                    (
-                        "relation",
-                        changes.relation_rows,
-                        changes.relation_rows_exact,
-                        changes.relation_gated,
-                        changes.relation_added,
-                    ),
+                for key, rows, written in (
+                    ("entity", changes.entity_rows, changes.entity_added),
+                    ("relation", changes.relation_rows, changes.relation_added),
                 ):
-                    label = "实体" if key == "entity" else "关系"
-                    if gated and written > 0:
-                        change_rows[key] = rows[:_CHANGE_ROWS_MAX]
-                        change_totals[key] = written
-                        change_errors[key] = (
-                            f"{label}当日写入 {_format_count(written)} 条，超出逐对象"
-                            "反查上限，明细按执行聚合展示"
-                        )
-                        continue
-                    detail = [row for row in rows if not row.is_aggregate]
-                    change_rows[key] = detail[:_CHANGE_ROWS_MAX]
-                    change_totals[key] = len(detail)
-                    if not exact and written > 0:
-                        change_errors[key] = f"{label}新增明细暂未完整读取，请稍后重试"
+                    change_rows[key] = rows[:_CHANGE_ROWS_MAX]
+                    change_totals[key] = written
                 entity_count = change_totals["entity"]
                 relation_count = change_totals["relation"]
-                # 有数才显示 +N；当日为 0 或读不到一律占位 --，标签统一不带括号说明。
-                # 徽标只在口径可信时给出：逐对象完整读取（=行数）或闸门日（=写图计数）
+                # 有数才显示 +N；当日为 0 或读不到一律占位 --，标签统一不带括号说明
                 added_label = "昨日新增"
-                entity_added = (
-                    f"+{_format_count(entity_count)}"
-                    if entity_count and (changes.entity_rows_exact or changes.entity_gated)
-                    else "--"
-                )
-                relation_added = (
-                    f"+{_format_count(relation_count)}"
-                    if relation_count and (changes.relation_rows_exact or changes.relation_gated)
-                    else "--"
-                )
+                entity_added = f"+{_format_count(entity_count)}" if entity_count else "--"
+                relation_added = f"+{_format_count(relation_count)}" if relation_count else "--"
                 day_source = "workflow-control-live"
                 extra_warnings = list(change_errors.values())
             else:

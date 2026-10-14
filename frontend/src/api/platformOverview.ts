@@ -17,15 +17,15 @@ export interface AssetOverviewGroup {
 
 export interface AssetChangeRow {
   type: string
-  object: string
-  change: string
+  /** 该写入块（执行×来源）的对象数：控制库 written 精确计数。 */
+  count: number
   source: string
   time: string
   /** 工作流控制库中的真实任务 ID；兼容没有任务关联的历史记录。 */
   taskId?: string | null
-  /** 同一条执行所属的图谱构建任务（job-xxx）；行点击跳 /graph-build/jobs 用。 */
+  /** 同一条执行所属的图谱构建任务（job-xxx）；与 taskId 同源。 */
   jobId?: string | null
-  /** 图对象唯一 ID；同名实体也各自展示一行。 */
+  /** 图对象唯一 ID；聚合格式下写入块行不再携带（保留字段兼容）。 */
   objectId?: string | null
   /** 写图执行终态；中断执行（TERMINATED/CANCELED/FAILED）也计入昨日新增，行内标注「已中断/失败」。 */
   execStatus?: string | null
@@ -56,7 +56,7 @@ export interface PlatformOverviewData {
   statsDay?: string
   assetOverviewGroups: AssetOverviewGroup[]
   assetChangeRows: Record<AssetOverviewKey, AssetChangeRow[]>
-  /** 昨日新增的实际逐对象记录数，与侧栏明细同源。 */
+  /** 昨日新增对象数合计（控制库 written 精确计数），抽屉左下角「共 N 条变化」同源。 */
   assetChangeTotals?: Partial<Record<AssetOverviewKey, number>>
   assetChangeErrors?: Partial<Record<AssetOverviewKey, string>>
   entityStructure: StructureItem[]

@@ -78,7 +78,9 @@ ON DUPLICATE KEY UPDATE
 _select_cols = (
     "stats_day, graph_space, kind, schema_key, schema_label, execution_id, source, "
     "object_count, exec_status, task_id, job_id, "
-    "DATE_FORMAT(finished_at, '%Y-%m-%d %H:%M:%S') AS finished_at"
+    # 分钟在 MySQL DATE_FORMAT 里是 %i（%M 是月份全名——曾把 02:30 渲染成
+    # 02:October，线上 ?day= 回看台账路径实测发现）；勿按 Python strftime 习惯写
+    "DATE_FORMAT(finished_at, '%Y-%m-%d %H:%i:%S') AS finished_at"
 )
 
 _ensure_lock = threading.Lock()

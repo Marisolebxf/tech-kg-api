@@ -343,3 +343,12 @@ def test_sync_upserts_rows_within_session(monkeypatch):
         lambda engine=None: pytest.fail("无账不应 ensure 建表"),
     )
     assert ledger.sync_execution_to_ledger(_NoopSession(), {"id": "E", "output": {}}) == 0
+
+
+def test_select_cols_minutes_use_mysql_specifier():
+    """读端 DATE_FORMAT 的分钟必须是 MySQL 的 %i——%M 在 MySQL 里是月份全名，
+    曾把台账行时间渲染成「02:October:39」（线上 ?day= 回看实测发现，单测无真
+    MySQL 才漏网）。守 SQL 片段本身，防再按 Python strftime 习惯改回去。"""
+    cols = ledger._select_cols
+    assert "%H:%i:%S" in cols
+    assert "%H:%M:%S" not in cols

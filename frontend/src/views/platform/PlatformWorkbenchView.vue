@@ -666,11 +666,11 @@ function assetChangeFooterText(key: AssetOverviewKey | null): string {
   return `共 ${total.toLocaleString()} 条变化`
 }
 // 中断/失败执行也计入昨日新增（已落图批次是真实写入）：行内标注终态，
-// 不与正常完成行混淆；ABNORMAL 是含行级失败记录，标「部分失败」
+// 不与正常完成行混淆。ABNORMAL（含行级失败）不标注——数量列只计成功写入，
+// 标「部分失败」会让人误以为行上的数里有失败的，失败行走任务详情/人工审核看
 function interruptedStatusTone(status?: string | null): string {
   if (status === 'TERMINATED' || status === 'CANCELED') return '已中断'
   if (status === 'FAILED') return '失败'
-  if (status === 'ABNORMAL') return '部分失败'
   return ''
 }
 // 新增明细对象/来源列的悬浮浮窗只在文本确实被截断时出现（未截断不出框）：

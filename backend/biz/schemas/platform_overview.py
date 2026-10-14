@@ -43,6 +43,9 @@ class AssetChangeRow(CamelCaseModel):
     # 与 task_id 同源（同一条执行记录），旧执行未记录时留空。
     job_id: str | None = None
     object_id: str | None = None
+    # 写图执行的终态（COMPLETED/ABNORMAL/TERMINATED/CANCELED/FAILED）：中断执行
+    # 也计入昨日新增（已落图批次是真实写入），页面据此对中断行标注「已中断/失败」。
+    exec_status: str | None = None
     # 控制库写入合计仅供内部诊断，不作为逐对象明细交给页面。
     is_aggregate: bool = Field(default=False, exclude=True)
 
@@ -70,6 +73,9 @@ class PlatformOverviewData(CamelCaseModel):
     platform_status: str
     pending_batch_count: int
     updated_at: str
+    # 统计日（日窗口时区自然日，YYYY-MM-DD）：昨日新增实际归属的日子，页面直接
+    # 展示它，不再自行推算「昨天」——多 worker 缓存异常时用户一眼可辨
+    stats_day: str = ""
     asset_overview_groups: list[AssetOverviewGroup]
     asset_change_rows: dict[AssetOverviewKey, list[AssetChangeRow]]
     # 与逐对象明细同源：完整读取时，徽标、合计和实际记录数一致。

@@ -1528,8 +1528,8 @@ def test_overview_serves_stale_value_and_refreshes_in_background() -> None:
     assert provider.calls == 1
 
     # 把缓存条目拨成过期（模拟 TTL 到期后的下一次进页）
-    _, data = service._cached["dev2"]
-    service._cached["dev2"] = (time.monotonic() - 1, data)
+    _, stored, data = service._cached["dev2"]
+    service._cached["dev2"] = (time.monotonic() - 1, stored, data)
 
     started = time.perf_counter()
     again = service.get_overview("dev2")
@@ -1537,7 +1537,7 @@ def test_overview_serves_stale_value_and_refreshes_in_background() -> None:
     assert time.perf_counter() - started < 1.0
 
     for _ in range(100):  # 等后台线程写回新值
-        if service._cached["dev2"][1] is not first:
+        if service._cached["dev2"][2] is not first:
             break
         time.sleep(0.02)
     assert provider.calls == 2
@@ -1737,3 +1737,344 @@ def test_old_source_watermark_cannot_include_objects_before_yesterday() -> None:
         default_space="dev2",
     )
     assert snapshot.entity_executions[0].window_lo == "2026-09-21 16:00:00"
+
+
+# ---- 2026-10-14 P0：chain 展开、中断终态、归属兜底、反查闸门、明细上限 ----
+
+
+def test_completed_in_day_tz_parses_offset_suffix() -> None:
+    """chain 环级时间自带 "+08:00" 偏移：完整解析不随 api 进程时区漂移。"""
+    from service.platform_overview import _completed_in_day_tz
+
+    offset_local = _completed_in_day_tz("2026-10-13 15:39:32+08:00")
+    assert offset_local is not None
+    assert offset_local.strftime("%Y-%m-%d %H:%M") == "2026-10-13 15:39"
+    # ISO 'T' 分隔 + 偏移同样可解析
+    iso_local = _completed_in_day_tz("2026-10-13T15:39:32+08:00")
+    assert iso_local is not None
+    assert iso_local.strftime("%Y-%m-%d") == "2026-10-13"
+    # naive 串（记录级 completedAt）仍按进程本地钟解读，坏串返回 None
+    assert _completed_in_day_tz("2026-10-13 15:39:32") is not None
+    assert _completed_in_day_tz("") is None
+    assert _completed_in_day_tz("garbage") is None
+
+
+def _chain_record(
+    *,
+    status: str = "COMPLETED",
+    completed_at: str = "2026-10-14 00:11:48",
+    steps: list[dict] | None = None,
+    task_id: str | None = "TASK-chain",
+    job_id: str | None = "job-chain",
+    payload_space: str | None = "dev2",
+) -> str:
+    """构造 chain 执行载荷：顶层无 kind，steps 按 schema:<uuid> 键组织。
+
+    环级时间带 +08:00 偏移（真实载荷形态，2026-10-13 gkx_verify_1 实录）。"""
+    import json
+
+    record: dict = {
+        "status": status,
+        "completedAt": completed_at,
+        "startedAt": "2026-10-13 15:39:27",
+        "triggerSource": "SCHEDULE",
+        "taskId": task_id,
+        "jobId": job_id,
+        "payload": {"graph_space": payload_space},
+        "output": {"chain": True, "schemaIds": [], "steps": {}},
+    }
+    for idx, step in enumerate(steps or []):
+        record["output"]["steps"][f"schema:{idx:036x}"] = step
+    return json.dumps(record, ensure_ascii=False)
+
+
+def _chain_step(
+    *,
+    kind: str,
+    label: str,
+    schema_key: str,
+    table: str,
+    written: int,
+    started_at: str,
+    finished_at: str,
+) -> dict:
+    return {
+        "kind": kind,
+        "name": label,
+        "schemaId": "irrelevant",
+        "written": written,
+        "startedAt": started_at,
+        "finishedAt": finished_at,
+        "output": {
+            "kind": kind,
+            "schemaLabel": label,
+            "schemaKey": schema_key,
+            "sources": [
+                {
+                    "table": table,
+                    "written": written,
+                    "startWatermark": "1970-01-01 00:00:00",
+                }
+            ],
+        },
+    }
+
+
+def test_parse_execution_records_expands_chain_steps() -> None:
+    """chain 执行逐环展开：每环按环级完成时刻归属统计日，不再整段不可见。
+
+    环 A 北京 10-13 15:43 完成（written 2）计入；环 B 北京 10-14 00:05 完成
+    属次日不计入；整链 completedAt 也在次日——按链级归属会颗粒无收。"""
+    snapshot = parse_execution_records(
+        [
+            _chain_record(
+                steps=[
+                    _chain_step(
+                        kind="entity",
+                        label="期刊",
+                        schema_key="tag-journal",
+                        table="gkx.dwd_zh_journal",
+                        written=2,
+                        started_at="2026-10-13 15:43:25+08:00",
+                        finished_at="2026-10-13 15:43:45+08:00",
+                    ),
+                    _chain_step(
+                        kind="relation",
+                        label="作者-论文",
+                        schema_key="edge-author",
+                        table="gkx.dwd_zh_author",
+                        written=1,
+                        started_at="2026-10-14 00:00:01+08:00",
+                        finished_at="2026-10-14 00:05:00+08:00",
+                    ),
+                    # written=0 的环：不出行不计数（真实 chain 大半环都是 0）
+                    _chain_step(
+                        kind="entity",
+                        label="专利",
+                        schema_key="tag-patent",
+                        table="gkx.dwd_patent",
+                        written=0,
+                        started_at="2026-10-13 15:39:41+08:00",
+                        finished_at="2026-10-13 15:39:42+08:00",
+                    ),
+                ]
+            )
+        ],
+        day="2026-10-13",
+        target_space="dev2",
+        default_space="dev2",
+    )
+    assert snapshot.entity_added == 2
+    assert snapshot.relation_added == 0  # 关系环属次日，不计入统计日
+    assert len(snapshot.entity_rows) == 1
+    row = snapshot.entity_rows[0]
+    assert row.type == "期刊"
+    assert row.object == "期刊 · 2 条"
+    assert row.source == "gkx.dwd_zh_journal"
+    assert row.task_id == "TASK-chain"
+    assert row.job_id == "job-chain"
+    assert row.exec_status == "COMPLETED"
+    assert snapshot.day == "2026-10-13"
+    descriptor = snapshot.entity_executions[0]
+    assert descriptor.schema_key == "tag-journal"
+    assert descriptor.status == "COMPLETED"
+    # 环级起止时间进了反查描述（带偏移原样保留，解析时按偏移折算）
+    assert descriptor.started_at == "2026-10-13 15:43:25+08:00"
+
+
+def test_parse_execution_records_counts_interrupted_terminal_statuses() -> None:
+    """TERMINATED/CANCELED/FAILED 中断终态：written>0 如实计入并携带终态标记；
+    written=0 仍不计入（噪声）。"""
+    snapshot = parse_execution_records(
+        [
+            _execution_record(
+                status="TERMINATED",
+                written=300,
+                completed_at="2026-10-13 09:00:00",
+            ),
+            _execution_record(
+                status="FAILED",
+                kind="relation",
+                written=4,
+                completed_at="2026-10-13 10:00:00",
+            ),
+            _execution_record(status="CANCELED", written=0),
+            # 未知终态：仍跳过
+            _execution_record(status="WEIRD", written=9),
+        ],
+        day="2026-10-13",
+        target_space="dev2",
+        default_space="dev2",
+    )
+    assert snapshot.entity_added == 300
+    assert snapshot.relation_added == 4
+    assert snapshot.entity_rows[0].exec_status == "TERMINATED"
+    assert snapshot.entity_executions[0].status == "TERMINATED"
+    assert snapshot.relation_rows[0].exec_status == "FAILED"
+
+
+def test_graph_row_execution_falls_back_to_unique_candidate() -> None:
+    """时间区间落空时的兜底：同 Schema+来源当日唯一执行直接归属——对象被同日
+    后续执行改写出窗是常态；仍不唯一（并发歧义）才放弃。"""
+    from service.platform_overview import _graph_row_execution
+
+    snapshot = parse_execution_records(
+        [
+            _execution_record(
+                table="paper",
+                started_at="2026-09-22 11:00:00",
+                completed_at="2026-09-22 12:00:00",
+            )
+        ],
+        day="2026-09-22",
+        target_space="dev2",
+        default_space="dev2",
+    )
+    executions = snapshot.entity_executions
+    # 对象 stamp 在唯一候选窗口之外 → 兜底仍归属它（旧口径恒 None）
+    resolved = _graph_row_execution(
+        executions[0],
+        {"source_table": "paper", "update_time": "2026-09-22 13:30:00"},
+        "update_time",
+        executions,
+    )
+    assert resolved is executions[0]
+    # 候选不唯一时保持不猜测
+    snapshot_two = parse_execution_records(
+        [
+            _execution_record(
+                table="paper",
+                started_at="2026-09-22 11:00:00",
+                completed_at="2026-09-22 12:00:00",
+            ),
+            _execution_record(
+                task_id="TASK-new",
+                job_id="job-new",
+                table="paper",
+                started_at="2026-09-22 13:00:00",
+                completed_at="2026-09-22 14:00:00",
+            ),
+        ],
+        day="2026-09-22",
+        target_space="dev2",
+        default_space="dev2",
+    )
+    both = snapshot_two.entity_executions
+    assert (
+        _graph_row_execution(
+            both[1],
+            {"source_table": "paper", "update_time": "2026-09-22 15:30:00"},
+            "update_time",
+            both,
+        )
+        is None
+    )
+
+
+def test_enrich_skips_lookup_when_written_exceeds_gate(monkeypatch) -> None:
+    """反查闸门：written 合计超阈值的类整体跳过逐对象反查（连图客户端都不建）。"""
+    import service.platform_overview as overview
+
+    monkeypatch.setattr(overview, "_LOOKUP_WRITTEN_LIMIT", 100)
+
+    gated = parse_execution_records(
+        [_execution_record(written=200, completed_at="2026-10-13 09:00:00")],
+        day="2026-10-13",
+        target_space="dev2",
+        default_space="dev2",
+    )
+
+    def _no_client(space):
+        raise AssertionError("闸门命中时不应连接图客户端")
+
+    result = overview.enrich_day_rows_with_graph(gated, "dev2", connect_client=_no_client)
+    assert result.entity_gated is True
+    assert result.relation_gated is False
+    # 聚合行原样保留（不替换成逐对象行）
+    assert len(result.entity_rows) == 1
+    assert result.entity_rows[0].is_aggregate is True
+
+
+def test_overview_caps_change_rows_and_keeps_full_totals() -> None:
+    """明细展示截断：行数受上限保护，合计/徽标仍按全量精确计数，统计日透出。"""
+    from biz.schemas.platform_overview import AssetChangeRow as Row
+
+    rows = [
+        Row(type="期刊", object=f"期刊-{i}", change="新增 期刊", source="t", time="10-13 12:00:00")
+        for i in range(1_500)
+    ]
+    snapshot = DayChangesSnapshot(
+        entity_added=1_500,
+        entity_rows_exact=True,
+        entity_rows=rows,
+        day="2026-10-13",
+    )
+    service = PlatformOverviewService(
+        stats_provider=FakeStatsProvider(), changes_provider=FakeChangesProvider(snapshot)
+    )
+
+    result = service.get_overview()
+
+    assert len(result.asset_change_rows["entity"]) == 1_000  # 截断到上限
+    assert result.asset_change_totals["entity"] == 1_500  # 全量合计
+    assert result.asset_overview_groups[0].added == "+1,500"  # 徽标按全量
+    assert result.stats_day == "2026-10-13"
+    assert "entity" not in result.asset_change_errors
+
+
+def test_overview_gated_day_shows_written_total_and_aggregate_rows() -> None:
+    """闸门日：徽标按控制库写图计数给出，明细保留聚合行并明确提示口径。"""
+    from biz.schemas.platform_overview import AssetChangeRow as Row
+
+    snapshot = DayChangesSnapshot(
+        entity_added=6_170_000,
+        entity_rows_exact=False,
+        entity_gated=True,
+        entity_rows=[
+            Row(
+                type="专利",
+                object="专利 · 6,170,000 条",
+                change="新增 tag-patent",
+                source="gkx.dwd_patent",
+                time="10-13 23:00:00",
+                exec_status="TERMINATED",
+            )
+        ],
+        day="2026-10-13",
+    )
+    service = PlatformOverviewService(
+        stats_provider=FakeStatsProvider(), changes_provider=FakeChangesProvider(snapshot)
+    )
+
+    result = service.get_overview()
+
+    assert result.asset_change_totals["entity"] == 6_170_000
+    assert result.asset_overview_groups[0].added == "+617.00 万"
+    # 聚合行保留（闸门日不隐藏）
+    assert len(result.asset_change_rows["entity"]) == 1
+    assert result.asset_change_rows["entity"][0].exec_status == "TERMINATED"
+    assert "超出逐对象反查上限" in result.asset_change_errors["entity"]
+
+
+def test_overview_cache_hard_limit_forces_sync_recompute() -> None:
+    """旧值硬上限：后台刷新线程卡死（锁被占）时，旧值超过硬上限后在请求线程
+    同步重算，不再无限期顶下去（2026-10-14 dev2 跨日旧值事故）。"""
+    provider = FakeStatsProvider()
+    service = PlatformOverviewService(
+        stats_provider=provider, changes_provider=FakeChangesProvider()
+    )
+    first = service.get_overview()
+
+    # 模拟事故形态：per-space 刷新锁被卡死线程长期占住，stale-while-revalidate
+    # 抢不到刷新权——旧值进入「过期但继续顶」状态
+    with service._lock_for(None):
+        stale = time.monotonic() - 10
+        service._cached[None] = (stale, stale, first)
+        assert service.get_overview() is first
+
+        # 过期且写入时刻超硬上限：不等锁，请求线程同步重算出新结果
+        very_old = time.monotonic() - service._stale_hard_limit - 1
+        service._cached[None] = (very_old, very_old, first)
+        refreshed = service.get_overview()
+        assert refreshed is not first
+        assert service._cached[None][2] is refreshed

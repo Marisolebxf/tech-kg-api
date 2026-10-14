@@ -1794,23 +1794,37 @@ def _with_watermark_retry(fn: Callable[[], Any], *, label: str, max_attempts: in
 
 
 def _write_pacing() -> tuple[int, float]:
-    """写图步调（env 可调，activity 内读）：每 every 条歇 sleep 秒。
+    """写图步调（env 可调，activity 内读）：每 every 行歇 sleep 秒。
 
-    默认 100 条 / 0.5s ≈ 单活动 ~110 条/s，4 并发下聚合 ~450 条/s——共享
-    图库宿主静态内存已 ~87%，全速写入（~1400 条/s）分钟级打穿 0.9 高水位
-    （缺陷㉘），限步调把突发压在水位线以下（0.35s 实测仍锯齿打线，收紧到 0.5）。
+    批量多行 INSERT 落地后按「行」计步调（与旧逐条口径可比）：默认 500 行 /
+    0.5s ≈ 单活动 1000 行/s 上限——多行语句把每行的 HTTP 往返/会话/解析成本
+    摊薄后，graphd 单条 64 行语句 ~几十 ms，自然速率本就到千行级，步调只作
+    聚合上限保护共享图库（缺陷㉘ 的高水位教训；压力窗再现时调小 every 或
+    调大 sleep 即可，无需回退批量）。
     """
     try:
-        every = max(0, int(os.getenv("SCHEMA_EXTRACT_WRITE_PACE_EVERY", "100")))
+        every = max(0, int(os.getenv("SCHEMA_EXTRACT_WRITE_PACE_EVERY", "500")))
         sleep_s = max(0.0, float(os.getenv("SCHEMA_EXTRACT_WRITE_PACE_SLEEP", "0.5")))
     except ValueError:
-        return 100, 0.5
+        return 500, 0.5
     return every, sleep_s
+
+
+def _write_batch_rows() -> int:
+    """批量写图每条多行 INSERT 的行数上限（env 可调）。
+
+    64 行/条在「HTTP 往返摊薄收益」与「graphd 单语句解析/执行内存」间取平衡
+    （与召回/碰撞名单 150/块的口径同量级）；大文本行另有语句字符上限兜底。
+    """
+    try:
+        return max(1, int(os.getenv("SCHEMA_EXTRACT_WRITE_BATCH_ROWS", "64")))
+    except ValueError:
+        return 64
 
 
 @activity.defn
 async def write_records(request: dict[str, Any]) -> dict[str, Any]:
-    """把转换结果写图：实体 nGQL INSERT VERTEX / 关系 merge_edge。
+    """把转换结果写图：实体/关系各走 nGQL 多行批量 INSERT。
 
     实体走 nGQL ``INSERT VERTEX``（vid=记录 id，列级 upsert 幂等）——REST
     ``/nodes/merge`` 会把 id/name/vid 当身份键从属性剥离，而 Schema DDL 把
@@ -1818,9 +1832,15 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
     Schema 注入的 NOT NULL 溯源列（create_time/update_time/source_table）
     缺省时由平台补默认值（脚本只管业务字段）。``graph.space`` 指定目标图空间。
 
-    写图自愈：写图遇 ``GraphRequestError`` 且报错为 unknown column 时，从该条
+    批量多行：一批记录按属性列集分组，同组拼成一条多行 INSERT（一条语句一次
+    HTTP 往返，替代逐条写；行数上限 ``SCHEMA_EXTRACT_WRITE_BATCH_ROWS``，默认
+    64，另有语句字符上限兜底大文本行）。组内同目标去重保最后一条、组间按原始
+    序排序，与逐条顺序写语义等价。
+
+    写图自愈：写图遇 ``GraphRequestError`` 且报错为 unknown column 时，从整组
     props 中剔除对应列重试（兜住「运行任务检查通过 → 任务恰好启动 → 属性被删」
     的时序窗口及一切计划快照与图库 schema 的错位）；无法定位列名则原样抛出。
+    语句级行值错误（类型不匹配等）回退逐条写定位坏行，坏行按原语义上抛。
     """
     from infra.graph_db.client import TRSGraphClient
     from infra.graph_db.config import TRSGraphSettings
@@ -1969,16 +1989,22 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("关系端点消歧查询失败，按原样写图: %s", exc)
 
-        # 逐记录写图下放线程：async 活动体内一批 2000 次同步 HTTP INSERT 会把
-        # worker 事件循环占满数秒（read_source_batch 同款根因），并发批次下互斥
-        # 串行化成「假死」。写路径本身无 await 点，整体挪线程不改变语义。
-        # 高水位错误走专用退避（_with_watermark_retry），每 pace_every 条歇
-        # pace_sleep 秒（默认 ~600 条/s 聚合，压住共享图库水位，缺陷㉘）。
+        # 批量多行写图下放线程：一批记录按「属性列集」分组拼成多行 INSERT 语句
+        # （一条语句一次 HTTP 往返，摊薄逐条写的会话/解析成本，吞吐 5-10×）。
+        # 语义与逐条写等价：同列集组内同目标（同 vid / 同 from->to）后者覆盖前者
+        # = 顺序写的最后写者；不同列集的组各写各的列，列级 upsert 互不覆盖，
+        # 组间按「组内最后一条记录的原始序」排序保证共享列的终值与逐条一致。
+        # 组内单行级错误（类型不匹配等）回退逐条隔离；高水位/瞬态错误走专用
+        # 退避（_with_watermark_retry），每累计 pace_every 行歇 pace_sleep 秒。
         pace_every, pace_sleep = _write_pacing()
+        batch_rows = _write_batch_rows()
+        # 语句字符上限：防大文本行（abstract 级）把单条语句撑过 graphd 语句
+        # 长度/REST body 限制；超限即切块（单行超限仍独占一条语句）。
+        max_stmt_chars = 2_000_000
 
-        def _write_all() -> int:
-            written_local = 0
-            for record in records:
+        def _prepared() -> list[tuple[int, dict[str, Any], dict[str, Any]]]:
+            prepared_rows: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
+            for idx, record in enumerate(records):
                 props = filtered(record.get("props"))
                 if kind == "entity" and not props:
                     continue
@@ -1992,13 +2018,108 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                     # 会让身份失去意义。仅在 id 属于白名单时注入，避免给未声明
                     # id 列的 Schema 加未知列。
                     props["id"] = str(record["id"])
-                _with_watermark_retry(
-                    lambda record=record, props=props: write_with_self_heal(record, props),
-                    label=f"写图 {name} {record.get('id') or record.get('fromId')}",
+                prepared_rows.append((idx, record, props))
+            return prepared_rows
+
+        def _row_segment(
+            record: dict[str, Any], props: dict[str, Any], cols: list[str]
+        ) -> str:
+            values = ", ".join(ngql_value_typed(props.get(col), col) for col in cols)
+            if kind == "entity":
+                vid = json.dumps(str(record["id"]), ensure_ascii=False)
+                return f"{vid}:({values})"
+            src = json.dumps(str(record["fromId"]), ensure_ascii=False)
+            dst = json.dumps(str(record["toId"]), ensure_ascii=False)
+            return f"{src}->{dst}:({values})"
+
+        def _write_chunk(
+            cols: list[str], chunk: list[tuple[dict[str, Any], dict[str, Any]]]
+        ) -> int:
+            while True:
+                cols_sql = ", ".join(f"`{col}`" for col in cols)
+                values_sql = ", ".join(
+                    _row_segment(record, props, cols) for record, props in chunk
                 )
-                written_local += 1
-                if pace_every and written_local % pace_every == 0:
-                    time.sleep(pace_sleep)
+                if kind == "entity":
+                    stmt = f"INSERT VERTEX `{name}`({cols_sql}) VALUES {values_sql}"
+                else:
+                    stmt = f"INSERT EDGE `{name}`({cols_sql}) VALUES {values_sql}"
+                try:
+                    _with_watermark_retry(
+                        lambda stmt=stmt: client.execute_write(stmt),
+                        label=f"批量写图 {name} ×{len(chunk)}",
+                    )
+                    return len(chunk)
+                except GraphRequestError as exc:
+                    if _GRAPH_TRANSIENT_RE.search(str(exc)):
+                        # 瞬态包络已烧尽：上抛给活动层重试/工作流层重发起，
+                        # 不在本层降级（保持与逐条时代相同的失败语义）。
+                        raise
+                    bad_column = _unknown_column_name(exc)
+                    if bad_column and bad_column in cols and len(cols) > 1:
+                        logger.warning(
+                            "批量写图遇未知列 %s，整组剔除后重试（%s）",
+                            bad_column,
+                            name,
+                        )
+                        cols.remove(bad_column)
+                        for _, props in chunk:
+                            props.pop(bad_column, None)
+                        continue
+                    if len(chunk) > 1:
+                        # 行级错误（值类型不匹配等）整条语句被拒：回退逐条定位，
+                        # 坏行仍按原语义上抛（活动失败 → Temporal 重试整批，
+                        # 幂等 upsert），好行不陪葬。
+                        logger.warning(
+                            "批量写图语句被拒回退逐条（%s：%s）",
+                            name,
+                            str(exc)[:200],
+                        )
+                        for record, props in chunk:
+                            _with_watermark_retry(
+                                lambda record=record, props=props: write_with_self_heal(
+                                    record, props
+                                ),
+                                label=f"写图 {name} {record.get('id') or record.get('fromId')}",
+                            )
+                        return len(chunk)
+                    raise
+
+        def _write_all() -> int:
+            written_local = 0
+            unslept = 0
+            groups: dict[tuple[str, ...], list[tuple[int, dict[str, Any], dict[str, Any]]]] = {}
+            for idx, record, props in _prepared():
+                groups.setdefault(tuple(props.keys()), []).append((idx, record, props))
+            # 组间按组内最后一条记录的原始序执行（共享列终值与逐条写一致）
+            ordered = sorted(groups.items(), key=lambda kv: kv[1][-1][0])
+            for _, items in ordered:
+                # 同列集组内同目标去重保最后一条（同列覆盖 = 顺序写的最后写者）
+                by_target: dict[Any, tuple[dict[str, Any], dict[str, Any]]] = {}
+                for _, record, props in items:
+                    if kind == "entity":
+                        by_target[str(record["id"])] = (record, props)
+                    else:
+                        by_target[(str(record["fromId"]), str(record["toId"]))] = (record, props)
+                rows = list(by_target.values())
+                cols = list(items[0][2].keys())
+                start = 0
+                while start < len(rows):
+                    chunk: list[tuple[dict[str, Any], dict[str, Any]]] = []
+                    size = 0
+                    while start < len(rows) and len(chunk) < batch_rows:
+                        record, props = rows[start]
+                        row_len = 64 + sum(len(str(v)) for v in props.values())
+                        if chunk and size + row_len > max_stmt_chars:
+                            break
+                        chunk.append((record, props))
+                        size += row_len
+                        start += 1
+                    written_local += _write_chunk(cols, chunk)
+                    unslept += len(chunk)
+                    if pace_every and unslept >= pace_every:
+                        time.sleep(pace_sleep)
+                        unslept = 0
             return written_local
 
         written = await asyncio.to_thread(_write_all)

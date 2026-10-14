@@ -1390,20 +1390,6 @@ watch(algoSpace, () => {
   }
 })
 
-// 手动刷新总览：后端自带 60s 结果缓存 + 旧值硬上限，重复点击代价可控；
-// 也给「昨日新增停在旧统计日」时用户一个自助恢复入口，不必等缓存自行过期
-const overviewRefreshing = ref(false)
-async function refreshOverviewData(): Promise<void> {
-  if (overviewRefreshing.value) return
-  overviewRefreshing.value = true
-  try {
-    await loadPlatformOverview()
-  } finally {
-    overviewRefreshing.value = false
-  }
-}
-
-
 function handleStartTask() {
   const priority = processingPriority.value === '紧急' ? '紧急优先' : '普通优先级'
   if (processingScope.value === '全量重建') {
@@ -1453,7 +1439,7 @@ const pageMeta = computed(() => {
       <div class="platform-hero__main">
         <h1>{{ pageMeta.title }}</h1>
       </div>
-      <div class="platform-hero__actions"><span :title="overviewMeta.warnings.join('\n')"><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个执行运行中 · {{ overviewMeta.dataMode === 'partial' ? '部分实时' : '降级数据' }}</span><button type="button" class="platform-hero-refresh" :disabled="overviewRefreshing" @click="refreshOverviewData">{{ overviewRefreshing ? '刷新中…' : '刷新数据' }}</button><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看任务</RouterLink><RouterLink v-if="canEnterAdminPages" to="/manual-review">进入人工处理</RouterLink></div>
+      <div class="platform-hero__actions"><span :title="overviewMeta.warnings.join('\n')"><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个执行运行中 · {{ overviewMeta.dataMode === 'partial' ? '部分实时' : '降级数据' }}</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看任务</RouterLink><RouterLink v-if="canEnterAdminPages" to="/manual-review">进入人工处理</RouterLink></div>
     </header>
 
     <header v-else-if="activeTab !== 'query'" class="platform-page-head">
@@ -2280,8 +2266,6 @@ print(response.json())</pre>
 .platform-hero__actions span { display:inline-flex;align-items:center;gap:7px;margin-right:4px;color:#526783;font-size:12px; }
 .platform-hero__actions span i { width:8px;height:8px;border-radius:50%;background:#067647;box-shadow:0 0 0 4px rgba(18,183,106,.12); }
 .platform-hero__actions a { height:32px;padding:0 12px;border:1px solid #9ec2f7;border-radius:6px;background:rgba(255,255,255,.72);color:#004ecc;font-size:12px;line-height:32px;text-decoration:none; }
-.platform-hero__actions .platform-hero-refresh { height:32px;padding:0 12px;border:1px solid #9ec2f7;border-radius:6px;background:rgba(255,255,255,.72);color:#004ecc;font-size:12px;line-height:30px;cursor:pointer; }
-.platform-hero__actions .platform-hero-refresh:disabled { color:#8fa3c2;cursor:default; }
 .platform-hero__actions a:last-child { border-color:#004ecc;background:#004ecc;color:#fff; }
 
 .platform-page-head {

@@ -93,7 +93,13 @@ const isConstructionTask = computed(() => processingInstance.value?.stage === '�
  *  不再按选中步骤的 abnormal 判断（chain 任务被 Temporal 历史淘汰后 steps/pipeline
  *  全空，步骤级口径会把入口整个藏掉）。 */
 const needsTaskReview = computed(() => ['执行出错', '执行异常'].includes(processingInstance.value?.taskStatus ?? ''))
-const activeTab = ref<DetailTab>('overview')
+const activeTab = ref<DetailTab>(
+  // ?tab= 指定初始页签（昨日新增行级跳转带 tab=lineage 直达来源结果表——
+  // 默认「概况与结果」只有整次执行的合计写入数，行上的单来源数在那里找不到）
+  (['overview', 'io', 'logs', 'lineage'] as const).includes(String(route.query.tab || '') as DetailTab)
+    ? (String(route.query.tab) as DetailTab)
+    : 'overview',
+)
 const isPipelineTask = computed(() => ['kg.custom.steps', 'kg.custom.chain', 'kg.schema.extract.chain'].includes(processingInstance.value?.workflowType ?? ''))
 /** 多脚本串行任务：流程里每个 step 是一个 Schema 抽取（旧版为一个脚本），点击在按钮下方展开其 activity steps。 */
 const isChainTask = computed(() => ['kg.custom.chain', 'kg.schema.extract.chain'].includes(processingInstance.value?.workflowType ?? ''))

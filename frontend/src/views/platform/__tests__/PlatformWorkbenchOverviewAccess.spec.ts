@@ -225,14 +225,18 @@ describe('昨日新增聚合格式展示', () => {
     expect(rows[0]!.attributes('tabindex')).toBe('0')
     await rows[0]!.trigger('click')
     expect(routerPush).toHaveBeenCalledWith({
-      name: 'job-detail', params: { jobId: 'job-paper-a' }, query: { exec: 'EXEC-paper-01' },
+      name: 'job-detail',
+      params: { jobId: 'job-paper-a' },
+      query: { tab: 'lineage', exec: 'EXEC-paper-01' },
     })
     await rows[0]!.trigger('keydown', { key: 'Enter' })
     expect(routerPush).toHaveBeenCalledTimes(2)
     // 有 jobId 无 execId（旧执行）：仍落任务页，不带 exec 查询参数
     expect(rows[1]!.classes()).toContain('is-clickable')
     await rows[1]!.trigger('click')
-    expect(routerPush).toHaveBeenLastCalledWith({ name: 'job-detail', params: { jobId: 'job-journal' }, query: undefined })
+    expect(routerPush).toHaveBeenLastCalledWith({
+      name: 'job-detail', params: { jobId: 'job-journal' }, query: { tab: 'lineage' },
+    })
     // 有 taskId 无 jobId：非任务通道执行（回填或中断），提示而非跳转
     expect(rows[2]!.classes()).not.toContain('is-clickable')
     await rows[2]!.trigger('click')

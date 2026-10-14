@@ -56,6 +56,9 @@ def client(monkeypatch):
     FakeGraphClient.instances = []
     monkeypatch.setenv("SCHEMA_EXTRACT_WRITE_PACE_EVERY", "0")
     monkeypatch.setenv("SCHEMA_EXTRACT_WRITE_BATCH_ROWS", "64")
+    # 批内增量入索引关掉：本文件桩掉图库，不应让联动打到真实控制库/Milvus
+    # （联动行为在 TestIncrementalIndexSync 里单独开开关验证）
+    monkeypatch.setenv("SCHEMA_EXTRACT_INCREMENTAL_INDEX", "0")
     return FakeGraphClient
 
 
@@ -162,9 +165,7 @@ class TestEntityBatching:
         from service.temporal_workflows import write_records
 
         monkeypatch.setenv("SCHEMA_EXTRACT_WRITE_BATCH_ROWS", "2")
-        records = [
-            {"id": f"v{i}", "props": {"id": f"v{i}", "name": f"名{i}"}} for i in range(5)
-        ]
+        records = [{"id": f"v{i}", "props": {"id": f"v{i}", "name": f"名{i}"}} for i in range(5)]
         result = await write_records(entity_request(records))
         assert result == {"written": 5}
         statements = stmts()
@@ -298,3 +299,80 @@ class TestSelfHealAndFallback:
             await write_records(entity_request(records))
         # 好行已在逐条回退中落地，坏行按原语义上抛
         assert len(stmts()) == 1 and '"v1":(' in stmts()[0]
+
+
+class TestIncrementalIndexSync:
+    """写图成功后批内增量入索引的联动（fail-open，开关 SCHEMA_EXTRACT_INCREMENTAL_INDEX）。"""
+
+    @pytest.fixture
+    def sync_calls(self, monkeypatch):
+        """记录联动调用的桩 + 显式打开开关（覆盖 client fixture 的默认关闭）。"""
+        calls: list[tuple[str, str, dict]] = []
+        monkeypatch.setattr(
+            "service.temporal_workflows._sync_batch_entity_index",
+            lambda space, label, entities: calls.append((space, label, entities)),
+        )
+        monkeypatch.setenv("SCHEMA_EXTRACT_INCREMENTAL_INDEX", "1")
+        return calls
+
+    async def test_entity_write_triggers_sync_with_merged_props(self, client, sync_calls):
+        from service.temporal_workflows import write_records
+
+        # 同 vid 跨列集组：联动收到的须是合并终值（tagx 保留、name 后写覆盖）
+        records = [
+            {"id": "v1", "props": {"id": "v1", "name": "早", "tagx": "x"}},
+            {"id": "v1", "props": {"id": "v1", "name": "晚"}},
+        ]
+        request = entity_request(records)
+        request["activeProps"].append("tagx")
+        result = await write_records(request)
+
+        assert result == {"written": 2}
+        assert len(sync_calls) == 1
+        space, label, entities = sync_calls[0]
+        assert (space, label) == ("test_space", "Product")
+        assert list(entities) == ["v1"]
+        assert entities["v1"]["name"] == "晚"
+        assert entities["v1"]["tagx"] == "x"
+
+    async def test_kill_switch_disables_sync(self, client, monkeypatch):
+        from service.temporal_workflows import write_records
+
+        def boom(*args):
+            raise AssertionError("开关关闭时不应触发联动")
+
+        monkeypatch.setattr("service.temporal_workflows._sync_batch_entity_index", boom)
+        monkeypatch.setenv("SCHEMA_EXTRACT_INCREMENTAL_INDEX", "0")
+        result = await write_records(
+            entity_request([{"id": "v1", "props": {"id": "v1", "name": "甲"}}])
+        )
+        assert result == {"written": 1}  # 未触发联动（boom 未抛）
+
+    async def test_edge_write_does_not_trigger_sync(self, client, sync_calls):
+        from service.temporal_workflows import write_records
+
+        result = await write_records(
+            edge_request([{"fromId": "p", "toId": "q", "props": {"author_order": "1"}}])
+        )
+        assert result == {"written": 1}
+        assert sync_calls == []
+
+    async def test_empty_write_skips_sync(self, client, sync_calls):
+        from service.temporal_workflows import write_records
+
+        # 全部实体空属性按旧语义跳过 → written=0，不联动
+        request = entity_request([{"id": "skip", "props": None}])
+        request["activeProps"] = ["id", "name"]
+        result = await write_records(request)
+        assert result == {"written": 0}
+        assert sync_calls == []
+
+    def test_sync_swallows_infra_failure(self, monkeypatch):
+        """联动内部任何异常（控制库不可用等）都不外抛——写图结果不受影响。"""
+        from service import temporal_workflows as tw
+
+        def boom():
+            raise RuntimeError("control db down")
+
+        monkeypatch.setattr("infra.workflow_mysql.create_workflow_session", boom)
+        tw._sync_batch_entity_index("dev2", "Expert", {"e1": {"name": "张三"}})  # 不抛即通过

@@ -1821,6 +1821,58 @@ def _write_batch_rows() -> int:
         return 64
 
 
+def _incremental_index_enabled() -> bool:
+    """批内增量入索引开关（默认开，``"0"`` 关）。
+
+    与任务末全量重建的 ``SCHEMA_EXTRACT_BUILD_INDEX`` 同族：关掉后行为回到
+    「只写图、末尾全量重建」，近邻路对 run 内前面批次的近名实体不可见。
+    """
+    return os.getenv("SCHEMA_EXTRACT_INCREMENTAL_INDEX", "1") != "0"
+
+
+def _sync_batch_entity_index(
+    space: str, node_label: str, entities: dict[str, dict[str, Any]]
+) -> None:
+    """写图成功后把本批实体批量 upsert 进 ``kg_entity``（fail-open）。
+
+    消歧 v2 的 Milvus 近邻路读 ``kg_entity``，而全量重建只在任务末跑一次——
+    没有这条联动，run 内前面批次写入的近名实体要到下一个 run 才被召回（盲窗）。
+    ``entities`` 是 ``{vid: 写图终值属性}``（跨列集组已合并）。任何失败只记
+    日志：索引落后无一致性风险，任务末全量重建兜底对账。
+    """
+    try:
+        # import 也在 try 内：模块级依赖异常同样不能让已写图的活动抛错
+        from infra.workflow_mysql import create_workflow_session
+        from service.entity_search import EntitySearchService
+
+        session = create_workflow_session()
+        try:
+            result = EntitySearchService(session).upsert_entities_batch(
+                space=space,
+                node_label=node_label,
+                entities=[{"vid": vid, "props": props} for vid, props in entities.items()],
+            )
+        finally:
+            session.close()
+        if result.get("upserted"):
+            logger.info(
+                "批内增量入索引 %s ×%s：upsert=%s skip=%s",
+                node_label,
+                len(entities),
+                result["upserted"],
+                result.get("skipped"),
+            )
+        else:
+            logger.info(
+                "批内增量入索引未生效 %s ×%s：%s（末尾全量重建兜底）",
+                node_label,
+                len(entities),
+                result.get("reason"),
+            )
+    except Exception:  # noqa: BLE001 - 索引联动失败不影响已写图结果
+        logger.warning("批内增量入索引失败（不影响写图，末尾全量重建兜底）", exc_info=True)
+
+
 @activity.defn
 async def write_records(request: dict[str, Any]) -> dict[str, Any]:
     """把转换结果写图：实体/关系各走 nGQL 多行批量 INSERT。
@@ -1840,6 +1892,9 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
     props 中剔除对应列重试（兜住「运行任务检查通过 → 任务恰好启动 → 属性被删」
     的时序窗口及一切计划快照与图库 schema 的错位）；无法定位列名则原样抛出。
     语句级行值错误（类型不匹配等）回退逐条写定位坏行，坏行按原语义上抛。
+
+    写图成功后实体批内增量入 Milvus 索引（``_sync_batch_entity_index``，
+    fail-open）：让消歧近邻路跨批看到本 run 已写的近名实体（盲窗收窄到同批内）。
     """
     from infra.graph_db.client import TRSGraphClient
     from infra.graph_db.config import TRSGraphSettings
@@ -2080,6 +2135,10 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                         return len(chunk)
                     raise
 
+        # 本批实体的写图终值属性（{vid: props}）：跨列集组按执行序合并、后者
+        # 覆盖共享列——与图内列级 upsert 终值一致，供写图后批内增量入索引
+        written_entities: dict[str, dict[str, Any]] = {}
+
         def _write_all() -> int:
             written_local = 0
             unslept = 0
@@ -2115,9 +2174,17 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                     if pace_every and unslept >= pace_every:
                         time.sleep(pace_sleep)
                         unslept = 0
+                # 组写完才收（自愈剔列会改 props，收的是终值）；组间执行序合并
+                if kind == "entity":
+                    for record, props in rows:
+                        written_entities.setdefault(str(record["id"]), {}).update(props)
             return written_local
 
         written = await asyncio.to_thread(_write_all)
+        if kind == "entity" and written and written_entities and _incremental_index_enabled():
+            await asyncio.to_thread(
+                _sync_batch_entity_index, settings.space, name, written_entities
+            )
         return {"written": written}
     finally:
         try:

@@ -1118,6 +1118,99 @@ class EntitySearchService:
             self._bump_state_counts(state_row, node_label)
         return {"upserted": True, "vid": vid, "entityType": node_label}
 
+    def upsert_entities_batch(
+        self, *, space: str, node_label: str, entities: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """图写后批量增量入索引（抽取链路每批写图后联动）。
+
+        与单实体 ``upsert_entity`` 同构但批量化：一次 embed + 分块 Milvus upsert
+        摊平逐条 HTTP 成本。``entities`` 形如 ``[{"vid", "props"}...]``，props 用
+        写图终值（列级 upsert 后的合并属性），不回图逐点读。前置守卫与单实体版
+        一致（重建进行中 / 空间未建索引 / embedding 未配置）整批跳过；文本为空
+        或稀疏向量为空的实体逐条跳过、计数入 ``skipped``。计数快照不动——本路
+        无法区分新建与并入（消歧 merge 已改写 vid），任务末全量重建会重写精确
+        计数。返回 ``{"upserted", "skipped", "reason"}``。
+        """
+        if not entities:
+            return {"upserted": 0, "skipped": 0, "reason": None}
+        if _database_reindex_running(self._session):
+            return {"upserted": 0, "skipped": len(entities), "reason": "reindex in progress"}
+        state_row = _load_state(self._session, space)
+        encoder = _load_bm25_from_state(self._session, space)
+        if state_row is None or encoder is None or not (state_row.entity_count or 0):
+            return {"upserted": 0, "skipped": len(entities), "reason": "space index not built"}
+        # 同 vid 多条（跨列集组）合并属性、后者覆盖——与图内列级 upsert 终值一致
+        merged: dict[str, dict[str, Any]] = {}
+        for item in entities:
+            merged.setdefault(str(item.get("vid") or ""), {}).update(item.get("props") or {})
+        records: list[dict[str, Any]] = []
+        skipped = 0
+        for vid, props in merged.items():
+            # 超长 VID 入不了 Milvus 主键字段（与 _iter_index_records 同口径）
+            if not vid or len(vid.encode("utf-8")) > 128:
+                skipped += 1
+                continue
+            record = _index_record({"vid": vid, "entity_type": node_label, "props": props})
+            if not record["text"]:
+                skipped += 1
+                continue
+            records.append(record)
+        if not records:
+            return {"upserted": 0, "skipped": skipped, "reason": "no indexable entities"}
+        try:
+            embedding_config = _resolve_embedding_config()
+            client = _embedding_client()
+        except EntitySearchError:
+            return {"upserted": 0, "skipped": skipped, "reason": "embedding not configured"}
+        if client is None:
+            return {"upserted": 0, "skipped": skipped, "reason": "embedding not configured"}
+        try:
+            vectors = client.embed([record["text"][:EMBED_TEXT_MAX_CHARS] for record in records])
+        except Exception:  # noqa: BLE001 - embedding 服务抖动按失败降级，末尾全量重建兜底
+            vectors = None
+        if not vectors or len(vectors) != len(records):
+            return {"upserted": 0, "skipped": skipped, "reason": "embedding failed"}
+        if embedding_config["dim"] is not None and any(
+            len(vector) != embedding_config["dim"] for vector in vectors
+        ):
+            return {"upserted": 0, "skipped": skipped, "reason": "embedding dim mismatch"}
+        written = 0
+        try:
+            milvus = get_milvus_client()
+            if not milvus.has_collection(COLLECTION_NAME):
+                return {"upserted": 0, "skipped": skipped, "reason": "collection missing"}
+            for start in range(0, len(records), EMBED_BATCH_SIZE):
+                chunk_records = records[start : start + EMBED_BATCH_SIZE]
+                chunk_vectors = vectors[start : start + EMBED_BATCH_SIZE]
+                rows = []
+                for record, vector in zip(chunk_records, chunk_vectors, strict=True):
+                    sparse_vector = encoder.encode_document(record["text"])
+                    if not sparse_vector:
+                        # Milvus 拒绝空稀疏向量：token 全不在全量词表（全新造词）时跳过
+                        skipped += 1
+                        continue
+                    rows.append(
+                        {
+                            "document_id": f"{space}::{record['vid']}",
+                            "vid": record["vid"],
+                            "entity_id": record["entity_id"],
+                            "name": record["name"],
+                            "entity_type": node_label,
+                            "graph_space": space,
+                            "search_text": record["text"],
+                            "properties": json.dumps(record["properties"], ensure_ascii=False),
+                            "dense_vector": vector,
+                            "sparse_vector": sparse_vector,
+                        }
+                    )
+                if rows:
+                    milvus.upsert(collection_name=COLLECTION_NAME, data=rows)
+                    written += len(rows)
+            return {"upserted": written, "skipped": skipped, "reason": None}
+        except Exception as exc:  # noqa: BLE001 - 增量失败不影响写图，末尾全量重建兜底
+            logger.warning("批量实体入索引失败 space=%s label=%s", space, node_label)
+            return {"upserted": written, "skipped": skipped, "reason": f"milvus error: {exc}"}
+
     def _bump_state_counts(self, state_row: Any, node_label: str) -> None:
         """create 场景计数快照 +1：浏览分页窗口/总览与图保持一致（merge 不变）。"""
         from datetime import UTC, datetime

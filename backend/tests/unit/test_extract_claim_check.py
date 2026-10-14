@@ -452,6 +452,8 @@ def fake_graph(monkeypatch: pytest.MonkeyPatch) -> list[FakeGraphClient]:
     # 消歧近邻路关掉：本文件桩掉图库，带真实 embedding/Milvus 配置的容器里
     # （dev2 栈）不该让 resolve_entity_batch 打到线上索引
     monkeypatch.setenv("ENTITY_DISAMBIGUATION_MILVUS_RECALL", "0")
+    # 批内增量入索引同理关掉：写图联动不应打到真实控制库/Milvus
+    monkeypatch.setenv("SCHEMA_EXTRACT_INCREMENTAL_INDEX", "0")
     return clients
 
 

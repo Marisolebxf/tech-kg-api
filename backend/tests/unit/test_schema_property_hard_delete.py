@@ -55,6 +55,13 @@ class TestUnknownColumnName:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _no_incremental_index(monkeypatch: pytest.MonkeyPatch):
+    # 批内增量入索引关掉：本文件的写图自愈用例桩掉图库，不应让联动打到真实
+    # 控制库/Milvus
+    monkeypatch.setenv("SCHEMA_EXTRACT_INCREMENTAL_INDEX", "0")
+
+
 class FakeGraphClient:
     """首写按配置炸 unknown column，重试（列已剔除）成功。"""
 

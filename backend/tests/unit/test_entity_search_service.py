@@ -2049,6 +2049,156 @@ def test_upsert_entity_embedding_failure_degrades(
     assert result == {"upserted": False, "reason": "embedding failed"}
 
 
+# ---------------------------------------------------------------------------
+# upsert_entities_batch：抽取链路每批写图后批量增量入索引（消歧近邻路跨批可见）
+# ---------------------------------------------------------------------------
+
+
+def _batch_ready_service(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> tuple[EntitySearchService, FakeMilvusClient]:
+    """两实体图全量重建后的服务 + Milvus 假客户端（批量增量在此基础上叠加）。"""
+    graph, milvus = _indexed_two_expert_graph()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", FakeEmbeddingClient)
+    service = EntitySearchService(state_session)
+    service.reindex(space="dev2")
+    return service, milvus
+
+
+def test_upsert_entities_batch_writes_rows_without_bumping_counts(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """批量入索引落 Milvus 行（与全量重建同行形状），计数快照不动。"""
+    service, milvus = _batch_ready_service(state_session, monkeypatch)
+
+    result = service.upsert_entities_batch(
+        space="dev2",
+        node_label="Expert",
+        entities=[
+            {"vid": "expert_3", "props": {"id": "E-3", "name": "张三", "org": "计算所"}},
+            {"vid": "expert_4", "props": {"id": "E-4", "name": "李四"}},
+        ],
+    )
+
+    assert result == {"upserted": 2, "skipped": 0, "reason": None}
+    for vid, entity_id, name in (
+        ("expert_3", "E-3", "张三"),
+        ("expert_4", "E-4", "李四"),
+    ):
+        row = next(r for r in milvus.collections[COLLECTION_NAME] if r["vid"] == vid)
+        assert row["document_id"] == f"dev2::{vid}"
+        assert row["entity_id"] == entity_id
+        assert row["name"] == name
+        assert row["entity_type"] == "Expert"
+        assert row["graph_space"] == "dev2"
+        assert len(row["dense_vector"]) == 3
+        assert row["sparse_vector"]  # 词表内 token 已编码
+    # 计数快照不动：本路无法区分新建与并入，末尾全量重建重写精确计数
+    state = state_session.get(EntitySearchState, "dev2")
+    assert state.entity_count == 2
+    assert json.loads(state.type_counts) == {"Expert": 2}
+
+
+def test_upsert_entities_batch_merges_same_vid_props(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """同 vid 多条（跨列集组）合并属性、后者覆盖——与图内列级 upsert 终值一致。"""
+    service, milvus = _batch_ready_service(state_session, monkeypatch)
+
+    result = service.upsert_entities_batch(
+        space="dev2",
+        node_label="Expert",
+        entities=[
+            {"vid": "expert_3", "props": {"id": "E-3", "name": "张三", "org": "旧单位"}},
+            {"vid": "expert_3", "props": {"id": "E-3", "name": "李四"}},
+        ],
+    )
+
+    assert result["upserted"] == 1
+    row = next(r for r in milvus.collections[COLLECTION_NAME] if r["vid"] == "expert_3")
+    assert row["name"] == "李四"  # 后写覆盖
+    props = json.loads(row["properties"])
+    assert props.get("org") == "旧单位"  # 非共享列保留（列级 upsert 并集）
+
+
+def test_upsert_entities_batch_skips_unindexable_entities(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """超长 VID（入不了 Milvus 主键字段）的实体逐条跳过，不影响其余入索引。"""
+    service, milvus = _batch_ready_service(state_session, monkeypatch)
+
+    result = service.upsert_entities_batch(
+        space="dev2",
+        node_label="Expert",
+        entities=[
+            {"vid": "v" * 200, "props": {"id": "x", "name": "张三"}},  # VID 超 128 字节
+            {"vid": "expert_3", "props": {"id": "E-3", "name": "张三"}},
+        ],
+    )
+
+    assert result == {"upserted": 1, "skipped": 1, "reason": None}
+    row = next(r for r in milvus.collections[COLLECTION_NAME] if r["vid"] == "expert_3")
+    assert row["name"] == "张三"
+
+
+def test_upsert_entities_batch_without_state_returns_not_built(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """空间从未建索引（gkx_verify_1 类）：整批跳过，末尾全量重建收编。"""
+    graph, milvus = _indexed_two_expert_graph()
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", FakeEmbeddingClient)
+
+    result = EntitySearchService(state_session).upsert_entities_batch(
+        space="dev2",
+        node_label="Expert",
+        entities=[{"vid": "expert_1", "props": {"id": "E-1", "name": "张三"}}],
+    )
+
+    assert result == {"upserted": 0, "skipped": 1, "reason": "space index not built"}
+    assert milvus.collections == {}
+
+
+def test_upsert_entities_batch_skips_while_reindex_running(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """任务末全量重建进行中：增量让路（reindex 会整体重写本空间行）。"""
+    service, milvus = _batch_ready_service(state_session, monkeypatch)
+    monkeypatch.setattr("service.entity_search._database_reindex_running", lambda session: True)
+
+    result = service.upsert_entities_batch(
+        space="dev2",
+        node_label="Expert",
+        entities=[{"vid": "expert_3", "props": {"id": "E-3", "name": "张三"}}],
+    )
+
+    assert result == {"upserted": 0, "skipped": 1, "reason": "reindex in progress"}
+    assert len(milvus.collections[COLLECTION_NAME]) == 2  # 未新增
+
+
+def test_upsert_entities_batch_embedding_failure_degrades(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """embedding 失败整批跳过（fail-open），末尾全量重建兜底。"""
+    service, milvus = _batch_ready_service(state_session, monkeypatch)
+
+    class BrokenEmbedding:
+        def embed(self, texts):
+            return None
+
+    monkeypatch.setattr("service.entity_search._embedding_client", lambda: BrokenEmbedding())
+    result = service.upsert_entities_batch(
+        space="dev2",
+        node_label="Expert",
+        entities=[{"vid": "expert_3", "props": {"id": "E-3", "name": "张三"}}],
+    )
+
+    assert result == {"upserted": 0, "skipped": 0, "reason": "embedding failed"}
+    assert len(milvus.collections[COLLECTION_NAME]) == 2
+
+
 def test_upsert_entity_milvus_error_degrades(
     state_session, monkeypatch: pytest.MonkeyPatch
 ) -> None:

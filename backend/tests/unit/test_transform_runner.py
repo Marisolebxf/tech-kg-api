@@ -45,6 +45,8 @@ def fake_graph(monkeypatch: pytest.MonkeyPatch):
         return client
 
     monkeypatch.setattr("infra.graph_db.client.TRSGraphClient", factory)
+    # 批内增量入索引关掉：本文件桩掉图库，不应让写图联动打到真实控制库/Milvus
+    monkeypatch.setenv("SCHEMA_EXTRACT_INCREMENTAL_INDEX", "0")
     return clients
 
 

@@ -106,4 +106,46 @@ describe('人工审核队列读取状态', () => {
     await vi.advanceTimersByTimeAsync(300)
     expect(mocks.getProductionReviews).toHaveBeenCalledTimes(2)
   })
+
+  it('翻页加载中保留已看行并显示顶部细条，不再整表闪白', async () => {
+    const first = pending()
+    mocks.getProductionReviews.mockReturnValueOnce(first.promise)
+    const wrapper = render()
+    first.resolve(result('首页记录'))
+    await flushPromises()
+    expect(wrapper.text()).toContain('首页记录')
+    const nextPage = pending()
+    mocks.getProductionReviews.mockReturnValueOnce(nextPage.promise)
+    wrapper.findComponent(ListPagination).vm.$emit('change', 2)
+    await flushPromises()
+    // 旧行保留 + 顶部细条提示；不再回落整表空态「正在加载人工审核记录…」
+    expect(wrapper.text()).toContain('首页记录')
+    expect(wrapper.get('[role="status"]').text()).toContain('正在加载')
+    expect(wrapper.text()).not.toContain('正在加载人工审核记录')
+    nextPage.resolve({ items: [{ id: 'P2', objectName: '第二页记录', status: 'OPEN' }], total: 21 })
+    await flushPromises()
+    expect(wrapper.text()).toContain('第二页记录')
+    expect(wrapper.text()).not.toContain('首页记录')
+    expect(wrapper.find('[role="status"]').exists()).toBe(false)
+  })
+
+  it('15s 内回到看过的页直接走页缓存，不重复请求', async () => {
+    mocks.getProductionReviews.mockImplementation(async (params: { page?: number }) => (
+      params.page === 2
+        ? { items: [{ id: 'P2', objectName: '第二页记录', status: 'OPEN' }], total: 21 }
+        : { items: [{ id: 'P1', objectName: '第一页记录', status: 'OPEN' }], total: 21 }
+    ))
+    const wrapper = render()
+    await flushPromises()
+    expect(wrapper.text()).toContain('第一页记录')
+    wrapper.findComponent(ListPagination).vm.$emit('change', 2)
+    await flushPromises()
+    expect(wrapper.text()).toContain('第二页记录')
+    wrapper.findComponent(ListPagination).vm.$emit('change', 1)
+    await flushPromises()
+    // 回第 1 页由页缓存直接出：仍只有两次请求，行内容立即切回
+    expect(mocks.getProductionReviews).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('第一页记录')
+    expect(wrapper.text()).not.toContain('第二页记录')
+  })
 })

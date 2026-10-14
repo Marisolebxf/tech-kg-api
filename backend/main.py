@@ -113,6 +113,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
         except Exception as exc:
             logger.warning("跳过平台配置表建表：MySQL 不可达 %s", exc)
+        # 人工审核队列索引兜底：存量 manual_review_case 无 template_id 索引，
+        # 跨空间队列查询全表扫描（幂等、best-effort；仅 MySQL 方言）
+        try:
+            from service.manual_review_production import ensure_review_queue_indexes
+
+            await asyncio.to_thread(ensure_review_queue_indexes)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("人工审核队列索引补建失败（忽略）：%s", exc)
         # 图空间↔向量库映射 backfill：对已绑定空间补 ensure Milvus 同名 database
         # （幂等、best-effort；Milvus 不可达只记 failed 行，下次重启重试）
         if _env_bool("GRAPH_SPACE_VECTOR_DB_BACKFILL", True):

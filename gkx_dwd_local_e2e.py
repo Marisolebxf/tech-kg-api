@@ -40,7 +40,8 @@ BIZ_DB_DEFAULT = "techkg_global"  # 业务库：抽取水位 + 审核队列
 DATASOURCE_DEFAULT = "MYSQL-DWD-LOCAL"
 DATABASE_DEFAULT = "gkx_dwd_local"
 CHAIN_TIMEOUT = 7200  # 单链轮询上限（秒）
-TERMINAL = {"succeeded", "failed", "canceled", "terminated", "completed", "error", "abnormal"}
+TERMINAL = {"COMPLETED", "FAILED", "CANCELED", "TERMINATED", "TIMED_OUT", "CONTINUED_AS_NEW"}
+WEDGE_STALL = 600  # 事件数持续不涨视为楔死（秒）
 
 
 # ---------------------------------------------------------------- MySQL 直连
@@ -308,29 +309,70 @@ async def _run_chains(args) -> None:
             print(f"[run] 建任务 {name}: http={r.status_code} id={jid}" + ("" if jid else f" {r.text[:160]}"))
             job_ids.append(jid)
 
-        # 串行：实体先入图，关系链随后（chain 内部已按 schemaIds 顺序串行）
+        # 串行：实体先入图，关系链随后（chain 内部已按 schemaIds 顺序串行）。
+        # 轮询走 Temporal describe 而非平台 API：平台把 describe 瞬时 NotFound 一律
+        # 误写成 TERMINATED 终态（不可逆），Temporal 直查免疫；楔死（worker 并发 1，
+        # 大历史回放被饿死在 10s workflow-task 时限外）则 cancel 后重触发水位续跑。
+        from service.temporal_runtime import temporal_runtime
+
+        tclient = await temporal_runtime.client()
         for name, jid in zip(("实体链", "关系链A", "关系链B"), job_ids):
             if not jid:
                 continue
-            t0 = time.time()
-            r = await c.post(f"/api/v1/workflow-system/jobs/{jid}/trigger")
-            eid = (r.json().get("data") or {}).get("id") if r.status_code == 200 else None
-            print(f"[run][{name}] 触发 http={r.status_code} exec={eid}")
-            if not eid:
-                continue
-            status = "unknown"
-            while time.time() - t0 < CHAIN_TIMEOUT:
-                await asyncio.sleep(20)
-                er = await c.get(f"/api/v1/workflow-system/executions/{eid}")
-                if er.status_code == 200:
+            for attempt in (1, 2, 3):
+                t0 = time.time()
+                r = await c.post(f"/api/v1/workflow-system/jobs/{jid}/trigger")
+                d = r.json().get("data") or {}
+                eid = d.get("id")
+                wf, run = d.get("workflowId"), d.get("runId")
+                print(f"[run][{name}]{'[重跑]' if attempt > 1 else ''} 触发 http={r.status_code} exec={eid}")
+                if not wf:
+                    er = await c.get(f"/api/v1/workflow-system/executions/{eid}")
                     d = er.json().get("data") or {}
-                    status = str(d.get("status") or "unknown").lower()
-                    if status in TERMINAL:
-                        break
-                    if int(time.time() - t0) % 300 < 20:
-                        print(f"[run][{name}] {status} {time.time() - t0:.0f}s")
-            mark = "OK" if status in ("succeeded", "completed") else "!!"
+                    wf, run = d.get("workflowId"), d.get("runId")
+                status, n_events = await _poll_chain(tclient, wf, run, name, t0)
+                if status == "COMPLETED":
+                    break
+                if status == "WEDGE" and attempt < 3:
+                    print(f"[run][{name}] 楔死自愈：cancel 旧 run 后重触发（水位续跑）")
+                    try:
+                        await tclient.get_workflow_handle(wf, run_id=run).cancel()
+                        await asyncio.sleep(10)
+                    except Exception as ex:  # noqa: BLE001
+                        print(f"[run][{name}] cancel: {ex}")
+                    continue
+                break
+            mark = "OK" if status == "COMPLETED" else "!!"
             print(f"[run][{name}] {mark} {status} {time.time() - t0:.0f}s")
+
+
+async def _poll_chain(tclient, wf: str | None, run: str | None, name: str, t0: float):
+    """轮询单链：返回 (终态, 事件数)。事件数 WEDGE_STALL 不涨 → WEDGE。"""
+    if not wf:
+        return "NO_WF", 0
+    h = tclient.get_workflow_handle(wf, run_id=run)
+    last_n, last_move = -1, time.time()
+    while time.time() - t0 < CHAIN_TIMEOUT:
+        await asyncio.sleep(25)
+        try:
+            d = await h.describe()
+            hist = await h.fetch_history()
+            n = len(list(hist.events))
+        except Exception as ex:  # noqa: BLE001
+            print(f"[run][{name}] describe: {type(ex).__name__} {str(ex)[:100]}")
+            await asyncio.sleep(30)
+            continue
+        status = str(d.status).split(".")[-1]
+        if status in TERMINAL:
+            return status, n
+        if n != last_n:
+            last_n, last_move = n, time.time()
+        elif time.time() - last_move > WEDGE_STALL:
+            print(f"[run][{name}] 事件数 {n} 已 {WEDGE_STALL}s 不涨，判楔死")
+            return "WEDGE", n
+        if int(time.time() - t0) % 300 < 25:
+            print(f"[run][{name}] {status} events={n} {time.time() - t0:.0f}s")
+    return "TIMEOUT", last_n
 
 
 # ---------------------------------------------------------------- verify

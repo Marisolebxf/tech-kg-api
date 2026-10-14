@@ -1,0 +1,426 @@
+"""gkx_dwd_local 本地 DWD 库 → 新图空间 全量 e2e 驱动（部署即跑）。
+
+复刻「前端动线」：克隆 Schema 目录 → DDL 建图结构 → 建 chain 任务 → 串行触发 → 验证。
+四个阶段可独立执行，也可 --phase all 一把梭（purge+prepare+run+verify）。
+
+用法（在 api 容器内；宿主先 docker cp 本文件进容器）：
+    docker cp gkx_dwd_local_e2e.py tech-kg-api-yunfei3:/tmp/
+    docker exec tech-kg-api-yunfei3 /app/.venv/bin/python /tmp/gkx_dwd_local_e2e.py --phase all
+    # 单阶段（可反复执行，各阶段幂等）：
+    docker exec tech-kg-api-yunfei3 /app/.venv/bin/python /tmp/gkx_dwd_local_e2e.py --phase prepare
+    docker exec tech-kg-api-yunfei3 /app/.venv/bin/python /tmp/gkx_dwd_local_e2e.py --phase purge
+    docker exec tech-kg-api-yunfei3 /app/.venv/bin/python /tmp/gkx_dwd_local_e2e.py --phase run
+    docker exec tech-kg-api-yunfei3 /app/.venv/bin/python /tmp/gkx_dwd_local_e2e.py --phase verify
+
+阶段说明：
+    prepare  建图空间（若无，走平台 API，含向量库登记）+ 克隆源空间目录
+             （definition/property/script/source 绑定改指 --datasource/--database）+ 执行 DDL
+    purge    CLEAR SPACE 清全部点边（保留 TAG/EDGE/索引）+ 按 source 绑定清抽取水位
+    run      按前端「新建任务」形态建 3 条 chain 任务（实体链 + 关系链A/B 交错分链
+             平衡大表），串行触发并轮询终态（任务/执行在图谱构建页可见）
+    verify   SUBMIT JOB STATS 后 SHOW STATS，对照锚点表 + 前端视角
+             （jobs/executions/审核case）收尾
+
+依赖 env：MYSQL_HOST/PORT/USERNAME/PASSWORD（业务+控制库同实例）；
+脚本不打印任何凭证。控制库/业务库/图空间等常量见顶部 *_DEFAULT。
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import sys
+import time
+import uuid
+
+SPACE_DEFAULT = "gkx_local_1"
+SOURCE_SPACE_DEFAULT = "gkx_verify_1"  # 目录模板空间（45 个 DWD 适配脚本所在）
+CTRL_DB_DEFAULT = "techkg_control_yunfei3"  # 控制库：schema 目录 + 绑定 + 执行记录
+BIZ_DB_DEFAULT = "techkg_global"  # 业务库：抽取水位 + 审核队列
+DATASOURCE_DEFAULT = "MYSQL-DWD-LOCAL"
+DATABASE_DEFAULT = "gkx_dwd_local"
+CHAIN_TIMEOUT = 7200  # 单链轮询上限（秒）
+TERMINAL = {"succeeded", "failed", "canceled", "terminated", "completed", "error", "abnormal"}
+
+
+# ---------------------------------------------------------------- MySQL 直连
+
+def mysql_conn(db: str):
+    import os
+
+    import pymysql
+
+    return pymysql.connect(
+        host=os.getenv("MYSQL_HOST", "host.docker.internal"),
+        port=int(os.getenv("MYSQL_PORT", "30306")),
+        user=os.getenv("MYSQL_USERNAME", "root"),
+        password=os.getenv("MYSQL_PASSWORD", ""),
+        database=db,
+        charset="utf8mb4",
+        cursorclass=pymysql.cursors.DictCursor,
+    )
+
+
+# ---------------------------------------------------------------- prepare
+
+def prepare(args) -> None:
+    asyncio.run(_create_space(args.space, args.description))
+    _clone_catalog(args)
+    _run_ddl(args)
+
+
+async def _create_space(space: str, description: str) -> None:
+    sys.path.insert(0, "/app")
+    import httpx
+
+    import main as app_main
+
+    transport = httpx.ASGITransport(app=app_main.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t", timeout=120) as c:
+        r = await c.get("/api/v1/graph-spaces")
+        names = [it["name"] for it in (r.json().get("data") or {}).get("items") or []]
+        if space in names:
+            print(f"[prepare] 图空间 {space} 已存在，跳过创建")
+            return
+        r = await c.post("/api/v1/graph-spaces", json={"name": space, "description": description})
+        print(f"[prepare] 建空间 {space}: http={r.status_code} {r.text[:160]}")
+
+
+def _clone_catalog(args) -> None:
+    """克隆源空间目录到目标空间：definition/property/mapping/script/source（幂等）。"""
+    conn = mysql_conn(args.ctrl_db)
+    cur = conn.cursor()
+    space, src = args.space, args.source_space
+
+    # 幂等：清目标空间既有目录（子表先删，definition 后删）
+    for t in ("kg_schema_source", "kg_schema_script", "kg_schema_mapping", "kg_schema_property"):
+        cur.execute(
+            f"DELETE t FROM {t} t JOIN kg_schema_definition d ON d.id=t.schema_id WHERE d.graph_space=%s",
+            (space,),
+        )
+    cur.execute("DELETE FROM kg_schema_definition WHERE graph_space=%s", (space,))
+    conn.commit()
+
+    cur.execute("SELECT * FROM kg_schema_definition WHERE graph_space=%s AND is_deleted=0", (src,))
+    defs = cur.fetchall()
+    id_map = {d["id"]: str(uuid.uuid4()) for d in defs}
+    n_prop = n_script = n_src = 0
+    for d in defs:
+        nid = id_map[d["id"]]
+        row = dict(d)
+        row["id"] = nid
+        row["graph_space"] = space
+        # relation 两端引用延后 UPDATE（外键 RESTRICT，首行 relation 先插会撞实体未就位）
+        row["source_schema_id"] = None
+        row["target_schema_id"] = None
+        for k, v in (("instance_count", 0), ("ddl_status", "pending"), ("ddl_error", None), ("ddl_executed_at", None)):
+            if k in row:
+                row[k] = v
+        _insert(cur, "kg_schema_definition", row)
+
+        # 子表：patch=硬改字段；reset=仅当列存在时重置（各库 schema 有差异，容错）
+        for table, patch, reset in (
+            ("kg_schema_property", {"id": str(uuid.uuid4()), "schema_id": nid}, None),
+            ("kg_schema_mapping", {"id": str(uuid.uuid4()), "schema_id": nid}, None),
+            (
+                "kg_schema_script",
+                {"id": str(uuid.uuid4()), "schema_id": nid},
+                {"last_run_status": "none", "last_run_error": None, "last_run_at": None},
+            ),
+            (
+                "kg_schema_source",
+                {
+                    "id": str(uuid.uuid4()),
+                    "schema_id": nid,
+                    "datasource_id": args.datasource,
+                    "database_name": args.database,
+                },
+                None,
+            ),
+        ):
+            cur.execute(f"SELECT * FROM {table} WHERE schema_id=%s", (d["id"],))
+            for sub in cur.fetchall():
+                sub.update(patch)
+                for k, v in (reset or {}).items():
+                    if k in sub:
+                        sub[k] = v
+                _insert(cur, table, sub)
+                if table == "kg_schema_property":
+                    n_prop += 1
+                elif table == "kg_schema_script":
+                    n_script += 1
+                elif table == "kg_schema_source":
+                    n_src += 1
+
+    for old, new in id_map.items():
+        cur.execute("SELECT source_schema_id, target_schema_id FROM kg_schema_definition WHERE id=%s", (old,))
+        r = cur.fetchone() or {}
+        cur.execute(
+            "UPDATE kg_schema_definition SET source_schema_id=%s, target_schema_id=%s WHERE id=%s",
+            (id_map.get(r.get("source_schema_id")), id_map.get(r.get("target_schema_id")), new),
+        )
+    conn.commit()
+    print(f"[prepare] 克隆目录: def={len(defs)} property={n_prop} script={n_script} source={n_src}")
+    conn.close()
+
+
+def _insert(cur, table: str, row: dict) -> None:
+    cols = ", ".join(f"`{k}`" for k in row)
+    ph = ", ".join(["%s"] * len(row))
+    cur.execute(f"INSERT INTO {table} ({cols}) VALUES ({ph})", list(row.values()))
+
+
+def _run_ddl(args) -> None:
+    sys.path.insert(0, "/app")
+    from service.schema_ddl import run_schema_ddl
+
+    conn = mysql_conn(args.ctrl_db)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, kind, name FROM kg_schema_definition WHERE graph_space=%s AND is_deleted=0",
+        (args.space,),
+    )
+    defs = cur.fetchall()
+    ok = fail = 0
+    for d in defs:
+        cur.execute(
+            "SELECT name, data_type, required FROM kg_schema_property WHERE schema_id=%s AND is_deleted=0 ORDER BY position",
+            (d["id"],),
+        )
+        res = run_schema_ddl(d["kind"], d["name"], list(cur.fetchall()), graph_space=args.space)
+        cur.execute(
+            "UPDATE kg_schema_definition SET ddl_statement=%s, ddl_status=%s, ddl_error=%s, ddl_executed_at=%s WHERE id=%s",
+            (res["statement"], res["status"], res["error"], res["executed_at"], d["id"]),
+        )
+        if res["status"] == "succeeded":
+            ok += 1
+        else:
+            fail += 1
+            print(f"[prepare] DDL FAIL {d['name']}: {res['error']}")
+    conn.commit()
+    print(f"[prepare] DDL: 成功 {ok} / 失败 {fail} / 总 {len(defs)}")
+    conn.close()
+
+
+# ---------------------------------------------------------------- purge
+
+def purge(args) -> None:
+    sys.path.insert(0, "/app")
+    from infra.graph_db import get_space_client
+
+    c = get_space_client(args.space)
+    try:
+        c.execute_write(f"CLEAR SPACE {args.space}")
+        print(f"[purge] CLEAR SPACE {args.space} 已提交")
+    except Exception as ex:  # noqa: BLE001
+        raise SystemExit(f"[purge] CLEAR SPACE 失败: {ex}")
+
+    # 水位键 = (workflow definition id, 'source:' + 绑定 uuid)——按目标空间绑定精确清
+    conn = mysql_conn(args.ctrl_db)
+    cur = conn.cursor()
+    cur.execute(
+        """SELECT s.id FROM kg_schema_source s JOIN kg_schema_definition d ON d.id=s.schema_id
+           WHERE d.graph_space=%s""",
+        (args.space,),
+    )
+    sids = [r["id"] for r in cur.fetchall()]
+    conn.close()
+    if not sids:
+        print("[purge] 无绑定，跳过水位清理")
+        return
+    biz = mysql_conn(args.biz_db)
+    bcur = biz.cursor()
+    ph = ",".join(["%s"] * len(sids))
+    bcur.execute(f"DELETE FROM kg_script_watermark WHERE step_id IN ({ph})", [f"source:{s}" for s in sids])
+    biz.commit()
+    print(f"[purge] 清水位 {bcur.rowcount} 行（绑定 {len(sids)} 个）")
+    biz.close()
+
+
+# ---------------------------------------------------------------- run
+
+def _load_runnable(ctrl_db: str, space: str):
+    """有脚本且有绑定（chain 入链前置）的 schema：实体序 + 关系交错分两链。"""
+    conn = mysql_conn(ctrl_db)
+    cur = conn.cursor()
+    cur.execute(
+        """SELECT d.id, d.kind FROM kg_schema_definition d
+           WHERE d.graph_space=%s AND d.is_deleted=0
+             AND EXISTS (SELECT 1 FROM kg_schema_script sc WHERE sc.schema_id=d.id)
+             AND EXISTS (SELECT 1 FROM kg_schema_source so WHERE so.schema_id=d.id)
+           ORDER BY d.name""",
+        (space,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    ents = [r["id"] for r in rows if r["kind"] == "entity"]
+    rels = [r["id"] for r in rows if r["kind"] == "relation"]
+    # 偶/奇位交错分链，把 CITES/COAUTHOR_WITH 等大表天然分开，两链时长均衡
+    chain_a = [sid for i, sid in enumerate(rels) if i % 2 == 0]
+    chain_b = [sid for i, sid in enumerate(rels) if i % 2 == 1]
+    return ents, chain_a, chain_b
+
+
+def run(args) -> None:
+    asyncio.run(_run_chains(args))
+
+
+async def _run_chains(args) -> None:
+    sys.path.insert(0, "/app")
+    import httpx
+
+    import main as app_main
+
+    ents, a, b = _load_runnable(args.ctrl_db, args.space)
+    print(f"[run] 可跑 schema: 实体 {len(ents)} | 关系A {len(a)} | 关系B {len(b)}")
+    transport = httpx.ASGITransport(app=app_main.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t", timeout=120) as c:
+        # 幂等：同名旧任务先删
+        r = await c.get("/api/v1/workflow-system/jobs", headers={"X-Graph-Space": args.space})
+        for it in (r.json().get("data") or {}).get("items") or []:
+            if str(it.get("name") or "").startswith("gkx本地e2e-"):
+                await c.delete(f"/api/v1/workflow-system/jobs/{it['id']}")
+                print(f"[run] 删除旧任务 {it['name']} ({it['id']})")
+
+        job_ids = []
+        for name, schema_ids in (
+            ("gkx本地e2e-实体链", ents),
+            ("gkx本地e2e-关系链A", a),
+            ("gkx本地e2e-关系链B", b),
+        ):
+            if len(schema_ids) < 2:
+                print(f"[run] {name} 仅 {len(schema_ids)} 个 schema（chain 需 ≥2），跳过")
+                job_ids.append(None)
+                continue
+            r = await c.post(
+                "/api/v1/workflow-system/jobs",
+                json={
+                    "name": name,
+                    "taskType": "chain",
+                    "schemaIds": schema_ids,
+                    "graphSpace": args.space,
+                    "schedule": {"kind": "once"},
+                    "runNow": False,
+                },
+            )
+            d = r.json().get("data") or {}
+            jid = d.get("id") or (d.get("job") or {}).get("id")
+            print(f"[run] 建任务 {name}: http={r.status_code} id={jid}" + ("" if jid else f" {r.text[:160]}"))
+            job_ids.append(jid)
+
+        # 串行：实体先入图，关系链随后（chain 内部已按 schemaIds 顺序串行）
+        for name, jid in zip(("实体链", "关系链A", "关系链B"), job_ids):
+            if not jid:
+                continue
+            t0 = time.time()
+            r = await c.post(f"/api/v1/workflow-system/jobs/{jid}/trigger")
+            eid = (r.json().get("data") or {}).get("id") if r.status_code == 200 else None
+            print(f"[run][{name}] 触发 http={r.status_code} exec={eid}")
+            if not eid:
+                continue
+            status = "unknown"
+            while time.time() - t0 < CHAIN_TIMEOUT:
+                await asyncio.sleep(20)
+                er = await c.get(f"/api/v1/workflow-system/executions/{eid}")
+                if er.status_code == 200:
+                    d = er.json().get("data") or {}
+                    status = str(d.get("status") or "unknown").lower()
+                    if status in TERMINAL:
+                        break
+                    if int(time.time() - t0) % 300 < 20:
+                        print(f"[run][{name}] {status} {time.time() - t0:.0f}s")
+            mark = "OK" if status in ("succeeded", "completed") else "!!"
+            print(f"[run][{name}] {mark} {status} {time.time() - t0:.0f}s")
+
+
+# ---------------------------------------------------------------- verify
+
+# 锚点 = gkx_dwd_local 源表行数口径（源库数据更新后需同步维护）
+ANCHORS = {
+    "Patent": 2010,  # = dwd_patent 行数
+    "Paper": 4000,  # = zh_paper 2000 + en_paper 2000
+    "Project": 4005,  # = zh_project 2011 + en_project 1994
+    "Report": 3000,  # = zh_report 2000 + en_report 1000
+    "BELONGS_TO_NODE": 2943,  # = 链上企业×节点去重（org_base_info 回填后）
+    "IndustryNode": 180,  # = dwd_industry_chain_info 182 − 2 链行
+}
+
+
+def verify(args) -> None:
+    sys.path.insert(0, "/app")
+    from infra.graph_db import get_space_client
+
+    c = get_space_client(args.space)
+    c.execute_query("SUBMIT JOB STATS")
+    time.sleep(15)
+    rows = c.execute_query("SHOW STATS").records
+    stats = {r["Name"]: int(r["Count"]) for r in rows if r.get("Type") in ("Tag", "Edge")}
+    tags = {r["Name"] for r in c.execute_query("SHOW TAGS").records}
+    n_vertex = sum(v for k, v in stats.items() if k in tags)
+    n_edge = len(stats) and sum(v for k, v in stats.items() if k not in tags)
+    print(f"[verify] 图内: 点 {n_vertex} / 边 {n_edge}（{len(stats)} 项 TAG/EDGE）")
+    print("[verify] 锚点对照：")
+    all_ok = True
+    for k, expect in ANCHORS.items():
+        got = stats.get(k)
+        ok = got == expect
+        all_ok = all_ok and ok
+        print(f"    {k:20} 期望 {expect:>8} 实际 {str(got):>8} {'OK' if ok else '<-- 差'}")
+    asyncio.run(_verify_frontend_view(args))
+    print(f"[verify] 结论: 锚点{'全部吻合' if all_ok else '存在偏差'}")
+
+
+async def _verify_frontend_view(args) -> None:
+    sys.path.insert(0, "/app")
+    import httpx
+
+    import main as app_main
+
+    transport = httpx.ASGITransport(app=app_main.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t", timeout=60) as c:
+        h = {"X-Graph-Space": args.space}
+        r = await c.get("/api/v1/workflow-system/jobs", headers=h)
+        jobs = r.json().get("data") or {}
+        print(f"[verify] 前端·图谱构建任务: total={jobs.get('total')}")
+        for it in jobs.get("items") or []:
+            print("    ", {k: it.get(k) for k in ("id", "name", "status", "lastExecutionStatus")})
+        r = await c.get("/api/v1/workflow-system/executions", params={"limit": 3}, headers=h)
+        d = r.json().get("data") or {}
+        print(f"[verify] 前端·执行历史: total={d.get('total')}")
+        for it in (d.get("items") or [])[:3]:
+            print("    ", {k: it.get(k) for k in ("id", "definitionId", "status")})
+
+    biz = mysql_conn(args.biz_db)
+    cur = biz.cursor()
+    cur.execute("SELECT COUNT(*) n FROM manual_review_case WHERE created_at > NOW() - INTERVAL 1 DAY")
+    n = (cur.fetchone() or {}).get("n", 0)
+    print(f"[verify] 人工审核: 近 24h 新建 case {n} 条（全成功抽取应为 0——零失败即无审核来源）")
+    biz.close()
+
+
+# ---------------------------------------------------------------- main
+
+def main() -> None:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--phase", choices=["prepare", "purge", "run", "verify", "all"], required=True)
+    p.add_argument("--space", default=SPACE_DEFAULT, help="目标图空间")
+    p.add_argument("--source-space", default=SOURCE_SPACE_DEFAULT, help="目录模板空间")
+    p.add_argument("--ctrl-db", default=CTRL_DB_DEFAULT, help="控制库（schema 目录）")
+    p.add_argument("--biz-db", default=BIZ_DB_DEFAULT, help="业务库（水位/审核）")
+    p.add_argument("--datasource", default=DATASOURCE_DEFAULT, help="绑定指向的数据源 id")
+    p.add_argument("--database", default=DATABASE_DEFAULT, help="绑定指向的库名")
+    p.add_argument("--description", default="gkx_dwd_local 本地 DWD 库全量 e2e")
+    args = p.parse_args()
+
+    if args.phase in ("all", "purge"):
+        purge(args)
+    if args.phase in ("all", "prepare"):
+        prepare(args)
+    if args.phase in ("all", "run"):
+        run(args)
+    if args.phase in ("all", "verify"):
+        verify(args)
+
+
+if __name__ == "__main__":
+    main()

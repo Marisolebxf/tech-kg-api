@@ -363,7 +363,7 @@ async def _poll_chain(tclient, wf: str | None, run: str | None, name: str, t0: f
             print(f"[run][{name}] describe: {type(ex).__name__} {str(ex)[:100]}")
             await asyncio.sleep(30)
             continue
-        status = str(d.status).split(".")[-1]
+        status = d.status.name  # Py3.11 IntEnum 的 str() 是数字，必须用 .name
         if status in TERMINAL:
             return status, n
         if n != last_n:

@@ -9,14 +9,22 @@ import { useGraphSpaceStore } from '../../../stores/graphSpace'
 import { getProductionReviews, listJobs } from '../../../api/workflowOperations'
 import PlatformWorkbenchView from '../PlatformWorkbenchView.vue'
 
-const { routerPush, showToast } = vi.hoisted(() => ({ routerPush: vi.fn(), showToast: vi.fn() }))
+const { routerPush, showToast, routeQuery } = vi.hoisted(() => ({
+  routerPush: vi.fn(),
+  showToast: vi.fn(),
+  routeQuery: {} as Record<string, string>,
+}))
 
 // 模拟线上误配：关闭前端认证不能覆盖后端返回的普通用户身份。
 vi.mock('../../../config', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../../config')>(), authDisabled: true,
 }))
 
-vi.mock('vue-router', () => ({ useRouter: () => ({ push: routerPush }), RouterLink: { template: '<a><slot /></a>' } }))
+vi.mock('vue-router', () => ({
+  useRoute: () => ({ query: routeQuery }),
+  useRouter: () => ({ push: routerPush }),
+  RouterLink: { template: '<a><slot /></a>' },
+}))
 vi.mock('../../../api/graphConsole', () => ({ runNgql: vi.fn() }))
 vi.mock('../../../api/graphAlgorithm', () => ({
   fetchGraphAlgorithmMetadata: vi.fn(),
@@ -67,6 +75,7 @@ function mountOverview(): VueWrapper {
 
 beforeEach(() => {
   vi.resetAllMocks()
+  routeQuery.day = ''
   vi.stubGlobal('matchMedia', (query: string) => ({
     matches: false, media: query, onchange: null,
     addListener: vi.fn(), removeListener: vi.fn(),
@@ -258,5 +267,21 @@ describe('昨日新增聚合格式展示', () => {
     await row.trigger('click')
     expect(routerPush).not.toHaveBeenCalled()
     expect(showToast).not.toHaveBeenCalled()
+  })
+
+  it('?day=YYYY-MM-DD 传给总览接口回看历史统计日；非法值按缺省不传', async () => {
+    useAuthStore().profile = makeProfile(true)
+    withAssetChanges()
+    routeQuery.day = '2026-10-13'
+    wrapper = mountOverview()
+    await flushPromises()
+    expect(getPlatformOverview).toHaveBeenCalledWith(expect.anything(), '2026-10-13')
+    wrapper.unmount()
+
+    routeQuery.day = 'not-a-date'
+    wrapper = mountOverview()
+    await flushPromises()
+    expect(getPlatformOverview).toHaveBeenCalledWith(expect.anything(), undefined)
+    wrapper.unmount()
   })
 })

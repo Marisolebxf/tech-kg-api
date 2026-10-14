@@ -194,7 +194,9 @@ class DayChangesSnapshot:
 
 
 class DayChangesProvider(Protocol):
-    def get_day_changes(self, space: str | None = None) -> DayChangesSnapshot: ...
+    def get_day_changes(
+        self, space: str | None = None, day: str | None = None
+    ) -> DayChangesSnapshot: ...
 
     def running_count(self, space: str | None = None) -> int: ...
 
@@ -502,19 +504,25 @@ class WorkflowControlDayChangesProvider:
         """统计日 = 日窗口时区（默认北京）自然日的昨天；北京 00:00 翻日。"""
         return (datetime.now(_DAY_TZ) - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    def get_day_changes(self, space: str | None = None) -> DayChangesSnapshot:
-        day = self._current_day()
-        if self._cached_day == day:
-            cached = self._cached.get(space)
-            if cached is not None:
-                return cached
-        snapshot = self._load(day, space)
-        if self._cached_day != day:
-            # 跨日翻页：旧统计日的缓存整体作废
-            self._cached_day = day
-            self._cached = {}
-        self._cached[space] = snapshot
-        return snapshot
+    def get_day_changes(
+        self, space: str | None = None, day: str | None = None
+    ) -> DayChangesSnapshot:
+        target_day = day or self._current_day()
+        if day is None:
+            # 默认当日路径：快照冻结到当天（跨日翻页旧缓存整体作废）
+            if self._cached_day == target_day:
+                cached = self._cached.get(space)
+                if cached is not None:
+                    return cached
+            snapshot = self._load(target_day, space)
+            if self._cached_day != target_day:
+                # 跨日翻页：旧统计日的缓存整体作废
+                self._cached_day = target_day
+                self._cached = {}
+            self._cached[space] = snapshot
+            return snapshot
+        # 指定统计日（历史日回看/验收核对）：现算即返，不进也不污染当日冻结缓存
+        return self._load(target_day, space)
 
     def running_count(self, space: str | None = None) -> int:
         """当前 RUNNING 执行数（实时短查）：日快照缓存到当天结束，「N 个执行
@@ -1319,9 +1327,10 @@ class PlatformOverviewService:
         self._stats_provider = stats_provider or TRSGraphStatsProvider()
         self._changes_provider = changes_provider or WorkflowControlDayChangesProvider()
         self._cache_seconds = int(os.getenv("PLATFORM_OVERVIEW_CACHE_SECONDS", "60"))
-        # 缓存按空间隔离：总览随全局图空间选择器切换后 60s 内不串空间；
-        # 三元组 (过期时刻, 写入时刻, 结果)——写入时刻供旧值硬上限判断
-        self._cached: dict[str | None, tuple[float, float, PlatformOverviewData]] = {}
+        # 缓存按 (空间, 统计日) 隔离：总览随全局图空间选择器切换后 60s 内不串空间；
+        # 指定历史日（day 查询参数）与默认当日互不挤占。三元组 (过期时刻, 写入
+        # 时刻, 结果)——写入时刻供旧值硬上限判断
+        self._cached: dict[tuple[str | None, str], tuple[float, float, PlatformOverviewData]] = {}
         # 旧值兜底硬上限：stale-while-revalidate 的后台刷新若卡死（图连接挂起等），
         # 旧值不能无限期顶下去（2026-10-14 dev2 事故：多 worker 各自的 per-space
         # 刷新锁被卡死线程占住，跨日仍返回前一天的装配结果）。超限后不等那把
@@ -1329,15 +1338,18 @@ class PlatformOverviewService:
         self._stale_hard_limit = float(
             os.getenv("PLATFORM_OVERVIEW_STALE_HARD_LIMIT_SECONDS", "900")
         )
-        self._compute_locks: dict[str | None, threading.Lock] = {}
+        self._compute_locks: dict[tuple[str | None, str], threading.Lock] = {}
         self._locks_guard = threading.Lock()
 
-    def _lock_for(self, space: str | None) -> threading.Lock:
+    def _lock_for(self, key: tuple[str | None, str]) -> threading.Lock:
         with self._locks_guard:
-            return self._compute_locks.setdefault(space, threading.Lock())
+            return self._compute_locks.setdefault(key, threading.Lock())
 
-    def get_overview(self, space: str | None = None) -> PlatformOverviewData:
-        cached = self._cached.get(space)
+    def get_overview(
+        self, space: str | None = None, day: str | None = None
+    ) -> PlatformOverviewData:
+        key = (space, day or "")
+        cached = self._cached.get(key)
         now = time.monotonic()
         if cached is not None and cached[0] > now:
             return cached[2]
@@ -1345,7 +1357,7 @@ class PlatformOverviewService:
             if now - cached[1] > self._stale_hard_limit:
                 # 硬上限兜底：不等可能卡死的后台刷新，直接同步重算并覆写缓存
                 try:
-                    result = self._compute_overview(space)
+                    result = self._compute_overview(space, day)
                 except Exception:  # noqa: BLE001 - 重算失败继续沿用旧值，下一个请求再试
                     logger.warning(
                         "平台总览旧值超硬上限后同步重算失败 space=%s，继续沿用旧值",
@@ -1354,36 +1366,44 @@ class PlatformOverviewService:
                     )
                     return cached[2]
                 stamp = time.monotonic()
-                self._cached[space] = (stamp + self._cache_seconds, stamp, result)
+                self._cached[key] = (stamp + self._cache_seconds, stamp, result)
                 return result
             # 过期：非阻塞抢刷新权，抢到即后台刷新，旧值立即返回
-            lock = self._lock_for(space)
+            lock = self._lock_for(key)
             if lock.acquire(blocking=False):
                 threading.Thread(
-                    target=self._refresh_in_background, args=(space, lock), daemon=True
+                    target=self._refresh_in_background, args=(key, space, day, lock), daemon=True
                 ).start()
             return cached[2]
-        # 冷路径：per-space 单飞同步计算（等锁线程双检命中刚写入的结果）
-        with self._lock_for(space):
-            cached = self._cached.get(space)
+        # 冷路径：per-key 单飞同步计算（等锁线程双检命中刚写入的结果）
+        with self._lock_for(key):
+            cached = self._cached.get(key)
             if cached is not None and cached[0] > time.monotonic():
                 return cached[2]
-            result = self._compute_overview(space)
+            result = self._compute_overview(space, day)
             stamp = time.monotonic()
-            self._cached[space] = (stamp + self._cache_seconds, stamp, result)
+            self._cached[key] = (stamp + self._cache_seconds, stamp, result)
             return result
 
-    def _refresh_in_background(self, space: str | None, lock: threading.Lock) -> None:
+    def _refresh_in_background(
+        self,
+        key: tuple[str | None, str],
+        space: str | None,
+        day: str | None,
+        lock: threading.Lock,
+    ) -> None:
         try:
-            result = self._compute_overview(space)
+            result = self._compute_overview(space, day)
             stamp = time.monotonic()
-            self._cached[space] = (stamp + self._cache_seconds, stamp, result)
+            self._cached[key] = (stamp + self._cache_seconds, stamp, result)
         except Exception:  # noqa: BLE001 - 刷新失败保留旧值，下一个请求再试
-            logger.warning("平台总览后台刷新失败 space=%s，继续沿用旧值", space, exc_info=True)
+            logger.warning(
+                "平台总览后台刷新失败 space=%s day=%s，继续沿用旧值", space, day, exc_info=True
+            )
         finally:
             lock.release()
 
-    def _compute_overview(self, space: str | None) -> PlatformOverviewData:
+    def _compute_overview(self, space: str | None, day: str | None = None) -> PlatformOverviewData:
         fallback = self._get_fallback_overview()
         try:
             stats = (
@@ -1417,7 +1437,7 @@ class PlatformOverviewService:
             # 读不到时保持占位并给出警告，绝不回填虚构演示行
             changes: DayChangesSnapshot | None = None
             try:
-                changes = self._changes_provider.get_day_changes(space)
+                changes = self._changes_provider.get_day_changes(space, day=day)
             except Exception as exc:
                 logger.warning("首页昨日新增读取失败（工作流控制库不可用）: %s", exc)
             if changes is not None:

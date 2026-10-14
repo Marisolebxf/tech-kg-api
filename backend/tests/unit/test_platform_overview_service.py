@@ -61,9 +61,13 @@ class FakeChangesProvider:
     def __init__(self, snapshot: DayChangesSnapshot | None = None) -> None:
         self.snapshot = snapshot or DayChangesSnapshot()
         self.spaces: list[str | None] = []
+        self.days: list[str | None] = []
 
-    def get_day_changes(self, space: str | None = None) -> DayChangesSnapshot:
+    def get_day_changes(
+        self, space: str | None = None, day: str | None = None
+    ) -> DayChangesSnapshot:
         self.spaces.append(space)
+        self.days.append(day)
         return self.snapshot
 
     def running_count(self, space: str | None = None) -> int:
@@ -71,7 +75,9 @@ class FakeChangesProvider:
 
 
 class FailingChangesProvider:
-    def get_day_changes(self, space: str | None = None) -> DayChangesSnapshot:
+    def get_day_changes(
+        self, space: str | None = None, day: str | None = None
+    ) -> DayChangesSnapshot:
         raise RuntimeError("control db unavailable")
 
     def running_count(self, space: str | None = None) -> int:
@@ -471,6 +477,52 @@ def test_day_changes_provider_caches_closed_window_until_day_rolls() -> None:
     assert loads == [("2026-09-23", "dev2"), ("2026-09-23", "techkg")]
     provider.get_day_changes("dev2")  # 翻日后旧缓存作废、重新冷算
     assert loads[-1] == ("2026-09-24", "dev2")
+
+
+def test_day_changes_with_explicit_day_bypasses_and_never_pollutes_daily_cache() -> None:
+    """?day= 指定历史日回看（验收核对）：现算即返、不进当日冻结缓存；当日态
+    （_cached_day/缓存行）不被历史日请求触碰，后续默认请求语义不变。"""
+    from service.platform_overview import DayChangesSnapshot, WorkflowControlDayChangesProvider
+
+    loads: list[tuple[str, str | None]] = []
+
+    class _FrozenProvider(WorkflowControlDayChangesProvider):
+        def _current_day(self) -> str:
+            return "2026-10-14"
+
+        def _load(self, day: str, space: str | None) -> DayChangesSnapshot:
+            loads.append((day, space))
+            return DayChangesSnapshot(day=day, entity_added=len(loads))
+
+    provider = _FrozenProvider()
+    history = provider.get_day_changes("gkx_verify_1", day="2026-10-13")
+    assert history.day == "2026-10-13"
+    assert loads == [("2026-10-13", "gkx_verify_1")]
+    # 历史日不落当日冻结缓存：重复请求重算（无缓存可命中）
+    provider.get_day_changes("gkx_verify_1", day="2026-10-13")
+    assert loads == [("2026-10-13", "gkx_verify_1"), ("2026-10-13", "gkx_verify_1")]
+    assert provider._cached_day is None  # 当日态未被历史日污染
+
+    # 随后的默认请求照旧：当日冷算一次后冻结
+    first = provider.get_day_changes("gkx_verify_1")
+    assert loads[-1] == ("2026-10-14", "gkx_verify_1")
+    assert provider.get_day_changes("gkx_verify_1") is first
+    assert len([entry for entry in loads if entry == ("2026-10-14", "gkx_verify_1")]) == 1
+
+
+def test_overview_threads_day_param_and_caches_per_day() -> None:
+    """get_overview(space, day) 把统计日透传给变更快照；结果缓存按 (空间, 统计日)
+    隔离——历史日回看与默认当日互不挤占缓存。"""
+    changes = FakeChangesProvider()
+    service = PlatformOverviewService(stats_provider=FakeStatsProvider(), changes_provider=changes)
+
+    service.get_overview("dev2", day="2026-10-13")
+    assert changes.days == ["2026-10-13"]
+    service.get_overview("dev2", day="2026-10-13")  # 同 (空间, 日) 命中缓存
+    assert changes.days == ["2026-10-13"]
+
+    service.get_overview("dev2")  # 默认当日：另一个缓存键，重算
+    assert changes.days == ["2026-10-13", None]
 
 
 def test_overview_shows_placeholder_when_no_day_changes() -> None:
@@ -1527,8 +1579,8 @@ def test_overview_serves_stale_value_and_refreshes_in_background() -> None:
     assert provider.calls == 1
 
     # 把缓存条目拨成过期（模拟 TTL 到期后的下一次进页）
-    _, stored, data = service._cached["dev2"]
-    service._cached["dev2"] = (time.monotonic() - 1, stored, data)
+    _, stored, data = service._cached[("dev2", "")]
+    service._cached[("dev2", "")] = (time.monotonic() - 1, stored, data)
 
     started = time.perf_counter()
     again = service.get_overview("dev2")
@@ -1536,7 +1588,7 @@ def test_overview_serves_stale_value_and_refreshes_in_background() -> None:
     assert time.perf_counter() - started < 1.0
 
     for _ in range(100):  # 等后台线程写回新值
-        if service._cached["dev2"][2] is not first:
+        if service._cached[("dev2", "")][2] is not first:
             break
         time.sleep(0.02)
     assert provider.calls == 2
@@ -2059,16 +2111,16 @@ def test_overview_cache_hard_limit_forces_sync_recompute() -> None:
     )
     first = service.get_overview()
 
-    # 模拟事故形态：per-space 刷新锁被卡死线程长期占住，stale-while-revalidate
+    # 模拟事故形态：per-key 刷新锁被卡死线程长期占住，stale-while-revalidate
     # 抢不到刷新权——旧值进入「过期但继续顶」状态
-    with service._lock_for(None):
+    with service._lock_for((None, "")):
         stale = time.monotonic() - 10
-        service._cached[None] = (stale, stale, first)
+        service._cached[(None, "")] = (stale, stale, first)
         assert service.get_overview() is first
 
         # 过期且写入时刻超硬上限：不等锁，请求线程同步重算出新结果
         very_old = time.monotonic() - service._stale_hard_limit - 1
-        service._cached[None] = (very_old, very_old, first)
+        service._cached[(None, "")] = (very_old, very_old, first)
         refreshed = service.get_overview()
         assert refreshed is not first
-        assert service._cached[None][2] is refreshed
+        assert service._cached[(None, "")][2] is refreshed

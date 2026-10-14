@@ -6,7 +6,7 @@ import {
   ref,
   watch,
 } from 'vue'
-import { RouterLink, useRouter } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { runNgql, type GraphConsoleResult } from '../../api/graphConsole'
 import { currentGraphSpace } from '../../api/currentGraphSpace'
 import AppAlert from '../../components/AppAlert.vue'
@@ -279,6 +279,13 @@ const props = defineProps<{
 }>()
 
 const router = useRouter()
+const route = useRoute()
+
+// ?day=YYYY-MM-DD 回看指定统计日的「昨日新增」（验收核对）；非法值按缺省处理
+const overviewDayParam = computed(() => {
+  const day = typeof route.query.day === 'string' ? route.query.day : ''
+  return /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : undefined
+})
 
 // 平台总览对所有登录用户开放；跳往管理页的入口（查看任务/进入人工处理按钮、
 // 图谱构建与人工审核面板、资产抽屉的更新任务链接）对普通用户直接隐藏，仅管理员可见。
@@ -1345,7 +1352,7 @@ onUnmounted(() => {
 async function loadPlatformOverview(): Promise<void> {
   try {
     // 图资产统计随全局图空间选择器（00918：抽取写非默认空间后总览也要能反映）
-    const data = await getPlatformOverview(currentGraphSpace())
+    const data = await getPlatformOverview(currentGraphSpace(), overviewDayParam.value)
 
     overviewMeta.value = {
       platformStatus: data.platformStatus,
@@ -1388,6 +1395,11 @@ watch(algoSpace, () => {
     void loadPlatformOverview()
     void loadOverviewCards()
   }
+})
+
+// ?day= 变化（页内改 URL 回看历史统计日）后重拉已展示的总览
+watch(overviewDayParam, () => {
+  if (overviewDataLoaded.value) void loadPlatformOverview()
 })
 
 function handleStartTask() {

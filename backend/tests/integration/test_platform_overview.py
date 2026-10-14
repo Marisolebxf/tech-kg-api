@@ -29,10 +29,17 @@ class _IntegrationChangesProvider:
     """控制库昨日增量替身：避免集成测试依赖真实 techkg_control 数据。
 
     聚合格式（2026-10-14）：一行 = 一个写入块（执行 × 来源），数量列 = 该块
-    written 精确计数，徽标/合计同口径。"""
+    written 精确计数，徽标/合计同口径。day（指定统计日回看）透传记录在
+    last_days 供 ?day= 用例断言。"""
 
-    def get_day_changes(self, space: str | None = None) -> DayChangesSnapshot:
+    last_days: list[str | None] = []
+
+    def get_day_changes(
+        self, space: str | None = None, day: str | None = None
+    ) -> DayChangesSnapshot:
+        type(self).last_days.append(day)
         return DayChangesSnapshot(
+            day=day or "2026-10-13",
             entity_added=5,
             relation_added=2,
             running_count=1,
@@ -120,6 +127,32 @@ async def test_platform_overview_returns_frontend_contract(
     assert data["dataMode"] == "partial"
     assert data["dataSources"]["graphAssets"] == "trsgraph-live"
     assert data["dataSources"]["dayChanges"] == "workflow-control-live"
+
+
+async def test_platform_overview_day_param_replays_history_day(
+    overview_client: AsyncClient,
+) -> None:
+    """?day=YYYY-MM-DD 指定统计日回看（验收核对历史「昨日新增」）：透传到
+    变更快照、统计日标签随载荷透出；非法格式 422 拒绝；缺省不传（默认=昨天）。"""
+    _IntegrationChangesProvider.last_days = []
+    application.service = PlatformOverviewService(
+        stats_provider=_IntegrationStatsProvider(),
+        changes_provider=_IntegrationChangesProvider(),
+    )
+    response = await overview_client.get("/api/v1/platform/overview", params={"day": "2026-10-13"})
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert _IntegrationChangesProvider.last_days == ["2026-10-13"]
+    assert data["statsDay"] == "2026-10-13"
+    # 历史日的写入块行照常装配（行级跳转链路可用）
+    assert len(data["assetChangeRows"]["entity"]) == 1
+
+    bad = await overview_client.get("/api/v1/platform/overview", params={"day": "10-13"})
+    assert bad.status_code == 422
+
+    await overview_client.get("/api/v1/platform/overview")
+    assert _IntegrationChangesProvider.last_days[-1] is None
 
 
 async def test_platform_overview_atomic_endpoints_are_registered(

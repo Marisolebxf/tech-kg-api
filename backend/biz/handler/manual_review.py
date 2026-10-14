@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -42,6 +43,12 @@ router = APIRouter(prefix="/manual-reviews", tags=["manual-review"])
 # TTL 环境变量 REVIEW_QUEUE_CACHE_SECONDS 可调，0=关闭。
 _QUEUE_CACHE_SECONDS = float(os.getenv("REVIEW_QUEUE_CACHE_SECONDS", "15"))
 _queue_payload_cache: dict[str, tuple[float, str]] = {}
+# 翻页提速（对齐实体列表 entity_search 的 100 条块缓存）：页请求对齐到所在
+# 100 条块计算并缓存，页只是块内切片，同块的相邻页不再各查一次库；块计算用
+# asyncio.Task 共享在飞结果——同一块并发翻页只放一个请求查库，其余等同一结果
+# （RBAC 开启时响应缓存禁用，但在飞去重依然成立：首个现算，其余共享）。
+REVIEW_QUEUE_BLOCK_SIZE = 100
+_queue_block_tasks: dict[str, asyncio.Task] = {}
 
 
 def _queue_cache_get(key: str) -> str | None:
@@ -99,6 +106,77 @@ def _raise_production_error(exc: Exception) -> None:
     raise exc
 
 
+def _queue_envelope(data: dict) -> str:
+    return json.dumps(
+        {"code": 200, "success": True, "data": data, "msg": "success"},
+        ensure_ascii=False,
+        default=str,
+    )
+
+
+def _queue_block_key(scope_key: str, filters: dict, block_offset: int) -> str:
+    return "queue-block:" + scope_key + json.dumps(filters, ensure_ascii=False) + f":{block_offset}"
+
+
+async def _compute_queue_block(
+    identity, scope_key: str, filters: dict, block_offset: int
+) -> tuple[str, bool]:
+    """现算一个 100 条块（list_cases 挪线程池，不再阻塞事件循环）并写响应缓存。
+
+    同键并发请求共享在飞的 asyncio.Task：只有一个请求查库，其余等同一结果。
+    返回 (payload, 是否缓存命中)。
+    """
+    key = _queue_block_key(scope_key, filters, block_offset)
+    cached = _queue_cache_get(key)
+    if cached is not None:
+        return cached, True
+
+    async def run() -> tuple[str, bool]:
+        data = await asyncio.to_thread(
+            production_service.list_cases,
+            {
+                **filters,
+                "page": block_offset // REVIEW_QUEUE_BLOCK_SIZE + 1,
+                "page_size": REVIEW_QUEUE_BLOCK_SIZE,
+            },
+            identity,
+        )
+        payload = _queue_envelope(data)
+        _queue_cache_put(key, payload)
+        return payload, False
+
+    task = _queue_block_tasks.get(key)
+    if task is None:
+        task = asyncio.ensure_future(run())
+        _queue_block_tasks[key] = task
+
+        def _pop(_task: asyncio.Task) -> None:
+            _queue_block_tasks.pop(key, None)
+
+        task.add_done_callback(_pop)
+    return await task
+
+
+async def _load_queue_page(
+    identity, scope_key: str, filters: dict, *, page: int, page_size: int
+) -> tuple[str, bool]:
+    """页请求 → 所在 100 条块的切片；跨块页补拉下一块拼接（对齐实体列表分页）。"""
+    offset = (page - 1) * page_size
+    block_offset = offset // REVIEW_QUEUE_BLOCK_SIZE * REVIEW_QUEUE_BLOCK_SIZE
+    payload, hit = await _compute_queue_block(identity, scope_key, filters, block_offset)
+    data = json.loads(payload)["data"]
+    start = offset - block_offset
+    items = data["items"][start : start + page_size]
+    if start + page_size > REVIEW_QUEUE_BLOCK_SIZE and offset + len(items) < data["total"]:
+        following, following_hit = await _compute_queue_block(
+            identity, scope_key, filters, block_offset + REVIEW_QUEUE_BLOCK_SIZE
+        )
+        items.extend(json.loads(following)["data"]["items"][: page_size - len(items)])
+        hit = hit and following_hit
+    data.update(items=items, page=page, pageSize=page_size)
+    return _queue_envelope(data), hit
+
+
 @router.get("/production/queue", response_model=ApiResponse)
 async def production_queue(
     identity: ReviewIdentityDep,
@@ -150,48 +228,44 @@ async def production_queue(
         if graph_space and graph_space != selected_space:
             raise HTTPException(403, "请求空间与当前图空间不一致")
         graph_space = selected_space
-    cache_key = (
-        "queue:"
-        + _cache_scope(identity)
-        + json.dumps(
-            [
-                queue,
-                status,
-                status_group,
-                kind,
-                risk,
-                domain,
-                template_id,
-                assignee_id,
-                graph_space,
-                category,
-                keyword,
-                updated_within,
-                sort,
-                page,
-                page_size,
-            ],
-            ensure_ascii=False,
-        )
-    )
-    cached = _queue_cache_get(cache_key)
-    if cached is not None:
-        return Response(cached, media_type="application/json")
+    # list_cases 只读这些过滤键（page/page_size 由块加载器按块对齐注入）
+    filters = {
+        "queue": queue,
+        "status": status,
+        "status_group": status_group,
+        "kind": kind,
+        "risk": risk,
+        "domain": domain,
+        "template_id": template_id,
+        "assignee_id": assignee_id,
+        "graph_space": graph_space,
+        "category": category,
+        "keyword": keyword,
+        "updated_within": updated_within,
+        "sort": sort,
+    }
+    page = max(int(page or 1), 1)
+    page_size = min(max(int(page_size or 50), 1), 200)
     try:
-        payload = json.dumps(
-            {
-                "code": 200,
-                "success": True,
-                "data": production_service.list_cases(locals(), identity),
-                "msg": "success",
-            },
-            ensure_ascii=False,
-            default=str,
-        )
+        if page_size <= REVIEW_QUEUE_BLOCK_SIZE:
+            payload, hit = await _load_queue_page(
+                identity, _cache_scope(identity), filters, page=page, page_size=page_size
+            )
+        else:
+            # 超过块大小的页大小直接现算（前端页大小上限 100，正常不会走到）
+            data = await asyncio.to_thread(
+                production_service.list_cases,
+                {**filters, "page": page, "page_size": page_size},
+                identity,
+            )
+            payload, hit = _queue_envelope(data), False
     except Exception as exc:
         _raise_production_error(exc)
-    _queue_cache_put(cache_key, payload)
-    return Response(payload, media_type="application/json")
+    return Response(
+        payload,
+        media_type="application/json",
+        headers={"X-Review-Queue-Cache": "HIT" if hit else "MISS"},
+    )
 
 
 readonly_router.get("/production/queue", response_model=ApiResponse)(production_queue)

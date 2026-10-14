@@ -282,3 +282,142 @@ async def test_http_queue_follows_graph_space_param(async_client, production_api
         assert everything["total"] == 2
     finally:
         handler_module._queue_cache_clear()
+
+
+@pytest.mark.anyio
+async def test_http_queue_block_cache_reuses_adjacent_pages(async_client, production_api):
+    """翻页提速（对齐实体列表）：页请求对齐 100 条块缓存，同块相邻页不再查库。"""
+    _, service = production_api
+    for i in range(25):
+        service.create_direct_case(
+            **_link_kwargs(task_id=f"TASK-BLK-{i}", execution_id=f"EXEC-BLK-{i}")
+        )
+    calls = {"n": 0}
+    original = service.list_cases
+
+    def counting(f, a):
+        calls["n"] += 1
+        return original(f, a)
+
+    service.list_cases = counting
+    try:
+        first = await async_client.get(
+            "/api/v1/manual-reviews/production/queue", params={"category": "A", "pageSize": 20}
+        )
+        assert first.headers["x-review-queue-cache"] == "MISS"
+        first_data = first.json()["data"]
+        assert first_data["total"] == 25
+        assert len(first_data["items"]) == 20
+        assert first_data["page"] == 1
+        assert calls["n"] == 1
+
+        second = await async_client.get(
+            "/api/v1/manual-reviews/production/queue",
+            params={"category": "A", "pageSize": 20, "page": 2},
+        )
+        assert second.headers["x-review-queue-cache"] == "HIT"
+        second_data = second.json()["data"]
+        assert second_data["total"] == 25
+        assert len(second_data["items"]) == 5
+        assert second_data["page"] == 2
+        # 第 1、2 页同属一个 100 条块：只有块计算那一次查库
+        assert calls["n"] == 1
+
+        # 改过滤=新块键：重新查库（MISS）
+        filtered = await async_client.get(
+            "/api/v1/manual-reviews/production/queue",
+            params={"category": "A", "pageSize": 20, "page": 1, "status": "OPEN"},
+        )
+        assert filtered.headers["x-review-queue-cache"] == "MISS"
+        assert calls["n"] == 2
+    finally:
+        service.list_cases = original
+        from biz.handler import manual_review as handler_module
+
+        handler_module._queue_cache_clear()
+
+
+@pytest.mark.anyio
+async def test_http_queue_page_spanning_blocks_stitches(async_client, production_api):
+    """跨块的页（pageSize 整除不了 100 时）补拉下一块拼接，行序连续不丢不重。"""
+    _, service = production_api
+    for i in range(105):
+        service.create_direct_case(
+            **_link_kwargs(task_id=f"TASK-SPN-{i}", execution_id=f"EXEC-SPN-{i}")
+        )
+    calls = {"n": 0}
+    original = service.list_cases
+
+    def counting(f, a):
+        calls["n"] += 1
+        return original(f, a)
+
+    service.list_cases = counting
+    try:
+        page4 = await async_client.get(
+            "/api/v1/manual-reviews/production/queue",
+            params={"category": "A", "pageSize": 30, "page": 4},
+        )
+        data = page4.json()["data"]
+        assert data["total"] == 105
+        # 第 4 页=第 90-104 行（105 条只剩 15 行）：横跨块边界补拉下一块拼接
+        assert len(data["items"]) == 15
+        assert data["page"] == 4
+        # 跨块页两块各查一次
+        assert calls["n"] == 2
+        # 与未切片的整段顺序一致（默认排序下取 90-104 行）
+        direct = original({"category": "A", "page": 4, "page_size": 30}, identity())
+        assert [item["id"] for item in data["items"]] == [item["id"] for item in direct["items"]]
+    finally:
+        service.list_cases = original
+        from biz.handler import manual_review as handler_module
+
+        handler_module._queue_cache_clear()
+
+
+@pytest.mark.anyio
+async def test_http_queue_rbac_disables_cache_not_slicing(
+    async_client, production_api, monkeypatch
+):
+    """RBAC 开启时响应缓存禁用（口径不变），但块切片/翻页行为保持正确。
+
+    只替换 handler 模块内的 rbac_enabled 开关：域层空间解析（platform_actor
+    /权限库）由 test_manual_review_business_rbac 独立覆盖，这里不依赖平台库。
+    """
+    _, service = production_api
+    for i in range(8):
+        service.create_direct_case(
+            **_link_kwargs(task_id=f"TASK-RB-{i}", execution_id=f"EXEC-RB-{i}")
+        )
+    from biz.handler import manual_review as handler_module
+
+    monkeypatch.setattr(handler_module, "rbac_enabled", lambda: True)
+    calls = {"n": 0}
+    original = service.list_cases
+
+    def counting(f, a):
+        calls["n"] += 1
+        return original(f, a)
+
+    service.list_cases = counting
+    try:
+        first = await async_client.get(
+            "/api/v1/manual-reviews/production/queue", params={"category": "A", "pageSize": 5}
+        )
+        assert first.headers["x-review-queue-cache"] == "MISS"
+        assert len(first.json()["data"]["items"]) == 5
+        second = await async_client.get(
+            "/api/v1/manual-reviews/production/queue",
+            params={"category": "A", "pageSize": 5, "page": 2},
+        )
+        assert second.headers["x-review-queue-cache"] == "MISS"
+        second_data = second.json()["data"]
+        # RBAC 下不缓存：两次请求各查一次库，切片仍正确
+        assert calls["n"] == 2
+        assert len(second_data["items"]) == 3
+        assert {item["id"] for item in first.json()["data"]["items"]}.isdisjoint(
+            {item["id"] for item in second_data["items"]}
+        )
+    finally:
+        service.list_cases = original
+        handler_module._queue_cache_clear()

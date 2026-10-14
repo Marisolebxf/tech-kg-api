@@ -199,9 +199,10 @@ describe('昨日新增聚合格式展示', () => {
     expect(drawer.find('thead').text()).not.toContain('具体对象')
     const rows = wrapper.findAll('.asset-change-table tbody tr')
     expect(rows).toHaveLength(4)
-    // 数量列千分位格式，中断执行行内标注
+    // 数量列千分位格式；行内不做任何终态标注（含中断执行，数量列只计成功写入）
     expect(rows[0]!.text()).toContain('200,000')
-    expect(rows[3]!.text()).toContain('已中断')
+    expect(rows[3]!.text()).toContain('专利')
+    expect(rows[3]!.text()).not.toContain('已中断')
     // 左下角合计 = 控制库 written 精确计数（对象数口径，与行数 3 是两回事）
     expect(drawer.find('footer').text()).toContain('共 237,005 条变化')
   })

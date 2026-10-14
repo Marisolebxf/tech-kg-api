@@ -665,14 +665,9 @@ function assetChangeFooterText(key: AssetOverviewKey | null): string {
   const total = assetChangeTotals.value[key] ?? assetChangeRows.value[key].length
   return `共 ${total.toLocaleString()} 条变化`
 }
-// 中断/失败执行也计入昨日新增（已落图批次是真实写入）：行内标注终态，
-// 不与正常完成行混淆。ABNORMAL（含行级失败）不标注——数量列只计成功写入，
-// 标「部分失败」会让人误以为行上的数里有失败的，失败行走任务详情/人工审核看
-function interruptedStatusTone(status?: string | null): string {
-  if (status === 'TERMINATED' || status === 'CANCELED') return '已中断'
-  if (status === 'FAILED') return '失败'
-  return ''
-}
+// 中断/失败执行也计入昨日新增（已落图批次是真实写入）。行内不做任何终态标注
+// （用户拍板 2026-10-15）——数量列只计成功写入，标注反而让人怀疑数不对；
+// 终态与失败行走任务详情的执行状态/失败行列看。
 // 新增明细对象/来源列的悬浮浮窗只在文本确实被截断时出现（未截断不出框）：
 // mouseenter 时量 scrollWidth>clientWidth 才置位，mouseleave 复位
 const assetTipVisible = reactive(new Set<string>())
@@ -2221,7 +2216,7 @@ print(response.json())</pre>
                 @keydown.enter.prevent="openAssetChangeTask(row)"
                 @keydown.space.prevent="openAssetChangeTask(row)"
               >
-                <td>{{ row.type }}<em v-if="interruptedStatusTone(row.execStatus)" class="asset-change-status" :class="{ 'is-failed': row.execStatus === 'FAILED' }">{{ interruptedStatusTone(row.execStatus) }}</em></td>
+                <td>{{ row.type }}</td>
                 <td class="asset-change-count">{{ row.count.toLocaleString() }}</td>
                 <td>
                   <a-tooltip :popup-visible="assetTipVisible.has(`src-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`src-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip">
@@ -4856,7 +4851,6 @@ print(response.json())</pre>
 .asset-change-drawer>header{display:flex;align-items:flex-start;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.asset-change-drawer>header span{color:#004ecc;font-size:11px}.asset-change-drawer h2{margin:6px 0 3px;font-size:20px}.asset-change-drawer header p{margin:0;color:#718098;font-size:12px}.asset-change-drawer header>button{width:31px;height:31px;border:0;border-radius:5px;background:transparent;color:#52647f;font-size:20px;cursor:pointer}
 .asset-change-summary{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:14px}.asset-change-summary article{display:grid;gap:5px;padding:14px;border:1px solid #c7dcfb;border-radius:7px;background:#fff}.asset-change-summary span{color:#718098;font-size:11px}.asset-change-summary strong{color:#004ecc;font-size:24px}.asset-change-summary article:last-child strong{color:#067647}
 .asset-change-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 14px 12px;flex-wrap:wrap}.asset-change-hint{color:#8a6116;font-size:11px}
-.asset-change-status{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:4px;background:#fff4e5;color:#8a6116;font-size:10px;font-style:normal;line-height:16px;vertical-align:1px}.asset-change-status.is-failed{background:#fdecea;color:#b42318}
 .asset-change-table{min-height:0;overflow:auto;padding:0 14px 14px}.asset-change-table table{width:100%;border-collapse:collapse;border:1px solid #dce8f8;background:#fff;font-size:12px}.asset-change-table th,.asset-change-table td{height:48px;padding:10px 12px;border-bottom:1px solid #e3ebf6;text-align:left}.asset-change-table th{position:sticky;top:0;background:#f3f7fc;color:#62728a}.asset-change-table td{color:#344861}.asset-change-table code{color:#004ecc;font-family:inherit}.asset-change-table td.asset-change-count{font-weight:600;font-variant-numeric:tabular-nums}.asset-change-table td .asset-change-source{display:inline-block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 .asset-change-table tr.is-clickable{cursor:pointer}.asset-change-table tr.is-clickable:focus-visible{background:#f4f8ff;outline:2px solid #004ecc;outline-offset:-2px}
 .asset-change-drawer>footer{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.asset-change-drawer>footer span{color:#718098;font-size:11px}.asset-change-drawer>footer a{height:32px;padding:0 12px;border-radius:5px;background:#004ecc;color:#fff;font-size:11px;line-height:32px;text-decoration:none}

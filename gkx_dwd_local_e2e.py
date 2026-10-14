@@ -319,6 +319,7 @@ async def _run_chains(args) -> None:
         for name, jid in zip(("实体链", "关系链A", "关系链B"), job_ids):
             if not jid:
                 continue
+            status, t0 = "SKIPPED", time.time()
             for attempt in (1, 2, 3):
                 t0 = time.time()
                 r = await c.post(f"/api/v1/workflow-system/jobs/{jid}/trigger")

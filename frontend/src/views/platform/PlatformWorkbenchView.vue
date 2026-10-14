@@ -1410,6 +1410,24 @@ function openProcessDetail(area: 'processing' | 'construction', taskId: string, 
   })
 }
 
+function openAssetChangeTask(row: AssetChangeRow) {
+  if (!canEnterAdminPages.value) return
+  if (!row.jobId) {
+    // 有 taskId 说明控制库有执行记录、但不是 job 通道下发（回填/中断执行）——
+    // 与「旧执行未记录任务」区分提示，指向不同排查方向
+    showToast(
+      row.taskId
+        ? '该记录来自非任务通道执行（回填或中断），未关联图谱构建任务'
+        : '该记录未关联图谱构建任务',
+      'info',
+    )
+    return
+  }
+  // 聚合格式下一行属于恰好一个执行、执行属于唯一任务（2026-10-14 恢复行级跳转）——
+  // jobId 即精确归属，落图谱构建区任务详情页（与图谱构建列表点任务同一动线）。
+  void router.push({ name: 'job-detail', params: { jobId: row.jobId } })
+}
+
 function handleExecuteService() {
   // 测试页签是接口示例控制台：执行按钮不发起真实调用，只如实提示。
   showToast('当前为接口示例，未发起真实调用；请到对应业务功能页发起真实查询', 'info')
@@ -2168,7 +2186,17 @@ print(response.json())</pre>
             <thead><tr><th>数据类型</th><th>数量</th><th>来源</th><th>识别时间</th></tr></thead>
             <tbody>
               <tr v-if="!activeAssetChangeRows.length"><td colspan="4">{{ assetChangeErrors[selectedAssetChange] || '昨日暂无写图记录' }}</td></tr>
-              <tr v-else v-for="(row, idx) in activeAssetChangeRows" :key="`${row.type}-${row.source}-${row.time}-${idx}`">
+              <tr
+                v-else
+                v-for="(row, idx) in activeAssetChangeRows"
+                :key="`${row.type}-${row.source}-${row.time}-${idx}`"
+                :class="{ 'is-clickable': canEnterAdminPages && row.jobId }"
+                :tabindex="canEnterAdminPages && row.jobId ? 0 : undefined"
+                :aria-label="canEnterAdminPages && row.jobId ? `查看${row.type}的图谱构建任务` : undefined"
+                @click="openAssetChangeTask(row)"
+                @keydown.enter.prevent="openAssetChangeTask(row)"
+                @keydown.space.prevent="openAssetChangeTask(row)"
+              >
                 <td>{{ row.type }}<em v-if="interruptedStatusTone(row.execStatus)" class="asset-change-status" :class="{ 'is-failed': row.execStatus === 'FAILED' }">{{ interruptedStatusTone(row.execStatus) }}</em></td>
                 <td class="asset-change-count">{{ row.count.toLocaleString() }}</td>
                 <td>

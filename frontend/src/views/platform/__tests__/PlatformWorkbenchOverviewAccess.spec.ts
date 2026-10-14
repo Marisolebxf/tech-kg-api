@@ -211,24 +211,31 @@ describe('昨日新增聚合格式展示', () => {
     expect(drawer.find('footer').text()).toContain('新增明细暂不可读取')
   })
 
-  it('行不再可点击跳转任务；底部保留查看更新任务入口', async () => {
+  it('行点击精确跳转所属图谱构建任务（job-detail）；无 jobId 的行提示来源不误导跳转', async () => {
     useAuthStore().profile = makeProfile(true)
     withAssetChanges()
     await openChanges()
     expect(wrapper.find('.asset-change-drawer footer a').text()).toBe('查看更新任务')
     expect(wrapper.find('.asset-change-drawer footer a').attributes('to')).toBe('/graph-build')
     const rows = wrapper.findAll('.asset-change-table tbody tr')
-    for (const row of rows) {
-      expect(row.classes()).not.toContain('is-clickable')
-      expect(row.attributes('tabindex')).toBeUndefined()
-      await row.trigger('click')
-      await row.trigger('keydown', { key: 'Enter' })
-    }
-    expect(routerPush).not.toHaveBeenCalled()
-    expect(showToast).not.toHaveBeenCalled()
+    // 带 jobId 的行可点击（手型 + tabindex + 回车可达），精确落到该行的执行所属任务
+    expect(rows[0]!.classes()).toContain('is-clickable')
+    expect(rows[0]!.attributes('tabindex')).toBe('0')
+    await rows[0]!.trigger('click')
+    expect(routerPush).toHaveBeenCalledWith({ name: 'job-detail', params: { jobId: 'job-paper-a' } })
+    await rows[0]!.trigger('keydown', { key: 'Enter' })
+    expect(routerPush).toHaveBeenCalledTimes(2)
+    // 有 taskId 无 jobId：非任务通道执行（回填或中断），提示而非跳转
+    expect(rows[1]!.classes()).not.toContain('is-clickable')
+    await rows[1]!.trigger('click')
+    expect(showToast).toHaveBeenLastCalledWith('该记录来自非任务通道执行（回填或中断），未关联图谱构建任务', 'info')
+    // 无 taskId 无 jobId：旧执行未记录任务，另给一条提示
+    await rows[2]!.trigger('click')
+    expect(showToast).toHaveBeenLastCalledWith('该记录未关联图谱构建任务', 'info')
+    expect(routerPush).toHaveBeenCalledTimes(2)
   })
 
-  it('普通用户仍可看新增明细，但没有管理跳转入口', async () => {
+  it('普通用户仍可看新增明细，但行不可点击、无管理跳转入口', async () => {
     useAuthStore().profile = makeProfile(false)
     withAssetChanges()
     await openChanges()
@@ -238,5 +245,6 @@ describe('昨日新增聚合格式展示', () => {
     expect(row.attributes('tabindex')).toBeUndefined()
     await row.trigger('click')
     expect(routerPush).not.toHaveBeenCalled()
+    expect(showToast).not.toHaveBeenCalled()
   })
 })

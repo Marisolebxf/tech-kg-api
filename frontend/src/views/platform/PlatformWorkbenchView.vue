@@ -629,6 +629,9 @@ const overviewMeta = ref({
   platformStatus: '正在加载平台状态',
   pendingBatchCount: 0,
   updatedAt: '--',
+  // 统计日（北京自然日）：昨日新增实际归属的日子，由后端随载荷透出——缓存异常
+  // 停在旧日子时用户一眼可辨，页面不自行推算「昨天」
+  statsDay: '',
   dataMode: 'mock' as PlatformOverviewData['dataMode'],
   warnings: [] as string[],
 })
@@ -641,11 +644,50 @@ const assetChangeRows = ref<Record<AssetOverviewKey, AssetChangeRow[]>>({
 // 合计与逐对象明细同源；无法完整读取时显示错误，不能把写入合计当成明细数。
 const assetChangeTotals = ref<Partial<Record<AssetOverviewKey, number>>>({})
 const assetChangeErrors = ref<Partial<Record<AssetOverviewKey, string>>>({})
+// 明细搜索：只筛「已加载」的行（大写入日明细截断到上限），不触发后端查询
+const assetChangeKeyword = ref('')
+watch(selectedAssetChange, () => {
+  assetChangeKeyword.value = ''
+})
+const assetChangeFilteredRows = computed(() => {
+  const key = selectedAssetChange.value
+  if (!key) return []
+  const keyword = assetChangeKeyword.value.trim().toLowerCase()
+  const rows = assetChangeRows.value[key]
+  if (!keyword) return rows
+  return rows.filter(
+    (row) =>
+      row.object.toLowerCase().includes(keyword) ||
+      row.type.toLowerCase().includes(keyword) ||
+      row.source.toLowerCase().includes(keyword),
+  )
+})
+// 截断提示：合计精确、明细行受上限保护时如实告知（共 N 条，展示前 M 条）
+function assetChangeTruncatedText(key: AssetOverviewKey | null): string {
+  if (!key) return ''
+  const total = assetChangeTotals.value[key]
+  const shown = assetChangeRows.value[key]?.length ?? 0
+  if (!total || shown >= total) return ''
+  return `共 ${total.toLocaleString()} 条，展示前 ${shown.toLocaleString()} 条`
+}
 function assetChangeFooterText(key: AssetOverviewKey | null): string {
   if (!key) return ''
-  const shown = assetChangeRows.value[key].length
-  if (assetChangeErrors.value[key]) return shown ? `已读取 ${shown} 条明细，部分明细暂不可读取` : '新增明细暂不可读取'
-  return `${shown} 条变化`
+  const truncated = assetChangeTruncatedText(key)
+  if (truncated) return truncated
+  if (assetChangeErrors.value[key]) {
+    const shown = assetChangeRows.value[key].length
+    return shown ? `已读取 ${shown} 条明细，部分明细暂不可读取` : '新增明细暂不可读取'
+  }
+  const total = assetChangeTotals.value[key] ?? assetChangeRows.value[key].length
+  return `${total.toLocaleString()} 条变化`
+}
+// 中断/失败执行也计入昨日新增（已落图批次是真实写入）：行内标注终态，
+// 不与正常完成行混淆；ABNORMAL 是含行级失败记录，标「部分失败」
+function interruptedStatusTone(status?: string | null): string {
+  if (status === 'TERMINATED' || status === 'CANCELED') return '已中断'
+  if (status === 'FAILED') return '失败'
+  if (status === 'ABNORMAL') return '部分失败'
+  return ''
 }
 // 新增明细对象/来源列的悬浮浮窗只在文本确实被截断时出现（未截断不出框）：
 // mouseenter 时量 scrollWidth>clientWidth 才置位，mouseleave 复位
@@ -1332,6 +1374,7 @@ async function loadPlatformOverview(): Promise<void> {
       platformStatus: data.platformStatus,
       pendingBatchCount: data.pendingBatchCount,
       updatedAt: data.updatedAt,
+      statsDay: data.statsDay ?? '',
       dataMode: data.dataMode,
       // 兜底：旧版本/异常载荷缺 warnings 时模板里 .join 会直接把页面炸掉
       warnings: data.warnings ?? [],
@@ -1370,6 +1413,19 @@ watch(algoSpace, () => {
   }
 })
 
+// 手动刷新总览：后端自带 60s 结果缓存 + 旧值硬上限，重复点击代价可控；
+// 也给「昨日新增停在旧统计日」时用户一个自助恢复入口，不必等缓存自行过期
+const overviewRefreshing = ref(false)
+async function refreshOverviewData(): Promise<void> {
+  if (overviewRefreshing.value) return
+  overviewRefreshing.value = true
+  try {
+    await loadPlatformOverview()
+  } finally {
+    overviewRefreshing.value = false
+  }
+}
+
 
 function handleStartTask() {
   const priority = processingPriority.value === '紧急' ? '紧急优先' : '普通优先级'
@@ -1394,7 +1450,14 @@ function openProcessDetail(area: 'processing' | 'construction', taskId: string, 
 function openAssetChangeTask(row: AssetChangeRow) {
   if (!canEnterAdminPages.value) return
   if (!row.jobId) {
-    showToast('该记录未关联图谱构建任务', 'info')
+    // 有 taskId 说明控制库有执行记录、但不是 job 通道下发（回填/中断执行）——
+    // 与「旧执行未记录任务」区分提示，指向不同排查方向
+    showToast(
+      row.taskId
+        ? '该记录来自非任务通道执行（回填或中断），未关联图谱构建任务'
+        : '该记录未关联图谱构建任务',
+      'info',
+    )
     return
   }
   // 跳图谱构建区内的正常任务详情页（与图谱构建列表点任务同一动线、导航高亮），
@@ -1431,7 +1494,7 @@ const pageMeta = computed(() => {
       <div class="platform-hero__main">
         <h1>{{ pageMeta.title }}</h1>
       </div>
-      <div class="platform-hero__actions"><span :title="overviewMeta.warnings.join('\n')"><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个执行运行中 · {{ overviewMeta.dataMode === 'partial' ? '部分实时' : '降级数据' }}</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看任务</RouterLink><RouterLink v-if="canEnterAdminPages" to="/manual-review">进入人工处理</RouterLink></div>
+      <div class="platform-hero__actions"><span :title="overviewMeta.warnings.join('\n')"><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个执行运行中 · {{ overviewMeta.dataMode === 'partial' ? '部分实时' : '降级数据' }}</span><button type="button" class="platform-hero-refresh" :disabled="overviewRefreshing" @click="refreshOverviewData">{{ overviewRefreshing ? '刷新中…' : '刷新数据' }}</button><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看任务</RouterLink><RouterLink v-if="canEnterAdminPages" to="/manual-review">进入人工处理</RouterLink></div>
     </header>
 
     <header v-else-if="activeTab !== 'query'" class="platform-page-head">
@@ -2150,15 +2213,21 @@ print(response.json())</pre>
     <Teleport to="body">
       <button v-if="selectedAssetChange" class="asset-change-mask" type="button" aria-label="关闭新增数据详情" @click="selectedAssetChange = null" />
       <aside aria-label="辅助区域 4" v-if="selectedAssetChange && activeAssetOverview" class="asset-change-drawer">
-        <header><div><span>昨日图谱数据变化</span><h2>{{ activeAssetOverview.title }}新增明细</h2><p>{{ activeAssetOverview.addedLabel }} {{ activeAssetOverview.added }} · 数据更新至 {{ overviewMeta.updatedAt }}</p></div><button type="button" aria-label="关闭新增数据详情" @click="selectedAssetChange = null">×</button></header>
+        <header><div><span>昨日图谱数据变化</span><h2>{{ activeAssetOverview.title }}新增明细</h2><p>{{ activeAssetOverview.addedLabel }} {{ activeAssetOverview.added }} · 统计日 {{ overviewMeta.statsDay || '—' }} · 数据更新至 {{ overviewMeta.updatedAt }}</p></div><button type="button" aria-label="关闭新增数据详情" @click="selectedAssetChange = null">×</button></header>
         <section class="asset-change-summary"><article><span>当前总量</span><strong>{{ activeAssetOverview.total }}</strong></article><article><span>{{ activeAssetOverview.addedLabel }}</span><strong>{{ activeAssetOverview.added }}</strong></article></section>
+        <div class="asset-change-toolbar">
+          <input v-model="assetChangeKeyword" type="text" placeholder="搜索已加载明细（对象 / 类型 / 来源）" aria-label="搜索昨日新增明细" />
+          <span v-if="assetChangeErrors[selectedAssetChange] || assetChangeTruncatedText(selectedAssetChange)" class="asset-change-hint">{{ assetChangeErrors[selectedAssetChange] || assetChangeTruncatedText(selectedAssetChange) }}</span>
+        </div>
         <div class="asset-change-table">
           <table aria-label="数据表">
             <thead><tr><th>数据类型</th><th>具体对象</th><th>来源</th><th>识别时间</th></tr></thead>
             <tbody>
               <tr v-if="!assetChangeRows[selectedAssetChange].length"><td colspan="4">{{ assetChangeErrors[selectedAssetChange] || '昨日暂无写图记录' }}</td></tr>
+              <tr v-else-if="!assetChangeFilteredRows.length"><td colspan="4">已加载明细中没有匹配「{{ assetChangeKeyword }}」的记录</td></tr>
               <tr
-                v-for="(row, idx) in assetChangeRows[selectedAssetChange]"
+                v-else
+                v-for="(row, idx) in assetChangeFilteredRows"
                 :key="row.objectId || `${row.type}-${row.object}-${row.time}-${idx}`"
                 :class="{ 'is-clickable': canEnterAdminPages && row.jobId }"
                 :tabindex="canEnterAdminPages && row.jobId ? 0 : undefined"
@@ -2167,7 +2236,7 @@ print(response.json())</pre>
                 @keydown.enter.prevent="openAssetChangeTask(row)"
                 @keydown.space.prevent="openAssetChangeTask(row)"
               >
-                <td>{{ row.type }}</td>
+                <td>{{ row.type }}<em v-if="interruptedStatusTone(row.execStatus)" class="asset-change-status" :class="{ 'is-failed': row.execStatus === 'FAILED' }">{{ interruptedStatusTone(row.execStatus) }}</em></td>
                 <td>
                   <a-tooltip :popup-visible="assetTipVisible.has(`obj-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`obj-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip">
                     <span class="asset-change-object" @mouseenter="showAssetTipIfTruncated(`obj-${idx}`, $event)" @mouseleave="hideAssetTip(`obj-${idx}`)"><strong>{{ row.object }}</strong></span>
@@ -2269,6 +2338,8 @@ print(response.json())</pre>
 .platform-hero__actions span { display:inline-flex;align-items:center;gap:7px;margin-right:4px;color:#526783;font-size:12px; }
 .platform-hero__actions span i { width:8px;height:8px;border-radius:50%;background:#067647;box-shadow:0 0 0 4px rgba(18,183,106,.12); }
 .platform-hero__actions a { height:32px;padding:0 12px;border:1px solid #9ec2f7;border-radius:6px;background:rgba(255,255,255,.72);color:#004ecc;font-size:12px;line-height:32px;text-decoration:none; }
+.platform-hero__actions .platform-hero-refresh { height:32px;padding:0 12px;border:1px solid #9ec2f7;border-radius:6px;background:rgba(255,255,255,.72);color:#004ecc;font-size:12px;line-height:30px;cursor:pointer; }
+.platform-hero__actions .platform-hero-refresh:disabled { color:#8fa3c2;cursor:default; }
 .platform-hero__actions a:last-child { border-color:#004ecc;background:#004ecc;color:#fff; }
 
 .platform-page-head {
@@ -4803,9 +4874,11 @@ print(response.json())</pre>
 }
 
 .asset-change-mask{position:fixed;z-index:49;inset:0;border:0;background:rgba(16,36,76,.22)}
-.asset-change-drawer{position:fixed;z-index:50;top:0;right:0;display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;width:min(820px,78vw);height:100vh;background:#f8fbff;box-shadow:-18px 0 42px rgba(34,74,132,.22)}
+.asset-change-drawer{position:fixed;z-index:50;top:0;right:0;display:grid;grid-template-rows:auto auto auto minmax(0,1fr) auto;width:min(820px,78vw);height:100vh;background:#f8fbff;box-shadow:-18px 0 42px rgba(34,74,132,.22)}
 .asset-change-drawer>header{display:flex;align-items:flex-start;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.asset-change-drawer>header span{color:#004ecc;font-size:11px}.asset-change-drawer h2{margin:6px 0 3px;font-size:20px}.asset-change-drawer header p{margin:0;color:#718098;font-size:12px}.asset-change-drawer header>button{width:31px;height:31px;border:0;border-radius:5px;background:transparent;color:#52647f;font-size:20px;cursor:pointer}
 .asset-change-summary{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:14px}.asset-change-summary article{display:grid;gap:5px;padding:14px;border:1px solid #c7dcfb;border-radius:7px;background:#fff}.asset-change-summary span{color:#718098;font-size:11px}.asset-change-summary strong{color:#004ecc;font-size:24px}.asset-change-summary article:last-child strong{color:#067647}
+.asset-change-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 14px 12px;flex-wrap:wrap}.asset-change-toolbar input{flex:0 0 280px;height:32px;padding:0 10px;border:1px solid #c7dcfb;border-radius:5px;background:#fff;color:#344861;font-size:12px}.asset-change-toolbar input:focus{border-color:#004ecc;outline:2px solid rgba(0,78,204,.18);outline-offset:-1px}.asset-change-hint{color:#8a6116;font-size:11px}
+.asset-change-status{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:4px;background:#fff4e5;color:#8a6116;font-size:10px;font-style:normal;line-height:16px;vertical-align:1px}.asset-change-status.is-failed{background:#fdecea;color:#b42318}
 .asset-change-table{min-height:0;overflow:auto;padding:0 14px 14px}.asset-change-table table{width:100%;border-collapse:collapse;border:1px solid #dce8f8;background:#fff;font-size:12px}.asset-change-table th,.asset-change-table td{height:48px;padding:10px 12px;border-bottom:1px solid #e3ebf6;text-align:left}.asset-change-table th{position:sticky;top:0;background:#f3f7fc;color:#62728a}.asset-change-table td{color:#344861}.asset-change-table code{color:#004ecc;font-family:inherit}.asset-change-table td .asset-change-object{display:inline-block;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}.asset-change-table td .asset-change-source{display:inline-block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 .asset-change-table tr.is-clickable{cursor:pointer}.asset-change-table tr.is-clickable:focus-visible{background:#f4f8ff;outline:2px solid #004ecc;outline-offset:-2px}
 .asset-change-drawer>footer{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.asset-change-drawer>footer span{color:#718098;font-size:11px}.asset-change-drawer>footer a{height:32px;padding:0 12px;border-radius:5px;background:#004ecc;color:#fff;font-size:11px;line-height:32px;text-decoration:none}

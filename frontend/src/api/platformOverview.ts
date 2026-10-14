@@ -27,6 +27,8 @@ export interface AssetChangeRow {
   jobId?: string | null
   /** 图对象唯一 ID；同名实体也各自展示一行。 */
   objectId?: string | null
+  /** 写图执行终态；中断执行（TERMINATED/CANCELED/FAILED）也计入昨日新增，行内标注「已中断/失败」。 */
+  execStatus?: string | null
 }
 
 export interface StructureMember {
@@ -50,6 +52,8 @@ export interface PlatformOverviewData {
   platformStatus: string
   pendingBatchCount: number
   updatedAt: string
+  /** 统计日（北京自然日 YYYY-MM-DD）：昨日新增实际归属的日子，页面直接展示，不自行推算「昨天」。 */
+  statsDay?: string
   assetOverviewGroups: AssetOverviewGroup[]
   assetChangeRows: Record<AssetOverviewKey, AssetChangeRow[]>
   /** 昨日新增的实际逐对象记录数，与侧栏明细同源。 */

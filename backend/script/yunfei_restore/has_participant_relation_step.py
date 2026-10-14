@@ -248,7 +248,9 @@ def _candidate_rows(
     return_properties: tuple[str, ...],
     filters: dict[str, set[str]],
     *,
-    chunk_size: int = 5000,
+    # 单条 IN 查询字面量上限 150（平台召回同款口径）：5000/块的巨型 MATCH 会
+    # 把共享 graphd 的执行计划内存顶穿容器限额（2026-10-13 gkx_verify_1 实锤）
+    chunk_size: int = 150,
 ) -> list[dict[str, Any]]:
     rows: dict[str, dict[str, Any]] = {}
     projection = ", ".join(f"n.{label}.{prop} AS {prop}" for prop in return_properties)

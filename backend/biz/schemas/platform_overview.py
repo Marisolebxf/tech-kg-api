@@ -46,6 +46,9 @@ class AssetChangeRow(CamelCaseModel):
     # 同一条执行所属的图谱构建任务（job-xxx）；与 task_id 同源（同一条执行记录），
     # 旧执行未记录时留空。
     job_id: str | None = None
+    # 该行写入块归属的执行 ID（EXEC-xxx）：行级跳转据此直达任务详情页的
+    # 那一次执行——任务可多次运行，只落任务页会默认展示最新执行、数字对不上。
+    exec_id: str | None = None
     object_id: str | None = None
     # 写图执行的终态（COMPLETED/ABNORMAL/TERMINATED/CANCELED/FAILED）：中断执行
     # 也计入昨日新增（已落图批次是真实写入），页面据此对中断行标注「已中断/失败」。

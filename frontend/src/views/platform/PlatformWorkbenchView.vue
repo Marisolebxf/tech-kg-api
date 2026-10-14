@@ -1424,8 +1424,13 @@ function openAssetChangeTask(row: AssetChangeRow) {
     return
   }
   // 聚合格式下一行属于恰好一个执行、执行属于唯一任务（2026-10-14 恢复行级跳转）——
-  // jobId 即精确归属，落图谱构建区任务详情页（与图谱构建列表点任务同一动线）。
-  void router.push({ name: 'job-detail', params: { jobId: row.jobId } })
+  // 落图谱构建区任务详情页（与图谱构建列表点任务同一动线）；带 execId 直达该行
+  // 所属的那一次执行——任务可多次运行，任务页默认展示最新执行，昨日行点开会张冠李戴。
+  void router.push({
+    name: 'job-detail',
+    params: { jobId: row.jobId },
+    query: row.execId ? { exec: row.execId } : undefined,
+  })
 }
 
 function handleExecuteService() {

@@ -204,6 +204,9 @@ def test_snapshot_from_ledger_builds_totals_and_descriptors(monkeypatch):
     # 聚合格式：数量列 = 台账 object_count 精确计数
     assert snap.entity_rows[0].count == 200
     assert snap.entity_rows[1].count == 100
+    # 行级跳转直达参数：行带所属执行 ID（payload 路径取记录 id，台账路径取台账键）
+    assert snap.entity_rows[1].exec_id == "EXEC-1"
+    assert snap.relation_rows[0].exec_id == "EXEC-2"
     assert snap.entity_rows[1].time == "10-13 15:47:04"  # 展示格式 MM-DD HH:MM:SS
     assert snap.entity_rows[1].is_aggregate is True
     assert snap.relation_rows[0].exec_status == "ABNORMAL"

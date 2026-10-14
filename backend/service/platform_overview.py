@@ -272,6 +272,9 @@ def parse_execution_records(
         # 直跑/回填执行没有，行点击只能退列表页
         task_id = str(record.get("taskId") or "").strip() or None
         job_id = str(record.get("jobId") or "").strip() or None
+        # 执行 ID（payload 自带 id）：行级跳转直达该次执行，任务页默认展示最新
+        # 执行会张冠李戴（gkx_verify_1 实测：任务 20 次运行，昨日行点开看到的是今天的数）
+        exec_id = str(record.get("id") or "").strip() or None
         # chain 执行按环展开：每环一个独立输出单元，统计日按环级完成时刻归属
         # （环在北京 23:59 完成、整链 00:05 跨日完成时，该环仍算前一天）
         for output, completed_at, started_at in _iter_record_outputs(record):
@@ -311,6 +314,7 @@ def parse_execution_records(
                     time=completed_time,
                     task_id=task_id,
                     job_id=job_id,
+                    exec_id=exec_id,
                     is_aggregate=True,
                     exec_status=status,
                 )
@@ -406,6 +410,7 @@ def _snapshot_from_ledger(
             time=finished[5:] if finished else "",
             task_id=row_data.get("task_id"),
             job_id=row_data.get("job_id"),
+            exec_id=row_data.get("execution_id") or None,
             is_aggregate=True,
             exec_status=str(row_data.get("exec_status") or "") or None,
         )

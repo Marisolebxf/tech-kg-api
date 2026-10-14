@@ -44,6 +44,7 @@ class _IntegrationChangesProvider:
                     time="09-22 10:30:00",
                     task_id="TASK-overview-test",
                     job_id="job-overview-test",
+                    exec_id="EXEC-overview-test",
                 )
             ],
             relation_rows=[
@@ -54,6 +55,7 @@ class _IntegrationChangesProvider:
                     time="09-22 10:30:00",
                     task_id="TASK-overview-test",
                     job_id="job-overview-test",
+                    exec_id="EXEC-overview-test",
                 )
             ],
         )
@@ -98,10 +100,11 @@ async def test_platform_overview_returns_frontend_contract(
     assert data["assetOverviewGroups"][0]["addedLabel"] == "昨日新增"
     assert data["assetOverviewGroups"][1]["added"] == "+2"
     assert len(data["assetChangeRows"]["entity"]) == 1
-    # 数量列 = 写入块 written 计数；行携带图谱构建任务 ID
+    # 数量列 = 写入块 written 计数；行携带图谱构建任务与执行 ID（行级跳转直达那一次执行）
     assert data["assetChangeRows"]["entity"][0]["count"] == 5
     assert data["assetChangeRows"]["entity"][0]["jobId"] == "job-overview-test"
     assert data["assetChangeRows"]["entity"][0]["taskId"] == "TASK-overview-test"
+    assert data["assetChangeRows"]["entity"][0]["execId"] == "EXEC-overview-test"
     # 逐对象时代的 object/change 列不再随接口序列化
     assert "object" not in data["assetChangeRows"]["entity"][0]
     assert "change" not in data["assetChangeRows"]["entity"][0]

@@ -25,6 +25,9 @@ export interface AssetChangeRow {
   taskId?: string | null
   /** 同一条执行所属的图谱构建任务（job-xxx）；与 taskId 同源。 */
   jobId?: string | null
+  /** 该写入块归属的执行 ID（EXEC-xxx）：跳任务详情时直达那一次执行——
+   *  任务可多次运行，任务页默认展示最新执行，不带它数字会对不上。 */
+  execId?: string | null
   /** 图对象唯一 ID；聚合格式下写入块行不再携带（保留字段兼容）。 */
   objectId?: string | null
   /** 写图执行终态；中断执行（TERMINATED/CANCELED/FAILED）也计入昨日新增，行内标注「已中断/失败」。 */

@@ -159,8 +159,9 @@ describe('昨日新增聚合格式展示', () => {
       ],
       assetChangeRows: {
         entity: [
-          { type: '论文', count: 200000, source: 'gkx.dwd_paper', time: '10-11 02:00:00', taskId: 'TASK-paper-a', jobId: 'job-paper-a' },
-          { type: '论文', count: 37000, source: 'gkx.dwd_paper_en', time: '10-11 01:30:00', taskId: 'TASK-direct' },
+          { type: '论文', count: 200000, source: 'gkx.dwd_paper', time: '10-11 02:00:00', taskId: 'TASK-paper-a', jobId: 'job-paper-a', execId: 'EXEC-paper-01' },
+          { type: '期刊', count: 37000, source: 'gkx.dwd_journal', time: '10-11 01:30:00', taskId: 'TASK-journal', jobId: 'job-journal' },
+          { type: '报告', count: 1200, source: 'legacy.backfill', time: '10-11 01:20:00', taskId: 'TASK-direct' },
           { type: '专利', count: 5, source: 'legacy.patent', time: '10-11 01:00:00', execStatus: 'TERMINATED' },
         ],
         relation: [
@@ -188,10 +189,10 @@ describe('昨日新增聚合格式展示', () => {
     expect(drawer.find('thead').text()).toContain('数量')
     expect(drawer.find('thead').text()).not.toContain('具体对象')
     const rows = wrapper.findAll('.asset-change-table tbody tr')
-    expect(rows).toHaveLength(3)
+    expect(rows).toHaveLength(4)
     // 数量列千分位格式，中断执行行内标注
     expect(rows[0]!.text()).toContain('200,000')
-    expect(rows[2]!.text()).toContain('已中断')
+    expect(rows[3]!.text()).toContain('已中断')
     // 左下角合计 = 控制库 written 精确计数（对象数口径，与行数 3 是两回事）
     expect(drawer.find('footer').text()).toContain('共 237,005 条变化')
   })
@@ -211,28 +212,35 @@ describe('昨日新增聚合格式展示', () => {
     expect(drawer.find('footer').text()).toContain('新增明细暂不可读取')
   })
 
-  it('行点击精确跳转所属图谱构建任务（job-detail）；无 jobId 的行提示来源不误导跳转', async () => {
+  it('行点击精确跳转所属执行（job-detail 带 ?exec=）；无 jobId 的行提示来源不误导跳转', async () => {
     useAuthStore().profile = makeProfile(true)
     withAssetChanges()
     await openChanges()
     expect(wrapper.find('.asset-change-drawer footer a').text()).toBe('查看更新任务')
     expect(wrapper.find('.asset-change-drawer footer a').attributes('to')).toBe('/graph-build')
     const rows = wrapper.findAll('.asset-change-table tbody tr')
-    // 带 jobId 的行可点击（手型 + tabindex + 回车可达），精确落到该行的执行所属任务
+    // 带 jobId 的行可点击（手型 + tabindex + 回车可达）；带 execId 时直达该行的执行
+    // ——任务可多次运行，任务页默认展示最新执行，不带它数字会对不上
     expect(rows[0]!.classes()).toContain('is-clickable')
     expect(rows[0]!.attributes('tabindex')).toBe('0')
     await rows[0]!.trigger('click')
-    expect(routerPush).toHaveBeenCalledWith({ name: 'job-detail', params: { jobId: 'job-paper-a' } })
+    expect(routerPush).toHaveBeenCalledWith({
+      name: 'job-detail', params: { jobId: 'job-paper-a' }, query: { exec: 'EXEC-paper-01' },
+    })
     await rows[0]!.trigger('keydown', { key: 'Enter' })
     expect(routerPush).toHaveBeenCalledTimes(2)
-    // 有 taskId 无 jobId：非任务通道执行（回填或中断），提示而非跳转
-    expect(rows[1]!.classes()).not.toContain('is-clickable')
+    // 有 jobId 无 execId（旧执行）：仍落任务页，不带 exec 查询参数
+    expect(rows[1]!.classes()).toContain('is-clickable')
     await rows[1]!.trigger('click')
+    expect(routerPush).toHaveBeenLastCalledWith({ name: 'job-detail', params: { jobId: 'job-journal' }, query: undefined })
+    // 有 taskId 无 jobId：非任务通道执行（回填或中断），提示而非跳转
+    expect(rows[2]!.classes()).not.toContain('is-clickable')
+    await rows[2]!.trigger('click')
     expect(showToast).toHaveBeenLastCalledWith('该记录来自非任务通道执行（回填或中断），未关联图谱构建任务', 'info')
     // 无 taskId 无 jobId：旧执行未记录任务，另给一条提示
-    await rows[2]!.trigger('click')
+    await rows[3]!.trigger('click')
     expect(showToast).toHaveBeenLastCalledWith('该记录未关联图谱构建任务', 'info')
-    expect(routerPush).toHaveBeenCalledTimes(2)
+    expect(routerPush).toHaveBeenCalledTimes(3)
   })
 
   it('普通用户仍可看新增明细，但行不可点击、无管理跳转入口', async () => {

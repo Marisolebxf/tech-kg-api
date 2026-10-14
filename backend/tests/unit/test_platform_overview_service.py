@@ -517,6 +517,7 @@ def _execution_record(
     sources: list[dict] | None = None,
     task_id: str | None = "TASK-overview-test",
     job_id: str | None = "job-overview-test",
+    exec_id: str | None = "EXEC-overview-test",
     started_at: str | None = None,
 ) -> str:
     import json
@@ -527,6 +528,7 @@ def _execution_record(
         "triggerSource": trigger,
         "taskId": task_id,
         "jobId": job_id,
+        "id": exec_id,
         "startedAt": started_at,
         "payload": {payload_space_key: payload_space} if payload_space else {},
         "output": {
@@ -648,6 +650,9 @@ def test_parse_execution_records_aggregates_day_by_kind_and_space() -> None:
     assert row.source == "techkg_e2e_liz.review_widgets"
     assert row.task_id == "TASK-overview-test"
     assert row.job_id == "job-overview-test"
+    # 行级跳转直达参数：任务页默认展示最新执行，不带执行 ID 会张冠李戴
+    assert row.exec_id == "EXEC-overview-test"
+    assert row.model_dump(by_alias=True)["execId"] == "EXEC-overview-test"
     assert row.model_dump(by_alias=True)["taskId"] == "TASK-overview-test"
     assert row.model_dump(by_alias=True)["jobId"] == "job-overview-test"
     assert row.time == "09-22 18:30:00"  # 完成时刻按北京展示（UTC+8），带月日（跨天歧义）

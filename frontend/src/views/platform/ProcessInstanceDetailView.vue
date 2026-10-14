@@ -682,7 +682,10 @@ async function loadLatestExecution() {
   resetExecPage()
   executionsResolved.value = true
   if (!executions.length) return
-  await selectExecution(executions[0].id)
+  // ?exec=EXEC-xxx 直达指定执行（昨日新增行级跳转带参）：任务可多次运行，
+  // 默认选最新会让「点开的数」和「行上的数」分属两次执行。
+  const pinnedExecId = String(route.query.exec || '')
+  await selectExecution(pinnedExecId || executions[0].id)
 }
 
 /** 选中一条执行（含重新执行类）：拉详情并填充下方流程面板。 */

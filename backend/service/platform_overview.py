@@ -46,9 +46,6 @@ _MATCH_BUDGET_SECONDS = float(os.getenv("PLATFORM_OVERVIEW_MATCH_BUDGET_SECONDS"
 # 真实写入（gkx_verify_1 案例：中断执行写了数百万实体却整段不可见）——统一按
 # written>0 过滤噪声，不再只认 COMPLETED/ABNORMAL。
 _TERMINAL_STATUSES = ("COMPLETED", "ABNORMAL", "TERMINATED", "CANCELED", "FAILED")
-# 明细展示上限（2026-10-14 口径）：聚合格式下一行是一个写入块（执行×来源），
-# 全天行数与执行数同量级、天然几十行封顶，此上限仅作序列化保险丝。
-_CHANGE_ROWS_MAX = int(os.getenv("PLATFORM_OVERVIEW_CHANGE_ROWS_MAX", "1000"))
 # 逐对象反查闸门：控制库 written 合计超过该量时跳过该类图反查——百万级写入的
 # LOOKUP 全窗扫描会长时间占住共享图会话池并把冷算拖到分钟级，聚合行 + 明确
 # 提示比打爆图服务更诚实；阈值可用环境变量调节。
@@ -1422,6 +1419,8 @@ class PlatformOverviewService:
                 # 聚合格式（2026-10-14）：行 = 写入块（执行 × 来源），徽标与左下角
                 # 合计按控制库 written 精确计数（台账/现算同口径），不再有反查闸门、
                 # 逐对象行数对账与「未完整读取」中间态——控制库读成即定局。
+                # 写入块行数与执行数同量级（几十封顶），全量透出不设上限——
+                # 「行 count 求和 == 合计」因此成为无条件的构造保证。
                 change_rows: dict[str, list[AssetChangeRow]] = {}
                 change_totals: dict[str, int] = {}
                 change_errors: dict[str, str] = {}
@@ -1429,7 +1428,7 @@ class PlatformOverviewService:
                     ("entity", changes.entity_rows, changes.entity_added),
                     ("relation", changes.relation_rows, changes.relation_added),
                 ):
-                    change_rows[key] = rows[:_CHANGE_ROWS_MAX]
+                    change_rows[key] = rows
                     change_totals[key] = written
                 entity_count = change_totals["entity"]
                 relation_count = change_totals["relation"]

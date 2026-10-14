@@ -1983,17 +1983,14 @@ def test_enrich_skips_lookup_when_written_exceeds_gate(monkeypatch) -> None:
     assert result.entity_rows[0].is_aggregate is True
 
 
-def test_overview_caps_change_rows_and_keeps_full_totals() -> None:
-    """明细展示截断：行数受上限保护，合计/徽标仍按全量精确计数，统计日透出。"""
+def test_overview_passes_all_change_rows_without_cap() -> None:
+    """写入块行全量透传（2026-10-14 删除 1000 行截断保险丝）：行数不设上限，
+    「行 count 求和 == 左下角合计」成为无条件构造保证，统计日透出。"""
     from biz.schemas.platform_overview import AssetChangeRow as Row
 
-    rows = [
-        Row(type="期刊", object=f"期刊-{i}", change="新增 期刊", source="t", time="10-13 12:00:00")
-        for i in range(1_500)
-    ]
+    rows = [Row(type="期刊", count=1, source="t", time="10-13 12:00:00") for _ in range(1_500)]
     snapshot = DayChangesSnapshot(
         entity_added=1_500,
-        entity_rows_exact=True,
         entity_rows=rows,
         day="2026-10-13",
     )
@@ -2003,9 +2000,10 @@ def test_overview_caps_change_rows_and_keeps_full_totals() -> None:
 
     result = service.get_overview()
 
-    assert len(result.asset_change_rows["entity"]) == 1_000  # 截断到上限
-    assert result.asset_change_totals["entity"] == 1_500  # 全量合计
-    assert result.asset_overview_groups[0].added == "+1,500"  # 徽标按全量
+    assert len(result.asset_change_rows["entity"]) == 1_500  # 不再截断
+    assert sum(row.count for row in result.asset_change_rows["entity"]) == 1_500
+    assert result.asset_change_totals["entity"] == 1_500
+    assert result.asset_overview_groups[0].added == "+1,500"
     assert result.stats_day == "2026-10-13"
     assert "entity" not in result.asset_change_errors
 

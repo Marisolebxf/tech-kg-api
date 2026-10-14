@@ -645,7 +645,7 @@ const lineageResultRows = computed(() => (extractOutput.value?.sources ?? []).ma
 })))
 /** 昨日新增行级跳转带来的来源锚点（?src=来源表&n=写入数）：来源结果表里同名
  *  来源表可能来自多个 Schema（chain 同表多 Schema 抽取），带上写入数才能唯一定位
- *  到点击的那一行；行渲染后高亮并滚动到它，用户落地即见「行上的数」。 */
+ *  到点击的那一行；行渲染后闪烁提示并滚动到它，用户落地即见「行上的数」。 */
 const pinnedSource = computed(() => {
   const src = String(route.query.src || '').trim()
   if (!src) return null
@@ -1092,12 +1092,14 @@ const publicSpaceReadOnly = computed(() => {
 .lineage-result-table .lineage-result-count{width:11%}
 .lineage-result-table .lineage-result-cursor{width:32%}
 .lineage-result-table .cursor-value{white-space:nowrap}
-/* 昨日新增行级跳转锚中的来源行：琥珀色底 + 左侧色条 + 一次落点脉冲，落地即见 */
-.lineage-result-table tr.is-pinned td{background:#fff6dc;box-shadow:inset 3px 0 0 #f59e0b}
-.lineage-result-table tr.is-pinned td code{font-weight:600}
-.lineage-result-table tr.is-pinned{animation:lineage-pin-pulse 1.6s ease-out 1}
-@keyframes lineage-pin-pulse{0%{background:#ffe9ad}100%{background:transparent}}
-@media (prefers-reduced-motion: reduce){.lineage-result-table tr.is-pinned{animation:none}}
+/* 昨日新增行级跳转锚中的来源行：琥珀色闪一下即退（先亮约 1 秒再淡出），
+   不做持续标注——滚动定位到视口中部已足够指路，行随后回到普通样式 */
+.lineage-result-table tr.is-pinned td{animation:lineage-pin-flash 1.6s ease-out 1}
+@keyframes lineage-pin-flash{
+  0%,55%{background:#fff6dc;box-shadow:inset 3px 0 0 #f59e0b}
+  100%{background:transparent;box-shadow:inset 3px 0 0 transparent}
+}
+@media (prefers-reduced-motion: reduce){.lineage-result-table tr.is-pinned td{animation:none}}
 /* 处理链路仅用浅色背景区分节点，箭头继续表达流向。 */
 .lineage span{border:0}
 /* 节点结果利用完整内容宽度，两列展示且指标值统一左对齐。 */

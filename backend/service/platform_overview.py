@@ -10,7 +10,6 @@ import time
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
-from zoneinfo import ZoneInfo
 
 from biz.schemas.platform_overview import (
     AssetChangeRow,
@@ -21,6 +20,21 @@ from biz.schemas.platform_overview import (
 )
 from infra.graph_db import get_trs_graph_client
 from infra.graph_db.client import is_known_no_index, is_no_index_error, mark_no_index
+from service.day_change_ledger import (
+    DAY_TZ as _DAY_TZ,
+)
+from service.day_change_ledger import (
+    completed_in_day_tz as _completed_in_day_tz,
+)
+from service.day_change_ledger import (
+    execution_space as _execution_space,
+)
+from service.day_change_ledger import (
+    iter_record_outputs as _iter_record_outputs,
+)
+from service.day_change_ledger import (
+    load_ledger_day,
+)
 
 # 今日新增图反查的单条查询读超时（秒）：反查任一环失败只是该执行退回聚合降级行，
 # 不该用默认 30s 在共享图服务拥塞窗口里把总览冷算拖到分钟级（0924 实测 30s×2=60s+）。
@@ -188,12 +202,6 @@ class DayChangesProvider(Protocol):
     def running_count(self, space: str | None = None) -> int: ...
 
 
-def _execution_space(record: dict[str, Any]) -> str:
-    """执行记录的目标图空间：调度下发记 ``graph_space``、手动/重跑记 ``graphSpace``。"""
-    payload = record.get("payload") or {}
-    return str(payload.get("graph_space") or payload.get("graphSpace") or "")
-
-
 def _space_matches(record: dict[str, Any], target_space: str, default_space: str) -> bool:
     """执行归属当前空间：显式空间相等，或旧执行未记空间且当前即默认空间。"""
     space = _execution_space(record)
@@ -204,72 +212,9 @@ def _written_of(output: dict[str, Any]) -> int:
     return sum(max(0, int(source.get("written") or 0)) for source in output.get("sources") or [])
 
 
-def _norm_ts(value: Any) -> str:
-    """执行时间串归一：ISO 'T' 分隔 → 空格分隔。保留时区偏移不切片——环级
-    时间带 "+08:00"，截掉会被当进程本地钟解读、错 8 小时。"""
-    return str(value or "").replace("T", " ", 1).strip()
-
-
-def _iter_record_outputs(record: dict[str, Any]) -> list[tuple[dict[str, Any], str, str]]:
-    """一条执行记录的全部写图输出单元，逐项 ``(output, 完成串, 起跑串)``。
-
-    单 Schema 执行即顶层 output 本身；chain 执行顶层无 kind，每个
-    ``steps["schema:<id>"]`` 的嵌套 ``output`` 与单 Schema 输出同构
-    （kind/schemaLabel/sources[].written/startWatermark 齐全），逐环展开、
-    环级时间缺失退整链时间。此前 chain 整段不可见就是只认顶层 kind 所致。"""
-    output = record.get("output") or {}
-    if not isinstance(output, dict):
-        return []
-    record_completed = _norm_ts(record.get("completedAt"))
-    record_started = _norm_ts(record.get("startedAt"))
-    steps = output.get("steps")
-    if not output.get("kind") and isinstance(steps, dict) and steps:
-        units: list[tuple[dict[str, Any], str, str]] = []
-        for step in steps.values():
-            if not isinstance(step, dict):
-                continue
-            inner = step.get("output") or {}
-            if not isinstance(inner, dict) or not inner:
-                continue
-            units.append(
-                (
-                    inner,
-                    _norm_ts(step.get("finishedAt")) or record_completed,
-                    _norm_ts(step.get("startedAt")) or record_started,
-                )
-            )
-        if units:
-            return units
-    return [(output, record_completed, record_started)]
-
-
-# 「昨日新增」日窗口时区：按北京自然日 00:00 翻日（2026-10-10 用户口径），
-# 不再随 api 容器 UTC 时钟到北京 08:00 才翻日。completedAt 记 api 进程本地钟
-# （dev2 容器为 UTC），归属统计日前先按系统时区解读、折算到本时区再比日期；
-# 图反查窗口（window_lo/completed_at 上界比较图侧时间戳）仍用原字符串，不吃 8h 位移。
-_DAY_TZ = ZoneInfo(os.getenv("PLATFORM_OVERVIEW_DAY_TIMEZONE", "Asia/Shanghai"))
-
-
-def _completed_in_day_tz(completed_at: str) -> datetime | None:
-    """完成时刻字符串 → 日窗口时区时刻；空/坏格式返回 None。
-
-    chain 环级 startedAt/finishedAt 自带时区偏移（"+08:00"），优先
-    fromisoformat 完整解析（绝对准确，不受 api 进程时区影响）；naive 串仍按
-    api 进程本地钟解读后折算（dev2 容器 UTC、宿主注入时区的栈都有）。"""
-    raw = str(completed_at or "").replace("T", " ", 1).strip()
-    if not raw:
-        return None
-    parsed: datetime | None = None
-    try:
-        parsed = datetime.fromisoformat(raw)
-    except ValueError:
-        try:
-            parsed = datetime.strptime(raw[:19], "%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            return None
-    if parsed.tzinfo is None:
-        parsed = parsed.astimezone()
-    return parsed.astimezone(_DAY_TZ)
+# 「昨日新增」日窗口时区与时间归一/chain 环展开工具共享自 day_change_ledger
+# （写账与读账同口径，防两处漂移）：北京自然日 00:00 翻日、环级 "+08:00" 偏移
+# 优先 fromisoformat 完整解析、naive 串按 api 进程本地钟折算，细节见该模块。
 
 
 def _day_boundary_utc(day: str, *, end: bool) -> str:
@@ -420,6 +365,120 @@ def parse_execution_records(
     )
 
 
+def _snapshot_from_ledger(
+    day: str, target_space: str, default_space: str
+) -> DayChangesSnapshot | None:
+    """从写图台账（P1 写时记账）构造统计日快照；当日无账返回 None 回落现算。
+
+    台账行自带精确计数（save_execution 覆盖式落账），聚合行直接成表；
+    图反查描述由台账行按（执行 × kind × Schema）聚合而成——window_hi 仍放宽
+    到统计日终点、台账未记水位故 window_lo 退统计日起点（比水位窗宽，宁可
+    多查靠归属匹配兜底），enrich 的反查/闸门/降级语义与现算路径完全一致：
+    量小于闸门仍逐对象反查（明细带对象名），超限走聚合行。"""
+    rows = load_ledger_day(day, target_space, default_space)
+    if not rows:
+        return None
+    day_start_graph = _day_boundary_utc(day, end=False)
+    day_end_graph = _day_boundary_utc(day, end=True)
+    entity_added = 0
+    relation_added = 0
+    entity_rows: list[tuple[str, AssetChangeRow]] = []
+    relation_rows: list[tuple[str, AssetChangeRow]] = []
+    # （执行 × kind × Schema）聚合出反查描述；跨行共用的执行级字段取首行
+    execs: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for row_data in rows:
+        kind = str(row_data.get("kind") or "")
+        if kind not in ("entity", "relation"):
+            continue
+        schema_key = str(row_data.get("schema_key") or "")
+        label = (
+            str(row_data.get("schema_label") or "")
+            or schema_key
+            or ("实体" if kind == "entity" else "关系")
+        )
+        count = max(0, int(row_data.get("object_count") or 0))
+        finished = str(row_data.get("finished_at") or "")
+        if kind == "entity":
+            entity_added += count
+        else:
+            relation_added += count
+        row = AssetChangeRow(
+            type=label,
+            object=f"{label} · {count:,} 条",
+            change=f"新增 {schema_key}",
+            source=str(row_data.get("source") or "-"),
+            time=finished[5:] if finished else "",
+            task_id=row_data.get("task_id"),
+            job_id=row_data.get("job_id"),
+            is_aggregate=True,
+            exec_status=str(row_data.get("exec_status") or "") or None,
+        )
+        if kind == "entity":
+            entity_rows.append((finished, row))
+        else:
+            relation_rows.append((finished, row))
+        key = (str(row_data.get("execution_id") or ""), kind, schema_key)
+        entry = execs.get(key)
+        if entry is None:
+            execs[key] = {
+                "kind": kind,
+                "schema_key": schema_key,
+                "schema_label": label,
+                "task_id": row_data.get("task_id"),
+                "job_id": row_data.get("job_id"),
+                "status": str(row_data.get("exec_status") or ""),
+                "min_fin": finished or None,
+                "max_fin": finished or None,
+                "rows": [row],
+            }
+        else:
+            entry["rows"].append(row)
+            if finished:
+                if not entry["max_fin"] or finished > entry["max_fin"]:
+                    entry["max_fin"] = finished
+                if not entry["min_fin"] or finished < entry["min_fin"]:
+                    entry["min_fin"] = finished
+    entity_execs: list[ExtractExecutionInfo] = []
+    relation_execs: list[ExtractExecutionInfo] = []
+    for entry in execs.values():
+        max_fin = entry["max_fin"] or ""
+        descriptor = ExtractExecutionInfo(
+            kind=entry["kind"],
+            schema_key=entry["schema_key"],
+            schema_label=entry["schema_label"],
+            completed_at=max_fin,
+            window_lo=day_start_graph,
+            window_hi=day_end_graph,
+            fallback_rows=entry["rows"],
+            task_id=entry["task_id"],
+            job_id=entry["job_id"],
+            started_at=entry["min_fin"] or max_fin,
+            status=entry["status"],
+        )
+        if entry["kind"] == "entity":
+            entity_execs.append(descriptor)
+        else:
+            relation_execs.append(descriptor)
+    # 反查描述同样按完成时刻倒序（与明细行、enrich 内部排序口径一致）
+    entity_execs.sort(key=lambda ex: ex.completed_at, reverse=True)
+    relation_execs.sort(key=lambda ex: ex.completed_at, reverse=True)
+    # 明细按完成时间倒序（最新写图在前），与现算路径同序
+    entity_rows.sort(key=lambda pair: pair[0], reverse=True)
+    relation_rows.sort(key=lambda pair: pair[0], reverse=True)
+    return DayChangesSnapshot(
+        entity_added=entity_added,
+        relation_added=relation_added,
+        # RUNNING 是实时指标（running_count() 独立短查）；台账只记已落库的账，
+        # 此处 0 仅为占位，不进页面「N 个执行运行中」
+        running_count=0,
+        entity_rows=[row for _, row in entity_rows],
+        relation_rows=[row for _, row in relation_rows],
+        entity_executions=entity_execs,
+        relation_executions=relation_execs,
+        day=day,
+    )
+
+
 class WorkflowControlDayChangesProvider:
     """默认实现：从工作流控制库（techkg_control.workflow_executions）读昨日增量。
 
@@ -509,6 +568,12 @@ class WorkflowControlDayChangesProvider:
 
         target_space = space or TRSGraphSettings.from_env().space
         default_space = TRSGraphSettings.from_env().space
+        # P1 快路径：写图台账有当日账（save_execution 写时记账）则直接构造快照，
+        # 仍走同一 enrich（量小于反查闸门时逐对象反查出对象名）；台账无账
+        # （旧执行 / 未部署本代码的栈写入）回落 payload 现算，两条路径同口径
+        ledger_snapshot = _snapshot_from_ledger(day, target_space, default_space)
+        if ledger_snapshot is not None:
+            return enrich_day_rows_with_graph(ledger_snapshot, space)
         now = datetime.now().astimezone()
         since = (now - timedelta(days=self._LOOKBACK_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
         engine = get_workflow_engine()

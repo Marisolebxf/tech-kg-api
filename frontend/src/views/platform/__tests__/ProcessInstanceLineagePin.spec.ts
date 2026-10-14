@@ -1,5 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { getExecution } from '../../../api/workflowOperations'
 import ProcessInstanceDetailView from '../ProcessInstanceDetailView.vue'
 
 /** 昨日新增行级跳转（job-detail?exec=&tab=lineage&src=&n=）：落对执行、落对
@@ -11,6 +12,7 @@ const state = vi.hoisted(() => ({
   currentSpace: 'gkx_verify_1',
   spaceItems: [] as Array<{ name: string; groupKind: string }>,
   job: null as Record<string, unknown> | null,
+  jobMissing: false,
   executions: [] as Array<Record<string, unknown>>,
   task: null as Record<string, unknown> | null,
 }))
@@ -23,7 +25,11 @@ vi.mock('../../../stores/graphSpace', () => ({ useGraphSpaceStore: () => ({
 vi.mock('vue-router', () => ({ useRoute: () => state.route, useRouter: () => ({ replace: vi.fn() }) }))
 vi.mock('../../../api/workflowOperations', async (original) => ({
   ...await original<typeof import('../../../api/workflowOperations')>(),
-  getJob: vi.fn(async () => ({ job: state.job, executions: state.executions })),
+  getJob: vi.fn(async () => {
+    // 任务壳已删：后端 delete_job 不级联执行记录，getJob 报「任务不存在」
+    if (state.jobMissing) throw new Error('任务不存在: job-9e84ebcd9fb1')
+    return { job: state.job, executions: state.executions }
+  }),
   getExecution: vi.fn(async (id: string) => state.executions.find((e) => e.id === id)),
   getTask: vi.fn(async () => state.task),
   listExecutions: vi.fn(async () => ({ items: state.executions, total: state.executions.length })),
@@ -85,6 +91,7 @@ describe('昨日新增行级跳转锚定来源结果行', () => {
     state.currentSpace = 'gkx_verify_1'
     state.spaceItems = []
     state.job = baseJob()
+    state.jobMissing = false
     state.executions = [chainExecution()]
     state.task = baseTask()
   })
@@ -128,6 +135,29 @@ describe('昨日新增行级跳转锚定来源结果行', () => {
     expect(wrapper.get('.detail-tabs button.active').text()).toBe('概况与结果')
     expect(wrapper.findAll('.lineage-result-table tbody tr.is-pinned')).toHaveLength(0)
     expect(scrollIntoView).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('任务已删除而执行仍在：getJob 报任务不存在时回落到 ?exec 那次执行，溯源页签照常锚定', async () => {
+    state.jobMissing = true
+    state.route = {
+      params: { jobId: 'job-9e84ebcd9fb1' },
+      query: { exec: 'EXEC-2C5669A668E04AED', tab: 'lineage', src: 'gkx.placeholder', n: '39' },
+    }
+    const scrollIntoView = vi.fn()
+    Element.prototype.scrollIntoView = scrollIntoView
+    const wrapper = mountView()
+    await flushPromises()
+
+    // 不再整页空白：执行详情回落取到，数据溯源页签渲染且锚行命中
+    expect(getExecution).toHaveBeenCalledWith('EXEC-2C5669A668E04AED')
+    expect(wrapper.get('.detail-tabs button.active').text()).toBe('数据溯源')
+    const pinned = wrapper.findAll('.lineage-result-table tbody tr')
+      .filter((row) => row.classes().includes('is-pinned'))
+    expect(pinned).toHaveLength(1)
+    expect(pinned[0]!.text()).toContain('gkx.placeholder')
+    // 明示任务壳已删，避免误以为任务还在
+    expect(wrapper.text()).toContain('所属图谱构建任务已删除')
     wrapper.unmount()
   })
 })

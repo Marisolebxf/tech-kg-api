@@ -710,13 +710,26 @@ async function loadLatestExecution() {
   } catch {
     executions = []
   }
+  // ?exec=EXEC-xxx 直达指定执行（昨日新增行级跳转带参）：任务可多次运行，
+  // 默认选最新会让「点开的数」和「行上的数」分属两次执行。
+  const pinnedExecId = String(route.query.exec || '')
+  if (!executions.length && jobId.value && pinnedExecId) {
+    // 任务壳已删而执行仍在（删任务不级联执行记录）：getJob 整体报「任务不存在」，
+    // 但 ?exec 指定的那次执行可单独取到——回落为只展示该执行，别让整页空白
+    try {
+      const execution = await getExecution(pinnedExecId)
+      if (execution) {
+        executions = [execution]
+        pipelineMessage.value = { type: 'info', text: '所属图谱构建任务已删除，以下为该次执行的留存详情' }
+      }
+    } catch {
+      // 执行也取不到时维持原有空态
+    }
+  }
   jobExecutions.value = executions
   resetExecPage()
   executionsResolved.value = true
   if (!executions.length) return
-  // ?exec=EXEC-xxx 直达指定执行（昨日新增行级跳转带参）：任务可多次运行，
-  // 默认选最新会让「点开的数」和「行上的数」分属两次执行。
-  const pinnedExecId = String(route.query.exec || '')
   await selectExecution(pinnedExecId || executions[0].id)
 }
 

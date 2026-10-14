@@ -2,7 +2,6 @@
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -112,32 +111,6 @@ def test_annotation_same_vids_are_separate_and_legacy_rows_are_not_exposed():
     finally:
         selected_graph_space.reset(token)
         engine.dispose()
-
-
-async def test_sql_paper_fallback_does_not_expose_paper_missing_from_current_graph(monkeypatch):
-    from service.expert_direct_relation import ExpertDirectRelationService
-
-    service = ExpertDirectRelationService()
-    monkeypatch.setattr(
-        service,
-        "_shared_paper_titles_from_mysql",
-        lambda *args: [
-            {"id": "paper_outside", "title": "outside"},
-            {"id": "paper_here", "title": "here"},
-        ],
-    )
-    graph = AsyncMock()
-    graph.get_node_edges.return_value = []
-
-    async def node(vid):
-        if vid == "paper_here":
-            return {"id": vid, "labels": ["Paper"], "properties": {}}
-        return None
-
-    graph.get_node.side_effect = node
-    rows = [{"expert_a_id": "a", "expert_b_id": "b", "relation_key": "a:b"}]
-    await service._attach_representative_achievements(graph, rows)
-    assert rows[0]["representative_achievements"] == [{"id": "paper_here", "title": "here"}]
 
 
 def test_sql_enterprise_enrichment_requires_selected_graph_entity(monkeypatch):

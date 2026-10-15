@@ -666,6 +666,21 @@ async def register_scheduled_execution(request: dict[str, Any]) -> dict[str, Any
     run_id = request.get("runId")
     if run_id and repository.get_execution_by_run(run_id) is not None:
         return {"ok": True, "deduped": True}
+    # chain 续新 run（continue-as-new，历史过大防饿死）后的重注册：同一
+    # workflowId 的执行行仍是 RUNNING（旧 run 停在 CONTINUED_AS_NEW，业务在新
+    # run 继续）——沿用原执行行、把 runId 指到新 run，不插重复行；收尾
+    # finalize 按新 runId 找回同一行。Schedule 固定 workflowId 且重叠触发会被
+    # AlreadyStarted 挡掉，RUNNING 行只可能是续跑（reset 产生的新 run 对应终态行）。
+    existing = repository.get_execution_by_workflow(request["workflowId"])
+    if (
+        run_id
+        and existing is not None
+        and existing.get("status") == "RUNNING"
+        and existing.get("scheduleId") == request.get("scheduleId")
+    ):
+        existing["runId"] = run_id
+        repository.save_execution(existing)
+        return {"ok": True, "continued": True, "executionId": existing.get("id")}
     dispatch = {
         "workflowId": request["workflowId"],
         "runId": run_id,
@@ -2916,6 +2931,19 @@ class SchemaExtractWorkflow:
         for pos, schema_id in enumerate(schema_ids):
             # 步间暂停挂起点：当前环正常结束后、下一环开始前等待恢复
             await self._wait_if_paused()
+            if pos and workflow.info().is_continue_as_new_suggested():
+                # 环边界主动续新 run：服务端已提示事件历史逼近上限/回放成本过高。
+                # worker 单并发下，长链的长历史回放会撞 workflow-task 10s 时限，
+                # WORKFLOW_TASK_TIMED_OUT 循环把执行饿死成历史冻结的 RUNNING 僵尸
+                # （2026-10-14 第二轮 e2e 两条关系链并发触发即复现）——把剩余
+                # Schema 交给干净历史的新 run 重放。水位按 schema 隔离，已完成环
+                # 不会重跑；代价是新 run 的聚合 result 只含剩余环（已完成环的失败
+                # 已在各自环内转审，case 不丢）。控制面执行行由 refresh_execution
+                # 跟链折算（CONTINUED_AS_NEW → 最新 run）；调度执行行由
+                # register_scheduled_execution 就地更新 runId，不插重复行。
+                # ContinueAsNewError 继承 BaseException，不会被 run() 顶层
+                # except Exception 误当失败收尾。
+                workflow.continue_as_new({**request, "schemaIds": schema_ids[pos:]})
             step_key = f"schema:{schema_id}"
             # current 与 chain_steps 键同形（带 schema: 前缀）：前端以
             # current 是否命中 steps 判断「当前环」补位节点，裸 id 恒未命中

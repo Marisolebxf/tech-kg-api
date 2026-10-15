@@ -55,8 +55,10 @@ async def reconcile_once() -> int:
         except Exception as exc:  # noqa: BLE001  # Temporal 不可达：本轮放弃
             logger.warning("执行对账：refresh %s 失败: %s", execution.get("id"), exc)
             return done
-        if refreshed.get("status") == execution.get("status"):
-            continue  # 真在跑，不动
+        if refreshed == execution:
+            continue  # 真在跑且无新信息，不动
+        # 状态未变但行有更新（如瞬时 NotFound 的 notFoundCount 计数/提示 message）
+        # 也必须回写——否则计数永远停在 1，真被删的执行永远到不了判死阈值
         repository.save_execution(refreshed)
         try:
             WorkflowOperationsService()._sync_task_from_execution(refreshed)

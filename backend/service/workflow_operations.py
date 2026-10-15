@@ -472,6 +472,14 @@ class WorkflowOperationsService:
         """
         from service import schema_extraction
 
+        # 同图空间互斥（与 trigger_job 同款防护）：批量直触若撞上运行中的
+        # 抽取/串行链，并发回放竞争会互相饿死（2026-10-14 e2e 实测）。
+        context_space = actor.context_graph_space if actor is not None else None
+        if context_space:
+            from service.workflow_jobs import assert_no_conflicting_run
+
+            await assert_no_conflicting_run({context_space}, set())
+
         executions: list[dict[str, Any]] = []
         skipped: list[dict[str, str]] = []
         for info in schema_extraction.list_extract_eligible_schemas():

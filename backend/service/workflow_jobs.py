@@ -8,6 +8,7 @@ jobId 关联回 Job，详情页据此列出执行历史。
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
@@ -24,6 +25,8 @@ from service.business_access_control import (
 from service.platform_access import PlatformActor
 from service.temporal_runtime import temporal_runtime
 from service.workflow_repository import repository
+
+logger = logging.getLogger(__name__)
 
 _SELECTOR_KEYS = (
     "llmConfigId",
@@ -195,6 +198,93 @@ def _job_business(actor, resource):
     return next(iter(private_clients)) if private_clients else None
 
 
+def _job_graph_spaces(resource: dict[str, Any]) -> set[Any]:
+    """job / 执行 payload 的目标图空间集合：显式 graphSpace 优先；未传时回退
+    Schema 绑定空间（job 建时未传 graphSpace，实际落图空间来自绑定）。"""
+    spaces = {resource.get("graphSpace"), resource.get("graph_space")} - {None, ""}
+    schema_ids = list(resource.get("schemaIds") or [])
+    if resource.get("schemaId"):
+        schema_ids.append(resource["schemaId"])
+    if not spaces and schema_ids:
+        from dao.schema_management import SchemaManagementDAO
+        from infra.workflow_mysql import workflow_session_scope
+
+        try:
+            with workflow_session_scope() as session:
+                for schema_id in schema_ids:
+                    row = SchemaManagementDAO(session).get(schema_id)
+                    if row and row.graph_space:
+                        spaces.add(row.graph_space)
+        except Exception:  # noqa: BLE001  # 控制库不可达：降级为仅 Schema 交集互斥
+            logger.warning("解析 Schema 绑定图空间失败，互斥检查退化为 Schema 交集", exc_info=True)
+    return spaces
+
+
+async def assert_no_conflicting_run(
+    spaces: set[str],
+    schema_ids: set[str],
+    *,
+    skip_job_id: str | None = None,
+    repo=None,  # noqa: ANN001 — WorkflowRepository；缺省用模块单例（单测注入 FakeRepo）
+) -> None:
+    """同图空间运行互斥（手动触发防护）。
+
+    worker 单并发下，同空间两条抽取/串行链并发会互相饿死——后到链的长历史
+    回放撞 workflow-task 10s 时限，WORKFLOW_TASK_TIMED_OUT 循环，历史冻结成
+    RUNNING 僵尸（2026-10-14 第二轮 e2e 实测两条关系链并发触发即复现）。手动
+    触发前扫最近执行（同 find_running_extraction 的 200 条口径），同空间或
+    Schema 交集仍有运行中的抽取执行时 409 拒绝；控制库 RUNNING 行可能是陈旧
+    记录，逐个向 Temporal 核实，陈旧行就地回写终态不误拦；Temporal 不可达时
+    保守拦截（宁可 409，不可楔死）。调度路径不走此防护（Schedule 有自己的
+    overlap 语义）。
+    """
+    if not spaces and not schema_ids:
+        return
+    if repo is None:
+        repo = repository
+    for execution in repo.list_executions(limit=200):
+        if execution.get("status") != "RUNNING":
+            continue
+        if skip_job_id and execution.get("jobId") == skip_job_id:
+            continue  # 本任务自己的上次执行：trigger_job 已按 job 口径单独拦
+        payload = execution.get("payload") or {}
+        running_schemas = set(payload.get("schemaIds") or [])
+        if payload.get("schemaId"):
+            running_schemas.add(payload["schemaId"])
+        if not running_schemas and not str(execution.get("workflowId") or "").startswith(
+            ("chain-", "schema-extract-")
+        ):
+            continue  # 非抽取类工作流不参与互斥
+        running_spaces = {payload.get("graph_space"), payload.get("graphSpace")} - {None, ""}
+        if not (running_spaces & spaces) and not (running_schemas & schema_ids):
+            continue
+        # 向 Temporal 核实真在跑（陈旧 RUNNING 就地回写终态，不拦）
+        try:
+            refreshed = await temporal_runtime.refresh_execution(execution)
+        except Exception as exc:  # noqa: BLE001  # Temporal 不可达：保守拦截
+            raise WorkflowJobConflictError(
+                f"无法确认图空间当前是否有抽取在运行（{exc}），请稍后重试，避免并发触发互相卡死"
+            ) from exc
+        execution.update(refreshed)
+        if refreshed.get("status") != "RUNNING":
+            try:
+                repo.save_execution(execution)
+            except Exception:  # noqa: BLE001
+                logger.exception("回写陈旧执行 %s 终态失败", execution.get("id"))
+            continue
+        name = payload.get("jobName") or execution.get("workflowId")
+        if execution.get("taskId"):
+            name = payload.get("jobName") or (
+                (repo.get_task(execution["taskId"]) or {}).get("objectName")
+                or execution.get("workflowId")
+            )
+        space_label = next(iter(running_spaces & spaces), None) if spaces else None
+        raise WorkflowJobConflictError(
+            f"图空间「{space_label or '该空间'}」已有抽取任务「{name}」在运行中，"
+            "请等待其完成后再触发（并发触发会互相卡死，可在执行详情查看进度）"
+        )
+
+
 def authorize_background_execution(payload):
     """Re-resolve persisted users; a scheduled payload cannot grant itself a role."""
     if not rbac_enabled():
@@ -343,8 +433,10 @@ class WorkflowJobConflictError(WorkflowJobError):
 
 # 视为"仍在运行"的状态。QUEUED 是 Temporal 不可用时的本地待下发记录，
 # 不会自愈，必须允许重新触发作为恢复手段，故不算运行中。
-# CONTINUED_AS_NEW 同理不算：我们的 workflow 从不 continue-as-new，且所有
-# 惰性刷新路径只认字面 RUNNING，把它算进运行中会永久 409 且无法自愈。
+# CONTINUED_AS_NEW 不算运行中：chain 环边界会主动续新 run（历史过大防饿死），
+# 但 refresh_execution 会跟链把执行行折算回 RUNNING，控制面正常不会残留
+# CONTINUED_AS_NEW；万一残留（跟链异常窗口）也不算运行中，避免永久 409 无法
+# 自愈——重触发即恢复。
 _NON_TERMINAL_RUNNING = {"RUNNING"}
 
 
@@ -599,6 +691,13 @@ class WorkflowJobService:
                 status = job["lastExecutionStatus"]
             if status in _NON_TERMINAL_RUNNING:
                 raise WorkflowJobConflictError("上一次执行仍在进行中，请等待完成后再触发")
+        # 同图空间互斥：其它任务（或本空间直触执行）仍在跑时拒绝，防并发楔死
+        await assert_no_conflicting_run(
+            _job_graph_spaces(job),
+            set(job.get("schemaIds") or []) | ({job["schemaId"]} if job.get("schemaId") else set()),
+            skip_job_id=job["id"],
+            repo=self.repo,
+        )
         definition = self.repo.get_definition(job["definitionId"])
         if definition is None:
             raise WorkflowJobError(f"任务脚本定义已丢失: {job['definitionId']}")

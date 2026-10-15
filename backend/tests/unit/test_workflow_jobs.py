@@ -119,6 +119,10 @@ class FakeTemporal:
     async def signal_workflow(self, workflow_id, run_id, signal_name):
         self.signals.append((workflow_id, signal_name))
 
+    async def refresh_execution(self, execution):
+        # 同空间互斥防护的核实步：默认「真在跑」原样返回，用例按需覆盖
+        return dict(execution)
+
     async def cancel_workflow(self, workflow_id, run_id):
         self.canceled = getattr(self, "canceled", []) + [(workflow_id, run_id)]
 
@@ -253,6 +257,64 @@ async def test_trigger_rejects_when_script_object_missing(env, monkeypatch):
     with pytest.raises(WorkflowJobError, match="对象存储中不存在"):
         await service.trigger_job(_actor("u1"), job["id"])
     assert not ops.executed, "预检失败不应下发执行"
+
+
+async def test_trigger_rejects_when_space_busy(env):
+    """同图空间已有运行中抽取执行（他任务/无主直触）时手动触发 409，防并发楔死。"""
+    service, repo, ops, _ = env
+    job = await service.create_job(
+        _actor("u1"),
+        {
+            "name": "链A",
+            "taskType": "chain",
+            "schemaIds": ["schema-widget", "schema-paper"],
+            "graphSpace": "sp1",
+        },
+    )
+    # 无主直触执行（无 jobId，能通过 FakeRepo.list_executions 的 None 过滤）
+    repo.saved_executions.append(
+        {
+            "id": "EXEC-X",
+            "workflowId": "schema-extract-widget-abc",
+            "status": "RUNNING",
+            "startedAt": "2026-10-15 10:00:00",
+            "payload": {"graph_space": "sp1", "schemaId": "schema-widget"},
+        }
+    )
+    with pytest.raises(WorkflowJobConflictError, match="已有抽取任务"):
+        await service.trigger_job(_actor("u1"), job["id"])
+    assert not ops.executed, "同空间运行中应拒绝下发"
+
+
+async def test_trigger_allows_when_running_row_is_stale(env):
+    """控制库 RUNNING 行经 Temporal 核实已终态（陈旧）时不拦，就地回写终态。"""
+    service, repo, ops, temporal = env
+    job = await service.create_job(
+        _actor("u1"),
+        {
+            "name": "链A",
+            "taskType": "chain",
+            "schemaIds": ["schema-widget", "schema-paper"],
+            "graphSpace": "sp1",
+        },
+    )
+    stale = {
+        "id": "EXEC-X",
+        "workflowId": "schema-extract-widget-abc",
+        "status": "RUNNING",
+        "startedAt": "2026-10-15 10:00:00",
+        "payload": {"graph_space": "sp1", "schemaId": "schema-widget"},
+    }
+    repo.saved_executions.append(stale)
+
+    async def _done(execution):
+        return {**execution, "status": "COMPLETED"}
+
+    temporal.refresh_execution = _done
+    execution = await service.trigger_job(_actor("u1"), job["id"])
+    assert ops.executed, "陈旧 RUNNING 不应拦截"
+    assert execution["jobId"] == job["id"]
+    assert stale["status"] == "COMPLETED", "陈旧行应就地回写终态"
 
 
 async def test_create_chain_job_builds_definition_and_steps(env):

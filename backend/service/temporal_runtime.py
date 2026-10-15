@@ -23,6 +23,12 @@ from service.temporal_workflows import ACTIVITIES, WORKFLOW_CLASSES
 
 logger = logging.getLogger(__name__)
 
+# refresh_execution 遇 NOT_FOUND 的判死阈值：连续 N 次仍查不到才标 TERMINATED。
+# 2026-10-15 实测同信道偶发连续 NotFound 而服务端零错误、随后自愈——一次 NotFound
+# 就判死会把活着的执行永久误标（终态后不再复核），必须重试确认。计数存执行行
+# payload（notFoundCount 键），成功 describe 后清零。
+_NOT_FOUND_TERMINATE_AFTER = 5
+
 
 def _format_workflow_failure(exc: BaseException) -> str:
     """展开 failure cause 链，取到 activity 抛出的真实业务错误。
@@ -166,21 +172,50 @@ class TemporalRuntime:
         try:
             description = await handle.describe()
         except RPCError as exc:
-            # workflow 在当前 Temporal 上不存在（服务迁移/重置/重部署后丢失）。
-            # 标记为 TERMINATED 让控制面把它当终态处理，避免 SQLite 卡在 RUNNING。
+            # workflow 在当前 Temporal 上不存在（服务迁移/重置/重部署后丢失）→
+            # 标记 TERMINATED 让控制面当终态处理。但 NOT_FOUND 也可能只是瞬时抖动
+            # （2026-10-15 实测：同信道 00:17 连续两次 NotFound、00:30 起全部正常，
+            # 服务端日志零错误、不可复现）——立即判死会把活着的执行永久误标终态。
+            # 连续 _NOT_FOUND_TERMINATE_AFTER 次仍查不到才判死，期间保持 RUNNING
+            # 等下次刷新重试确认；计数随执行行持久化，成功 describe 清零。
             if exc.status.value == 5:  # grpc.StatusCode.NOT_FOUND
+                misses = int(execution.get("notFoundCount") or 0) + 1
+                if misses < _NOT_FOUND_TERMINATE_AFTER:
+                    return {
+                        **execution,
+                        "notFoundCount": misses,
+                        "message": (
+                            f"状态刷新第 {misses} 次未查到工作流（多为瞬时抖动，"
+                            f"下次刷新自动重试确认；连续 {_NOT_FOUND_TERMINATE_AFTER} 次"
+                            "仍未查到才判定已终止）"
+                        ),
+                    }
                 return {
-                    **execution,
+                    **{k: v for k, v in execution.items() if k != "notFoundCount"},
                     "status": "TERMINATED",
                     "completedAt": datetime.now(UTC).astimezone().strftime("%Y-%m-%d %H:%M:%S"),
                     "message": (
-                        f"工作流在 Temporal 已不存在（{exc}）。"
+                        f"连续 {misses} 次未在 Temporal 查到该工作流，判定已不存在（{exc}）。"
                         "常见原因：Temporal 服务迁移/重置、或工作流在另一实例上运行。"
                     ),
                 }
             raise
         status = description.status.name
         refreshed = {**execution, "status": status}
+        refreshed.pop("notFoundCount", None)  # 成功 describe：清零瞬时计数（含终态路径）
+        if status == "CONTINUED_AS_NEW":
+            # chain 主动续新 run（事件历史过大防饿死，见 _run_chain）后旧 run 停在
+            # CONTINUED_AS_NEW，业务执行在新 run 里继续——describe 不跟链，按
+            # workflowId 取最新 run 的状态并把执行行指到新 run（暂停/取消/重置都
+            # 必须落在活着的 run 上），直至最新 run 到真正终态；handle.result()
+            # 自带跨续新链取产出语义，最终产出仍从原 handle 取。
+            follow = await client.get_workflow_handle(execution["workflowId"]).describe()
+            status = follow.status.name
+            refreshed = {
+                **execution,
+                "status": status,
+                "runId": getattr(follow, "run_id", None) or execution.get("runId"),
+            }
         if status == "RUNNING":
             return refreshed
 

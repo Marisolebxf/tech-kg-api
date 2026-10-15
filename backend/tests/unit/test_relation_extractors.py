@@ -390,6 +390,21 @@ class TestScholarEdges:
         assert rec.properties["confidence"] == 1.0
         assert rec.identity == {"source_record_id": "S1_S2"}
 
+    def test_coauthor_with_relation_time_proxy(self):
+        """无真实合作时间字段：update_time 代理写 relation_time（直接关系限时过滤依赖）。"""
+        rec = coauthor_with(
+            "dwd_scholar_coauthor",
+            {"scholar_id": "S1", "co_scholar_id": "S2", "update_time": "2026-05-27 16:39:38"},
+            "B",
+        )[0]
+        assert rec.properties["relation_time"] == "2026-05-27 16:39:38"
+        rec2 = coauthor_with(
+            "dwd_scholar_coauthor",
+            {"scholar_id": "S1", "co_scholar_id": "S2"},
+            "B",
+        )[0]
+        assert rec2.properties["relation_time"] == ""
+
 
 class TestPatentMatchingPrimitives:
     """专利域匹配原语（移植自旧 load_patent_relations.py，口径对拍已验证）。"""

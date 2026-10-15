@@ -280,6 +280,27 @@ def test_park_drops_edges_to_rejected_endpoint(service, graph):
     assert out == {"records": [], "parked": 0, "dropped": 1}
 
 
+def test_park_filters_cases_by_graph_space(service, graph):
+    """跨空间污染回归：vid 跨空间同名，端点消歧只认本抽取空间的 case。
+
+    gkx_verify_1 的未决 case 不得拦下 gkx_local_1 抽取的边（否则边被暂存进
+    外空间快照、裁决补写也落到外空间图）；同空间 case 照常暂存，不传空间
+    （旧调用）不过滤。
+    """
+    service.create_direct_case(**gray_case_kwargs(graph_space="gkx_verify_1"))
+    edge = [{"fromId": "person_1", "toId": "org_new_1", "props": {}}]
+    # 外空间 case：不暂存，原样放行写图
+    out = service.park_or_rewrite_edges("EMPLOYED_BY", edge, graph_space="gkx_local_1")
+    assert out == {"records": edge, "parked": 0, "dropped": 0}
+    # 同空间 case：照常暂存
+    same = service.park_or_rewrite_edges("EMPLOYED_BY", edge, graph_space="gkx_verify_1")
+    assert same["parked"] == 1
+    assert same["records"] == []
+    # 旧调用（不带空间）：不过滤，维持旧口径
+    legacy = service.park_or_rewrite_edges("EMPLOYED_BY", edge)
+    assert legacy["parked"] == 1
+
+
 class SchemaGraph(FakeGraph):
     """DESCRIBE 返回平台 DDL 风格 schema（NOT NULL 审计列 + 数字列存在）。"""
 

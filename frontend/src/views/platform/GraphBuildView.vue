@@ -250,8 +250,15 @@ async function onToggleState(job: WorkflowJob) {
   const active = job.status === '暂停'
   try {
     await updateJobState(job.id, active)
-    if (active || job.lastExecutionStatus !== 'RUNNING') {
-      showToast(active ? '已恢复' : '已暂停', 'success')
+    if (job.lastExecutionStatus !== 'RUNNING') {
+      // 无运行中执行：翻的只是调度/任务开关，立即生效。cron 按调度口径提示，
+      // 与按钮名（暂停调度/恢复调度）一致；单次任务此处只剩翻回开关本身
+      showToast(
+        active
+          ? (job.schedule.kind === 'cron' ? '已恢复调度：将按周期继续自动触发' : '已恢复')
+          : '已暂停调度：停止后续自动触发',
+        'success',
+      )
       await loadData()
       return
     }
@@ -279,6 +286,7 @@ async function onToggleState(job: WorkflowJob) {
     await loadData()
   } catch (error) {
     delete pausingJobIds.value[job.id]
+    delete resumingJobIds.value[job.id]
     showToast(schemaErrorMessage(error), 'error')
   }
 }
@@ -315,12 +323,16 @@ function openJobDetail(job: WorkflowJob) {
   void router.push({ name: 'job-detail', params: { jobId: job.id } })
 }
 
-/** 任务行操作项（有序）：执行/重新执行、暂停/恢复、查看详情、删除。
+/** 任务行操作项（有序）：执行/重新执行、暂停/恢复（周期任务无运行中执行时为
+ *  暂停调度/恢复调度——停/续的是后续自动触发，不是挂起执行）、查看详情、删除。
  *  运行中不可删：置灰而非隐藏（悬停说明原因），与其余操作列同口径。 */
 type JobAction = { key: string; label: string; danger?: boolean; disabled?: boolean; title?: string; run: () => void }
 
 function jobActions(job: WorkflowJob): JobAction[] {
   const status = deriveJobUnifiedStatus(job)
+  // 周期任务当前无运行中执行（上次已失败/完成/未跑）：可停的只剩调度本身，
+  // 按钮按调度口径命名并悬停说明，消除「运行失败还能暂停」的字面矛盾
+  const scheduleOnly = job.schedule.kind === 'cron' && job.lastExecutionStatus !== 'RUNNING'
   const actions: JobAction[] = []
   if (['未运行', '运行失败', '运行异常'].includes(status)) {
     actions.push({
@@ -334,15 +346,17 @@ function jobActions(job: WorkflowJob): JobAction[] {
   if (status !== '已暂停' && job.status !== '暂停' && (status === '运行中' || job.schedule.kind === 'cron')) {
     actions.push({
       key: 'pause',
-      label: pausingJobIds.value[job.id] ? '暂停中…' : '暂停',
+      label: scheduleOnly ? '暂停调度' : pausingJobIds.value[job.id] ? '暂停中…' : '暂停',
       disabled: !spaces.canWrite(jobSpace(job)) || Boolean(pausingJobIds.value[job.id]),
+      title: scheduleOnly ? '暂停周期调度：停止后续自动触发，已结束的执行不受影响' : undefined,
       run: () => void onToggleState(job),
     })
   } else if (job.status === '暂停' || status === '已暂停') {
     actions.push({
       key: 'resume',
-      label: resumingJobIds.value[job.id] ? '恢复中…' : '恢复',
+      label: scheduleOnly ? '恢复调度' : resumingJobIds.value[job.id] ? '恢复中…' : '恢复',
       disabled: !spaces.canWrite(jobSpace(job)) || Boolean(resumingJobIds.value[job.id]),
+      title: scheduleOnly ? '恢复周期调度：将按周期继续自动触发' : undefined,
       run: () => void onToggleState(job),
     })
   }

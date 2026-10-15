@@ -473,6 +473,93 @@ class TestDownstreamRecordsKey:
         assert result == {"written": 1}
         assert any("INSERT VERTEX" in q for q in fake_graph[0].written)
 
+    async def test_write_records_uploads_vids_manifest(self, fake_graph, fake_s3, relay_on):
+        """indexVids 开：实际写入的 vid（空属性跳过行不含）+ TAG 名上传 S3 工件，
+        返回 vidsKey——环末增量索引 activity 凭 key 下载。"""
+        result = await write_records(
+            {
+                "kind": "entity",
+                "name": "Widget",
+                "activeProps": ["id", "name"],
+                "records": [
+                    {"id": "n1", "props": {"id": "n1", "name": "甲"}},
+                    {"id": "n2", "props": {}},  # 实体空属性按旧语义跳过
+                ],
+                "graph": {},
+                "sourceTable": "gkx.scholar",
+                "stepId": "source:bind-1#step1",
+                "batchIdx": 2,
+                "chunkIdx": 1,
+                "indexVids": True,
+            }
+        )
+        assert result["written"] == 1
+        key = result["vidsKey"]
+        assert key.endswith("payloads/source:bind-1#step1/0002/vids-01.json.gz")
+        assert fake_s3.dumped(key) == {"label": "Widget", "vids": ["n1"]}
+
+    async def test_write_records_no_vids_key_without_relay(self, fake_graph, fake_s3, relay_off):
+        """S3 中转未开 = 本栈增量索引不可用：计划内不带 vidsKey（索引步跳过）。"""
+        result = await write_records(
+            {
+                "kind": "entity",
+                "name": "Widget",
+                "activeProps": ["id", "name"],
+                "records": [{"id": "n1", "props": {"id": "n1", "name": "甲"}}],
+                "graph": {},
+                "sourceTable": "gkx.scholar",
+                "stepId": "source:bind-1#step1",
+                "indexVids": True,
+            }
+        )
+        assert result == {"written": 1}
+
+    async def test_write_records_relation_ignores_index_vids(
+        self, fake_graph, fake_s3, relay_on, monkeypatch: pytest.MonkeyPatch
+    ):
+        """关系环不参与实体索引：即便误带 indexVids 也不上传。"""
+        from service.manual_review_production import manual_review_service
+
+        monkeypatch.setattr(
+            manual_review_service,
+            "park_or_rewrite_edges",
+            lambda edge_type, records: {"records": records, "parked": 0, "dropped": 0},
+        )
+        result = await write_records(
+            {
+                "kind": "relation",
+                "name": "LINKS",
+                "records": [{"fromId": "n1", "toId": "n2", "props": {"w": 1}}],
+                "graph": {},
+                "sourceTable": "gkx.scholar",
+                "stepId": "source:bind-1#step1",
+                "indexVids": True,
+            }
+        )
+        assert result == {"written": 1}
+        assert not [key for key in fake_s3.objects if "vids-" in key]
+
+    async def test_write_records_upload_failure_raises(self, fake_graph, fake_s3, relay_on):
+        """工件上传失败必须上抛（activity 重试幂等重写图+重传），绝不静默丢 vid。"""
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("s3 down")
+
+        fake_s3.put_bytes = _boom
+        with pytest.raises(RuntimeError, match="s3 down"):
+            await write_records(
+                {
+                    "kind": "entity",
+                    "name": "Widget",
+                    "activeProps": ["id", "name"],
+                    "records": [{"id": "n1", "props": {"id": "n1", "name": "甲"}}],
+                    "graph": {},
+                    "sourceTable": "gkx.scholar",
+                    "stepId": "source:bind-1#step1",
+                    "indexVids": True,
+                }
+            )
+
     async def test_resolve_entity_batch_relays_kept_records(self, fake_graph, fake_s3):
         out_key = store.put_extract_payload_json(
             "source:bind-1",

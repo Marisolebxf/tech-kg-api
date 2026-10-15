@@ -61,9 +61,13 @@ class FakeChangesProvider:
     def __init__(self, snapshot: DayChangesSnapshot | None = None) -> None:
         self.snapshot = snapshot or DayChangesSnapshot()
         self.spaces: list[str | None] = []
+        self.days: list[str | None] = []
 
-    def get_day_changes(self, space: str | None = None) -> DayChangesSnapshot:
+    def get_day_changes(
+        self, space: str | None = None, day: str | None = None
+    ) -> DayChangesSnapshot:
         self.spaces.append(space)
+        self.days.append(day)
         return self.snapshot
 
     def running_count(self, space: str | None = None) -> int:
@@ -71,7 +75,9 @@ class FakeChangesProvider:
 
 
 class FailingChangesProvider:
-    def get_day_changes(self, space: str | None = None) -> DayChangesSnapshot:
+    def get_day_changes(
+        self, space: str | None = None, day: str | None = None
+    ) -> DayChangesSnapshot:
         raise RuntimeError("control db unavailable")
 
     def running_count(self, space: str | None = None) -> int:
@@ -356,11 +362,15 @@ def test_stats_provider_rest_fallback_when_cache_missing() -> None:
     assert snapshot.edges == {"PUBLISH": 5}
 
 
-def test_overview_does_not_present_control_plane_totals_as_individual_changes() -> None:
+def test_overview_presents_aggregate_blocks_with_written_totals() -> None:
+    """聚合格式（2026-10-14）：写入块行如实展示，徽标/合计按控制库 written 精确
+    计数（对象数口径，与行数是两回事）；不再有「聚合行藏起来等图反查」「未完整
+    读取」的中间态。"""
     from biz.schemas.platform_overview import AssetChangeRow
 
     aggregate = AssetChangeRow(
         type="论文",
+        count=32,
         object="论文 · 32 条",
         change="新增 Paper",
         source="paper",
@@ -376,56 +386,45 @@ def test_overview_does_not_present_control_plane_totals_as_individual_changes() 
         stats_provider=FakeStatsProvider(), changes_provider=changes
     ).get_overview("dev2")
     assert changes.spaces == ["dev2"]
-    assert [group.added for group in result.asset_overview_groups] == ["--", "--"]
+    assert [group.added for group in result.asset_overview_groups] == ["+32", "+7"]
     assert result.pending_batch_count == 3
-    assert result.asset_change_rows == {"entity": [], "relation": []}
-    assert result.asset_change_totals == {"entity": 0, "relation": 0}
-    assert set(result.asset_change_errors) == {"entity", "relation"}
-    assert "assetChangeErrors" in result.model_dump(by_alias=True)
-    assert all("暂未完整读取" in message for message in result.asset_change_errors.values())
+    assert result.asset_change_rows == {"entity": [aggregate], "relation": []}
+    assert result.asset_change_totals == {"entity": 32, "relation": 7}
+    assert result.asset_change_errors == {}
+    # 数量列随接口序列化；逐对象时代的 object/change 不再外发
+    dumped = result.model_dump(by_alias=True)["assetChangeRows"]["entity"]
+    assert dumped[0]["count"] == 32
+    assert "object" not in dumped[0] and "change" not in dumped[0]
 
 
-def test_overview_badge_counts_graph_rows_when_lookup_exact() -> None:
-    """徽标与抽屉同数：图反查逐对象成功（exact）时徽标/合计=明细行数——控制库
-    written 只数 COMPLETED/ABNORMAL 的抽取，时间窗反查圈住的是图内昨日真实
-    写入对象（ewrdf 实测 written 合计 +4 vs 图内 13 条）；反查降级才回退
-    written 合计。"""
+def test_overview_badge_uses_written_totals_regardless_of_row_shape() -> None:
+    """徽标/合计=控制库 written 合计（聚合格式 2026-10-14 口径）：不再依赖
+    rows_exact/gated 标志（反查闸门随逐对象展示一并退役），行集原样透传。"""
     from biz.schemas.platform_overview import AssetChangeRow
 
     entity_rows = [
         AssetChangeRow(
             type="专家",
-            object=f"专家{index:02d}",
+            count=4,
+            object="专家 · 4 条",
             change="新增 expert",
             source="ewrdf_test.t_expert",
             time="10-10 04:20:02",
+            is_aggregate=True,
         )
-        for index in range(1, 14)
     ]
     result = PlatformOverviewService(
         stats_provider=FakeStatsProvider(),
         changes_provider=FakeChangesProvider(
-            DayChangesSnapshot(
-                entity_added=4,
-                relation_added=0,
-                entity_rows_exact=True,
-                entity_rows=entity_rows,
-            )
-        ),
-    ).get_overview("ewrdf")
-
-    assert result.asset_overview_groups[0].added == "+13"  # 与抽屉 13 行同数
-    assert result.asset_change_totals == {"entity": 13, "relation": 0}
-
-    degraded = PlatformOverviewService(
-        stats_provider=FakeStatsProvider(),
-        changes_provider=FakeChangesProvider(
+            # exact/gated 均为默认 False：聚合格式下装配层不再读这两个标志
             DayChangesSnapshot(entity_added=4, relation_added=0, entity_rows=entity_rows)
         ),
     ).get_overview("ewrdf")
-    assert degraded.asset_overview_groups[0].added == "--"  # 未完整读取时不冒充新增总数
-    assert degraded.asset_change_totals == {"entity": 13, "relation": 0}
-    assert "entity" in degraded.asset_change_errors
+
+    assert result.asset_overview_groups[0].added == "+4"  # written 精确计数
+    assert result.asset_change_totals == {"entity": 4, "relation": 0}
+    assert result.asset_change_rows["entity"] == entity_rows
+    assert result.asset_change_errors == {}
 
 
 def test_overview_running_count_is_live_not_frozen_in_day_snapshot() -> None:
@@ -480,6 +479,52 @@ def test_day_changes_provider_caches_closed_window_until_day_rolls() -> None:
     assert loads[-1] == ("2026-09-24", "dev2")
 
 
+def test_day_changes_with_explicit_day_bypasses_and_never_pollutes_daily_cache() -> None:
+    """?day= 指定历史日回看（验收核对）：现算即返、不进当日冻结缓存；当日态
+    （_cached_day/缓存行）不被历史日请求触碰，后续默认请求语义不变。"""
+    from service.platform_overview import DayChangesSnapshot, WorkflowControlDayChangesProvider
+
+    loads: list[tuple[str, str | None]] = []
+
+    class _FrozenProvider(WorkflowControlDayChangesProvider):
+        def _current_day(self) -> str:
+            return "2026-10-14"
+
+        def _load(self, day: str, space: str | None) -> DayChangesSnapshot:
+            loads.append((day, space))
+            return DayChangesSnapshot(day=day, entity_added=len(loads))
+
+    provider = _FrozenProvider()
+    history = provider.get_day_changes("gkx_verify_1", day="2026-10-13")
+    assert history.day == "2026-10-13"
+    assert loads == [("2026-10-13", "gkx_verify_1")]
+    # 历史日不落当日冻结缓存：重复请求重算（无缓存可命中）
+    provider.get_day_changes("gkx_verify_1", day="2026-10-13")
+    assert loads == [("2026-10-13", "gkx_verify_1"), ("2026-10-13", "gkx_verify_1")]
+    assert provider._cached_day is None  # 当日态未被历史日污染
+
+    # 随后的默认请求照旧：当日冷算一次后冻结
+    first = provider.get_day_changes("gkx_verify_1")
+    assert loads[-1] == ("2026-10-14", "gkx_verify_1")
+    assert provider.get_day_changes("gkx_verify_1") is first
+    assert len([entry for entry in loads if entry == ("2026-10-14", "gkx_verify_1")]) == 1
+
+
+def test_overview_threads_day_param_and_caches_per_day() -> None:
+    """get_overview(space, day) 把统计日透传给变更快照；结果缓存按 (空间, 统计日)
+    隔离——历史日回看与默认当日互不挤占缓存。"""
+    changes = FakeChangesProvider()
+    service = PlatformOverviewService(stats_provider=FakeStatsProvider(), changes_provider=changes)
+
+    service.get_overview("dev2", day="2026-10-13")
+    assert changes.days == ["2026-10-13"]
+    service.get_overview("dev2", day="2026-10-13")  # 同 (空间, 日) 命中缓存
+    assert changes.days == ["2026-10-13"]
+
+    service.get_overview("dev2")  # 默认当日：另一个缓存键，重算
+    assert changes.days == ["2026-10-13", None]
+
+
 def test_overview_shows_placeholder_when_no_day_changes() -> None:
     """控制库可读但统计日写图为 0：显示 -- 而非 +0，数据源仍标记真实。"""
     result = PlatformOverviewService(
@@ -524,6 +569,7 @@ def _execution_record(
     sources: list[dict] | None = None,
     task_id: str | None = "TASK-overview-test",
     job_id: str | None = "job-overview-test",
+    exec_id: str | None = "EXEC-overview-test",
     started_at: str | None = None,
 ) -> str:
     import json
@@ -534,6 +580,7 @@ def _execution_record(
         "triggerSource": trigger,
         "taskId": task_id,
         "jobId": job_id,
+        "id": exec_id,
         "startedAt": started_at,
         "payload": {payload_space_key: payload_space} if payload_space else {},
         "output": {
@@ -650,10 +697,14 @@ def test_parse_execution_records_aggregates_day_by_kind_and_space() -> None:
     row = snapshot.entity_rows[0]
     assert row.type == "审测挂件"
     assert row.object == "审测挂件 · 5 条"
+    assert row.count == 5  # 聚合格式：数量列 = 该来源 written 精确计数
     assert row.change == "新增 review-widget-64d0d5"
     assert row.source == "techkg_e2e_liz.review_widgets"
     assert row.task_id == "TASK-overview-test"
     assert row.job_id == "job-overview-test"
+    # 行级跳转直达参数：任务页默认展示最新执行，不带执行 ID 会张冠李戴
+    assert row.exec_id == "EXEC-overview-test"
+    assert row.model_dump(by_alias=True)["execId"] == "EXEC-overview-test"
     assert row.model_dump(by_alias=True)["taskId"] == "TASK-overview-test"
     assert row.model_dump(by_alias=True)["jobId"] == "job-overview-test"
     assert row.time == "09-22 18:30:00"  # 完成时刻按北京展示（UTC+8），带月日（跨天歧义）
@@ -1528,8 +1579,8 @@ def test_overview_serves_stale_value_and_refreshes_in_background() -> None:
     assert provider.calls == 1
 
     # 把缓存条目拨成过期（模拟 TTL 到期后的下一次进页）
-    _, data = service._cached["dev2"]
-    service._cached["dev2"] = (time.monotonic() - 1, data)
+    _, stored, data = service._cached[("dev2", "")]
+    service._cached[("dev2", "")] = (time.monotonic() - 1, stored, data)
 
     started = time.perf_counter()
     again = service.get_overview("dev2")
@@ -1537,7 +1588,7 @@ def test_overview_serves_stale_value_and_refreshes_in_background() -> None:
     assert time.perf_counter() - started < 1.0
 
     for _ in range(100):  # 等后台线程写回新值
-        if service._cached["dev2"][1] is not first:
+        if service._cached[("dev2", "")][2] is not first:
             break
         time.sleep(0.02)
     assert provider.calls == 2
@@ -1693,18 +1744,13 @@ def test_match_budget_expiry_never_reports_a_partial_page_as_complete(monkeypatc
     )  # 内部写入统计保留，不伪装成逐对象行。
 
 
-def test_failed_day_snapshot_retries_then_caches_recovered_details(monkeypatch) -> None:
-    from dataclasses import replace
-
+def test_day_changes_failure_propagates_then_success_freezes(monkeypatch) -> None:
+    """聚合格式（2026-10-14）：快照只来自控制库——读失败直接上抛（由总览装配
+    层兜底占位），不再有「反查降级短缓存 60s 重试」的中间态；读成即冻结到当天。"""
     import service.platform_overview as overview
 
-    clock = [0.0]
-    monkeypatch.setattr(overview.time, "monotonic", lambda: clock[0])
-    failed = parse_execution_records(
-        [_execution_record(written=32)], day="2026-09-22", target_space="dev2", default_space="dev2"
-    )
-    recovered = replace(failed, entity_rows_exact=True, entity_rows=[])
-    loads = []
+    snapshot = overview.DayChangesSnapshot(day="2026-09-22", entity_added=1)
+    loads: list[tuple[str, str | None]] = []
 
     class Provider(overview.WorkflowControlDayChangesProvider):
         def _current_day(self):
@@ -1712,16 +1758,15 @@ def test_failed_day_snapshot_retries_then_caches_recovered_details(monkeypatch) 
 
         def _load(self, day, space):
             loads.append((day, space))
-            return failed if len(loads) == 1 else recovered
+            if len(loads) == 1:
+                raise RuntimeError("control db down")
+            return snapshot
 
     provider = Provider()
-    assert provider.get_day_changes("dev2") is failed
-    clock[0] = 30
-    assert provider.get_day_changes("dev2") is failed
-    clock[0] = 61
-    assert provider.get_day_changes("dev2") is recovered
-    clock[0] = 10000
-    assert provider.get_day_changes("dev2") is recovered
+    with pytest.raises(RuntimeError):
+        provider.get_day_changes("dev2")
+    assert provider.get_day_changes("dev2") is snapshot
+    assert provider.get_day_changes("dev2") is snapshot  # 读成后冻结到当天，不再重算
     assert len(loads) == 2
 
 
@@ -1737,3 +1782,345 @@ def test_old_source_watermark_cannot_include_objects_before_yesterday() -> None:
         default_space="dev2",
     )
     assert snapshot.entity_executions[0].window_lo == "2026-09-21 16:00:00"
+
+
+# ---- 2026-10-14 P0：chain 展开、中断终态、归属兜底、反查闸门、明细上限 ----
+
+
+def test_completed_in_day_tz_parses_offset_suffix() -> None:
+    """chain 环级时间自带 "+08:00" 偏移：完整解析不随 api 进程时区漂移。"""
+    from service.platform_overview import _completed_in_day_tz
+
+    offset_local = _completed_in_day_tz("2026-10-13 15:39:32+08:00")
+    assert offset_local is not None
+    assert offset_local.strftime("%Y-%m-%d %H:%M") == "2026-10-13 15:39"
+    # ISO 'T' 分隔 + 偏移同样可解析
+    iso_local = _completed_in_day_tz("2026-10-13T15:39:32+08:00")
+    assert iso_local is not None
+    assert iso_local.strftime("%Y-%m-%d") == "2026-10-13"
+    # naive 串（记录级 completedAt）仍按进程本地钟解读，坏串返回 None
+    assert _completed_in_day_tz("2026-10-13 15:39:32") is not None
+    assert _completed_in_day_tz("") is None
+    assert _completed_in_day_tz("garbage") is None
+
+
+def _chain_record(
+    *,
+    status: str = "COMPLETED",
+    completed_at: str = "2026-10-14 00:11:48",
+    steps: list[dict] | None = None,
+    task_id: str | None = "TASK-chain",
+    job_id: str | None = "job-chain",
+    payload_space: str | None = "dev2",
+) -> str:
+    """构造 chain 执行载荷：顶层无 kind，steps 按 schema:<uuid> 键组织。
+
+    环级时间带 +08:00 偏移（真实载荷形态，2026-10-13 gkx_verify_1 实录）。"""
+    import json
+
+    record: dict = {
+        "status": status,
+        "completedAt": completed_at,
+        "startedAt": "2026-10-13 15:39:27",
+        "triggerSource": "SCHEDULE",
+        "taskId": task_id,
+        "jobId": job_id,
+        "payload": {"graph_space": payload_space},
+        "output": {"chain": True, "schemaIds": [], "steps": {}},
+    }
+    for idx, step in enumerate(steps or []):
+        record["output"]["steps"][f"schema:{idx:036x}"] = step
+    return json.dumps(record, ensure_ascii=False)
+
+
+def _chain_step(
+    *,
+    kind: str,
+    label: str,
+    schema_key: str,
+    table: str,
+    written: int,
+    started_at: str,
+    finished_at: str,
+) -> dict:
+    return {
+        "kind": kind,
+        "name": label,
+        "schemaId": "irrelevant",
+        "written": written,
+        "startedAt": started_at,
+        "finishedAt": finished_at,
+        "output": {
+            "kind": kind,
+            "schemaLabel": label,
+            "schemaKey": schema_key,
+            "sources": [
+                {
+                    "table": table,
+                    "written": written,
+                    "startWatermark": "1970-01-01 00:00:00",
+                }
+            ],
+        },
+    }
+
+
+def test_parse_execution_records_expands_chain_steps() -> None:
+    """chain 执行逐环展开：每环按环级完成时刻归属统计日，不再整段不可见。
+
+    环 A 北京 10-13 15:43 完成（written 2）计入；环 B 北京 10-14 00:05 完成
+    属次日不计入；整链 completedAt 也在次日——按链级归属会颗粒无收。"""
+    snapshot = parse_execution_records(
+        [
+            _chain_record(
+                steps=[
+                    _chain_step(
+                        kind="entity",
+                        label="期刊",
+                        schema_key="tag-journal",
+                        table="gkx.dwd_zh_journal",
+                        written=2,
+                        started_at="2026-10-13 15:43:25+08:00",
+                        finished_at="2026-10-13 15:43:45+08:00",
+                    ),
+                    _chain_step(
+                        kind="relation",
+                        label="作者-论文",
+                        schema_key="edge-author",
+                        table="gkx.dwd_zh_author",
+                        written=1,
+                        started_at="2026-10-14 00:00:01+08:00",
+                        finished_at="2026-10-14 00:05:00+08:00",
+                    ),
+                    # written=0 的环：不出行不计数（真实 chain 大半环都是 0）
+                    _chain_step(
+                        kind="entity",
+                        label="专利",
+                        schema_key="tag-patent",
+                        table="gkx.dwd_patent",
+                        written=0,
+                        started_at="2026-10-13 15:39:41+08:00",
+                        finished_at="2026-10-13 15:39:42+08:00",
+                    ),
+                ]
+            )
+        ],
+        day="2026-10-13",
+        target_space="dev2",
+        default_space="dev2",
+    )
+    assert snapshot.entity_added == 2
+    assert snapshot.relation_added == 0  # 关系环属次日，不计入统计日
+    assert len(snapshot.entity_rows) == 1
+    row = snapshot.entity_rows[0]
+    assert row.type == "期刊"
+    assert row.object == "期刊 · 2 条"
+    assert row.source == "gkx.dwd_zh_journal"
+    assert row.task_id == "TASK-chain"
+    assert row.job_id == "job-chain"
+    assert row.exec_status == "COMPLETED"
+    assert snapshot.day == "2026-10-13"
+    descriptor = snapshot.entity_executions[0]
+    assert descriptor.schema_key == "tag-journal"
+    assert descriptor.status == "COMPLETED"
+    # 环级起止时间进了反查描述（带偏移原样保留，解析时按偏移折算）
+    assert descriptor.started_at == "2026-10-13 15:43:25+08:00"
+
+
+def test_parse_execution_records_counts_interrupted_terminal_statuses() -> None:
+    """TERMINATED/CANCELED/FAILED 中断终态：written>0 如实计入并携带终态标记；
+    written=0 仍不计入（噪声）。"""
+    snapshot = parse_execution_records(
+        [
+            _execution_record(
+                status="TERMINATED",
+                written=300,
+                completed_at="2026-10-13 09:00:00",
+            ),
+            _execution_record(
+                status="FAILED",
+                kind="relation",
+                written=4,
+                completed_at="2026-10-13 10:00:00",
+            ),
+            _execution_record(status="CANCELED", written=0),
+            # 未知终态：仍跳过
+            _execution_record(status="WEIRD", written=9),
+        ],
+        day="2026-10-13",
+        target_space="dev2",
+        default_space="dev2",
+    )
+    assert snapshot.entity_added == 300
+    assert snapshot.relation_added == 4
+    assert snapshot.entity_rows[0].exec_status == "TERMINATED"
+    assert snapshot.entity_executions[0].status == "TERMINATED"
+    assert snapshot.relation_rows[0].exec_status == "FAILED"
+
+
+def test_graph_row_execution_falls_back_to_unique_candidate() -> None:
+    """时间区间落空时的兜底：同 Schema+来源当日唯一执行直接归属——对象被同日
+    后续执行改写出窗是常态；仍不唯一（并发歧义）才放弃。"""
+    from service.platform_overview import _graph_row_execution
+
+    snapshot = parse_execution_records(
+        [
+            _execution_record(
+                table="paper",
+                started_at="2026-09-22 11:00:00",
+                completed_at="2026-09-22 12:00:00",
+            )
+        ],
+        day="2026-09-22",
+        target_space="dev2",
+        default_space="dev2",
+    )
+    executions = snapshot.entity_executions
+    # 对象 stamp 在唯一候选窗口之外 → 兜底仍归属它（旧口径恒 None）
+    resolved = _graph_row_execution(
+        executions[0],
+        {"source_table": "paper", "update_time": "2026-09-22 13:30:00"},
+        "update_time",
+        executions,
+    )
+    assert resolved is executions[0]
+    # 候选不唯一时保持不猜测
+    snapshot_two = parse_execution_records(
+        [
+            _execution_record(
+                table="paper",
+                started_at="2026-09-22 11:00:00",
+                completed_at="2026-09-22 12:00:00",
+            ),
+            _execution_record(
+                task_id="TASK-new",
+                job_id="job-new",
+                table="paper",
+                started_at="2026-09-22 13:00:00",
+                completed_at="2026-09-22 14:00:00",
+            ),
+        ],
+        day="2026-09-22",
+        target_space="dev2",
+        default_space="dev2",
+    )
+    both = snapshot_two.entity_executions
+    assert (
+        _graph_row_execution(
+            both[1],
+            {"source_table": "paper", "update_time": "2026-09-22 15:30:00"},
+            "update_time",
+            both,
+        )
+        is None
+    )
+
+
+def test_enrich_skips_lookup_when_written_exceeds_gate(monkeypatch) -> None:
+    """反查闸门：written 合计超阈值的类整体跳过逐对象反查（连图客户端都不建）。"""
+    import service.platform_overview as overview
+
+    monkeypatch.setattr(overview, "_LOOKUP_WRITTEN_LIMIT", 100)
+
+    gated = parse_execution_records(
+        [_execution_record(written=200, completed_at="2026-10-13 09:00:00")],
+        day="2026-10-13",
+        target_space="dev2",
+        default_space="dev2",
+    )
+
+    def _no_client(space):
+        raise AssertionError("闸门命中时不应连接图客户端")
+
+    result = overview.enrich_day_rows_with_graph(gated, "dev2", connect_client=_no_client)
+    assert result.entity_gated is True
+    assert result.relation_gated is False
+    # 聚合行原样保留（不替换成逐对象行）
+    assert len(result.entity_rows) == 1
+    assert result.entity_rows[0].is_aggregate is True
+
+
+def test_overview_passes_all_change_rows_without_cap() -> None:
+    """写入块行全量透传（2026-10-14 删除 1000 行截断保险丝）：行数不设上限，
+    「行 count 求和 == 左下角合计」成为无条件构造保证，统计日透出。"""
+    from biz.schemas.platform_overview import AssetChangeRow as Row
+
+    rows = [Row(type="期刊", count=1, source="t", time="10-13 12:00:00") for _ in range(1_500)]
+    snapshot = DayChangesSnapshot(
+        entity_added=1_500,
+        entity_rows=rows,
+        day="2026-10-13",
+    )
+    service = PlatformOverviewService(
+        stats_provider=FakeStatsProvider(), changes_provider=FakeChangesProvider(snapshot)
+    )
+
+    result = service.get_overview()
+
+    assert len(result.asset_change_rows["entity"]) == 1_500  # 不再截断
+    assert sum(row.count for row in result.asset_change_rows["entity"]) == 1_500
+    assert result.asset_change_totals["entity"] == 1_500
+    assert result.asset_overview_groups[0].added == "+1,500"
+    assert result.stats_day == "2026-10-13"
+    assert "entity" not in result.asset_change_errors
+
+
+def test_overview_large_write_day_shows_written_total_without_gate_text() -> None:
+    """大写入日（原闸门日）：聚合格式下反查闸门退役——徽标/合计按控制库写图
+    计数精确给出，写入块行如实展示，不再有「超出反查上限」的降级文案。"""
+    from biz.schemas.platform_overview import AssetChangeRow as Row
+
+    snapshot = DayChangesSnapshot(
+        entity_added=6_170_000,
+        # exact/gated 是逐对象时代标志：装配层已不再读取（反查闸门随聚合格式退役）
+        entity_rows_exact=False,
+        entity_gated=True,
+        entity_rows=[
+            Row(
+                type="专利",
+                count=6_170_000,
+                object="专利 · 6,170,000 条",
+                change="新增 tag-patent",
+                source="gkx.dwd_patent",
+                time="10-13 23:00:00",
+                exec_status="TERMINATED",
+            )
+        ],
+        day="2026-10-13",
+    )
+    service = PlatformOverviewService(
+        stats_provider=FakeStatsProvider(), changes_provider=FakeChangesProvider(snapshot)
+    )
+
+    result = service.get_overview()
+
+    assert result.asset_change_totals["entity"] == 6_170_000
+    assert result.asset_overview_groups[0].added == "+617.00 万"
+    # 写入块行保留（大写入日不隐藏），中断终态行内标注
+    assert len(result.asset_change_rows["entity"]) == 1
+    assert result.asset_change_rows["entity"][0].exec_status == "TERMINATED"
+    assert result.asset_change_errors == {}
+
+
+def test_overview_cache_hard_limit_forces_sync_recompute() -> None:
+    """旧值硬上限：后台刷新线程卡死（锁被占）时，旧值超过硬上限后在请求线程
+    同步重算，不再无限期顶下去（2026-10-14 dev2 跨日旧值事故）。"""
+    provider = FakeStatsProvider()
+    service = PlatformOverviewService(
+        stats_provider=provider, changes_provider=FakeChangesProvider()
+    )
+    first = service.get_overview()
+
+    # 模拟事故形态：per-key 刷新锁被卡死线程长期占住，stale-while-revalidate
+    # 抢不到刷新权——旧值进入「过期但继续顶」状态
+    with service._lock_for((None, "")):
+        stale = time.monotonic() - 10
+        service._cached[(None, "")] = (stale, stale, first)
+        assert service.get_overview() is first
+
+        # 过期且写入时刻超硬上限：不等锁，请求线程同步重算出新结果
+        very_old = time.monotonic() - service._stale_hard_limit - 1
+        service._cached[(None, "")] = (very_old, very_old, first)
+        refreshed = service.get_overview()
+        assert refreshed is not first
+        assert service._cached[(None, "")][2] is refreshed

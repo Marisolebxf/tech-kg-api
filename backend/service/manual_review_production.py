@@ -1113,7 +1113,10 @@ class ManualReviewService:
     # ------------------------------------------------------------------
 
     def park_or_rewrite_edges(
-        self, edge_type: str, records: list[dict[str, Any]]
+        self,
+        edge_type: str,
+        records: list[dict[str, Any]],
+        graph_space: str | None = None,
     ) -> dict[str, Any]:
         """关系写图前端点消歧处理（``write_records`` 关系分支调用，跨执行兜底）。
 
@@ -1122,6 +1125,11 @@ class ManualReviewService:
         - 端点 case 已裁决 merge → 端点改写为目标实体后正常返回写；
         - 端点实体已被驳回（verdict=reject）→ 该边一并丢弃；
         - 其余（含已裁决 create，预留 vid 已入库）→ 原样返回写。
+
+        ``graph_space`` 传入时按 case 归属空间过滤：消歧 case 是按图空间建的，
+        跨空间的同名 vid（多空间共用同一批 scholar_id 源表）互不相干——
+        误把他空间的未决 case 当成本空间灰区，会把本空间合法边成批暂存。
+        空间为空的历史 case 一并视为无关（写图 records 必有明确空间）。
         """
         if not records:
             return {"records": [], "parked": 0, "dropped": 0}
@@ -1134,6 +1142,8 @@ class ManualReviewService:
                     ReviewCase.object_id.in_(endpoints),
                 )
             ).all()
+            if graph_space:
+                cases = [c for c in cases if c.graph_space == graph_space]
             open_cases = {c.object_id: c for c in cases if c.status not in TERMINAL_STATUSES}
             for c in cases:
                 if c.object_id in open_cases:

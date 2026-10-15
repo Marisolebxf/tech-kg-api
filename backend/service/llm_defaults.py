@@ -114,6 +114,8 @@ def set_default_for_actor(session: Session, actor, config_id: str) -> None:
         raise HTTPException(404, "LLM 配置不存在")
     if row.status == "停用":
         raise HTTPException(409, "停用的语言模型不能设为默认")
+    if row.status == "异常":
+        raise HTTPException(409, "异常的语言模型不能设为默认，请先恢复连接")
     if not row.api_key:
         raise HTTPException(409, "未配置 API Key 的语言模型不能设为默认")
     if business_id is None:

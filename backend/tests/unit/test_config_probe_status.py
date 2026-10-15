@@ -6,6 +6,8 @@
 
 from types import SimpleNamespace
 
+from openai import APITimeoutError
+
 import service.embedding_config as embedding_module
 import service.llm_config as llm_module
 import service.mysql_datasource as mysql_module
@@ -134,3 +136,49 @@ def test_embedding_probe_result_persisted(monkeypatch):
     service._dao = stub  # noqa: SLF001
     service.test_connection("CFG-1")
     assert stub.updates == [{"id": "CFG-1", "status": "异常"}]
+
+
+def test_probe_timeout_shorter_than_frontend_abort():
+    # 探活必须先于前端 axios 20s 中止返回，否则徽标停在「正常」（回归守卫）
+    from infra.llm import PROBE_TIMEOUT_SECONDS
+
+    assert PROBE_TIMEOUT_SECONDS < 20
+
+
+def _stub_openai_timeout(monkeypatch, module):
+    """让 OpenAI 客户端的调用抛 APITimeoutError，不真发请求。"""
+
+    class _Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        class chat:  # noqa: N801 模拟 openai SDK 的链式属性
+            class completions:
+                @staticmethod
+                def create(**_kwargs):
+                    raise APITimeoutError(request=SimpleNamespace())
+
+    monkeypatch.setattr(module, "OpenAI", _Client)
+
+
+def test_llm_probe_timeout_reports_chinese(monkeypatch):
+    _stub_openai_timeout(monkeypatch, llm_module)
+    result = llm_module._ping_llm("https://llm.example/api", "m", "sk-x")  # noqa: SLF001
+    assert result["ok"] is False
+    assert result["error"] == "超时"
+
+
+def test_embedding_probe_timeout_reports_chinese(monkeypatch):
+    class _Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        class embeddings:
+            @staticmethod
+            def create(**_kwargs):
+                raise APITimeoutError(request=SimpleNamespace())
+
+    monkeypatch.setattr(embedding_module, "OpenAI", _Client)
+    result = embedding_module._ping_embedding("https://emb.example/api", "m", "sk-x")  # noqa: SLF001
+    assert result["ok"] is False
+    assert result["error"] == "超时"

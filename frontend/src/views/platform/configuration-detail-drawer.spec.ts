@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import ConfigurationManagementView from './ConfigurationManagementView.vue'
 import ListPagination from '../../components/list-pagination.vue'
+import { useToast } from '../../composables/use-toast'
 import { useAuthStore } from '../../stores/auth'
 import { currentUserIsAdmin } from '../../api/currentUser'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
@@ -87,6 +88,8 @@ function mountView(realTextarea = false) {
         'a-form': { template: '<form><slot /></form>' },
         'a-form-item': { template: '<label><slot /></label>' },
         'a-textarea': realTextarea ? Textarea : true, 'a-checkbox': true,
+        // 说明小字超长时外包 a-tooltip（悬浮看全文）；测试只关心行内截断文本
+        'a-tooltip': { template: '<span><slot /></span>' },
       },
     },
   })
@@ -626,5 +629,120 @@ describe('业务默认模型交互', () => {
     expect(actions[1]!.attributes('disabled')).toBeDefined()
     expect(actions[2]!.attributes('disabled')).toBeDefined()
     wrapper.unmount()
+  })
+})
+
+// 异常=探活事实：挂死的模型设为默认会让下游抽取全部失败——列表先置灰拦下
+//（后端 set-default/update 同步加 409 守卫），恢复连接后才可设。
+describe('异常语言模型不能设为默认', () => {
+  const rowByName = (wrapper: ReturnType<typeof mountView>, name: string) =>
+    wrapper.findAll('.config-table-wrap tbody tr').find(r => r.get('.config-name strong').text() === name)!
+
+  it('异常模型的「设为默认」置灰并提示先恢复连接；正常模型不受影响', async () => {
+    setActivePinia(createPinia())
+    const { listLlmConfigs, setDefaultLlmConfig } = await import('../../api/llmConfig')
+    vi.mocked(setDefaultLlmConfig).mockClear()
+    vi.mocked(listLlmConfigs).mockResolvedValueOnce([
+      { ...state.current, id: 'LLM-BAD', name: '异常模型', status: '异常', isDefault: false },
+      { ...state.current, id: 'LLM-OK', name: '正常模型', status: '正常', isDefault: false },
+    ])
+    const wrapper = mountView()
+    try {
+      await flushPromises()
+      const badToggle = rowByName(wrapper, '异常模型').get('.config-default-toggle')
+      expect(badToggle.attributes('disabled')).toBeDefined()
+      expect(badToggle.attributes('title')).toBe('连接异常的模型不能设为默认，请先恢复连接')
+      await badToggle.trigger('click')
+      await flushPromises()
+      expect(setDefaultLlmConfig).not.toHaveBeenCalled()
+      const okToggle = rowByName(wrapper, '正常模型').get('.config-default-toggle')
+      expect(okToggle.attributes('disabled')).toBeUndefined()
+      expect(okToggle.attributes('title')).toBe('设为默认配置')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+})
+
+// 探活超时此前有两个坑：后端按 40s 才报错、前端 axios 20s 先中止走 catch，
+// 徽标停留在「正常」且提示是英文原始报错。现在后端探活 8s 内返回 error=超时，
+// 前端两条失败路径都把徽标翻成异常、提示只说「连接超时」。
+describe('探活超时的状态与提示', () => {
+  const rowByName = (wrapper: ReturnType<typeof mountView>, name: string) =>
+    wrapper.findAll('.config-table-wrap tbody tr').find(r => r.get('.config-name strong').text() === name)!
+
+  async function openDrawerByName(wrapper: ReturnType<typeof mountView>, name: string) {
+    await rowByName(wrapper, name).get('.row-actions button').trigger('click')
+    await flushPromises()
+  }
+
+  it('探活返回超时：徽标翻异常，提示只说连接超时', async () => {
+    setActivePinia(createPinia())
+    const { listLlmConfigs, testLlmConfig } = await import('../../api/llmConfig')
+    const { toasts } = useToast()
+    vi.mocked(listLlmConfigs).mockResolvedValueOnce([
+      { ...state.current, id: 'LLM-TMO', name: '挂死模型', status: '正常', isDefault: false },
+    ])
+    vi.mocked(testLlmConfig).mockResolvedValueOnce({ ok: false, latencyMs: 8000, error: '超时' })
+    const wrapper = mountView()
+    try {
+      await flushPromises()
+      await openDrawerByName(wrapper, '挂死模型')
+      await wrapper.findAll('.detail-drawer .health-card button').find(b => b.text().includes('测试连接'))!.trigger('click')
+      await flushPromises()
+      expect(rowByName(wrapper, '挂死模型').get('.status').classes()).toContain('is-异常')
+      expect(wrapper.get('.detail-drawer .health-card i').classes()).toContain('is-异常')
+      const toast = toasts.value.filter(t => t.message.includes('挂死模型')).at(-1)
+      expect(toast?.message).toBe('挂死模型 连接超时')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('请求层超时中止（axios ECONNABORTED）：徽标同样翻异常', async () => {
+    setActivePinia(createPinia())
+    const { listLlmConfigs, testLlmConfig } = await import('../../api/llmConfig')
+    vi.mocked(listLlmConfigs).mockResolvedValueOnce([
+      { ...state.current, id: 'LLM-ABT', name: '无响应模型', status: '正常', isDefault: false },
+    ])
+    vi.mocked(testLlmConfig).mockRejectedValueOnce(
+      Object.assign(new Error('timeout of 20000ms exceeded'), { code: 'ECONNABORTED' }),
+    )
+    const wrapper = mountView()
+    try {
+      await flushPromises()
+      await openDrawerByName(wrapper, '无响应模型')
+      await wrapper.findAll('.detail-drawer .health-card button').find(b => b.text().includes('测试连接'))!.trigger('click')
+      await flushPromises()
+      expect(rowByName(wrapper, '无响应模型').get('.status').classes()).toContain('is-异常')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+})
+
+// 列表「说明」小字：超长截断单行 + 悬浮 tooltip 看全文，不再整段换行撑高行。
+describe('列表说明超长截断', () => {
+  it('超过 40 字截断显示省略号且行内无全文；短说明原样显示', async () => {
+    setActivePinia(createPinia())
+    const { listLlmConfigs } = await import('../../api/llmConfig')
+    const longText = '用于回归验证的超长配置说明文字。'.repeat(5) // 70 字
+    vi.mocked(listLlmConfigs).mockResolvedValueOnce([
+      { ...state.current, id: 'LLM-LONG', name: '长说明模型', description: longText, isDefault: false },
+      { ...state.current, id: 'LLM-SHORT', name: '短说明模型', description: '短说明', isDefault: false },
+    ])
+    const wrapper = mountView()
+    try {
+      await flushPromises()
+      const longRow = wrapper.findAll('.config-table-wrap tbody tr').find(r => r.get('.config-name strong').text() === '长说明模型')!
+      const small = longRow.get('.config-name small')
+      expect(small.text()).toBe(`${longText.slice(0, 40)}…`)
+      expect(small.text().endsWith('…')).toBe(true)
+      expect(longRow.text()).not.toContain(longText)
+      const shortRow = wrapper.findAll('.config-table-wrap tbody tr').find(r => r.get('.config-name strong').text() === '短说明模型')!
+      expect(shortRow.get('.config-name small').text()).toBe('短说明')
+    } finally {
+      wrapper.unmount()
+    }
   })
 })

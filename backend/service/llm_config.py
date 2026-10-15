@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException
-from openai import OpenAI
+from openai import APITimeoutError, OpenAI
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -18,7 +18,7 @@ from db_model.llm_config import LlmConfig
 from infra.llm import (
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
-    DEFAULT_TIMEOUT,
+    PROBE_TIMEOUT_SECONDS,
     reset_llm_client,
     thinking_extra_body,
 )
@@ -71,7 +71,7 @@ def _ping_llm(base_url: str, model: str, api_key: str) -> dict:
         return {"ok": ok, "latencyMs": int((time.perf_counter() - start) * 1000), "error": error}
 
     try:
-        client = OpenAI(api_key=api_key, base_url=base_url, timeout=DEFAULT_TIMEOUT)
+        client = OpenAI(api_key=api_key, base_url=base_url, timeout=PROBE_TIMEOUT_SECONDS)
         client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": "ping"}],
@@ -79,6 +79,9 @@ def _ping_llm(base_url: str, model: str, api_key: str) -> dict:
             extra_body=thinking_extra_body(model),
         )
         return result(True, None)
+    except APITimeoutError:
+        logger.warning("LLM 连接验证超时 base_url=%s model=%s", base_url, model)
+        return result(False, "超时")
     except Exception as exc:  # noqa: BLE001
         logger.warning("LLM 连接验证失败 base_url=%s model=%s: %s", base_url, model, exc)
         return result(False, str(exc))
@@ -106,6 +109,9 @@ class LlmConfigService:
             raise HTTPException(403, "公共默认只能选择公共语言模型")
         if payload.get("is_default") and payload.get("status") == "停用":
             raise HTTPException(409, "停用的语言模型不能设为默认")
+        # 异常是探活事实：挂了的模型设为默认会让下游全部抽取失败，先恢复再设
+        if payload.get("is_default") and payload.get("status") == "异常":
+            raise HTTPException(409, "异常的语言模型不能设为默认，请先恢复连接")
         now = _utcnow_naive()
         config_id = f"LLM-{uuid.uuid4().hex[:8].upper()}"
         # Register visibility in the same commit as the configuration itself.
@@ -178,6 +184,8 @@ class LlmConfigService:
             raise HTTPException(403, "公共默认只能选择公共语言模型")
         if payload.get("is_default") and payload.get("status", row.status) == "停用":
             raise HTTPException(409, "停用的语言模型不能设为默认")
+        if payload.get("is_default") and payload.get("status", row.status) == "异常":
+            raise HTTPException(409, "异常的语言模型不能设为默认，请先恢复连接")
         updates: dict = {"updated_at": _utcnow_naive()}
         for field in ("name", "description", "base_url", "model", "owner", "is_default", "status"):
             if field in payload and payload[field] is not None:
@@ -219,6 +227,8 @@ class LlmConfigService:
             raise HTTPException(403, "公共默认只能选择公共语言模型")
         if row.status == "停用":
             raise HTTPException(409, "停用的语言模型不能设为默认")
+        if row.status == "异常":
+            raise HTTPException(409, "异常的语言模型不能设为默认，请先恢复连接")
         return self.update_config(config_id, {"is_default": True})
 
     def test_connection(self, config_id: str) -> dict:

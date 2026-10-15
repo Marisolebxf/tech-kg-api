@@ -16,6 +16,10 @@ DEFAULT_MODEL = "glm-5.3-flash"
 DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 DEFAULT_MAX_TOKENS = 2048
 DEFAULT_TIMEOUT = 40
+# 配置管理「测试连接」探活专用超时：必须显著短于前端 axios 的 20s 中止
+# （api/http.ts timeout: 20_000）——挂死的端点若按 DEFAULT_TIMEOUT=40s 才报错，
+# 前端早已超时中止走 catch 分支、徽标不更新，表现为「提示超时了，状态还是正常」。
+PROBE_TIMEOUT_SECONDS = min(DEFAULT_TIMEOUT, float(os.getenv("LLM_PROBE_TIMEOUT_SECONDS", "8")))
 JSON_MODES = ("json_schema", "json_object", "prompt_only")
 # 单次 embedding 请求的最大条数。自建 m3e 服务按 M3E_MAX_BATCH_SIZE（默认 64）
 # 校验并 422 拒绝超量请求，这里默认对齐；调用方仍可一次 embed 大列表，客户端自动分片。

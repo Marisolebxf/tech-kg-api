@@ -1517,12 +1517,18 @@ class ManualReviewService:
         # 维持旧兜底让 trs-graph 报错暴露问题
         fields = self._tag_fields(client, node_label)
         now_str = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
+        # 平台 DDL 的 name 列 NOT NULL 无默认值：源脚本把名字写进 name_cn 等
+        # 业务列、name 留空（空值列不写）时 INSERT 缺列被 Nebula 拒（400
+        # not null field doesn't have a default value）——按快照记载的展示名补
+        display_name = str(snapshot.get("name") or c.object_name or "").strip()
         audit = {
             "id": vid,
             "create_time": now_str,
             "update_time": now_str,
             "source_table": incoming.get("sourceTable") or "schema_extract",
         }
+        if display_name:
+            audit["name"] = display_name
         for key, value in audit.items():
             if fields is None or key in fields:
                 props.setdefault(key, value)

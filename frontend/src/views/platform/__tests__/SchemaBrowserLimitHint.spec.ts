@@ -432,22 +432,22 @@ describe('Schema 属性与脚本弹窗样式', () => {
 })
 
 describe('Schema 列表说明列截断显示与删除脏行兜底', () => {
-  it('实体/关系说明超 10 字符截断、起点/终点超 5 字符截断（悬停看全文），短文本原样展示', async () => {
+  it('实体/关系说明超 40 字符截断、起点/终点超 5 字符截断（悬停看全文），短文本原样展示', async () => {
     vi.mocked(listSchemasPaged).mockResolvedValue({
-      items: [schemaFixture({ kind: 'entity', description: '说'.repeat(25) })],
+      items: [schemaFixture({ kind: 'entity', description: '说'.repeat(45) })],
       total: 1, page: 1, pageSize: 10,
     })
     const view = mountView()
     await flushPromises()
 
     const entityDesc = view.findAll('.schema-table-wrap tbody tr')[0].findAll('td')[2]
-    expect(entityDesc.text()).toBe('说'.repeat(10) + '…')
+    expect(entityDesc.text()).toBe('说'.repeat(40) + '…')
 
-    // 关系子页面：说明（basis=description）截断 10 字符；起点 6 字符截断为 5+省略号，
+    // 关系子页面：说明（basis=description）截断 40 字符；起点 6 字符截断为 5+省略号，
     // 终点恰好 5 字符不截断
     vi.mocked(listSchemasPaged).mockResolvedValue({
       items: [schemaFixture({
-        kind: 'relation', name: 'USES_TECH', description: '长'.repeat(30),
+        kind: 'relation', name: 'USES_TECH', description: '长'.repeat(50),
         sourceSchemaName: 'Expert', targetSchemaName: 'Paper',
       })],
       total: 1, page: 1, pageSize: 10,
@@ -459,7 +459,7 @@ describe('Schema 列表说明列截断显示与删除脏行兜底', () => {
     const relationCells = view.findAll('.schema-table-wrap tbody tr')[0].findAll('td')
     expect(relationCells[2].text()).toBe('Exper…')
     expect(relationCells[3].text()).toBe('Paper')
-    expect(relationCells[4].text()).toBe('长'.repeat(10) + '…')
+    expect(relationCells[4].text()).toBe('长'.repeat(40) + '…')
 
     // 短说明不截断（重新挂载拿新 mock 数据）
     view.unmount()

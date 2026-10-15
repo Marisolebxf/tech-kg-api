@@ -1611,6 +1611,21 @@ class ManualReviewService:
             c.completed_at = now()
             c.version += 1
             c.updated_at = now()
+            # 与 submit 通道同口径落一条决议：详情接口靠它回显最终裁决，
+            # 否则 T_DIRECT case 刷新后裁决单选回落默认值
+            t = now()
+            s.add(
+                ReviewDecision(
+                    case_id=c.id,
+                    action_id="accept" if accepted else "reject",
+                    result=dump({"accepted": accepted}),
+                    note=note,
+                    submitted_by=identity.user_id,
+                    status="APPROVED",
+                    created_at=t,
+                    decided_at=t,
+                )
+            )
             self.audit(
                 s,
                 c,
@@ -2051,6 +2066,13 @@ class ManualReviewService:
             exec_statuses=exec_statuses,
         )
         dr = s.get(ReviewDraft, c.id)
+        # 已裁决 case 的最终决议：详情回显裁决单选用（前端刷新后不再回落默认
+        # “合并”——2026-10-15 处理记录“确认为新实体”刷新变“合并”的根因）
+        decision_row = s.scalars(
+            select(ReviewDecision)
+            .where(ReviewDecision.case_id == c.id)
+            .order_by(ReviewDecision.id.desc())
+        ).first()
         reported = (load(c.candidate_snapshot) or {}).pop("reportedEvidence", [])
         files = [
             {
@@ -2072,6 +2094,21 @@ class ManualReviewService:
         d.update(
             {
                 "draft": load(dr.payload) if dr else {},
+                "decision": (
+                    {
+                        "actionId": decision_row.action_id,
+                        "result": load(decision_row.result) or {},
+                        "note": decision_row.note,
+                        "submittedBy": decision_row.submitted_by,
+                        "decidedAt": (
+                            utc_to_cst_str(decision_row.decided_at)
+                            if decision_row.decided_at
+                            else None
+                        ),
+                    }
+                    if decision_row
+                    else None
+                ),
                 "template": template_contract(c.template_id),
                 "data": {
                     "input": input_data,

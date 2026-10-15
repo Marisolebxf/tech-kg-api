@@ -306,8 +306,20 @@ const manualReviewFormRules = {
 
 const initWorkspace = (item?: ReviewRecord) => {
   if (!item) return
+  // 已裁决 case 优先按最终决议回显单选值（否则刷新后回落默认「合并」）
+  const decisionResult = (productionCase.value?.decision?.result || {}) as Record<string, unknown>
+  const savedVerdict = decisionResult.entityVerdict
   if (getReviewTemplate(item).id === 'T_LINK') {
-    entityVerdict.value = item.type === '单任务执行失败' ? 'create' : 'merge'
+    entityVerdict.value =
+      savedVerdict === 'create' || savedVerdict === 'reject' || savedVerdict === 'merge'
+        ? savedVerdict
+        : item.type === '单任务执行失败'
+          ? 'create'
+          : 'merge'
+    const savedTarget = decisionResult.targetEntityId
+    if (typeof savedTarget === 'string' && savedTarget) selectedTarget.value = savedTarget
+  } else if (isDirectCase.value && productionCase.value?.decision?.actionId) {
+    directVerdict.value = productionCase.value.decision.actionId === 'reject' ? 'reject' : 'accept'
   }
 }
 
@@ -325,14 +337,20 @@ const startHeartbeat = () => {
   }, 30000)
 }
 
+// 详情加载中：加载完成前不渲染「未找到处理实例」（此前会闪一下空态）
+const loading = ref(true)
+
 async function loadReview() {
+  loading.value = true
   try {
     productionCase.value = await getProductionReview(String(route.params.instanceId || ''))
     record.value = mapProductionRecord(productionCase.value)
-    note.value = String(productionCase.value.draft?.note || '')
+    // 处理备注回显：草稿优先，已裁决 case 回落最终决议里记的备注
+    note.value = String(productionCase.value.draft?.note || productionCase.value.decision?.note || '')
     initWorkspace(record.value)
     startHeartbeat()
   } catch (error) { notify('error', error instanceof Error ? error.message : '人工处理详情加载失败') }
+  finally { loading.value = false }
 }
 
 onMounted(loadReview)
@@ -752,8 +770,12 @@ const runPrimary = () => {
       </footer>
     </main>
   </div>
+  <div v-else-if="loading" class="rw-empty">
+    <h1>处理实例加载中…</h1>
+  </div>
   <div v-else class="rw-empty">
     <h1>未找到处理实例</h1>
+    <AppAlert v-if="feedback" :type="feedback.type" class="rw-feedback">{{ feedback.text }}</AppAlert>
   </div>
 </template>
 

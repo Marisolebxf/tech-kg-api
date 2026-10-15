@@ -176,16 +176,31 @@ const linkSnapshot = computed<Record<string, unknown> | null>(() => {
   const snapshot = productionCase.value?.candidate
   return snapshot && typeof snapshot === 'object' ? (snapshot as Record<string, unknown>) : null
 })
-const linkCandidates = computed(() => {
+/** T_LINK 候选：建案快照存 vid/name/score，详情富化（detail-enrich）补
+ *  props（候选全量属性）与 nameSim/propsAgree/comparedProps（评分明细）。 */
+interface LinkCandidate {
+  vid: string
+  name: string
+  score: number | null
+  nameSim?: number | null
+  propsAgree?: number | null
+  comparedProps?: string[]
+  props?: Record<string, unknown>
+}
+const linkCandidates = computed<LinkCandidate[]>(() => {
   const raw = linkSnapshot.value?.existingCandidates
   if (!Array.isArray(raw) || !raw.length) return []
   return raw
-    .filter((c): c is { vid?: string; name?: string; score?: number } => Boolean(c) && typeof c === 'object')
+    .filter((c): c is Record<string, unknown> => Boolean(c) && typeof c === 'object')
     .filter((c) => c.vid)
     .map((c) => ({
       vid: String(c.vid),
-      name: c.name || '—',
+      name: String(c.name || '—'),
       score: typeof c.score === 'number' ? c.score : null,
+      nameSim: typeof c.nameSim === 'number' ? c.nameSim : null,
+      propsAgree: typeof c.propsAgree === 'number' ? c.propsAgree : null,
+      comparedProps: Array.isArray(c.comparedProps) ? (c.comparedProps as string[]) : undefined,
+      props: (c.props && typeof c.props === 'object' ? c.props : undefined) as Record<string, unknown> | undefined,
     }))
 })
 const linkResolution = computed(() => {
@@ -194,6 +209,55 @@ const linkResolution = computed(() => {
     ? (raw as { matchScore?: number; margin?: number | null })
     : null
 })
+/** 详情富化元信息：图库同名实体总数（TOP_K=5 截断外评审员原本看不见）。 */
+const linkSameNameTotal = computed<number | null>(() => {
+  const raw = (linkSnapshot.value?._enriched as { sameNameTotal?: number } | undefined) || undefined
+  return raw && typeof raw.sameNameTotal === 'number' ? raw.sameNameTotal : null
+})
+/** 待入库实体自身属性（_incoming.props）——评审员原来只能看到名字，属性全被藏住。 */
+const LINK_PROP_NOISE = new Set(['ingest_time', 'ingest_batch', 'source_system', 'source_table', 'create_time', 'update_time'])
+const linkIncomingProps = computed<Array<[string, unknown]>>(() => {
+  const raw = (linkSnapshot.value?._incoming as { props?: Record<string, unknown> } | undefined)?.props
+  if (!raw || typeof raw !== 'object') return []
+  return Object.entries(raw).filter(([k]) => !k.startsWith('_') && !LINK_PROP_NOISE.has(k))
+})
+/** 挂起边（_pendingRelations）：裁决 merge/create 时补写，reject 时一并丢弃。 */
+interface LinkPendingRelation {
+  edgeType: string
+  fromId: string
+  toId: string
+  fromName?: string
+  toName?: string
+}
+const linkPendingRelations = computed<LinkPendingRelation[]>(() => {
+  const raw = linkSnapshot.value?._pendingRelations
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((r): r is Record<string, unknown> => Boolean(r) && typeof r === 'object')
+    .map((r) => ({
+      edgeType: String(r.edgeType || ''),
+      fromId: String(r.fromId || ''),
+      toId: String(r.toId || ''),
+      fromName: r.fromName ? String(r.fromName) : undefined,
+      toName: r.toName ? String(r.toName) : undefined,
+    }))
+    .filter((r) => r.edgeType && r.fromId && r.toId)
+})
+/** 待入库 vs 候选的逐字段对照：same=一致 / differ=冲突 / missing=单侧缺失。 */
+type LinkPropDiff = { key: string; left: string; right: string; status: 'same' | 'differ' | 'missing' }
+const LINK_DIFF_NOISE = new Set([...LINK_PROP_NOISE, 'id', 'vid', 'name', 'name_cn', 'name_zh', 'name_en', 'confidence', 'extra_json'])
+const linkPropDiff = (candProps: Record<string, unknown> | undefined): LinkPropDiff[] => {
+  const incoming = (linkSnapshot.value?._incoming as { props?: Record<string, unknown> } | undefined)?.props || {}
+  if (!candProps) return []
+  const keys = Array.from(new Set([...Object.keys(incoming), ...Object.keys(candProps)]))
+    .filter((k) => !k.startsWith('_') && !LINK_DIFF_NOISE.has(k))
+  const fmt = (v: unknown) => (typeof v === 'object' && v !== null ? JSON.stringify(v) : v == null ? '' : String(v))
+  return keys.map((key) => {
+    const l = fmt(incoming[key])
+    const r = fmt(candProps[key])
+    return { key, left: l, right: r, status: !l || !r ? 'missing' : l === r ? 'same' : 'differ' }
+  })
+}
 /** 待入库记录卡的「类型」行：只展示 实体/关系 二选一（T_LINK 恒实体对齐）。 */
 const incomingKindLabel = computed(() => (
   templateId.value === 'T_LINK' || directKind.value !== 'relation' ? '实体' : '关系'
@@ -496,6 +560,17 @@ const runPrimary = () => {
           </dl>
           <template v-if="templateId === 'T_LINK'">
             <p v-if="linkResolution">消歧得分 {{ linkResolution.matchScore ?? '—' }} · 候选分差 {{ linkResolution.margin ?? '—' }} · 灰区人工裁决</p>
+            <details v-if="linkIncomingProps.length" class="link-incoming-props zone-extra">
+              <summary>待入库实体属性（{{ linkIncomingProps.length }} 项）</summary>
+              <table class="direct-fields">
+                <tbody>
+                  <tr v-for="[key, val] in linkIncomingProps" :key="key">
+                    <th>{{ key }}</th>
+                    <td>{{ typeof val === 'object' ? JSON.stringify(val) : String(val) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </details>
           </template>
           <template v-else>
             <p v-if="directKind === 'relation' && directFromId">关系端点：<code>{{ directFromId }}</code> -[{{ labelZh(directEdgeType) || directEdgeType }}]-&gt; <code>{{ directToId }}</code></p>
@@ -503,9 +578,23 @@ const runPrimary = () => {
           </template>
         </div>
 
+        <!-- T_LINK 挂起边可见：驳回会把这些边一并丢弃，评审员需看见代价 -->
+        <div v-if="templateId === 'T_LINK' && linkPendingRelations.length" class="link-pending">
+          <p class="link-candidates-title">本裁决挂起的暂存边（{{ linkPendingRelations.length }} 条，未写图）：</p>
+          <ul class="link-pending-list">
+            <li v-for="(rel, idx) in linkPendingRelations" :key="`${rel.edgeType}-${rel.fromId}-${rel.toId}-${idx}`">
+              {{ labelZh(rel.edgeType) || rel.edgeType }}：<code>{{ rel.fromName || rel.fromId }}</code> → <code>{{ rel.toName || rel.toId }}</code>
+            </li>
+          </ul>
+          <p class="link-pending-hint">合并 / 确认为新实体时这些边按裁决端点补写；驳回时将随挂起实体一并丢弃。</p>
+        </div>
+
         <!-- T_LINK：快照带真实候选（existingCandidates + _incoming）时渲染候选选择 -->
         <template v-if="linkCandidates.length">
-          <p class="link-candidates-title">选择要并入的候选（merge 时生效）：</p>
+          <p class="link-candidates-title">
+            选择要并入的候选（merge 时生效）：
+            <span v-if="linkSameNameTotal !== null" class="link-samename-total">图库同名实体共 {{ linkSameNameTotal }} 个，按得分展示前 {{ linkCandidates.length }} 个</span>
+          </p>
           <ul class="link-candidates">
             <li
               v-for="cand in linkCandidates"
@@ -523,7 +612,21 @@ const runPrimary = () => {
                 <strong>{{ cand.name }}</strong>
                 <small><code>{{ cand.vid }}</code></small>
                 <em v-if="cand.score !== null">得分 {{ cand.score }}</em>
+                <small v-if="cand.nameSim != null" class="link-cand-evidence">名称相似 {{ Math.round(cand.nameSim * 100) }}%<template v-if="cand.propsAgree != null"> · 属性一致率 {{ Math.round(cand.propsAgree * 100) }}%</template></small>
               </label>
+              <details v-if="cand.props && linkPropDiff(cand.props).length" class="link-cand-diff">
+                <summary>属性对照（待入库 vs 该候选，绿=一致 / 红=冲突 / 灰=单侧缺失）</summary>
+                <table class="direct-fields link-cand-diff-table">
+                  <thead><tr><th>字段</th><th>待入库</th><th>该候选</th></tr></thead>
+                  <tbody>
+                    <tr v-for="row in linkPropDiff(cand.props)" :key="row.key" :class="`is-${row.status}`">
+                      <th>{{ row.key }}</th>
+                      <td>{{ row.left || '—' }}</td>
+                      <td>{{ row.right || '—' }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </details>
             </li>
           </ul>
         </template>
@@ -587,7 +690,8 @@ const runPrimary = () => {
         </a-radio-group>
         </a-form-item>
 
-        <!-- T_DIRECT 溯源 / 原始记录 / 抽取推理过程（折叠保留，不改变裁决框主布局） -->
+        <!-- T_DIRECT 溯源 / 原始记录 / 抽取推理过程（T_LINK 快照这些字段建案时即空，
+             按评审反馈不展示） -->
         <template v-if="templateId === 'T_DIRECT'">
           <details class="direct-trace zone-extra">
             <summary>溯源信息（点击 ID 跳转任务详情）</summary>
@@ -1103,6 +1207,96 @@ const runPrimary = () => {
   color: #175cd3;
   font-size: 11px;
   font-style: normal;
+}
+
+/* T_LINK 判定证据增强：同名总数 / 评分明细 / 属性对照 / 挂起边代价 */
+.link-samename-total {
+  margin-left: 8px;
+  color: #7890b5;
+  font-size: 11px;
+}
+
+.link-cand-evidence {
+  flex-basis: 100%;
+  margin: -4px 0 0 22px;
+  font-size: 11px;
+}
+
+.link-cand-diff {
+  border-top: 1px dashed #e5ecf5;
+}
+
+.link-cand-diff summary {
+  padding: 6px 12px 6px 22px;
+  color: #475467;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.link-cand-diff-table {
+  margin: 0 12px 10px;
+}
+
+.link-cand-diff-table th {
+  width: auto;
+}
+
+.link-cand-diff-table td:first-child,
+.link-cand-diff-table th:first-child {
+  width: 160px;
+}
+
+.link-cand-diff-table thead th {
+  background: #f8fafc;
+  color: #66758f;
+  font-size: 11px;
+}
+
+.link-cand-diff-table tr.is-same td {
+  background: #f2fbf5;
+}
+
+.link-cand-diff-table tr.is-differ td {
+  background: #fef3f2;
+}
+
+.link-cand-diff-table tr.is-missing td {
+  color: #98a2b3;
+}
+
+.link-pending {
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border: 1px dashed #f0c877;
+  border-radius: 8px;
+  background: #fffcf5;
+}
+
+.link-pending-list {
+  margin: 0 0 6px;
+  padding-left: 18px;
+  color: #475467;
+  font-size: 12px;
+}
+
+.link-pending-hint {
+  margin: 0;
+  color: #b54708;
+  font-size: 11px;
+}
+
+.link-incoming-props {
+  margin-top: 8px;
+}
+
+.link-incoming-props summary {
+  color: #475467;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.link-incoming-props .direct-fields {
+  margin-top: 6px;
 }
 
 /* A 类统一裁决框：T_DIRECT 候选字段表 + 折叠辅助区间距 */

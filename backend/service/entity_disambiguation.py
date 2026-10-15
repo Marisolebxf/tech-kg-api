@@ -9,8 +9,10 @@
 - 低于 ``GRAY_LOW`` → 新实体原样写图。
 
 阈值与权重为 v1 初值，待人工复核样本校准（docs/实体消歧与入库对齐-落地方案
-（人工审核专项）.md §5）。召回当前走图库同名精确匹配（与消歧 v1 检测同源），
-Milvus 模糊召回为后续增强；名称相似度用 RapidFuzz 词面比对，与
+（人工审核专项）.md §5）。召回为多路：图库同名精确匹配（与消歧 v1 检测同源）
+∪ Milvus 稠密近邻（``kg_entity``，见 ``recall_candidates``）——近邻路把
+「名称相近但不同名」的候选也送进评分，名称相似度因此不再是常量 1.0，
+``NAME_WEIGHT`` 才有真实区分作用；名称相似度用 RapidFuzz 词面比对，与
 ``organization_entity_alignment`` 的编码器解耦。
 """
 
@@ -18,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import Iterable
 from typing import Any
 
@@ -211,3 +214,167 @@ def recall_same_name(client: Any, tag: str, names: list[str]) -> dict[str, list[
                     {"vid": vid, "name": display, "props": props}
                 )
     return existing
+
+
+# ---------------------------------------------------------------------------
+# 多路召回：Milvus 稠密近邻路（fail-open，可与同名精确路独立开关）
+# ---------------------------------------------------------------------------
+
+# m3e 名称语料上无关实体的余弦相似度普遍 0.7 上下（实测「华为技术」对无关公司
+# 0.69-0.76，精确同名 0.87）——最小相似度 0.75 起步偏保守，宁漏召不淹候选：
+# 漏掉的仍走同名路原语义，淹没则灰区 case 暴涨。近邻路每名取 TOP_K=10，
+# 与 existingCandidates 的 TOP_K=5 之间留出排序淘汰余量。
+_MILVUS_RECALL_TOP_K_DEFAULT = 10
+_MILVUS_RECALL_MIN_SIM_DEFAULT = 0.75
+# 与 entity_search 的 EMBED_BATCH_SIZE 同口径：m3e 单批 ≤64，超限服务 422 拒整批
+_MILVUS_QUERY_CHUNK = 64
+
+
+def _milvus_recall_top_k() -> int:
+    try:
+        return max(1, int(os.getenv("ENTITY_DISAMBIGUATION_MILVUS_TOP_K", "")))
+    except ValueError:
+        return _MILVUS_RECALL_TOP_K_DEFAULT
+
+
+def _milvus_recall_min_sim() -> float:
+    try:
+        value = float(os.getenv("ENTITY_DISAMBIGUATION_MILVUS_MIN_SIM", ""))
+    except ValueError:
+        return _MILVUS_RECALL_MIN_SIM_DEFAULT
+    return min(1.0, max(0.0, value))
+
+
+def _milvus_fuzzy_recall(
+    tag: str,
+    names: list[str],
+    space: str | None,
+    *,
+    milvus: Any | None = None,
+    embedder: Any | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Milvus 稠密近邻召回（fail-open）：``{显示名: [{"vid","name","props","similarity"}...]}``。
+
+    复用实体检索的 ``kg_entity`` 集合（抽取链路末尾 reindex 全量同步 + T_LINK
+    裁决落图后增量 upsert 维护），按 ``graph_space`` + ``entity_type`` 过滤取
+    稠密向量近邻。候选属性取集合内嵌的 ``properties``（reindex 时从图库同步的
+    JSON 快照），不回图逐点取——索引滞后最多损失一点属性一致率（偏保守，落
+    灰区转人工），换取消歧主通道零额外图查询。
+
+    任何一步不可用（开关关闭 / embedding 未配置 / 集合不存在 / 空间未建索引 /
+    检索异常）都返回空 dict，调用方退化为仅同名精确召回，不阻塞写图。
+    """
+    if not names:
+        return {}
+    if os.getenv("ENTITY_DISAMBIGUATION_MILVUS_RECALL", "1") == "0":
+        return {}
+    try:
+        if embedder is None:
+            from service.entity_search import _embedding_client
+
+            embedder = _embedding_client()
+        if embedder is None:
+            logger.info("消歧 Milvus 召回：embedding 未配置，退化为仅同名精确召回")
+            return {}
+        if milvus is None:
+            from infra.milvus import get_milvus_client
+
+            milvus = get_milvus_client()
+        from service.entity_search import (
+            COLLECTION_NAME,
+            _escape_expression,
+            _milvus_space_has_rows,
+        )
+
+        assert milvus is not None  # 上一分支已赋值；仅为收窄类型
+        if not milvus.has_collection(COLLECTION_NAME):
+            logger.info("消歧 Milvus 召回：kg_entity 集合不存在，退化为仅同名精确召回")
+            return {}
+        if not space:
+            from infra.graph_db.config import TRSGraphSettings
+
+            space = TRSGraphSettings.from_env().space
+        if not _milvus_space_has_rows(milvus, space):
+            logger.info("消歧 Milvus 召回：图空间 %s 未建实体索引，退化为仅同名精确召回", space)
+            return {}
+        vectors = embedder.embed(names)
+        if not vectors or len(vectors) != len(names):
+            logger.info("消歧 Milvus 召回：名称 embedding 失败，退化为仅同名精确召回")
+            return {}
+        top_k = _milvus_recall_top_k()
+        min_sim = _milvus_recall_min_sim()
+        expr = (
+            f'graph_space == "{_escape_expression(space)}" '
+            f'and entity_type == "{_escape_expression(tag)}"'
+        )
+        hits_by_idx: dict[int, list[dict[str, Any]]] = {}
+        for start in range(0, len(names), _MILVUS_QUERY_CHUNK):
+            chunk = vectors[start : start + _MILVUS_QUERY_CHUNK]
+            response = milvus.search(
+                collection_name=COLLECTION_NAME,
+                data=chunk,
+                anns_field="dense_vector",
+                search_params={"metric_type": "COSINE", "params": {"ef": max(128, top_k * 2)}},
+                filter=expr,
+                limit=top_k,
+                output_fields=["vid", "name", "properties"],
+            )
+            for offset, query_hits in enumerate(response or []):
+                for hit in query_hits or []:
+                    if not isinstance(hit, dict):
+                        continue
+                    similarity = float(hit.get("distance") or 0.0)
+                    if similarity < min_sim:
+                        continue
+                    fields = hit.get("entity") or {}
+                    vid = str(fields.get("vid") or "")
+                    if not vid:
+                        continue
+                    raw_props = fields.get("properties")
+                    props: dict[str, Any] = {}
+                    if isinstance(raw_props, str) and raw_props:
+                        try:
+                            parsed = json.loads(raw_props)
+                            props = parsed if isinstance(parsed, dict) else {}
+                        except ValueError:
+                            props = {}
+                    elif isinstance(raw_props, dict):
+                        props = raw_props
+                    hits_by_idx.setdefault(start + offset, []).append(
+                        {
+                            "vid": vid,
+                            "name": str(fields.get("name") or ""),
+                            "props": props,
+                            "similarity": round(similarity, 4),
+                        }
+                    )
+        return {names[idx]: cands for idx, cands in hits_by_idx.items() if 0 <= idx < len(names)}
+    except Exception:  # noqa: BLE001 - 近邻路失败绝不阻塞写前消歧
+        logger.warning("消歧 Milvus 召回失败，退化为仅同名精确召回", exc_info=True)
+        return {}
+
+
+def recall_candidates(
+    client: Any, tag: str, names: list[str], *, space: str | None = None
+) -> dict[str, list[dict[str, Any]]]:
+    """消歧多路召回（写前判定与挂实体改道的统一入口）：
+
+    图库同名精确（``recall_same_name``）∪ Milvus 稠密近邻（``_milvus_fuzzy_recall``），
+    两路并集按 vid 去重、同名路在前（保序稳定）。近邻路 fail-open——不可用即
+    退化为仅同名精确召回，行为与旧版完全一致。返回形状与 ``recall_same_name``
+    一致，近邻路候选额外附 ``similarity``（稠密相似度，供排查）。
+    """
+    exact = recall_same_name(client, tag, names)
+    fuzzy = _milvus_fuzzy_recall(tag, names, space)
+    if not fuzzy:
+        return exact
+    merged: dict[str, list[dict[str, Any]]] = {}
+    for name in names:
+        cands = list(exact.get(name) or [])
+        seen = {str(c.get("vid")) for c in cands}
+        for cand in fuzzy.get(name) or []:
+            if str(cand.get("vid")) not in seen:
+                cands.append(cand)
+        if cands:
+            merged[name] = cands
+    return merged

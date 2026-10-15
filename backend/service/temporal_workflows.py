@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable, Iterator
+from contextlib import nullcontext
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -777,7 +778,7 @@ def _enqueue_entity_pending_item(
     workflow_run_id: str | None,
     job_id: str | None = None,
 ) -> None:
-    """单个挂起实体项 → 图库同名召回 + 评分 → T_LINK case（强制灰区人裁）。
+    """单个挂起实体项 → 多路召回（同名精确∪Milvus近邻）+ 评分 → T_LINK case（强制灰区人裁）。
 
     与 ``resolve_entity_batch`` 灰区分支同构（_incoming/existingCandidates/
     _pendingRelations），前端与 _apply_link_verdict 直接复用；但**不走 decide 的
@@ -799,7 +800,7 @@ def _enqueue_entity_pending_item(
     incoming_props = dict(candidate.get("props") or {})
     incoming_props.setdefault("name", display)
     scored: list[dict[str, Any]] = []
-    for cand in ed.recall_same_name(client, node_label, [display]).get(display, []):
+    for cand in ed.recall_candidates(client, node_label, [display], space=space).get(display, []):
         if cand["vid"] == vid:
             continue
         score, detail = ed.score_candidate(display, incoming_props, cand["name"], cand.get("props"))
@@ -807,9 +808,7 @@ def _enqueue_entity_pending_item(
             {"vid": cand["vid"], "name": cand["name"], "score": round(score, 3), **detail}
         )
     top = sorted(scored, key=lambda x: x["score"], reverse=True)[:TOP_K]
-    reason = (
-        f"脚本挂起改道消歧：{item.get('reason') or '歧义实体待人工确认'}；同名候选 {len(scored)} 个"
-    )
+    reason = f"脚本挂起改道消歧：{item.get('reason') or '歧义实体待人工确认'}；召回候选 {len(scored)} 个（同名+近邻）"
     if top:
         reason += f"，最高得分 {top[0]['score']:.2f}"
     manual_review_service.create_direct_case(
@@ -833,6 +832,7 @@ def _enqueue_entity_pending_item(
             "_graphSpace": space,
             "_resolution": {
                 "policyVersion": "script-pending-gray-v1",
+                "recallPolicy": "exact+milvus-dense-v1",
                 "scriptReason": item.get("reason"),
                 "thresholds": {"merge": MERGE_THRESHOLD, "grayLow": GRAY_LOW},
             },
@@ -1822,6 +1822,106 @@ def _write_batch_rows() -> int:
         return 64
 
 
+async def _prewrite_recheck(
+    client: Any,
+    name_tag: str,
+    records: list[dict[str, Any]],
+    *,
+    graph: dict[str, Any],
+    source_table: str,
+    step_id: str,
+) -> dict[str, int]:
+    """写前权威终判（守卫核心）：INSERT 落笔前对整批重做多路召回 + 评分。
+
+    resolve 的判定是乐观预判——并行批次链交错时其召回可能跑在其它批次的
+    INSERT 之前（同名双盲双写竞态）。此处是最后一刻的权威判定：图里此刻
+    真实存在什么就按什么判。三分支与 resolve 同构：merge → 改写 vid（随后
+    的 INSERT 幂等 upsert 到目标节点）；gray → 就地建 T_LINK 案扣留该记录；
+    new → 照写。排除自身 vid（resolve 已合并改写的记录 vid 即目标节点本身）。
+
+    原地变异 ``records``（改写 id / 剔除扣留项），调用方随后照常写图。召回
+    失败 fail-open：本批按 resolve 判定原样写（不劣于守卫前行为）。
+    """
+    from service.entity_disambiguation import (
+        decide,
+        display_name,
+        recall_candidates,
+        score_candidate,
+    )
+
+    by_name: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        display = display_name(record.get("props"))
+        if display:
+            by_name.setdefault(display, []).append(record)
+    stats = {"guardMerged": 0, "guardWithheld": 0}
+    if not by_name:
+        return stats
+
+    def _recall() -> dict[str, list[dict[str, Any]]]:
+        return _with_watermark_retry(
+            lambda: recall_candidates(client, name_tag, list(by_name), space=graph.get("space")),
+            label="写前终判召回",
+            max_attempts=10,
+        )
+
+    try:
+        existing = await asyncio.to_thread(_recall)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("写前终判召回失败，本批按 resolve 判定原样写图: %s", exc)
+        return stats
+
+    info, task_id, execution_id, execution = _execution_context_for_cases()
+    dropped: set[int] = set()
+    for pos, record in enumerate(records):
+        display = display_name(record.get("props"))
+        if not display:
+            continue
+        self_vid = str(record.get("id"))
+        scored = []
+        for cand in existing.get(display, []):
+            if cand["vid"] == self_vid:
+                continue
+            score, detail = score_candidate(
+                display, record.get("props"), cand["name"], cand.get("props")
+            )
+            scored.append(
+                {"vid": cand["vid"], "name": cand["name"], "score": round(score, 3), **detail}
+            )
+        if not scored:
+            continue
+        outcome = decide(scored)
+        if outcome["decision"] == "merge":
+            record["id"] = outcome["targetVid"]
+            stats["guardMerged"] += 1
+        elif outcome["decision"] == "gray":
+            try:
+                _open_entity_gray_case(
+                    graph=graph,
+                    name_tag=name_tag,
+                    display=display,
+                    record=record,
+                    scored=scored,
+                    outcome=outcome,
+                    step_id=step_id,
+                    source_table=source_table,
+                    info=info,
+                    task_id=task_id,
+                    execution_id=execution_id,
+                    execution=execution,
+                    stage="写前终判",
+                )
+                stats["guardWithheld"] += 1
+                dropped.add(pos)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "写前终判灰区建案失败 vid=%s，记录按原样写图: %s", record.get("id"), exc
+                )
+    if dropped:
+        records[:] = [record for pos, record in enumerate(records) if pos not in dropped]
+    return stats
+
+
 @activity.defn
 async def write_records(request: dict[str, Any]) -> dict[str, Any]:
     """把转换结果写图：实体/关系各走 nGQL 多行批量 INSERT。
@@ -1841,10 +1941,20 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
     props 中剔除对应列重试（兜住「运行任务检查通过 → 任务恰好启动 → 属性被删」
     的时序窗口及一切计划快照与图库 schema 的错位）；无法定位列名则原样抛出。
     语句级行值错误（类型不匹配等）回退逐条写定位坏行，坏行按原语义上抛。
+
+    增量索引走方案②a：实际写入的 vid 清单经 S3 claim-check（``vidsKey``）
+    传给环末的索引 activity 按冻结词表批级 upsert，本活动不再直连索引。
+
+    写前守卫（``service/entity_write_guard.py``）：INSERT 前对整批做权威终判
+    （``_prewrite_recheck``）并持同名微锁包住「终判 + INSERT」临界区——根治
+    并行批次同名双盲双写竞态（resolve 召回跑在它批 INSERT 之前）。终判扣留的
+    记录从本批剔除，过滤后的 records 经返回值交回工作流（碰撞检测/计数只看
+    真正落图的记录）。
     """
     from infra.graph_db.client import TRSGraphClient
     from infra.graph_db.config import TRSGraphSettings
     from infra.graph_db.exceptions import GraphRequestError
+    from service import entity_write_guard as _entity_write_guard
 
     kind = request["kind"]
     name = request["name"]
@@ -2132,8 +2242,37 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                         unslept = 0
             return written_local
 
-        written = await asyncio.to_thread(_write_all)
-        result: dict[str, Any] = {"written": written}
+        guard_stats: dict[str, int] = {}
+        if kind == "entity" and records and _entity_write_guard.prewrite_recheck_enabled():
+            from service.entity_disambiguation import display_name as _entity_display_name
+
+            names = sorted(
+                {
+                    display
+                    for display in (_entity_display_name(r.get("props")) for r in records)
+                    if display
+                }
+            )
+            # 同名微锁包住「终判 + INSERT」临界区：同名写入方跨批/跨来源/跨 job
+            # 串行（Redis SET NX PX，fail-open），异名完全并行
+            lock = (
+                _entity_write_guard.name_write_locks(settings.space, name, names)
+                if names and _entity_write_guard.name_lock_enabled()
+                else nullcontext()
+            )
+            async with lock:
+                guard_stats = await _prewrite_recheck(
+                    client,
+                    name,
+                    records,
+                    graph=graph,
+                    source_table=source_table,
+                    step_id=request.get("stepId") or "write",
+                )
+                written = await asyncio.to_thread(_write_all)
+        else:
+            written = await asyncio.to_thread(_write_all)
+        result: dict[str, Any] = {"written": written, **guard_stats}
         if kind == "entity" and index_vids and vid_step_id and written_vids:
             # S3 中转未开 = 本栈增量索引不可用：计划内不带 key（索引步跳过），
             # 不算失败；上传失败则上抛——activity 重试幂等重写图 + 重传，绝不
@@ -2154,6 +2293,22 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                     f"vids-{vid_chunk_idx:02d}",
                     {"label": name, "vids": written_vids},
                 )
+        if guard_stats.get("guardWithheld"):
+            # 写前终判扣留了记录：把过滤后的 records 交回工作流，后续碰撞检测/
+            # 计数只看真正落图的记录（与 resolve 扣留同一语义）
+            if request.get("recordsKey"):
+                from service.extract_payload_store import put_extract_payload_json
+
+                result["outKey"] = await asyncio.to_thread(
+                    put_extract_payload_json,
+                    request.get("stepId") or "write",
+                    int(request.get("batchIdx") or 0),
+                    f"guarded-{int(request.get('chunkIdx') or 0):02d}",
+                    records,
+                )
+                result["keptCount"] = len(records)
+            else:
+                result["records"] = records
         return result
     finally:
         try:
@@ -2162,9 +2317,94 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
             logger.exception("关闭图客户端失败")
 
 
+def _execution_context_for_cases() -> tuple[Any, str, Any, dict[str, Any]]:
+    """建案所需的执行上下文（taskId/executionId/execution），拿不到给兜底。"""
+    info = _activity_info_safe()
+    try:
+        from service.workflow_repository import repository
+
+        execution = repository.get_execution_by_workflow(info.workflow_id) or {}
+    except Exception:  # noqa: BLE001
+        execution = {}
+    task_id = execution.get("taskId") or f"PI-extract-{info.workflow_id[:12]}"
+    return info, task_id, execution.get("id"), execution
+
+
+def _open_entity_gray_case(
+    *,
+    graph: dict[str, Any],
+    name_tag: str,
+    display: str,
+    record: dict[str, Any],
+    scored: list[dict[str, Any]],
+    outcome: dict[str, Any],
+    step_id: str,
+    source_table: str,
+    info: Any,
+    task_id: str,
+    execution_id: Any,
+    execution: dict[str, Any],
+    stage: str = "resolve",
+) -> None:
+    """灰区实体建 T_LINK 案：消歧判定（resolve）与写前守卫（write）共用同一快照口径。
+
+    失败上抛，由调用方决定 fail-open（记录照写，行为退回消歧 v1）。建案本身
+    按 dedupe_key 幂等——活动重试同输入不重复建案。
+    """
+    from service.entity_disambiguation import GRAY_LOW, MERGE_THRESHOLD, TOP_K
+    from service.manual_review_production import manual_review_service
+
+    manual_review_service.create_direct_case(
+        graph_space=graph.get("space"),
+        task_id=task_id,
+        execution_id=execution_id,
+        step_id=step_id,
+        kind="entity",
+        candidate={
+            "name": display,
+            "newIds": [str(record.get("id"))],
+            "existingCandidates": [
+                {"vid": c["vid"], "name": c["name"], "score": c["score"]}
+                for c in sorted(scored, key=lambda x: x["score"], reverse=True)[:TOP_K]
+            ],
+            "_incoming": {
+                "vid": str(record.get("id")),
+                "props": record.get("props") or {},
+                "sourceTable": source_table,
+            },
+            "_pendingRelations": [],
+            "_graphSpace": graph.get("space"),
+            "_resolution": {
+                "matchScore": outcome["score"],
+                "margin": outcome["margin"],
+                "policyVersion": "disambiguation-gray-v1",
+                "recallPolicy": "exact+milvus-dense-v1",
+                "thresholds": {"merge": MERGE_THRESHOLD, "grayLow": GRAY_LOW},
+            },
+        },
+        object_id=str(record.get("id")),
+        object_name=display,
+        node_label=name_tag,
+        reason=(
+            f"消歧得分 {outcome['score']:.2f} 落入灰区 "
+            f"[{GRAY_LOW}, {MERGE_THRESHOLD})，需人工裁决是否并入已有实体（{stage}）"
+        ),
+        confidence=outcome["score"],
+        workflow_id=info.workflow_id,
+        workflow_run_id=info.workflow_run_id,
+        template_id="T_LINK",
+        workflow_type="kg.schema.extract",
+        exception_code="KG_ENTITY_DISAMBIGUATION_GRAY",
+        resume_token=f"extract-resolve:{execution_id}:{record.get('id')}",
+        source_table=source_table or None,
+        source_record_id=str(record.get("id")),
+        extra_snapshot={"jobId": execution.get("jobId")},
+    )
+
+
 @activity.defn
 async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
-    """消歧 v2（写前判定）：转换产出的实体在写图前先做同名召回 + 多证据评分。
+    """消歧 v2（写前判定）：转换产出的实体在写图前先做多路召回 + 多证据评分。
 
     三分支：得分 ≥0.85 且分差足够 → 改写 vid 并入已有实体（后续 INSERT VERTEX
     幂等 upsert，"合并"=属性覆盖到目标节点）；灰区 [0.65, 0.85) → 扣留该记录
@@ -2176,13 +2416,10 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
     from infra.graph_db.client import TRSGraphClient
     from infra.graph_db.config import TRSGraphSettings
     from service.entity_disambiguation import (
-        GRAY_LOW,
-        MERGE_THRESHOLD,
-        TOP_K,
         decide,
         display_name,
         normalize_display_name,
-        recall_same_name,
+        recall_candidates,
         score_candidate,
     )
 
@@ -2208,7 +2445,8 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
             record["id"] = first_vid
             deduped += 1
 
-    # 2) 图库同名召回（带候选完整属性供评分；properties() 失败降级为仅名称）
+    # 2) 多路召回（图库同名精确 ∪ Milvus 近邻；带候选完整属性供评分，
+    #    近邻路 fail-open 不可用即退化为仅同名精确——properties() 失败降级为仅名称）
     by_name: dict[str, list[dict[str, Any]]] = {}
     for record in records:
         display = display_name(record.get("props"))
@@ -2222,13 +2460,15 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
             settings.space = graph["space"]
         client = TRSGraphClient(settings)
 
-        # 同名召回整体下放线程（同步 HTTP 批量 LOOKUP；read_source_batch 同款根因）；
-        # 高水位走专用退避（本活动 STC 300s，max_attempts=10 ≈ 200s 内安全，缺陷㉘）
+        # 多路召回整体下放线程（同步 HTTP 批量 LOOKUP / Milvus 检索；read_source_batch
+        # 同款根因）；高水位走专用退避（本活动 STC 300s，max_attempts=10 ≈ 200s 内安全，缺陷㉘）
         def _recall() -> dict[str, list[dict[str, Any]]]:
             _with_watermark_retry(client.connect, label="消歧召回连接", max_attempts=10)
             return _with_watermark_retry(
-                lambda: recall_same_name(client, name_tag, list(by_name)),
-                label="消歧同名召回",
+                lambda: recall_candidates(
+                    client, name_tag, list(by_name), space=graph.get("space")
+                ),
+                label="消歧多路召回",
                 max_attempts=10,
             )
 
@@ -2240,17 +2480,7 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
             except Exception:  # noqa: BLE001
                 logger.exception("关闭图客户端失败")
 
-    info = _activity_info_safe()
-    try:
-        from service.workflow_repository import repository
-
-        execution = repository.get_execution_by_workflow(info.workflow_id) or {}
-    except Exception:  # noqa: BLE001
-        execution = {}
-    task_id = execution.get("taskId") or f"PI-extract-{info.workflow_id[:12]}"
-    execution_id = execution.get("id")
-
-    from service.manual_review_production import manual_review_service
+    info, task_id, execution_id, execution = _execution_context_for_cases()
 
     kept: list[dict[str, Any]] = []
     stats = {"merged": 0, "withheld": 0, "deduped": deduped, "new": 0}
@@ -2273,50 +2503,19 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
             kept.append(record)
         elif outcome["decision"] == "gray":
             try:
-                manual_review_service.create_direct_case(
-                    graph_space=graph.get("space"),
+                _open_entity_gray_case(
+                    graph=graph,
+                    name_tag=name_tag,
+                    display=display,
+                    record=record,
+                    scored=scored,
+                    outcome=outcome,
+                    step_id=request.get("stepId") or "align",
+                    source_table=source_table,
+                    info=info,
                     task_id=task_id,
                     execution_id=execution_id,
-                    step_id=request.get("stepId") or "align",
-                    kind="entity",
-                    candidate={
-                        "name": display,
-                        "newIds": [str(record.get("id"))],
-                        "existingCandidates": [
-                            {"vid": c["vid"], "name": c["name"], "score": c["score"]}
-                            for c in sorted(scored, key=lambda x: x["score"], reverse=True)[:TOP_K]
-                        ],
-                        "_incoming": {
-                            "vid": str(record.get("id")),
-                            "props": record.get("props") or {},
-                            "sourceTable": source_table,
-                        },
-                        "_pendingRelations": [],
-                        "_graphSpace": graph.get("space"),
-                        "_resolution": {
-                            "matchScore": outcome["score"],
-                            "margin": outcome["margin"],
-                            "policyVersion": "disambiguation-gray-v1",
-                            "thresholds": {"merge": MERGE_THRESHOLD, "grayLow": GRAY_LOW},
-                        },
-                    },
-                    object_id=str(record.get("id")),
-                    object_name=display,
-                    node_label=name_tag,
-                    reason=(
-                        f"消歧得分 {outcome['score']:.2f} 落入灰区 "
-                        f"[{GRAY_LOW}, {MERGE_THRESHOLD})，需人工裁决是否并入已有实体"
-                    ),
-                    confidence=outcome["score"],
-                    workflow_id=info.workflow_id,
-                    workflow_run_id=info.workflow_run_id,
-                    template_id="T_LINK",
-                    workflow_type="kg.schema.extract",
-                    exception_code="KG_ENTITY_DISAMBIGUATION_GRAY",
-                    resume_token=f"extract-resolve:{execution_id}:{record.get('id')}",
-                    source_table=source_table or None,
-                    source_record_id=str(record.get("id")),
-                    extra_snapshot={"jobId": execution.get("jobId")},
+                    execution=execution,
                 )
                 stats["withheld"] += 1
             except Exception as exc:  # noqa: BLE001
@@ -3468,20 +3667,17 @@ class SchemaExtractWorkflow:
                                         "activeProps": plan["activeProps"],
                                         "graph": graph,
                                         "sourceTable": table_label,
+                                        # 写前守卫终判建案时的溯源（同 resolve 口径）
+                                        "stepId": f"{step_id}#{step['id']}",
+                                        "batchIdx": idx,
+                                        "chunkIdx": chunk["index"],
                                         **records_arg,
                                     }
                                     if use_incremental_index and kind == "entity":
                                         # vid 清单 claim-check 派生字段（与
                                         # resolve_entity_batch 的键派生一致，
                                         # activity 内同 request → 同 key → 幂等）
-                                        write_request.update(
-                                            {
-                                                "stepId": f"{step_id}#{step['id']}",
-                                                "batchIdx": idx,
-                                                "chunkIdx": chunk["index"],
-                                                "indexVids": True,
-                                            }
-                                        )
+                                        write_request["indexVids"] = True
                                     write_result = await _execute_activity(
                                         write_records,
                                         write_request,
@@ -3490,6 +3686,16 @@ class SchemaExtractWorkflow:
                                         schedule_to_start_timeout=ACTIVITY_SCHEDULE_TO_START,
                                     )
                                     step_written = int(write_result.get("written", 0))
+                                    # 写前终判扣留时拿过滤后的 records：碰撞检测/计数
+                                    # 只看真正落图的记录（与 resolve 扣留同一语义）
+                                    if "outKey" in write_result:
+                                        records_count = int(
+                                            write_result.get("keptCount", records_count)
+                                        )
+                                        records_arg = {"recordsKey": write_result["outKey"]}
+                                    elif "records" in write_result:
+                                        records_arg = {"records": write_result["records"]}
+                                        records_count = len(records_arg["records"])
                                     if use_incremental_index and kind == "entity":
                                         # 按已记录的结果形状分支（重放安全）：
                                         # S3 关/0 写入 → 无 vidsKey

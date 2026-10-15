@@ -308,6 +308,105 @@ class SchemaGraph(FakeGraph):
         return _Result()
 
 
+class PersonSchemaGraph(SchemaGraph):
+    """gkx Person 风格 schema：name 列 NOT NULL + 名字写在业务列 name_cn。"""
+
+    TAG_FIELDS = {
+        "name": "string",
+        "name_cn": "string",
+        "person_kind": "string",
+        "extra_json": "string",
+        "create_time": "string",
+        "update_time": "string",
+        "source_table": "string",
+    }
+
+
+def test_withheld_vertex_injects_not_null_name_from_snapshot(service, monkeypatch):
+    """平台 DDL 的 name 列 NOT NULL 无默认值：源脚本把名字写进 name_cn、name
+    留空（被空值保护滤掉）时 INSERT 缺列被 Nebula 拒（400 not null field
+    doesn't have a default value；2026-10-15 gkx_verify_1 汪小红 28 案裁决
+    实测全炸）——按快照展示名补 name，业务列不受影响。"""
+    fake = PersonSchemaGraph()
+    monkeypatch.setattr(ManualReviewService, "_graph_client_for", lambda self, snapshot: fake)
+    case = service.create_direct_case(
+        **gray_case_kwargs(
+            candidate={
+                "name": "汪小红",
+                "newIds": ["person_new_1"],
+                "existingCandidates": [{"vid": "person_9", "name": "汪小红", "score": 0.8}],
+                "_incoming": {
+                    "vid": "person_new_1",
+                    "props": {
+                        "name": "",
+                        "name_cn": "汪小红",
+                        "person_kind": "legal_representative",
+                    },
+                    "sourceTable": "dwd_org_base_info",
+                },
+                "_pendingRelations": [],
+                "_graphSpace": "gkx_verify_1",
+            },
+            object_id="person_new_1",
+            object_name="汪小红",
+            node_label="Person",
+        )
+    )
+    detail = service.get_case(case["reviewId"], actor())
+    out = service.submit(
+        detail["id"],
+        detail["version"],
+        "entity-confirm",
+        {"entityVerdict": "merge", "targetEntityId": "person_9"},
+        "",
+        actor(),
+    )
+    assert out["status"] == "RESOLVED"
+    (stmt,) = fake.writes
+    assert 'VALUES "person_9"' in stmt
+    # name 列按快照展示名补齐（缺列即 Nebula 400）
+    assert "`name`" in stmt and "汪小红" in stmt
+    # 名字业务列与实体属性保留
+    assert "name_cn" in stmt and "person_kind" in stmt
+
+
+def test_withheld_vertex_keeps_incoming_name_over_snapshot(service, monkeypatch):
+    """扣留记录自带非空 name 时不被快照名覆盖（setdefault 语义）。"""
+    fake = PersonSchemaGraph()
+    monkeypatch.setattr(ManualReviewService, "_graph_client_for", lambda self, snapshot: fake)
+    case = service.create_direct_case(
+        **gray_case_kwargs(
+            candidate={
+                "name": "快照名",
+                "newIds": ["person_new_1"],
+                "existingCandidates": [{"vid": "person_9", "name": "快照名", "score": 0.8}],
+                "_incoming": {
+                    "vid": "person_new_1",
+                    "props": {"name": "扣留记录名", "name_cn": "扣留记录名"},
+                    "sourceTable": "dwd_org_base_info",
+                },
+                "_pendingRelations": [],
+                "_graphSpace": "gkx_verify_1",
+            },
+            object_id="person_new_1",
+            object_name="快照名",
+            node_label="Person",
+        )
+    )
+    detail = service.get_case(case["reviewId"], actor())
+    service.submit(
+        detail["id"],
+        detail["version"],
+        "entity-confirm",
+        {"entityVerdict": "create"},
+        "",
+        actor(),
+    )
+    (stmt,) = fake.writes
+    assert "扣留记录名" in stmt
+    assert "快照名" not in stmt
+
+
 def test_parked_edge_write_injects_not_null_audit_columns(service, monkeypatch):
     """平台 DDL 给边注入 NOT NULL create_time/update_time（无默认值）：暂存边
     属性缺这些列时补写会被 Nebula 拒（400 not nullable）——按边 schema 补缺省；

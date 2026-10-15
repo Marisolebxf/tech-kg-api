@@ -30,10 +30,13 @@ router = APIRouter(
 application = PlatformOverviewApplication()
 
 
-async def _get_overview(space: str | None = None, actor=None) -> PlatformOverviewData:
+async def _get_overview(
+    space: str | None = None, actor=None, day: str | None = None
+) -> PlatformOverviewData:
     space = resolve_selected_space(space)
     # TRSGraph 客户端为同步实现，放在线程中避免阻塞 FastAPI 事件循环。
     # space：全局图空间选择器当前空间（缺省回落 env 默认空间，兼容旧调用方）。
+    # day：指定统计日（YYYY-MM-DD，历史日回看/验收核对）；缺省=昨天（默认口径）。
     if rbac_enabled():
         if not space:
             spaces = allowed_space_names(actor)
@@ -46,7 +49,7 @@ async def _get_overview(space: str | None = None, actor=None) -> PlatformOvervie
         # 默认空间+本人绑定。此前非 RBAC 模式不校验，换账号登录后前端带着上一用户
         # 选择的空间请求，总览会把无权空间的数据直接吐出来（2026-09-24 修复）。
         _ensure_space_access(actor, space)
-    result = await asyncio.to_thread(application.get_overview, space)
+    result = await asyncio.to_thread(application.get_overview, space, day)
     return result
 
 
@@ -54,16 +57,18 @@ async def _get_overview(space: str | None = None, actor=None) -> PlatformOvervie
 async def get_platform_overview(
     actor: CurrentActor,
     space: Annotated[str | None, Query(max_length=64)] = None,
+    day: Annotated[str | None, Query(pattern=r"^\d{4}-\d{2}-\d{2}$")] = None,
 ) -> PlatformOverviewResponse:
-    return PlatformOverviewResponse(data=await _get_overview(space, actor))
+    return PlatformOverviewResponse(data=await _get_overview(space, actor, day))
 
 
 @router.get("/assets")
 async def get_platform_assets(
     actor: CurrentActor,
     space: Annotated[str | None, Query(max_length=64)] = None,
+    day: Annotated[str | None, Query(pattern=r"^\d{4}-\d{2}-\d{2}$")] = None,
 ) -> PlatformAssetSummaryResponse:
-    overview = await _get_overview(space, actor)
+    overview = await _get_overview(space, actor, day)
     return PlatformAssetSummaryResponse(
         data=PlatformAssetSummaryData(
             platform_status=overview.platform_status,
@@ -82,8 +87,9 @@ async def get_platform_asset_changes(
     actor: CurrentActor,
     asset_type: Annotated[AssetOverviewKey, Query(alias="assetType")] = "entity",
     space: Annotated[str | None, Query(max_length=64)] = None,
+    day: Annotated[str | None, Query(pattern=r"^\d{4}-\d{2}-\d{2}$")] = None,
 ) -> PlatformAssetChangesResponse:
-    overview = await _get_overview(space, actor)
+    overview = await _get_overview(space, actor, day)
     return PlatformAssetChangesResponse(
         data=PlatformAssetChangesData(
             asset_type=asset_type,
@@ -97,8 +103,9 @@ async def get_platform_asset_changes(
 async def get_platform_structures(
     actor: CurrentActor,
     space: Annotated[str | None, Query(max_length=64)] = None,
+    day: Annotated[str | None, Query(pattern=r"^\d{4}-\d{2}-\d{2}$")] = None,
 ) -> PlatformStructureResponse:
-    overview = await _get_overview(space, actor)
+    overview = await _get_overview(space, actor, day)
     return PlatformStructureResponse(
         data=PlatformStructureData(
             entity=overview.entity_structure,

@@ -55,6 +55,13 @@ class TestUnknownColumnName:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _no_write_guard(monkeypatch: pytest.MonkeyPatch):
+    # 写前守卫关掉：本文件只测写图自愈，终判/锁行为见 test_entity_write_guard
+    monkeypatch.setenv("ENTITY_DISAMBIGUATION_PREWRITE_RECHECK", "0")
+    monkeypatch.setenv("ENTITY_DISAMBIGUATION_NAME_LOCK", "0")
+
+
 class FakeGraphClient:
     """首写按配置炸 unknown column，重试（列已剔除）成功。"""
 

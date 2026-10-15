@@ -925,3 +925,24 @@ def test_reopened_case_round_trips_through_rerun(service, monkeypatch):
         for x in service.list_cases({"template_id": "T_EXTRACT_FAIL"}, _admin())["items"]
     }
     assert items[case_id] == "RESOLVED"
+
+
+def test_fix_mojibake_repairs_latin1_and_cp1252_double_encoding():
+    """图库历史乱码（UTF-8 被按 latin-1/cp1252 解码落库）读出即修，正常值零误伤。"""
+    fix = ManualReviewService._fix_mojibake
+    # latin-1 通道：否（e5 90 a6 全在 latin-1 范围）
+    assert fix("否".encode().decode("latin-1")) == "否"
+    # cp1252 通道：刘晓 的字节含 0x98/0x99/0x9a（latin-1 外，cp1252 为 ˜/™/š）
+    assert fix("刘晓".encode().decode("cp1252")) == "刘晓"
+    # Java 通道空洞：华 的字节含 0x8D（cp1252 未定义，当年按 latin-1 控制符落库）
+    assert fix("华".encode().decode("latin-1")) == "华"
+    assert (
+        fix("清华大学计算机科学与技术系".encode().decode("latin-1")) == "清华大学计算机科学与技术系"
+    )
+    # 正常中文两种编码都还原不回含 CJK 的串（latin-1/cp1252 编码直接抛错）→ 原样
+    assert fix("刘霄") == "刘霄"
+    # 纯 ASCII / 空值 / 非串原样返回
+    assert fix("Xiao Liu") == "Xiao Liu"
+    assert fix("") == ""
+    assert fix(None) is None
+    assert fix(123) == 123

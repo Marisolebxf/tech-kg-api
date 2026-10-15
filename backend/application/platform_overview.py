@@ -8,5 +8,7 @@ class PlatformOverviewApplication:
     def __init__(self, service: PlatformOverviewService | None = None) -> None:
         self.service = service or PlatformOverviewService()
 
-    def get_overview(self, space: str | None = None) -> PlatformOverviewData:
-        return self.service.get_overview(space)
+    def get_overview(
+        self, space: str | None = None, day: str | None = None
+    ) -> PlatformOverviewData:
+        return self.service.get_overview(space, day)

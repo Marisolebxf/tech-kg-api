@@ -1,7 +1,12 @@
-"""实体消歧（写前判定）纯函数单测：评分口径 / 三分支决策 / 平台列排除。"""
+"""实体消歧（写前判定）纯函数单测：评分口径 / 三分支决策 / 平台列排除 / 多路召回。"""
 
 from __future__ import annotations
 
+from typing import Any
+
+import pytest
+
+from service import entity_disambiguation as ed
 from service.entity_disambiguation import (
     GRAY_LOW,
     MARGIN,
@@ -10,6 +15,7 @@ from service.entity_disambiguation import (
     display_name,
     name_columns_in,
     normalize_display_name,
+    recall_candidates,
     score_candidate,
 )
 
@@ -95,3 +101,153 @@ def test_decide_ambiguous_high_pair_goes_gray():
 def test_decide_low_score_is_new():
     out = decide([{"vid": "v1", "name": "x", "score": 0.6}])
     assert out["decision"] == "new"
+
+
+# ---------------------------------------------------------------------------
+# 多路召回：Milvus 近邻路（fail-open）+ 并集去重
+# ---------------------------------------------------------------------------
+
+
+class _FakeMilvus:
+    """MilvusClient 高层 search 的最小仿真：返回按查询分组的 dict 型命中。"""
+
+    def __init__(self, per_query_hits: list[list[dict[str, Any]]]) -> None:
+        self._per_query = per_query_hits
+        self.search_calls: list[dict[str, Any]] = []
+
+    def has_collection(self, name: str) -> bool:
+        return True
+
+    def query(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return [{"vid": "stub"}]  # _milvus_space_has_rows → True
+
+    def search(self, **kwargs: Any) -> list[list[dict[str, Any]]]:
+        self.search_calls.append(kwargs)
+        return self._per_query
+
+
+class _FakeEmbedder:
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return [[float(i)] for i, _ in enumerate(texts)]
+
+
+def _hit(vid: str, name: str, distance: float, props: str = "{}") -> dict[str, Any]:
+    return {
+        "id": f"dev2::{vid}",
+        "distance": distance,
+        "entity": {"vid": vid, "name": name, "properties": props},
+    }
+
+
+def test_fuzzy_recall_kill_switch(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ENTITY_DISAMBIGUATION_MILVUS_RECALL", "0")
+    milvus = _FakeMilvus([[_hit("v9", "无关", 0.99)]])
+    out = ed._milvus_fuzzy_recall(
+        "Person", ["张三"], "dev2", milvus=milvus, embedder=_FakeEmbedder()
+    )
+    assert out == {}
+    assert milvus.search_calls == []  # 关闭时不发任何检索
+
+
+def test_fuzzy_recall_filters_by_min_sim_and_parses_props(monkeypatch: pytest.MonkeyPatch):
+    for key in (
+        "ENTITY_DISAMBIGUATION_MILVUS_RECALL",
+        "ENTITY_DISAMBIGUATION_MILVUS_TOP_K",
+        "ENTITY_DISAMBIGUATION_MILVUS_MIN_SIM",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    milvus = _FakeMilvus(
+        [
+            [
+                _hit("v1", "华为技术有限公司", 0.93, '{"province": "广东省"}'),
+                _hit("v2", "无关公司", 0.70),  # 低于最小相似度 → 丢弃
+                _hit("v3", "华为技术", 0.88, "非JSON"),  # properties 解析失败 → 空 dict
+            ]
+        ]
+    )
+    out = ed._milvus_fuzzy_recall(
+        "Organization", ["华为技术"], "dev2", milvus=milvus, embedder=_FakeEmbedder()
+    )
+    cands = out["华为技术"]
+    assert [c["vid"] for c in cands] == ["v1", "v3"]
+    assert cands[0]["props"] == {"province": "广东省"}
+    assert cands[1]["props"] == {}
+    assert cands[0]["similarity"] == pytest.approx(0.93)
+
+
+def test_fuzzy_recall_degrades_without_embedder(monkeypatch: pytest.MonkeyPatch):
+    # 容器里可能带真实 embedding 配置：钉死 _embedding_client 返回 None
+    monkeypatch.setattr("service.entity_search._embedding_client", lambda: None)
+    milvus = _FakeMilvus([[_hit("v9", "无关", 0.99)]])
+    out = ed._milvus_fuzzy_recall("Person", ["张三"], "dev2", milvus=milvus, embedder=None)
+    assert out == {}
+    assert milvus.search_calls == []
+
+
+def test_fuzzy_recall_degrades_on_milvus_error():
+    class _Broken(_FakeMilvus):
+        def search(self, **kwargs: Any) -> Any:
+            raise RuntimeError("milvus down")
+
+    out = ed._milvus_fuzzy_recall(
+        "Person", ["张三"], "dev2", milvus=_Broken([]), embedder=_FakeEmbedder()
+    )
+    assert out == {}
+
+
+class _FakeGraph:
+    """图客户端仿真：DESCRIBE 报 name 列；MATCH 命中预置同名候选。"""
+
+    def execute_query(self, q: str) -> Any:
+        class _R:
+            records = [{"Field": "name"}]
+
+        return _R()
+
+    def execute_read(self, q: str) -> Any:
+        class _R:
+            records = [
+                {"vid": "e1", "props": {"name": "王伟", "province": "北京"}},
+                {"vid": "e2", "props": {"name": "王伟", "province": "上海"}},
+            ]
+
+        return _R()
+
+
+def test_recall_candidates_unions_two_roads_dedup_by_vid(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("ENTITY_DISAMBIGUATION_MILVUS_RECALL", raising=False)
+    # 近邻路：e2 已被同名路召回（去重丢弃），e3 为不同名新候选
+    monkeypatch.setattr(
+        ed,
+        "_milvus_fuzzy_recall",
+        lambda tag, names, space, **kw: {
+            "王伟": [
+                {"vid": "e2", "name": "王伟", "props": {}, "similarity": 0.9},
+                {"vid": "e3", "name": "汪伟", "props": {"province": "北京"}, "similarity": 0.8},
+            ]
+        },
+    )
+    out = recall_candidates(_FakeGraph(), "Person", ["王伟"], space="dev2")
+    vids = [c["vid"] for c in out["王伟"]]
+    assert vids == ["e1", "e2", "e3"]  # 同名路在前，近邻路去重后补位
+
+
+def test_recall_candidates_fuzzy_failure_falls_back_to_exact(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(ed, "_milvus_fuzzy_recall", lambda *a, **kw: {})
+    out = recall_candidates(_FakeGraph(), "Person", ["王伟"], space="dev2")
+    assert [c["vid"] for c in out["王伟"]] == ["e1", "e2"]
+
+
+def test_name_similarity_varies_for_fuzzy_names():
+    # 多路召回的意义：不同名候选的名称相似度是真实变量，不再恒 1.0；
+    # 属性全一致时同名候选满分（自动并），近名候选按权重折价后不再轻易过阈值
+    score_same, exact = score_candidate(
+        "华为技术", {"province": "广东省"}, "华为技术", {"province": "广东省"}
+    )
+    score_near, fuzzy = score_candidate(
+        "华为技术", {"province": "广东省"}, "华为技术有限公司", {"province": "广东省"}
+    )
+    assert exact["nameSim"] == 1.0
+    assert score_same == 1.0
+    assert 0.0 < fuzzy["nameSim"] < 1.0
+    assert score_near < score_same

@@ -59,6 +59,10 @@ def client(monkeypatch):
     # 批内增量入索引关掉：本文件桩掉图库，不应让联动打到真实控制库/Milvus
     # （联动行为在 TestIncrementalIndexSync 里单独开开关验证）
     monkeypatch.setenv("SCHEMA_EXTRACT_INCREMENTAL_INDEX", "0")
+    # 写前守卫关掉：本文件只测批量写图语句形状，终判/锁行为见
+    # test_entity_write_guard
+    monkeypatch.setenv("ENTITY_DISAMBIGUATION_PREWRITE_RECHECK", "0")
+    monkeypatch.setenv("ENTITY_DISAMBIGUATION_NAME_LOCK", "0")
     return FakeGraphClient
 
 

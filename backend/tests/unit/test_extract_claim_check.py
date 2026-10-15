@@ -454,6 +454,9 @@ def fake_graph(monkeypatch: pytest.MonkeyPatch) -> list[FakeGraphClient]:
     monkeypatch.setenv("ENTITY_DISAMBIGUATION_MILVUS_RECALL", "0")
     # 批内增量入索引同理关掉：写图联动不应打到真实控制库/Milvus
     monkeypatch.setenv("SCHEMA_EXTRACT_INCREMENTAL_INDEX", "0")
+    # 写前守卫关掉：本文件只测载荷流转形状，终判/锁行为见 test_entity_write_guard
+    monkeypatch.setenv("ENTITY_DISAMBIGUATION_PREWRITE_RECHECK", "0")
+    monkeypatch.setenv("ENTITY_DISAMBIGUATION_NAME_LOCK", "0")
     return clients
 
 

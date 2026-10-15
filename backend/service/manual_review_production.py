@@ -1118,7 +1118,10 @@ class ManualReviewService:
     # ------------------------------------------------------------------
 
     def park_or_rewrite_edges(
-        self, edge_type: str, records: list[dict[str, Any]]
+        self,
+        edge_type: str,
+        records: list[dict[str, Any]],
+        graph_space: str | None = None,
     ) -> dict[str, Any]:
         """关系写图前端点消歧处理（``write_records`` 关系分支调用，跨执行兜底）。
 
@@ -1127,18 +1130,24 @@ class ManualReviewService:
         - 端点 case 已裁决 merge → 端点改写为目标实体后正常返回写；
         - 端点实体已被驳回（verdict=reject）→ 该边一并丢弃；
         - 其余（含已裁决 create，预留 vid 已入库）→ 原样返回写。
+
+        ``graph_space``：抽取目标图空间。vid 跨空间同名（person_xxx 在所有空间
+        指同一学者），T_LINK case 却按空间归属——不按空间过滤时，其它空间
+        （gkx_verify_1 等验证场）的未决 case 会拦下本空间的边并暂存进外空间
+        快照，裁决补写也落到外空间图。传空时不过滤（旧调用兼容）。
         """
         if not records:
             return {"records": [], "parked": 0, "dropped": 0}
         endpoints = {str(r.get("fromId")) for r in records} | {str(r.get("toId")) for r in records}
         verdicts: dict[str, tuple[str | None, str | None]] = {}
         with self.sf() as s:
-            cases = s.scalars(
-                select(ReviewCase).where(
-                    ReviewCase.template_id == "T_LINK",
-                    ReviewCase.object_id.in_(endpoints),
-                )
-            ).all()
+            filters = [
+                ReviewCase.template_id == "T_LINK",
+                ReviewCase.object_id.in_(endpoints),
+            ]
+            if graph_space:
+                filters.append(ReviewCase.graph_space == graph_space)
+            cases = s.scalars(select(ReviewCase).where(*filters)).all()
             open_cases = {c.object_id: c for c in cases if c.status not in TERMINAL_STATUSES}
             for c in cases:
                 if c.object_id in open_cases:

@@ -529,7 +529,11 @@ class TestDownstreamRecordsKey:
         monkeypatch.setattr(
             manual_review_service,
             "park_or_rewrite_edges",
-            lambda edge_type, records: {"records": records, "parked": 0, "dropped": 0},
+            lambda edge_type, records, graph_space=None: {
+                "records": records,
+                "parked": 0,
+                "dropped": 0,
+            },
         )
         result = await write_records(
             {

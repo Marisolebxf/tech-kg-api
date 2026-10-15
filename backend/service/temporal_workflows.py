@@ -2095,7 +2095,9 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
             from service.manual_review_production import manual_review_service
 
             try:
-                parked = manual_review_service.park_or_rewrite_edges(name, records)
+                parked = manual_review_service.park_or_rewrite_edges(
+                    name, records, graph_space=space or None
+                )
                 records = parked.get("records") or []
                 if parked.get("parked"):
                     logger.info(

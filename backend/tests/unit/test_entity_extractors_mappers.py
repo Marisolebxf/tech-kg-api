@@ -279,6 +279,18 @@ class TestPaperJournalReport:
         assert rec.properties["publication_name"] == "J123"
         assert rec.properties["source_record_id"] == "paper_P1"
 
+    def test_paper_year_falls_back_to_cover_year_start(self):
+        """gkx DWD 源表无 publication_year 列，年份回退取 cover_year_start（4 位年字符串）。"""
+        row = {"id": "P3", "cover_year_start": "2019"}
+        rec = mappers.paper_record("dwd_zh_paper", row, "B")[0]
+        assert rec.properties["publication_year"] == "2019"
+        both = mappers.paper_record(
+            "dwd_zh_paper",
+            {"id": "P4", "publication_year": "2020", "cover_year_start": "2019"},
+            "B",
+        )[0]
+        assert both.properties["publication_year"] == "2020"
+
     def test_paper_newlines_replaced(self):
         row = {"id": "P2", "title_zh": "第一行\n第二行"}
         rec = mappers.paper_record("dwd_zh_paper", row, "B")[0]

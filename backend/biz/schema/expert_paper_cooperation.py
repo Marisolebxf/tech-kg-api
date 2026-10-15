@@ -1,11 +1,30 @@
 import re
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 EXPERT_ID_PATTERN = r"^[\w\u4e00-\u9fff·.\-]+$"
-DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
+DATE_PATTERN = r"^\d{4}(?:-\d{2}){0,2}$"
+
+
+def _boundary_date(value: str, *, end: bool) -> date:
+    """YYYY / YYYY-MM / YYYY-MM-DD → 起止边界日历日（end=False 取当期首日）。
+
+    与两点合作成果模块同语义：年/月粒度输入按自然周期取边界，供校验比较；
+    过滤本身只取年份（service 层 ``startTime[:4]``）。
+    """
+    if len(value) == 4:
+        return date(int(value), 12 if end else 1, 31 if end else 1)
+    if len(value) == 7:
+        year, month = map(int, value.split("-"))
+        if not 1 <= month <= 12:
+            raise ValueError(f"月份越界: {value}")
+        if not end:
+            return date(year, month, 1)
+        next_month = date(year + (month == 12), 1 if month == 12 else month + 1, 1)
+        return date.fromordinal(next_month.toordinal() - 1)
+    return datetime.strptime(value, "%Y-%m-%d").date()
 
 
 class ExpertPaperCooperationDemoRequest(BaseModel):
@@ -34,8 +53,12 @@ class ExpertPaperCooperationDemoRequest(BaseModel):
         pattern=EXPERT_ID_PATTERN,
         description="专家 B 的 VID、scholar_id、source_record_id 或精确姓名。",
     )
-    startTime: str | None = Field(default=None, description="统计开始时间，格式 YYYY-MM-DD。")
-    endTime: str | None = Field(default=None, description="统计结束时间，格式 YYYY-MM-DD。")
+    startTime: str | None = Field(
+        default=None, description="统计开始时间，格式 YYYY / YYYY-MM / YYYY-MM-DD（过滤按年份）。"
+    )
+    endTime: str | None = Field(
+        default=None, description="统计结束时间，格式 YYYY / YYYY-MM / YYYY-MM-DD（过滤按年份）。"
+    )
 
     @field_validator("expertAId", "expertBId", mode="before")
     @classmethod
@@ -61,7 +84,7 @@ class ExpertPaperCooperationDemoRequest(BaseModel):
         if not value:
             return None
         if not re.fullmatch(DATE_PATTERN, value):
-            raise ValueError("时间格式错误，请使用有效日期 YYYY-MM-DD")
+            raise ValueError("时间格式错误，请使用 YYYY、YYYY-MM 或 YYYY-MM-DD")
         return value
 
     @field_validator("startTime", "endTime")
@@ -70,9 +93,9 @@ class ExpertPaperCooperationDemoRequest(BaseModel):
         if value is None:
             return None
         try:
-            date.fromisoformat(value)
+            _boundary_date(value, end=True)
         except ValueError as exc:
-            raise ValueError("时间格式错误，请使用有效日期 YYYY-MM-DD") from exc
+            raise ValueError("时间格式错误，请使用 YYYY、YYYY-MM 或 YYYY-MM-DD") from exc
         return value
 
     @model_validator(mode="after")
@@ -80,14 +103,12 @@ class ExpertPaperCooperationDemoRequest(BaseModel):
         if self.expertAId == self.expertBId:
             raise ValueError("expertAId 和 expertBId 不能相同")
         today = date.today()
-        if self.startTime and date.fromisoformat(self.startTime) > today:
+        if self.startTime and _boundary_date(self.startTime, end=False) > today:
             raise ValueError("startTime 超出当前时间")
-        if self.endTime and date.fromisoformat(self.endTime) > today:
+        if self.endTime and _boundary_date(self.endTime, end=True) > today:
             raise ValueError("endTime 超出当前时间")
         if self.startTime and self.endTime:
-            start_date = date.fromisoformat(self.startTime)
-            end_date = date.fromisoformat(self.endTime)
-            if start_date > end_date:
+            if _boundary_date(self.startTime, end=False) > _boundary_date(self.endTime, end=True):
                 raise ValueError("startTime 不能晚于 endTime")
         return self
 

@@ -499,7 +499,11 @@ def paper_record(table: str, row: Mapping[str, Any], batch: str) -> list[EntityR
         "doi": paper_text(row.get("doi")),
         "title_zh": paper_text(row.get("zh_name") or row.get("title_zh")),
         "title_en": paper_text(row.get("en_name") or row.get("title_en")),
-        "publication_year": text_or_empty(row.get("publication_year")),
+        # gkx DWD 源表（dwd_zh_paper/dwd_en_paper）无 publication_year 列，
+        # 年份在 cover_year_start；旧库口径保留 publication_year 优先。
+        "publication_year": text_or_empty(
+            row.get("publication_year") or row.get("cover_year_start")
+        ),
         # 旧口径：publication_name 固定写 publication_id 列的值。
         "publication_name": paper_text(row.get("publication_id")),
         "source": "gkx",

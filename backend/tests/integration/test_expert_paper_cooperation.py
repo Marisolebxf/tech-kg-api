@@ -77,6 +77,33 @@ async def test_expert_paper_cooperation_returns_structured_result(async_client, 
 
 
 @pytest.mark.parametrize(
+    ("start", "end"),
+    [
+        ("2021-01", "2026-08"),  # 前端测试参数面板（月选择器）实际发送的粒度
+        ("2021", "2025"),
+        ("2021-01-01", "2024-12-31"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_expert_paper_cooperation_accepts_month_and_year_granularity(
+    async_client, monkeypatch, start, end
+):
+    """日期契约与两点合作成果模块对齐：YYYY / YYYY-MM / YYYY-MM-DD 三格式兼容。"""
+    monkeypatch.setattr(
+        handler.application,
+        "build_structured_result_only",
+        lambda body, **_kwargs: _structured_result(),
+    )
+
+    response = await async_client.post(
+        ENDPOINT, json={**VALID_PAYLOAD, "startTime": start, "endTime": end}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["structuredResult"]["cooperationPaperCount"] == 6
+
+
+@pytest.mark.parametrize(
     ("payload_patch", "expected_message"),
     [
         ({"expertAId": ""}, "String should have at least 1 character"),
@@ -84,10 +111,11 @@ async def test_expert_paper_cooperation_returns_structured_result(async_client, 
         ({"expertBId": "BAD ID!"}, "专家标识不能包含空格或 !@#￥%& 等异常字符"),
         ({"expertAId": "A" * 65}, "专家标识长度不能超过 64 个字符"),
         ({"expertBId": "4P566No1"}, "expertAId 和 expertBId 不能相同"),
-        ({"startTime": "2021-08"}, "时间格式错误，请使用有效日期 YYYY-MM-DD"),
-        ({"endTime": "2021-08"}, "时间格式错误，请使用有效日期 YYYY-MM-DD"),
-        ({"startTime": "2021-02-30"}, "时间格式错误，请使用有效日期 YYYY-MM-DD"),
-        ({"endTime": "2021-02-30"}, "时间格式错误，请使用有效日期 YYYY-MM-DD"),
+        ({"startTime": "2021/08"}, "时间格式错误，请使用 YYYY、YYYY-MM 或 YYYY-MM-DD"),
+        ({"endTime": "2021-8"}, "时间格式错误，请使用 YYYY、YYYY-MM 或 YYYY-MM-DD"),
+        ({"startTime": "2021-13-01"}, "时间格式错误，请使用 YYYY、YYYY-MM 或 YYYY-MM-DD"),
+        ({"startTime": "2021-02-30"}, "时间格式错误，请使用 YYYY、YYYY-MM 或 YYYY-MM-DD"),
+        ({"endTime": "2021-02-30"}, "时间格式错误，请使用 YYYY、YYYY-MM 或 YYYY-MM-DD"),
         ({"startTime": f"{FUTURE_YEAR}-01-01"}, "startTime 超出当前时间"),
         ({"endTime": f"{FUTURE_YEAR}-01-31"}, "endTime 超出当前时间"),
         ({"startTime": "2025-01-01", "endTime": "2024-12-31"}, "startTime 不能晚于 endTime"),

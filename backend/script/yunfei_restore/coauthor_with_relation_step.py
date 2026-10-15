@@ -5,17 +5,23 @@
 改动请落到原模块后重新生成。
 """
 
-from __future__ import annotations
 
+from __future__ import annotations
+import argparse
 import hashlib
 import json
 import logging
-from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+import os
+import re
+from collections.abc import Mapping, Callable, Iterable
+from datetime import datetime, UTC
 from typing import Any
-
+from dataclasses import dataclass, field
+from pathlib import Path
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
 from kg_sdk import step
+
 
 logger = logging.getLogger("coauthor_with")
 
@@ -62,8 +68,16 @@ def coauthor_with(table: str, row: Mapping[str, Any], batch: str) -> list[EdgeRe
     if not sid or not co_sid:
         return []
     record_id = f"{sid}_{co_sid}"
+    # 无真实合作时间字段：与旧 load_scholar_relations / dao 直查口径一致，用行更新
+    # 时间代理（直接关系模块的时间过滤依赖 relation_time，缺字段则限时查询全空）。
+    rel_time = row.get("update_time") or row.get("create_time")
+    if isinstance(rel_time, datetime):
+        rel_time_text = rel_time.strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        rel_time_text = str(rel_time or "")
     props = {
         "co_paper_count": int(row.get("co_paper_count") or 0),
+        "relation_time": rel_time_text,
         "confidence": 1.0,
         "match_method": "source_primary_key",
         "match_evidence": "dwd_scholar_coauthor.scholar_id 主键直接抽取，未经推断",

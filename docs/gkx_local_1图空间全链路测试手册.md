@@ -39,6 +39,7 @@ Schema 集与脚本同源（17 实体 + 33 关系），适配口径见 `docs/gkx
 | 无脚本 Schema | 4 个关系 | APPLIED_BY, INVENTED_BY, OUTPUT_OF, OWNED_BY（图内边数均为 0，一致） |
 | 链任务 | 3 条 | 实体链 16 schema / 关系链A 14 / 关系链B 13（第 5 节） |
 | 图内数据 | 118,068 点 / 388,033 边 | 2026-10-15 `SUBMIT JOB STATS` 实测（第 6 节） |
+| 配套物料包 | `docs/gkx_local_1_materials/` | `schemas.json`（50 个定义全属性）+ `bindings.json`（152 条含**完整 querySql**）+ `scripts/`（46 个脚本**原文件**，与栈上 S3 对象同源）；从零重建用法见 7.0 |
 
 ### 1.1 源库 `gkx_dwd_local`（72 表，行数为 information_schema 估算值）
 
@@ -187,7 +188,7 @@ Schema 集与脚本同源（17 实体 + 33 关系），适配口径见 `docs/gkx
 
 ## 3. 来源表绑定清单（152 条）
 
-全部绑定：数据源 `MYSQL-DWD-LOCAL`（host.docker.internal:30306）· 库 `gkx_dwd_local`。querySql 列"有"= 绑定带投影 SQL（裁列 / 语义映射 / 过滤 `is_deleted=0`），"无"= 裸表全列读取。
+全部绑定：数据源 `MYSQL-DWD-LOCAL`（host.docker.internal:30306）· 库 `gkx_dwd_local`。querySql 列"有"= 绑定带投影 SQL（裁列 / 语义映射 / 过滤 `is_deleted=0`），"无"= 裸表全列读取。**152 条的 querySql 完整文本**在物料包 `docs/gkx_local_1_materials/bindings.json`（机器可读，含 schemaId 映射）。
 
 
 **实体绑定：**
@@ -385,7 +386,7 @@ SELECT 1 AS id, '1970-01-01 00:00:01' AS wm_col
 
 ## 4. 抽取脚本清单（46 个）
 
-全部脚本由仓库 `script/tools/build_portable_steps.py` 从 `backend/script/entity_extractors_one_entity/` 源模块及其依赖闭包**自动生成**，自包含单文件、平台喂数管道 `kg.schema.extract` 直传可用。**请勿手改**——改动落回源模块后重新生成。
+全部脚本由仓库 `script/tools/build_portable_steps.py` 从 `backend/script/entity_extractors_one_entity/` 源模块及其依赖闭包**自动生成**，自包含单文件、平台喂数管道 `kg.schema.extract` 直传可用。**请勿手改**——改动落回源模块后重新生成。**46 个脚本原文件已随仓库携带**：`docs/gkx_local_1_materials/scripts/`（2026-10-15 从栈上逐个导出，重建空间时直接上传这批文件）。
 
 | 脚本文件 | 绑定 Schema | 大小(B) | 末次校验 | 上传日期 |
 |---|---|---|---|---|
@@ -706,6 +707,89 @@ GROUP BY definition_id ORDER BY definition_id;
 
 ## 7. 验收与测试步骤
 
+### 7.0 从零重建（可选·自足路径）
+
+gkx_local_1 空间本身已配好可直接验收（7.1 起）；若要在**新图空间**重建同一套配置（回归测试 / 灾备演练 / 换栈验证），物料包 `docs/gkx_local_1_materials/` 携带了全部三件套。
+
+**前置**：
+
+1. 页面新建图空间（vid FIXED_STRING，见《真实数据全链路测试手册》第 1 节）。
+2. 数据源：重建在 **yunfei3 栈**则已有 `gkx_dwd_local`（`MYSQL-DWD-LOCAL`）直接可用；重建到**其他栈**需先在「配置管理」新建 MySQL 数据源指向 `host.docker.internal:30306`（库 `gkx_dwd_local`），并把下方脚本里的 `API`/`datasourceId` 改成该栈地址与新数据源 id（开了鉴权的栈还需带登录 Cookie/token）。
+
+**批量灌入**（在仓库检出目录执行；三步依次 = 建 50 Schema → 绑 152 来源 → 传 46 脚本）：
+
+```bash
+pip install requests -q && python3 rebuild_gkx_local.py   # 脚本在物料包里,见下
+```
+
+物料包附带灌入脚本 `docs/gkx_local_1_materials/rebuild_gkx_local.py`（内容如下，改头部三个常量即可换栈/换空间）：
+
+```python
+#!/usr/bin/env python3
+"""gkx_local_1 三件套灌入:Schema(50) -> 来源绑定(152) -> 脚本(46)。遇错即停。"""
+import json
+from pathlib import Path
+
+import requests
+
+API = "http://localhost:8004"        # yunfei3 栈;换栈改这里(开鉴权的栈自行带 headers)
+NEW_SPACE = "gkx_local_rb1"          # 新空间名(须已建好)
+DS = "MYSQL-DWD-LOCAL"               # 数据源 id;换栈时改成新数据源
+M = Path(__file__).parent            # 物料包目录
+
+schemas = json.loads((M / "schemas.json").read_text())["schemas"]
+bindings = json.loads((M / "bindings.json").read_text())["bindings"]
+
+def call(method, path, **kw):
+    r = requests.request(method, f"{API}/api/v1/schema-management{path}", timeout=120, **kw)
+    j = r.json()
+    if r.status_code >= 400 or not j.get("success"):
+        raise SystemExit(f"{method} {path} -> {r.status_code} {j}")
+    return j["data"]
+
+# 1) 建 Schema:先实体后关系(关系按 name 解析源/目标新 id)
+id_by_name = {}
+for kind, path in (("entity", "/schemas/entities"), ("relation", "/schemas/relations")):
+    for s in [x for x in schemas if x["kind"] == kind]:
+        body = {
+            "schemaKey": s["key"], "name": s["name"], "label": s["label"],
+            "description": s.get("description") or "", "identityKey": s.get("identityKey") or "",
+            "properties": [
+                {"name": p["name"], "dataType": p["dataType"], "required": p.get("required", False),
+                 "rule": p.get("rule") or "", "category": p.get("category") or "core"}
+                for p in s["properties"]
+            ],
+            "graphSpace": NEW_SPACE,
+        }
+        if kind == "relation":
+            body["sourceSchemaId"] = id_by_name[s["sourceSchemaName"]]
+            body["targetSchemaId"] = id_by_name[s["targetSchemaName"]]
+        id_by_name[s["name"]] = call("POST", path, json=body)["id"]
+        print("created", s["name"])
+
+# 2) 绑来源(按 schema 聚合后全量替换)
+by_schema = {}
+for b in bindings:
+    by_schema.setdefault(b["schemaName"], []).append({
+        "datasourceId": DS, "databaseName": b["databaseName"], "tableName": b["tableName"],
+        "pkColumn": b["pkColumn"], "timeColumn": b["timeColumn"], "querySql": b["querySql"],
+    })
+for name, srcs in by_schema.items():
+    call("PUT", f"/schemas/{id_by_name[name]}/sources", json={"sources": srcs})
+    print("bound", name, len(srcs))
+
+# 3) 传脚本(multipart 字段名 script;文件名与 schema 登记一致)
+for s in schemas:
+    fn = s.get("scriptFilename")
+    if not fn:
+        continue
+    with open(M / "scripts" / fn, "rb") as f:
+        call("PUT", f"/schemas/{id_by_name[s['name']]}/script", files={"script": (fn, f)})
+    print("scripted", fn)
+```
+
+> 说明：①脚本是"从物料原样灌入"的思路，等价于页面上传，逐条打印进度、遇错即停；②`DataSource` 绑的 `placeholder` 恒等行也会照灌（保证三件套与源空间逐项一致）；③4 个无脚本关系（APPLIED_BY/OWNED_BY/OUTPUT_OF/INVENTED_BY）跳过属正常；④属性按 `schemas.json` **全量**回传（含平台自动注入的 required 列与 provenance 溯源列）——服务端注入按属性名去重（同名保留传入口径并强制 required），不会重复叠加，已核对 50 个定义的字段值全部通过接口校验。灌完后按 §5.1 在「图谱构建」页建三条链（batchSize 2000，once），触发后走 7.1 起的验收；新空间检索为空记得 7.5 reindex。
+
 ### 7.1 计数对齐（图 vs 源库）
 
 TRS 定制 Nebula 语法注意：`YIELD id(vertex)`（不是 `id($$.Tag)`）。例：
@@ -810,3 +894,6 @@ fetch('/api/v1/entity-search/reindex', {
 | 执行历史 | `techkg_control_yunfei3.workflow_executions` |
 | 审核案 | `techkg_global.manual_review_case WHERE graph_space='gkx_local_1'` |
 | 源库行数 | host 30306 `gkx_dwd_local` information_schema（估算值） |
+| 物料包 schemas.json | `GET …/schemas/{id}` 逐个导出（50 × 全属性定义） |
+| 物料包 bindings.json | `kg_schema_source` 全量导出（152 × 完整 querySql） |
+| 物料包 scripts/ | `GET …/schemas/{id}/script/content` 逐个导出（46 个，与栈上 S3 对象同源） |

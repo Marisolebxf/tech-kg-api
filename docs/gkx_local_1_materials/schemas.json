@@ -1,0 +1,7943 @@
+{
+ "graphSpace": "gkx_local_1",
+ "exportedAt": "2026-10-15",
+ "count": 50,
+ "schemas": [
+  {
+   "id": "279576c3-8fda-494b-8a9a-6dbf0c240ccb",
+   "key": "scholar-organization",
+   "kind": "entity",
+   "name": "ScholarOrganization",
+   "label": "学者任职机构",
+   "description": "学者任职经历（dwd_scholar_work_experience）中的机构顶点：按机构名 md5 落 vid，与 AFFILIATED_WITH 任职边机构端点同键对齐，保证边端点实连。正式机构库（企业/高校/研究所）落地后经同名消歧合并。",
+   "identityKey": "source_record_id",
+   "attributeIdentityKey": "source_record_id",
+   "version": "v1.0",
+   "sourceSchemaName": null,
+   "targetSchemaName": null,
+   "properties": [
+    {
+     "name": "id",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "name",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "name_cn",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "name_en",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "org_kind",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "dynamic",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE TAG IF NOT EXISTS ScholarOrganization(id string NOT NULL, name string NOT NULL, create_time string NOT NULL, update_time string NOT NULL, name_cn string, name_en string, org_kind string, confidence double, source_table string NOT NULL, source_record_id string, ingest_batch string, ingest_time string, vid string, source_system string, source_url string, source_update_time string, match_method string, match_evidence string);\nCREATE TAG INDEX IF NOT EXISTS idx_scholarorganization_name ON ScholarOrganization(name(64));\nREBUILD TAG INDEX idx_scholarorganization_name;",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-15 14:03:57",
+   "updatedAt": "2026-10-15 14:04:09"
+  },
+  {
+   "id": "32cbb202-f390-4806-aac1-7c8ea49eabe7",
+   "key": "tag-datasource",
+   "kind": "entity",
+   "name": "DataSource",
+   "label": "数据来源",
+   "description": "yunfei_test 还原：复刻 dev 空间 DataSource（e2e 创建）",
+   "identityKey": "id",
+   "attributeIdentityKey": "id",
+   "version": "v1.0",
+   "sourceSchemaName": null,
+   "targetSchemaName": null,
+   "properties": [
+    {
+     "name": "id",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "name",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "table_cn_name",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "tier",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "library",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE TAG IF NOT EXISTS DataSource(id string NOT NULL, name string NOT NULL, create_time string NOT NULL, update_time string NOT NULL, source_table string NOT NULL, table_cn_name string, tier string, library string, source_system string, source_record_id string, source_url string, ingest_batch string, ingest_time string, source_update_time string, vid string, confidence string, match_method string, match_evidence string);\nCREATE TAG INDEX IF NOT EXISTS idx_datasource_name ON DataSource(name(64));\nREBUILD TAG INDEX idx_datasource_name;",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:00",
+   "updatedAt": "2026-10-10 20:54:01"
+  },
+  {
+   "id": "418a2767-93dc-4d18-8ed3-ddf389bd54be",
+   "key": "tag-event",
+   "kind": "entity",
+   "name": "Event",
+   "label": "事件",
+   "description": "yunfei_test 还原：复刻 dev 空间 Event（e2e 创建）",
+   "identityKey": "id",
+   "attributeIdentityKey": "id",
+   "version": "v1.0",
+   "sourceSchemaName": null,
+   "targetSchemaName": null,
+   "properties": [
+    {
+     "name": "id",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "name",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "event_type",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "raw_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "title",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "content",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "case_no",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "case_cause",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "occur_date",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "amount",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "currency",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE TAG IF NOT EXISTS Event(id string NOT NULL, name string NOT NULL, create_time string NOT NULL, update_time string NOT NULL, event_type string, raw_id string, title string, content string, case_no string, case_cause string, occur_date string, amount double, currency string, extra_json string, source_system string, source_table string NOT NULL, source_record_id string, source_url string, ingest_batch string, ingest_time string, source_update_time string, organization_id string, confidence double, vid string, match_method string, match_evidence string);\nCREATE TAG INDEX IF NOT EXISTS idx_event_name ON Event(name(64));\nREBUILD TAG INDEX idx_event_name;",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:53:57",
+   "updatedAt": "2026-10-10 20:54:00"
+  },
+  {
+   "id": "28ed049d-d14f-4b0a-ab5c-705a0c644676",
+   "key": "tag-industrychain",
+   "kind": "entity",
+   "name": "IndustryChain",
+   "label": "产业链",
+   "description": "yunfei_test 还原：复刻 dev 空间 IndustryChain（e2e 创建）",
+   "identityKey": "id",
+   "attributeIdentityKey": "id",
+   "version": "v1.0",
+   "sourceSchemaName": null,
+   "targetSchemaName": null,
+   "properties": [
+    {
+     "name": "id",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "name",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "chain_code",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "chain_name",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE TAG IF NOT EXISTS IndustryChain(id string NOT NULL, name string NOT NULL, create_time string NOT NULL, update_time string NOT NULL, chain_code string, chain_name string, source_table string NOT NULL, ingest_batch string, ingest_time string, vid string, source_system string, source_record_id string, source_url string, source_update_time string, confidence string, match_method string, match_evidence string);\nCREATE TAG INDEX IF NOT EXISTS idx_industrychain_name ON IndustryChain(name(64));\nREBUILD TAG INDEX idx_industrychain_name;",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:53:54",
+   "updatedAt": "2026-10-10 20:53:57"
+  },
+  {
+   "id": "a0f7b80d-e061-40f4-8612-78a7fd578ddd",
+   "key": "tag-industrynode",
+   "kind": "entity",
+   "name": "IndustryNode",
+   "label": "产业链节点",
+   "description": "yunfei_test 还原：复刻 dev 空间 IndustryNode（e2e 创建）",
+   "identityKey": "id",
+   "attributeIdentityKey": "id",
+   "version": "v1.0",
+   "sourceSchemaName": null,
+   "targetSchemaName": null,
+   "properties": [
+    {
+     "name": "id",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "name",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "node_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "node_name",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "node_type",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "level",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "node_seq",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "node_imp_level",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "node_stage",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "node_path",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE TAG IF NOT EXISTS IndustryNode(id string NOT NULL, name string NOT NULL, create_time string NOT NULL, update_time string NOT NULL, node_id string, node_name string, node_type string, level string, node_seq string, node_imp_level string, node_stage string, node_path string, source_table string NOT NULL, ingest_batch string, ingest_time string, confidence double, vid string, source_system string, source_record_id string, source_url string, source_update_time string, match_method string, match_evidence string);\nCREATE TAG INDEX IF NOT EXISTS idx_industrynode_name ON IndustryNode(name(64));\nREBUILD TAG INDEX idx_industrynode_name;",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:53:51",
+   "updatedAt": "2026-10-10 20:53:54"
+  },
+  {
+   "id": "19158919-d3d9-4ded-a75e-43bad24f0120",
+   "key": "tag-journal",
+   "kind": "entity",
+   "name": "Journal",
+   "label": "期刊",
+   "description": "yunfei_test 还原：复刻 dev 空间 Journal（e2e 创建）",
+   "identityKey": "id",
+   "attributeIdentityKey": "id",
+   "version": "v1.0",
+   "sourceSchemaName": null,
+   "targetSchemaName": null,
+   "properties": [
+    {
+     "name": "id",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "name",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "name_zh",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "name_en",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "name_abbr",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "issn",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "eissn",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "country",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "founding_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "impact_factor",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "is_sci",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "jcr_zone",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "cite_nums",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "annual_publication",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "publication_cycle",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "zh_core",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "sub_quartile",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "top",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "scope_zone",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE TAG IF NOT EXISTS Journal(id string NOT NULL, name string NOT NULL, create_time string NOT NULL, update_time string NOT NULL, source_table string NOT NULL, name_zh string, name_en string, name_abbr string, issn string, eissn string, country string, founding_time string, impact_factor string, is_sci string, jcr_zone string, cite_nums string, annual_publication string, publication_cycle string, source string, zh_core string, sub_quartile string, top string, scope_zone string, vid string, source_system string, source_record_id string, source_url string, ingest_batch string, ingest_time string, source_update_time string, confidence string, match_method string, match_evidence string);\nCREATE TAG INDEX IF NOT EXISTS idx_journal_name ON Journal(name(64));\nREBUILD TAG INDEX idx_journal_name;",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:53:50",
+   "updatedAt": "2026-10-10 20:53:51"
+  },
+  {
+   "id": "e43f51cd-e4a9-4c04-b499-ca5a281e2fe3",
+   "key": "tag-keyword",
+   "kind": "entity",
+   "name": "Keyword",
+   "label": "技术主题",
+   "description": "yunfei_test 还原：复刻 dev 空间 Keyword（e2e 创建）",
+   "identityKey": "id",
+   "attributeIdentityKey": "id",
+   "version": "v1.0",
+   "sourceSchemaName": null,
+   "targetSchemaName": null,
+   "properties": [
+    {
+     "name": "id",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "name",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "keyword",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_base",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE TAG IF NOT EXISTS Keyword(id string NOT NULL, name string NOT NULL, create_time string NOT NULL, update_time string NOT NULL, keyword string, source_system string, source_table string NOT NULL, source_record_id string, source_url string, ingest_batch string, ingest_time string, source_update_time string, confidence double, organization_base string, organization_id string, vid string, match_method string, match_evidence string);\nCREATE TAG INDEX IF NOT EXISTS idx_keyword_name ON Keyword(name(64));\nREBUILD TAG INDEX idx_keyword_name;",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:53:47",
+   "updatedAt": "2026-10-10 20:53:50"
+  },
+  {
+   "id": "3bddf68b-a661-4152-9790-f4110cebdaa2",
+   "key": "tag-news",
+   "kind": "entity",
+   "name": "News",
+   "label": "新闻资讯",
+   "description": "yunfei_test 还原：复刻 dev 空间 News（e2e 创建）",
+   "identityKey": "id",
+   "attributeIdentityKey": "id",
+   "version": "v1.0",
+   "sourceSchemaName": null,
+   "targetSchemaName": null,
+   "properties": [
+    {
+     "name": "id",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "name",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "title",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "content",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "release_date",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "original_url",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE TAG IF NOT EXISTS News(id string NOT NULL, name string NOT NULL, create_time string NOT NULL, update_time string NOT NULL, title string, content string, release_date string, original_url string, extra_json string, source_system string, source_table string NOT NULL, source_record_id string, source_url string, ingest_batch string, ingest_time string, source_update_time string, organization_id string, confidence double, vid string, match_method string, match_evidence string);\nCREATE TAG INDEX IF NOT EXISTS idx_news_name ON News(name(64));\nREBUILD TAG INDEX idx_news_name;",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:53:44",
+   "updatedAt": "2026-10-10 20:53:47"
+  },
+  {
+   "id": "e94df1e0-7489-4332-af1c-5ad5af49d4e4",
+   "key": "tag-organization",
+   "kind": "entity",
+   "name": "Organization",
+   "label": "机构",
+   "description": "yunfei_test 还原：复刻 dev 空间 Organization（e2e 创建）",
+   "identityKey": "id",
+   "attributeIdentityKey": "id",
+   "version": "v1.0",
+   "sourceSchemaName": null,
+   "targetSchemaName": null,
+   "properties": [
+    {
+     "name": "id",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "name",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "name_cn",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "name_en",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "org_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "external_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "province",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "city",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "area",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "country_code",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "country",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "address",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "postal_code",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "phone",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "email",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "legal_rep",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "org_type",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "org_size",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "founded_year",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "listing_status",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "listed_date",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "registered_capital",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "capital_currency",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "industry_class",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "stock_code",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "stock_noun",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "stock_type",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "org_kind",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "description",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "main_products",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_base",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "manual_disabled",
+     "dataType": "bool",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "correction_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "corrected_at",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE TAG IF NOT EXISTS Organization(id string NOT NULL, name string NOT NULL, create_time string NOT NULL, update_time string NOT NULL, name_cn string, name_en string, source string, source_system string, source_table string NOT NULL, source_record_id string, source_url string, ingest_batch string, ingest_time string, source_update_time string, org_id string, external_id string, province string, city string, area string, country_code string, country string, address string, postal_code string, phone string, email string, legal_rep string, org_type string, org_size string, founded_year int64, listing_status string, listed_date string, registered_capital double, capital_currency string, industry_class string, stock_code string, stock_noun string, stock_type string, org_kind string, description string, main_products string, extra_json string, organization_base string, organization_id string, confidence double, manual_disabled bool, correction_id string, corrected_at string, vid string, match_method string, match_evidence string);\nCREATE TAG INDEX IF NOT EXISTS idx_organization_name ON Organization(name(64));\nREBUILD TAG INDEX idx_organization_name;",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:53:41",
+   "updatedAt": "2026-10-10 20:53:44"
+  },
+  {
+   "id": "cef39098-07d8-49fc-ab29-425abfc62a07",
+   "key": "tag-organizationbase",
+   "kind": "entity",
+   "name": "OrganizationBase",
+   "label": "机构基础信息",
+   "description": "yunfei_test 还原：复刻 dev 空间 organization_base（e2e 创建）",
+   "identityKey": "id",
+   "attributeIdentityKey": "id",
+   "version": "v1.0",
+   "sourceSchemaName": null,
+   "targetSchemaName": null,
+   "properties": [
+    {
+     "name": "id",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "name",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE TAG IF NOT EXISTS OrganizationBase(id string NOT NULL, name string NOT NULL, create_time string NOT NULL, update_time string NOT NULL, organization_id string, confidence double, source_system string, source_table string NOT NULL, source_record_id string, source_url string, ingest_batch string, ingest_time string, source_update_time string, extra_json string, vid string, match_method string, match_evidence string);\nCREATE TAG INDEX IF NOT EXISTS idx_organizationbase_name ON OrganizationBase(name(64));\nREBUILD TAG INDEX idx_organizationbase_name;",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:53:38",
+   "updatedAt": "2026-10-10 20:53:41"
+  },
+  {
+   "id": "5a04edcd-6a0e-4f39-b3a1-a96f8b402401",
+   "key": "tag-paper",
+   "kind": "entity",
+   "name": "Paper",
+   "label": "论文",
+   "description": "yunfei_test 还原：复刻 dev 空间 Paper（e2e 创建）",
+   "identityKey": "id",
+   "attributeIdentityKey": "id",
+   "version": "v1.0",
+   "sourceSchemaName": null,
+   "targetSchemaName": null,
+   "properties": [
+    {
+     "name": "id",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "name",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "title_en",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "title_zh",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "doi",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "publication_year",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "publication_date",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "language",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "document_type",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "publication_type",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "volume",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "issue",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "start_page",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "end_page",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "is_oa",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "created_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "updated_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "output_awards",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE TAG IF NOT EXISTS Paper(id string NOT NULL, name string NOT NULL, create_time string NOT NULL, update_time string NOT NULL, source_table string NOT NULL, title_en string, title_zh string, doi string, publication_year string, publication_date string, language string, document_type string, publication_type string, volume string, issue string, start_page string, end_page string, is_oa string, source_url string, source string, created_time string, updated_time string, output_awards string, vid string, source_system string, source_record_id string, ingest_batch string, ingest_time string, source_update_time string, confidence string, match_method string, match_evidence string);\nCREATE TAG INDEX IF NOT EXISTS idx_paper_name ON Paper(name(64));\nREBUILD TAG INDEX idx_paper_name;",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:53:35",
+   "updatedAt": "2026-10-10 20:53:38"
+  },
+  {
+   "id": "c154b27c-5d66-44e0-b20f-51dc2cbf75db",
+   "key": "tag-patent",
+   "kind": "entity",
+   "name": "Patent",
+   "label": "专利",
+   "description": "yunfei_test 还原：复刻 dev 空间 Patent（e2e 创建）",
+   "identityKey": "id",
+   "attributeIdentityKey": "id",
+   "version": "v1.0",
+   "sourceSchemaName": null,
+   "targetSchemaName": null,
+   "properties": [
+    {
+     "name": "id",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "name",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "patent_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "publication_number",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "application_number",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "application_kind",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "country_code",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "country",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "publication_date",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "application_date",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "granted_number",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "grant_date",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "status",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "anticipated_expiration",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "title_original",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "title_en",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "title_zh",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "abstract_zh",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "language",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "main_ipcr",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "further_ipcr",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "main_cpc",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "further_cpc",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "keywords",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "citation_nums",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "cited_by_nums",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "patent_value",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "simple_family_number",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "db_source",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "create_time",
+     "dataType": "datetime",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "datetime",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "title",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_base",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "output_awards",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "evaluation",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE TAG IF NOT EXISTS Patent(id string NOT NULL, name string NOT NULL, patent_id string, publication_number string, application_number string, application_kind string, country_code string, country string, publication_date int64, application_date int64, granted_number string, grant_date string, status string, anticipated_expiration int64, title_original string, title_en string, title_zh string, abstract_zh string, language string, main_ipcr string, further_ipcr string, main_cpc string, further_cpc string, keywords string, citation_nums int64, cited_by_nums int64, patent_value int64, simple_family_number string, db_source string, create_time datetime NOT NULL, update_time datetime NOT NULL, title string, source string, source_system string, source_table string NOT NULL, source_record_id string, source_url string, ingest_batch string, ingest_time string, source_update_time string, confidence double, organization_base string, organization_id string, output_awards string, evaluation string, vid string, match_method string, match_evidence string);\nCREATE TAG INDEX IF NOT EXISTS idx_patent_name ON Patent(name(64));\nREBUILD TAG INDEX idx_patent_name;",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:53:32",
+   "updatedAt": "2026-10-10 20:53:35"
+  },
+  {
+   "id": "b794a856-30b4-4c87-9acb-0698eb7a77ba",
+   "key": "tag-patentfamily",
+   "kind": "entity",
+   "name": "PatentFamily",
+   "label": "专利同族",
+   "description": "yunfei_test 还原：复刻 dev 空间 PatentFamily（e2e 创建）",
+   "identityKey": "id",
+   "attributeIdentityKey": "id",
+   "version": "v1.0",
+   "sourceSchemaName": null,
+   "targetSchemaName": null,
+   "properties": [
+    {
+     "name": "id",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "name",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "family_number",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_base",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE TAG IF NOT EXISTS PatentFamily(id string NOT NULL, name string NOT NULL, create_time string NOT NULL, update_time string NOT NULL, source_table string NOT NULL, family_number string, confidence double, organization_base string, organization_id string, vid string, source_system string, source_record_id string, source_url string, ingest_batch string, ingest_time string, source_update_time string, match_method string, match_evidence string);\nCREATE TAG INDEX IF NOT EXISTS idx_patentfamily_name ON PatentFamily(name(64));\nREBUILD TAG INDEX idx_patentfamily_name;",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:53:29",
+   "updatedAt": "2026-10-10 20:53:32"
+  },
+  {
+   "id": "596e15c8-9aca-4539-8d67-3febbcc18cef",
+   "key": "tag-person",
+   "kind": "entity",
+   "name": "Person",
+   "label": "科技专家",
+   "description": "yunfei_test 还原：复刻 dev 空间 Person（e2e 创建）",
+   "identityKey": "id",
+   "attributeIdentityKey": "id",
+   "version": "v1.0",
+   "sourceSchemaName": null,
+   "targetSchemaName": null,
+   "properties": [
+    {
+     "name": "id",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "name",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "name_en",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "name_zh",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "email",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "name_cn",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "person_kind",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "country_code",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "country",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "birth_date",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "gender",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "biography",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "avatar",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "scholar_org",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "bio_zh",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "paper_nums",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "citation_nums",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "h_index",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "scholar_status",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "is_academician",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "research_fields",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "work_experience_date",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "work_experience_institution_en",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "work_experience_department_en",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "work_experience_position_en",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "work_experience_institution_zh",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "work_experience_department_zh",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "work_experience_position_zh",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "education_background_date",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "education_background_institution_en",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "education_background_degree_en",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "education_background_institution_zh",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "education_background_degree_zh",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_base",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE TAG IF NOT EXISTS Person(id string NOT NULL, name string NOT NULL, create_time string NOT NULL, update_time string NOT NULL, name_en string, name_zh string, email string, source string, name_cn string, person_kind string, country_code string, country string, birth_date string, gender string, biography string, extra_json string, source_system string, source_table string NOT NULL, source_record_id string, source_url string, ingest_batch string, ingest_time string, source_update_time string, avatar string, scholar_org string, bio_zh string, paper_nums int64, citation_nums int64, h_index int64, scholar_status int64, is_academician string, research_fields string, work_experience_date string, work_experience_institution_en string, work_experience_department_en string, work_experience_position_en string, work_experience_institution_zh string, work_experience_department_zh string, work_experience_position_zh string, education_background_date string, education_background_institution_en string, education_background_degree_en string, education_background_institution_zh string, education_background_degree_zh string, confidence double, match_method string, match_evidence string, organization_base string, organization_id string, vid string);\nCREATE TAG INDEX IF NOT EXISTS idx_person_name ON Person(name(64));\nREBUILD TAG INDEX idx_person_name;",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:53:26",
+   "updatedAt": "2026-10-10 20:53:29"
+  },
+  {
+   "id": "5832c2fd-03be-4c8f-a078-1b46b9a7aaa5",
+   "key": "tag-product",
+   "kind": "entity",
+   "name": "Product",
+   "label": "产品",
+   "description": "yunfei_test 还原：复刻 dev 空间 Product（e2e 创建）",
+   "identityKey": "id",
+   "attributeIdentityKey": "id",
+   "version": "v1.0",
+   "sourceSchemaName": null,
+   "targetSchemaName": null,
+   "properties": [
+    {
+     "name": "id",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "name",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "category",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "description",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE TAG IF NOT EXISTS Product(id string NOT NULL, create_time string NOT NULL, update_time string NOT NULL, name string NOT NULL, category string, description string, extra_json string, source_system string, source_table string NOT NULL, source_record_id string, source_url string, ingest_batch string, ingest_time string, source_update_time string, organization_id string, confidence double, vid string, match_method string, match_evidence string);\nCREATE TAG INDEX IF NOT EXISTS idx_product_name ON Product(name(64));\nREBUILD TAG INDEX idx_product_name;",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:53:20",
+   "updatedAt": "2026-10-10 20:53:26"
+  },
+  {
+   "id": "65a4a26c-d7ff-4e49-bdc4-34a26c8dc5b8",
+   "key": "tag-project",
+   "kind": "entity",
+   "name": "Project",
+   "label": "项目",
+   "description": "yunfei_test 还原：复刻 dev 空间 Project（e2e 创建）",
+   "identityKey": "id",
+   "attributeIdentityKey": "id",
+   "version": "v1.0",
+   "sourceSchemaName": null,
+   "targetSchemaName": null,
+   "properties": [
+    {
+     "name": "id",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "name",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "project_number",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "title",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "project_source",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "project_level",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "funded_amount",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "discipline",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "discipline_code",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "fund_category",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "funded_region",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "approval_year",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "approval_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "research_period",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "abstract",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "final_report_abstract",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "project_page_url",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "total_outputs",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "journal_articles_count",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "conference_papers_count",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "books_count",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "degree_papers_count",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "patents_count",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "clinical_trials_count",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "products_count",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "awards_count",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "reports_count",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "other_outputs_count",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "output_awards",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "keywords",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "evaluation",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE TAG IF NOT EXISTS Project(id string NOT NULL, name string NOT NULL, create_time string NOT NULL, update_time string NOT NULL, project_number string, title string, project_source string, project_level string, funded_amount double, discipline string, discipline_code string, fund_category string, funded_region string, approval_year string, approval_time string, research_period string, abstract string, final_report_abstract string, project_page_url string, source string, total_outputs int64, journal_articles_count int64, conference_papers_count int64, books_count int64, degree_papers_count int64, patents_count int64, clinical_trials_count int64, products_count int64, awards_count int64, reports_count int64, other_outputs_count int64, source_system string, source_table string NOT NULL, source_record_id string, source_url string, ingest_batch string, ingest_time string, source_update_time string, extra_json string, confidence double, output_awards string, keywords string, evaluation string, vid string, match_method string, match_evidence string);\nCREATE TAG INDEX IF NOT EXISTS idx_project_name ON Project(name(64));\nREBUILD TAG INDEX idx_project_name;",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:53:16",
+   "updatedAt": "2026-10-10 20:53:20"
+  },
+  {
+   "id": "471ecf52-0385-4b56-8727-ab2e04e12a54",
+   "key": "tag-report",
+   "kind": "entity",
+   "name": "Report",
+   "label": "科技成果",
+   "description": "yunfei_test 还原：复刻 dev 空间 Report（e2e 创建）",
+   "identityKey": "id",
+   "attributeIdentityKey": "id",
+   "version": "v1.0",
+   "sourceSchemaName": null,
+   "targetSchemaName": null,
+   "properties": [
+    {
+     "name": "id",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "name",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "title_cn",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "title_en",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "report_category",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "report_type",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "abstract",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "keywords",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "page_count",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "publication_date",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_url",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "vid",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "source_update_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE TAG IF NOT EXISTS Report(id string NOT NULL, name string NOT NULL, create_time string NOT NULL, update_time string NOT NULL, source_table string NOT NULL, title_cn string, title_en string, report_category string, report_type string, abstract string, keywords string, page_count string, publication_date string, source_url string, source string, vid string, source_system string, source_record_id string, ingest_batch string, ingest_time string, source_update_time string, confidence string, match_method string, match_evidence string);\nCREATE TAG INDEX IF NOT EXISTS idx_report_name ON Report(name(64));\nREBUILD TAG INDEX idx_report_name;",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:53:13",
+   "updatedAt": "2026-10-10 20:53:16"
+  },
+  {
+   "id": "24b6bbc8-0843-41ac-a96f-d059ae64731e",
+   "key": "edge-acquires",
+   "kind": "relation",
+   "name": "ACQUIRES",
+   "label": "收购",
+   "description": "yunfei_test 还原：复刻 dev 空间 ACQUIRES（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Organization",
+   "targetSchemaName": "Organization",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "ma_amount",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "currency_code",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS ACQUIRES(create_time string NOT NULL, update_time string NOT NULL, ma_amount double, currency_code string, extra_json string, source_table string NOT NULL, source_record_id string, ingest_batch string, ingest_time string, organization_id string, confidence double, match_method string, match_evidence string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:03",
+   "updatedAt": "2026-10-10 20:54:03"
+  },
+  {
+   "id": "2b92b1f2-f516-4061-9f35-aad576bbcfc9",
+   "key": "edge-belongs-to-node",
+   "kind": "relation",
+   "name": "BELONGS_TO_NODE",
+   "label": "企业归属产业链节点",
+   "description": "yunfei_test 还原：复刻 dev 空间 BELONGS_TO_NODE（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Organization",
+   "targetSchemaName": "IndustryNode",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "chain_score",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS BELONGS_TO_NODE(create_time string NOT NULL, update_time string NOT NULL, chain_score double, source_table string NOT NULL, source_record_id string, ingest_batch string, ingest_time string, confidence string, match_method string, match_evidence string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:03",
+   "updatedAt": "2026-10-10 20:54:03"
+  },
+  {
+   "id": "87918a17-7a09-4412-8081-6f6648e9e58f",
+   "key": "edge-authored-by",
+   "kind": "relation",
+   "name": "AUTHORED_BY",
+   "label": "论文署名关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 AUTHORED_BY（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Paper",
+   "targetSchemaName": "Person",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "author_order",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "is_corresponding",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "citations",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS AUTHORED_BY(create_time string NOT NULL, update_time string NOT NULL, author_order string, is_corresponding string, citations int64, source_table string NOT NULL, source_record_id string, ingest_batch string, ingest_time string, confidence double, match_method string, match_evidence string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:03",
+   "updatedAt": "2026-10-10 20:54:03"
+  },
+  {
+   "id": "b600093a-5c1f-48a5-949b-1ae3e07ab865",
+   "key": "edge-actual-controller-of",
+   "kind": "relation",
+   "name": "ACTUAL_CONTROLLER_OF",
+   "label": "实际控制关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 ACTUAL_CONTROLLER_OF（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Organization",
+   "targetSchemaName": "Organization",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "direct_pct",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "total_pct",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS ACTUAL_CONTROLLER_OF(create_time string NOT NULL, update_time string NOT NULL, direct_pct double, total_pct double, extra_json string, source_table string NOT NULL, source_record_id string, ingest_batch string, ingest_time string, organization_id string, confidence double, match_method string, match_evidence string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:03",
+   "updatedAt": "2026-10-10 20:54:03"
+  },
+  {
+   "id": "0218e891-391c-4ba9-ba7e-e327c324f044",
+   "key": "edge-funded-by",
+   "kind": "relation",
+   "name": "FUNDED_BY",
+   "label": "项目资助方",
+   "description": "yunfei_test 还原：复刻 dev 空间 FUNDED_BY（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Project",
+   "targetSchemaName": "Organization",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "funded_amount",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "fund_category",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_source_table",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS FUNDED_BY(create_time string NOT NULL, update_time string NOT NULL, funded_amount double, fund_category string, match_method string, match_evidence string, confidence double, source_table string NOT NULL, source_record_id string, ingest_batch string, ingest_time string, extra_json string, organization_id string, organization_source_table string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:02",
+   "updatedAt": "2026-10-10 20:54:02"
+  },
+  {
+   "id": "036a6094-54ff-4f0b-99a9-eab17ac578ea",
+   "key": "edge-has-keyword",
+   "kind": "relation",
+   "name": "HAS_KEYWORD",
+   "label": "论文主题",
+   "description": "yunfei_test 还原：复刻 dev 空间 HAS_KEYWORD（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Paper",
+   "targetSchemaName": "Keyword",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS HAS_KEYWORD(create_time string NOT NULL, update_time string NOT NULL, confidence double, source_table string NOT NULL, source_record_id string, ingest_batch string, ingest_time string, match_method string, match_evidence string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:02",
+   "updatedAt": "2026-10-10 20:54:02"
+  },
+  {
+   "id": "146ce17b-a16e-43a4-b6a2-0ee04e8633fd",
+   "key": "edge-downstream-of",
+   "kind": "relation",
+   "name": "DOWNSTREAM_OF",
+   "label": "产业上下游",
+   "description": "yunfei_test 还原：复刻 dev 空间 DOWNSTREAM_OF（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "IndustryNode",
+   "targetSchemaName": "IndustryNode",
+   "properties": [
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS DOWNSTREAM_OF(update_time string NOT NULL, source_table string NOT NULL, create_time string NOT NULL, source_record_id string, ingest_batch string, ingest_time string, confidence string, match_method string, match_evidence string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:02",
+   "updatedAt": "2026-10-10 20:54:02"
+  },
+  {
+   "id": "170c5e57-debd-44ab-8d08-ec21a2f06e47",
+   "key": "edge-produces",
+   "kind": "relation",
+   "name": "PRODUCES",
+   "label": "企业生产产品",
+   "description": "yunfei_test 还原：复刻 dev 空间 PRODUCES（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Organization",
+   "targetSchemaName": "Product",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "tech_product_seq",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS PRODUCES(create_time string NOT NULL, update_time string NOT NULL, tech_product_seq int64, extra_json string, source_table string NOT NULL, source_record_id string, ingest_batch string, ingest_time string, organization_id string, confidence double, match_method string, match_evidence string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:02",
+   "updatedAt": "2026-10-10 20:54:02"
+  },
+  {
+   "id": "20412cc6-509d-4668-8fb2-d8636177fa48",
+   "key": "edge-legal-rep-of",
+   "kind": "relation",
+   "name": "LEGAL_REP_OF",
+   "label": "法定代表关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 LEGAL_REP_OF（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Person",
+   "targetSchemaName": "Organization",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS LEGAL_REP_OF(create_time string NOT NULL, update_time string NOT NULL, extra_json string, source_table string NOT NULL, source_record_id string, ingest_batch string, ingest_time string, organization_id string, confidence double, match_method string, match_evidence string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:02",
+   "updatedAt": "2026-10-10 20:54:02"
+  },
+  {
+   "id": "2c668dc9-3dd0-4a5b-a501-9dd4daa8adc0",
+   "key": "edge-child-of",
+   "kind": "relation",
+   "name": "CHILD_OF",
+   "label": "产业节点上下级",
+   "description": "yunfei_test 还原：复刻 dev 空间 CHILD_OF（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "IndustryNode",
+   "targetSchemaName": "IndustryNode",
+   "properties": [
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS CHILD_OF(update_time string NOT NULL, source_table string NOT NULL, create_time string NOT NULL, source_record_id string, ingest_batch string, ingest_time string, confidence string, match_method string, match_evidence string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:02",
+   "updatedAt": "2026-10-10 20:54:02"
+  },
+  {
+   "id": "3ac8f06c-f098-4e99-b33f-8cadf729aafe",
+   "key": "edge-leads",
+   "kind": "relation",
+   "name": "LEADS",
+   "label": "项目负责人",
+   "description": "yunfei_test 还原：复刻 dev 空间 LEADS（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Project",
+   "targetSchemaName": "Person",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS LEADS(create_time string NOT NULL, update_time string NOT NULL, match_method string, match_evidence string, confidence double, source_table string NOT NULL, source_record_id string, ingest_batch string, ingest_time string, organization_id string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:02",
+   "updatedAt": "2026-10-10 20:54:02"
+  },
+  {
+   "id": "48d3b06c-2aed-4fba-a21a-b18de6c17173",
+   "key": "edge-has-news",
+   "kind": "relation",
+   "name": "HAS_NEWS",
+   "label": "企业关联资讯",
+   "description": "yunfei_test 还原：复刻 dev 空间 HAS_NEWS（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "News",
+   "targetSchemaName": "Organization",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS HAS_NEWS(create_time string NOT NULL, update_time string NOT NULL, extra_json string, source_table string NOT NULL, source_record_id string, ingest_batch string, ingest_time string, organization_id string, confidence double, match_method string, match_evidence string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:02",
+   "updatedAt": "2026-10-10 20:54:02"
+  },
+  {
+   "id": "4c38a99d-2290-4d11-8d88-b21240d7373e",
+   "key": "edge-published-in",
+   "kind": "relation",
+   "name": "PUBLISHED_IN",
+   "label": "论文发表关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 PUBLISHED_IN（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Paper",
+   "targetSchemaName": "Journal",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "volume",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "issue",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "start_page",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "end_page",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "publication_year",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS PUBLISHED_IN(create_time string NOT NULL, update_time string NOT NULL, source_table string NOT NULL, volume string, issue string, start_page string, end_page string, publication_year string, confidence double, ingest_batch string, ingest_time string, source_record_id string, match_method string, match_evidence string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:02",
+   "updatedAt": "2026-10-10 20:54:02"
+  },
+  {
+   "id": "4e698d22-152a-47b1-8886-305293200b78",
+   "key": "edge-beneficial-owner-of",
+   "kind": "relation",
+   "name": "BENEFICIAL_OWNER_OF",
+   "label": "最终受益关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 BENEFICIAL_OWNER_OF（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Person",
+   "targetSchemaName": "Organization",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "direct_percent",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "indirect_percent",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "total_percent",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS BENEFICIAL_OWNER_OF(create_time string NOT NULL, update_time string NOT NULL, direct_percent double, indirect_percent double, total_percent double, extra_json string, source_table string NOT NULL, source_record_id string, ingest_batch string, ingest_time string, organization_id string, confidence double, match_method string, match_evidence string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:02",
+   "updatedAt": "2026-10-10 20:54:02"
+  },
+  {
+   "id": "514f9e0e-4ba9-492d-9c5e-6d4b1b455272",
+   "key": "edge-invests-in",
+   "kind": "relation",
+   "name": "INVESTS_IN",
+   "label": "投资关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 INVESTS_IN（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Organization",
+   "targetSchemaName": "Organization",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "investment_amount",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "investment_ratio",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS INVESTS_IN(create_time string NOT NULL, update_time string NOT NULL, investment_amount double, investment_ratio double, extra_json string, source_table string NOT NULL, source_record_id string, ingest_batch string, ingest_time string, organization_id string, confidence double, match_method string, match_evidence string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:02",
+   "updatedAt": "2026-10-10 20:54:02"
+  },
+  {
+   "id": "5b5ca407-a119-437d-9d71-81a33a883d54",
+   "key": "edge-affiliated-with",
+   "kind": "relation",
+   "name": "AFFILIATED_WITH",
+   "label": "任职关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 AFFILIATED_WITH（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Person",
+   "targetSchemaName": "Organization",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "affiliation_name",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_base",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "work_experience_date",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "work_experience_department_zh",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "work_experience_position_zh",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS AFFILIATED_WITH(create_time string NOT NULL, update_time string NOT NULL, affiliation_name string, source string, source_table string NOT NULL, source_record_id string, ingest_batch string, ingest_time string, confidence double, match_method string, match_evidence string, organization_base string, organization_id string, work_experience_date string, work_experience_department_zh string, work_experience_position_zh string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:02",
+   "updatedAt": "2026-10-10 20:54:02"
+  },
+  {
+   "id": "5d779088-f019-4d07-9501-1b263897288b",
+   "key": "edge-studied-at",
+   "kind": "relation",
+   "name": "STUDIED_AT",
+   "label": "就读所属院校",
+   "description": "yunfei_test 还原：复刻 dev 空间 STUDIED_AT（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Person",
+   "targetSchemaName": "Organization",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "degree_zh",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "degree_en",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "education_date",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "institution_zh",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "institution_en",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_system",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS STUDIED_AT(create_time string NOT NULL, update_time string NOT NULL, degree_zh string, degree_en string, education_date string, institution_zh string, institution_en string, confidence double, match_method string, match_evidence string, source_system string, source_table string NOT NULL, source_record_id string, ingest_batch string, ingest_time string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:02",
+   "updatedAt": "2026-10-10 20:54:02"
+  },
+  {
+   "id": "610fc2cd-2df0-4cc0-80b6-8baa81acb72f",
+   "key": "edge-shareholder-of",
+   "kind": "relation",
+   "name": "SHAREHOLDER_OF",
+   "label": "股东持股关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 SHAREHOLDER_OF（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Organization",
+   "targetSchemaName": "Organization",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "ownership_percentage",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS SHAREHOLDER_OF(create_time string NOT NULL, update_time string NOT NULL, ownership_percentage double, extra_json string, source_table string NOT NULL, source_record_id string, ingest_batch string, ingest_time string, organization_id string, confidence double, match_method string, match_evidence string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:02",
+   "updatedAt": "2026-10-10 20:54:02"
+  },
+  {
+   "id": "6e867190-73f1-4c3f-b0d1-49bac98571d1",
+   "key": "edge-covers-chain",
+   "kind": "relation",
+   "name": "COVERS_CHAIN",
+   "label": "产业资讯报道产业链",
+   "description": "yunfei_test 还原：复刻 dev 空间 COVERS_CHAIN（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "News",
+   "targetSchemaName": "IndustryChain",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS COVERS_CHAIN(create_time string NOT NULL, update_time string NOT NULL, source_table string NOT NULL, ingest_batch string, ingest_time string, source_record_id string, confidence string, match_method string, match_evidence string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:02",
+   "updatedAt": "2026-10-10 20:54:02"
+  },
+  {
+   "id": "7f0cf505-73dc-4980-a1c8-5da93fa8f4e6",
+   "key": "edge-cites",
+   "kind": "relation",
+   "name": "CITES",
+   "label": "论文引用关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 CITES（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Paper",
+   "targetSchemaName": "Paper",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "reference_identifier",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "sequence",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS CITES(create_time string NOT NULL, update_time string NOT NULL, reference_identifier string, sequence int64, confidence double, match_method string, match_evidence string, source_table string NOT NULL, source_record_id string, ingest_batch string, ingest_time string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:02",
+   "updatedAt": "2026-10-10 20:54:02"
+  },
+  {
+   "id": "aa98d825-f39c-4cee-9d9a-bf39117bffcd",
+   "key": "edge-referenced-by",
+   "kind": "relation",
+   "name": "REFERENCED_BY",
+   "label": "被参考",
+   "description": "yunfei_test 还原：复刻 dev 空间 REFERENCED_BY（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Paper",
+   "targetSchemaName": "Report",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS REFERENCED_BY(create_time string NOT NULL, update_time string NOT NULL, source_table string NOT NULL, confidence double, source_record_id string, ingest_batch string, ingest_time string, match_method string, match_evidence string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:02",
+   "updatedAt": "2026-10-10 20:54:02"
+  },
+  {
+   "id": "bceaf57d-feee-4e80-9b0e-2ed9012ddf53",
+   "key": "edge-executive-of",
+   "kind": "relation",
+   "name": "EXECUTIVE_OF",
+   "label": "高管任职关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 EXECUTIVE_OF（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Person",
+   "targetSchemaName": "Organization",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "position",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS EXECUTIVE_OF(create_time string NOT NULL, update_time string NOT NULL, position string, extra_json string, source_table string NOT NULL, source_record_id string, ingest_batch string, ingest_time string, organization_id string, confidence double, match_method string, match_evidence string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:02",
+   "updatedAt": "2026-10-10 20:54:02"
+  },
+  {
+   "id": "c4eb8652-2133-4b0a-bbed-98ac50ec890c",
+   "key": "edge-has-output",
+   "kind": "relation",
+   "name": "HAS_OUTPUT",
+   "label": "成果产出关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 HAS_OUTPUT（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Project",
+   "targetSchemaName": "Paper",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "output_type",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "output_title",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "output_identifier",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS HAS_OUTPUT(create_time string NOT NULL, update_time string NOT NULL, output_type string, output_title string, output_identifier string, match_method string, match_evidence string, confidence double, source_table string NOT NULL, source_record_id string, ingest_batch string, ingest_time string, organization_id string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:02",
+   "updatedAt": "2026-10-10 20:54:02"
+  },
+  {
+   "id": "ddd2dae7-3148-4f46-9cac-927f301f5050",
+   "key": "edge-involved-in",
+   "kind": "relation",
+   "name": "INVOLVED_IN",
+   "label": "涉及风险事件关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 INVOLVED_IN（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Event",
+   "targetSchemaName": "Organization",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "role",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS INVOLVED_IN(create_time string NOT NULL, update_time string NOT NULL, role string, extra_json string, source_table string NOT NULL, source_record_id string, ingest_batch string, ingest_time string, organization_id string, confidence double, match_method string, match_evidence string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:02",
+   "updatedAt": "2026-10-10 20:54:02"
+  },
+  {
+   "id": "e3a6cab0-fb3c-435f-8d71-5052fcb5cd0d",
+   "key": "edge-has-node",
+   "kind": "relation",
+   "name": "HAS_NODE",
+   "label": "产业链包含产业节点",
+   "description": "yunfei_test 还原：复刻 dev 空间 HAS_NODE（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "IndustryChain",
+   "targetSchemaName": "IndustryNode",
+   "properties": [
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS HAS_NODE(update_time string NOT NULL, source_table string NOT NULL, create_time string NOT NULL, source_record_id string, ingest_batch string, ingest_time string, confidence string, match_method string, match_evidence string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:02",
+   "updatedAt": "2026-10-10 20:54:02"
+  },
+  {
+   "id": "ef0069ac-1b44-46da-8536-97063811ff90",
+   "key": "edge-coauthor-with",
+   "kind": "relation",
+   "name": "COAUTHOR_WITH",
+   "label": "专家合著关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 COAUTHOR_WITH（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Person",
+   "targetSchemaName": "Person",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "co_paper_count",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "relation_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS COAUTHOR_WITH(create_time string NOT NULL, update_time string NOT NULL, co_paper_count int64, source_table string NOT NULL, source_record_id string, ingest_batch string, ingest_time string, confidence double, match_method string, match_evidence string, organization_id string, relation_time string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:02",
+   "updatedAt": "2026-10-10 20:54:02"
+  },
+  {
+   "id": "f43f9020-daff-4f73-9788-1c65824a5a3f",
+   "key": "edge-has-participant",
+   "kind": "relation",
+   "name": "HAS_PARTICIPANT",
+   "label": "项目参加人",
+   "description": "yunfei_test 还原：复刻 dev 空间 HAS_PARTICIPANT（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Project",
+   "targetSchemaName": "Person",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS HAS_PARTICIPANT(create_time string NOT NULL, update_time string NOT NULL, match_method string, match_evidence string, confidence double, source_table string NOT NULL, source_record_id string, ingest_batch string, ingest_time string, organization_id string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:02",
+   "updatedAt": "2026-10-10 20:54:02"
+  },
+  {
+   "id": "f6a1059c-df3c-4da3-a654-a87fac817c21",
+   "key": "edge-member-of-family",
+   "kind": "relation",
+   "name": "MEMBER_OF_FAMILY",
+   "label": "家族成员关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 MEMBER_OF_FAMILY（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Patent",
+   "targetSchemaName": "PatentFamily",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS MEMBER_OF_FAMILY(create_time string NOT NULL, update_time string NOT NULL, confidence double, match_method string, match_evidence string, source_table string NOT NULL, source_record_id string, organization_id string, ingest_batch string, ingest_time string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:02",
+   "updatedAt": "2026-10-10 20:54:02"
+  },
+  {
+   "id": "0cc76b55-21df-477e-b91f-bacfbd9034a4",
+   "key": "edge-output-of",
+   "kind": "relation",
+   "name": "OUTPUT_OF",
+   "label": "成果归属关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 OUTPUT_OF（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "OrganizationBase",
+   "targetSchemaName": "Project",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS OUTPUT_OF(create_time string NOT NULL, update_time string NOT NULL, source_table string NOT NULL, source_record_id string, confidence double, match_method string, match_evidence string, ingest_batch string, ingest_time string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:01",
+   "updatedAt": "2026-10-10 20:54:01"
+  },
+  {
+   "id": "2721b83f-d4e8-448d-8118-7ea2beca1844",
+   "key": "edge-applied-by",
+   "kind": "relation",
+   "name": "APPLIED_BY",
+   "label": "专利申请方",
+   "description": "yunfei_test 还原：复刻 dev 空间 APPLIED_BY（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Patent",
+   "targetSchemaName": "Person",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "sequence",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "role",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_name",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "subject_type",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "resolution_status",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS APPLIED_BY(create_time string NOT NULL, update_time string NOT NULL, sequence int64, role string, source_name string, confidence double, subject_type string, resolution_status string, match_method string, match_evidence string, source_table string NOT NULL, source_record_id string, organization_id string, ingest_batch string, ingest_time string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:01",
+   "updatedAt": "2026-10-10 20:54:01"
+  },
+  {
+   "id": "51732621-5fbe-4286-93c7-36d925747ebb",
+   "key": "edge-subsidiary-of",
+   "kind": "relation",
+   "name": "SUBSIDIARY_OF",
+   "label": "子公司关系",
+   "description": "yunfei_test 还原：复刻 dev 空间 SUBSIDIARY_OF（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Organization",
+   "targetSchemaName": "Organization",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "extra_json",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS SUBSIDIARY_OF(create_time string NOT NULL, update_time string NOT NULL, extra_json string, source_table string NOT NULL, source_record_id string, ingest_batch string, ingest_time string, organization_id string, confidence double, match_method string, match_evidence string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:01",
+   "updatedAt": "2026-10-10 20:54:01"
+  },
+  {
+   "id": "530eb6e1-95fb-4451-ae14-2c6e4a287bd8",
+   "key": "edge-owned-by",
+   "kind": "relation",
+   "name": "OWNED_BY",
+   "label": "专利权利人",
+   "description": "yunfei_test 还原：复刻 dev 空间 OWNED_BY（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Patent",
+   "targetSchemaName": "Organization",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "sequence",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "role",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "is_current",
+     "dataType": "bool",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_name",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "subject_type",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "resolution_status",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "provenance",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS OWNED_BY(create_time string NOT NULL, update_time string NOT NULL, sequence int64, role string, is_current bool, source_name string, confidence double, subject_type string, resolution_status string, match_method string, match_evidence string, source_table string NOT NULL, source_record_id string, organization_id string, ingest_batch string, ingest_time string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:01",
+   "updatedAt": "2026-10-10 20:54:01"
+  },
+  {
+   "id": "e784e636-3ed5-4b48-b144-860d3aa1ff0d",
+   "key": "edge-invented-by",
+   "kind": "relation",
+   "name": "INVENTED_BY",
+   "label": "专利发明人",
+   "description": "yunfei_test 还原：复刻 dev 空间 INVENTED_BY（e2e 创建）",
+   "identityKey": "",
+   "attributeIdentityKey": "",
+   "version": "v1.0",
+   "sourceSchemaName": "Patent",
+   "targetSchemaName": "Person",
+   "properties": [
+    {
+     "name": "create_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "update_time",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "sequence",
+     "dataType": "int64",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_name",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "confidence",
+     "dataType": "double",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "subject_type",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "resolution_status",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_method",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "match_evidence",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "source_table",
+     "dataType": "string",
+     "required": true,
+     "rule": "",
+     "category": "required",
+     "locked": true
+    },
+    {
+     "name": "source_record_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "organization_id",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_batch",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    },
+    {
+     "name": "ingest_time",
+     "dataType": "string",
+     "required": false,
+     "rule": "",
+     "category": "core",
+     "locked": false
+    }
+   ],
+   "scriptFilename": null,
+   "ddlStatement": "CREATE EDGE IF NOT EXISTS INVENTED_BY(create_time string NOT NULL, update_time string NOT NULL, sequence int64, source_name string, confidence double, subject_type string, resolution_status string, match_method string, match_evidence string, source_table string NOT NULL, source_record_id string, organization_id string, ingest_batch string, ingest_time string);",
+   "ddlStatus": "succeeded",
+   "createdAt": "2026-10-10 20:54:01",
+   "updatedAt": "2026-10-10 20:54:02"
+  }
+ ]
+}

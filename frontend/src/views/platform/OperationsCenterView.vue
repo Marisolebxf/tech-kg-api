@@ -117,6 +117,59 @@ const reviewLoading = ref(true)
 let reviewRequestId = 0
 let reviewDisposed = false
 
+// ---- 翻页提速（对齐实体列表 EntityListView）：页级缓存 + 相同请求去重 ----
+// 15s 内回到看过的页直接出（与后端队列响应缓存同 TTL）；重跑/删除等写操作后
+// 整体失效。不预取下一页：后端已按 100 条块缓存，同块翻页本就毫秒级。
+const REVIEW_PAGE_CACHE_TTL = 15_000
+const reviewPageCache = new Map<string, { expires: number; items: ProductionReviewCase[]; total: number }>()
+const pendingReviewPages = new Map<string, Promise<{ items: ProductionReviewCase[]; total: number }>>()
+let reviewCacheVersion = 0
+/** 当前表内数据所属的「分类+空间」：翻页/筛选/排序保留旧行避免整表闪白；换分类/换空间才清表。 */
+let reviewRowsScope = ''
+
+function clearReviewPageCache() {
+  reviewCacheVersion += 1
+  reviewPageCache.clear()
+  pendingReviewPages.clear()
+}
+
+/** 当前队列请求参数（缓存键与请求体同源，改筛选即换键）。 */
+function reviewQueueParams() {
+  return {
+    graphSpace: currentGraphSpace() || undefined,
+    category: reviewCategory.value,
+    templateId: reviewCategory.value === 'A' ? 'T_LINK' : undefined,
+    keyword: submittedKeyword.value || undefined,
+    status: REVIEW_STATUS_PARAM[reviewStatusFilter.value ?? '全部'],
+    kind: !reviewKindFilter.value || reviewKindFilter.value === '全部' ? undefined : reviewKindFilter.value === '实体' ? 'entity' : 'relation',
+    updatedWithin: REVIEW_TIME_PARAMS[reviewTimeFilter.value || '全部'],
+    sort: reviewTimeSort.value === 'default' ? undefined : `updated_${reviewTimeSort.value}`,
+    page: reviewPage.value,
+    pageSize: reviewPageSize.value,
+  }
+}
+
+/** 带页缓存的队列拉取：相同参数的并发/重复请求共享同一个在飞 Promise。 */
+function fetchReviewPage(params: Record<string, unknown>): Promise<{ items: ProductionReviewCase[]; total: number }> {
+  const key = JSON.stringify(params)
+  const cached = reviewPageCache.get(key)
+  if (cached && cached.expires > Date.now()) return Promise.resolve({ items: cached.items, total: cached.total })
+  const pending = pendingReviewPages.get(key)
+  if (pending) return pending
+  const version = reviewCacheVersion
+  const promise = getProductionReviews(params).then((response) => {
+    if (version === reviewCacheVersion) {
+      if (reviewPageCache.size >= 30) reviewPageCache.delete(reviewPageCache.keys().next().value!)
+      reviewPageCache.set(key, { expires: Date.now() + REVIEW_PAGE_CACHE_TTL, items: response.items, total: response.total })
+    }
+    return { items: response.items, total: response.total }
+  }).finally(() => {
+    if (pendingReviewPages.get(key) === promise) pendingReviewPages.delete(key)
+  })
+  pendingReviewPages.set(key, promise)
+  return promise
+}
+
 const reviewRows = computed(() => reviewRecords.value)
 
 /** 当前队列整页只读（查看档，如开发维护切到共享生产空间）：顶部提示条。 */
@@ -299,6 +352,8 @@ async function rerunSelected(caseIds: string[] | undefined = undefined, skipConf
       result.executions,
     )
     rerunSelection.value = new Set()
+    // 写操作后队列已变化：页缓存整体失效，翻页不再读到重跑前的旧快照
+    clearReviewPageCache()
     void loadReviews()
   } catch (error) {
     showRerunFeedback('error', error instanceof Error ? error.message : '重跑下发失败', [])
@@ -487,6 +542,7 @@ async function confirmDelete() {
     deleteVisible.value = false
     rerunSelection.value.delete(target.id)
     showRerunFeedback('success', `已删除失败记录 ${target.id}`, [])
+    clearReviewPageCache()
     void loadReviews()
   } catch (error) {
     deleteError.value = error instanceof Error ? error.message : '删除失败'
@@ -531,6 +587,7 @@ async function confirmBatchDelete() {
     )
     batchDeleteVisible.value = false
     rerunSelection.value = new Set()
+    clearReviewPageCache()
     void loadReviews()
   } catch (error) {
     showRerunFeedback('error', error instanceof Error ? error.message : '批量删除失败', [])
@@ -571,25 +628,19 @@ async function loadReviews() {
     /* 隐私模式等存储不可用：跳过快照，返回时退回默认第 1 页 */
   }
   const requestId = ++reviewRequestId
+  // 翻页/筛选/排序/搜索：保留旧行 + 顶部加载条（不再整表闪白回「正在加载」）；
+  // 换分类或换空间才是另一份数据，先清表走空态加载
+  const scope = `${reviewCategory.value}:${currentGraphSpace() || ''}`
+  if (scope !== reviewRowsScope) {
+    reviewRowsScope = scope
+    reviewRecords.value = []
+  }
   reviewLoading.value = true
   reviewLoadError.value = ''
-  reviewRecords.value = []
-  reviewTotal.value = 0
   try {
     // A=入库决策：Tab 只筛 T_LINK（实体对齐裁决）——T_DIRECT case 不进队列，
     // 详情由工作台总览/处理实例详情直达；C=抽取失败重跑（T_EXTRACT_FAIL）
-    const response = await getProductionReviews({
-      graphSpace: currentGraphSpace() || undefined,
-      category: reviewCategory.value,
-      templateId: reviewCategory.value === 'A' ? 'T_LINK' : undefined,
-      keyword: submittedKeyword.value || undefined,
-      status: REVIEW_STATUS_PARAM[reviewStatusFilter.value ?? '全部'],
-      kind: !reviewKindFilter.value || reviewKindFilter.value === '全部' ? undefined : reviewKindFilter.value === '实体' ? 'entity' : 'relation',
-      updatedWithin: REVIEW_TIME_PARAMS[reviewTimeFilter.value || '全部'],
-      sort: reviewTimeSort.value === 'default' ? undefined : `updated_${reviewTimeSort.value}`,
-      page: reviewPage.value,
-      pageSize: reviewPageSize.value,
-    })
+    const response = await fetchReviewPage(reviewQueueParams())
     if (reviewDisposed || requestId !== reviewRequestId) return
     reviewTotal.value = response.total
     // 筛选后总页数变小时收敛当前页（如翻到第 3 页后把筛选改成只有 1 页数据）
@@ -603,6 +654,9 @@ async function loadReviews() {
     reviewLoadError.value = ''
   } catch (error) {
     if (reviewDisposed || requestId !== reviewRequestId) return
+    // 失败回到空表错误态（旧行可能是翻页前的旧数据，不再展示以免误导）
+    reviewRecords.value = []
+    reviewTotal.value = 0
     reviewLoadError.value = error instanceof Error ? error.message : '人工处理队列加载失败'
   } finally {
     if (!reviewDisposed && requestId === reviewRequestId) reviewLoading.value = false
@@ -649,6 +703,7 @@ watch([reviewStatusFilter, reviewKindFilter, reviewTimeFilter], () => {
 watch(() => graphSpaceStore.current, () => {
   if (props.mode !== 'review') return
   reviewPage.value = 1
+  clearReviewPageCache()
   rerunSelection.value = new Set()
   rerunConfirmVisible.value = false
   rerunFeedback.value = null
@@ -717,6 +772,9 @@ onMounted(() => {
           class="rerun-feedback-exec"
         >{{ item.schemaId }} · {{ item.cases }} 条</span>
       </AppAlert>
+
+      <!-- 换页/筛选加载中：保留已看行，顶部细条提示（对齐实体列表），不再整表闪白 -->
+      <div v-if="reviewLoading && reviewRows.length" class="review-loading-strip" role="status">正在加载…</div>
 
       <div ref="reviewTableRef" class="ops-review-table-scroll" :class="{ 'has-scroll-right': tableHasMoreToScroll, 'review-scroll--active': tableScrollActive }" :aria-busy="reviewLoading" @scroll.passive="handleReviewTableScroll"><table class="review-case-table" :class="{ 'review-case-table--selectable': reviewCategory === 'C' }">
         <!-- 固定列宽：有数据/无数据切换时表头列位不漂移（待处理对象列吃剩余宽度） -->
@@ -1023,6 +1081,8 @@ onMounted(() => {
 /* 队列加载失败态：错误态提示条 + 重新加载入口 */
 .review-load-error{display:flex;flex-direction:column;align-items:center;gap:8px}
 .review-load-error__alert{max-width:720px;text-align:left}
+/* 翻页/筛选加载条：旧行保留时顶部细条提示（空表首载仍走表格内空态行） */
+.review-loading-strip{display:flex;flex:0 0 auto;align-items:center;padding:4px 16px;background:#edf4ff;color:#165dff;font-size:12px;line-height:20px}
 .rerun-confirm-text{margin:0}
 .review-status.is-重跑中,.review-status.is-执行中{color:var(--status-info)}
 .review-status.is-重跑失败,.review-status.is-失败{color:var(--status-danger)}

@@ -17,6 +17,9 @@ class ReviewCase(Base):
         Index("ix_review_queue", "status", "risk_level", "domain", "created_at"),
         Index("ix_review_assignee", "assignee_id", "status"),
         Index("ix_review_graph_space", "graph_space"),
+        # 队列按 category（template_id 集合）+ status 过滤再按时间排序/计数：
+        # 无 template_id 索引时跨空间查询全表扫描（50 万行实测 count+分页约 3s）
+        Index("ix_review_template", "template_id", "status", "created_at"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)

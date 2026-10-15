@@ -103,6 +103,7 @@ beforeEach(() => {
 
 afterEach(() => {
   wrappers.splice(0).forEach((wrapper) => wrapper.unmount())
+  vi.useRealTimers()
 })
 
 describe('审核队列 C 类（抽取失败重跑）', () => {
@@ -192,6 +193,7 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
   })
 
   it('关键字在点击查询或提交表单后才请求，清空后可重新查询全部', async () => {
+    vi.useFakeTimers()
     const wrapper = renderReview()
     await flushPromises()
     const input = wrapper.get('.review-filter-search')
@@ -203,12 +205,15 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: 'MR-2' }))
     await input.setValue('')
     expect(mocks.getProductionReviews).toHaveBeenCalledTimes(2)
+    // 15s 页缓存内清空重提交直接命中初始页缓存（0 请求）；过期后才重新请求全部
+    await vi.advanceTimersByTimeAsync(15_100)
     await wrapper.get('.review-filter-row').trigger('submit')
     await flushPromises()
     expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: undefined }))
   })
 
   it('搜索框带清空（×）：点清空连已提交关键词一起复位并重新拉取', async () => {
+    vi.useFakeTimers()
     const wrapper = renderReview()
     await flushPromises()
     const input = wrapper.get('.review-filter-search')
@@ -219,12 +224,15 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: 'MR-2' }))
 
     // 点 ×（Arco 清空输入并触发 clear 事件）：不点「查询」也应立即按无关键词重拉
+    //（页缓存过期后走真实请求；缓存期内同参数重访由缓存直接出）
+    await vi.advanceTimersByTimeAsync(15_100)
     wrapper.findComponent({ name: 'AInput' }).vm.$emit('clear')
     await flushPromises()
     expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: undefined }))
   })
 
   it('Tab 切换不影响筛选条件：A/C 各自独立记忆，切回原样恢复', async () => {
+    vi.useFakeTimers()
     const wrapper = renderReview()
     await flushPromises()
     // A 页（入库决策）设筛选：状态=已完成 + 关键词「对齐」
@@ -247,7 +255,9 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
       expect.objectContaining({ category: 'C', status: 'RERUNNING' }),
     )
 
-    // 切回 A：已完成 + 关键词原样恢复（含输入框文本）
+    // 切回 A：已完成 + 关键词原样恢复（含输入框文本）。
+    // 15s 页缓存内切回直接出旧页（0 请求）；老化后重发，验证请求仍带各自筛选
+    await vi.advanceTimersByTimeAsync(15_100)
     await wrapper.findAll('.review-tabs nav button')[0].trigger('click')
     await flushPromises()
     expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(
@@ -526,6 +536,7 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
   })
 
   it('更新时间表头三态排序：默认 → 新→旧 → 旧→新 → 默认，请求带对应 sort 参数', async () => {
+    vi.useFakeTimers()
     const wrapper = renderReview()
     await flushPromises()
     const th = wrapper.get('.th-time-sort')
@@ -535,6 +546,8 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ sort: 'updated_desc' }))
     await th.trigger('click')
     expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ sort: 'updated_asc' }))
+    // 切回默认：15s 页缓存内直接出初始页（0 请求），过期后重发 sort=undefined
+    await vi.advanceTimersByTimeAsync(15_100)
     await th.trigger('click')
     expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ sort: undefined }))
   })

@@ -253,8 +253,11 @@ def _candidate_rows(
     label: str,
     return_properties: tuple[str, ...],
     filters: dict[str, set[str]],
+    # 单条 IN 查询字面量上限 150（平台召回/碰撞探测同款口径）：participants
+    # 列表字段使批级名池可达两万级，5000/块的巨型 MATCH 会让共享 graphd 的
+    # 执行计划内存瞬间顶穿容器限额（2026-10-13 gkx_verify_1 实锤 OOM 击杀链）
     *,
-    chunk_size: int = 5000,
+    chunk_size: int = 150,
 ) -> list[dict[str, Any]]:
     rows: dict[str, dict[str, Any]] = {}
     projection = ", ".join(f"n.{label}.{prop} AS {prop}" for prop in return_properties)

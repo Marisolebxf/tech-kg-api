@@ -8,12 +8,12 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from openai import OpenAI
+from openai import APITimeoutError, OpenAI
 from sqlalchemy.orm import Session
 
 from dao.embedding_config import EmbeddingConfigDAO
 from db_model.embedding_config import EmbeddingConfig
-from infra.llm import DEFAULT_TIMEOUT, EmbeddingClient
+from infra.llm import EmbeddingClient, PROBE_TIMEOUT_SECONDS
 from utils.time_display import utc_to_cst_str
 
 logger = logging.getLogger(__name__)
@@ -35,9 +35,12 @@ def _ping_embedding(base_url: str, model: str, api_key: str) -> dict[str, Any]:
         return {"ok": ok, "latencyMs": int((time.perf_counter() - start) * 1000), "error": error}
 
     try:
-        client = OpenAI(api_key=api_key, base_url=base_url, timeout=DEFAULT_TIMEOUT)
+        client = OpenAI(api_key=api_key, base_url=base_url, timeout=PROBE_TIMEOUT_SECONDS)
         client.embeddings.create(model=model, input="ping")
         return result(True, None)
+    except APITimeoutError:
+        logger.warning("embedding 连接验证超时 base_url=%s model=%s", base_url, model)
+        return result(False, "超时")
     except Exception as exc:  # noqa: BLE001
         logger.warning("embedding 连接验证失败 base_url=%s model=%s: %s", base_url, model, exc)
         return result(False, str(exc))

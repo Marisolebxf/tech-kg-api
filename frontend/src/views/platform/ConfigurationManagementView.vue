@@ -326,6 +326,12 @@ function configStatus(status: string): ConfigStatus {
   return '异常'
 }
 
+// 列表「说明」小字超长截断为单行，悬浮 a-tooltip 看全文（口径同 Schema 列表）
+const DESC_CELL_LIMIT = 40
+function descCell(text: string): string {
+  return text.length > DESC_CELL_LIMIT ? `${text.slice(0, DESC_CELL_LIMIT)}…` : text
+}
+
 function toConfigItem(kind: ConfigKind, cfg: LlmConfig | MysqlDatasource | EmbeddingConfig): ConfigItem {
   const common = {
     id: cfg.id,
@@ -619,13 +625,23 @@ async function testConnection(item: ConfigItem) {
       showToast(`${item.name} 连接测试成功，延迟 ${result.latencyMs ?? '-'} ms。`, 'success')
     } else {
       item.status = '异常'
-      showToast(`${item.name} 连接失败`, 'error')
+      // 超时只提示「连接超时」，其余失败不透出原始英文报错
+      showToast(result.error === '超时' ? `${item.name} 连接超时` : `${item.name} 连接失败`, 'error')
     }
     // 探活结果同步列表卡片（抽屉编辑副本不再共享列表项引用）
     const listed = items.value.find((i) => i.id === item.id)
     if (listed) listed.status = item.status
   } catch (err) {
-    showToast(`测试请求失败：${(err as Error).message}`, 'error')
+    // 请求层超时（探活端点挂死、网关掐断）：徽标同样置异常，不再停留「正常」
+    const message = String((err as Error)?.message ?? '')
+    if ((err as { code?: string })?.code === 'ECONNABORTED' || /timeout/i.test(message)) {
+      item.status = '异常'
+      const listed = items.value.find((i) => i.id === item.id)
+      if (listed) listed.status = '异常'
+      showToast(`${item.name} 连接超时`, 'error')
+    } else {
+      showToast(`测试请求失败：${message}`, 'error')
+    }
   } finally {
     testingId.value = ''
   }
@@ -663,8 +679,14 @@ async function toggleItem(item: ConfigItem) {
 const defaultUpdating = ref(false)
 const hasCategoryDefault = computed(() => items.value.some(item => item.category === activeCategory.value && item.isDefault))
 function defaultSwitchDisabled(item: ConfigItem) {
-  if (item.kind === 'llm') return item.canSetDefault !== true || defaultUpdating.value || (item.isDefault && (isAdmin.value || item.defaultSource !== 'public')) || item.status === '停用'
+  // 异常=探活事实：挂了的模型设为默认会让下游抽取全部失败，恢复连接后才能设
+  if (item.kind === 'llm') return item.canSetDefault !== true || defaultUpdating.value || (item.isDefault && (isAdmin.value || item.defaultSource !== 'public')) || item.status === '停用' || item.status === '异常'
   return !isAdmin.value || defaultUpdating.value || item.isDefault
+}
+function defaultToggleTitle(item: ConfigItem) {
+  if (item.kind === 'llm' && item.status === '异常') return '连接异常的模型不能设为默认，请先恢复连接'
+  if (item.kind === 'llm' && !isAdmin.value) return item.defaultSource === 'public' && item.isDefault ? '当前跟随公共默认；点击将此模型固定为本业务默认' : '设为本业务默认，不影响其他业务'
+  return item.isDefault ? '如需更换，请将其他配置设为默认' : '设为默认配置'
 }
 async function toggleDefault(item: ConfigItem, value: unknown) {
   const enabled = value === true
@@ -808,7 +830,7 @@ onUnmounted(() => {
             <thead><tr><th>配置名称 / 说明</th><th>标识 / 归属</th><th>类型 / 地址</th><th class="config-status-col">状态</th><th v-if="isModelKind" class="config-usage-col">引用情况</th><th class="config-time-col">更新时间</th><th class="config-action-col">操作</th></tr></thead>
             <tbody>
               <tr v-for="item in pagedItems" :key="item.id">
-                <td><div class="config-name"><span><strong>{{ item.name }}<b v-if="item.isDefault && isModelKind" class="default-tag">{{ defaultLabel(item) }}</b></strong><small v-if="item.description">{{ item.description }}</small></span></div></td>
+                <td><div class="config-name"><span><strong>{{ item.name }}<b v-if="item.isDefault && isModelKind" class="default-tag">{{ defaultLabel(item) }}</b></strong><small v-if="item.description"><a-tooltip v-if="item.description.length > DESC_CELL_LIMIT" :content="item.description" position="top"><span class="config-desc-text">{{ descCell(item.description) }}</span></a-tooltip><template v-else>{{ item.description }}</template></small></span></div></td>
                 <td class="config-id-col">{{ item.id }}<small v-if="item.kind !== 'embedding'" class="config-ownership">{{ ownershipLabel(item) }}</small></td>
                 <td><strong class="type-name">{{ item.type }}<template v-if="item.model"> · {{ item.model }}</template></strong><code>{{ item.baseUrl || item.host && `${item.host}:${item.port}` || item.endpoint }}</code></td>
                 <td class="config-status-col"><span class="status" :class="`is-${item.status}`"><i />{{ item.status }}</span></td>
@@ -821,7 +843,7 @@ onUnmounted(() => {
                     :aria-pressed="item.isDefault"
                     :aria-busy="defaultUpdating"
                     :aria-label="item.isDefault ? `当前默认：${item.name}` : `将${item.name}设为默认配置`"
-                    :title="item.kind === 'llm' && !isAdmin ? item.defaultSource === 'public' && item.isDefault ? '当前跟随公共默认；点击将此模型固定为本业务默认' : '设为本业务默认，不影响其他业务' : item.isDefault ? '如需更换，请将其他配置设为默认' : '设为默认配置'"
+                    :title="defaultToggleTitle(item)"
                     @click.stop="toggleDefault(item, true)"
                   ><span class="config-default-toggle__dot" aria-hidden="true" />{{ item.isDefault ? defaultLabel(item) : '设为默认' }}</button>
                 </td>
@@ -1197,6 +1219,11 @@ onUnmounted(() => {
 /* Compact fixed action column; free width belongs to data columns. */
 .config-table-wrap :is(th,td).config-action-col{width:152px;min-width:152px;max-width:152px}
 .config-usage-col :deep(.arco-switch){vertical-align:middle}
+/* 列表「说明」小字：超长单行截断（全文走 a-tooltip 悬浮），此前整段换行撑高行 */
+.config-name small{max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 管理抽屉里不可编辑字段（权限禁用或只读回显：服务类型/归属/凭据等）悬停显示
+   「禁止」光标，明示此处改不了，而不是长得像普通输入框；a-textarea 内层须 :deep */
+.detail-form input:disabled,.detail-form input[readonly],.detail-form :deep(textarea:disabled),.detail-form :deep(textarea[readonly]){cursor:not-allowed}
 </style>
 <style>
 /* The wrapper is the only visible shell; global native-input rules must not restyle Arco's inner field. */

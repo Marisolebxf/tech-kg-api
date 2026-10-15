@@ -95,6 +95,36 @@ def test_default_permission_and_disabled(factory):
             set_default_for_actor(s, actor("a"), "a1")
 
 
+def test_abnormal_model_cannot_become_default(factory):
+    """异常=探活事实：挂死的模型设为默认会让下游抽取全部失败，全部写路径 409 拦下。"""
+    with factory() as s:
+        service = LlmConfigService(s)
+        service.update_config("a1", {"status": "异常"})
+        s.get(LlmConfig, "public2").status = "异常"
+        s.commit()
+        for action in [
+            lambda: set_default_for_actor(s, actor("a"), "a1"),  # 业务默认
+            lambda: set_default_for_actor(s, actor(), "public2"),  # 公共默认
+            lambda: service.update_config("public2", {"is_default": True}),
+            lambda: service.set_default("public2"),
+        ]:
+            with pytest.raises(HTTPException) as error:
+                action()
+            assert error.value.status_code == 409
+            s.rollback()
+        # 新建时直发「异常 + 默认」同样被拦（带 Key 才会走到状态守卫）
+        with pytest.raises(HTTPException) as error:
+            service.create_config(
+                {"name": "x", "base_url": "http://test", "model": "x", "api_key": "k",
+                 "is_default": True, "status": "异常"}
+            )
+        assert error.value.status_code == 409
+        s.rollback()
+        # 恢复正常后即可设默认
+        service.update_config("a1", {"status": "正常"})
+        set_default_for_actor(s, actor("a"), "a1")
+
+
 def test_default_reference_protects_other_business_public_model(factory):
     with factory() as s:
         set_default_for_actor(s, actor("a"), "public2")

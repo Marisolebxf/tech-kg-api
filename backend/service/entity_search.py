@@ -54,6 +54,8 @@ GRAPH_PAGE_SIZE = 200
 # 任一超限服务直接 422 拒绝整批，全量重建在 pass 2 首批即中断（2026-09-21 实测）。
 EMBED_TEXT_MAX_CHARS = int(os.getenv("ENTITY_SEARCH_EMBED_TEXT_MAX_CHARS", "16000"))
 EMBED_BATCH_SIZE = int(os.getenv("ENTITY_SEARCH_EMBED_BATCH_SIZE", "64"))
+# 增量入索引批量读图/存在性查询的单块 vid 数（对齐 get_nodes_bulk 的 FETCH 块大小）
+_BULK_FETCH_VID_CHUNK = 200
 # RRF 融合常数（与项目域一致）
 RRF_K = 60
 # 检索/展示文本上限
@@ -1226,6 +1228,196 @@ class EntitySearchService:
         state_row.entity_count = int(state_row.entity_count or 0) + 1
         state_row.updated_at = datetime.now(UTC)
         self._session.commit()
+
+    def upsert_entities(self, *, space: str, items: list[dict[str, Any]]) -> dict[str, Any]:
+        """随环抽取后的批级增量入索引（冻结 BM25 词表，方案②a）。
+
+        与单实体 ``upsert_entity`` 同构（图读回 → dense embed + 冻结词表 BM25 →
+        幂等 upsert），差异在**失败口径**：本方法跑在抽取链内，守卫不满足
+        （重建在跑 / 空间索引未建）按计划内跳过返回；真实组件故障（图读、
+        embedding、Milvus）上抛 ``EntitySearchError`` → activity 重试耗尽整链
+        FAILED（2026-09-29 口径）。冻结词表产出的稀疏向量维度由词表决定、与
+        既有行天然兼容（SPARSE_FLOAT_VECTOR 无固定维度），增量行无需重刷全空间。
+
+        ``items``：``[{"vid": ..., "label": 写图的 TAG 名}]``——label 用写图侧
+        的事实（FETCH 批量读回的 vertex 不保证 labels 字段），props/文本与全量
+        重建同源同构。计数快照只对 Milvus 里尚无行的 vid +n（merge 重写不变）。
+        """
+        if _database_reindex_running(self._session):
+            # 全量重建会重读整个图空间，本批行天然被覆盖：计划内跳过，不算失败
+            return {"mode": "skip", "upserted": 0, "reason": "reindex in progress"}
+        state_row = _load_state(self._session, space)
+        encoder = _load_bm25_from_state(self._session, space)
+        if state_row is None or encoder is None or not (state_row.entity_count or 0):
+            # 未建索引的空间不随环全量首建（大空间会撞 activity 超时自锁缺陷），
+            # 首建走管理端点 POST /entity-search/reindex 低峰执行
+            return {"mode": "skip", "upserted": 0, "reason": "space index not built"}
+
+        label_by_vid: dict[str, str] = {}
+        for item in items or []:
+            vid = str(item.get("vid") or "")
+            if vid and vid not in label_by_vid:
+                label_by_vid[vid] = str(item.get("label") or "")
+        vids = list(label_by_vid)
+
+        graph = get_space_client(space)
+        records: list[tuple[str, str, dict[str, Any]]] = []
+        skipped_missing = 0
+        skipped_empty_text = 0
+        try:
+            for start in range(0, len(vids), _BULK_FETCH_VID_CHUNK):
+                found = graph.get_nodes_bulk(vids[start : start + _BULK_FETCH_VID_CHUNK])
+                for vid in vids[start : start + _BULK_FETCH_VID_CHUNK]:
+                    node = found.get(vid)
+                    # 超 128B 的 VID 入不了 Milvus 主键字段（与全量重建同规则）
+                    if node is None or len(vid.encode("utf-8")) > 128:
+                        skipped_missing += 1
+                        continue
+                    record = _index_record(
+                        {
+                            "vid": vid,
+                            "entity_type": label_by_vid[vid],
+                            "props": dict(node.properties or {}),
+                        }
+                    )
+                    if not record["text"]:
+                        skipped_empty_text += 1
+                        continue
+                    records.append((vid, label_by_vid[vid], record))
+        except Exception as exc:  # noqa: BLE001 - 链内真实故障：统一口径上抛
+            raise EntitySearchError(f"增量入索引批量读图失败（{len(vids)} 个 vid）: {exc}") from exc
+
+        # 先做 BM25 编码（纯 CPU，冻结词表，OOV token 静默丢弃）再 embed：
+        # 全 OOV 的行不浪费 embedding 配额
+        prepared: list[tuple[str, str, dict[str, Any], dict[int, float]]] = []
+        skipped_empty_sparse = 0
+        for vid, label, record in records:
+            sparse_vector = encoder.encode_document(record["text"])
+            if not sparse_vector:
+                # Milvus 拒绝空稀疏向量：文本 token 全不在冻结词表（全新造词）
+                skipped_empty_sparse += 1
+                continue
+            prepared.append((vid, label, record, sparse_vector))
+        if not prepared:
+            return {
+                "mode": "incremental",
+                "upserted": 0,
+                "newCount": 0,
+                "skippedMissing": skipped_missing,
+                "skippedEmptyText": skipped_empty_text,
+                "skippedEmptySparse": skipped_empty_sparse,
+                "entityCount": int(state_row.entity_count or 0),
+                "graphSpace": space,
+            }
+
+        embedding_config = _resolve_embedding_config()
+        client = _embedding_client()
+        if client is None:
+            raise EntitySearchError(
+                "未配置 embedding 服务：请在「配置管理」设置默认 embedding 配置，"
+                "或配置 ENTITY_SEARCH_EMBEDDING_*/PATENT_EMBEDDING_* 环境变量"
+            )
+        milvus = get_milvus_client()
+        if not milvus.has_collection(COLLECTION_NAME):
+            # state 说已建而集合不存在 = 索引被外部清掉，属真实故障而非计划内跳过
+            raise EntitySearchError(f"Milvus 集合 {COLLECTION_NAME} 不存在（空间 {space}）")
+
+        expected_dim = embedding_config["dim"]
+        existing = self._existing_document_ids(
+            milvus, [f"{space}::{vid}" for vid, _, _, _ in prepared]
+        )
+        upserted = 0
+        try:
+            for start in range(0, len(prepared), EMBED_BATCH_SIZE):
+                chunk = prepared[start : start + EMBED_BATCH_SIZE]
+                # 只裁 embedding 输入：BM25 语料/存储仍保留完整文本（与全量重建一致）
+                vectors = client.embed(
+                    [record["text"][:EMBED_TEXT_MAX_CHARS] for _, _, record, _ in chunk]
+                )
+                if vectors is None or len(vectors) != len(chunk):
+                    raise EntitySearchError(
+                        f"embedding 服务调用失败（model={embedding_config['model']}），"
+                        "增量索引未写入"
+                    )
+                if expected_dim is None:
+                    expected_dim = len(vectors[0])
+                if any(len(vector) != expected_dim for vector in vectors):
+                    raise EntitySearchError(f"embedding 维度与配置不符（期望 {expected_dim}）")
+                rows = []
+                for (vid, label, record, sparse_vector), vector in zip(chunk, vectors, strict=True):
+                    rows.append(
+                        {
+                            "document_id": f"{space}::{vid}",
+                            "vid": vid,
+                            "entity_id": record["entity_id"],
+                            "name": record["name"],
+                            "entity_type": label,
+                            "graph_space": space,
+                            "search_text": record["text"],
+                            "properties": json.dumps(record["properties"], ensure_ascii=False),
+                            "dense_vector": vector,
+                            "sparse_vector": sparse_vector,
+                        }
+                    )
+                milvus.upsert(collection_name=COLLECTION_NAME, data=rows)
+                upserted += len(rows)
+            milvus.flush(COLLECTION_NAME)
+        except EntitySearchError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 链内真实故障：统一口径上抛
+            raise EntitySearchError(
+                f"增量入索引写 Milvus 失败（已写 {upserted} 行）: {exc}"
+            ) from exc
+
+        # 计数快照在 Milvus 落盘后推进：中途失败重试幂等重写，计数不重复累计
+        new_labels = [label for vid, label, _, _ in prepared if f"{space}::{vid}" not in existing]
+        if new_labels:
+            from datetime import UTC, datetime
+
+            try:
+                counts = json.loads(state_row.type_counts or "{}")
+            except Exception:  # noqa: BLE001 - 计数快照损坏按空处理
+                counts = {}
+            if not isinstance(counts, dict):
+                counts = {}
+            for label in new_labels:
+                counts[label] = int(counts.get(label) or 0) + 1
+            state_row.type_counts = json.dumps(counts, ensure_ascii=False)
+            state_row.entity_count = int(state_row.entity_count or 0) + len(new_labels)
+            state_row.updated_at = datetime.now(UTC)
+            self._session.commit()
+
+        return {
+            "mode": "incremental",
+            "upserted": upserted,
+            "newCount": len(new_labels),
+            "skippedMissing": skipped_missing,
+            "skippedEmptyText": skipped_empty_text,
+            "skippedEmptySparse": skipped_empty_sparse,
+            "entityCount": int(state_row.entity_count or 0),
+            "graphSpace": space,
+        }
+
+    def _existing_document_ids(self, milvus: Any, doc_ids: list[str]) -> set[str]:
+        """查 Milvus 里已存在的行（计数只对新增 +n）；查询失败按全不存在
+        （宁多计不漏计，全量重建终会校正）。"""
+        existing: set[str] = set()
+        try:
+            for start in range(0, len(doc_ids), _BULK_FETCH_VID_CHUNK):
+                part = doc_ids[start : start + _BULK_FETCH_VID_CHUNK]
+                quoted = ", ".join(f'"{_escape_expression(doc_id)}"' for doc_id in part)
+                rows = milvus.query(
+                    collection_name=COLLECTION_NAME,
+                    filter=f"document_id in [{quoted}]",
+                    output_fields=["document_id"],
+                )
+                existing.update(
+                    str(row.get("document_id")) for row in (rows or []) if row.get("document_id")
+                )
+        except Exception:  # noqa: BLE001 - 存在性判断降级，不阻断增量写入
+            logger.warning("增量入索引存在性查询失败，计数快照按全新增推进", exc_info=True)
+            return set()
+        return existing
 
     @staticmethod
     def _ensure_collection(milvus: Any, *, dim: int) -> None:

@@ -62,6 +62,11 @@ class FakeGraph:
             (node for nodes in self._nodes.values() for node in nodes if node.id == node_id), None
         )
 
+    def get_nodes_bulk(self, node_ids):
+        by_id = {str(node.id): node for nodes in self._nodes.values() for node in nodes}
+        wanted = [str(vid) for vid in dict.fromkeys(str(v) for v in node_ids if v)]
+        return {vid: by_id[vid] for vid in wanted if vid in by_id}
+
     def list_indexes(self, label=None):
         return []
 
@@ -161,6 +166,10 @@ class FakeMilvusClient:
         if 'graph_space == "' in filter:
             space = filter.split('graph_space == "', 1)[1].split('"', 1)[0]
             rows = [row for row in rows if row.get("graph_space") == space]
+        if filter.startswith("document_id in [") and filter.endswith("]"):
+            inner = filter[len("document_id in [") : -1]
+            wanted = {part.strip().strip('"') for part in inner.split(",") if part.strip()}
+            rows = [row for row in rows if row.get("document_id") in wanted]
         return rows[:limit]
 
 
@@ -2299,3 +2308,166 @@ def test_literal_search_graph_failure_is_not_reported_as_empty(state_session, mo
     )
     with pytest.raises(EntitySearchError, match="暂不可用"):
         EntitySearchService(state_session).keyword_search(keyword="论文", space="dev2")
+
+
+# ---------------------------------------------------------------------------
+# upsert_entities：随环批级增量入索引（方案②a，冻结 BM25 词表）
+# ---------------------------------------------------------------------------
+
+
+class _NoEmbedClient:
+    """embed 全失败的替身：链内严格口径应 raise 而非降级。"""
+
+    def embed(self, texts: list[str]) -> list[list[float]] | None:
+        return None
+
+
+class _FailingUpsertMilvus(FakeMilvusClient):
+    def upsert(self, collection_name: str, data: list[dict[str, Any]]):  # noqa: D102
+        raise RuntimeError("milvus down")
+
+
+def _indexed_expert_space(monkeypatch: pytest.MonkeyPatch, state_session) -> tuple:
+    """两名 Expert 全量建索引后备用（词表含 张三/李四/Expert/id 等语料 token）。"""
+    graph, milvus = _indexed_two_expert_graph()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", FakeEmbeddingClient)
+    monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+    EntitySearchService(state_session).reindex(space="dev2")
+    return graph, milvus
+
+
+def test_upsert_entities_mixed_new_existing_missing(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """新 vid 入行+计数、已有 vid 幂等覆盖不计数、图里缺失的 vid 跳过计数；
+    重复 vid 输入天然去重。"""
+    graph, milvus = _indexed_expert_space(monkeypatch, state_session)
+    graph._nodes["Expert"].extend(
+        [
+            FakeNode("expert_3", {"id": "E-3", "name": "张三", "org": "中科院"}),
+            FakeNode("expert_4", {"id": "E-4", "name": "王五"}),
+        ]
+    )
+
+    result = EntitySearchService(state_session).upsert_entities(
+        space="dev2",
+        items=[
+            {"vid": "expert_1", "label": "Expert"},  # 已有行（merge 重写）
+            {"vid": "expert_3", "label": "Expert"},
+            {"vid": "expert_3", "label": "Expert"},  # 重复输入去重
+            {"vid": "expert_4", "label": "Expert"},
+            {"vid": "ghost", "label": "Expert"},  # 图里不存在
+        ],
+    )
+
+    assert result["mode"] == "incremental"
+    assert result["upserted"] == 3  # expert_1/3/4
+    assert result["newCount"] == 2  # expert_3/4（expert_1 已有行）
+    assert result["skippedMissing"] == 1
+    rows = {row["vid"]: row for row in milvus.collections[COLLECTION_NAME]}
+    assert set(rows) == {"expert_1", "expert_2", "expert_3", "expert_4"}
+    assert rows["expert_3"]["document_id"] == "dev2::expert_3"
+    assert rows["expert_3"]["entity_type"] == "Expert"
+    assert rows["expert_3"]["graph_space"] == "dev2"
+    assert rows["expert_3"]["sparse_vector"]  # 冻结词表可编码（张三/Expert 在词表内）
+    state = state_session.get(EntitySearchState, "dev2")
+    assert state.entity_count == 4  # 2 → 4
+    assert json.loads(state.type_counts) == {"Expert": 4}
+
+
+def test_upsert_entities_all_oov_text_skipped_not_failed(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """文本 token 全不在冻结词表 → 空稀疏向量跳行计数，不算失败。
+
+    vid 用纯字母（tokenize 的 _ALNUM_RE 会把 ``zzq_1`` 拆出 ``1``，而 ``1``
+    在既有语料词表内——E-1/expert_1 的 token），保证文本真正全 OOV。"""
+    graph, milvus = _indexed_expert_space(monkeypatch, state_session)
+    graph._nodes["Expert"].append(FakeNode("qzxqvw", {}))  # 名退 vid、无属性
+
+    result = EntitySearchService(state_session).upsert_entities(
+        space="dev2", items=[{"vid": "qzxqvw", "label": "Widgets"}]
+    )
+
+    assert result["upserted"] == 0
+    assert result["skippedEmptySparse"] == 1
+    assert len(milvus.collections[COLLECTION_NAME]) == 2  # 未新增行
+    assert state_session.get(EntitySearchState, "dev2").entity_count == 2
+
+
+def test_upsert_entities_reindex_in_progress_skips(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """全量重建在跑：计划内跳过（重建重读全图天然覆盖本批），不上抛。"""
+    _indexed_expert_space(monkeypatch, state_session)
+    monkeypatch.setattr("service.entity_search._database_reindex_running", lambda session: True)
+
+    result = EntitySearchService(state_session).upsert_entities(
+        space="dev2", items=[{"vid": "expert_1", "label": "Expert"}]
+    )
+
+    assert result["mode"] == "skip"
+    assert result["reason"] == "reindex in progress"
+    assert result["upserted"] == 0
+
+
+def test_upsert_entities_without_state_skips(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """空间索引未建不随环全量首建（大空间首建会撞 activity 超时自锁）：跳过。"""
+    graph, milvus = _indexed_two_expert_graph()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", FakeEmbeddingClient)
+
+    result = EntitySearchService(state_session).upsert_entities(
+        space="dev2", items=[{"vid": "expert_1", "label": "Expert"}]
+    )
+
+    assert result == {"mode": "skip", "upserted": 0, "reason": "space index not built"}
+
+
+def test_upsert_entities_embedding_failure_raises(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """真实组件故障上抛（链内严格口径，对照单实体路径的优雅降级）。"""
+    graph, milvus = _indexed_expert_space(monkeypatch, state_session)
+    graph._nodes["Expert"].append(FakeNode("expert_5", {"id": "E-5", "name": "赵六"}))
+    monkeypatch.setattr("service.entity_search._embedding_client", _NoEmbedClient)
+
+    with pytest.raises(EntitySearchError, match="embedding 服务调用失败"):
+        EntitySearchService(state_session).upsert_entities(
+            space="dev2", items=[{"vid": "expert_5", "label": "Expert"}]
+        )
+
+
+def test_upsert_entities_milvus_error_raises(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Milvus 写失败上抛整链 FAILED（e2e 抽取静默丢失红线：绝不静默吞）。"""
+    graph, milvus = _indexed_expert_space(monkeypatch, state_session)
+    graph._nodes["Expert"].append(FakeNode("expert_6", {"id": "E-6", "name": "钱七"}))
+    failing = _FailingUpsertMilvus()
+    failing.collections[COLLECTION_NAME] = list(milvus.collections[COLLECTION_NAME])
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: failing)
+
+    with pytest.raises(EntitySearchError, match="写 Milvus 失败"):
+        EntitySearchService(state_session).upsert_entities(
+            space="dev2", items=[{"vid": "expert_6", "label": "Expert"}]
+        )
+
+
+def test_upsert_entities_collection_missing_raises(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """state 说已建而集合不存在 = 索引被外部清掉：真实故障上抛。"""
+    graph, milvus = _indexed_expert_space(monkeypatch, state_session)
+    graph._nodes["Expert"].append(FakeNode("expert_7", {"id": "E-7", "name": "孙八"}))
+    milvus.collections.pop(COLLECTION_NAME)
+
+    with pytest.raises(EntitySearchError, match="集合 kg_entity 不存在"):
+        EntitySearchService(state_session).upsert_entities(
+            space="dev2", items=[{"vid": "expert_7", "label": "Expert"}]
+        )

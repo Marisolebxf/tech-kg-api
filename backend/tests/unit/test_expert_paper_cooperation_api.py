@@ -5,8 +5,6 @@ import pytest
 from biz.schema.expert_paper_cooperation import ExpertPaperCooperationDemoRequest
 from service import expert_paper_cooperation_api
 from service.expert_paper_cooperation_api import (
-    _affiliation_text,
-    _backfill_expert_org_from_mysql,
     _build_rules,
     _build_structured_result,
     _context_semaphore,
@@ -20,37 +18,6 @@ from service.expert_paper_cooperation_api import (
     _year_filters,
     clear_caches,
 )
-
-
-class _FakeResult:
-    def __init__(self, rows):
-        self._rows = rows
-
-    def all(self):
-        return list(self._rows)
-
-
-class _FakeSession:
-    """模拟 gkx_element_read_session()：按表名返回预置行，记录查询的表和 ID。"""
-
-    def __init__(self, rows_by_table: dict):
-        self._rows = rows_by_table
-        self.queries = []
-
-    def __call__(self):
-        return self
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        return None
-
-    def execute(self, stmt, params):
-        table = str(stmt).split(" FROM ")[1].split()[0]
-        ids = next(iter(params.values()))
-        self.queries.append((table, list(ids)))
-        return _FakeResult(self._rows.get(table, []))
 
 
 class FakeGraphSearchApi:
@@ -565,73 +532,6 @@ async def test_context_semaphore_caps_concurrency_across_callers(monkeypatch):
     assert peak <= 3  # 全局上限对两批调用方一起生效
 
 
-def test_affiliation_text_takes_first_nonempty_from_json_array():
-    assert _affiliation_text('["中国石油大学(华东)新能源学院"]') == "中国石油大学(华东)新能源学院"
-    assert _affiliation_text('["", "备用单位"]') == "备用单位"
-    assert _affiliation_text("纯文本单位") == "纯文本单位"
-    assert _affiliation_text("[broken json") == "[broken json"
-    assert _affiliation_text(None) == ""
-
-
-def test_backfill_expert_org_fills_missing_org_only(monkeypatch):
-    clear_caches()
-    session = _FakeSession(
-        {
-            "dwd_zh_author": [
-                ("author-b", '["中国石油大学(华东)新能源学院"]', None),
-                ("author-c", None, "兜底学院"),
-            ],
-        }
-    )
-    monkeypatch.setattr(expert_paper_cooperation_api, "gkx_element_read_session", session)
-
-    with_org = {"properties": {"scholar_org": "已有单位"}}
-    orgless_b = {"properties": {"name_zh": "专家乙"}}
-    orgless_c = {"properties": {"name_zh": "专家丙"}}
-    orgless_d = {"properties": {"name_zh": "专家丁"}}
-
-    _backfill_expert_org_from_mysql(
-        [
-            ("person_author-a", with_org),
-            ("person_author-b", orgless_b),
-            ("person_author-c", orgless_c),
-            ("person_author-d", orgless_d),
-        ]
-    )
-
-    # 图上已有机构属性的不动；缺失的按源表回填（affiliation 优先、institution 兜底）；
-    # 源表查不到 author-d（dwd_en_author 也无行）时保持原样。
-    assert with_org == {"properties": {"scholar_org": "已有单位"}}
-    assert orgless_b["properties"]["scholar_org"] == "中国石油大学(华东)新能源学院"
-    assert orgless_c["properties"]["scholar_org"] == "兜底学院"
-    assert "scholar_org" not in orgless_d["properties"]
-    assert session.queries[0] == (
-        "dwd_zh_author",
-        ["author-b", "author-c", "author-d"],
-    )
-    assert session.queries[1][0] == "dwd_en_author"
-
-
-def test_backfill_expert_org_swallows_mysql_failure(monkeypatch):
-    clear_caches()
-
-    class _BoomSession:
-        def __enter__(self):
-            raise RuntimeError("mysql down")
-
-        def __exit__(self, *args):
-            return None
-
-    monkeypatch.setattr(expert_paper_cooperation_api, "gkx_element_read_session", _BoomSession())
-    node = {"properties": {}}
-
-    _backfill_expert_org_from_mysql([("person_author-x", node)])
-
-    # MySQL 故障不影响主查询，也不把"未找到"写进缓存。
-    assert "scholar_org" not in node["properties"]
-    assert expert_paper_cooperation_api._author_org_cache == {}
-
-
 class _OrglessGraphApi(FakeGraphSearchApi):
     """专家 B 的图节点不带任何机构属性，模拟论文 ETL 丢弃 affiliation 的情况。"""
 
@@ -645,17 +545,17 @@ class _OrglessGraphApi(FakeGraphSearchApi):
 
 
 @pytest.mark.asyncio
-async def test_structured_result_backfills_author_units_from_source_table(monkeypatch):
+async def test_structured_result_orgless_expert_stays_graph_only():
+    """仅查图数据库：图节点缺机构属性时按"未知机构"展示，不再回退源表兜底。"""
     clear_caches()
-    session = _FakeSession({"dwd_zh_author": [("B", '["中国石油大学(华东)新能源学院"]', None)]})
-    monkeypatch.setattr(expert_paper_cooperation_api, "gkx_element_read_session", session)
+    assert not hasattr(expert_paper_cooperation_api, "gkx_element_read_session")
 
     body = ExpertPaperCooperationDemoRequest(expertAId="A", expertBId="B")
     result = await _build_structured_result(_OrglessGraphApi(), body)
 
-    assert result["authorUnits"] == ["甲单位", "中国石油大学(华东)新能源学院"]
+    assert result["authorUnits"] == ["甲单位", "未知机构"]
     graph_nodes = {n["id"]: n for n in result["_graph"]["nodes"]}
-    assert graph_nodes["person_B"]["subtitle"] == "中国石油大学(华东)新能源学院"
+    assert graph_nodes["person_B"]["subtitle"] == ""
 
 
 class _PagedPathsApi:

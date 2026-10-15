@@ -99,6 +99,7 @@ def _make_activities(
     fail_batch=None,
     fail_plan=False,
     fail_index=False,
+    upload_vids=True,
 ):
     """假 activity 集：读按游标吐批次；转换对毒行（id=bad）报 failures；记录调用。"""
 
@@ -158,7 +159,14 @@ def _make_activities(
     @activity.defn(name="write_records")
     async def write_records(request: dict[str, Any]) -> dict[str, Any]:
         state.setdefault("writes", []).append(len(request.get("records") or []))
-        return {"written": len(request.get("records") or [])}
+        result: dict[str, Any] = {"written": len(request.get("records") or [])}
+        if upload_vids and request.get("indexVids"):
+            # 模拟真实 activity：vid 清单上传 S3 后只回传 key（增量索引 claim-check）
+            result["vidsKey"] = (
+                f"runs/mock/{request.get('stepId')}/{request.get('batchIdx')}-"
+                f"{request.get('chunkIdx')}/vids.json.gz"
+            )
+        return result
 
     @activity.defn(name="resolve_entity_batch")
     async def resolve_entities(request: dict[str, Any]) -> dict[str, Any]:
@@ -207,6 +215,13 @@ def _make_activities(
         state.setdefault("reverts", []).append(request)
         return {"reverted": len(request.get("rerunCaseIds") or [])}
 
+    @activity.defn(name="resolve_execution_llm")
+    async def resolve_llm(request: dict[str, Any]) -> dict[str, Any]:
+        # business-llm-default-v1 后链首会调真实 LLM 选型 activity，假实现
+        # 返回空覆盖（请求原样透传），只记调用次数
+        state["resolve_llm"] = state.get("resolve_llm", 0) + 1
+        return {}
+
     return [
         load_plan,
         read_batch,
@@ -221,6 +236,7 @@ def _make_activities(
         revert_rerun,
         build_index,
         refresh_stats,
+        resolve_llm,
     ]
 
 
@@ -260,8 +276,14 @@ class TestSchemaExtractOrchestration:
         assert sum(state["writes"]) == 6
         # 游标只推进一次（全部批次成功后）
         assert len(state.get("advances", [])) == 1
-        # 实体默认重建索引 + 冲突检测按批调用
-        assert state.get("index") == [{"space": "dev2"}]
+        # 实体环随环增量索引（方案②a）：索引 activity 收 vid 工件 key 集，不再全量重建
+        index_calls = state.get("index") or []
+        assert len(index_calls) == 1
+        assert index_calls[0]["space"] == "dev2"
+        assert sorted(index_calls[0]["vidsKeys"]) == [
+            "runs/mock/source:bind-1#main/0-0/vids.json.gz",
+            "runs/mock/source:bind-1#main/1-0/vids.json.gz",
+        ]
         assert len(state.get("collisions_calls", [])) >= 2
 
     async def test_poison_rows_go_to_failure_cases(self):
@@ -337,6 +359,67 @@ class TestSchemaExtractOrchestration:
         # 抽取与写图已发生，索引失败把执行打成 FAILED（而非成功+警告）
         assert state.get("writes")
         assert state.get("index")
+
+    async def test_index_incremental_failure_fails_workflow(self):
+        """增量路径同口径：vid 工件在、索引 activity 抛错 → 整链 FAILED
+        （索引失败即任务 FAILED，不因增量而放松）。"""
+        state: dict[str, Any] = {}
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue="t-3-idx-inc",
+                workflows=[SchemaExtractWorkflow],
+                activities=_make_activities(state, rows_per_batch=2, batches=1, fail_index=True),
+            ):
+                with pytest.raises(WorkflowFailureError):
+                    await _run(
+                        env.client,
+                        "t-3-idx-inc",
+                        {"schemaId": "schema-e2e", "graphSpace": "dev2", "batchSize": 2},
+                    )
+        assert state.get("index") and state["index"][0].get("vidsKeys")
+
+    async def test_index_skipped_when_vid_manifest_missing(self):
+        """S3 中转未开的栈：write_records 无 vidsKey 回传 → 索引步计划内跳过
+        （不触发全量重建、链不失败），摘要给可区分原因。"""
+        state: dict[str, Any] = {}
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue="t-3-idx-skip",
+                workflows=[SchemaExtractWorkflow],
+                activities=_make_activities(state, rows_per_batch=2, batches=1, upload_vids=False),
+            ):
+                result = await _run(
+                    env.client,
+                    "t-3-idx-skip",
+                    {"schemaId": "schema-e2e", "graphSpace": "dev2", "batchSize": 2},
+                )
+        assert result["status"] == "completed"
+        assert state.get("writes")
+        assert state.get("index") in (None, [])
+        assert result["index"]["mode"] == "skip"
+        assert "未留档" in result["index"]["reason"]
+
+    async def test_index_skipped_when_no_new_entities(self):
+        """0 写入环不再白跑全量重建：无 vid 工件 → 跳过并给原因，链照常完成。"""
+        state: dict[str, Any] = {}
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue="t-3-idx-empty",
+                workflows=[SchemaExtractWorkflow],
+                activities=_make_activities(state, rows_per_batch=2, batches=0),
+            ):
+                result = await _run(
+                    env.client,
+                    "t-3-idx-empty",
+                    {"schemaId": "schema-e2e", "graphSpace": "dev2", "batchSize": 2},
+                )
+        assert result["status"] == "completed"
+        assert state.get("index") in (None, [])
+        assert result["index"]["mode"] == "skip"
+        assert result["index"]["reason"] == "本环无新增实体"
 
     async def test_rerun_crash_reverts_rerunning_cases(self):
         """重跑执行中途崩溃（如脚本对象丢失）：case 回滚 OPEN，不滞留 RERUNING。
@@ -514,6 +597,11 @@ def _make_step_activities(state: dict[str, Any], *, fail_on=None, block_on=None,
         state.setdefault("index", []).append(request)
         return {"reindexed": {}}
 
+    @activity.defn(name="resolve_execution_llm")
+    async def resolve_llm(request: dict[str, Any]) -> dict[str, Any]:
+        # business-llm-default-v1 链首选型 activity 的假实现：空覆盖原样透传
+        return {}
+
     return [
         load_plan,
         read_batch,
@@ -526,6 +614,7 @@ def _make_step_activities(state: dict[str, Any], *, fail_on=None, block_on=None,
         record_script_run,
         build_index,
         refresh_stats,
+        resolve_llm,
     ]
 
 
@@ -672,7 +761,13 @@ def _make_chain_activities(state: dict[str, Any], *, fail_schema: str | None = N
     @activity.defn(name="write_records")
     async def write_records(request: dict[str, Any]) -> dict[str, Any]:
         state.setdefault("writes", []).append(request["name"])
-        return {"written": len(request.get("records") or [])}
+        result: dict[str, Any] = {"written": len(request.get("records") or [])}
+        if request.get("indexVids"):
+            result["vidsKey"] = (
+                f"runs/mock/{request.get('stepId')}/{request.get('batchIdx')}-"
+                f"{request.get('chunkIdx')}/vids.json.gz"
+            )
+        return result
 
     @activity.defn(name="resolve_entity_batch")
     async def resolve_entities(request: dict[str, Any]) -> dict[str, Any]:
@@ -713,6 +808,11 @@ def _make_chain_activities(state: dict[str, Any], *, fail_schema: str | None = N
         state.setdefault("index", []).append(request)
         return {"reindexed": {}}
 
+    @activity.defn(name="resolve_execution_llm")
+    async def resolve_llm(request: dict[str, Any]) -> dict[str, Any]:
+        # business-llm-default-v1 链首选型 activity 的假实现：空覆盖原样透传
+        return {}
+
     return [
         load_plan,
         read_batch,
@@ -726,6 +826,7 @@ def _make_chain_activities(state: dict[str, Any], *, fail_schema: str | None = N
         resolve,
         build_index,
         refresh_stats,
+        resolve_llm,
     ]
 
 
@@ -1087,7 +1188,13 @@ def _make_relay_activities(
             (data.get("entities") or data.get("edges") or []) if isinstance(data, dict) else data
         )
         state.setdefault("writes", []).append(len(records))
-        return {"written": len(records)}
+        result: dict[str, Any] = {"written": len(records)}
+        if request.get("indexVids"):
+            result["vidsKey"] = (
+                f"runs/mock/{request.get('stepId')}/{request.get('batchIdx')}-"
+                f"{request.get('chunkIdx')}/vids.json.gz"
+            )
+        return result
 
     @activity.defn(name="advance_schema_extract_watermark")
     async def advance(request: dict[str, Any]) -> dict[str, Any]:
@@ -1129,6 +1236,11 @@ def _make_relay_activities(
     async def record_script_run(request: dict[str, Any]) -> dict[str, Any]:
         return {"ok": True}
 
+    @activity.defn(name="resolve_execution_llm")
+    async def resolve_llm(request: dict[str, Any]) -> dict[str, Any]:
+        # business-llm-default-v1 链首选型 activity 的假实现：空覆盖原样透传
+        return {}
+
     return [
         load_plan,
         read_batch,
@@ -1142,6 +1254,7 @@ def _make_relay_activities(
         record_script_run,
         build_index,
         refresh_stats,
+        resolve_llm,
     ]
 
 

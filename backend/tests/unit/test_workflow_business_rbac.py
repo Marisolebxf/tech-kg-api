@@ -262,3 +262,47 @@ def test_task_capabilities_report_actual_space_independent_of_selected_space(
     result = jobs.workflow_resource_capabilities(current, {"graphSpace": space})
     assert result["isSharedProduction"] is shared
     assert result["writeAllowed"] is writable
+
+
+def test_schema_space_resolution_cached_and_missing_schema_still_voids_spaces(monkeypatch):
+    """任务详情对 job+每条执行各解析一次 Schema 空间，曾逐 Schema 回库把详情页拖到
+    1.5s+（链任务 16 Schema × 21 个资源）；短缓存后同 Schema 只查一次。查不到的
+    Schema 维持「整体作废」语义（半解析空间会误导鉴权）。"""
+    import dao.schema_management as dao_mod
+    import infra.workflow_mysql as wf_mysql
+
+    calls = {"n": 0}
+
+    class FakeDAO:
+        def __init__(self, session):
+            pass
+
+        def get(self, schema_id):
+            calls["n"] += 1
+            return SimpleNamespace(graph_space="gkx_verify_1") if schema_id == "s-ok" else None
+
+    monkeypatch.setattr(dao_mod, "SchemaManagementDAO", FakeDAO)
+    monkeypatch.setattr(wf_mysql, "workflow_session_scope", lambda: nullcontext(None))
+    monkeypatch.setattr(jobs, "_SCHEMA_SPACE_CACHE_TTL", 60.0)
+    jobs._SCHEMA_SPACE_CACHE.clear()
+
+    assert jobs._schema_graph_space("s-ok") == "gkx_verify_1"
+    assert jobs._schema_graph_space("s-ok") == "gkx_verify_1"
+    assert calls["n"] == 1  # 第二次命中缓存，不再回库
+
+    # Schema 查不到 → 空间整体作废（原语义）；查到的合并 payload 直带空间
+    assert (
+        jobs.workflow_resource_spaces({"payload": {"schemaId": "s-miss", "graph_space": "x"}})
+        == set()
+    )
+    assert jobs.workflow_resource_spaces({"payload": {"schemaId": "s-ok", "graph_space": "x"}}) == {
+        "gkx_verify_1",
+        "x",
+    }
+    assert calls["n"] == 2  # 负缓存同样只查一次
+
+    # TTL=0 时关闭缓存（测试口径），每次都回库
+    monkeypatch.setattr(jobs, "_SCHEMA_SPACE_CACHE_TTL", 0.0)
+    jobs._schema_graph_space("s-ok")
+    jobs._schema_graph_space("s-ok")
+    assert calls["n"] == 4

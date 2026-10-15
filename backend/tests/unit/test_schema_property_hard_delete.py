@@ -56,10 +56,7 @@ class TestUnknownColumnName:
 
 
 @pytest.fixture(autouse=True)
-def _no_incremental_index(monkeypatch: pytest.MonkeyPatch):
-    # 批内增量入索引关掉：本文件的写图自愈用例桩掉图库，不应让联动打到真实
-    # 控制库/Milvus
-    monkeypatch.setenv("SCHEMA_EXTRACT_INCREMENTAL_INDEX", "0")
+def _no_write_guard(monkeypatch: pytest.MonkeyPatch):
     # 写前守卫关掉：本文件只测写图自愈，终判/锁行为见 test_entity_write_guard
     monkeypatch.setenv("ENTITY_DISAMBIGUATION_PREWRITE_RECHECK", "0")
     monkeypatch.setenv("ENTITY_DISAMBIGUATION_NAME_LOCK", "0")

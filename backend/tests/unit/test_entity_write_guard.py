@@ -249,7 +249,6 @@ def guard_env(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setenv("ENTITY_DISAMBIGUATION_PREWRITE_RECHECK", "1")
     monkeypatch.setenv("ENTITY_DISAMBIGUATION_NAME_LOCK", "1")
     monkeypatch.setenv("ENTITY_DISAMBIGUATION_MILVUS_RECALL", "0")
-    monkeypatch.setenv("SCHEMA_EXTRACT_INCREMENTAL_INDEX", "0")
     state: dict[str, dict[str, Any]] = {}
 
     def factory(settings):

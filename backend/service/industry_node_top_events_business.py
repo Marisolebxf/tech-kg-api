@@ -510,11 +510,12 @@ class IndustryNodeTopEventsService:
         top = events[: req.top_n]
         top_org_ids = {ev.get("org_id") for ev in top if ev.get("org_id")}
         experts_by_org = await _gather_org_experts(client, top_org_ids)
+        probed: set[str] = set(top_org_ids)
 
         # TOP 事件全无专家时：先查扫描窗内其余有事件的企业（瑞芯微在 max_orgs=50
-        # 窗内仍进不了 impact TOP-10），再探测窗外企业。命中后替换末位。
-        scanned = {oid for oid, _ in orgs}
-
+        # 窗内仍进不了 impact TOP-10），再探测未查过专家的链上企业。命中后替换末位。
+        # 排除口径是「未探测过专家」而非「未扫描过事件」：指定 event_type/时间窗时扫描
+        # 窗已扩到全链，扫过但事件被筛光的企业（可能恰是链上唯一挂人员的）仍须可被探测。
         def _has_expert() -> bool:
             return any(people for people in experts_by_org.values())
 
@@ -523,33 +524,36 @@ class IndustryNodeTopEventsService:
                 dict.fromkeys(
                     ev.get("org_id")
                     for ev in events[req.top_n :]
-                    if ev.get("org_id") and ev.get("org_id") not in experts_by_org
+                    if ev.get("org_id") and ev.get("org_id") not in probed
                 )
             )
             if rest_org_ids:
                 experts_by_org.update(await _gather_org_experts(client, rest_org_ids))
+                probed.update(rest_org_ids)
         if top and not _has_expert():
-            extra_orgs = [item for item in all_orgs if item[0] not in scanned][
+            extra_orgs = [item for item in all_orgs if item[0] not in probed][
                 :EXPERT_SCAN_EXTRA_ORGS
             ]
             extra_hits: list[tuple[str, float]] = []
             extra_experts: dict[str, list[tuple[str, str | None, dict[str, Any]]]] = {}
             for i in range(0, len(extra_orgs), EXPERT_PROBE_LIMIT):
                 batch = extra_orgs[i : i + EXPERT_PROBE_LIMIT]
-                probed = await _gather_org_experts(client, [oid for oid, _ in batch])
+                batch_probed = await _gather_org_experts(client, [oid for oid, _ in batch])
                 for oid, score in batch:
-                    people = probed.get(oid) or []
+                    people = batch_probed.get(oid) or []
                     if people:
                         extra_hits.append((oid, score))
                         extra_experts[oid] = people
             if extra_hits:
+                # 兜底命中的专家先注册（计入关联专家与溯源），不被事件过滤门拦——
+                # 有人员企业的事件可能全被 event_type/时间窗滤掉，专家仍是链上有效关联。
+                experts_by_org.update(extra_experts)
+                probed.update(oid for oid, _ in extra_hits)
                 extra_events = await _gather_org_events(client, extra_hits)
                 extra_events = _merge_events([ev for ev in extra_events if _keep(ev)])
                 if extra_events:
                     events = _score_and_rank(_merge_events(events + extra_events))
-                    experts_by_org.update(extra_experts)
                     orgs = orgs + extra_hits
-                    scanned.update(oid for oid, _ in extra_hits)
         top = _select_top_covering_experts(events, req.top_n, experts_by_org)
         top_org_ids = {ev.get("org_id") for ev in top if ev.get("org_id")}
         missing = [oid for oid in top_org_ids if oid not in experts_by_org]
@@ -588,10 +592,14 @@ class IndustryNodeTopEventsService:
 
         all_expert_ids = set()
         expert_props_by_pid: dict[str, dict[str, Any]] = {}
-        for ev in top:
-            for pid, role, props in experts_by_org.get(ev.get("org_id", ""), []):
+        # 专家计数与溯源覆盖全部探测到的链上企业专家（兜底命中的企业事件可能全被
+        # event_type/时间窗滤掉，专家仍是链上有效关联）；relations 仍只挂 TOP 事件侧。
+        for people in experts_by_org.values():
+            for pid, _role, props in people:
                 all_expert_ids.add(pid)
                 expert_props_by_pid.setdefault(pid, props)
+        for ev in top:
+            for pid, role, props in experts_by_org.get(ev.get("org_id", ""), []):
                 resp.relations.append(
                     EventExpertRelation(
                         event_id=ev["event_id"],

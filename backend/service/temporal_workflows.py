@@ -1822,58 +1822,6 @@ def _write_batch_rows() -> int:
         return 64
 
 
-def _incremental_index_enabled() -> bool:
-    """批内增量入索引开关（默认开，``"0"`` 关）。
-
-    与任务末全量重建的 ``SCHEMA_EXTRACT_BUILD_INDEX`` 同族：关掉后行为回到
-    「只写图、末尾全量重建」，近邻路对 run 内前面批次的近名实体不可见。
-    """
-    return os.getenv("SCHEMA_EXTRACT_INCREMENTAL_INDEX", "1") != "0"
-
-
-def _sync_batch_entity_index(
-    space: str, node_label: str, entities: dict[str, dict[str, Any]]
-) -> None:
-    """写图成功后把本批实体批量 upsert 进 ``kg_entity``（fail-open）。
-
-    消歧 v2 的 Milvus 近邻路读 ``kg_entity``，而全量重建只在任务末跑一次——
-    没有这条联动，run 内前面批次写入的近名实体要到下一个 run 才被召回（盲窗）。
-    ``entities`` 是 ``{vid: 写图终值属性}``（跨列集组已合并）。任何失败只记
-    日志：索引落后无一致性风险，任务末全量重建兜底对账。
-    """
-    try:
-        # import 也在 try 内：模块级依赖异常同样不能让已写图的活动抛错
-        from infra.workflow_mysql import create_workflow_session
-        from service.entity_search import EntitySearchService
-
-        session = create_workflow_session()
-        try:
-            result = EntitySearchService(session).upsert_entities_batch(
-                space=space,
-                node_label=node_label,
-                entities=[{"vid": vid, "props": props} for vid, props in entities.items()],
-            )
-        finally:
-            session.close()
-        if result.get("upserted"):
-            logger.info(
-                "批内增量入索引 %s ×%s：upsert=%s skip=%s",
-                node_label,
-                len(entities),
-                result["upserted"],
-                result.get("skipped"),
-            )
-        else:
-            logger.info(
-                "批内增量入索引未生效 %s ×%s：%s（末尾全量重建兜底）",
-                node_label,
-                len(entities),
-                result.get("reason"),
-            )
-    except Exception:  # noqa: BLE001 - 索引联动失败不影响已写图结果
-        logger.warning("批内增量入索引失败（不影响写图，末尾全量重建兜底）", exc_info=True)
-
-
 async def _prewrite_recheck(
     client: Any,
     name_tag: str,
@@ -1994,8 +1942,8 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
     的时序窗口及一切计划快照与图库 schema 的错位）；无法定位列名则原样抛出。
     语句级行值错误（类型不匹配等）回退逐条写定位坏行，坏行按原语义上抛。
 
-    写图成功后实体批内增量入 Milvus 索引（``_sync_batch_entity_index``，
-    fail-open）：让消歧近邻路跨批看到本 run 已写的近名实体（盲窗收窄到同批内）。
+    增量索引走方案②a：实际写入的 vid 清单经 S3 claim-check（``vidsKey``）
+    传给环末的索引 activity 按冻结词表批级 upsert，本活动不再直连索引。
 
     写前守卫（``service/entity_write_guard.py``）：INSERT 前对整批做权威终判
     （``_prewrite_recheck``）并持同名微锁包住「终判 + INSERT」临界区——根治
@@ -2018,6 +1966,13 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
     records = records or []
     graph = request.get("graph") or {}
     source_table = str(request.get("sourceTable") or "")
+    # 增量索引 vid 清单（方案②a）：随环索引改批级增量后，实际写入的 vid 经
+    # S3 claim-check 传给环末的索引 activity（事件历史只过 key）。旧请求不带
+    # 这些字段 = 不收集，在飞旧 run 的 activity 重试向后兼容。
+    index_vids = bool(request.get("indexVids"))
+    vid_step_id = str(request.get("stepId") or "")
+    vid_batch_idx = int(request.get("batchIdx") or 0)
+    vid_chunk_idx = int(request.get("chunkIdx") or 0)
 
     settings = TRSGraphSettings.from_env()
     space = graph.get("space")
@@ -2243,9 +2198,10 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                         return len(chunk)
                     raise
 
-        # 本批实体的写图终值属性（{vid: props}）：跨列集组按执行序合并、后者
-        # 覆盖共享列——与图内列级 upsert 终值一致，供写图后批内增量入索引
-        written_entities: dict[str, dict[str, Any]] = {}
+        # 实际写入成功的实体 vid（空属性跳过/组内去重掉的都不进清单）——环末
+        # 增量索引用；在 _write_chunk 语句成功后按 chunk 收集（chunk 是组内
+        # 去重后的实际写入行，回退逐条路径同样以整 chunk 成功返回）。
+        written_vids: list[str] = []
 
         def _write_all() -> int:
             written_local = 0
@@ -2278,14 +2234,12 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                         size += row_len
                         start += 1
                     written_local += _write_chunk(cols, chunk)
+                    if kind == "entity":
+                        written_vids.extend(str(record["id"]) for record, _ in chunk)
                     unslept += len(chunk)
                     if pace_every and unslept >= pace_every:
                         time.sleep(pace_sleep)
                         unslept = 0
-                # 组写完才收（自愈剔列会改 props，收的是终值）；组间执行序合并
-                if kind == "entity":
-                    for record, props in rows:
-                        written_entities.setdefault(str(record["id"]), {}).update(props)
             return written_local
 
         guard_stats: dict[str, int] = {}
@@ -2318,11 +2272,27 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                 written = await asyncio.to_thread(_write_all)
         else:
             written = await asyncio.to_thread(_write_all)
-        if kind == "entity" and written and written_entities and _incremental_index_enabled():
-            await asyncio.to_thread(
-                _sync_batch_entity_index, settings.space, name, written_entities
-            )
         result: dict[str, Any] = {"written": written, **guard_stats}
+        if kind == "entity" and index_vids and vid_step_id and written_vids:
+            # S3 中转未开 = 本栈增量索引不可用：计划内不带 key（索引步跳过），
+            # 不算失败；上传失败则上抛——activity 重试幂等重写图 + 重传，绝不
+            # 静默丢失 vid 清单（e2e 抽取静默丢失红线）
+            from service.extract_payload_store import payload_s3_enabled, put_extract_payload_json
+
+            if not payload_s3_enabled():
+                logger.warning(
+                    "增量索引需要批载荷 S3 中转（SCHEMA_EXTRACT_PAYLOAD_S3_ENABLED=true），"
+                    "本批 %s 个 vid 未留档，随环索引步将跳过",
+                    len(written_vids),
+                )
+            else:
+                result["vidsKey"] = await asyncio.to_thread(
+                    put_extract_payload_json,
+                    vid_step_id,
+                    vid_batch_idx,
+                    f"vids-{vid_chunk_idx:02d}",
+                    {"label": name, "vids": written_vids},
+                )
         if guard_stats.get("guardWithheld"):
             # 写前终判扣留了记录：把过滤后的 records 交回工作流，后续碰撞检测/
             # 计数只看真正落图的记录（与 resolve 扣留同一语义）
@@ -2827,17 +2797,23 @@ async def revert_rerun_failure_cases(request: dict[str, Any]) -> dict[str, Any]:
 
 @activity.defn
 async def build_entity_index(request: dict[str, Any]) -> dict[str, Any]:
-    """重建实体 Milvus 混合检索索引（kg_entity 集合）：图 → embedding+BM25 → Milvus。
+    """实体 Milvus 混合检索索引：随环批级增量（冻结 BM25 词表）或整空间全量重建。
 
-    reindex 为同步重操作（含全局单飞锁），放线程池执行；并发冲突由 activity 重试兜底。
+    ``vidsKeys`` 存在 → 增量路径：下载 write_records 留档的 vid 清单（S3
+    claim-check），合并去重后 ``upsert_entities`` 定向 upsert（代价 ∝ 变更量，
+    替代随环全量重建——后者耗时 > activity 超时会自锁整链 FAILED）。守卫不
+    满足（重建在跑 / 空间索引未建）按计划内跳过返回；真实组件故障上抛重试。
+    ``vidsKeys`` 缺失 → 旧全量 reindex 路径（在飞旧 run 重放 / 手动触发专属，
+    新 run 的 workflow 已不产生该形状）。
     """
     load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
     from infra.workflow_mysql import get_workflow_engine
-    from service.entity_search import EntitySearchService
+    from service.entity_search import EntitySearchService, invalidate_entity_caches_sync
 
     space = request.get("space")
     entity_types = request.get("entityTypes") or []
+    vids_keys = request.get("vidsKeys")
 
     def _run() -> dict[str, Any]:
         # BM25 状态表（kg_entity_search_state）在控制库：与 handler 的
@@ -2845,9 +2821,34 @@ async def build_entity_index(request: dict[str, Any]) -> dict[str, Any]:
         from sqlalchemy.orm import Session as OrmSession
 
         with OrmSession(get_workflow_engine()) as session:
-            return EntitySearchService(session).reindex(space=space, entity_types=entity_types)
+            service = EntitySearchService(session)
+            if vids_keys is None:
+                return service.reindex(space=space, entity_types=entity_types)
+            from service.extract_payload_store import load_extract_payload_json
+
+            # 跨来源/跨步/跨批合并去重（同 vid 首个 label 生效；重触发重写
+            # 幂等）。工件下载失败上抛 → activity 重试（严格口径）
+            items: list[dict[str, Any]] = []
+            seen: set[str] = set()
+            for key in vids_keys:
+                payload = load_extract_payload_json(key)
+                if not isinstance(payload, dict):
+                    continue
+                label = str(payload.get("label") or "")
+                for vid in payload.get("vids") or []:
+                    vid = str(vid)
+                    if vid and vid not in seen:
+                        seen.add(vid)
+                        items.append({"vid": vid, "label": label})
+            result = service.upsert_entities(space=space, items=items)
+            result["vidManifests"] = len(vids_keys)
+            return result
 
     result = await asyncio.to_thread(_run)
+    # 增量生效后失效检索缓存（L1 进程 + L2 Redis，同 T_LINK 裁决联动）；
+    # 全量 reindex 路径服务内已自清
+    if isinstance(result, dict) and result.get("mode") == "incremental":
+        invalidate_entity_caches_sync()
     return {"reindexed": result}
 
 
@@ -3340,6 +3341,11 @@ class SchemaExtractWorkflow:
             # Use the resolved Schema space for scripts and pending-review creation,
             # including runs started without an explicit graph-space override.
             selectors["graph_space"] = graph_space
+        # 方案②a：随环索引改批级增量（write_records 留档 vid 清单 → 环末索引
+        # activity 下载后按冻结 BM25 词表 upsert）。patch 守卫保证在飞旧 run
+        # 重放进旧分支（全量重建），无历史失配；新 run 全量路径不可达，消除
+        # 「重建耗时 > activity 超时 → 自锁整链 FAILED」缺陷。
+        use_incremental_index = workflow.patched("entity-index-incremental-v1")
 
         async def extract_source(source: dict[str, Any]) -> dict[str, Any]:
             source_id = source["id"]
@@ -3377,6 +3383,10 @@ class SchemaExtractWorkflow:
             queue: asyncio.Queue = asyncio.Queue(maxsize=max_inflight)
             slots: dict[int, dict[str, Any]] = self._slots[step_id]
             pk_column = source["pkColumn"]
+            # 增量索引 vid 留档状态（worker 协程并发变更 dict 字段，无 nonlocal）：
+            # keys = write_records 回传的 S3 工件 key；missing = 有实体写入但
+            # 工件不可得（S3 中转未开），索引步跳过时给可区分的原因
+            vids_manifest: dict[str, Any] = {"keys": [], "missing": False}
 
             async def reader() -> dict[str, Any]:
                 read_base = {
@@ -3651,20 +3661,26 @@ class SchemaExtractWorkflow:
                                         records_count = len(resolved.get("records") or [])
                                         records_arg = {"records": resolved.get("records") or []}
                                 if records_count:
+                                    write_request: dict[str, Any] = {
+                                        "kind": kind,
+                                        "name": plan["name"],
+                                        "activeProps": plan["activeProps"],
+                                        "graph": graph,
+                                        "sourceTable": table_label,
+                                        # 写前守卫终判建案时的溯源（同 resolve 口径）
+                                        "stepId": f"{step_id}#{step['id']}",
+                                        "batchIdx": idx,
+                                        "chunkIdx": chunk["index"],
+                                        **records_arg,
+                                    }
+                                    if use_incremental_index and kind == "entity":
+                                        # vid 清单 claim-check 派生字段（与
+                                        # resolve_entity_batch 的键派生一致，
+                                        # activity 内同 request → 同 key → 幂等）
+                                        write_request["indexVids"] = True
                                     write_result = await _execute_activity(
                                         write_records,
-                                        {
-                                            "kind": kind,
-                                            "name": plan["name"],
-                                            "activeProps": plan["activeProps"],
-                                            "graph": graph,
-                                            "sourceTable": table_label,
-                                            # 写前守卫终判建案时的溯源（同 resolve 口径）
-                                            "stepId": f"{step_id}#{step['id']}",
-                                            "batchIdx": idx,
-                                            "chunkIdx": chunk["index"],
-                                            **records_arg,
-                                        },
+                                        write_request,
                                         start_to_close_timeout=timedelta(seconds=600),
                                         retry_policy=ACTIVITY_RETRY_POLICY,
                                         schedule_to_start_timeout=ACTIVITY_SCHEDULE_TO_START,
@@ -3680,6 +3696,13 @@ class SchemaExtractWorkflow:
                                     elif "records" in write_result:
                                         records_arg = {"records": write_result["records"]}
                                         records_count = len(records_arg["records"])
+                                    if use_incremental_index and kind == "entity":
+                                        # 按已记录的结果形状分支（重放安全）：
+                                        # S3 关/0 写入 → 无 vidsKey
+                                        if write_result.get("vidsKey"):
+                                            vids_manifest["keys"].append(write_result["vidsKey"])
+                                        elif step_written > 0:
+                                            vids_manifest["missing"] = True
                                 if kind == "entity" and records_count and detect_collisions:
                                     await _execute_activity(
                                         detect_extract_collisions,
@@ -3840,6 +3863,8 @@ class SchemaExtractWorkflow:
                 ),
             }
             return {
+                "vidsKeys": vids_manifest["keys"],
+                "vidsMissing": vids_manifest["missing"],
                 "source": step_id,
                 "table": table_label,
                 "batches": read_summary.get("batches", 0),
@@ -3866,6 +3891,10 @@ class SchemaExtractWorkflow:
 
         results = await asyncio.gather(*(extract_source(source) for source in plan["sources"]))
         all_failures = [f for r in results for f in (r.get("failures") or [])]
+        # 增量索引 vid 工件合并（跨来源/跨步去重在索引 activity 内做；旧 run
+        # 与 relation 环恒为空列表，不影响既有分支）
+        index_vid_keys = [k for r in results for k in (r.get("vidsKeys") or [])]
+        index_vids_missing = any(r.get("vidsMissing") for r in results)
         # 失败聚合双形状：S3 中转的清单以 failuresKey 引用（历史只过 key + 计数），
         # 内联条目（旧路径 / 重跑合成）原样；终态建 case 的 activity 内下载展开
         failure_refs = [f for f in all_failures if "failuresKey" in f]
@@ -3909,16 +3938,41 @@ class SchemaExtractWorkflow:
                 # 警告吞掉——重试耗尽后 ActivityError 上抛，整链失败，执行详情
                 # 的失败原因带上索引 activity 的报错信息。显式关闭
                 # （buildIndexEnabled=False）属计划内跳过，不算失败。
-                index_result = await _execute_activity(
-                    build_entity_index,
-                    {"space": graph_space},
-                    start_to_close_timeout=timedelta(
-                        seconds=int(plan.get("indexTimeoutSeconds", 1800))
-                    ),
-                    retry_policy=ACTIVITY_RETRY_POLICY,
-                    schedule_to_start_timeout=ACTIVITY_SCHEDULE_TO_START,
-                )
-                index_summary = (index_result or {}).get("reindexed")
+                if use_incremental_index:
+                    # 方案②a：vid 工件非空 → 冻结词表批级增量（秒级~分钟级，
+                    # 代价 ∝ 变更量）；空 → 计划内跳过（0 写入环不再白跑全量
+                    # 重建；S3 中转未开的栈 vid 不可得，同样跳过不算失败）
+                    if index_vid_keys:
+                        index_result = await _execute_activity(
+                            build_entity_index,
+                            {"space": graph_space, "vidsKeys": index_vid_keys},
+                            start_to_close_timeout=timedelta(
+                                seconds=int(plan.get("indexTimeoutSeconds", 1800))
+                            ),
+                            retry_policy=ACTIVITY_RETRY_POLICY,
+                            schedule_to_start_timeout=ACTIVITY_SCHEDULE_TO_START,
+                        )
+                        index_summary = (index_result or {}).get("reindexed")
+                    else:
+                        index_summary = {
+                            "mode": "skip",
+                            "reason": (
+                                "写入 vid 未留档（批载荷 S3 中转未开）"
+                                if index_vids_missing
+                                else "本环无新增实体"
+                            ),
+                        }
+                else:
+                    index_result = await _execute_activity(
+                        build_entity_index,
+                        {"space": graph_space},
+                        start_to_close_timeout=timedelta(
+                            seconds=int(plan.get("indexTimeoutSeconds", 1800))
+                        ),
+                        retry_policy=ACTIVITY_RETRY_POLICY,
+                        schedule_to_start_timeout=ACTIVITY_SCHEDULE_TO_START,
+                    )
+                    index_summary = (index_result or {}).get("reindexed")
             if failures_total:
                 fail_resp = await _execute_activity(
                     record_extract_failures,

@@ -1095,9 +1095,9 @@ function endpointNameCell(name: string): string {
   return name.length > ENDPOINT_NAME_LIMIT ? `${name.slice(0, ENDPOINT_NAME_LIMIT)}…` : name
 }
 
-// 说明列截断：超过 20 字符截断显示，悬停经 tooltip 查看全文（实体/关系两个子页面共用）。
-// 上限 10 太紧——常见一两句说明也被折叠成显隐，放宽到 20，仍为属性列留展示空间。
-const DESC_CELL_LIMIT = 20
+// 说明列截断：超过 40 字符截断显示，悬停经 tooltip 查看全文（实体/关系两个子页面共用）。
+// 验收反馈 20 仍偏紧：现有目录 91% 的说明 ≤40 字，放宽到 40 后九成行不再折叠。
+const DESC_CELL_LIMIT = 40
 
 function descCell(text: string): string {
   return text.length > DESC_CELL_LIMIT ? `${text.slice(0, DESC_CELL_LIMIT)}…` : text

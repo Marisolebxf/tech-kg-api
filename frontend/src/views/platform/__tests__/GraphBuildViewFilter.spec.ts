@@ -94,6 +94,18 @@ function mountView() {
 /** 真实任务行数：空列表时表格渲染「暂无任务」占位行（td.empty），不计入。 */
 const rowCount = () => wrapper.findAll('tbody tr').filter((row) => !row.text().includes('暂无任务')).length
 
+/** 按任务名定位行。 */
+const rowOf = (id: string) =>
+  wrapper.findAll('tbody tr').filter((row) => row.text().includes(`任务${id}`))[0]
+
+/** 重建列表并挂载（各用例自备 fixtures 时用）。 */
+async function remountWith(items: WorkflowJob[]) {
+  wrapper.unmount()
+  mocks.listJobs.mockResolvedValue({ items, total: items.length })
+  mountView()
+  await flushPromises()
+}
+
 beforeEach(async () => {
   permission.writable = true
   mocks.listJobs.mockResolvedValue({ items: JOBS, total: JOBS.length })
@@ -185,8 +197,6 @@ describe('图谱构建任务筛选「未选择」伪选项（00843/00847）', ()
 })
 
 describe('重新执行入口的状态口径（问题②：运行异常也提供重跑）', () => {
-  const rowOf = (id: string) =>
-    wrapper.findAll('tbody tr').filter((row) => row.text().includes(`任务${id}`))[0]
 
   it('运行异常行平铺「重新执行」，点击调用触发接口', async () => {
     wrapper.unmount()
@@ -219,6 +229,50 @@ describe('重新执行入口的状态口径（问题②：运行异常也提供�
     const labels = rowOf('j11').findAll('button').map((b) => b.text())
     expect(labels).toContain('执行')
     expect(labels).not.toContain('重新执行')
+  })
+})
+
+describe('暂停操作的对象口径（问题：运行失败还能暂停 → 改名消歧）', () => {
+  const cron = { kind: 'cron' as const, cron: '10 17 * * *' }
+
+  it('运行失败的周期任务显示「暂停调度」而非「暂停」，悬停说明停的是调度', async () => {
+    await remountWith([jobFixture('jc1', { schedule: cron, lastExecutionStatus: 'FAILED' })])
+    const labels = rowOf('jc1').findAll('button').map((b) => b.text())
+    expect(labels).toContain('暂停调度')
+    expect(labels).not.toContain('暂停')
+    const pause = rowOf('jc1').findAll('button').find((b) => b.text() === '暂停调度')!
+    expect(pause.attributes('title')).toContain('停止后续自动触发')
+  })
+
+  it('运行中的周期任务仍显示「暂停」（挂起当前执行）', async () => {
+    await remountWith([jobFixture('jc2', { schedule: cron, lastExecutionStatus: 'RUNNING' })])
+    const labels = rowOf('jc2').findAll('button').map((b) => b.text())
+    expect(labels).toContain('暂停')
+    expect(labels).not.toContain('暂停调度')
+  })
+
+  it('运行失败的单次任务不出现任何暂停入口', async () => {
+    await remountWith([jobFixture('j3', { lastExecutionStatus: 'FAILED' })])
+    const labels = rowOf('j3').findAll('button').map((b) => b.text())
+    expect(labels).not.toContain('暂停')
+    expect(labels).not.toContain('暂停调度')
+  })
+
+  it('已暂停周期任务（无运行中执行）显示「恢复调度」', async () => {
+    await remountWith([jobFixture('jc3', { schedule: cron, lastExecutionStatus: 'FAILED', status: '暂停' })])
+    const labels = rowOf('jc3').findAll('button').map((b) => b.text())
+    expect(labels).toContain('恢复调度')
+    expect(labels).not.toContain('恢复')
+  })
+
+  it('点击「暂停调度」调用状态接口停调度，不触发挂起确认轮询', async () => {
+    await remountWith([jobFixture('jc1', { schedule: cron, lastExecutionStatus: 'FAILED' })])
+    mocks.updateJobState.mockResolvedValue(jobFixture('jc1', { schedule: cron, lastExecutionStatus: 'FAILED', status: '暂停' }))
+    const pause = rowOf('jc1').findAll('button').find((b) => b.text() === '暂停调度')!
+    await pause.trigger('click')
+    await flushPromises()
+    expect(mocks.updateJobState).toHaveBeenCalledWith('jc1', false)
+    expect(mocks.getExecution).not.toHaveBeenCalled()
   })
 })
 

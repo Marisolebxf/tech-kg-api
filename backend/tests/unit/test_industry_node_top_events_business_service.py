@@ -546,3 +546,74 @@ async def test_topn_covers_expert_org_inside_max_orgs_but_not_in_impact_top(monk
     assert resp.experts == 1
     assert resp.relations[0].expert_id == "person_y"
     assert resp.top_events[0].org_id == org_c
+
+
+@pytest.mark.asyncio
+async def test_topn_counts_expert_when_expert_org_events_filtered_out(monkeypatch):
+    """指定 event_type 时，链上唯一有高管的企业事件全被滤掉，专家仍计入关联专家。
+
+    回补盲区：event_type 让扫描窗扩到全链后，旧口径只探「窗外」企业（为空），
+    扫过但事件被筛光的企业永远探不到 → 关联专家恒 0。修复后应兜出该企业专家。
+    """
+    org_c = "org_ccc"
+    subs = _subgraphs()
+    # 把甲乙公司的事件都改成 stock_finance（TOP 命中），两家都不挂人员
+    subs[ORG_A]["nodes"][1]["properties"]["event_type"] = "stock_finance"
+    subs[ORG_B]["nodes"][1]["properties"]["event_type"] = "stock_finance"
+    subs[NODE_VID]["nodes"].append(
+        {"id": org_c, "labels": ["Organization"], "properties": {"name_cn": "丙公司"}}
+    )
+    subs[NODE_VID]["edges"].append(
+        {
+            "type": "BELONGS_TO_NODE",
+            "source": org_c,
+            "target": NODE_VID,
+            "properties": {"chain_score": 50},
+        }
+    )
+    # 丙公司挂高管，但事件是 financing——会被 event_type=stock_finance 全部滤掉
+    subs[org_c] = {
+        "nodes": [
+            {"id": org_c, "labels": ["Organization"], "properties": {"name_cn": "丙公司"}},
+            {
+                "id": "ev_fin",
+                "labels": ["Event"],
+                "properties": {
+                    "event_type": "financing",
+                    "occur_date": "2025-06-01",
+                    "amount": "1000",
+                    "title": "股权融资",
+                },
+            },
+        ],
+        "edges": [{"type": "INVOLVED_IN", "source": org_c, "target": "ev_fin", "properties": {}}],
+    }
+    govs = {
+        ORG_A: [],
+        ORG_B: [],
+        org_c: [("person_y", "董事长", {"name_cn": "王五", "source_record_id": "sch-y"})],
+    }
+    monkeypatch.setattr(
+        mod,
+        "_subgraph_sync",
+        lambda client, vid, edge_types, limit: subs.get(vid, {"nodes": [], "edges": []}),
+    )
+    monkeypatch.setattr(
+        mod, "_fetch_org_governance_sync", lambda client, org_id: govs.get(org_id, [])
+    )
+    monkeypatch.setattr(mod, "_get_dev_client", lambda: None)
+    monkeypatch.setattr(mod, "_result_cache", {})
+
+    resp = await IndustryNodeTopEventsService().run(
+        IndustryNodeTopEventsRequest(
+            chain_node_id="IC_test", top_n=5, max_orgs=10, event_type="stock_finance"
+        )
+    )
+
+    # 兜底命中的丙公司专家计入关联专家与溯源；TOP 事件仍是 stock_finance 两家
+    assert resp.experts == 1
+    assert "person_y" in resp.entity_provenance
+    assert {ev.org_id for ev in resp.top_events} == {ORG_A, ORG_B}
+    assert all(ev.event_type == "stock_finance" for ev in resp.top_events)
+    # 其事件被滤掉 → 挂不上事件↔专家 relations（计数靠 experts 字段，前端有兜底）
+    assert resp.relations == []

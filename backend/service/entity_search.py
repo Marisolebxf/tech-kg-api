@@ -27,6 +27,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from itertools import islice
 from typing import Any
@@ -92,6 +93,16 @@ _types_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _reindex_lock = threading.Lock()
 _reindex_running = False
 _node_count_cache: dict[tuple[str, str], tuple[float, int]] = {}
+
+# 实体列表关键词检索逐标签全扫（CONTAINS 无索引可用，必须扫描过滤）。真实空间
+# 标签数几十个（dev2 空间 56 个），串行计数 17~36s，前端 axios 20s 直接超时，
+# 搜索栏承诺的「属性关键词」实际不可用。按标签有界并行后总耗时≈最慢单标签；
+# 4 并发对图服务只占兜底执行预算（TRS_EXEC_CONCURRENCY=32）的一小部分，
+# 不重蹈图查询风暴； executor 全局共享，多请求同时搜索时天然排队背压。
+_KEYWORD_SCAN_WORKERS = max(1, int(os.getenv("ENTITY_KEYWORD_SCAN_CONCURRENCY", "4")))
+_keyword_scan_executor = ThreadPoolExecutor(
+    max_workers=_KEYWORD_SCAN_WORKERS, thread_name_prefix="entity-keyword-scan"
+)
 
 # 搜索/浏览响应缓存（L1 进程 + L2 Redis，实例从 handler 下沉到 service，
 # 供 reindex 完成与人工审核写图联动统一失效——FUNC-00813 队列与图库联动）。
@@ -646,20 +657,35 @@ class EntitySearchService:
         space: str | None = None,
         entity_type: str | None = None,
     ) -> dict[str, int]:
-        """实体列表文字搜索的全量匹配计数，不依赖 Milvus/embedding 状态。"""
+        """实体列表文字搜索的全量匹配计数，不依赖 Milvus/embedding 状态。
+
+        逐标签计数并行执行（全扫是大头，见 ``_keyword_scan_executor`` 注释）；
+        任一标签失败仍按「暂不可用」整体报错，绝不把失败伪装成 0 命中。
+        """
         graph = get_space_client(space or _default_space())
         labels = sorted(graph.labels())
         if entity_type:
             if entity_type not in labels:
                 raise EntitySearchError(f"图空间中不存在实体类型: {entity_type}")
             labels = [entity_type]
-        try:
-            return {
-                label: graph.keyword_nodes_by_label(label, keyword.strip(), count_only=True).total
-                for label in labels
-            }
-        except Exception as exc:
-            raise EntitySearchError("实体文字检索暂不可用，请稍后重试") from exc
+        keyword = keyword.strip()
+        futures = {
+            label: _keyword_scan_executor.submit(
+                graph.keyword_nodes_by_label, label, keyword, count_only=True
+            )
+            for label in labels
+        }
+        counts: dict[str, int] = {}
+        first_error: BaseException | None = None
+        for label in labels:
+            try:
+                counts[label] = futures[label].result().total
+            except Exception as exc:  # noqa: BLE001 - 汇总后统一转领域错误
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise EntitySearchError("实体文字检索暂不可用，请稍后重试") from first_error
+        return counts
 
     def keyword_search(
         self,
@@ -681,19 +707,27 @@ class EntitySearchService:
                 keyword=keyword, space=resolved_space, entity_type=entity_type
             )
         graph = get_space_client(resolved_space)
-        items = []
+        # 先按计数把请求页窗口切成各标签的分页区间，再并行取页；结果严格按
+        # 标签字典序拼接，与串行实现逐字节一致（跨类型翻页稳定）。
+        page_jobs: list[tuple[str, int, int]] = []
         cursor = 0
+        for label, count in sorted(counts.items()):
+            start, end = max(offset - cursor, 0), min(offset + limit - cursor, count)
+            cursor += count
+            if start < end:
+                page_jobs.append((label, start, end))
+            if cursor >= offset + limit:
+                break
         try:
-            for label, count in sorted(counts.items()):
-                start, end = max(offset - cursor, 0), min(offset + limit - cursor, count)
-                cursor += count
-                if start < end:
-                    rows = graph.keyword_nodes_by_label(
-                        label, keyword, limit=end - start, offset=start
-                    )
-                    items.extend(_serialize_browse_item(node, label) for node in rows.items)
-                if cursor >= offset + limit:
-                    break
+            page_futures = [
+                _keyword_scan_executor.submit(
+                    graph.keyword_nodes_by_label, label, keyword, limit=end - start, offset=start
+                )
+                for label, start, end in page_jobs
+            ]
+            items = []
+            for (label, _start, _end), future in zip(page_jobs, page_futures, strict=True):
+                items.extend(_serialize_browse_item(node, label) for node in future.result().items)
         except Exception as exc:
             raise EntitySearchError("实体文字检索暂不可用，请稍后重试") from exc
         return {

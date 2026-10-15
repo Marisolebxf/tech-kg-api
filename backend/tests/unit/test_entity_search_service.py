@@ -6,6 +6,8 @@ import csv
 import json
 import os
 import re
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -18,6 +20,7 @@ from sqlalchemy.pool import StaticPool
 from db_model.entity_search import EntitySearchState
 from infra.graph_db.exceptions import GraphRequestError
 from service.entity_search import (
+    _KEYWORD_SCAN_WORKERS,
     COLLECTION_NAME,
     EntitySearchError,
     EntitySearchService,
@@ -2471,3 +2474,38 @@ def test_upsert_entities_collection_missing_raises(
         EntitySearchService(state_session).upsert_entities(
             space="dev2", items=[{"vid": "expert_7", "label": "Expert"}]
         )
+
+
+def test_literal_counts_scan_labels_in_parallel_with_bounded_workers(state_session, monkeypatch):
+    """关键词计数逐标签并行：真实空间几十个标签串行 17~36s，前端 20s 超时直接把
+    搜索栏承诺的「属性关键词」检索掐掉。回归约束：确实并行（峰值并发 > 1）且
+    并发不超过执行器上限——既防退回串行，也防有人改成无界线程池打图服务会话池。
+    """
+
+    class TrackingGraph(LiteralGraph):
+        lock = threading.Lock()
+        in_flight = 0
+        peak = 0
+
+        def keyword_nodes_by_label(self, label, keyword, *, limit=100, offset=0, count_only=False):
+            with type(self).lock:
+                type(self).in_flight += 1
+                type(self).peak = max(type(self).peak, type(self).in_flight)
+            time.sleep(0.2)  # 让并行的标签扫描有时间重叠
+            try:
+                return super().keyword_nodes_by_label(
+                    label, keyword, limit=limit, offset=offset, count_only=count_only
+                )
+            finally:
+                with type(self).lock:
+                    type(self).in_flight -= 1
+
+    labels = ["A", "B", "C", "D", "E", "F"]
+    graph = TrackingGraph(
+        labels, {label: [FakeNode(f"{label}_1", {"name": "同名"})] for label in labels}
+    )
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    counts = EntitySearchService(state_session).keyword_counts(keyword="同名", space="dev2")
+    assert counts == {label: 1 for label in labels}
+    assert TrackingGraph.peak > 1, "逐标签计数应并行执行，而不是串行全扫"
+    assert TrackingGraph.peak <= _KEYWORD_SCAN_WORKERS

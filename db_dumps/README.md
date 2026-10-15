@@ -1,7 +1,15 @@
 # 控制面库 techkg_control 数据快照
 
-- 来源:主栈容器 `tech-kg-temporal-mysql`(根 docker-compose),库 `techkg_control`
-- 导出时间:2026-10-15,mysqldump `--single-transaction --routines --triggers --databases`
-- 内容:14 张表,含 Schema 目录 5 张(`kg_schema_definition` 67 行 / `kg_schema_property` 195 行 / `kg_schema_mapping` 39 行)及 workflow/review 控制面表
-- 恢复:`gunzip -c techkg_control_root_20261015.sql.gz | mysql -uroot -p`(含 CREATE DATABASE,会覆盖同名库)
-- 注意:dev2 栈(`tech-kg-temporal-mysql-dev2`)同名库另有 1501 个 Schema 定义 + 来源/脚本绑定 + 全流程执行记录(约 155MB),未包含在本快照内
+## dev2 栈 Schema 目录(主要快照)
+
+- 文件:`techkg_control_dev2_schema_tables_20261015.sql.gz`(1.4MB)
+- 来源:dev2 栈容器 `tech-kg-temporal-mysql-dev2`,库 `techkg_control` 的 5 张 schema 相关表
+- 内容:`kg_schema_definition`(1501 行)/`kg_schema_property`(18767 行,含 required/provenance 公共属性行)/`kg_schema_source`(3336 行,来源表绑定+水位)/`kg_schema_script`(1126 行,脚本 S3 元数据)/`kg_schema_mapping`(78 行)
+- 恢复:先建库 `CREATE DATABASE techkg_control`,再 `gunzip -c techkg_control_dev2_schema_tables_20261015.sql.gz | mysql -uroot -p techkg_control`(不含 CREATE DATABASE)
+- 未包含:该库其余 workflow/review 控制面表(workflow_executions 等,整库约 155MB)
+
+## 主栈全库(参考)
+
+- 文件:`techkg_control_root_20261015.sql.gz`(17KB)
+- 来源:主栈容器 `tech-kg-temporal-mysql`,全库 14 张表(含 CREATE DATABASE,会覆盖同名库)
+- 注意:主栈 67 个 Schema 为初始化脚本直建,`kg_schema_property` 里没有 required/provenance 公共属性行

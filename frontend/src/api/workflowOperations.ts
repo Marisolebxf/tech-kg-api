@@ -177,6 +177,14 @@ export interface ProductionReviewCase {
     llm_input?: { system: string; user: string } | null
     llm_output?: string | null
   }; consequence?: { writeTarget:string; rerunStepId:string; scope:string }
+  /** 已裁决 case 的最终决议：刷新后裁决单选按它回显（未裁决为 null）。 */
+  decision?: {
+    actionId: string
+    result: Record<string, unknown>
+    note?: string
+    submittedBy?: string
+    decidedAt?: string | null
+  } | null
 }
 export const getProductionReviews = (params: Record<string, unknown> = {}) => unwrap(http.get('/v1/manual-reviews/production/queue', { params })) as Promise<{ items: ProductionReviewCase[]; total: number; page: number; pageSize: number }>
 export const getProductionReview = (id: string) => unwrap(http.get(`/v1/manual-reviews/production/${id}`)) as Promise<ProductionReviewCase>

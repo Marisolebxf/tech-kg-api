@@ -1095,9 +1095,9 @@ function endpointNameCell(name: string): string {
   return name.length > ENDPOINT_NAME_LIMIT ? `${name.slice(0, ENDPOINT_NAME_LIMIT)}…` : name
 }
 
-// 说明列截断：超过 10 字符截断显示，悬停经 tooltip 查看全文（实体/关系两个子页面共用）。
-// 上限压到 10 是为属性列保留更充足的展示空间。
-const DESC_CELL_LIMIT = 10
+// 说明列截断：超过 20 字符截断显示，悬停经 tooltip 查看全文（实体/关系两个子页面共用）。
+// 上限 10 太紧——常见一两句说明也被折叠成显隐，放宽到 20，仍为属性列留展示空间。
+const DESC_CELL_LIMIT = 20
 
 function descCell(text: string): string {
   return text.length > DESC_CELL_LIMIT ? `${text.slice(0, DESC_CELL_LIMIT)}…` : text
@@ -1390,7 +1390,7 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
         <aside class="schema-modal__panel schema-delete-panel">
           <header><h2>删除属性</h2><button type="button" @click="propertyDeleteConfirmOpen = false">×</button></header>
           <div class="schema-modal__body">
-            <p class="schema-delete-text">确认删除属性 <b><code>{{ propertyDeleteTarget.name }}</code></b>（{{ propertyTarget?.label || propertyTarget?.name }}）？<b class="danger-text">此操作不可逆。</b></p>
+            <p class="schema-delete-text">确认删除属性 <b><code>{{ propertyDeleteTarget.name }}</code></b>？<b class="danger-text">此操作不可逆。</b></p>
             <p class="schema-delete-note">将删除图库中该属性列及其全部数据（ALTER ... DROP），并从 Schema 目录移除；如有运行中的抽取任务会被拦截，请先到任务中心停止。</p>
           </div>
           <footer>

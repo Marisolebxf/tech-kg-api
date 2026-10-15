@@ -119,6 +119,28 @@ def test_ordinary_decision_records_verdict_and_resolves(service):
     assert case["consequence"]["writeTarget"]
 
 
+def test_submit_decision_returned_in_detail_for_redisplay(service):
+    # 刷新回显：详情带最终决议（裁决单选不再回落默认「合并」——2026-10-15 修复）
+    created = service.create_direct_case(**link_case_kwargs())
+    detail = service.get_case(created["reviewId"], actor())
+    assert detail["decision"] is None  # 未裁决的 case 无决议
+    out = service.submit(
+        detail["id"],
+        detail["version"],
+        "entity-confirm",
+        {"entityVerdict": "create"},
+        "判为新实体",
+        actor(),
+    )
+    assert out["status"] == "RESOLVED"
+    assert out["decision"]["result"]["entityVerdict"] == "create"
+
+    again = service.get_case(detail["id"], actor())
+    assert again["decision"]["actionId"] == "entity-confirm"
+    assert again["decision"]["note"] == "判为新实体"
+    assert again["decision"]["decidedAt"]
+
+
 def test_p0_executes_at_submit_without_approval(service):
     # 直审模式：confidence < 0.7 → P0 同样提交即执行，无四方签核
     case = claimed(service, confidence=0.4)
@@ -249,6 +271,19 @@ def test_direct_decide_reject_with_candidate_rejected(monkeypatch):
     with pytest.raises(ReviewValidationError, match="驳回"):
         svc.direct_decide(case_id, 1, False, "", _reviewer(), candidate={"name_zh": "李四"})
     assert graph.merged == []
+
+
+def test_direct_decide_decision_returned_in_detail(monkeypatch):
+    # 直判通道同样落决议行：T_DIRECT case 刷新后裁决单选可回显
+    svc = _make_service()
+    case_id, _ = _direct_case(svc, monkeypatch)
+    out = svc.direct_decide(case_id, 1, False, "不收录", _reviewer())
+    assert out["status"] == "REJECTED"
+    assert out["decision"]["actionId"] == "reject"
+
+    detail = svc.get_case(case_id, _reviewer())
+    assert detail["decision"]["result"] == {"accepted": False}
+    assert detail["decision"]["note"] == "不收录"
 
 
 def test_direct_decide_audit_records_modified_fields(monkeypatch):

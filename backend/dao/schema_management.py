@@ -58,6 +58,15 @@ class SchemaManagementDAO:
         )
         return self.session.scalar(statement) is not None
 
+    @staticmethod
+    def _escape_like(value: str) -> str:
+        """搜索关键字按字面匹配：转义 LIKE 通配符 %/_/\\。
+
+        不转义时搜索栏输入 "%" 会拼成 "%%%" 匹配全部行、"_" 匹配任意单字，
+        结果失真且用户无从理解（"输入 % 需要转义"的由来）。
+        """
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
     def list(
         self,
         *,
@@ -73,12 +82,12 @@ class SchemaManagementDAO:
         if graph_space:
             filters.append(GraphSchemaDefinition.graph_space == graph_space)
         if keyword:
-            pattern = f"%{keyword}%"
+            pattern = f"%{self._escape_like(keyword)}%"
             filters.append(
                 or_(
-                    GraphSchemaDefinition.name.like(pattern),
-                    GraphSchemaDefinition.label.like(pattern),
-                    GraphSchemaDefinition.schema_key.like(pattern),
+                    GraphSchemaDefinition.name.like(pattern, escape="\\"),
+                    GraphSchemaDefinition.label.like(pattern, escape="\\"),
+                    GraphSchemaDefinition.schema_key.like(pattern, escape="\\"),
                 )
             )
 

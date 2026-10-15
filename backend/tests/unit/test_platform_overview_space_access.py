@@ -44,7 +44,7 @@ def console_backend(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         overview_handler,
         "application",
-        SimpleNamespace(get_overview=lambda space: calls.update(space=space) or {"ok": True}),
+        SimpleNamespace(get_overview=lambda space, day=None: calls.update(space=space) or {"ok": True}),
     )
     return calls
 

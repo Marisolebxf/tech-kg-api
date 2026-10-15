@@ -1,8 +1,9 @@
 # 控制面库 techkg_control 数据快照
 
-## kg_schema_definition 全字段注释版(推荐单独导入)
+## 注释版(推荐单独导入,建表工具里直接看到字段说明)
 
-- 文件:`kg_schema_definition_annotated_20261015.sql.gz`(168KB)
+- `kg_schema_definition_annotated_20261015.sql.gz`(168KB):Schema 主定义表,30 字段全注释,含 1484 行数据
+- `kg_schema_property_annotated_20261015.sql.gz`(822KB):属性表,10 字段全注释,含 18924 行数据;外键挂 definition 表,建议先导 definition 版(单独导也可,FK 检查已关)
 - 内容:重写 CREATE TABLE,30 个字段全部补中文 COLUMN COMMENT + 表注释,数据为 dev2 快照全集(1484 行);已在临时库实测导入,Navicat/DataGrip/DBeaver 表设计视图可直接看到字段说明
 - 注意:含 `DROP TABLE IF EXISTS`,会覆盖同名表;默认 DEFAULT (now()) 等表达式需 MySQL 8.0.13+
 ## dev2 栈 Schema 目录(主要快照)

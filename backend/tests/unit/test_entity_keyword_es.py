@@ -169,6 +169,14 @@ def test_upsert_writes_ndjson_with_vid_as_id_and_raises_on_item_error():
     assert json.loads(action) == {"index": {"_index": "kg_entity_kw_dev2", "_id": "v1"}}
     assert json.loads(payload)["search_text"] == "v1\n标题"
 
+    # 显式 _id（同步脚本传 label::vid）优先，且不落入文档正文
+    seen["body"] = ""
+    doc2 = {**doc, "_id": "Paper::v1"}
+    store.upsert("dev2", [doc2])
+    action2, payload2 = seen["body"].split("\n")[0:2]
+    assert json.loads(action2)["index"]["_id"] == "Paper::v1"
+    assert "_id" not in json.loads(payload2)
+
     def handler_fail(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,

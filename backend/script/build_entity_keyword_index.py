@@ -59,6 +59,7 @@ def build_docs(nodes: list, label: str) -> list[dict]:
         vid = str(node.id)
         docs.append(
             {
+                "_id": f"{label}::{vid}",  # 图按标签枚举，多 TAG 同 vid 时各占一篇
                 "vid": vid,
                 "entity_type": label,
                 "search_text": _search_text(vid, props),
@@ -68,21 +69,52 @@ def build_docs(nodes: list, label: str) -> list[dict]:
     return docs
 
 
+def enum_count(graph, label: str) -> int:
+    """标签全量计数（LOOKUP 优先，无索引回退 MATCH；不走 SHOW STATS——实测会过期）。"""
+    from infra.graph_db.client import is_no_index_error
+    from infra.graph_db.exceptions import GraphRequestError
+
+    try:
+        result = graph.execute_read(f"LOOKUP ON `{label}` YIELD vertex AS v | YIELD count(*) AS c")
+    except GraphRequestError as exc:
+        if not is_no_index_error(exc):
+            raise
+        result = graph.execute_read(f"MATCH (v:`{label}`) RETURN count(*) AS c")
+    return int(result.records[0]["c"])
+
+
 def sync_label(store: EntityKeywordES, graph, space: str, label: str, batch_size: int) -> int:
-    offset = 0
-    total = 0
-    started = time.monotonic()
-    while True:
-        nodes = graph.paged_nodes_by_label(label, limit=batch_size, offset=offset)
-        if not nodes:
-            break
-        docs = build_docs(nodes, label)
-        store.upsert(space, docs)
-        total += len(docs)
-        offset += len(nodes)
-        elapsed = time.monotonic() - started
-        print(f"  [{label}] +{len(docs)} (累计 {total}, {elapsed:.1f}s)", flush=True)
-    return total
+    """拉取并写入一个标签；分页偶发空页（实测 TRS 会出现），必须与枚举计数核对。
+
+    取数与计数不一致时整标签重拉（_id 幂等覆盖），重试 3 次仍不一致按失败退出，
+    绝不静默少同步。
+    """
+    expected = enum_count(graph, label)
+    last_total = -1
+    for attempt in range(3):
+        offset = 0
+        total = 0
+        started = time.monotonic()
+        while True:
+            nodes = graph.paged_nodes_by_label(label, limit=batch_size, offset=offset)
+            if not nodes:
+                break
+            docs = build_docs(nodes, label)
+            store.upsert(space, docs)
+            total += len(docs)
+            offset += len(nodes)
+            elapsed = time.monotonic() - started
+            print(f"  [{label}] +{len(docs)} (累计 {total}, {elapsed:.1f}s)", flush=True)
+        last_total = total
+        if total == expected:
+            return total
+        print(
+            f"[{label}] 取数 {total} ≠ 枚举 {expected}（第 {attempt + 1} 次，疑似空页/分页不稳），重拉",
+            file=sys.stderr,
+            flush=True,
+        )
+        time.sleep(2)
+    raise RuntimeError(f"标签 {label} 三次取数均与枚举计数不符（{last_total} ≠ {expected}），中止")
 
 
 def main() -> int:

@@ -141,6 +141,9 @@ class EntityKeywordES:
         "settings": {
             "number_of_shards": 1,
             "number_of_replicas": 0,
+            # 实体总数几十万，前端可跳任意页（offset 深翻）；默认 10000 会 400
+            # 触发图直查回退，深翻页优势全失
+            "index.max_result_window": 1000000,
             "analysis": {
                 "tokenizer": {
                     "kw_ngram": {
@@ -229,8 +232,10 @@ class EntityKeywordES:
     # --------------------------------------------------------------- 写入
 
     def upsert(self, space: str, docs: list[dict[str, Any]], *, refresh: bool = False) -> int:
-        """批量写入。``docs`` 元素需含 ``vid``/``entity_type``/``search_text``/``item``；
-        _id = vid，重复同步幂等（覆盖旧文档）。返回成功条数。"""
+        """批量写入。``docs`` 元素需含 ``vid``/``entity_type``/``search_text``/``item``，
+        可选 ``_id``（缺省用 vid）。_id 决定幂等覆盖单位：同步脚本传
+        ``{entity_type}::{vid}`` 以镜像图「按标签枚举」语义（多 TAG 同 vid 各占一篇）。
+        ``_id`` 不写入文档正文。返回成功条数。"""
         if not docs:
             return 0
         name = self.index_name(space)
@@ -238,9 +243,8 @@ class EntityKeywordES:
         for doc in docs:
             if not doc.get("vid"):
                 raise ElasticsearchError("ES 文档缺少 vid")
-            lines.append(
-                json.dumps({"index": {"_index": name, "_id": str(doc["vid"])}}, ensure_ascii=False)
-            )
+            doc_id = str(doc.pop("_id", None) or doc["vid"])
+            lines.append(json.dumps({"index": {"_index": name, "_id": doc_id}}, ensure_ascii=False))
             lines.append(json.dumps(doc, ensure_ascii=False))
         body = "\n".join(lines) + "\n"
         data = self._bulk(body, refresh=refresh)

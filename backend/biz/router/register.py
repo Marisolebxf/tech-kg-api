@@ -38,6 +38,7 @@ from biz.handler.industry_node_top_events_business import (
     router as industry_node_top_events_business_router,
 )
 from biz.handler.kg_construction import router as kg_construction_router
+from biz.handler.kg_open import router as kg_open_router
 from biz.handler.llm_config import router as llm_config_router
 from biz.handler.manual_review import readonly_router as manual_review_readonly_router
 from biz.handler.manual_review import router as manual_review_router
@@ -119,6 +120,8 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(auth_router, prefix=API_V1_PREFIX)
     # 该路由自身执行 API Key / 用户双通道认证，不叠加仅接受用户的依赖。
     app.include_router(project_relation_router, prefix=API_V1_PREFIX)
+    # kg-open 对外查询同项目关系接口：自带双通道认证，不叠加仅接受用户的依赖。
+    app.include_router(kg_open_router, prefix=API_V1_PREFIX)
 
     protected_dependencies = [Depends(require_authenticated_user)]
     business_routers = (

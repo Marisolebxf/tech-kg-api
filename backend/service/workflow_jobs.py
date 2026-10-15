@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import time
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
@@ -337,6 +339,30 @@ def authorize_background_execution(payload):
     return actor
 
 
+# Schema→图空间解析的进程内短缓存：任务详情会对 job+每条执行各调一次
+# capabilities，每次都按 schemaId 逐个回库解析（链任务 16 Schema × 21 个资源
+# ≈1.5s，详情页明显卡顿）；Schema 归属空间基本不变，60s TTL 足够。
+# 0=关闭（测试用），与 handler 层 WORKFLOW_JOBS_CACHE_SECONDS 同一套约定。
+_SCHEMA_SPACE_CACHE: dict[str, tuple[float, str | None]] = {}
+_SCHEMA_SPACE_CACHE_TTL = float(os.getenv("WORKFLOW_SCHEMA_SPACE_CACHE_SECONDS", "60"))
+
+
+def _schema_graph_space(schema_id: str) -> str | None:
+    now = time.monotonic()
+    cached = _SCHEMA_SPACE_CACHE.get(schema_id)
+    if _SCHEMA_SPACE_CACHE_TTL > 0 and cached and cached[0] > now:
+        return cached[1]
+    from dao.schema_management import SchemaManagementDAO
+    from infra.workflow_mysql import workflow_session_scope
+
+    with workflow_session_scope() as session:
+        row = SchemaManagementDAO(session).get(schema_id)
+        value = row.graph_space if row else None
+    if _SCHEMA_SPACE_CACHE_TTL > 0:
+        _SCHEMA_SPACE_CACHE[schema_id] = (now + _SCHEMA_SPACE_CACHE_TTL, value)
+    return value
+
+
 def workflow_resource_spaces(resource):
     values = [resource] + [
         resource[key] for key in ("payload", "input") if isinstance(resource.get(key), dict)
@@ -355,17 +381,13 @@ def workflow_resource_spaces(resource):
             for step in value.get("steps") or []
             if isinstance(step, dict) and step.get("schemaId")
         )
-    if schema_ids:
-        from dao.schema_management import SchemaManagementDAO
-        from infra.workflow_mysql import workflow_session_scope
-
-        with workflow_session_scope() as session:
-            for schema_id in schema_ids:
-                row = SchemaManagementDAO(session).get(schema_id)
-                if row:
-                    spaces.add(row.graph_space)
-                else:
-                    return set()
+    for schema_id in schema_ids:
+        space = _schema_graph_space(schema_id)
+        if space:
+            spaces.add(space)
+        else:
+            # 任一 Schema 查不到即整体作废（原语义保留：半解析的空间会误导鉴权）
+            return set()
     return spaces
 
 

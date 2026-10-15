@@ -24,7 +24,7 @@ import PlatformWorkbenchView from '../PlatformWorkbenchView.vue'
 
 // 提升 showToast mock，便于在用例里断言右上角提示文案。
 const { showToast } = vi.hoisted(() => ({ showToast: vi.fn() }))
-vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }), RouterLink: { template: '<a><slot /></a>' } }))
+vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }), useRouter: () => ({ push: vi.fn() }), RouterLink: { template: '<a><slot /></a>' } }))
 vi.mock('../../../api/graphConsole', () => ({ runNgql: vi.fn() }))
 vi.mock('../../../api/graphAlgorithm', () => ({
   cancelAlgorithmJob: vi.fn(),

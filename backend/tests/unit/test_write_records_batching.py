@@ -23,7 +23,7 @@ class FakeGraphClient:
     """
 
     fail_predicate = None
-    instances: list["FakeGraphClient"] = []
+    instances: list[FakeGraphClient] = []
 
     def __init__(self, settings=None):
         self.settings = settings
@@ -56,6 +56,10 @@ def client(monkeypatch):
     FakeGraphClient.instances = []
     monkeypatch.setenv("SCHEMA_EXTRACT_WRITE_PACE_EVERY", "0")
     monkeypatch.setenv("SCHEMA_EXTRACT_WRITE_BATCH_ROWS", "64")
+    # 写前守卫关掉：本文件只测批量写图语句形状，终判/锁行为见
+    # test_entity_write_guard
+    monkeypatch.setenv("ENTITY_DISAMBIGUATION_PREWRITE_RECHECK", "0")
+    monkeypatch.setenv("ENTITY_DISAMBIGUATION_NAME_LOCK", "0")
     return FakeGraphClient
 
 
@@ -162,9 +166,7 @@ class TestEntityBatching:
         from service.temporal_workflows import write_records
 
         monkeypatch.setenv("SCHEMA_EXTRACT_WRITE_BATCH_ROWS", "2")
-        records = [
-            {"id": f"v{i}", "props": {"id": f"v{i}", "name": f"名{i}"}} for i in range(5)
-        ]
+        records = [{"id": f"v{i}", "props": {"id": f"v{i}", "name": f"名{i}"}} for i in range(5)]
         result = await write_records(entity_request(records))
         assert result == {"written": 5}
         statements = stmts()

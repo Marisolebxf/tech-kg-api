@@ -62,6 +62,11 @@ class FakeGraph:
             (node for nodes in self._nodes.values() for node in nodes if node.id == node_id), None
         )
 
+    def get_nodes_bulk(self, node_ids):
+        by_id = {str(node.id): node for nodes in self._nodes.values() for node in nodes}
+        wanted = [str(vid) for vid in dict.fromkeys(str(v) for v in node_ids if v)]
+        return {vid: by_id[vid] for vid in wanted if vid in by_id}
+
     def list_indexes(self, label=None):
         return []
 
@@ -161,6 +166,10 @@ class FakeMilvusClient:
         if 'graph_space == "' in filter:
             space = filter.split('graph_space == "', 1)[1].split('"', 1)[0]
             rows = [row for row in rows if row.get("graph_space") == space]
+        if filter.startswith("document_id in [") and filter.endswith("]"):
+            inner = filter[len("document_id in [") : -1]
+            wanted = {part.strip().strip('"') for part in inner.split(",") if part.strip()}
+            rows = [row for row in rows if row.get("document_id") in wanted]
         return rows[:limit]
 
 
@@ -2049,6 +2058,156 @@ def test_upsert_entity_embedding_failure_degrades(
     assert result == {"upserted": False, "reason": "embedding failed"}
 
 
+# ---------------------------------------------------------------------------
+# upsert_entities_batch：抽取链路每批写图后批量增量入索引（消歧近邻路跨批可见）
+# ---------------------------------------------------------------------------
+
+
+def _batch_ready_service(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> tuple[EntitySearchService, FakeMilvusClient]:
+    """两实体图全量重建后的服务 + Milvus 假客户端（批量增量在此基础上叠加）。"""
+    graph, milvus = _indexed_two_expert_graph()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", FakeEmbeddingClient)
+    service = EntitySearchService(state_session)
+    service.reindex(space="dev2")
+    return service, milvus
+
+
+def test_upsert_entities_batch_writes_rows_without_bumping_counts(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """批量入索引落 Milvus 行（与全量重建同行形状），计数快照不动。"""
+    service, milvus = _batch_ready_service(state_session, monkeypatch)
+
+    result = service.upsert_entities_batch(
+        space="dev2",
+        node_label="Expert",
+        entities=[
+            {"vid": "expert_3", "props": {"id": "E-3", "name": "张三", "org": "计算所"}},
+            {"vid": "expert_4", "props": {"id": "E-4", "name": "李四"}},
+        ],
+    )
+
+    assert result == {"upserted": 2, "skipped": 0, "reason": None}
+    for vid, entity_id, name in (
+        ("expert_3", "E-3", "张三"),
+        ("expert_4", "E-4", "李四"),
+    ):
+        row = next(r for r in milvus.collections[COLLECTION_NAME] if r["vid"] == vid)
+        assert row["document_id"] == f"dev2::{vid}"
+        assert row["entity_id"] == entity_id
+        assert row["name"] == name
+        assert row["entity_type"] == "Expert"
+        assert row["graph_space"] == "dev2"
+        assert len(row["dense_vector"]) == 3
+        assert row["sparse_vector"]  # 词表内 token 已编码
+    # 计数快照不动：本路无法区分新建与并入，末尾全量重建重写精确计数
+    state = state_session.get(EntitySearchState, "dev2")
+    assert state.entity_count == 2
+    assert json.loads(state.type_counts) == {"Expert": 2}
+
+
+def test_upsert_entities_batch_merges_same_vid_props(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """同 vid 多条（跨列集组）合并属性、后者覆盖——与图内列级 upsert 终值一致。"""
+    service, milvus = _batch_ready_service(state_session, monkeypatch)
+
+    result = service.upsert_entities_batch(
+        space="dev2",
+        node_label="Expert",
+        entities=[
+            {"vid": "expert_3", "props": {"id": "E-3", "name": "张三", "org": "旧单位"}},
+            {"vid": "expert_3", "props": {"id": "E-3", "name": "李四"}},
+        ],
+    )
+
+    assert result["upserted"] == 1
+    row = next(r for r in milvus.collections[COLLECTION_NAME] if r["vid"] == "expert_3")
+    assert row["name"] == "李四"  # 后写覆盖
+    props = json.loads(row["properties"])
+    assert props.get("org") == "旧单位"  # 非共享列保留（列级 upsert 并集）
+
+
+def test_upsert_entities_batch_skips_unindexable_entities(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """超长 VID（入不了 Milvus 主键字段）的实体逐条跳过，不影响其余入索引。"""
+    service, milvus = _batch_ready_service(state_session, monkeypatch)
+
+    result = service.upsert_entities_batch(
+        space="dev2",
+        node_label="Expert",
+        entities=[
+            {"vid": "v" * 200, "props": {"id": "x", "name": "张三"}},  # VID 超 128 字节
+            {"vid": "expert_3", "props": {"id": "E-3", "name": "张三"}},
+        ],
+    )
+
+    assert result == {"upserted": 1, "skipped": 1, "reason": None}
+    row = next(r for r in milvus.collections[COLLECTION_NAME] if r["vid"] == "expert_3")
+    assert row["name"] == "张三"
+
+
+def test_upsert_entities_batch_without_state_returns_not_built(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """空间从未建索引（gkx_verify_1 类）：整批跳过，末尾全量重建收编。"""
+    graph, milvus = _indexed_two_expert_graph()
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", FakeEmbeddingClient)
+
+    result = EntitySearchService(state_session).upsert_entities_batch(
+        space="dev2",
+        node_label="Expert",
+        entities=[{"vid": "expert_1", "props": {"id": "E-1", "name": "张三"}}],
+    )
+
+    assert result == {"upserted": 0, "skipped": 1, "reason": "space index not built"}
+    assert milvus.collections == {}
+
+
+def test_upsert_entities_batch_skips_while_reindex_running(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """任务末全量重建进行中：增量让路（reindex 会整体重写本空间行）。"""
+    service, milvus = _batch_ready_service(state_session, monkeypatch)
+    monkeypatch.setattr("service.entity_search._database_reindex_running", lambda session: True)
+
+    result = service.upsert_entities_batch(
+        space="dev2",
+        node_label="Expert",
+        entities=[{"vid": "expert_3", "props": {"id": "E-3", "name": "张三"}}],
+    )
+
+    assert result == {"upserted": 0, "skipped": 1, "reason": "reindex in progress"}
+    assert len(milvus.collections[COLLECTION_NAME]) == 2  # 未新增
+
+
+def test_upsert_entities_batch_embedding_failure_degrades(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """embedding 失败整批跳过（fail-open），末尾全量重建兜底。"""
+    service, milvus = _batch_ready_service(state_session, monkeypatch)
+
+    class BrokenEmbedding:
+        def embed(self, texts):
+            return None
+
+    monkeypatch.setattr("service.entity_search._embedding_client", lambda: BrokenEmbedding())
+    result = service.upsert_entities_batch(
+        space="dev2",
+        node_label="Expert",
+        entities=[{"vid": "expert_3", "props": {"id": "E-3", "name": "张三"}}],
+    )
+
+    assert result == {"upserted": 0, "skipped": 0, "reason": "embedding failed"}
+    assert len(milvus.collections[COLLECTION_NAME]) == 2
+
+
 def test_upsert_entity_milvus_error_degrades(
     state_session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2149,3 +2308,166 @@ def test_literal_search_graph_failure_is_not_reported_as_empty(state_session, mo
     )
     with pytest.raises(EntitySearchError, match="暂不可用"):
         EntitySearchService(state_session).keyword_search(keyword="论文", space="dev2")
+
+
+# ---------------------------------------------------------------------------
+# upsert_entities：随环批级增量入索引（方案②a，冻结 BM25 词表）
+# ---------------------------------------------------------------------------
+
+
+class _NoEmbedClient:
+    """embed 全失败的替身：链内严格口径应 raise 而非降级。"""
+
+    def embed(self, texts: list[str]) -> list[list[float]] | None:
+        return None
+
+
+class _FailingUpsertMilvus(FakeMilvusClient):
+    def upsert(self, collection_name: str, data: list[dict[str, Any]]):  # noqa: D102
+        raise RuntimeError("milvus down")
+
+
+def _indexed_expert_space(monkeypatch: pytest.MonkeyPatch, state_session) -> tuple:
+    """两名 Expert 全量建索引后备用（词表含 张三/李四/Expert/id 等语料 token）。"""
+    graph, milvus = _indexed_two_expert_graph()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", FakeEmbeddingClient)
+    monkeypatch.setattr("service.entity_search._default_space", lambda: "dev2")
+    EntitySearchService(state_session).reindex(space="dev2")
+    return graph, milvus
+
+
+def test_upsert_entities_mixed_new_existing_missing(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """新 vid 入行+计数、已有 vid 幂等覆盖不计数、图里缺失的 vid 跳过计数；
+    重复 vid 输入天然去重。"""
+    graph, milvus = _indexed_expert_space(monkeypatch, state_session)
+    graph._nodes["Expert"].extend(
+        [
+            FakeNode("expert_3", {"id": "E-3", "name": "张三", "org": "中科院"}),
+            FakeNode("expert_4", {"id": "E-4", "name": "王五"}),
+        ]
+    )
+
+    result = EntitySearchService(state_session).upsert_entities(
+        space="dev2",
+        items=[
+            {"vid": "expert_1", "label": "Expert"},  # 已有行（merge 重写）
+            {"vid": "expert_3", "label": "Expert"},
+            {"vid": "expert_3", "label": "Expert"},  # 重复输入去重
+            {"vid": "expert_4", "label": "Expert"},
+            {"vid": "ghost", "label": "Expert"},  # 图里不存在
+        ],
+    )
+
+    assert result["mode"] == "incremental"
+    assert result["upserted"] == 3  # expert_1/3/4
+    assert result["newCount"] == 2  # expert_3/4（expert_1 已有行）
+    assert result["skippedMissing"] == 1
+    rows = {row["vid"]: row for row in milvus.collections[COLLECTION_NAME]}
+    assert set(rows) == {"expert_1", "expert_2", "expert_3", "expert_4"}
+    assert rows["expert_3"]["document_id"] == "dev2::expert_3"
+    assert rows["expert_3"]["entity_type"] == "Expert"
+    assert rows["expert_3"]["graph_space"] == "dev2"
+    assert rows["expert_3"]["sparse_vector"]  # 冻结词表可编码（张三/Expert 在词表内）
+    state = state_session.get(EntitySearchState, "dev2")
+    assert state.entity_count == 4  # 2 → 4
+    assert json.loads(state.type_counts) == {"Expert": 4}
+
+
+def test_upsert_entities_all_oov_text_skipped_not_failed(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """文本 token 全不在冻结词表 → 空稀疏向量跳行计数，不算失败。
+
+    vid 用纯字母（tokenize 的 _ALNUM_RE 会把 ``zzq_1`` 拆出 ``1``，而 ``1``
+    在既有语料词表内——E-1/expert_1 的 token），保证文本真正全 OOV。"""
+    graph, milvus = _indexed_expert_space(monkeypatch, state_session)
+    graph._nodes["Expert"].append(FakeNode("qzxqvw", {}))  # 名退 vid、无属性
+
+    result = EntitySearchService(state_session).upsert_entities(
+        space="dev2", items=[{"vid": "qzxqvw", "label": "Widgets"}]
+    )
+
+    assert result["upserted"] == 0
+    assert result["skippedEmptySparse"] == 1
+    assert len(milvus.collections[COLLECTION_NAME]) == 2  # 未新增行
+    assert state_session.get(EntitySearchState, "dev2").entity_count == 2
+
+
+def test_upsert_entities_reindex_in_progress_skips(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """全量重建在跑：计划内跳过（重建重读全图天然覆盖本批），不上抛。"""
+    _indexed_expert_space(monkeypatch, state_session)
+    monkeypatch.setattr("service.entity_search._database_reindex_running", lambda session: True)
+
+    result = EntitySearchService(state_session).upsert_entities(
+        space="dev2", items=[{"vid": "expert_1", "label": "Expert"}]
+    )
+
+    assert result["mode"] == "skip"
+    assert result["reason"] == "reindex in progress"
+    assert result["upserted"] == 0
+
+
+def test_upsert_entities_without_state_skips(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """空间索引未建不随环全量首建（大空间首建会撞 activity 超时自锁）：跳过。"""
+    graph, milvus = _indexed_two_expert_graph()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    monkeypatch.setattr("service.entity_search._embedding_client", FakeEmbeddingClient)
+
+    result = EntitySearchService(state_session).upsert_entities(
+        space="dev2", items=[{"vid": "expert_1", "label": "Expert"}]
+    )
+
+    assert result == {"mode": "skip", "upserted": 0, "reason": "space index not built"}
+
+
+def test_upsert_entities_embedding_failure_raises(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """真实组件故障上抛（链内严格口径，对照单实体路径的优雅降级）。"""
+    graph, milvus = _indexed_expert_space(monkeypatch, state_session)
+    graph._nodes["Expert"].append(FakeNode("expert_5", {"id": "E-5", "name": "赵六"}))
+    monkeypatch.setattr("service.entity_search._embedding_client", _NoEmbedClient)
+
+    with pytest.raises(EntitySearchError, match="embedding 服务调用失败"):
+        EntitySearchService(state_session).upsert_entities(
+            space="dev2", items=[{"vid": "expert_5", "label": "Expert"}]
+        )
+
+
+def test_upsert_entities_milvus_error_raises(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Milvus 写失败上抛整链 FAILED（e2e 抽取静默丢失红线：绝不静默吞）。"""
+    graph, milvus = _indexed_expert_space(monkeypatch, state_session)
+    graph._nodes["Expert"].append(FakeNode("expert_6", {"id": "E-6", "name": "钱七"}))
+    failing = _FailingUpsertMilvus()
+    failing.collections[COLLECTION_NAME] = list(milvus.collections[COLLECTION_NAME])
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: failing)
+
+    with pytest.raises(EntitySearchError, match="写 Milvus 失败"):
+        EntitySearchService(state_session).upsert_entities(
+            space="dev2", items=[{"vid": "expert_6", "label": "Expert"}]
+        )
+
+
+def test_upsert_entities_collection_missing_raises(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """state 说已建而集合不存在 = 索引被外部清掉：真实故障上抛。"""
+    graph, milvus = _indexed_expert_space(monkeypatch, state_session)
+    graph._nodes["Expert"].append(FakeNode("expert_7", {"id": "E-7", "name": "孙八"}))
+    milvus.collections.pop(COLLECTION_NAME)
+
+    with pytest.raises(EntitySearchError, match="集合 kg_entity 不存在"):
+        EntitySearchService(state_session).upsert_entities(
+            space="dev2", items=[{"vid": "expert_7", "label": "Expert"}]
+        )

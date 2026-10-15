@@ -6,7 +6,7 @@ import {
   ref,
   watch,
 } from 'vue'
-import { RouterLink, useRouter } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { runNgql, type GraphConsoleResult } from '../../api/graphConsole'
 import { currentGraphSpace } from '../../api/currentGraphSpace'
 import AppAlert from '../../components/AppAlert.vue'
@@ -279,6 +279,13 @@ const props = defineProps<{
 }>()
 
 const router = useRouter()
+const route = useRoute()
+
+// ?day=YYYY-MM-DD 回看指定统计日的「昨日新增」（验收核对）；非法值按缺省处理
+const overviewDayParam = computed(() => {
+  const day = typeof route.query.day === 'string' ? route.query.day : ''
+  return /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : undefined
+})
 
 // 平台总览对所有登录用户开放；跳往管理页的入口（查看任务/进入人工处理按钮、
 // 图谱构建与人工审核面板、资产抽屉的更新任务链接）对普通用户直接隐藏，仅管理员可见。
@@ -629,6 +636,9 @@ const overviewMeta = ref({
   platformStatus: '正在加载平台状态',
   pendingBatchCount: 0,
   updatedAt: '--',
+  // 统计日（北京自然日）：昨日新增实际归属的日子，由后端随载荷透出——缓存异常
+  // 停在旧日子时用户一眼可辨，页面不自行推算「昨天」
+  statsDay: '',
   dataMode: 'mock' as PlatformOverviewData['dataMode'],
   warnings: [] as string[],
 })
@@ -638,15 +648,26 @@ const assetChangeRows = ref<Record<AssetOverviewKey, AssetChangeRow[]>>({
   entity: [],
   relation: [],
 })
-// 合计与逐对象明细同源；无法完整读取时显示错误，不能把写入合计当成明细数。
+// 聚合格式（2026-10-14）：一行 = 一个写入块（执行×来源），合计按控制库 written
+// 精确计数（对象数口径，与行数是两回事）；控制库不可读时显示错误占位。
 const assetChangeTotals = ref<Partial<Record<AssetOverviewKey, number>>>({})
 const assetChangeErrors = ref<Partial<Record<AssetOverviewKey, string>>>({})
+const activeAssetChangeRows = computed(() => {
+  const key = selectedAssetChange.value
+  return key ? assetChangeRows.value[key] ?? [] : []
+})
 function assetChangeFooterText(key: AssetOverviewKey | null): string {
   if (!key) return ''
-  const shown = assetChangeRows.value[key].length
-  if (assetChangeErrors.value[key]) return shown ? `已读取 ${shown} 条明细，部分明细暂不可读取` : '新增明细暂不可读取'
-  return `${shown} 条变化`
+  if (assetChangeErrors.value[key]) {
+    const shown = assetChangeRows.value[key].length
+    return shown ? `已读取 ${shown} 条变化，部分暂不可读取` : '新增明细暂不可读取'
+  }
+  const total = assetChangeTotals.value[key] ?? assetChangeRows.value[key].length
+  return `共 ${total.toLocaleString()} 条变化`
 }
+// 中断/失败执行也计入昨日新增（已落图批次是真实写入）。行内不做任何终态标注
+// （用户拍板 2026-10-15）——数量列只计成功写入，标注反而让人怀疑数不对；
+// 终态与失败行走任务详情的执行状态/失败行列看。
 // 新增明细对象/来源列的悬浮浮窗只在文本确实被截断时出现（未截断不出框）：
 // mouseenter 时量 scrollWidth>clientWidth 才置位，mouseleave 复位
 const assetTipVisible = reactive(new Set<string>())
@@ -1326,12 +1347,13 @@ onUnmounted(() => {
 async function loadPlatformOverview(): Promise<void> {
   try {
     // 图资产统计随全局图空间选择器（00918：抽取写非默认空间后总览也要能反映）
-    const data = await getPlatformOverview(currentGraphSpace())
+    const data = await getPlatformOverview(currentGraphSpace(), overviewDayParam.value)
 
     overviewMeta.value = {
       platformStatus: data.platformStatus,
       pendingBatchCount: data.pendingBatchCount,
       updatedAt: data.updatedAt,
+      statsDay: data.statsDay ?? '',
       dataMode: data.dataMode,
       // 兜底：旧版本/异常载荷缺 warnings 时模板里 .join 会直接把页面炸掉
       warnings: data.warnings ?? [],
@@ -1370,6 +1392,10 @@ watch(algoSpace, () => {
   }
 })
 
+// ?day= 变化（页内改 URL 回看历史统计日）后重拉已展示的总览
+watch(overviewDayParam, () => {
+  if (overviewDataLoaded.value) void loadPlatformOverview()
+})
 
 function handleStartTask() {
   const priority = processingPriority.value === '紧急' ? '紧急优先' : '普通优先级'
@@ -1394,12 +1420,31 @@ function openProcessDetail(area: 'processing' | 'construction', taskId: string, 
 function openAssetChangeTask(row: AssetChangeRow) {
   if (!canEnterAdminPages.value) return
   if (!row.jobId) {
-    showToast('该记录未关联图谱构建任务', 'info')
+    // 有 taskId 说明控制库有执行记录、但不是 job 通道下发（回填/中断执行）——
+    // 与「旧执行未记录任务」区分提示，指向不同排查方向
+    showToast(
+      row.taskId
+        ? '该记录来自非任务通道执行（回填或中断），未关联图谱构建任务'
+        : '该记录未关联图谱构建任务',
+      'info',
+    )
     return
   }
-  // 跳图谱构建区内的正常任务详情页（与图谱构建列表点任务同一动线、导航高亮），
-  // 不再落 /task-detail 专用页——该路由不在左侧导航，落地后无归属无返回动线。
-  void router.push({ name: 'job-detail', params: { jobId: row.jobId } })
+  // 聚合格式下一行属于恰好一个执行、执行属于唯一任务（2026-10-14 恢复行级跳转）——
+  // 落图谱构建区任务详情页（与图谱构建列表点任务同一动线）；带 execId 直达该行
+  // 所属的那一次执行——任务可多次运行，任务页默认展示最新执行，昨日行点开会张冠李戴。
+  // tab=lineage 直落「数据溯源」页签；src+n 锚定点击的那条来源行（同名来源表可能
+  // 来自多个 Schema，带写入数才唯一），目标页高亮并滚动到它，落地即见行上的数。
+  void router.push({
+    name: 'job-detail',
+    params: { jobId: row.jobId },
+    query: {
+      tab: 'lineage',
+      ...(row.execId ? { exec: row.execId } : {}),
+      src: row.source,
+      n: row.count,
+    },
+  })
 }
 
 function handleExecuteService() {
@@ -2150,30 +2195,29 @@ print(response.json())</pre>
     <Teleport to="body">
       <button v-if="selectedAssetChange" class="asset-change-mask" type="button" aria-label="关闭新增数据详情" @click="selectedAssetChange = null" />
       <aside aria-label="辅助区域 4" v-if="selectedAssetChange && activeAssetOverview" class="asset-change-drawer">
-        <header><div><span>昨日图谱数据变化</span><h2>{{ activeAssetOverview.title }}新增明细</h2><p>{{ activeAssetOverview.addedLabel }} {{ activeAssetOverview.added }} · 数据更新至 {{ overviewMeta.updatedAt }}</p></div><button type="button" aria-label="关闭新增数据详情" @click="selectedAssetChange = null">×</button></header>
+        <header><div><span>昨日图谱数据变化</span><h2>{{ activeAssetOverview.title }}新增明细</h2><p>{{ activeAssetOverview.addedLabel }} {{ activeAssetOverview.added }} · 统计日 {{ overviewMeta.statsDay || '—' }} · 数据更新至 {{ overviewMeta.updatedAt }}</p></div><button type="button" aria-label="关闭新增数据详情" @click="selectedAssetChange = null">×</button></header>
         <section class="asset-change-summary"><article><span>当前总量</span><strong>{{ activeAssetOverview.total }}</strong></article><article><span>{{ activeAssetOverview.addedLabel }}</span><strong>{{ activeAssetOverview.added }}</strong></article></section>
+        <div class="asset-change-toolbar">
+          <span v-if="assetChangeErrors[selectedAssetChange]" class="asset-change-hint">{{ assetChangeErrors[selectedAssetChange] }}</span>
+        </div>
         <div class="asset-change-table">
           <table aria-label="数据表">
-            <thead><tr><th>数据类型</th><th>具体对象</th><th>来源</th><th>识别时间</th></tr></thead>
+            <thead><tr><th>数据类型</th><th>数量</th><th>来源</th><th>识别时间</th></tr></thead>
             <tbody>
-              <tr v-if="!assetChangeRows[selectedAssetChange].length"><td colspan="4">{{ assetChangeErrors[selectedAssetChange] || '昨日暂无写图记录' }}</td></tr>
+              <tr v-if="!activeAssetChangeRows.length"><td colspan="4">{{ assetChangeErrors[selectedAssetChange] || '昨日暂无写图记录' }}</td></tr>
               <tr
-                v-for="(row, idx) in assetChangeRows[selectedAssetChange]"
-                :key="row.objectId || `${row.type}-${row.object}-${row.time}-${idx}`"
+                v-else
+                v-for="(row, idx) in activeAssetChangeRows"
+                :key="`${row.type}-${row.source}-${row.time}-${idx}`"
                 :class="{ 'is-clickable': canEnterAdminPages && row.jobId }"
                 :tabindex="canEnterAdminPages && row.jobId ? 0 : undefined"
-                :aria-label="canEnterAdminPages && row.jobId ? `查看${row.object}的图谱构建任务` : undefined"
+                :aria-label="canEnterAdminPages && row.jobId ? `查看${row.type}的图谱构建任务` : undefined"
                 @click="openAssetChangeTask(row)"
                 @keydown.enter.prevent="openAssetChangeTask(row)"
                 @keydown.space.prevent="openAssetChangeTask(row)"
               >
                 <td>{{ row.type }}</td>
-                <td>
-                  <a-tooltip :popup-visible="assetTipVisible.has(`obj-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`obj-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip">
-                    <span class="asset-change-object" @mouseenter="showAssetTipIfTruncated(`obj-${idx}`, $event)" @mouseleave="hideAssetTip(`obj-${idx}`)"><strong>{{ row.object }}</strong></span>
-                    <template #content>{{ row.object }}</template>
-                  </a-tooltip>
-                </td>
+                <td class="asset-change-count">{{ row.count.toLocaleString() }}</td>
                 <td>
                   <a-tooltip :popup-visible="assetTipVisible.has(`src-${idx}`)" @popup-visible-change="(visible) => { if (!visible) hideAssetTip(`src-${idx}`) }" position="top" background-color="#ffffff" content-class="platform-legend-tooltip">
                     <code class="asset-change-source" @mouseenter="showAssetTipIfTruncated(`src-${idx}`, $event)" @mouseleave="hideAssetTip(`src-${idx}`)">{{ row.source }}</code>
@@ -4803,10 +4847,11 @@ print(response.json())</pre>
 }
 
 .asset-change-mask{position:fixed;z-index:49;inset:0;border:0;background:rgba(16,36,76,.22)}
-.asset-change-drawer{position:fixed;z-index:50;top:0;right:0;display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;width:min(820px,78vw);height:100vh;background:#f8fbff;box-shadow:-18px 0 42px rgba(34,74,132,.22)}
+.asset-change-drawer{position:fixed;z-index:50;top:0;right:0;display:grid;grid-template-rows:auto auto auto minmax(0,1fr) auto;width:min(820px,78vw);height:100vh;background:#f8fbff;box-shadow:-18px 0 42px rgba(34,74,132,.22)}
 .asset-change-drawer>header{display:flex;align-items:flex-start;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.asset-change-drawer>header span{color:#004ecc;font-size:11px}.asset-change-drawer h2{margin:6px 0 3px;font-size:20px}.asset-change-drawer header p{margin:0;color:#718098;font-size:12px}.asset-change-drawer header>button{width:31px;height:31px;border:0;border-radius:5px;background:transparent;color:#52647f;font-size:20px;cursor:pointer}
 .asset-change-summary{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:14px}.asset-change-summary article{display:grid;gap:5px;padding:14px;border:1px solid #c7dcfb;border-radius:7px;background:#fff}.asset-change-summary span{color:#718098;font-size:11px}.asset-change-summary strong{color:#004ecc;font-size:24px}.asset-change-summary article:last-child strong{color:#067647}
-.asset-change-table{min-height:0;overflow:auto;padding:0 14px 14px}.asset-change-table table{width:100%;border-collapse:collapse;border:1px solid #dce8f8;background:#fff;font-size:12px}.asset-change-table th,.asset-change-table td{height:48px;padding:10px 12px;border-bottom:1px solid #e3ebf6;text-align:left}.asset-change-table th{position:sticky;top:0;background:#f3f7fc;color:#62728a}.asset-change-table td{color:#344861}.asset-change-table code{color:#004ecc;font-family:inherit}.asset-change-table td .asset-change-object{display:inline-block;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}.asset-change-table td .asset-change-source{display:inline-block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
+.asset-change-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 14px 12px;flex-wrap:wrap}.asset-change-hint{color:#8a6116;font-size:11px}
+.asset-change-table{min-height:0;overflow:auto;padding:0 14px 14px}.asset-change-table table{width:100%;border-collapse:collapse;border:1px solid #dce8f8;background:#fff;font-size:12px}.asset-change-table th,.asset-change-table td{height:48px;padding:10px 12px;border-bottom:1px solid #e3ebf6;text-align:left}.asset-change-table th{position:sticky;top:0;background:#f3f7fc;color:#62728a}.asset-change-table td{color:#344861}.asset-change-table code{color:#004ecc;font-family:inherit}.asset-change-table td.asset-change-count{font-weight:600;font-variant-numeric:tabular-nums}.asset-change-table td .asset-change-source{display:inline-block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 .asset-change-table tr.is-clickable{cursor:pointer}.asset-change-table tr.is-clickable:focus-visible{background:#f4f8ff;outline:2px solid #004ecc;outline-offset:-2px}
 .asset-change-drawer>footer{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.asset-change-drawer>footer span{color:#718098;font-size:11px}.asset-change-drawer>footer a{height:32px;padding:0 12px;border-radius:5px;background:#004ecc;color:#fff;font-size:11px;line-height:32px;text-decoration:none}
 @media(max-width:760px){.asset-change-drawer{width:94vw}.asset-change-table table{min-width:700px}}

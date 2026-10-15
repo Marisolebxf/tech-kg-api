@@ -63,6 +63,11 @@ class WorkflowRepository:
         self._migrate_job_columns()
         self._migrate_schema_space_column()
         self._migrate_schema_instance_count_column()
+        # 写图日增台账（P1）：api/worker 进程启动即建表（幂等；失败只告警，
+        # save_execution 写账前还有一道 ensure 兜底）
+        from service.day_change_ledger import ensure_day_change_ledger
+
+        ensure_day_change_ledger(self._engine)
 
     def _migrate_schema_instance_count_column(self) -> None:
         """幂等删除 kg_schema_definition.instance_count 列（恒 0 的死统计，已下线）。
@@ -250,6 +255,11 @@ class WorkflowRepository:
                     payload=_json(execution),
                 )
             )
+            # 写图日增台账（P1）：与执行记录同事务覆盖式落账，重放/进度推进
+            # 不双计；异常随事务回滚，杜绝「执行说写了 N、账上没有」的漂移
+            from service.day_change_ledger import sync_execution_to_ledger
+
+            sync_execution_to_ledger(session, execution)
 
     def get_execution(self, execution_id: str) -> dict[str, Any] | None:
         with workflow_session_scope() as session:

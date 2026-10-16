@@ -18,7 +18,7 @@ from biz.schemas.common import ApiResponse
 from biz.schemas.schema_management import (
     EntitySchemaCreate,
     RelationSchemaCreate,
-    SchemaBackfillRequest,
+    # SchemaBackfillRequest,  # 历史回填接口已废弃下线（见下方注释块）
     SchemaExtractRequest,
     SchemaPropertyInput,
     SchemaSourcesReplace,
@@ -386,34 +386,37 @@ async def trigger_schema_extraction(
         _raise_domain_error(exc)
 
 
-@router.post("/schemas/{schema_id}/backfill", response_model=ApiResponse, status_code=201)
-async def backfill_schema_history(
-    schema_id: str,
-    actor: CurrentActor,
-    session: Annotated[Session, Depends(get_workflow_session)],
-    payload: SchemaBackfillRequest | None = None,
-) -> ApiResponse:
-    """回填历史数据：清空该 Schema 全部来源水位后触发全量重跑（可反复执行）。
-
-    前置同触发抽取（已上传脚本 + ≥1 来源绑定）。脚本落后于 Schema 时回填可能
-    无效，未带 ``force`` 返回 409，前端强确认后带 force 重发。
-    """
-    _schema_access(actor, session, schema_id, "write", payload.graph_space if payload else None)
-    if rbac_enabled() and payload and payload.graph_space:
-        ensure_space_access(actor, payload.graph_space, "write")
-    try:
-        data = await _application(session).backfill(
-            schema_id=schema_id,
-            user_id=actor.user_id,
-            is_platform_admin=_can_manage(actor),
-            force=payload.force if payload else False,
-            graph_space=payload.graph_space if payload else None,
-            batch_size=payload.batch_size if payload else None,
-            actor=actor,
-        )
-        return ApiResponse(data=data, msg="历史数据回填已触发")
-    except SchemaManagementError as exc:
-        _raise_domain_error(exc)
+# 2026-10-16 废弃下线：历史回填（清全部来源水位 + 全量重跑）与正常业务口径
+# 不对齐（重跑会绕过增量水位、覆盖人工修订），仅调试用。接口先行注释停用，
+# 待彻底确认无依赖后整段删除；需要重跑历史数据走「重新绑定来源表」或联系维护。
+# @router.post("/schemas/{schema_id}/backfill", response_model=ApiResponse, status_code=201)
+# async def backfill_schema_history(
+#     schema_id: str,
+#     actor: CurrentActor,
+#     session: Annotated[Session, Depends(get_workflow_session)],
+#     payload: SchemaBackfillRequest | None = None,
+# ) -> ApiResponse:
+#     """回填历史数据：清空该 Schema 全部来源水位后触发全量重跑（可反复执行）。
+#
+#     前置同触发抽取（已上传脚本 + ≥1 来源绑定）。脚本落后于 Schema 时回填可能
+#     无效，未带 ``force`` 返回 409，前端强确认后带 force 重发。
+#     """
+#     _schema_access(actor, session, schema_id, "write", payload.graph_space if payload else None)
+#     if rbac_enabled() and payload and payload.graph_space:
+#         ensure_space_access(actor, payload.graph_space, "write")
+#     try:
+#         data = await _application(session).backfill(
+#             schema_id=schema_id,
+#             user_id=actor.user_id,
+#             is_platform_admin=_can_manage(actor),
+#             force=payload.force if payload else False,
+#             graph_space=payload.graph_space if payload else None,
+#             batch_size=payload.batch_size if payload else None,
+#             actor=actor,
+#         )
+#         return ApiResponse(data=data, msg="历史数据回填已触发")
+#     except SchemaManagementError as exc:
+#         _raise_domain_error(exc)
 
 
 @router.put("/schemas/{schema_id}/script", response_model=ApiResponse)

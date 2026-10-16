@@ -1,0 +1,167 @@
+# ES spike 栈（feat/es-entity-search-1016）：验证「实体关键词搜索走 ES」的真实收益。
+# 与 dev2 栈的差异：
+# - 新增 es1016-es（Elasticsearch 8.14.3 单节点，ngram 子串索引），
+#   宿主机 9200 暴露便于 curl/_cat 观测；
+# - 独立 es1016-redis：EntityResponseCache 的 L2 落 Redis，共用 auth-redis 会把
+#   ES 口径的 keyword 缓存漏给 dev2 栈，必须隔离；
+# - 控制面继续共用 temporal-mysql-dev2 的 techkg_control 库（本栈不跑 workflow，
+#   entity-search 不触控制面；勿在本栈触发任务，避免跨栈写执行记录）；
+# - 不起 temporal / worker（entity-search 不依赖；api 里 TEMPORAL_ADDRESS 指向
+#   temporal-dev2 仅兜底）；
+# - AUTH_ENABLED=false 免登录（e2e 三件套），便于 curl 直测；
+# - api 注入 ENTITY_SEARCH_ES_URL，业务 MySQL / trs-graph 走 host.docker.internal
+#   （graph 为只读共享，读负载 = 同等图直查的一次扫描，与 dev2 同量级）。
+#
+# 启动：docker compose -f docker-compose.es-spike.yml up -d --build
+# 回收：docker compose -f docker-compose.es-spike.yml down -v
+name: es-spike-1016
+
+services:
+  es1016-es:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.14.3
+    container_name: es1016-es
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms2g -Xmx2g
+    ports:
+      - "9200:9200"
+    volumes:
+      - es1016-es-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks:
+      - app
+    restart: unless-stopped
+
+  # 独立会话/缓存 Redis（见顶部说明：L2 缓存隔离）
+  es1016-redis:
+    image: redis:7.4-alpine
+    container_name: es1016-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - es1016-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - app
+    restart: unless-stopped
+
+  es1016-api:
+    build:
+      context: ./backend
+      args:
+        PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
+    image: tech-kg-api-es1016-api:latest
+    container_name: es1016-api
+    command: [".venv/bin/uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4", "--timeout-keep-alive", "75"]
+    ports:
+      - "8003:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      TZ: UTC
+      TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://host.docker.internal:8090}
+      TRS_GRAPH_SPACE: dev2
+      TRS_GRAPH_API_KEY: ${TRS_GRAPH_API_KEY:-ysukeg}
+      TRS_GRAPH_TIMEOUT: ${TRS_GRAPH_TIMEOUT:-30}
+      MYSQL_HOST: ${MYSQL_HOST:-host.docker.internal}
+      MYSQL_PORT: ${MYSQL_PORT:-3306}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-gkx_element}
+      MYSQL_USERNAME: ${MYSQL_USERNAME:-root}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-123456789}
+      MYSQL_POOL_SIZE: "10"
+      MYSQL_MAX_OVERFLOW: "20"
+      PAPER_COOP_MYSQL_HOST: ${PAPER_COOP_MYSQL_HOST:-${MYSQL_HOST:-host.docker.internal}}
+      PAPER_COOP_MYSQL_PORT: ${PAPER_COOP_MYSQL_PORT:-${MYSQL_PORT:-3306}}
+      PAPER_COOP_MYSQL_DATABASE: ${PAPER_COOP_MYSQL_DATABASE:-gkx_local}
+      PAPER_COOP_MYSQL_USERNAME: ${PAPER_COOP_MYSQL_USERNAME:-${MYSQL_USERNAME:-root}}
+      PAPER_COOP_MYSQL_PASSWORD: ${PAPER_COOP_MYSQL_PASSWORD:-${MYSQL_PASSWORD:-123456789}}
+      MILVUS_HOST: milvus
+      MILVUS_PORT: "19530"
+      MILVUS_URI: ""
+      PATENT_EMBEDDING_PROVIDER: openai
+      PATENT_EMBEDDING_BASE_URL: http://m3e-embedding:8010/v1
+      PATENT_EMBEDDING_MODEL: moka-ai/m3e-small
+      PATENT_EMBEDDING_DIM: "512"
+      PATENT_EMBEDDING_API_KEY: local-no-auth
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-glm-5.3-flash}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
+      # ==== ES spike 关键注入 ====
+      ENTITY_SEARCH_ES_URL: http://es1016-es:9200
+      ENTITY_SEARCH_ES_TIMEOUT: "10"
+      # 控制面共用 dev2 的 techkg_control（见顶部说明）
+      WORKFLOW_MYSQL_HOST: temporal-mysql-dev2
+      WORKFLOW_MYSQL_PORT: "3306"
+      WORKFLOW_MYSQL_DATABASE: techkg_control
+      WORKFLOW_MYSQL_USERNAME: root
+      WORKFLOW_MYSQL_PASSWORD: temporal
+      TEMPORAL_ADDRESS: temporal-dev2:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: tech-kg-workflows
+      # e2e 免登录三件套
+      AUTH_ENABLED: "false"
+      APP_ENV: dev
+      AUTH_ALLOW_INSECURE_DEV_CONTEXT: "true"
+      AUTH_SESSION_BACKEND: redis
+      REDIS_URL: redis://es1016-redis:6379/0
+      BUSINESS_RBAC_ENABLED: "false"
+      REVIEW_IDENTITY_REQUIRE_SIGNATURE: "false"
+      SCHEMA_AUTO_INIT: "false"
+      SCHEMA_S3_ENDPOINT_URL: http://operator-rustfs:9000
+      SCHEMA_S3_ACCESS_KEY: rustfsadmin
+      SCHEMA_S3_SECRET_KEY: rustfsadmin
+      SCHEMA_S3_BUCKET: tech-kg-schema-scripts
+      SCHEMA_S3_REGION: us-east-1
+      SCHEMA_S3_SECURE: "false"
+      CORRECTION_SYNC_WORKER_ENABLED: "false"
+      GRAPH_SPACE_REPLICA_FACTOR: "1"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - app
+    depends_on:
+      es1016-es:
+        condition: service_healthy
+      es1016-redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # 根路径前端（8094）：与 dev2 同构，仅 upstream 指向 es1016-api
+  es1016-web:
+    build:
+      context: ./frontend
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+    image: tech-kg-api-es1016-web:latest
+    container_name: es1016-web
+    ports:
+      - "8094:80"
+    environment:
+      APP_BASE: ""
+      TRS_GRAPH_SPACE: dev2
+      AUTH_ENABLED: "false"
+      ADMIN_EXAMPLE_FALLBACK: "false"
+    volumes:
+      - ./frontend/nginx.es1016.conf:/etc/nginx/templates/default.conf.template:ro
+    depends_on:
+      - es1016-api
+    networks:
+      - app
+    restart: unless-stopped
+
+volumes:
+  es1016-es-data:
+  es1016-redis-data:
+
+networks:
+  app:
+    external: true
+    name: tech-kg-api_app

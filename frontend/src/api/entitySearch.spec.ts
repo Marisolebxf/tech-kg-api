@@ -19,7 +19,9 @@ describe('实体检索 API 路由', () => {
   it('实体列表文字搜索使用 keyword 接口，保留当前图空间及分页', async () => {
     const scope = { space: 'dev2', entityType: 'Paper', keyword: '世界生命科学格局中的中国', limit: 10, offset: 10 }
     await searchEntityList(scope)
-    expect(http.get).toHaveBeenCalledWith('/v1/entity-search/keyword', { params: scope })
+    // 大图空间逐标签全扫可达 30s+，keyword 请求放宽到 55s（< nginx 60s 代理读超时），
+    // 不能回落 20s 默认值——那会把属性关键词检索整个超时掉。
+    expect(http.get).toHaveBeenCalledWith('/v1/entity-search/keyword', { params: scope, timeout: 55_000 })
     expect(http.post).not.toHaveBeenCalled()
   })
 

@@ -44,6 +44,9 @@ class SchemaManagementApplication:
     def topology(self, user_id: str | None, **kwargs) -> dict[str, Any]:
         return self._service.topology(user_id, **kwargs)
 
+    def external_catalog(self, graph_space: str | None = None) -> dict[str, Any]:
+        return self._service.external_catalog(graph_space)
+
     def create_entity(self, **kwargs) -> dict[str, Any]:
         return self._service.create_entity(**kwargs)
 

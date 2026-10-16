@@ -86,3 +86,30 @@ def test_database_failure_is_safe_503(monkeypatch):
         service.authenticate_client("partner-a", "test-key")
     assert error.value.status_code == 503
     assert "secret" not in str(error.value)
+
+
+def test_kg_open_scope_issues_and_authenticates(client_db):
+    key = service.issue_key(
+        "partner-kg",
+        business_name="图谱调用方",
+        expires_days=30,
+        scopes=[service.KG_OPEN_READ],
+    )
+    with client_db() as session:
+        row = session.get(ExternalAPIClient, "partner-kg")
+        assert row.scopes == [service.KG_OPEN_READ]
+    identity = service.authenticate_client("partner-kg", key, required_scope=service.KG_OPEN_READ)
+    assert identity.client_id == "partner-kg"
+    # 只授了 kg-open:read 时，项目关系接口（默认 scope）应拒绝。
+    with pytest.raises(service.ExternalClientError) as error:
+        service.authenticate_client("partner-kg", key)
+    assert error.value.status_code == 403
+
+
+def test_issue_key_rejects_unknown_or_empty_scopes(client_db):
+    with pytest.raises(ValueError):
+        service.issue_key(
+            "partner-bad", business_name="业务方", expires_days=1, scopes=["nope:read"]
+        )
+    with pytest.raises(ValueError):
+        service.issue_key("partner-empty", business_name="业务方", expires_days=1, scopes=[])

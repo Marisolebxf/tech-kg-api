@@ -13,6 +13,8 @@ from db_model.external_api_client import ExternalAPIClient
 from infra.mysql import session_scope
 
 PROJECT_RELATIONS_READ = "project-relations:read"
+KG_OPEN_READ = "kg-open:read"
+KNOWN_SCOPES = (PROJECT_RELATIONS_READ, KG_OPEN_READ)
 CLIENT_ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
 
 
@@ -35,7 +37,9 @@ def hash_key(key: str) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
-def authenticate_client(client_id: str, api_key: str) -> ExternalClientIdentity:
+def authenticate_client(
+    client_id: str, api_key: str, *, required_scope: str = PROJECT_RELATIONS_READ
+) -> ExternalClientIdentity:
     if not CLIENT_ID_PATTERN.fullmatch(client_id) or not 1 <= len(api_key) <= 256:
         raise ExternalClientError("调用凭证无效或已失效")
     try:
@@ -50,15 +54,21 @@ def authenticate_client(client_id: str, api_key: str) -> ExternalClientIdentity:
                 or client.expires_at <= utc_now()
             ):
                 raise ExternalClientError("调用凭证无效或已失效")
-            if PROJECT_RELATIONS_READ not in (client.scopes or []):
-                raise ExternalClientError("调用方无项目关系查询权限", 403)
+            if required_scope not in (client.scopes or []):
+                raise ExternalClientError("调用方无该接口的查询权限", 403)
             return ExternalClientIdentity(client_id=client.client_id)
     except SQLAlchemyError as exc:
         # 不将连接信息、SQL 参数或数据库异常回传调用方。
         raise ExternalClientError("调用方认证服务暂时不可用", 503) from exc
 
 
-def issue_key(client_id: str, *, business_name: str | None, expires_days: int) -> str:
+def issue_key(
+    client_id: str,
+    *,
+    business_name: str | None,
+    expires_days: int,
+    scopes: list[str] | None = None,
+) -> str:
     """business_name=None 表示轮换；提交成功后才返回唯一一次明文。"""
     if not CLIENT_ID_PATTERN.fullmatch(client_id):
         raise ValueError("client_id 须为 1～64 位小写字母、数字、下划线或连字符，首位为字母或数字")
@@ -66,6 +76,9 @@ def issue_key(client_id: str, *, business_name: str | None, expires_days: int) -
         raise ValueError("有效天数须为 1～3650")
     if business_name is not None and not 1 <= len(business_name.strip()) <= 200:
         raise ValueError("业务方名称须为 1～200 字符")
+    effective_scopes = list(scopes) if scopes is not None else [PROJECT_RELATIONS_READ]
+    if not effective_scopes or any(scope not in KNOWN_SCOPES for scope in effective_scopes):
+        raise ValueError(f"scopes 仅支持 {', '.join(KNOWN_SCOPES)} 的非空组合")
     now = utc_now()
     key = "kg_" + secrets.token_urlsafe(32)
     with session_scope() as session:
@@ -77,7 +90,7 @@ def issue_key(client_id: str, *, business_name: str | None, expires_days: int) -
                 client_id=client_id,
                 business_name=business_name.strip(),
                 enabled=True,
-                scopes=[PROJECT_RELATIONS_READ],
+                scopes=effective_scopes,
                 created_at=now,
             )
             session.add(client)

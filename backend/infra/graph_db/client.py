@@ -793,6 +793,44 @@ class TRSGraphClient:
             offset=offset,
         )
 
+    def paged_edges_by_type(
+        self, edge_type: str, *, limit: int = 100, offset: int = 0
+    ) -> list[GraphEdge]:
+        """按边类型分页取边：LOOKUP 边索引枚举优先，无边索引回退 MATCH 全扫。
+
+        REST /api/v1/edges/type/{type} 耗时与边总量正相关（实测 dev 6350 条 4.7s、
+        两万级及无索引小类型 30s+ 超时），LOOKUP 走边索引任意分页深度 ≤1.4s；
+        无边索引 LOOKUP 立即 400 "There is no index to use"（快速失败不扫描），
+        回退 MATCH 慢但正确——补建边索引后自动切回快路径。
+        边总数需求另走 stats_snapshot()（REST page.total 实测对部分边类型恒为 0）。
+        """
+        if not _TAG_IDENTIFIER.fullmatch(edge_type or ""):
+            raise GraphRequestError(f"非法边类型: {edge_type!r}", status_code=400)
+        try:
+            result = self.execute_read(
+                f"LOOKUP ON `{edge_type}` YIELD edge AS e | LIMIT {int(limit)} OFFSET {int(offset)}"
+            )
+        except GraphRequestError as exc:
+            logger.warning("LOOKUP 分页无边索引（edge=%s），回退 MATCH 全扫: %s", edge_type, exc)
+            result = self.execute_read(
+                f"MATCH ()-[e:`{edge_type}`]->() RETURN e SKIP {int(offset)} LIMIT {int(limit)}"
+            )
+        edges: list[GraphEdge] = []
+        for record in result.records or []:
+            data = record.get("e") if isinstance(record, dict) else None
+            if not isinstance(data, dict):
+                continue
+            edges.append(
+                GraphEdge(
+                    id=data.get("id"),
+                    type=data.get("type") or edge_type,
+                    source_id=data.get("sourceId"),
+                    target_id=data.get("targetId"),
+                    properties=dict(data.get("properties") or {}),
+                )
+            )
+        return edges
+
     def find_edges(
         self,
         edge_type: str,

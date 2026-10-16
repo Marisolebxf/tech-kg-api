@@ -644,6 +644,39 @@ class SchemaManagementService:
         ]
         return {"nodes": nodes, "edges": edges}
 
+    def external_catalog(self, graph_space: str | None = None) -> dict[str, Any]:
+        """kg-open 对外目录：类名/显示名/属性定义/关系端点，不含平台管理字段。"""
+        entities: list[dict[str, Any]] = []
+        relations: list[dict[str, Any]] = []
+        for item in self._dao.list_all(graph_space):
+            properties = [
+                {"name": prop.name, "type": prop.data_type, "required": bool(prop.required)}
+                for prop in item.properties
+            ]
+            if item.kind == "relation":
+                relations.append(
+                    {
+                        "name": item.name,
+                        "displayName": item.label or "",
+                        "description": item.description or "",
+                        "properties": properties,
+                        "sourceType": item.source_expression
+                        or (item.source_schema.name if item.source_schema else ""),
+                        "targetType": item.target_expression
+                        or (item.target_schema.name if item.target_schema else ""),
+                    }
+                )
+            elif item.kind == "entity":
+                entities.append(
+                    {
+                        "name": item.name,
+                        "displayName": item.label or "",
+                        "description": item.description or "",
+                        "properties": properties,
+                    }
+                )
+        return {"entityTypes": entities, "relationTypes": relations}
+
     def create_entity(
         self,
         *,

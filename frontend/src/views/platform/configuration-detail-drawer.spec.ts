@@ -617,13 +617,40 @@ describe('业务默认模型交互', () => {
     }
   })
 
-  it('管理员不能把业务模型设为公共默认，被业务引用的非公共默认模型不能停用删除', async () => {
+  it('管理员拨业务归属模型的开关＝设该业务默认：可点、提示明确、成功后亮业务默认徽标', async () => {
+    setActivePinia(createPinia())
+    const { listLlmConfigs, setDefaultLlmConfig } = await import('../../api/llmConfig')
+    vi.mocked(setDefaultLlmConfig).mockClear()
+    const bizModel = { ...state.current, isDefault: false, defaultReferenced: false, defaultSource: 'public' as const, visibility: 'business' as const, businessName: '亿级图谱' }
+    vi.mocked(listLlmConfigs).mockResolvedValueOnce([bizModel])
+    vi.mocked(setDefaultLlmConfig).mockImplementationOnce(async () => {
+      vi.mocked(listLlmConfigs).mockResolvedValueOnce([{ ...bizModel, isDefault: true, defaultSource: 'business' as const }])
+      return { ...bizModel, isDefault: true, defaultSource: 'business' as const }
+    })
+    const wrapper = mountView()
+    try {
+      await flushPromises()
+      const toggle = wrapper.get('.config-default-toggle')
+      expect(toggle.attributes('disabled')).toBeUndefined()
+      expect(toggle.attributes('title')).toBe('设为该模型所属业务的默认，不影响公共默认')
+      await toggle.trigger('click')
+      await flushPromises()
+      expect(setDefaultLlmConfig).toHaveBeenCalledWith(bizModel.id, 'user-e2e')
+      expect(wrapper.get('.config-default-toggle').text()).toBe('业务默认')
+      expect(wrapper.get('.config-default-toggle').attributes('disabled')).toBeDefined()
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('未配置 Key 的业务模型置灰并说明原因；被业务引用的非默认模型不能停用删除', async () => {
     setActivePinia(createPinia())
     const { listLlmConfigs } = await import('../../api/llmConfig')
-    vi.mocked(listLlmConfigs).mockResolvedValueOnce([{ ...state.current, visibility: 'business', canManage: true, canSetDefault: false, isDefault: false, defaultReferenced: true }])
+    vi.mocked(listLlmConfigs).mockResolvedValueOnce([{ ...state.current, visibility: 'business', canManage: true, canSetDefault: false, hasApiKey: false, isDefault: false, defaultReferenced: true }])
     const wrapper = mountView()
     await flushPromises()
     expect(wrapper.get('.config-default-toggle').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('.config-default-toggle').attributes('title')).toBe('未配置 API Key 的模型不能设为默认')
     const actions = wrapper.findAll('.row-actions button')
     expect(actions[0]!.text()).toBe('管理')
     expect(actions[1]!.attributes('disabled')).toBeDefined()

@@ -85,14 +85,46 @@ def test_business_shared_and_public_fallback(factory):
 
 def test_default_permission_and_disabled(factory):
     with factory() as s:
-        for who, target in [(actor("a"), "b1"), (actor(), "a1")]:
-            with pytest.raises(HTTPException) as error:
-                set_default_for_actor(s, who, target)
-            assert error.value.status_code == 403
-            s.rollback()
+        with pytest.raises(HTTPException) as error:
+            set_default_for_actor(s, actor("a"), "b1")
+        assert error.value.status_code == 403
+        s.rollback()
         LlmConfigService(s).update_config("a1", {"status": "停用"})
         with pytest.raises(HTTPException):
             set_default_for_actor(s, actor("a"), "a1")
+
+
+def test_admin_toggles_business_model_to_its_business_default(factory):
+    """管理员拨业务归属模型的开关＝给该业务设业务默认：公共默认与其他业务不受影响。"""
+    with factory() as s:
+        set_default_for_actor(s, actor(), "a1")
+        assert resolve_default_config(s, "a").id == "a1"
+        assert resolve_default_config(s, "b").id == "public1"
+        assert s.get(LlmConfig, "public1").is_default is True
+        from service.config_ownership import visible_configurations
+
+        rows = {
+            row["id"]: row
+            for row in decorate_defaults(
+                s,
+                actor(),
+                visible_configurations(s, actor(), "llm", LlmConfigService(s).list_configs()),
+            )
+        }
+        assert rows["a1"]["isDefault"] and rows["a1"]["defaultSource"] == "business"
+        assert rows["public1"]["isDefault"] and rows["public1"]["defaultSource"] == "public"
+        assert not rows["b1"]["isDefault"]
+        # 正常 + 有 Key 的模型对管理员全部可设，不再按 public/business 区分
+        assert rows["a1"]["canSetDefault"] and rows["public2"]["canSetDefault"]
+
+
+def test_admin_business_default_requires_active_business(factory):
+    with factory() as s:
+        s.get(BusinessClient, "a").enabled = False
+        s.commit()
+        with pytest.raises(HTTPException) as error:
+            set_default_for_actor(s, actor(), "a1")
+        assert error.value.status_code == 403
 
 
 def test_abnormal_model_cannot_become_default(factory):
@@ -104,6 +136,7 @@ def test_abnormal_model_cannot_become_default(factory):
         s.commit()
         for action in [
             lambda: set_default_for_actor(s, actor("a"), "a1"),  # 业务默认
+            lambda: set_default_for_actor(s, actor(), "a1"),  # 管理员给业务设默认也走状态守卫
             lambda: set_default_for_actor(s, actor(), "public2"),  # 公共默认
             lambda: service.update_config("public2", {"is_default": True}),
             lambda: service.set_default("public2"),
@@ -115,8 +148,14 @@ def test_abnormal_model_cannot_become_default(factory):
         # 新建时直发「异常 + 默认」同样被拦（带 Key 才会走到状态守卫）
         with pytest.raises(HTTPException) as error:
             service.create_config(
-                {"name": "x", "base_url": "http://test", "model": "x", "api_key": "k",
-                 "is_default": True, "status": "异常"}
+                {
+                    "name": "x",
+                    "base_url": "http://test",
+                    "model": "x",
+                    "api_key": "k",
+                    "is_default": True,
+                    "status": "异常",
+                }
             )
         assert error.value.status_code == 409
         s.rollback()
@@ -237,11 +276,14 @@ def test_all_global_default_write_paths_require_key(factory):
                 {"name": "x", "base_url": "http://test", "model": "x", "is_default": True}
             )
         s.get(LlmConfig, "public2").api_key = ""
+        s.get(LlmConfig, "a1").api_key = ""
         s.commit()
         with pytest.raises(HTTPException):
             service.update_config("public2", {"is_default": True})
         with pytest.raises(HTTPException):
             set_default_for_actor(s, actor(), "public2")
+        with pytest.raises(HTTPException):
+            set_default_for_actor(s, actor(), "a1")  # 管理员给业务设默认同样要求有 Key
 
 
 @pytest.mark.parametrize("invalid", ["missing", "foreign", "disabled", "key", "business"])

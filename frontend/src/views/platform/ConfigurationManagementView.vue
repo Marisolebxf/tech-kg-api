@@ -648,7 +648,10 @@ async function testConnection(item: ConfigItem) {
 }
 
 function defaultLabel(item: ConfigItem) {
-  return item.kind === 'llm' && !isAdmin.value && item.defaultSource === 'public' ? '跟随公共默认' : '默认'
+  if (item.kind === 'llm' && !isAdmin.value && item.defaultSource === 'public') return '跟随公共默认'
+  // 管理员视角下公共默认与各业务默认并存，徽标区分开
+  if (item.kind === 'llm' && isAdmin.value && item.defaultSource === 'business') return '业务默认'
+  return '默认'
 }
 function defaultProtected(item: ConfigItem) {
   return item.kind === 'llm' ? item.defaultReferenced === true || item.isDefault : item.kind === 'embedding' && item.isDefault
@@ -685,8 +688,13 @@ function defaultSwitchDisabled(item: ConfigItem) {
 }
 function defaultToggleTitle(item: ConfigItem) {
   if (item.kind === 'llm' && item.status === '异常') return '连接异常的模型不能设为默认，请先恢复连接'
+  if (item.kind === 'llm' && item.status === '停用') return '停用的模型不能设为默认，请先启用'
+  if (item.kind === 'llm' && !item.hasApiKey) return '未配置 API Key 的模型不能设为默认'
   if (item.kind === 'llm' && !isAdmin.value) return item.defaultSource === 'public' && item.isDefault ? '当前跟随公共默认；点击将此模型固定为本业务默认' : '设为本业务默认，不影响其他业务'
-  return item.isDefault ? '如需更换，请将其他配置设为默认' : '设为默认配置'
+  if (item.isDefault) return '如需更换，请将其他配置设为默认'
+  // 管理员拨业务归属模型的开关＝给该业务设业务默认
+  if (item.kind === 'llm' && isAdmin.value && item.visibility === 'business') return '设为该模型所属业务的默认，不影响公共默认'
+  return '设为默认配置'
 }
 async function toggleDefault(item: ConfigItem, value: unknown) {
   const enabled = value === true
@@ -714,7 +722,10 @@ async function toggleDefault(item: ConfigItem, value: unknown) {
       }
     }
     resetConfigPage()
-    showToast(`“${item.name}”已设为${item.kind === 'llm' ? isAdmin.value ? '公共默认' : '本业务默认' : '默认'}。`, 'success')
+    const defaultScope = item.kind !== 'llm' ? '默认'
+      : isAdmin.value ? (item.visibility === 'business' ? `「${item.businessName || '所属业务'}」业务默认` : '公共默认')
+      : '本业务默认'
+    showToast(`“${item.name}”已设为${defaultScope}。`, 'success')
   } catch (err) {
     showToast(`更新默认配置失败：${(err as Error).message}`, 'error')
   } finally {

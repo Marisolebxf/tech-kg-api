@@ -232,7 +232,7 @@ async def test_entity_extraction_uses_selected_endpoint_without_shared_client(mo
             assert requests[-1] == (f"{model}.test", model)
 
 
-async def test_foreign_business_header_and_private_default_are_rejected_before_model_call(
+async def test_foreign_business_header_rejected_and_admin_pins_business_default(
     model_api,
 ):
     app, requests = model_api
@@ -245,11 +245,16 @@ async def test_foreign_business_header_and_private_default_are_rejected_before_m
             "/llm-config/llm-configs/private_b/set-default", headers=headers("a")
         )
         assert response.status_code == 403
+        assert requests == []
+        # 管理员拨业务归属模型的开关＝给该业务设业务默认，公共默认与其他业务不受影响
         response = await client.post(
             "/llm-config/llm-configs/private_a/set-default", headers=headers("admin")
         )
-        assert response.status_code == 403
-        assert requests == []
+        assert response.status_code == 200, response.text
+        assert (await call_model(client, "a")).status_code == 200
+        assert requests[-1] == ("private_a.test", "private_a")
+        assert (await call_model(client, "b")).status_code == 200
+        assert requests[-1] == ("public_one.test", "public_one")
     assert selected_llm_business.get() is None
 
 

@@ -83,6 +83,15 @@ def guard_default_removal(session: Session, config_id: str) -> None:
 def set_default_for_actor(session: Session, actor, config_id: str) -> None:
     business_id = assigned_config_business(session, actor)
     ensure_config_access(session, actor, "llm", config_id)
+    if not business_id:
+        # 管理员拨公共模型的开关＝设公共默认；拨业务归属模型＝给该业务设业务默认，
+        # 公共默认仍只能选公共模型，业务默认的归属不变量不破（目标即该业务自有模型）。
+        target_business = config_business(session, config_id)
+        if target_business:
+            owner = session.get(BusinessClient, target_business)
+            if owner is None or not owner.enabled:
+                raise HTTPException(403, "所属业务不存在或已停用")
+            business_id = target_business
     if business_id:
         # Business row exists even before its first preference; locks concurrent first inserts.
         session.scalar(
@@ -149,22 +158,35 @@ def decorate_defaults(session: Session, actor, configs: list[dict]) -> list[dict
     effective_id = preference.config_id if preference else public.id if public else None
     references = set(session.scalars(select(BusinessLlmDefault.config_id)))
     source = "business" if preference else "public"
-    return [
-        {
-            **item,
-            "isDefault": item["id"] == effective_id,
-            "defaultSource": source,
-            "defaultReferenced": bool(
-                item["id"] in references or (public and public.id == item["id"])
-            ),
-            "canSetDefault": bool(
-                item.get("status") != "停用"
-                and item.get("hasApiKey")
-                and (
-                    (business_active and business_id)
-                    or (actor.is_admin and item.get("visibility") == "public")
-                )
-            ),
-        }
-        for item in configs
-    ]
+    # 管理员看得到各业务的模型：业务模型若已是所属业务的默认，同样要亮「默认」。
+    business_defaults = (
+        {}
+        if business_id
+        else {row.business_id: row.config_id for row in session.scalars(select(BusinessLlmDefault))}
+    )
+    decorated = []
+    for item in configs:
+        if business_id:
+            is_default, item_source = item["id"] == effective_id, source
+        elif item.get("businessId") and business_defaults.get(item["businessId"]) == item["id"]:
+            is_default, item_source = True, "business"
+        else:
+            is_default = public is not None and item["id"] == public.id
+            item_source = "public"
+        decorated.append(
+            {
+                **item,
+                "isDefault": is_default,
+                "defaultSource": item_source,
+                "defaultReferenced": bool(
+                    item["id"] in references or (public and public.id == item["id"])
+                ),
+                # 管理员不再限定公共模型：拨业务归属模型＝设该业务的业务默认。
+                "canSetDefault": bool(
+                    item.get("status") != "停用"
+                    and item.get("hasApiKey")
+                    and ((business_active and business_id) or actor.is_admin)
+                ),
+            }
+        )
+    return decorated

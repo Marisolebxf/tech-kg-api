@@ -68,6 +68,11 @@ RELATION_GROUPS: tuple[tuple[str, set[str]], ...] = (
     ),
 )
 
+# 本地归类可识别的全部边类型：四类关系边集的并集。交给 /filtered-subgraph
+# 做每类型每跳配额遍历，拉回后仍按 relation_types 本地归类——输出语义与
+# 原全量子图一致（类别之外的边本来就不参与归类）。
+_CLASSIFICATION_EDGE_TYPES = sorted({et for _name, types in RELATION_GROUPS for et in types})
+
 DEFAULT_EDGE_WEIGHTS = {
     "COAUTHOR_WITH": 0.84,
     "AFFILIATED_WITH": 0.88,
@@ -128,10 +133,17 @@ class GraphQueryApiClient:
             params={"space": get_current_space()},
         )
 
-    async def get_subgraph(self, node_id: str, *, depth: int) -> dict[str, Any]:
+    async def get_filtered_subgraph(
+        self, node_id: str, *, depth: int, edge_types: list[str]
+    ) -> dict[str, Any]:
+        # 走 /filtered-subgraph（每种边类型每跳独立配额）：单跳边数被一种类型
+        # 刷屏时（如高产专家上千条 AUTHORED_BY），/subgraph 的每跳总量配额会
+        # 把 AFFILIATED_WITH 等低频类型整体挤出首跳取数页，机构/项目等关联
+        # 随之整体消失。端点是单段路径参数，person VID 不含「/」可直用。
         return await self._get(
-            f"/graph-search/subgraph/{node_id}",
+            f"/graph-search/filtered-subgraph/{node_id}",
             params={
+                "edge_types": ",".join(edge_types),
                 "depth": depth,
                 "limit": MAX_GRAPH_ITEMS,
                 "direction": "both",
@@ -163,11 +175,15 @@ class ExpertIndirectRelationApiService(KGModuleScaffoldService):
         async with GraphQueryApiClient(
             api_base_url, auth_headers=auth_headers, app=app
         ) as graph_api:
-            # get_node 与 get_subgraph 入参都是 core_id，互不依赖，并行拉取。
+            # get_node 与 get_filtered_subgraph 入参都是 core_id，互不依赖，并行拉取。
             # return_exceptions + 节点不存在(ValueError→404)优先抛，保留原串行的错误码语义。
             core_node_r, subgraph_r = await asyncio.gather(
                 graph_api.get_node(core_id),
-                graph_api.get_subgraph(core_id, depth=body.path_depth),
+                graph_api.get_filtered_subgraph(
+                    core_id,
+                    depth=body.path_depth,
+                    edge_types=_CLASSIFICATION_EDGE_TYPES,
+                ),
                 return_exceptions=True,
             )
         if isinstance(core_node_r, ValueError):

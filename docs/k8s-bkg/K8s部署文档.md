@@ -7,7 +7,7 @@
 - 镜像仓库地址：<http://10.50.62.9:30303>
 - 容器管理平台地址：<https://10.50.199.115>
 
-本文档自包含全部 13 份部署清单（见下表），**不再附带独立 yaml 文件**——以本文档为唯一交付物，避免正文与文件两份拷贝漂移。部署时将各节标注编号的 yaml 内容保存为同名临时文件后 `kubectl apply`，或直接在容器平台界面按序导入；其中 02/03 须先按第七节完成地址与密码的修改：
+本文档自包含全部 15 份部署清单（见下表），**不再附带独立 yaml 文件**——以本文档为唯一交付物，避免正文与文件两份拷贝漂移。部署时将各节标注编号的 yaml 内容保存为同名临时文件后 `kubectl apply`，或直接在容器平台界面按序导入；其中 02/03 须先按第七节完成地址与密码的修改：
 
 | 清单 | 内容 |
 | ------ | ------ |
@@ -19,6 +19,8 @@
 | `11-operator-rustfs.yaml` | S3 对象存储（rustfs） |
 | `12-milvus.yaml` | milvus-etcd + milvus 向量库 |
 | `13-temporal.yaml` | temporal-mysql + temporal + temporal-ui |
+| `14-elasticsearch.yaml` | 实体搜索 ES（可选，§六.6） |
+| `15-entity-es-sync.yaml` | 实体 ES 索引全量同步 Job（可选，§六.6） |
 | `20-m3e-embedding.yaml` | 专利向量化服务 |
 | `21-temporal-worker.yaml` | 工作流消费者 |
 | `22-api.yaml` | FastAPI 后端主服务 |
@@ -29,6 +31,7 @@
 
 | 版本 | 文档发布日期 | 修订内容 |
 | ------ | ------------ | --------- |
+| v0.0.8 | 2026/10/16 | 新增实体关键词搜索 ES 通道物料（可选）：§六.6 elasticsearch 8.14.3（单节点）+ 全量同步 Job + `elasticsearch-data` PVC，§一清单表 / §五.3 转推 / §六.1 PVC 同步登记；§七 02-configmap 新增 `ENTITY_SEARCH_ES_URL` / `ENTITY_SEARCH_ES_TIMEOUT`（URL 留空=通道关闭，走图直查）；backend 镜像 v0.0.2→v0.0.3（内置 ES 通道代码与同步脚本）、web v0.0.1→v0.0.2 |
 | v0.0.7 | 2026/9/10 | §九 新增「临时改用 IP 直连登录」清单：5 个环境变量（APP_BASE / AUTH_COOKIE_PATH / AUTH_COOKIE_SECURE / AUTH_FRONTEND_URL / USER_CENTER_REDIRECT_URI）+ 用户中心回调登记 + `set env` 快速切换/回退命令与安全注意事项 |
 | v0.0.6 | 2026/9/10 | 图谱服务连接配置标注来源：§七 02-configmap 的 `TRS_GRAPH_*` 四项与 03-secret 的 `TRS_GRAPH_API_KEY`、§四 依赖表、`docs/k8s-deployment.md` ConfigMap 示例、后端 `infra/graph_db/config.py`，均注明取值对应《图数据库平台（TRS Graph）K8s 部署文档》的 §五.8 Service（trs-graph-service:8090）/ §五.3 Secret（api-key-hash 明文 ysukeg）/ §六 图空间（须与 TRS_GRAPH_SPACE 同名、replica_factor=1） |
 | v0.0.5 | 2026/9/10 | 交付物收口为单一部署文档：02-configmap / 03-secret / 24-web-nginx-template 内联进正文（02/03 在 §七、24 在 §八 前端），删除全部独立 yaml 文件，本文档为唯一交付物（PVC 容量维持 a65647d 统一后的 10Gi 口径） |
@@ -63,8 +66,9 @@
 | mysql | 8.4 | temporal 专用库 + 业务控制面库 techkg_control |
 | temporal | 1.29.2（auto-setup） | 工作流引擎 |
 | temporal-ui | 2.39.0 | 工作流控制台（运维观察用） |
-| backend | v0.0.2（Python 3.11） | 后端业务镜像 ×3（api / temporal-worker / m3e-embedding），已内置 m3e-small 模型 |
-| web | v0.0.1（nginx 1.27） | 前端业务镜像 |
+| elasticsearch | 8.14.3（可选） | 实体关键词搜索 ngram 索引（§六.6；未部署时图直查兜底，仅慢） |
+| backend | v0.0.3（Python 3.11） | 后端业务镜像 ×3（api / temporal-worker / m3e-embedding），已内置 m3e-small 模型；v0.0.3 起含实体搜索 ES 通道 |
+| web | v0.0.2（nginx 1.27） | 前端业务镜像 |
 
 **集群外依赖**（需提前准备，yaml 中只填连接地址）：
 
@@ -98,18 +102,18 @@ docker login 10.50.62.9:30303
 ```bash
 # 后端（api / temporal-worker / m3e-embedding 三个 Deployment 共用同一镜像；
 # 构建期把 m3e-small 模型下载进镜像，m3e 服务启动即用、无需联网）
-docker build -t 10.50.62.9:30303/bkg/backend:v0.0.2 \
+docker build -t 10.50.62.9:30303/bkg/backend:v0.0.3 \
   --build-arg PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
   --build-arg HF_ENDPOINT=https://hf-mirror.com \
   ./backend
 
 # 前端（一次构建、部署期注入——不传任何 VITE_*，部署前缀由 bkg-config 的 APP_BASE 决定）
-docker build -t 10.50.62.9:30303/bkg/web:v0.0.1 \
+docker build -t 10.50.62.9:30303/bkg/web:v0.0.2 \
   --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
   ./frontend
 
-docker push 10.50.62.9:30303/bkg/backend:v0.0.2
-docker push 10.50.62.9:30303/bkg/web:v0.0.1
+docker push 10.50.62.9:30303/bkg/backend:v0.0.3
+docker push 10.50.62.9:30303/bkg/web:v0.0.2
 ```
 
 > 版本升级沿用 v0.0.1 覆盖推送时注意：清单为 `imagePullPolicy: IfNotPresent`，节点不会自动重拉——升级后需删除对应 Pod（或节点上 `crictl rmi`）强制重拉；建议递增 tag 并同步四个 yaml 的 image 引用。
@@ -130,6 +134,7 @@ push_mw milvusdb/milvus:v2.4.17              milvus:v2.4.17
 push_mw mysql:8.4                            mysql:8.4
 push_mw temporalio/auto-setup:1.29.2         temporal-auto-setup:1.29.2
 push_mw temporalio/ui:2.39.0                 temporal-ui:2.39.0
+push_mw docker.elastic.co/elasticsearch/elasticsearch:8.14.3  elasticsearch:8.14.3
 ```
 
 ### 4、创建镜像拉取密钥（全部工作负载引用 `bkg-image-pull-secret-0`）
@@ -160,6 +165,7 @@ kubectl -n bkg create secret docker-registry bkg-image-pull-secret-0 \
 | workflow-state | 10Gi | temporal-worker（本地运行态；D6 后 api 不再挂载） |
 | patent-index-state | 20Gi | api（专利索引状态） |
 | auth-redis-data | 10Gi | auth-redis |
+| elasticsearch-data | 10Gi | elasticsearch（§六.6，可选） |
 
 ```yaml
 # 00-namespace.yaml
@@ -247,6 +253,18 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: auth-redis-data
+  namespace: bkg
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: managed-nfs-storage
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: elasticsearch-data
   namespace: bkg
 spec:
   accessModes: ["ReadWriteOnce"]
@@ -815,6 +833,223 @@ spec:
       nodePort: 30833
 ```
 
+### 6、部署 elasticsearch（可选——实体关键词搜索索引）
+
+实体列表「属性关键词」搜索在图上无法建索引（属性 CONTAINS 逐标签全扫 17~36s，前端 20s 必超时）；ES 通道用 ngram 子串索引把计数/取页降到毫秒级（实测 34.7 万实体空间：计数 9~15ms vs 图直查 6.3~6.6s，索引 185MB、容器内存 ~3GB）。**可选组件**：
+
+- **不部署**：保持 02-configmap 的 `ENTITY_SEARCH_ES_URL` 留空即可，实体搜索自动走图直查（慢，但功能完整），其余业务零影响
+- **部署**：先跑下方全量同步 Job → 把 `ENTITY_SEARCH_ES_URL` 填为 `http://elasticsearch:9200` → 重启 api / temporal-worker（envFrom 不热更新）。此后图谱构建的增量写入会随环自动 upsert ES 文档，全量 Job 仅首灌与对账用
+
+镜像先按 §五.3 转推 `elasticsearch:8.14.3`。
+
+```yaml
+# 14-elasticsearch.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: elasticsearch
+  namespace: bkg
+spec:
+  serviceName: elasticsearch
+  replicas: 1
+  selector:
+    matchLabels:
+      app: elasticsearch
+  template:
+    metadata:
+      labels:
+        app: elasticsearch
+    spec:
+      imagePullSecrets:
+        - name: bkg-image-pull-secret-0
+      # ES mmapfs 要求节点 vm.max_map_count>=262144；若所有节点已在
+      # /etc/sysctl.conf 全局配置，可删除此 initContainer
+      initContainers:
+        - name: sysctl
+          image: 10.50.62.9:30303/library/busybox:1.36
+          command: ["sysctl", "-w", "vm.max_map_count=262144"]
+          securityContext:
+            privileged: true
+      containers:
+        - name: elasticsearch
+          image: 10.50.62.9:30303/library/elasticsearch:8.14.3
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: discovery.type
+              value: single-node
+            - name: xpack.security.enabled
+              value: "false"
+            # 堆按 limit 的 ~40% 配：limit 5Gi → 2g 堆（实测 RSS ~3GB）
+            - name: ES_JAVA_OPTS
+              value: -Xms2g -Xmx2g
+          ports:
+            - containerPort: 9200
+              name: http
+          resources:
+            requests:
+              cpu: 500m
+              memory: 3Gi
+            limits:
+              cpu: "2"
+              memory: 5Gi
+          readinessProbe:
+            exec:
+              command: ["curl", "-fs", "http://localhost:9200/_cluster/health"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            exec:
+              command: ["curl", "-fs", "http://localhost:9200/"]
+            initialDelaySeconds: 90
+            periodSeconds: 15
+            failureThreshold: 8
+          volumeMounts:
+            - name: elasticsearch-data
+              mountPath: /usr/share/elasticsearch/data
+      volumes:
+        - name: elasticsearch-data
+          persistentVolumeClaim:
+            claimName: elasticsearch-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch
+  namespace: bkg
+  labels:
+    app: elasticsearch
+spec:
+  selector:
+    app: elasticsearch
+  ports:
+    - name: http
+      port: 9200
+      targetPort: 9200
+```
+
+> 仅集群内访问，不开 NodePort（与 TRS Graph 的 30090/30002、本项目的 30880/30833 无冲突）。数据卷默认随集群存储类；若只能用 NFS 且启动报 mmapfs 相关错误，改用本地存储类。
+
+ES 就绪后执行首次全量同步（幂等，`_id=标签::vid` 覆盖写；`--drop` 先删旧索引重建，可清走图上已删实体的残留文档）：
+
+```yaml
+# 15-entity-es-sync.yaml
+# 同步空间取 02-configmap 的 TRS_GRAPH_SPACE（多空间对每个空间各跑一次：复制本
+# Job 改名，并在 env 增加 TRS_GRAPH_SPACE: "<space>" 覆盖——显式 env 优先于 envFrom）。
+# ★ TRS_GRAPH_TIMEOUT=180：大标签深 OFFSET 分页单页可到 15~30s（23 万肥标签实测），
+#   默认 30s 客户端超时会中途崩；--batch-size 5000 降低分页成本。两者本 Job 已内置。
+# 断点续跑：追加参数 --labels <剩余标签,逗号分隔>（已完成标签按 vid 幂等，无需重灌；
+#   此时脚本收尾的「图侧与 ES 不一致」警告是子集口径假警）。
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: entity-es-sync
+  namespace: bkg
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 7200 # 大空间（30 万+实体/肥标签）全量同步需 10~30 分钟
+  template:
+    metadata:
+      labels:
+        app: entity-es-sync
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: bkg-image-pull-secret-0
+      containers:
+        - name: sync
+          image: 10.50.62.9:30303/bkg/backend:v0.0.3
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: bkg-config
+            - secretRef:
+                name: bkg-secrets
+          env:
+            - name: TRS_GRAPH_TIMEOUT # 覆盖 configmap 的 30s
+              value: "180"
+          command: [".venv/bin/python", "-m", "script.build_entity_keyword_index"]
+          args:
+            - --es-url
+            - http://elasticsearch:9200
+            - --batch-size
+            - "5000"
+            - --drop
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+```
+
+> `--space` 不传时默认读环境变量 `TRS_GRAPH_SPACE`（envFrom 注入）；`--es-url` 显式指向集群内 ES，与 02-configmap 的开关解耦（开关留空不影响同步 Job）。Job 对图库只读、逐标签串行分页，负载约等于一次图直查扫描。
+
+随环增量已上线（图谱构建写入时自动 upsert ES 文档）。夜间全量重建仅作**对账兜底**（修复图删实体残留等漂移），需要时把上面的 Job 换成 CronJob（同文件二选一）：
+
+```yaml
+# 15-entity-es-sync.yaml（夜间对账变体）
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: entity-es-sync
+  namespace: bkg
+spec:
+  schedule: "17 3 * * *" # 每日 03:17（避开整点）
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 7200
+      template:
+        metadata:
+          labels:
+            app: entity-es-sync
+        spec:
+          restartPolicy: Never
+          imagePullSecrets:
+            - name: bkg-image-pull-secret-0
+          containers:
+            - name: sync
+              image: 10.50.62.9:30303/bkg/backend:v0.0.3
+              imagePullPolicy: IfNotPresent
+              envFrom:
+                - configMapRef:
+                    name: bkg-config
+                - secretRef:
+                    name: bkg-secrets
+              env:
+                - name: TRS_GRAPH_TIMEOUT
+                  value: "180"
+              command: [".venv/bin/python", "-m", "script.build_entity_keyword_index"]
+              args:
+                [
+                  "--es-url",
+                  "http://elasticsearch:9200",
+                  "--batch-size",
+                  "5000",
+                  "--drop",
+                ]
+              resources:
+                requests:
+                  cpu: 250m
+                  memory: 512Mi
+                limits:
+                  cpu: "1"
+                  memory: 2Gi
+```
+
+同步完成的验证：
+
+```bash
+kubectl -n bkg logs job/entity-es-sync --tail=20 # 末尾有各标签 docs 数汇总
+kubectl -n bkg exec elasticsearch-0 -- curl -s http://localhost:9200/_cat/indices
+# kg_entity_kw_<space> 索引的 docs.count 应等于图空间实体总数
+```
+
 ## 七、数据初始化
 
 1. **创建业务配置**（部署业务前完成；两份清单见下方，地址与密码按实际环境修改后再 apply）：
@@ -851,6 +1086,13 @@ data:
   # TRS Graph 单副本 storaged，建图空间必须 replica_factor=1（默认 3 会 Host not enough）
   GRAPH_SPACE_REPLICA_FACTOR: "1"
   TRS_GRAPH_TIMEOUT: "30"
+
+  # ---- 实体搜索 ES 通道（可选，组件见 §六.6）----
+  # 留空 = ES 通道关闭，实体列表关键词搜索走图直查（逐标签全扫 17~36s，功能完整仅慢）。
+  # 部署 §六.6 elasticsearch 并跑完全量同步 Job 后填 http://elasticsearch:9200，
+  # 改动需重启 api / temporal-worker 生效（envFrom 不热更新）。
+  ENTITY_SEARCH_ES_URL: ""
+  ENTITY_SEARCH_ES_TIMEOUT: "10"
 
   # ---- 主 MySQL（外部依赖，按实际环境修改）----
   MYSQL_HOST: "mysql"
@@ -986,7 +1228,7 @@ stringData:
 
 ### 后端
 
-后端三个 Deployment 共用镜像 `10.50.62.9:30303/bkg/backend:v0.0.2`，仅启动命令不同。
+后端三个 Deployment 共用镜像 `10.50.62.9:30303/bkg/backend:v0.0.3`，仅启动命令不同。
 
 **1、m3e-embedding（专利向量化服务）**
 
@@ -1013,7 +1255,7 @@ spec:
         - name: bkg-image-pull-secret-0
       containers:
         - name: m3e-embedding
-          image: 10.50.62.9:30303/bkg/backend:v0.0.2
+          image: 10.50.62.9:30303/bkg/backend:v0.0.3
           imagePullPolicy: IfNotPresent
           command:
             [
@@ -1104,7 +1346,7 @@ spec:
         - name: bkg-image-pull-secret-0
       containers:
         - name: temporal-worker
-          image: 10.50.62.9:30303/bkg/backend:v0.0.2
+          image: 10.50.62.9:30303/bkg/backend:v0.0.3
           imagePullPolicy: IfNotPresent
           command: [".venv/bin/python", "-m", "script.run_temporal_worker"]
           envFrom:
@@ -1155,7 +1397,7 @@ spec:
         - name: bkg-image-pull-secret-0
       containers:
         - name: api
-          image: 10.50.62.9:30303/bkg/backend:v0.0.2
+          image: 10.50.62.9:30303/bkg/backend:v0.0.3
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:
@@ -1300,7 +1542,7 @@ spec:
         - name: bkg-image-pull-secret-0
       containers:
         - name: web
-          image: 10.50.62.9:30303/bkg/web:v0.0.1
+          image: 10.50.62.9:30303/bkg/web:v0.0.2
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:
@@ -1362,6 +1604,7 @@ kubectl apply -f 10-auth-redis.yaml
 kubectl apply -f 11-operator-rustfs.yaml
 kubectl apply -f 12-milvus.yaml
 kubectl apply -f 13-temporal.yaml
+kubectl apply -f 14-elasticsearch.yaml  # 可选（§六.6）：实体搜索 ES，不部署则跳过
 kubectl apply -f 02-configmap.yaml    # 先按第七节修改地址/密码
 kubectl apply -f 03-secret.yaml
 kubectl apply -f 20-m3e-embedding.yaml
@@ -1369,10 +1612,14 @@ kubectl apply -f 21-temporal-worker.yaml
 kubectl apply -f 22-api.yaml
 kubectl apply -f 24-web-nginx-template.yaml
 kubectl apply -f 23-web.yaml
+kubectl apply -f 15-entity-es-sync.yaml # 可选（§六.6）：ES 首次全量同步；完成后填
+                                      # ENTITY_SEARCH_ES_URL 并重启 api/temporal-worker
 
 # 验证
 kubectl -n bkg get pods -o wide
 kubectl -n bkg exec deploy/api -- curl -s http://localhost:8000/health
+# 部署 ES 时：同步 Job 完成后确认索引就位
+kubectl -n bkg exec elasticsearch-0 -- curl -s http://localhost:9200/_cat/indices
 ```
 
 ## 九、代理配置

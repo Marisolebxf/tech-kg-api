@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { IconSearch } from '@arco-design/web-vue/es/icon'
 
 import KgGraphCanvas from '../../components/kg-graph-canvas.vue'
 import AppAlert from '../../components/AppAlert.vue'
@@ -754,9 +753,7 @@ onUnmounted(() => {
                 :max-length="SEARCH_KEYWORD_MAX_LENGTH"
                 placeholder="输入实体名称或关键词检索查询起点"
                 @keyup.enter="doSearch"
-              >
-                <template #prefix><IconSearch /></template>
-              </a-input>
+              />
               <button class="kg-button" type="button" :disabled="searching" @click="doSearch">
                 {{ searching ? '检索中…' : '搜索起点' }}
               </button>

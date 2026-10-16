@@ -167,7 +167,8 @@ function showDetails(row: Record<string, unknown>, index: number): void {
 .query-result-table{min-width:0;overflow:hidden}
 /* A single viewport contains the header and rows, so the vertical scrollbar
    starts at the field-name row. Sticky cells preserve the header on scroll. */
-.query-result-table :deep(.arco-table-content){overflow:auto}
+/* scrollbar-gutter:stable —— 结果出滚动条时不再压住/推移最后一列内容（同图谱构建任务表的口径） */
+.query-result-table :deep(.arco-table-content){overflow:auto;scrollbar-gutter:stable}
 .query-result-table :deep(thead .arco-table-th){position:sticky;top:0;z-index:11}
 .query-result-table :deep(thead .arco-table-col-fixed-right){z-index:12}
 .query-details-button{height:auto;padding:0;border:0;background:transparent;color:#165dff;font-size:14px;line-height:22px;font-weight:400;white-space:nowrap;cursor:pointer}

@@ -45,7 +45,7 @@ import {
   Textarea as ATextarea,
 } from '@arco-design/web-vue'
 import QueryResultTable from './QueryResultTable.vue'
-import { IconInfoCircle, IconRefresh, IconSearch } from '@arco-design/web-vue/es/icon'
+import { IconInfoCircle, IconRefresh } from '@arco-design/web-vue/es/icon'
 import { useAuthStore } from '../../stores/auth'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
 import {
@@ -702,6 +702,27 @@ const overviewReviews = ref<ProductionReviewCase[]>([])
 const overviewReviewsTotal = ref(0)
 const overviewReviewsState = ref<'loading' | 'ready' | 'empty' | 'forbidden' | 'error'>('loading')
 const overviewReviewsError = ref('')
+// 总览审核面板按「对象名 + 类别」合并展示：同一对象多条待审 case（如同名实体多次抽取失败）
+// 在队列页是不同处理实例，但总览只显示名称+类别，逐条列出看起来就是整屏重复；
+// 这里合并成一行并用 ×N 标注条数，跳转仍落在该对象第一条待审 case。
+const overviewReviewRows = computed(() => {
+  const rows: Array<{ id: string; name: string; category: string; count: number; case: ProductionReviewCase }> = []
+  const byKey = new Map<string, (typeof rows)[number]>()
+  for (const item of overviewReviews.value) {
+    const name = item.objectName || item.objectId
+    const category = reviewItemCategory(item)
+    const key = `${name}::${category}`
+    const hit = byKey.get(key)
+    if (hit) {
+      hit.count += 1
+      continue
+    }
+    const row = { id: item.id, name, category, count: 1, case: item }
+    byKey.set(key, row)
+    rows.push(row)
+  }
+  return rows
+})
 
 const visibleOverviewJobs = computed(() =>
   overviewJobs.value.filter(
@@ -1548,9 +1569,9 @@ const pageMeta = computed(() => {
           <template v-if="overviewReviewsState === 'ready'">
             <div class="platform-review-count">待处理 <strong>{{ overviewReviewsTotal }}</strong> 条</div>
             <div class="platform-review-list">
-              <RouterLink v-for="item in overviewReviews" :key="item.id" :to="reviewItemRoute(item)">
-                <strong :title="item.objectName || item.objectId">{{ item.objectName || item.objectId }}</strong>
-                <em :title="reviewItemCategory(item)">{{ reviewItemCategory(item) }}</em>
+              <RouterLink v-for="row in overviewReviewRows" :key="row.id" :to="reviewItemRoute(row.case)">
+                <strong :title="row.name">{{ row.name }}</strong>
+                <em :title="row.category">{{ row.category }}<span v-if="row.count > 1" class="platform-review-dup" :title="`同名对象共 ${row.count} 条待审记录`">×{{ row.count }}</span></em>
               </RouterLink>
             </div>
             <RouterLink v-if="overviewReviewsTotal > overviewReviews.length" class="platform-review-more" to="/manual-review">还有 {{ overviewReviewsTotal - overviewReviews.length }} 条待处理</RouterLink>
@@ -2011,9 +2032,7 @@ const pageMeta = computed(() => {
         </header>
         <div v-if="algoResult" class="platform-algo-list-toolbar">
           <form class="platform-algo-search-form" @submit.prevent="queryAlgoResults">
-            <AInput v-model="algoSearch" class="platform-algo-search platform-algo-search--entity-style" :input-attrs="{ 'aria-label': '搜索图 VID' }" allow-clear placeholder="输入图 VID 筛选结果">
-              <template #prefix><IconSearch aria-hidden="true" /></template>
-            </AInput>
+            <AInput v-model="algoSearch" class="platform-algo-search platform-algo-search--entity-style" :input-attrs="{ 'aria-label': '搜索图 VID' }" allow-clear placeholder="输入图 VID 筛选结果" />
             <AButton type="primary" html-type="submit">查询</AButton>
           </form>
           <AButton type="primary" :disabled="!algoRows.length" @click="exportAlgoCsv">导出{{ algoResult.truncated ? '预览' : '当前结果' }} CSV</AButton>
@@ -2480,7 +2499,7 @@ print(response.json())</pre>
 .platform-summary-card>header a,.platform-summary-card>header button { padding:0;border:0;background:transparent;color:#004ecc;font-size:10px;text-decoration:none;white-space:nowrap;cursor:pointer; }
 .platform-summary-card__main { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));min-height:112px;background:#fff; }
 .platform-summary-card__main section { display:flex;justify-content:center;gap:5px;padding:20px 18px;border-right:1px solid #e3ebf6;flex-direction:column; }.platform-summary-card__main section:last-child { border-right:0; }
-.platform-summary-card__main strong { color:#004ecc;font-size:34px;line-height:40px;letter-spacing:-.5px; }.platform-summary-card.is-relation .platform-summary-card__main strong { color:#7a5af8; }.platform-summary-card.is-property .platform-summary-card__main strong { color:#f79009; }.platform-summary-card .platform-summary-card__main .is-added strong { color:#067647; }
+.platform-summary-card__main strong { color:#004ecc;font-size:34px;line-height:40px;letter-spacing:-.5px; }.platform-summary-card.is-relation .platform-summary-card__main strong { color:#7a5af8; }.platform-summary-card.is-property .platform-summary-card__main strong { color:#f79009; }.platform-summary-card .platform-summary-card__main .is-added strong { color:#f53f3f; }
 .platform-summary-card__main span { color:#475467;font-size:12px; }
 .platform-summary-card__items { position:relative;z-index:1;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:10px 8px;background:#f8fbff; }
 .platform-summary-card__items>a { display:grid;gap:3px;padding:2px 8px;border-right:1px solid #e1eaf5;color:inherit;text-decoration:none;transition:background-color .2s ease; }.platform-summary-card__items>a:last-child { border-right:0; }.platform-summary-card__items>a:hover { background:#eef5ff; }
@@ -2498,8 +2517,7 @@ print(response.json())</pre>
 .platform-jobs-stats { display:grid;grid-template-columns:repeat(6,minmax(0,1fr));border-bottom:1px solid #e4ecf6; }
 .platform-jobs-stats article { display:grid;gap:2px;padding:12px 8px;text-align:center;border-right:1px solid #edf2f8; }
 .platform-jobs-stats article:last-child { border-right:0; }
-.platform-jobs-stats article span { font-size:18px;font-weight:600; }
-.platform-jobs-stats article span.is-run { color:var(--status-info); }.platform-jobs-stats article span.is-ok { color:var(--status-success); }.platform-jobs-stats article span.is-err { color:var(--status-danger); }.platform-jobs-stats article span.is-warn { color:var(--status-warning); }.platform-jobs-stats article span.is-idle { color:var(--status-neutral); }
+.platform-jobs-stats article span { color:#1d2129;font-size:18px;font-weight:600; }
 .platform-jobs-stats article em { color:#52627a;font-size:12px;line-height:20px;font-style:normal; }
 .platform-jobs-list { display:grid;flex:1;grid-template-rows:repeat(5,minmax(44px,1fr));overflow-y:auto; }
 .platform-jobs-list a { display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:10px;min-height:44px;padding:9px 14px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
@@ -2518,6 +2536,7 @@ print(response.json())</pre>
 .platform-review-list a { display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 10px;align-items:center;padding:9px 14px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
 .platform-review-list a:nth-child(8):last-child { border-bottom:0; }
 .platform-review-list a:hover { background:#f4f8ff; }
+.platform-review-list a em .platform-review-dup { margin-left:6px;padding:0 6px;border:1px solid #e5e6eb;border-radius:10px;color:#4e5969;font-size:12px;font-style:normal;font-weight:400;line-height:18px; }
 .platform-review-list strong { min-width:0;overflow:hidden;color:#253752;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap; }
 .platform-review-list em { min-width:0;overflow:hidden;color:#8a97aa;font-size:12px;line-height:20px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }
 .platform-review-more { flex:0 0 auto;padding:10px 14px;border-top:1px solid #e4ecf6;color:#004ecc;font-size:12px;line-height:20px;text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
@@ -4861,11 +4880,11 @@ print(response.json())</pre>
 .asset-change-mask{position:fixed;z-index:49;inset:0;border:0;background:rgba(16,36,76,.22)}
 .asset-change-drawer{position:fixed;z-index:50;top:0;right:0;display:grid;grid-template-rows:auto auto auto minmax(0,1fr) auto;width:min(820px,78vw);height:100vh;background:#f8fbff;box-shadow:-18px 0 42px rgba(34,74,132,.22)}
 .asset-change-drawer>header{display:flex;align-items:flex-start;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.asset-change-drawer>header span{color:#004ecc;font-size:11px}.asset-change-drawer h2{margin:6px 0 3px;font-size:20px}.asset-change-drawer header p{margin:0;color:#718098;font-size:12px}.asset-change-drawer header>button{width:31px;height:31px;border:0;border-radius:5px;background:transparent;color:#52647f;font-size:20px;cursor:pointer}
-.asset-change-summary{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:14px}.asset-change-summary article{display:grid;gap:5px;padding:14px;border:1px solid #c7dcfb;border-radius:7px;background:#fff}.asset-change-summary span{color:#718098;font-size:11px}.asset-change-summary strong{color:#004ecc;font-size:24px}.asset-change-summary article:last-child strong{color:#067647}
+.asset-change-summary{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:14px}.asset-change-summary article{display:grid;gap:5px;padding:14px;border:1px solid #c7dcfb;border-radius:7px;background:#fff}.asset-change-summary span{color:#718098;font-size:11px}.asset-change-summary strong{color:#004ecc;font-size:24px}.asset-change-summary article:last-child strong{color:#f53f3f}
 .asset-change-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 14px 12px;flex-wrap:wrap}.asset-change-hint{color:#8a6116;font-size:11px}
 .asset-change-table{min-height:0;overflow:auto;padding:0 14px 14px}.asset-change-table table{width:100%;border-collapse:collapse;border:1px solid #dce8f8;background:#fff;font-size:12px}.asset-change-table th,.asset-change-table td{height:48px;padding:10px 12px;border-bottom:1px solid #e3ebf6;text-align:left}.asset-change-table th{position:sticky;top:0;background:#f3f7fc;color:#62728a}.asset-change-table td{color:#344861}.asset-change-table code{color:#004ecc;font-family:inherit}.asset-change-table td.asset-change-count{font-weight:600;font-variant-numeric:tabular-nums}.asset-change-table td .asset-change-source{display:inline-block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 .asset-change-table tr.is-clickable{cursor:pointer}.asset-change-table tr.is-clickable:focus-visible{background:#f4f8ff;outline:2px solid #004ecc;outline-offset:-2px}
-.asset-change-drawer>footer{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.asset-change-drawer>footer span{color:#718098;font-size:11px}.asset-change-drawer>footer .net-added{font-style:normal;color:#067647;font-weight:600;margin-left:10px}.asset-change-drawer>footer a{height:32px;padding:0 12px;border-radius:5px;background:#004ecc;color:#fff;font-size:11px;line-height:32px;text-decoration:none}
+.asset-change-drawer>footer{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.asset-change-drawer>footer span{color:#718098;font-size:11px}.asset-change-drawer>footer .net-added{font-style:normal;color:#f53f3f;font-weight:600;margin-left:10px}.asset-change-drawer>footer a{height:32px;padding:0 12px;border-radius:5px;background:#004ecc;color:#fff;font-size:11px;line-height:32px;text-decoration:none}
 @media(max-width:760px){.asset-change-drawer{width:94vw}.asset-change-table table{min-width:700px}}
 
 .platform-query-algo__toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:40px;border-bottom:1px solid #e5e6eb}

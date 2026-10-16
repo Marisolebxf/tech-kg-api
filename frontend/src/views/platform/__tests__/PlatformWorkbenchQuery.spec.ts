@@ -601,7 +601,8 @@ describe('Algorithm result lists', () => {
     expect(search.classes()).toContain('platform-algo-search--entity-style')
     await wrapper.get('input[aria-label="搜索图 VID"]').setValue('node-0')
     expect(wrapper.findAll('tbody tr')).toHaveLength(20)
-    expect(wrapper.get('.platform-algo-search-form .arco-input-prefix .search-icon').exists()).toBe(true)
+    // 搜索框不再带左侧放大镜前缀（设计规范：搜索图标在右侧，这里干脆不放）
+    expect(wrapper.find('.platform-algo-search-form .arco-input-prefix').exists()).toBe(false)
     expect(wrapper.get('.platform-algo-search-form button').text()).toBe('查询')
     expect(wrapper.get('.platform-algo-search-form button').attributes('type')).toBe('submit')
     await wrapper.get('.platform-algo-search-form').trigger('submit')

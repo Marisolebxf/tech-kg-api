@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Popover as APopover } from '@arco-design/web-vue'
-import { IconSearch } from '@arco-design/web-vue/es/icon'
 
 import {
   browseEntities,
@@ -260,9 +259,7 @@ watch(
             placeholder="输入实体名称 / ID / 属性关键词"
             @keyup.enter="resetPagingAndSearch"
             @clear="resetPagingAndSearch"
-          >
-            <template #prefix><IconSearch /></template>
-          </a-input>
+          />
           <button class="kg-button" type="button" :disabled="loading" @click="resetPagingAndSearch">
             {{ loading ? '查询中...' : '查询' }}
           </button>
@@ -433,9 +430,6 @@ watch(
 .app-workspace .entity-toolbar-shell #entity-filter-name.entity-search-input.arco-input-wrapper{box-sizing:border-box;width:280px;min-width:0;max-width:280px;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:1 1 180px}
 .app-workspace .entity-toolbar-shell #entity-filter-name.entity-search-input.arco-input-wrapper:hover{border-color:#4080ff!important;background:#fff!important}
 .app-workspace .entity-toolbar-shell #entity-filter-name.entity-search-input.arco-input-wrapper:focus-within,.app-workspace .entity-toolbar-shell #entity-filter-name.entity-search-input.arco-input-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
-.app-workspace .entity-toolbar-shell #entity-filter-name .arco-input-prefix{padding-right:8px;color:#4e5969}
-.app-workspace .entity-toolbar-shell #entity-filter-name.arco-input-focus .arco-input-prefix{color:#165dff}
-.app-workspace .entity-toolbar-shell #entity-filter-name .arco-input-prefix svg{width:16px;height:16px;font-size:16px}
 .app-workspace .entity-toolbar-shell #entity-filter-name input.arco-input{box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
 .app-workspace .entity-toolbar-shell #entity-filter-type.entity-filter-select.arco-select-view{display:inline-flex;box-sizing:border-box;align-items:center;width:160px;min-width:160px;max-width:160px;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:0 0 160px}
 .app-workspace .entity-toolbar-shell #entity-filter-type.entity-filter-select.arco-select-view:hover{border-color:#4080ff!important;background:#fff!important}

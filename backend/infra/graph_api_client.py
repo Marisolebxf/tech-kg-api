@@ -271,6 +271,15 @@ class GraphAPIClient:
             params["space"] = space
         return await self._get(f"/subgraph/{vid}", params=params) or {"nodes": [], "edges": []}
 
+    async def search_paths(self, body: dict[str, Any]) -> dict[str, Any]:
+        """两点间按逐跳边类型/方向的路径搜索（``POST /paths/search``）。
+
+        与其它方法不同：该端点从请求体模型读 ``space``，调用方须把它放进
+        ``body``。返回 ``{"items": [...], "total": int}``。
+        """
+        data = await self._post("/paths/search", json=body)
+        return data if isinstance(data, dict) else {"items": [], "total": 0}
+
     async def shortest_path(
         self,
         *,

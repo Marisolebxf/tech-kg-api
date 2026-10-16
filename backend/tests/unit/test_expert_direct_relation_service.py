@@ -36,20 +36,66 @@ def test_display_date_has_no_time(value):
 
 @pytest.mark.asyncio
 async def test_representative_achievements_use_shared_paper_titles():
+    """代表成果来自 /paths/search 服务端交集：高产专家（边数超 200）也不丢共同论文。"""
     client = AsyncMock()
-    client.get_node_edges.side_effect = [
-        [{"source": "paper_1", "target": "a"}, {"source": "paper_2", "target": "a"}],
-        [{"source": "paper_2", "target": "b"}, {"source": "paper_3", "target": "b"}],
-    ]
-    client.get_node.return_value = {"properties": {"title": "A verified joint paper"}}
+    # 路径节点自带 Paper 属性（nodes[1] 为论文），无需逐篇 get_node。
+    client.search_paths.return_value = {
+        "items": [
+            {
+                "nodes": [
+                    {"id": "a"},
+                    {"id": "paper_2", "properties": {"title": "A verified joint paper"}},
+                    {"id": "b"},
+                ]
+            },
+            {
+                "nodes": [
+                    {"id": "a"},
+                    {"id": "paper_4", "properties": {"zh_name": "第二篇共同论文"}},
+                    {"id": "b"},
+                ]
+            },
+        ]
+    }
     rows = [{"expert_a_id": "a", "expert_b_id": "b", "relation_key": "a:b"}]
     service = ExpertDirectRelationService()
     await service._attach_representative_achievements(client, rows)
     item = service._build_item(rows[0])
     assert item["representativeAchievements"] == [
-        {"id": "paper_2", "title": "A verified joint paper"}
+        {"id": "paper_2", "title": "A verified joint paper"},
+        {"id": "paper_4", "title": "第二篇共同论文"},
     ]
-    client.get_node.assert_awaited_once_with("paper_2")
+    request = client.search_paths.await_args.args[0]
+    assert request["sourceId"] == "a" and request["targetId"] == "b"
+    assert request["countTotal"] is False
+    client.get_node.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_representative_achievements_skip_empty_titles_and_cap_at_three():
+    client = AsyncMock()
+    client.search_paths.return_value = {
+        "items": [
+            {"nodes": [{"id": "a"}, {"id": f"paper_{i}", "properties": {}}, {"id": "b"}]}
+            if i % 2
+            else {
+                "nodes": [
+                    {"id": "a"},
+                    {"id": f"paper_{i}", "properties": {"title": f"论文{i}"}},
+                    {"id": "b"},
+                ],
+            }
+            for i in range(5)
+        ]
+    }
+    rows: list[dict] = [{"expert_a_id": "a", "expert_b_id": "b", "relation_key": "a:b"}]
+    service = ExpertDirectRelationService()
+    await service._attach_representative_achievements(client, rows)
+    assert [a["id"] for a in rows[0]["representative_achievements"]] == [
+        "paper_0",
+        "paper_2",
+        "paper_4",
+    ]
 
 
 @pytest.mark.asyncio
@@ -59,8 +105,7 @@ async def test_representative_achievements_graph_only_no_mysql_fallback():
 
     assert not hasattr(expert_direct_relation, "session_scope")
     client = AsyncMock()
-    client.get_node_edges.return_value = []
-    client.get_node.return_value = {"properties": {}}
+    client.search_paths.return_value = {"items": [], "total": 0}
     rows = [{"expert_a_id": "person_a1", "expert_b_id": "person_b2", "relation_key": "a:b"}]
     service = ExpertDirectRelationService()
     await service._attach_representative_achievements(client, rows)

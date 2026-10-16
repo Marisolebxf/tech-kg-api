@@ -257,7 +257,7 @@ watch(
             :max-length="SEARCH_KEYWORD_MAX_LENGTH"
             allow-clear
             aria-label="查询当前图空间的实体名称、ID或属性关键词；留空则分页浏览全部实体"
-            placeholder="输入实体名称 / 属性关键词"
+            placeholder="输入实体名称 / ID / 属性关键词"
             @keyup.enter="resetPagingAndSearch"
             @clear="resetPagingAndSearch"
           >

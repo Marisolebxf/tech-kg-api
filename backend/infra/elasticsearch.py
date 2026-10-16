@@ -247,7 +247,20 @@ class EntityKeywordES:
             lines.append(json.dumps({"index": {"_index": name, "_id": doc_id}}, ensure_ascii=False))
             lines.append(json.dumps(doc, ensure_ascii=False))
         body = "\n".join(lines) + "\n"
-        data = self._bulk(body, refresh=refresh)
+        try:
+            data = self._bulk(body, refresh=refresh)
+        except ElasticsearchError:
+            # 新空间首批写入时索引可能尚未创建（随环增量不做显式 ensure_index）：
+            # 确认缺失后按模板建索引重试一次；其余异常原样上抛（含重试再败）。
+            # body 构造后未再变更，可直接重发。
+            head = self._request("HEAD", f"/{name}")
+            if head.status_code != 404:
+                raise
+            try:
+                self.ensure_index(space)
+            except ElasticsearchError:
+                pass  # 多副本并发首建撞 already_exists：继续重试 bulk
+            data = self._bulk(body, refresh=refresh)
         if data.get("errors"):
             first = next(
                 (

@@ -187,6 +187,47 @@ def test_upsert_writes_ndjson_with_vid_as_id_and_raises_on_item_error():
         _store_with(handler_fail).upsert("dev2", [doc])
 
 
+def test_upsert_creates_missing_index_and_retries_once():
+    """新空间首批写入：bulk 撞索引缺失 → 确认 404 → 按模板建索引 → 重试成功
+    （随环增量不显式 ensure_index，靠这里兜住新空间首建）。"""
+    calls: list[tuple[str, str]] = []
+    state = {"created": False}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        if request.method == "POST" and request.url.path == "/_bulk":
+            if not state["created"]:
+                return httpx.Response(400, text='{"error":{"type":"index_not_found_exception"}}')
+            return httpx.Response(200, json={"errors": False, "items": []})
+        if request.method == "HEAD" and request.url.path == "/kg_entity_kw_dev2":
+            return httpx.Response(200 if state["created"] else 404)
+        if request.method == "PUT" and request.url.path == "/kg_entity_kw_dev2":
+            state["created"] = True
+            return httpx.Response(200, json={"acknowledged": True})
+        return httpx.Response(404, text="unmatched")
+
+    store = _store_with(handler)
+    doc = {"vid": "v1", "entity_type": "T", "search_text": "v1", "item": {"vid": "v1"}}
+    assert store.upsert("dev2", [doc]) == 1
+    assert ("PUT", "/kg_entity_kw_dev2") in calls
+    assert calls.count(("POST", "/_bulk")) == 2  # 失败一次 + 重试一次
+
+
+def test_upsert_non_missing_index_error_not_retried():
+    """bulk 失败但索引存在（如映射/集群错误）：不建索引，异常原样上抛。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/_bulk":
+            return httpx.Response(400, text="mapper_parsing_exception")
+        if request.method == "HEAD":
+            return httpx.Response(200)  # 索引存在
+        return httpx.Response(500)
+
+    doc = {"vid": "v1", "entity_type": "T", "search_text": "v1", "item": {}}
+    with pytest.raises(ElasticsearchError, match="400"):
+        _store_with(handler).upsert("dev2", [doc])
+
+
 def test_counts_and_page_request_bodies_and_parsing():
     bodies: list[dict] = []
 

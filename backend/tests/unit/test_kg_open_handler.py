@@ -138,27 +138,22 @@ def test_space_selectors_are_ignored_and_pinned_to_default(monkeypatch) -> None:
 
 def test_edges_fill_endpoints_and_mark_dangling_null(monkeypatch) -> None:
     from biz.handler import kg_open
-    from infra.graph_db.models import GraphEdge, GraphPagedResult
+    from infra.graph_db.models import GraphEdge
 
     monkeypatch.setattr(kg_open, "_catalog", lambda session, space: FAKE_CATALOG)
 
     class FakeClient:
-        def get_edges_by_type(self, edge_type: str, *, limit: int, offset: int):
-            # REST page.total 实测对部分边类型恒为 0，total 应改用 SHOW STATS 口径。
-            return GraphPagedResult(
-                items=[
-                    GraphEdge(
-                        id='"paper_0001"->"paper_ref_missing"@0',
-                        type="AUTHORED_BY",
-                        source_id='"paper_0001"',
-                        target_id="paper_ref_missing",
-                        properties={"confidence": 0.9},
-                    )
-                ],
-                total=1,
-                limit=limit,
-                offset=offset,
-            )
+        def paged_edges_by_type(self, edge_type: str, *, limit: int, offset: int):
+            # 边列表走 LOOKUP 分页（REST /edges/type 与边总量正相关会超时）。
+            return [
+                GraphEdge(
+                    id='"paper_0001"->"paper_ref_missing"@0',
+                    type="AUTHORED_BY",
+                    source_id='"paper_0001"',
+                    target_id="paper_ref_missing",
+                    properties={"confidence": 0.9},
+                )
+            ]
 
         def stats_snapshot(self):
             return {"tags": {}, "edges": {"AUTHORED_BY": 184}}

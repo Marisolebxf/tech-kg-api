@@ -81,7 +81,9 @@ docker exec <api容器> python script/manage_external_api_clients.py create \
 
 返回 `data`：`space`（固定默认空间）、`relationType`、`edges[]`（`type` / `source` / `target` 两端 VID / `properties` 边属性；`includeEntities=true` 时附 `sourceEntity` / `targetEntity`，结构与接口 2 实体相同）、`total`、`limit`、`offset`。
 
-`total` 采用 SHOW STATS 统计口径（与接口 1 的 `count` 同源，**包含悬挂边**；空间从未跑过统计时回退 REST 计数）。trs-graph REST 自带的分页计数对部分边类型恒为 0（实测返回行非空仍报 0），故不采用。
+边列表走 LOOKUP 边索引分页（无索引自动回退 MATCH 全扫，慢但正确）。**不走 trs-graph REST `/edges/type`**：该端点耗时与边总量正相关（实测 dev 6350 条 4.7s、两万级 30s+ 超时），其分页计数对部分边类型还恒为 0。
+
+`total` 采用 SHOW STATS 统计口径（与接口 1 的 `count` 同源，**包含悬挂边**；空间从未跑过统计时回退当页行数）。
 
 **悬挂边**：写入时端点实体未落图的边（如引用桩），对应 `sourceEntity` / `targetEntity` 为 `null`，不是错误。
 
@@ -110,6 +112,6 @@ curl -H "X-Client-Id: $CID" -H "X-API-Key: $KEY" \
 
 ## 上线前置检查（运维）
 
-1. **边索引**：按关系类枚举走 LOOKUP，需每个 EDGE 类型有边索引。TRS 定制版零属性边索引有"CREATE 静默 no-op"坑：先 `SHOW EDGE INDEXES IN <space>` 核查，缺的显式补建并去重。
+1. **边索引**：按关系类枚举走 LOOKUP，需每个 EDGE 类型有边索引（无边索引回退 MATCH 全扫，量大即超时；2026-10-16 dev 实测 42 个边类型里 24 个缺索引）。核查用 `SHOW EDGE INDEXES`（TRS 定制版不支持 `IN <space>` 后缀，空间随连接头走）。TRS 零属性边索引另有"CREATE 静默 no-op"坑：缺的显式补建并去重。
 2. **标签索引**：实体类枚举无标签索引时回退 MATCH 全扫（慢但正确）：`SHOW TAG INDEXES IN <space>` 核查，缺的补建后自动切快路径。
 3. 对外空间的数据质量先行确认（空心化 Schema 未修复的空间不要对外）。

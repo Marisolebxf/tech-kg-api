@@ -179,22 +179,24 @@ async def list_edges_by_type(
     client = _get_client(ctx.space)
     try:
         async with graph_exec_slot():
-            result = await asyncio.to_thread(
-                client.get_edges_by_type, name, limit=limit, offset=offset
+            # 边列表走 LOOKUP 边索引分页：REST /edges/type 耗时与边总量正相关
+            # （实测两万级及无索引小类型 30s+ 超时），无边索引自动回退 MATCH。
+            edges_page = await asyncio.to_thread(
+                client.paged_edges_by_type, name, limit=limit, offset=offset
             )
             # trs-graph REST 的 page.total 对部分边类型恒为 0（实测返回行非空仍报 0），
-            # total 改用 SHOW STATS 口径（与 /schema 的 count 同源，含悬挂边），
-            # 空间从未跑过统计时回退 REST 计数。
+            # total 用 SHOW STATS 口径（与 /schema 的 count 同源，含悬挂边），
+            # 空间从未跑过统计时回退当页行数。
             stats_total = int(
                 (await asyncio.to_thread(client.stats_snapshot)).get("edges", {}).get(name, 0)
             )
-            total = stats_total or result.total
+            total = stats_total or len(edges_page)
             entity_by_vid: dict[str, dict[str, Any]] = {}
-            if include_entities and result.items:
+            if include_entities and edges_page:
                 # 边端点 VID 与 /nodes/{id} 同口径去引号后再拼 FETCH 字面量。
                 vids = sorted(
-                    {str(edge.source_id).strip('"') for edge in result.items}
-                    | {str(edge.target_id).strip('"') for edge in result.items}
+                    {str(edge.source_id).strip('"') for edge in edges_page}
+                    | {str(edge.target_id).strip('"') for edge in edges_page}
                 )
                 entity_by_vid = await asyncio.to_thread(_fetch_entities_by_vids, client, vids)
     except GraphExecOverloaded as exc:
@@ -205,7 +207,7 @@ async def list_edges_by_type(
         logger.exception("kg-open 关系类查询失败 type=%s", name)
         raise HTTPException(status_code=502, detail="图数据服务暂时不可用，请稍后重试") from exc
     edges: list[dict[str, Any]] = []
-    for edge in result.items:
+    for edge in edges_page:
         source = str(edge.source_id).strip('"')
         target = str(edge.target_id).strip('"')
         entry: dict[str, Any] = {

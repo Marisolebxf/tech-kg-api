@@ -1712,6 +1712,74 @@ class TestStatsAndPagedNodes:
             repo.paged_nodes_by_label("Paper`); DROP SPACE dev2; --")
         repo.close()
 
+    def test_paged_edges_by_type_builds_ngql_and_parses_edges(self):
+        captured = []
+
+        def handler(request):
+            if request.url.path == "/health":
+                return _health_ok(request)
+            assert request.url.path == "/api/v1/query/read"
+            captured.append(json.loads(request.content)["query"])
+            return httpx.Response(
+                200,
+                json={
+                    "records": [
+                        {
+                            "e": {
+                                "id": "paper_1->person_1@0",
+                                "type": "AUTHORED_BY",
+                                "sourceId": "paper_1",
+                                "targetId": "person_1",
+                                "properties": {"confidence": 0.9},
+                            }
+                        },
+                        {"other": "ignored"},
+                    ]
+                },
+            )
+
+        repo = _make_repo(handler)
+        edges = repo.paged_edges_by_type("AUTHORED_BY", limit=20, offset=40)
+        # LOOKUP 边索引枚举优先（REST /edges/type 与边总量正相关，实测 30s+ 超时）
+        assert captured == [
+            "USE test; LOOKUP ON `AUTHORED_BY` YIELD edge AS e | LIMIT 20 OFFSET 40"
+        ]
+        assert len(edges) == 1
+        assert edges[0].id == "paper_1->person_1@0"
+        assert edges[0].type == "AUTHORED_BY"
+        assert edges[0].source_id == "paper_1"
+        assert edges[0].target_id == "person_1"
+        assert edges[0].properties == {"confidence": 0.9}
+        repo.close()
+
+    def test_paged_edges_by_type_falls_back_to_match_without_index(self):
+        """无边索引 LOOKUP 立即 400（不扫描），回退 MATCH 全扫保住可用性。"""
+        captured = []
+
+        def handler(request):
+            if request.url.path == "/health":
+                return _health_ok(request)
+            assert request.url.path == "/api/v1/query/read"
+            query = json.loads(request.content)["query"]
+            captured.append(query)
+            if "LOOKUP ON" in query:
+                return httpx.Response(400, json={"error": "There is no index to use at runtime"})
+            assert "MATCH ()-[e:`AUTHORED_BY`]->()" in query
+            return httpx.Response(200, json={"records": []})
+
+        repo = _make_repo(handler)
+        assert repo.paged_edges_by_type("AUTHORED_BY", limit=10, offset=0) == []
+        assert len(captured) == 2
+        assert "LOOKUP ON `AUTHORED_BY`" in captured[0]
+        assert captured[1] == "USE test; MATCH ()-[e:`AUTHORED_BY`]->() RETURN e SKIP 0 LIMIT 10"
+        repo.close()
+
+    def test_paged_edges_by_type_rejects_injection(self):
+        repo = _make_repo(_health_ok)
+        with pytest.raises(GraphRequestError, match="非法边类型"):
+            repo.paged_edges_by_type("AUTHORED_BY`); DROP SPACE dev2; --")
+        repo.close()
+
 
 class TestSchemaListCache:
     """labels()/edge_types() 短 TTL 单飞缓存（响应缓存过期瞬间的会话池保护，2026-09-21）。"""

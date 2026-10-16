@@ -187,11 +187,44 @@ def test_upsert_writes_ndjson_with_vid_as_id_and_raises_on_item_error():
         _store_with(handler_fail).upsert("dev2", [doc])
 
 
-def test_upsert_creates_missing_index_and_retries_once():
-    """新空间首批写入：bulk 撞索引缺失 → 确认 404 → 按模板建索引 → 重试成功
-    （随环增量不显式 ensure_index，靠这里兜住新空间首建）。"""
+def test_upsert_ensures_template_before_first_bulk():
+    """新空间首批写入：先 HEAD → 缺失则按模板 PUT → 再 bulk（一次成功）。
+
+    ES 默认开 auto_create_index：若不先 ensure，首笔 bulk 会用动态映射建出
+    错误模板（entity_type=text、无 ngram）——2026-10-16 e2e 实测踩坑。
+    """
     calls: list[tuple[str, str]] = []
     state = {"created": False}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        if request.method == "HEAD" and request.url.path == "/kg_entity_kw_dev2":
+            return httpx.Response(200 if state["created"] else 404)
+        if request.method == "PUT" and request.url.path == "/kg_entity_kw_dev2":
+            state["created"] = True
+            return httpx.Response(200, json={"acknowledged": True})
+        if request.method == "POST" and request.url.path == "/_bulk":
+            assert state["created"], "bulk 必须发生在模板 PUT 之后"
+            return httpx.Response(200, json={"errors": False, "items": []})
+        return httpx.Response(404, text="unmatched")
+
+    store = _store_with(handler)
+    doc = {"vid": "v1", "entity_type": "T", "search_text": "v1", "item": {"vid": "v1"}}
+    assert store.upsert("dev2", [doc]) == 1
+    assert ("PUT", "/kg_entity_kw_dev2") in calls
+    assert calls.count(("POST", "/_bulk")) == 1  # 模板建好，bulk 一次成功
+
+    # 同进程第二批：已 ensure 过，不再 HEAD/PUT，只发 bulk
+    calls.clear()
+    assert store.upsert("dev2", [doc]) == 1
+    assert calls == [("POST", "/_bulk")]
+
+
+def test_upsert_recreates_index_dropped_after_ensure():
+    """ensure 之后、bulk 之前索引被删（夜间 --drop 并发竞态）：bulk 撞缺失
+    → 确认 404 → 按模板重建 → 重试一次成功。"""
+    calls: list[tuple[str, str]] = []
+    state = {"created": True}
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append((request.method, request.url.path))
@@ -207,10 +240,12 @@ def test_upsert_creates_missing_index_and_retries_once():
         return httpx.Response(404, text="unmatched")
 
     store = _store_with(handler)
+    store._ensured = {"dev2"}  # 模拟此前已 ensure（缓存命中，不再主动 HEAD）
+    state["created"] = False  # …但索引随后被删
     doc = {"vid": "v1", "entity_type": "T", "search_text": "v1", "item": {"vid": "v1"}}
     assert store.upsert("dev2", [doc]) == 1
     assert ("PUT", "/kg_entity_kw_dev2") in calls
-    assert calls.count(("POST", "/_bulk")) == 2  # 失败一次 + 重试一次
+    assert calls.count(("POST", "/_bulk")) == 2  # 失败一次 + 重建后重试一次
 
 
 def test_upsert_non_missing_index_error_not_retried():

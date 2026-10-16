@@ -71,6 +71,8 @@ class EntityKeywordES:
         self._http = httpx.Client(base_url=self._base_url, timeout=timeout)
         self._ready_cache: dict[str, tuple[float, bool]] = {}
         self._ready_lock = threading.Lock()
+        # 已按模板 ensure 过的空间：upsert 首批前显式建索引，之后零额外 HEAD
+        self._ensured: set[str] = set()
 
     # ------------------------------------------------------------------ 基础
 
@@ -239,6 +241,18 @@ class EntityKeywordES:
         if not docs:
             return 0
         name = self.index_name(space)
+        # 首批写入前必须显式按模板建索引：ES 默认开 auto_create_index，直接
+        # bulk 会「成功」地用动态映射建出错误模板（entity_type 变 text → 排序/
+        # 聚合 400，search_text 无 ngram 分词），且此后 ensure_index 幂等跳过、
+        # 错误模板永久固化（2026-10-16 e2e 实测踩坑）。每进程每空间只 ensure
+        # 一次，后续批次零额外开销；ensure 失败不缓存，下批重试。
+        if space not in self._ensured:
+            try:
+                self.ensure_index(space)
+            except ElasticsearchError:
+                pass
+            else:
+                self._ensured.add(space)
         lines: list[str] = []
         for doc in docs:
             if not doc.get("vid"):
@@ -250,9 +264,9 @@ class EntityKeywordES:
         try:
             data = self._bulk(body, refresh=refresh)
         except ElasticsearchError:
-            # 新空间首批写入时索引可能尚未创建（随环增量不做显式 ensure_index）：
-            # 确认缺失后按模板建索引重试一次；其余异常原样上抛（含重试再败）。
-            # body 构造后未再变更，可直接重发。
+            # 兜底：索引在 ensure 之后、bulk 之前被动删除（如夜间 --drop 对账
+            # 与抽取并发）等竞态——确认缺失后按模板重建重试一次；其余异常原样
+            # 上抛（含重试再败）。body 构造后未再变更，可直接重发。
             head = self._request("HEAD", f"/{name}")
             if head.status_code != 404:
                 raise

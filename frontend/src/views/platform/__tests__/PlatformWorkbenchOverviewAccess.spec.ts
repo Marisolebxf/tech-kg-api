@@ -211,9 +211,11 @@ describe('昨日新增聚合格式展示', () => {
     // 口径提示已撤下（2026-10-16 晚用户要求）：抽屉不再常驻口径说明文案、无占位
     expect(drawer.text()).not.toContain('不能直接相减对账')
     expect(drawer.text()).not.toContain('不去重')
-    // 净新增：卡片随徽标万级缩写，抽屉千分位精确值（有数才渲染，无占位文案）
-    expect(wrapper.text()).toContain('净新增 +9.3万')
-    expect(drawer.find('.asset-change-caliber.is-net').text()).toBe('净新增：+93,444')
+    // 净新增（用户指定展示位，2026-10-16 晚）：只在抽屉 footer「共XX变化」右侧，
+    // 卡片与抽屉正文都不出现
+    expect(wrapper.text()).not.toContain('净新增 +9.3万')
+    expect(drawer.find('.asset-change-caliber.is-net').exists()).toBe(false)
+    expect(drawer.find('footer').text()).toContain('净新增 +93,444')
   })
 
   it('明细暂不可读时显示读取失败，不显示汇总行或暂无新增', async () => {
@@ -234,6 +236,7 @@ describe('昨日新增聚合格式展示', () => {
     expect(wrapper.text()).not.toContain('净新增 +')
     // 快照缺失：净新增整段不渲染（撤下提示占位），note 只留在载荷不进页面
     expect(drawer.find('.asset-change-caliber.is-net').exists()).toBe(false)
+    expect(drawer.find('footer').text()).not.toContain('净新增')
     expect(drawer.text()).not.toContain('当日快照尚未生成')
     expect(drawer.find('footer').text()).toContain('新增明细暂不可读取')
   })

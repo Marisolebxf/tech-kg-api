@@ -654,18 +654,9 @@ const assetChangeTotals = ref<Partial<Record<AssetOverviewKey, number>>>({})
 const assetChangeErrors = ref<Partial<Record<AssetOverviewKey, string>>>({})
 // 净新增（2026-10-16）：相邻两日图统计快照差分（与总量同一数据源），
 // 总量(当日) − 总量(前一日) = 净新增；null=快照缺失（当日未采集 / 上线前
-// 无法回补）——此时不展示任何占位文案，有数才渲染（用户要求撤下提示占位）
+// 无法回补）——此时不展示任何占位文案。展示位置（用户指定）：昨日新增
+// 抽屉左下角 footer「共XX变化」右侧，卡片与抽屉正文都不出现
 const assetNetAdded = ref<Partial<Record<AssetOverviewKey, number | null>>>({})
-function netAddedText(key: AssetOverviewKey): string {
-  const value = assetNetAdded.value[key]
-  if (value == null) return ''
-  const sign = value < 0 ? '−' : '+'
-  const abs = Math.abs(value)
-  // 卡片随昨日新增徽标用万级缩写；不足 1 万退千分位，两卡观感一致
-  return abs >= 10000
-    ? `${sign}${(abs / 10000).toFixed(1).replace(/\.0$/, '')}万`
-    : `${sign}${abs.toLocaleString()}`
-}
 const activeNetAddedText = computed(() => {
   const key = selectedAssetChange.value
   if (!key) return ''
@@ -1510,7 +1501,7 @@ const pageMeta = computed(() => {
       <section class="platform-summary-grid" aria-label="实体与关系数据总览">
         <article v-for="group in assetOverviewGroups" :key="group.key" :class="['kg-panel', 'platform-summary-card', `is-${group.key}`]">
           <header><div><strong>{{ group.title }}</strong><span><i />数据已更新</span></div><button type="button" @click="selectedAssetChange = group.key">查看昨日新增</button></header>
-          <div class="platform-summary-card__main"><section><strong>{{ group.total }}</strong><span>{{ group.totalLabel }}</span></section><section class="is-added"><strong>{{ group.added }}</strong><span>{{ group.addedLabel }}</span><em v-if="netAddedText(group.key)" class="net-added">净新增 {{ netAddedText(group.key) }}</em></section></div>
+          <div class="platform-summary-card__main"><section><strong>{{ group.total }}</strong><span>{{ group.totalLabel }}</span></section><section class="is-added"><strong>{{ group.added }}</strong><span>{{ group.addedLabel }}</span></section></div>
         </article>
       </section>
 
@@ -2218,7 +2209,6 @@ print(response.json())</pre>
       <aside aria-label="辅助区域 4" v-if="selectedAssetChange && activeAssetOverview" class="asset-change-drawer">
         <header><div><span>昨日图谱数据变化</span><h2>{{ activeAssetOverview.title }}新增明细</h2><p>{{ activeAssetOverview.addedLabel }} {{ activeAssetOverview.added }} · 统计日 {{ overviewMeta.statsDay || '—' }} · 数据更新至 {{ overviewMeta.updatedAt }}</p></div><button type="button" aria-label="关闭新增数据详情" @click="selectedAssetChange = null">×</button></header>
         <section class="asset-change-summary"><article><span>当前总量</span><strong>{{ activeAssetOverview.total }}</strong></article><article><span>{{ activeAssetOverview.addedLabel }}</span><strong>{{ activeAssetOverview.added }}</strong></article></section>
-        <p v-if="activeNetAddedText" class="asset-change-caliber is-net">净新增：{{ activeNetAddedText }}</p>
         <div class="asset-change-toolbar">
           <span v-if="assetChangeErrors[selectedAssetChange]" class="asset-change-hint">{{ assetChangeErrors[selectedAssetChange] }}</span>
         </div>
@@ -2251,7 +2241,7 @@ print(response.json())</pre>
             </tbody>
           </table>
         </div>
-        <footer><span>{{ assetChangeFooterText(selectedAssetChange) }}</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看更新任务</RouterLink></footer>
+        <footer><span>{{ assetChangeFooterText(selectedAssetChange) }}<em v-if="activeNetAddedText" class="net-added">净新增 {{ activeNetAddedText }}</em></span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看更新任务</RouterLink></footer>
       </aside>
     </Teleport>
 
@@ -4871,11 +4861,11 @@ print(response.json())</pre>
 .asset-change-mask{position:fixed;z-index:49;inset:0;border:0;background:rgba(16,36,76,.22)}
 .asset-change-drawer{position:fixed;z-index:50;top:0;right:0;display:grid;grid-template-rows:auto auto auto minmax(0,1fr) auto;width:min(820px,78vw);height:100vh;background:#f8fbff;box-shadow:-18px 0 42px rgba(34,74,132,.22)}
 .asset-change-drawer>header{display:flex;align-items:flex-start;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.asset-change-drawer>header span{color:#004ecc;font-size:11px}.asset-change-drawer h2{margin:6px 0 3px;font-size:20px}.asset-change-drawer header p{margin:0;color:#718098;font-size:12px}.asset-change-drawer header>button{width:31px;height:31px;border:0;border-radius:5px;background:transparent;color:#52647f;font-size:20px;cursor:pointer}
-.asset-change-summary{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:14px}.asset-change-summary article{display:grid;gap:5px;padding:14px;border:1px solid #c7dcfb;border-radius:7px;background:#fff}.asset-change-summary span{color:#718098;font-size:11px}.asset-change-summary strong{color:#004ecc;font-size:24px}.asset-change-summary article:last-child strong{color:#067647}.asset-change-caliber.is-net{margin:0 14px;padding:10px 12px;border:1px solid #bfe5d2;border-radius:7px;background:#f4fbf7;color:#276749;font-size:12px;line-height:1.7}.platform-summary-card__main .is-added .net-added{font-style:normal;color:#067647;font-size:11px;line-height:14px}
+.asset-change-summary{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:14px}.asset-change-summary article{display:grid;gap:5px;padding:14px;border:1px solid #c7dcfb;border-radius:7px;background:#fff}.asset-change-summary span{color:#718098;font-size:11px}.asset-change-summary strong{color:#004ecc;font-size:24px}.asset-change-summary article:last-child strong{color:#067647}
 .asset-change-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 14px 12px;flex-wrap:wrap}.asset-change-hint{color:#8a6116;font-size:11px}
 .asset-change-table{min-height:0;overflow:auto;padding:0 14px 14px}.asset-change-table table{width:100%;border-collapse:collapse;border:1px solid #dce8f8;background:#fff;font-size:12px}.asset-change-table th,.asset-change-table td{height:48px;padding:10px 12px;border-bottom:1px solid #e3ebf6;text-align:left}.asset-change-table th{position:sticky;top:0;background:#f3f7fc;color:#62728a}.asset-change-table td{color:#344861}.asset-change-table code{color:#004ecc;font-family:inherit}.asset-change-table td.asset-change-count{font-weight:600;font-variant-numeric:tabular-nums}.asset-change-table td .asset-change-source{display:inline-block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 .asset-change-table tr.is-clickable{cursor:pointer}.asset-change-table tr.is-clickable:focus-visible{background:#f4f8ff;outline:2px solid #004ecc;outline-offset:-2px}
-.asset-change-drawer>footer{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.asset-change-drawer>footer span{color:#718098;font-size:11px}.asset-change-drawer>footer a{height:32px;padding:0 12px;border-radius:5px;background:#004ecc;color:#fff;font-size:11px;line-height:32px;text-decoration:none}
+.asset-change-drawer>footer{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.asset-change-drawer>footer span{color:#718098;font-size:11px}.asset-change-drawer>footer .net-added{font-style:normal;color:#067647;font-weight:600;margin-left:10px}.asset-change-drawer>footer a{height:32px;padding:0 12px;border-radius:5px;background:#004ecc;color:#fff;font-size:11px;line-height:32px;text-decoration:none}
 @media(max-width:760px){.asset-change-drawer{width:94vw}.asset-change-table table{min-width:700px}}
 
 .platform-query-algo__toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:40px;border-bottom:1px solid #e5e6eb}

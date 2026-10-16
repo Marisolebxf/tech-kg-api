@@ -4,7 +4,6 @@ import { useSpacePermissions } from "../../composables/use-space-permissions"
 const { canWrite, spaces } = useSpacePermissions()
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { IconSearch } from '@arco-design/web-vue/es/icon'
 import hljs from 'highlight.js/lib/core'
 import python from 'highlight.js/lib/languages/python'
 import 'highlight.js/styles/github-dark.css'
@@ -1145,12 +1144,11 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
         <div class="schema-tabs__items">
           <button v-for="tab in tabs" :key="tab" type="button" :class="{ active: activeTab === tab }" @click="switchTab(tab)">{{ tab }}</button>
         </div>
+        <!-- ＋增加 紧跟类型页签放左侧；搜索/查询收右侧（设计规范：主操作左、筛选右） -->
+        <button class="primary schema-tabs__create" type="button" :disabled="!canWrite" @click="openCreate">＋ 增加</button>
         <form class="schema-toolbar__actions" role="search" @submit.prevent="submitKeyword">
-          <button class="primary" type="button" :disabled="!canWrite" @click="openCreate">＋ 增加</button>
           <span class="limit-field">
-            <a-input v-model="keyword" class="schema-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" :aria-label="`搜索${activeTab}`" :placeholder="`搜索${activeTab}`">
-              <template #prefix><IconSearch /></template>
-            </a-input>
+            <a-input v-model="keyword" class="schema-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" :aria-label="`搜索${activeTab}`" :placeholder="`搜索${activeTab}`" />
             <span v-if="atLimit(keyword, SEARCH_KEYWORD_MAX_LENGTH)" class="limit-field__hint">已达 {{ SEARCH_KEYWORD_MAX_LENGTH }} 字上限，无法继续输入</span>
           </span>
           <button class="primary" type="submit" :disabled="listLoading">查询</button>
@@ -1593,6 +1591,7 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 .schema-toolbar__actions{display:flex;min-width:0;flex-wrap:wrap;align-items:center;gap:10px}
 .schema-toolbar__actions>.primary{flex-shrink:0;white-space:nowrap}
 .schema-tabs>.schema-toolbar__actions{min-width:0;width:auto;justify-content:flex-end;margin-left:auto}
+.schema-tabs__create{flex:0 0 auto;white-space:nowrap}
 .prop-len--invalid,.property-add-form__len--invalid{border-color:#e5484d!important;background:#fff3f3!important}
 /* 长度达上限：与校验失败同款红边高亮（可见文案见 .limit-field-note / .limit-field__hint） */
 .is-at-limit{border-color:#e5484d!important;background:#fff3f3!important}
@@ -1881,8 +1880,6 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 .schema-search-input.arco-input-wrapper{box-sizing:border-box;flex:1 1 180px;min-width:0;max-width:280px;width:280px;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important}
 .schema-search-input.arco-input-wrapper:hover{border-color:#4080ff!important;background:#fff!important}
 .schema-search-input.arco-input-wrapper:focus-within,.schema-search-input.arco-input-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
-.schema-search-input.arco-input-wrapper :deep(.arco-input-prefix){padding-right:8px;color:#4e5969}.schema-search-input.arco-input-focus :deep(.arco-input-prefix){color:#165dff}
-.schema-search-input.arco-input-wrapper :deep(.arco-input-prefix svg){width:16px;height:16px;font-size:16px}
 .schema-search-input.arco-input-wrapper :deep(.arco-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px;box-shadow:none!important;outline:none!important}
 :is(.create-text-input,.prop-name,.prop-len){box-sizing:border-box;height:32px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#1d2129;font-size:14px;line-height:22px;outline:none;box-shadow:none;transition:border-color .1s ease,box-shadow .1s ease}
 :is(.create-text-input,.prop-name,.prop-len):hover{border-color:#4080ff}
@@ -1903,7 +1900,7 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 .schema-create-panel .create-ddl__label{color:#4e5969;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}.schema-create-panel .create-ddl__confirm{font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
 .schema-create-panel .create-ddl__pre{font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
 .schema-create-panel footer button{font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
-@media(max-width:900px){.schema-tabs{align-items:stretch;flex-direction:column}.schema-tabs__items{min-height:36px}.schema-tabs>.schema-toolbar__actions{width:100%;margin-left:0;justify-content:flex-end}.create-row{grid-template-columns:1fr}.create-field--full{grid-column:auto}}
+@media(max-width:900px){.schema-tabs{align-items:stretch;flex-direction:column}.schema-tabs__items{min-height:36px}.schema-tabs__create{align-self:flex-start}.schema-tabs>.schema-toolbar__actions{width:100%;margin-left:0;justify-content:flex-end}.create-row{grid-template-columns:1fr}.create-field--full{grid-column:auto}}
 .schema-create-body>.create-field,.create-row>.create-field{margin-bottom:0;gap:0}.schema-create-body>.create-props{margin-bottom:0}.create-ddl{margin-top:0;gap:8px}.create-ddl__confirm{margin:0}
 /* Schema 拓扑总览 */
 .schema-topology-shell{margin-bottom:16px;padding-bottom:0}

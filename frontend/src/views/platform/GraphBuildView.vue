@@ -6,7 +6,7 @@ const { canWrite, spaces } = useSpacePermissions()
 import DeleteConfirmDialog from '../../components/DeleteConfirmDialog.vue'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { IconInfoCircle, IconRefresh, IconSearch } from '@arco-design/web-vue/es/icon'
+import { IconInfoCircle, IconRefresh } from '@arco-design/web-vue/es/icon'
 import { Popover as APopover } from '@arco-design/web-vue'
 import {
   countJobUnifiedStatuses,
@@ -454,7 +454,7 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
             <a-option value="chain">多脚本串行</a-option>
             <a-option value="upload">上传脚本</a-option>
           </a-select>
-          <a-input id="graph-build-filter-name" v-model="filterName" class="gb-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="按名称搜索" placeholder="按名称搜索" allow-clear @clear="submitJobSearch"><template #prefix><IconSearch /></template></a-input>
+          <a-input id="graph-build-filter-name" v-model="filterName" class="gb-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="按名称搜索" placeholder="按名称搜索" allow-clear @clear="submitJobSearch" />
           <button class="gb-search-button" type="submit">查询</button>
         </form>
       </header>
@@ -650,7 +650,6 @@ span.run{color:var(--status-info)}
 .app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-wrapper{box-sizing:border-box;width:280px;min-width:0;max-width:100%;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:0 1 280px}
 .app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-wrapper:hover{border-color:#4080ff!important;background:#fff!important}
 .app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-wrapper:focus-within,.app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
-.app-workspace .gb-filters #graph-build-filter-name .arco-input-prefix{padding-right:8px;color:#4e5969}.app-workspace .gb-filters #graph-build-filter-name.arco-input-focus .arco-input-prefix{color:#165dff}.app-workspace .gb-filters #graph-build-filter-name .arco-input-prefix svg{width:16px;height:16px;font-size:16px}
 /* 名称搜索清空图标：与下拉箭头同口径放大着色（Arco 默认 12px 偏淡几乎看不见） */
 .app-workspace .gb-filters #graph-build-filter-name .arco-input-clear-btn svg{width:14px;height:14px;font-size:14px;color:#4e5969}
 .app-workspace .gb-filters #graph-build-filter-name input.arco-input{box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
@@ -675,6 +674,6 @@ span.run{color:var(--status-info)}
 .gb-script-popover__title{margin:0 0 8px;color:#1d2129;font-size:13px;line-height:20px;font-weight:500}
 .gb-script-popover__list{display:grid;gap:6px;max-height:280px;margin:0;padding:0;overflow:auto;list-style:none}
 .gb-script-popover__list li{display:flex;align-items:center;min-width:0;gap:8px;padding:4px 8px;border:1px solid #e5e6eb;border-radius:4px;background:#f7f8fa;font-size:12px;line-height:20px}
-.gb-script-popover__idx{flex:0 0 auto;min-width:18px;height:18px;border-radius:9px;background:#e8f3ff;color:#165dff;font-size:11px;line-height:18px;text-align:center}
+.gb-script-popover__idx{flex:0 0 auto;min-width:20px;height:20px;border-radius:10px;background:#e8f3ff;color:#165dff;font-size:12px;line-height:20px;text-align:center}
 .gb-script-popover__name{flex:1;min-width:0;overflow:hidden;color:#1d2129;text-overflow:ellipsis;white-space:nowrap}
 </style>

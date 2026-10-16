@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import DeleteConfirmDialog from '../../components/DeleteConfirmDialog.vue'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { IconSearch } from '@arco-design/web-vue/es/icon'
 import ListPagination from '../../components/list-pagination.vue'
 import { useClientPagination } from '../../composables/use-client-pagination'
 import {
@@ -800,7 +799,7 @@ onUnmounted(() => {
       </aside>
 
       <main class="config-list">
-        <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" :disabled="!canCreateConfig" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilter" allow-clear placeholder="全部状态"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><form class="config-search-form" role="search" @submit.prevent="submitConfigSearch"><a-input v-model="keyword" class="config-search-input" allow-clear :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识、类型或地址" placeholder="搜索名称、标识、类型或地址"><template #prefix><IconSearch /></template></a-input><button class="primary config-search-button" type="submit">查询</button></form></nav><nav v-else class="config-list-actions"><button class="primary create-entry" type="button" :disabled="!canManageSpaces" @click="spaceDialogOpen = true">＋ 新建图数据空间</button><form class="config-search-form" role="search" @submit.prevent="submitSpaceSearch"><a-input v-model="spaceKeyword" class="config-search-input" allow-clear :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索图空间名称" placeholder="搜索图空间名称"><template #prefix><IconSearch /></template></a-input><button class="primary config-search-button" type="submit">查询</button></form></nav></header>
+        <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" :disabled="!canCreateConfig" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilter" class="config-status-select" allow-clear placeholder="全部状态"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><form class="config-search-form" role="search" @submit.prevent="submitConfigSearch"><a-input v-model="keyword" class="config-search-input" allow-clear :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识、类型或地址" placeholder="搜索名称、标识、类型或地址" /><button class="primary config-search-button" type="submit">查询</button></form></nav><nav v-else class="config-list-actions"><button class="primary create-entry" type="button" :disabled="!canManageSpaces" @click="spaceDialogOpen = true">＋ 新建图数据空间</button><form class="config-search-form" role="search" @submit.prevent="submitSpaceSearch"><a-input v-model="spaceKeyword" class="config-search-input" allow-clear :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索图空间名称" placeholder="搜索图空间名称" /><button class="primary config-search-button" type="submit">查询</button></form></nav></header>
         <div v-if="isGraphSpaceCategory" class="table-wrap space-table">
           <table>
             <thead><tr><th>图空间名称 / 说明</th><th>标识</th><th class="config-status-col">绑定状态</th><th class="config-action-col">操作</th></tr></thead>
@@ -1011,8 +1010,6 @@ onUnmounted(() => {
 .config-search-input.arco-input-wrapper{box-sizing:border-box;width:360px;min-width:0;max-width:100%;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:0 1 360px}
 .config-search-input.arco-input-wrapper:hover{border-color:#4080ff!important;background:#fff!important}
 .config-search-input.arco-input-wrapper:focus-within,.config-search-input.arco-input-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
-.config-search-input.arco-input-wrapper :deep(.arco-input-prefix){padding-right:8px;color:#4e5969}.config-search-input.arco-input-focus :deep(.arco-input-prefix){color:#165dff}
-.config-search-input.arco-input-wrapper :deep(.arco-input-prefix svg){width:16px;height:16px;font-size:16px}
 .config-search-input.arco-input-wrapper :deep(.arco-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:none!important}
 /* Isolate the status Arco Select from native search-input styles. */
 /* 列表头操作按钮（新建配置/绑定）：与输入框同规格，禁止换行与压缩导致文字溢出 */
@@ -1150,8 +1147,10 @@ onUnmounted(() => {
 .config-table-wrap :is(th,td){white-space:nowrap}
 .config-table-wrap tbody tr{cursor:default}
 .config-id-col{color:#4e5969}
-/* 筛选输入框加宽（可搜名称/标识/类型/地址）；查询与新建使用同一主按钮。 */
-.config-search-form{display:flex;min-width:0;margin-left:auto;align-items:center;gap:16px}
+/* 筛选输入框加宽（可搜名称/标识/类型/地址）；查询与新建使用同一主按钮。
+ * 新建按钮吃掉左侧富余空间：状态下拉与搜索框/查询在右侧连成一组（两个输入框不再被拉开）。 */
+.config-search-form{display:flex;min-width:0;align-items:center;gap:16px}
+.config-list-actions .create-entry{margin-right:auto}
 .config-list-actions .config-search-input.arco-input-wrapper{width:360px;max-width:100%;margin-left:0;flex:0 1 360px}
 .config-search-form .config-search-button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
 .config-search-form .config-search-button:hover{border-color:#4080ff!important;background:#4080ff!important}

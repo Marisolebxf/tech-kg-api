@@ -652,6 +652,10 @@ const assetChangeRows = ref<Record<AssetOverviewKey, AssetChangeRow[]>>({
 // 精确计数（对象数口径，与行数是两回事）；控制库不可读时显示错误占位。
 const assetChangeTotals = ref<Partial<Record<AssetOverviewKey, number>>>({})
 const assetChangeErrors = ref<Partial<Record<AssetOverviewKey, string>>>({})
+// 昨日新增与总量的口径说明（2026-10-16）：新增按当日任务写图记录计数（同对象
+// 重复写入不去重），总量为图上去重存量——两者并排展示时必须说明不可直接相减
+// 对账，否则「新增大于总量」会被当成数错了
+const assetAddedCaliber = '总量为图上去重存量；昨日新增为当日任务写图记录数，同一对象重复写入（重跑重写、多 Schema 共写同一顶点）不去重，脚本等非任务通道写入只计入总量——两口径不同，不能直接相减对账。'
 const activeAssetChangeRows = computed(() => {
   const key = selectedAssetChange.value
   return key ? assetChangeRows.value[key] ?? [] : []
@@ -1489,7 +1493,7 @@ const pageMeta = computed(() => {
       <section class="platform-summary-grid" aria-label="实体与关系数据总览">
         <article v-for="group in assetOverviewGroups" :key="group.key" :class="['kg-panel', 'platform-summary-card', `is-${group.key}`]">
           <header><div><strong>{{ group.title }}</strong><span><i />数据已更新</span></div><button type="button" @click="selectedAssetChange = group.key">查看昨日新增</button></header>
-          <div class="platform-summary-card__main"><section><strong>{{ group.total }}</strong><span>{{ group.totalLabel }}</span></section><section class="is-added"><strong>{{ group.added }}</strong><span>{{ group.addedLabel }}</span></section></div>
+          <div class="platform-summary-card__main"><section><strong>{{ group.total }}</strong><span>{{ group.totalLabel }}</span></section><section class="is-added" :title="assetAddedCaliber"><strong>{{ group.added }}</strong><span>{{ group.addedLabel }}</span></section></div>
         </article>
       </section>
 
@@ -2197,6 +2201,7 @@ print(response.json())</pre>
       <aside aria-label="辅助区域 4" v-if="selectedAssetChange && activeAssetOverview" class="asset-change-drawer">
         <header><div><span>昨日图谱数据变化</span><h2>{{ activeAssetOverview.title }}新增明细</h2><p>{{ activeAssetOverview.addedLabel }} {{ activeAssetOverview.added }} · 统计日 {{ overviewMeta.statsDay || '—' }} · 数据更新至 {{ overviewMeta.updatedAt }}</p></div><button type="button" aria-label="关闭新增数据详情" @click="selectedAssetChange = null">×</button></header>
         <section class="asset-change-summary"><article><span>当前总量</span><strong>{{ activeAssetOverview.total }}</strong></article><article><span>{{ activeAssetOverview.addedLabel }}</span><strong>{{ activeAssetOverview.added }}</strong></article></section>
+        <p class="asset-change-caliber">{{ assetAddedCaliber }}</p>
         <div class="asset-change-toolbar">
           <span v-if="assetChangeErrors[selectedAssetChange]" class="asset-change-hint">{{ assetChangeErrors[selectedAssetChange] }}</span>
         </div>
@@ -4849,7 +4854,7 @@ print(response.json())</pre>
 .asset-change-mask{position:fixed;z-index:49;inset:0;border:0;background:rgba(16,36,76,.22)}
 .asset-change-drawer{position:fixed;z-index:50;top:0;right:0;display:grid;grid-template-rows:auto auto auto minmax(0,1fr) auto;width:min(820px,78vw);height:100vh;background:#f8fbff;box-shadow:-18px 0 42px rgba(34,74,132,.22)}
 .asset-change-drawer>header{display:flex;align-items:flex-start;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.asset-change-drawer>header span{color:#004ecc;font-size:11px}.asset-change-drawer h2{margin:6px 0 3px;font-size:20px}.asset-change-drawer header p{margin:0;color:#718098;font-size:12px}.asset-change-drawer header>button{width:31px;height:31px;border:0;border-radius:5px;background:transparent;color:#52647f;font-size:20px;cursor:pointer}
-.asset-change-summary{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:14px}.asset-change-summary article{display:grid;gap:5px;padding:14px;border:1px solid #c7dcfb;border-radius:7px;background:#fff}.asset-change-summary span{color:#718098;font-size:11px}.asset-change-summary strong{color:#004ecc;font-size:24px}.asset-change-summary article:last-child strong{color:#067647}
+.asset-change-summary{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:14px}.asset-change-summary article{display:grid;gap:5px;padding:14px;border:1px solid #c7dcfb;border-radius:7px;background:#fff}.asset-change-summary span{color:#718098;font-size:11px}.asset-change-summary strong{color:#004ecc;font-size:24px}.asset-change-summary article:last-child strong{color:#067647}.asset-change-caliber{margin:0 14px;padding:10px 12px;border:1px dashed #c7dcfb;border-radius:7px;background:#f5f9ff;color:#51607a;font-size:12px;line-height:1.7}
 .asset-change-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 14px 12px;flex-wrap:wrap}.asset-change-hint{color:#8a6116;font-size:11px}
 .asset-change-table{min-height:0;overflow:auto;padding:0 14px 14px}.asset-change-table table{width:100%;border-collapse:collapse;border:1px solid #dce8f8;background:#fff;font-size:12px}.asset-change-table th,.asset-change-table td{height:48px;padding:10px 12px;border-bottom:1px solid #e3ebf6;text-align:left}.asset-change-table th{position:sticky;top:0;background:#f3f7fc;color:#62728a}.asset-change-table td{color:#344861}.asset-change-table code{color:#004ecc;font-family:inherit}.asset-change-table td.asset-change-count{font-weight:600;font-variant-numeric:tabular-nums}.asset-change-table td .asset-change-source{display:inline-block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 .asset-change-table tr.is-clickable{cursor:pointer}.asset-change-table tr.is-clickable:focus-visible{background:#f4f8ff;outline:2px solid #004ecc;outline-offset:-2px}

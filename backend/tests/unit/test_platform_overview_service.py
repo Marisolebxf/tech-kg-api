@@ -2063,6 +2063,12 @@ def test_overview_passes_all_change_rows_without_cap() -> None:
     assert result.asset_overview_groups[0].added == "+1,500"
     assert result.stats_day == "2026-10-13"
     assert "entity" not in result.asset_change_errors
+    # 口径说明（2026-10-16）：文案必须写明「按写图记录计数、不去重」，且不得再出现
+    # 已退役的「图反查」表述——用户拿昨日新增与总量对账曾被旧文案误导
+    caliber = "\n".join(result.warnings)
+    assert "写图记录计数" in caliber
+    assert "不去重" in caliber
+    assert "图反查" not in caliber
 
 
 def test_overview_large_write_day_shows_written_total_without_gate_text() -> None:

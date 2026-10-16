@@ -205,6 +205,9 @@ describe('昨日新增聚合格式展示', () => {
     expect(rows[3]!.text()).not.toContain('已中断')
     // 左下角合计 = 控制库 written 精确计数（对象数口径，与行数 3 是两回事）
     expect(drawer.find('footer').text()).toContain('共 237,005 条变化')
+    // 口径说明（2026-10-16）：总量与新增并排展示时说明两口径不可直接相减对账
+    expect(drawer.find('.asset-change-caliber').text()).toContain('不能直接相减对账')
+    expect(drawer.find('.asset-change-caliber').text()).toContain('不去重')
   })
 
   it('明细暂不可读时显示读取失败，不显示汇总行或暂无新增', async () => {

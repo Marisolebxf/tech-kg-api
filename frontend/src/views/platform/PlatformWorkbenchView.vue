@@ -652,6 +652,17 @@ const assetChangeRows = ref<Record<AssetOverviewKey, AssetChangeRow[]>>({
 // 精确计数（对象数口径，与行数是两回事）；控制库不可读时显示错误占位。
 const assetChangeTotals = ref<Partial<Record<AssetOverviewKey, number>>>({})
 const assetChangeErrors = ref<Partial<Record<AssetOverviewKey, string>>>({})
+// 净新增（2026-10-16）：相邻两日图统计快照差分（与总量同一数据源），
+// 总量(当日) − 总量(前一日) = 净新增；null=快照缺失（当日未采集 / 上线前
+// 无法回补）——此时不展示任何占位文案。展示位置（用户指定）：昨日新增
+// 抽屉左下角 footer「共XX变化」右侧，卡片与抽屉正文都不出现
+const assetNetAdded = ref<Partial<Record<AssetOverviewKey, number | null>>>({})
+const activeNetAddedText = computed(() => {
+  const key = selectedAssetChange.value
+  if (!key) return ''
+  const value = assetNetAdded.value[key]
+  return value == null ? '' : `${value >= 0 ? '+' : '−'}${Math.abs(value).toLocaleString()}`
+})
 const activeAssetChangeRows = computed(() => {
   const key = selectedAssetChange.value
   return key ? assetChangeRows.value[key] ?? [] : []
@@ -1362,6 +1373,7 @@ async function loadPlatformOverview(): Promise<void> {
     assetChangeRows.value = data.assetChangeRows
     assetChangeTotals.value = data.assetChangeTotals ?? {}
     assetChangeErrors.value = data.assetChangeErrors ?? {}
+    assetNetAdded.value = data.assetNetAdded ?? {}
     entityStructure.value = data.entityStructure
     relationStructure.value = data.relationStructure
   } catch (error) {
@@ -2229,7 +2241,7 @@ print(response.json())</pre>
             </tbody>
           </table>
         </div>
-        <footer><span>{{ assetChangeFooterText(selectedAssetChange) }}</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看更新任务</RouterLink></footer>
+        <footer><span>{{ assetChangeFooterText(selectedAssetChange) }}<em v-if="activeNetAddedText" class="net-added">净新增 {{ activeNetAddedText }}</em></span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看更新任务</RouterLink></footer>
       </aside>
     </Teleport>
 
@@ -4853,7 +4865,7 @@ print(response.json())</pre>
 .asset-change-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 14px 12px;flex-wrap:wrap}.asset-change-hint{color:#8a6116;font-size:11px}
 .asset-change-table{min-height:0;overflow:auto;padding:0 14px 14px}.asset-change-table table{width:100%;border-collapse:collapse;border:1px solid #dce8f8;background:#fff;font-size:12px}.asset-change-table th,.asset-change-table td{height:48px;padding:10px 12px;border-bottom:1px solid #e3ebf6;text-align:left}.asset-change-table th{position:sticky;top:0;background:#f3f7fc;color:#62728a}.asset-change-table td{color:#344861}.asset-change-table code{color:#004ecc;font-family:inherit}.asset-change-table td.asset-change-count{font-weight:600;font-variant-numeric:tabular-nums}.asset-change-table td .asset-change-source{display:inline-block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 .asset-change-table tr.is-clickable{cursor:pointer}.asset-change-table tr.is-clickable:focus-visible{background:#f4f8ff;outline:2px solid #004ecc;outline-offset:-2px}
-.asset-change-drawer>footer{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.asset-change-drawer>footer span{color:#718098;font-size:11px}.asset-change-drawer>footer a{height:32px;padding:0 12px;border-radius:5px;background:#004ecc;color:#fff;font-size:11px;line-height:32px;text-decoration:none}
+.asset-change-drawer>footer{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.asset-change-drawer>footer span{color:#718098;font-size:11px}.asset-change-drawer>footer .net-added{font-style:normal;color:#067647;font-weight:600;margin-left:10px}.asset-change-drawer>footer a{height:32px;padding:0 12px;border-radius:5px;background:#004ecc;color:#fff;font-size:11px;line-height:32px;text-decoration:none}
 @media(max-width:760px){.asset-change-drawer{width:94vw}.asset-change-table table{min-width:700px}}
 
 .platform-query-algo__toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:40px;border-bottom:1px solid #e5e6eb}

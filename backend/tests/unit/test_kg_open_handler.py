@@ -105,6 +105,37 @@ def test_unknown_entity_type_returns_404(monkeypatch) -> None:
     assert "实体类型不存在" in response.json()["detail"]
 
 
+def test_space_selectors_are_ignored_and_pinned_to_default(monkeypatch) -> None:
+    """图空间固定默认业务空间：space/graphSpace/X-Graph-Space 一律不读。"""
+    from biz.handler import kg_open
+    from infra.graph_db.models import GraphNode
+    from service.graph_space import default_graph_space
+
+    seen: dict[str, str] = {}
+
+    def record_catalog(session, space):
+        seen["space"] = space
+        return FAKE_CATALOG
+
+    class FakeClient:
+        def paged_nodes_by_label(self, label: str, *, limit: int, offset: int):
+            return [GraphNode(id="paper_0001", labels=["Paper"], properties={})]
+
+        def label_count(self, label: str) -> int:
+            return 1
+
+    monkeypatch.setattr(kg_open, "_catalog", record_catalog)
+    monkeypatch.setattr(kg_open, "_get_client", lambda space=None: FakeClient())
+
+    response = client.get(
+        f"{BASE_URL}/entity-types/Paper/entities?space=test1012e2e&graphSpace=dev2",
+        headers={"X-Graph-Space": "dev2"},
+    )
+    assert response.status_code == 200
+    assert seen["space"] == default_graph_space()
+    assert response.json()["data"]["space"] == default_graph_space()
+
+
 def test_edges_fill_endpoints_and_mark_dangling_null(monkeypatch) -> None:
     from biz.handler import kg_open
     from infra.graph_db.models import GraphEdge, GraphPagedResult

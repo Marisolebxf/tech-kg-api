@@ -5,13 +5,14 @@
 - 路由前缀：`/api/v1/kg-open`
 - 实现代码：`backend/biz/handler/kg_open.py`（鉴权 `backend/biz/dependencies/kg_open_auth.py`）
 - 鉴权与项目关系接口（`/kg-service/project-relations`）同一套双通道模式
+- **图空间固定为默认业务空间（dev）**：不接受 `space` / `graphSpace` 参数或 `X-Graph-Space` 头换空间，传了也会被忽略
 
 ## 鉴权
 
 | 通道 | 用法 | 可查空间 |
 |---|---|---|
-| 机器密钥 | 请求头 `X-Client-Id` + `X-API-Key`（scope 须含 `kg-open:read`） | 仅默认共享生产空间 |
-| 平台用户 | `Authorization: Bearer <统一用户中心token>`（或平台会话） | 请求参数 `space` 指定且账号已绑定的空间 |
+| 机器密钥 | 请求头 `X-Client-Id` + `X-API-Key`（scope 须含 `kg-open:read`） | 固定默认业务空间（dev），另需共享生产空间门禁 |
+| 平台用户 | `Authorization: Bearer <统一用户中心token>`（或平台会话） | 固定默认业务空间（dev） |
 
 - 提供任一 API Key 头即视为机器认证，密钥错误**不会**回退到浏览器身份。
 - 密钥签发/轮换/停用（后端容器内执行）：
@@ -33,9 +34,7 @@ docker exec <api容器> python script/manage_external_api_clients.py create \
 
 ## 接口 1：`GET /kg-open/schema` — 图谱地图
 
-| 参数 | 位置 | 必填 | 默认 | 说明 |
-|---|---|---|---|---|
-| `space` | query | 否 | 账号默认空间 | 图空间（机器通道忽略，固定默认空间） |
+无参数（空间固定，见总约定）。
 
 返回 `data`：
 
@@ -47,7 +46,7 @@ docker exec <api容器> python script/manage_external_api_clients.py create \
 
 ```json
 {"code": 200, "success": true, "data": {
-  "space": "prod",
+  "space": "dev",
   "entityTypes": [
     {"name": "Paper", "displayName": "论文", "description": "", "count": 6590000,
      "properties": [{"name": "title", "type": "string", "required": false}]}
@@ -64,11 +63,10 @@ docker exec <api容器> python script/manage_external_api_clients.py create \
 | 参数 | 位置 | 必填 | 默认 | 约束 |
 |---|---|---|---|---|
 | `name` | path | 是 | — | `^[A-Za-z_][A-Za-z0-9_]{0,127}$`，来自接口 1 |
-| `space` | query | 否 | 默认空间 | |
 | `limit` | query | 否 | 20 | 1–500 |
 | `offset` | query | 否 | 0 | 0–10,000,000 |
 
-返回 `data`：`entityType`、`entities[]`（`id`=VID 稳定唯一键 / `type` / `name` 展示名 / `properties` 全属性整体透传）、`total`（图上真实总数）、`limit`、`offset`、`relationTypes[]`（目录推导：端点包含该实体类的所有关系类名，提示接下来可查哪些边）。
+返回 `data`：`space`（固定默认空间）、`entityType`、`entities[]`（`id`=VID 稳定唯一键 / `type` / `name` 展示名 / `properties` 全属性整体透传）、`total`（图上真实总数）、`limit`、`offset`、`relationTypes[]`（目录推导：端点包含该实体类的所有关系类名，提示接下来可查哪些边）。
 
 属性整体透传意味着 Schema 新增属性**无需**改对接；`properties` 内值可能为 null。
 
@@ -77,12 +75,11 @@ docker exec <api容器> python script/manage_external_api_clients.py create \
 | 参数 | 位置 | 必填 | 默认 | 约束 |
 |---|---|---|---|---|
 | `name` | path | 是 | — | 同上 |
-| `space` | query | 否 | 默认空间 | |
 | `limit` | query | 否 | 20 | 1–500 |
 | `offset` | query | 否 | 0 | 0–10,000,000 |
 | `includeEntities` | query | 否 | true | false 时只返回边不补端点实体（自持实体清单时省流量） |
 
-返回 `data`：`relationType`、`edges[]`（`type` / `source` / `target` 两端 VID / `properties` 边属性；`includeEntities=true` 时附 `sourceEntity` / `targetEntity`，结构与接口 2 实体相同）、`total`、`limit`、`offset`。
+返回 `data`：`space`（固定默认空间）、`relationType`、`edges[]`（`type` / `source` / `target` 两端 VID / `properties` 边属性；`includeEntities=true` 时附 `sourceEntity` / `targetEntity`，结构与接口 2 实体相同）、`total`、`limit`、`offset`。
 
 `total` 采用 SHOW STATS 统计口径（与接口 1 的 `count` 同源，**包含悬挂边**；空间从未跑过统计时回退 REST 计数）。trs-graph REST 自带的分页计数对部分边类型恒为 0（实测返回行非空仍报 0），故不采用。
 

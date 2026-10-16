@@ -1,7 +1,8 @@
 """kg-open 对外查询接口鉴权：沿用项目关系接口的双通道模式。
 
-机器密钥（X-Client-Id + X-API-Key，scope=kg-open:read）钉死默认共享生产空间；
-浏览器用户沿用平台认证并按请求选择空间（复用 space RBAC 读校验）。
+图空间固定为默认业务空间（本栈即 dev），不接受 space 参数换空间；
+机器密钥（X-Client-Id + X-API-Key，scope=kg-open:read）仍走共享生产空间门禁，
+浏览器用户沿用平台认证并保留默认空间的 RBAC 读校验。
 """
 
 import asyncio
@@ -69,12 +70,13 @@ async def require_kg_open_identity(
     context = await require_authenticated_user(request, response, application, bearer)
     # 保留原 CurrentActor 的用户资料校验和角色解析，机器身份不进入用户表。
     actor = await asyncio.to_thread(application.platform_actor, context)
-    from biz.dependencies.selected_graph_space import read_request_graph_space
     from service.business_access_control import ensure_space_access
 
-    space = await read_request_graph_space(request)
+    # 空间固定默认业务空间：请求里的 space/graphSpace 选择器一律不读，
+    # 对外只暴露这一份数据；仍过 RBAC 读校验作纵深防御。
+    space = default_graph_space()
     await asyncio.to_thread(ensure_space_access, actor, space, "read")
-    return KgOpenContext(identity=actor, space=space or default_graph_space(), is_machine=False)
+    return KgOpenContext(identity=actor, space=space, is_machine=False)
 
 
 KgOpenAuth = Annotated[KgOpenContext, Depends(require_kg_open_identity)]

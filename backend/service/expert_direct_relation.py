@@ -8,7 +8,7 @@
    ``COAUTHOR_WITH`` 边；找不到 → 空结果。找到则据此组装唯一一条关系。
 4. 机构过滤 & 时间过滤：在服务层按 ``institution`` 关键字、``relation_time`` 过滤该条关系。
 5. 图数据/详情：按业务格式组装 items + graph + provenance。
-6. 代表成果：图上 AUTHORED_BY 共同论文（双方各取 200 条边求交集，最多 3 条）；
+6. 代表成果：/paths/search 服务端搜 A→Paper→B 共同论文路径（最多 3 条标题）；
    图上无共同论文边时为空列表，不再回退 MySQL。
 
 查询结果一律来自图库；未命中或图服务异常时返回空结果并在 ``source.reason`` 标明原因，
@@ -50,6 +50,9 @@ logger = logging.getLogger(__name__)
 MAX_QUERY_LIMIT = 100
 _MAX_ANCHOR_CANDIDATES = 5
 _MAX_EDGES_PER_EXPERT = 100
+# 代表成果：出参最多 3 条标题；路径多取几条给空标题留余量。
+_MAX_ACHIEVEMENT_TITLES = 3
+_ACHIEVEMENT_PATH_LIMIT = 5
 
 # 溯源展示的 MySQL 源表名与英文字段名（图空间 VID 逐条取自节点/边）
 _SCHOLAR_SOURCE_TABLE = "dwd_scholar"
@@ -340,56 +343,94 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         client: Any,
         rows: list[dict[str, Any]],
     ) -> None:
-        paper_ids: dict[str, set[str]] = {}
-        titles: dict[str, str] = {}
-        edge_type = "AUTHORED" if get_current_space() == "techkg" else "AUTHORED_BY"
+        """为代表成果挂最多 3 篇共同论文标题。
+
+        旧实现按每人 ``limit=200`` 拉边后客户端求交集：高产专家（>200 篇）的
+        边被截断，共同论文不在前 200 条时代表成果整列丢空（实测沈定刚 1083
+        篇 × 杨健 156 篇，图上 11 篇共同论文一条都取不到）。改走
+        ``/paths/search`` 服务端 A→Paper→B 路径搜索（与论文合作模块同口径，
+        服务端做交集、不受端点单次 200 上限约束）；路径节点自带 Paper
+        属性，逐篇 ``get_node`` 补标题也不再需要。
+        """
+        space = get_current_space()
         for row in rows:
             try:
-                for person_id in (row["expert_a_id"], row["expert_b_id"]):
-                    if person_id not in paper_ids:
-                        edges = await client.get_node_edges(
-                            person_id, edge_type=edge_type, limit=200
-                        )
-                        paper_ids[person_id] = {
-                            str(
-                                edge["target"]
-                                if edge.get("source") == person_id
-                                else edge["source"]
-                            )
-                            for edge in edges
-                            if edge.get("source") == person_id or edge.get("target") == person_id
-                        }
-                shared = paper_ids[row["expert_a_id"]] & paper_ids[row["expert_b_id"]]
-                achievements = []
-                for paper_id in sorted(shared):
-                    if paper_id not in titles:
-                        paper = await client.get_node(paper_id)
-                        props = (paper or {}).get("properties") or {}
-                        titles[paper_id] = next(
-                            (
-                                str(props[key]).strip()
-                                for key in (
-                                    "title_zh",
-                                    "title_cn",
-                                    "title",
-                                    "title_en",
-                                    "zh_name",
-                                    "en_name",
-                                    "name",
-                                )
-                                if props.get(key)
-                            ),
-                            "",
-                        )
-                    if titles[paper_id]:
-                        achievements.append({"id": paper_id, "title": titles[paper_id]})
-                    if len(achievements) == 3:
-                        break
-                row["representative_achievements"] = achievements
+                row["representative_achievements"] = await self._shared_paper_titles(
+                    client, row["expert_a_id"], row["expert_b_id"], space=space
+                )
             except GraphAPIError:
                 logger.warning(
                     "Could not retrieve representative papers for %s", row["relation_key"]
                 )
+
+    async def _shared_paper_titles(
+        self,
+        client: Any,
+        person_a: str,
+        person_b: str,
+        *,
+        space: str,
+    ) -> list[dict[str, str]]:
+        """经 /paths/search 搜两位专家的共同论文，返回 ≤3 条 {id, title}。"""
+        # techkg: Scholar -[AUTHORED]-> Paper（out）；dev: Paper -[AUTHORED_BY]-> Person，
+        # 从人找论文要走 in，第二跳反方向。
+        space_is_techkg = space == "techkg"
+        person_to_paper = "out" if space_is_techkg else "in"
+        paper_to_person = "in" if space_is_techkg else "out"
+        request = {
+            "sourceId": person_a,
+            "targetId": person_b,
+            "steps": [
+                {
+                    "edgeType": "AUTHORED" if space_is_techkg else "AUTHORED_BY",
+                    "direction": person_to_paper,
+                    "targetLabel": "Paper",
+                    "targetFilters": [],
+                },
+                {
+                    "edgeType": "AUTHORED" if space_is_techkg else "AUTHORED_BY",
+                    "direction": paper_to_person,
+                    "targetLabel": "Scholar" if space_is_techkg else "Person",
+                    "targetFilters": [],
+                },
+            ],
+            # 多取几条给空标题留余量，出参仍截 3 条；countTotal=False 省掉
+            # 服务端全量 count 聚合。
+            "limit": _ACHIEVEMENT_PATH_LIMIT,
+            "offset": 0,
+            "countTotal": False,
+            "space": space,
+        }
+        result = await client.search_paths(request)
+        achievements: list[dict[str, str]] = []
+        for path in result.get("items") or []:
+            nodes = path.get("nodes") or []
+            if len(nodes) < 2:
+                continue
+            paper = nodes[1]
+            paper_id = str(paper.get("id") or "")
+            props = paper.get("properties") or {}
+            title = next(
+                (
+                    str(props[key]).strip()
+                    for key in (
+                        "title_zh",
+                        "title_cn",
+                        "title",
+                        "title_en",
+                        "zh_name",
+                        "en_name",
+                        "name",
+                    )
+                    if props.get(key)
+                ),
+                "",
+            )
+            if paper_id and title:
+                achievements.append({"id": paper_id, "title": title})
+            if len(achievements) == _MAX_ACHIEVEMENT_TITLES:
+                break
+        return achievements
 
     async def _find_person(self, client: Any, keyword: str) -> dict[str, Any] | None:
         """按 VID / scholar_id / 姓名定位一个 Person 节点。

@@ -113,6 +113,7 @@ def test_edges_fill_endpoints_and_mark_dangling_null(monkeypatch) -> None:
 
     class FakeClient:
         def get_edges_by_type(self, edge_type: str, *, limit: int, offset: int):
+            # REST page.total 实测对部分边类型恒为 0，total 应改用 SHOW STATS 口径。
             return GraphPagedResult(
                 items=[
                     GraphEdge(
@@ -127,6 +128,9 @@ def test_edges_fill_endpoints_and_mark_dangling_null(monkeypatch) -> None:
                 limit=limit,
                 offset=offset,
             )
+
+        def stats_snapshot(self):
+            return {"tags": {}, "edges": {"AUTHORED_BY": 184}}
 
         def execute_read(self, query: str):
             # TRS 定制 Nebula 的 FETCH 必须带 YIELD；端点缺失的 VID 不返回行。
@@ -150,7 +154,7 @@ def test_edges_fill_endpoints_and_mark_dangling_null(monkeypatch) -> None:
     assert response.status_code == 200
     data = response.json()["data"]
     assert data["relationType"] == "AUTHORED_BY"
-    assert data["total"] == 1
+    assert data["total"] == 184
     edge = data["edges"][0]
     assert edge["source"] == "paper_0001"
     assert edge["target"] == "paper_ref_missing"

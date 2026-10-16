@@ -84,6 +84,8 @@ docker exec <api容器> python script/manage_external_api_clients.py create \
 
 返回 `data`：`relationType`、`edges[]`（`type` / `source` / `target` 两端 VID / `properties` 边属性；`includeEntities=true` 时附 `sourceEntity` / `targetEntity`，结构与接口 2 实体相同）、`total`、`limit`、`offset`。
 
+`total` 采用 SHOW STATS 统计口径（与接口 1 的 `count` 同源，**包含悬挂边**；空间从未跑过统计时回退 REST 计数）。trs-graph REST 自带的分页计数对部分边类型恒为 0（实测返回行非空仍报 0），故不采用。
+
 **悬挂边**：写入时端点实体未落图的边（如引用桩），对应 `sourceEntity` / `targetEntity` 为 `null`，不是错误。
 
 ## 调用方最小使用流
@@ -107,7 +109,7 @@ curl -H "X-Client-Id: $CID" -H "X-API-Key: $KEY" \
 
 - **没有"返回全部"接口**：亿级图单次响应装不下（详见设计讨论）。全量需求 = 对每个类循环翻页，分页即护栏。若调用方要一次性镜像整图，另立异步导出通道（二期），勿走查询接口。
 - 深分页（offset 极大）逐页变慢，属图库遍历特性；交互式查询建议带类过滤 + 小页。
-- `total` 来自 SHOW STATS 统计快照（300s 缓存），非实时精确。
+- `total` / `count` 来自 SHOW STATS 统计快照（300s 缓存），非实时精确；按 `offset >= total` 判断翻页结束。
 
 ## 上线前置检查（运维）
 

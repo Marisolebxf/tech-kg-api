@@ -182,6 +182,13 @@ async def list_edges_by_type(
             result = await asyncio.to_thread(
                 client.get_edges_by_type, name, limit=limit, offset=offset
             )
+            # trs-graph REST 的 page.total 对部分边类型恒为 0（实测返回行非空仍报 0），
+            # total 改用 SHOW STATS 口径（与 /schema 的 count 同源，含悬挂边），
+            # 空间从未跑过统计时回退 REST 计数。
+            stats_total = int(
+                (await asyncio.to_thread(client.stats_snapshot)).get("edges", {}).get(name, 0)
+            )
+            total = stats_total or result.total
             entity_by_vid: dict[str, dict[str, Any]] = {}
             if include_entities and result.items:
                 # 边端点 VID 与 /nodes/{id} 同口径去引号后再拼 FETCH 字面量。
@@ -216,7 +223,7 @@ async def list_edges_by_type(
             "space": ctx.space,
             "relationType": name,
             "edges": edges,
-            "total": result.total,
+            "total": total,
             "limit": limit,
             "offset": offset,
         }

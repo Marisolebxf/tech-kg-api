@@ -2063,11 +2063,11 @@ def test_overview_passes_all_change_rows_without_cap() -> None:
     assert result.asset_overview_groups[0].added == "+1,500"
     assert result.stats_day == "2026-10-13"
     assert "entity" not in result.asset_change_errors
-    # 口径说明（2026-10-16）：文案必须写明「按写图记录计数、不去重」，且不得再出现
-    # 已退役的「图反查」表述——用户拿昨日新增与总量对账曾被旧文案误导
+    # 口径提示撤下（2026-10-16 晚用户要求）：warnings 不再常驻口径说明文案，
+    # 口径只留在数据载荷侧；已退役的「图反查」表述同样不得回归
     caliber = "\n".join(result.warnings)
-    assert "写图记录计数" in caliber
-    assert "不去重" in caliber
+    assert "写图记录计数" not in caliber
+    assert "不去重" not in caliber
     assert "图反查" not in caliber
 
 
@@ -2101,7 +2101,8 @@ def test_overview_carries_net_added_snapshot_diff(monkeypatch: pytest.MonkeyPatc
     assert result.asset_net_added_note == ""
     # 统计日随快照透传给差分读取（缺省回看昨日）
     assert seen == [(None, "2026-10-13")]
-    assert any("净新增" in warning and "同口径" in warning for warning in result.warnings)
+    # 口径提示撤下（2026-10-16 晚）：净新增说明不进 warnings，只在载荷里
+    assert all("净新增" not in warning for warning in result.warnings)
 
 
 def test_overview_net_added_missing_shows_note_not_fabricated(

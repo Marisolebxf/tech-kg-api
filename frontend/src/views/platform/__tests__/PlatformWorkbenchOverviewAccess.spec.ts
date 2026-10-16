@@ -208,13 +208,12 @@ describe('昨日新增聚合格式展示', () => {
     expect(rows[3]!.text()).not.toContain('已中断')
     // 左下角合计 = 控制库 written 精确计数（对象数口径，与行数 3 是两回事）
     expect(drawer.find('footer').text()).toContain('共 237,005 条变化')
-    // 口径说明（2026-10-16）：总量与新增并排展示时说明两口径不可直接相减对账
-    expect(drawer.find('.asset-change-caliber').text()).toContain('不能直接相减对账')
-    expect(drawer.find('.asset-change-caliber').text()).toContain('不去重')
-    // 净新增：卡片随徽标万级缩写，抽屉千分位精确值（与总量同口径可对账）
+    // 口径提示已撤下（2026-10-16 晚用户要求）：抽屉不再常驻口径说明文案、无占位
+    expect(drawer.text()).not.toContain('不能直接相减对账')
+    expect(drawer.text()).not.toContain('不去重')
+    // 净新增：卡片随徽标万级缩写，抽屉千分位精确值（有数才渲染，无占位文案）
     expect(wrapper.text()).toContain('净新增 +9.3万')
-    expect(drawer.find('.asset-change-caliber.is-net').text()).toContain('净新增')
-    expect(drawer.find('.asset-change-caliber.is-net').text()).toContain('93,444')
+    expect(drawer.find('.asset-change-caliber.is-net').text()).toBe('净新增：+93,444')
   })
 
   it('明细暂不可读时显示读取失败，不显示汇总行或暂无新增', async () => {
@@ -233,7 +232,9 @@ describe('昨日新增聚合格式展示', () => {
     expect(drawer.text()).toContain('实体新增明细暂不可读取，请稍后重试')
     expect(drawer.text()).not.toContain('昨日暂无写图记录')
     expect(wrapper.text()).not.toContain('净新增 +')
-    expect(drawer.find('.asset-change-caliber.is-net').text()).toContain('当日快照尚未生成')
+    // 快照缺失：净新增整段不渲染（撤下提示占位），note 只留在载荷不进页面
+    expect(drawer.find('.asset-change-caliber.is-net').exists()).toBe(false)
+    expect(drawer.text()).not.toContain('当日快照尚未生成')
     expect(drawer.find('footer').text()).toContain('新增明细暂不可读取')
   })
 

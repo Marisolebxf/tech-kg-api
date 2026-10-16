@@ -8,14 +8,22 @@ from collections.abc import Mapping
 from typing import Any
 
 from script.relation_extractors_one_relation.org_edges import (
-    org_relation_sources,
     transform_org_relation,
 )
 
 RELATION_KEY = "beneficial_owner"
 
-# 来源绑定元数据（script/register_platform_extraction.py 读取建 GraphSchemaSource）
-SOURCES = org_relation_sources(RELATION_KEY)
+# 来源绑定元数据（script/register_platform_extraction.py 读取建 GraphSchemaSource）。
+# element 库 dwd_forg_beneficiary_info（6,376 行）无 id/update_time 列：row_pk 别名成
+# id 作 keyset 游标，time 留空走 pk keyset 模式；转换仍由 spec 驱动读同名列。
+SOURCES = [
+    {
+        "table": "dwd_forg_beneficiary_info",
+        "pk": "id",
+        "time": "",
+        "query_sql": "SELECT *, row_pk AS id FROM dwd_forg_beneficiary_info",
+    },
+]
 
 
 def transform(payload: Mapping[str, Any]) -> dict[str, Any]:

@@ -379,6 +379,61 @@ def _serialize_browse_item(node: Any, entity_type: str) -> dict[str, Any]:
     }
 
 
+def _es_keyword_search_text(vid: str, props: dict[str, Any]) -> str:
+    """关键词检索语料 = VID + 全量属性值（不截断、不挑 key）。
+
+    与图谓词 ``id(v) CONTAINS kw OR any(values(properties(v)) CONTAINS kw)``
+    保持同一口径：属性 key 不参与匹配（图上本来也不匹配 key）。全量同步
+    脚本与随环增量共用本函数，保证两条写入路径语料逐字一致。
+    """
+    parts = [str(vid)]
+    for value in props.values():
+        if value is None:
+            continue
+        if isinstance(value, (dict, list, tuple, set)):
+            try:
+                parts.append(
+                    json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))
+                )
+            except (TypeError, ValueError):
+                continue
+        else:
+            parts.append(str(value))
+    return "\n".join(parts)
+
+
+def _es_keyword_doc(node: Any, label: str) -> dict[str, Any]:
+    """图节点 → ES 关键词索引文档（``_id = 标签::vid``，镜像图「按标签枚举」
+    语义：多 TAG 同 vid 各占一篇）。全量同步与随环增量共用，保证增量行与
+    全量重建的文档逐字段一致。"""
+    vid = str(node.id)
+    return {
+        "_id": f"{label}::{vid}",
+        "vid": vid,
+        "entity_type": label,
+        "search_text": _es_keyword_search_text(vid, dict(node.properties or {})),
+        "item": _serialize_browse_item(node, label),
+    }
+
+
+def _es_incremental_upsert(store: EntityKeywordES, space: str, docs: list[dict[str, Any]]) -> int:
+    """随环 ES 关键词增量写入：失败降级告警不抛。
+
+    与 Milvus 增量的链内严格口径相反——关键词通道有图直查兜底，漏写的
+    批次由夜间全量对账（``--drop`` 重建）修复，ES 抖动不该把构建链拖
+    FAILED。"""
+    try:
+        return store.upsert(space, docs)
+    except Exception:  # noqa: BLE001 - 降级口径：构建链不被 ES 故障中断
+        logger.warning(
+            "ES 关键词增量写入失败(space=%s, %s 条，待夜间对账修复)",
+            space,
+            len(docs),
+            exc_info=True,
+        )
+        return 0
+
+
 def _node_count_cached(graph: TRSGraphClient, space: str, label: str) -> int:
     """带 TTL 缓存的标签节点数。label_count 优先 SHOW STATS（毫秒级），
     统计缺失或不可用（空间未跑 stats job）时回退 nGQL 标签 count（亚秒级）。"""
@@ -1356,19 +1411,37 @@ class EntitySearchService:
         FAILED（2026-09-29 口径）。冻结词表产出的稀疏向量维度由词表决定、与
         既有行天然兼容（SPARSE_FLOAT_VECTOR 无固定维度），增量行无需重刷全空间。
 
+        同一班次捎带 ES 关键词索引增量：读回的节点顺手构造 ES 文档（与全量
+        同构，``_es_keyword_doc``）bulk 写入，**不遵循 Milvus 守卫**（新空间
+        首批写入即自动建索引）、**失败降级不抛**（``esUpserted`` 计数、夜间
+        对账修复）——ES 是查询优化层，不该把构建链拖 FAILED。
+
         ``items``：``[{"vid": ..., "label": 写图的 TAG 名}]``——label 用写图侧
         的事实（FETCH 批量读回的 vertex 不保证 labels 字段），props/文本与全量
         重建同源同构。计数快照只对 Milvus 里尚无行的 vid +n（merge 重写不变）。
         """
+        # ES 关键词索引增量不受下方 Milvus 守卫约束：ES 建索引只是一次 PUT，
+        # 无词表冻结/embedding/全扫，不存在 Milvus 的首建自锁问题——新空间
+        # 首批写入即自动建索引（infra upsert 惰性 ensure_index），这就是
+        # 「新空间→构建→自动带 ES 索引」的入口。未配置 ENTITY_SEARCH_ES_URL
+        # 时 es_store 为 None，本方法行为与本改动前完全一致。
+        es_store = get_entity_keyword_es()
+        milvus_skip_reason: str | None = None
+        state_row: Any = None
+        encoder: BM25SparseEncoder | None = None
         if _database_reindex_running(self._session):
             # 全量重建会重读整个图空间，本批行天然被覆盖：计划内跳过，不算失败
-            return {"mode": "skip", "upserted": 0, "reason": "reindex in progress"}
-        state_row = _load_state(self._session, space)
-        encoder = _load_bm25_from_state(self._session, space)
-        if state_row is None or encoder is None or not (state_row.entity_count or 0):
-            # 未建索引的空间不随环全量首建（大空间会撞 activity 超时自锁缺陷），
-            # 首建走管理端点 POST /entity-search/reindex 低峰执行
-            return {"mode": "skip", "upserted": 0, "reason": "space index not built"}
+            milvus_skip_reason = "reindex in progress"
+        else:
+            state_row = _load_state(self._session, space)
+            encoder = _load_bm25_from_state(self._session, space)
+            if state_row is None or encoder is None or not (state_row.entity_count or 0):
+                # 未建索引的空间不随环全量首建（大空间会撞 activity 超时自锁缺陷），
+                # 首建走管理端点 POST /entity-search/reindex 低峰执行
+                milvus_skip_reason = "space index not built"
+        if milvus_skip_reason is not None and es_store is None:
+            # ES 未配置：守卫短路，行为与旧版一致（零额外图读）
+            return {"mode": "skip", "upserted": 0, "reason": milvus_skip_reason}
 
         label_by_vid: dict[str, str] = {}
         for item in items or []:
@@ -1379,6 +1452,8 @@ class EntitySearchService:
 
         graph = get_space_client(space)
         records: list[tuple[str, str, dict[str, Any]]] = []
+        es_docs: list[dict[str, Any]] = []
+        es_written = 0
         skipped_missing = 0
         skipped_empty_text = 0
         try:
@@ -1386,8 +1461,14 @@ class EntitySearchService:
                 found = graph.get_nodes_bulk(vids[start : start + _BULK_FETCH_VID_CHUNK])
                 for vid in vids[start : start + _BULK_FETCH_VID_CHUNK]:
                     node = found.get(vid)
+                    if node is None:
+                        skipped_missing += 1
+                        continue
+                    if es_store is not None:
+                        # ES 无 128B VID 限制：全部节点入关键词索引（与全量同步同口径）
+                        es_docs.append(_es_keyword_doc(node, label_by_vid[vid]))
                     # 超 128B 的 VID 入不了 Milvus 主键字段（与全量重建同规则）
-                    if node is None or len(vid.encode("utf-8")) > 128:
+                    if len(vid.encode("utf-8")) > 128:
                         skipped_missing += 1
                         continue
                     record = _index_record(
@@ -1401,8 +1482,23 @@ class EntitySearchService:
                         skipped_empty_text += 1
                         continue
                     records.append((vid, label_by_vid[vid], record))
+                if es_docs:
+                    es_written += _es_incremental_upsert(es_store, space, es_docs)
+                    es_docs = []
         except Exception as exc:  # noqa: BLE001 - 链内真实故障：统一口径上抛
             raise EntitySearchError(f"增量入索引批量读图失败（{len(vids)} 个 vid）: {exc}") from exc
+
+        if milvus_skip_reason is not None:
+            # Milvus 侧计划内跳过；ES 已落数时 mode 仍标 incremental——环末
+            # activity 据此失效检索缓存，让关键词搜索立刻看到本批实体
+            return {
+                "mode": "incremental" if es_written else "skip",
+                "upserted": 0,
+                "reason": milvus_skip_reason,
+                "esUpserted": es_written,
+                "graphSpace": space,
+            }
+        assert state_row is not None and encoder is not None  # Milvus 未跳过则必已加载
 
         # 先做 BM25 编码（纯 CPU，冻结词表，OOV token 静默丢弃）再 embed：
         # 全 OOV 的行不浪费 embedding 配额
@@ -1425,6 +1521,7 @@ class EntitySearchService:
                 "skippedEmptySparse": skipped_empty_sparse,
                 "entityCount": int(state_row.entity_count or 0),
                 "graphSpace": space,
+                "esUpserted": es_written,
             }
 
         embedding_config = _resolve_embedding_config()
@@ -1513,6 +1610,7 @@ class EntitySearchService:
             "skippedEmptySparse": skipped_empty_sparse,
             "entityCount": int(state_row.entity_count or 0),
             "graphSpace": space,
+            "esUpserted": es_written,
         }
 
     def _existing_document_ids(self, milvus: Any, doc_ids: list[str]) -> set[str]:

@@ -4,7 +4,8 @@
 每个图空间的全部实体（VID + 全量属性值 + 序列化列表项）镜像进 ES 的
 ``kg_entity_kw_{space}`` 索引，供 ``service/entity_search.py`` 的 ES 通道查询。
 
-- 幂等：``_id = vid``，重复执行为覆盖写；``--drop`` 先删索引重建（清走已删实体）；
+- 幂等：``_id = 标签::vid``（镜像图按标签枚举语义），重复执行为覆盖写；
+  ``--drop`` 先删索引重建（清走已删实体）；
 - 分页拉取（``paged_nodes_by_label``，标签索引路径）+ 批量 bulk，串行逐标签，
   对共享 graphd 友好；
 - 逐标签打印进度与耗时，结尾输出同步吞吐与索引文档数核对。
@@ -18,7 +19,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 import time
@@ -26,47 +26,12 @@ import time
 from infra.elasticsearch import ElasticsearchError, EntityKeywordES
 from infra.graph_db import get_space_client
 from service.entity_search import (
-    _serialize_browse_item,
-)  # 同仓脚本复用，保证回放项与图直查逐字节一致
-
-
-def _search_text(vid: str, props: dict) -> str:
-    """检索语料 = VID + 全量属性值（不截断、不挑 key）。
-
-    与图谓词 ``id(v) CONTAINS kw OR any(values(properties(v)) CONTAINS kw)``
-    保持同一口径：属性 key 不参与匹配（图上本来也不匹配 key）。
-    """
-    parts = [str(vid)]
-    for value in props.values():
-        if value is None:
-            continue
-        if isinstance(value, (dict, list, tuple, set)):
-            try:
-                parts.append(
-                    json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))
-                )
-            except (TypeError, ValueError):
-                continue
-        else:
-            parts.append(str(value))
-    return "\n".join(parts)
+    _es_keyword_doc,
+)  # 同仓脚本复用：文档构造与随环增量、图直查回放逐字节一致
 
 
 def build_docs(nodes: list, label: str) -> list[dict]:
-    docs = []
-    for node in nodes:
-        props = dict(node.properties or {})
-        vid = str(node.id)
-        docs.append(
-            {
-                "_id": f"{label}::{vid}",  # 图按标签枚举，多 TAG 同 vid 时各占一篇
-                "vid": vid,
-                "entity_type": label,
-                "search_text": _search_text(vid, props),
-                "item": _serialize_browse_item(node, label),
-            }
-        )
-    return docs
+    return [_es_keyword_doc(node, label) for node in nodes]
 
 
 def enum_count(graph, label: str) -> int:

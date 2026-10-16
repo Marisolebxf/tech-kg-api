@@ -8,14 +8,12 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from infra.s3 import S3Storage
-from service.schema_extraction import SchemaExtractionService
 from service.schema_management import SchemaManagementService
 
 
 class SchemaManagementApplication:
     def __init__(self, session: Session, storage: S3Storage | None = None) -> None:
         self._service = SchemaManagementService(session, storage=storage)
-        self._extraction = SchemaExtractionService(session)
 
     def overview(self, graph_space: str | None = None) -> dict[str, Any]:
         return self._service.overview(graph_space)
@@ -67,12 +65,6 @@ class SchemaManagementApplication:
 
     def replace_sources(self, **kwargs) -> dict[str, Any]:
         return self._service.replace_sources(**kwargs)
-
-    async def trigger_extraction(self, **kwargs) -> dict[str, Any]:
-        return await self._extraction.trigger_extraction(**kwargs)
-
-    async def backfill(self, **kwargs) -> dict[str, Any]:
-        return await self._extraction.backfill(**kwargs)
 
     def replace_script(self, **kwargs) -> dict[str, Any]:
         return self._service.replace_script(**kwargs)

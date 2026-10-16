@@ -422,34 +422,8 @@ export async function replaceSchemaSources(
   )
 }
 
-export interface SchemaExtractTriggerResult {
-  executionId: string
-  workflowId: string
-  status: string
-  staleScript?: boolean
-  staleBehind?: number
-}
-
-export interface SchemaBackfillResult extends SchemaExtractTriggerResult {
-  watermarksCleared: number
-  forced: boolean
-}
-
-export async function backfillSchemaHistory(
-  schemaId: string,
-  userId: string,
-  options?: { force?: boolean; graphSpace?: string; batchSize?: number },
-): Promise<SchemaBackfillResult> {
-  const body: Record<string, unknown> = {}
-  if (options?.force) body.force = true
-  if (options?.graphSpace) body.graphSpace = options.graphSpace
-  if (options?.batchSize) body.batchSize = options.batchSize
-  return unwrap(
-    await asApiPromise<SchemaBackfillResult>(
-      http.post(`${PREFIX}/schemas/${schemaId}/backfill`, body, { headers: headers(userId) }),
-    ),
-  )
-}
+// 2026-10-16 入口收敛：原「执行抽取」「历史回填」接口（POST /schemas/{id}/extract、
+// /backfill）及对应 API 函数已删除，抽取触发统一走图谱构建任务（workflow-system jobs）。
 
 export async function deleteSchema(
   schemaId: string,

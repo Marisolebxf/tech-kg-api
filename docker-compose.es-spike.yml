@@ -105,7 +105,9 @@ services:
       WORKFLOW_MYSQL_PASSWORD: temporal
       TEMPORAL_ADDRESS: temporal-dev2:7233
       TEMPORAL_NAMESPACE: default
-      TEMPORAL_TASK_QUEUE: tech-kg-workflows
+      # 专属队列：本栈触发的抽取 workflow 只落到下方 es1016-worker（带 ES 增量
+      # 代码），不会被 dev2 worker（旧代码、无 ENTITY_SEARCH_ES_URL）抢走
+      TEMPORAL_TASK_QUEUE: es1016-workflows
       # e2e 免登录三件套
       AUTH_ENABLED: "false"
       APP_ENV: dev
@@ -121,6 +123,70 @@ services:
       SCHEMA_S3_BUCKET: tech-kg-schema-scripts
       SCHEMA_S3_REGION: us-east-1
       SCHEMA_S3_SECURE: "false"
+      CORRECTION_SYNC_WORKER_ENABLED: "false"
+      GRAPH_SPACE_REPLICA_FACTOR: "1"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - app
+    depends_on:
+      es1016-es:
+        condition: service_healthy
+      es1016-redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # 1016 全链路验证专用 worker：跑 PR②（feat/es-entity-search-incremental）镜像，
+  # 只轮询 es1016-workflows 队列（api 侧 TEMPORAL_TASK_QUEUE 已指向该队列）。
+  # 与 dev2 worker 的差异仅有三处：代码带 ES 增量、注入 ENTITY_SEARCH_ES_URL、
+  # 队列隔离——控制面/图/源库/S3 仍共用 dev2，验证物料一律 es1016 前缀防串扰。
+  es1016-worker:
+    image: tech-kg-api-es1016-api:latest
+    container_name: es1016-worker
+    command: [".venv/bin/python", "-m", "script.run_temporal_worker"]
+    environment:
+      TZ: UTC
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      TEMPORAL_ADDRESS: temporal-dev2:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: es1016-workflows
+      TRS_GRAPH_BASE_URL: ${TRS_GRAPH_BASE_URL:-http://host.docker.internal:8090}
+      TRS_GRAPH_SPACE: dev2
+      TRS_GRAPH_API_KEY: ${TRS_GRAPH_API_KEY:-ysukeg}
+      TRS_GRAPH_TIMEOUT: ${TRS_GRAPH_TIMEOUT:-30}
+      MYSQL_HOST: ${MYSQL_HOST:-host.docker.internal}
+      MYSQL_PORT: ${MYSQL_PORT:-3306}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-gkx_element}
+      MYSQL_USERNAME: ${MYSQL_USERNAME:-root}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-123456789}
+      MYSQL_POOL_SIZE: "10"
+      MYSQL_MAX_OVERFLOW: "20"
+      WORKFLOW_MYSQL_HOST: temporal-mysql-dev2
+      WORKFLOW_MYSQL_PORT: "3306"
+      WORKFLOW_MYSQL_DATABASE: techkg_control
+      WORKFLOW_MYSQL_USERNAME: root
+      WORKFLOW_MYSQL_PASSWORD: temporal
+      MILVUS_HOST: milvus
+      MILVUS_PORT: "19530"
+      MILVUS_URI: ""
+      ENTITY_SEARCH_ES_URL: http://es1016-es:9200
+      ENTITY_SEARCH_ES_TIMEOUT: "10"
+      SCHEMA_S3_ENDPOINT_URL: http://operator-rustfs:9000
+      SCHEMA_S3_ACCESS_KEY: rustfsadmin
+      SCHEMA_S3_SECRET_KEY: rustfsadmin
+      SCHEMA_S3_BUCKET: tech-kg-schema-scripts
+      SCHEMA_S3_REGION: us-east-1
+      SCHEMA_S3_SECURE: "false"
+      # 批载荷 S3 中转（vids claim-check）：随环增量索引入口，缺省则整环跳过索引
+      SCHEMA_EXTRACT_PAYLOAD_S3_ENABLED: "true"
+      SCHEMA_EXTRACT_PAYLOAD_CLEANUP_ENABLED: "true"
+      SCHEMA_EXTRACT_PAYLOAD_RETENTION_DAYS: "7"
+      REDIS_URL: redis://es1016-redis:6379/0
+      AUTH_ENABLED: "false"
+      APP_ENV: dev
+      AUTH_ALLOW_INSECURE_DEV_CONTEXT: "true"
+      BUSINESS_RBAC_ENABLED: "false"
       CORRECTION_SYNC_WORKER_ENABLED: "false"
       GRAPH_SPACE_REPLICA_FACTOR: "1"
     extra_hosts:

@@ -226,19 +226,3 @@ class SchemaSourcesReplace(CamelModel):
         if len(set(keys)) != len(keys):
             raise ValueError("来源表绑定不能重复")
         return self
-
-
-class SchemaExtractRequest(CamelModel):
-    """触发平台喂数抽取的请求体。"""
-
-    graph_space: str | None = Field(default=None, min_length=1, max_length=128)
-    batch_size: int | None = Field(default=None, ge=1, le=5000)
-
-
-class SchemaBackfillRequest(CamelModel):
-    """回填历史数据的请求体：清空来源水位后全量重跑抽取。"""
-
-    # 脚本落后于 Schema 时仍强行回填（前端强确认后携带；脚本可能通配透传字段）
-    force: bool = False
-    graph_space: str | None = Field(default=None, min_length=1, max_length=128)
-    batch_size: int | None = Field(default=None, ge=1, le=5000)

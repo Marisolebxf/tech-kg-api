@@ -17,11 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from service.business_access_control import rbac_enabled
-from service.schema_management import (
-    SchemaConflictError,
-    SchemaManagementService,
-    _stale_behind,
-)
+from service.schema_management import SchemaConflictError
 
 logger = logging.getLogger(__name__)
 
@@ -322,126 +318,12 @@ def _ensure_script_object_exists(schema_id: str) -> None:
         )
 
 
-class SchemaExtractionService:
-    def __init__(self, session: Session) -> None:
-        self._session = session
-        self._schema_service = SchemaManagementService(session)
-
-    async def trigger_extraction(
-        self,
-        *,
-        schema_id: str,
-        user_id: str,
-        is_platform_admin: bool = False,
-        graph_space: str | None = None,
-        batch_size: int | None = None,
-        actor=None,
-    ) -> dict[str, Any]:
-        """触发平台喂数抽取。要求已上传脚本且 ≥1 来源表绑定，否则 409。"""
-        self._schema_service.assert_mutable(
-            schema_id,
-            user_id,
-            is_platform_admin=is_platform_admin,
-            denied_system_message="只有 Schema 管理员可以触发系统 Schema 抽取",
-            denied_owner_message="只能触发自己创建的 Schema 抽取",
-        )
-        info = load_extract_schema(schema_id, session=self._session)
-
-        from service.workflow_operations import workflow_operations_service
-
-        payload = {
-            "schemaId": schema_id,
-            "actorUserId": user_id,
-            # 空间优先级：显式传参 > Schema 目录登记的归属空间 > env 默认
-            "graphSpace": graph_space
-            or info.get("graph_space")
-            or os.getenv("TRS_GRAPH_SPACE", "techkg"),
-            "batchSize": min(max(int(batch_size or DEFAULT_BATCH_SIZE), 1), MAX_BATCH_SIZE),
-            "triggerSource": "MANUAL",
-        }
-        if rbac_enabled():
-            from service.workflow_jobs import _job_business
-
-            if actor is None:
-                raise SchemaConflictError("抽取缺少已验证的平台身份")
-            payload["clientId"] = _job_business(actor, payload)
-        definition = persist_extract_definition(build_extract_definition(info))
-        execution = await workflow_operations_service.execute_definition(
-            definition, payload, persist_task=True
-        )
-        result = {
-            "executionId": execution["id"],
-            "workflowId": execution["workflowId"],
-            "status": execution["status"],
-        }
-        # 下发检查：脚本落后于 Schema → 提示但放行（旧脚本永远跑不挂：
-        # 删掉的属性被 activeProps 过滤、新属性只是没人产出留 NULL）
-        stale_behind = _stale_behind(info.get("property_revision"), info.get("captured_revision"))
-        if stale_behind:
-            result["staleScript"] = True
-            result["staleBehind"] = stale_behind
-        return result
-
-    async def backfill(
-        self,
-        *,
-        schema_id: str,
-        user_id: str,
-        is_platform_admin: bool = False,
-        force: bool = False,
-        graph_space: str | None = None,
-        batch_size: int | None = None,
-        actor=None,
-    ) -> dict[str, Any]:
-        """回填历史数据：清空该 Schema 全部来源水位后全量重跑抽取。
-
-        merge_node/INSERT VERTEX 是 UPSERT：回填用源表当前值覆盖既有属性；
-        失败可直接重跑（清水位幂等）。脚本落后于 Schema 时回填可能无效
-        （脚本不产出新增属性，重跑完新列还是 NULL）——未带 ``force`` 时 409。
-        """
-        self._schema_service.assert_mutable(
-            schema_id,
-            user_id,
-            is_platform_admin=is_platform_admin,
-            denied_system_message="只有 Schema 管理员可以回填系统 Schema",
-            denied_owner_message="只能回填自己创建的 Schema",
-        )
-        info = load_extract_schema(schema_id, session=self._session)
-        stale_behind = _stale_behind(info.get("property_revision"), info.get("captured_revision"))
-        if stale_behind and not force:
-            raise SchemaConflictError(
-                f"当前脚本未覆盖最新属性（落后 {stale_behind} 版），"
-                "回填可能无效，请先更新脚本后再回填"
-            )
-
-        from service.script_watermark import clear_watermarks
-
-        if rbac_enabled():
-            from service.workflow_jobs import _job_business, authorize_background_execution
-
-            if actor is None:
-                raise SchemaConflictError("回填缺少已验证的平台身份")
-            context = {
-                "schemaId": schema_id,
-                "graphSpace": graph_space or info.get("graph_space"),
-                "actorUserId": user_id,
-            }
-            context["clientId"] = _job_business(actor, context)
-            authorize_background_execution(context)
-        cleared = clear_watermarks(extract_watermark_definition_ids(info["schema_key"], schema_id))
-        result = await self.trigger_extraction(
-            schema_id=schema_id,
-            user_id=user_id,
-            is_platform_admin=is_platform_admin,
-            graph_space=graph_space,
-            batch_size=batch_size,
-            actor=actor,
-        )
-        return {
-            **result,
-            "watermarksCleared": cleared,
-            "forced": bool(force and stale_behind),
-        }
+# 2026-10-16 入口收敛：原 SchemaExtractionService.trigger_extraction / backfill
+# （Schema 管理页「执行抽取」「历史回填」的服务端实现）已随 HTTP 入口一并删除。
+# 抽取触发统一走图谱构建任务 POST /workflow-system/jobs（taskType=extract +
+# runNow），按来源水位增量读取；历史回填清水位全量重跑会绕过增量水位、
+# 覆盖人工修订，与业务口径不对齐，不再提供。本模块保留定义构建/预检/
+# 可抽取枚举（任务链路复用）与 rerun_failed_records（审核失败记录重跑）。
 
 
 async def rerun_failed_records(

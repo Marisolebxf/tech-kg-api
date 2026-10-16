@@ -62,6 +62,9 @@ export interface PlatformOverviewData {
   /** 昨日新增对象数合计（控制库 written 精确计数），抽屉左下角「共 N 条变化」同源。 */
   assetChangeTotals?: Partial<Record<AssetOverviewKey, number>>
   assetChangeErrors?: Partial<Record<AssetOverviewKey, string>>
+  /** 净新增（相邻两日图统计快照差分，与总量同口径、可直接对账）；null=快照缺失，原因见 assetNetAddedNote。 */
+  assetNetAdded?: Partial<Record<AssetOverviewKey, number | null>>
+  assetNetAddedNote?: string
   entityStructure: StructureItem[]
   relationStructure: StructureItem[]
   dataMode: 'partial' | 'mock'

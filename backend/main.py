@@ -72,6 +72,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "on",
     }:
         correction_dispatcher = asyncio.create_task(_run_correction_dispatcher())
+    stats_snapshot_collector = None
+    if os.getenv("KG_STATS_SNAPSHOT_ENABLED", "true").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        # 每日图统计快照采集（平台总览「净新增」的差分数据源）：低峰节奏对
+        # 每个图空间 SUBMIT JOB STATS + SHOW STATS 落控制库；测试/CI 可用
+        # KG_STATS_SNAPSHOT_ENABLED=false 显式关闭
+        from service.stats_daily_snapshot import run_stats_snapshot_collector
+
+        stats_snapshot_collector = asyncio.create_task(run_stats_snapshot_collector())
     try:
         # 确保平台配置表存在（LLM/数据源/Milvus/embedding/水位 持久化；
         # 间接关系人工标注）。
@@ -163,6 +176,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             correction_dispatcher.cancel()
             with suppress(asyncio.CancelledError):
                 await correction_dispatcher
+        if stats_snapshot_collector is not None:
+            stats_snapshot_collector.cancel()
+            with suppress(asyncio.CancelledError):
+                await stats_snapshot_collector
         await close_redis_client()
         close_trs_graph_client()
         close_algorithm_client()

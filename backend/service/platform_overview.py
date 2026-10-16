@@ -1316,6 +1316,18 @@ def _build_structure(
     return items
 
 
+def _load_net_added_safe(space: str | None, day: str) -> tuple[dict[str, int | None], str]:
+    """净新增差分读取的安全包装：任何失败降级为 null + 原因，绝不影响总览装配。"""
+    try:
+        from infra.graph_db.config import TRSGraphSettings
+        from service.stats_daily_snapshot import load_net_added
+
+        return load_net_added(space or TRSGraphSettings.from_env().space, day)
+    except Exception:
+        logger.warning("净新增读取失败 space=%s day=%s", space, day, exc_info=True)
+        return {"entity": None, "relation": None}, "净新增暂不可读取，请稍后重试"
+
+
 class PlatformOverviewService:
     """优先读取真实图统计；无法读取时进入诚实降级：显式占位，不回填演示数据。"""
 
@@ -1480,6 +1492,15 @@ class PlatformOverviewService:
                 running_live = self._changes_provider.running_count(space)
             except Exception:
                 running_live = changes.running_count if changes is not None else 0
+            # 净新增（2026-10-16）：相邻两日图统计快照差分，与总量同口径
+            # （总量(D) − 总量(D−1) ≡ 净新增(D)，可直接对账）；快照缺失时值为
+            # null、note 给原因，不编数。与昨日新增（写图记录口径）并排展示。
+            net_target_day = (
+                changes.day
+                if changes is not None and changes.day
+                else (day or (datetime.now(_DAY_TZ) - timedelta(days=1)).strftime("%Y-%m-%d"))
+            )
+            net_added, net_note = _load_net_added_safe(space, net_target_day)
             # 资产卡中心 = 真实体数（去重口径）：实体总量用 Space/vertices、
             # 关系总量用 Space/edges。构成图分段按 Schema(tag/边类型)计数、
             # 无法去重（需逐 vid 查标签），多标签顶点（如同一机构 vid 同挂
@@ -1519,6 +1540,8 @@ class PlatformOverviewService:
                     "asset_change_rows": change_rows,
                     "asset_change_totals": change_totals,
                     "asset_change_errors": change_errors,
+                    "asset_net_added": net_added,
+                    "asset_net_added_note": net_note,
                     "entity_structure": _build_structure(
                         stats.nodes, entity=True, labels=_schema_labels_by_name(space, "entity")
                     ),
@@ -1536,6 +1559,8 @@ class PlatformOverviewService:
                         "写入（重跑重写、多 Schema 共写同一顶点）不去重；实体/关系总量"
                         "为图上去重存量，脚本等非任务通道写入只计入总量——两口径不同，"
                         "不能直接相减对账。运行中执行数来自工作流控制库。",
+                        "净新增为相邻两日图统计快照差分（与总量同口径：总量(当日) 减 "
+                        "总量(前一日) 即净新增）；当日值随采集时点更新、次日凌晨定局。",
                         *extra_warnings,
                     ],
                 }

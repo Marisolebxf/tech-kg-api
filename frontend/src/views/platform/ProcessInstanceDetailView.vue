@@ -1087,8 +1087,8 @@ const publicSpaceReadOnly = computed(() => {
 .job-executions-panel :deep(.execution-pagination){margin:0;padding:16px 0 0}
 /* 外层工作区已有 16px 内边距，详情页不再叠加额外底部留白。 */
 .task-detail-page{box-sizing:border-box;padding-bottom:0}
-/* 异常与日志内容区不显示外框或分隔描边，状态仍由底色与文字表达。 */
-.log-content :is(.issue-list,.issue-list h3,.log-meta,.io-empty,.process-empty){border:0}
+/* 异常与日志保留标题/日志元信息的分隔线，仅去除内容块外框。 */
+.log-content :is(.issue-list,.io-empty,.process-empty){border:0}
 .issue-list.safe{background:#f6fef9}
 /* 溯源字段保留等宽文本；对象与当前值共用单行省略和全文 Tooltip。 */
 .lineage-compare table{table-layout:fixed}

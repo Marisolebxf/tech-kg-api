@@ -101,7 +101,8 @@ body {
 }
 
 .arco-modal {
-  display: flex;
+  /* Arco uses an inline sibling and vertical-align to center the dialog. */
+  display: inline-flex;
   flex-direction: column;
   max-width: calc(100vw - 48px) !important;
   max-height: calc(100dvh - 48px);

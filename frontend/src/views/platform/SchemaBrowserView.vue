@@ -1676,8 +1676,8 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 .script-badge--failed{color:var(--status-danger)}
 .script-badge--rerun{color:var(--status-neutral)}
 
-/* 属性管理弹窗 */
-.property-panel{width:min(1280px,100%)}
+/* 属性管理恢复历史实际宽度；保留共享弹窗的视口上限和 Body 内滚动。 */
+.schema-modal__panel.property-panel{width:min(560px,100%)}
 .property-body{gap:18px}
 .property-section{display:flex;flex-direction:column;gap:8px}
 .property-section__head{display:flex;align-items:baseline;justify-content:space-between}

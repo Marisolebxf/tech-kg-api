@@ -49,8 +49,7 @@ const submittedName = ref('')
 const filterStatus = ref('')
 const filterTaskType = ref('')
 
-/** 状态/类型筛选带「未选择」伪选项（用例 00843/00847）：value 为空串，选中即清空筛选。
- *  空串映射回 undefined 让框体恢复 placeholder 空态；× 号清空（undefined）同样归一为空串。 */
+/** 下拉仅展示真实筛选值；× 号清空后恢复占位词，并归一为空串查询条件。 */
 const filterStatusSelect = computed({
   get: () => filterStatus.value || undefined,
   set: (value: string | undefined) => {
@@ -439,7 +438,6 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
         <strong class="gb-section-title">任务列表</strong>
         <form class="gb-filters" role="search" @submit.prevent="submitJobSearch">
           <a-select id="graph-build-filter-status" v-model="filterStatusSelect" class="gb-filter-select" placeholder="状态" allow-clear>
-            <a-option value="">未选择</a-option>
             <a-option value="未运行">未运行</a-option>
             <a-option value="运行中">运行中</a-option>
             <a-option value="已暂停">已暂停</a-option>
@@ -448,7 +446,6 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
             <a-option value="运行失败">运行失败</a-option>
           </a-select>
           <a-select id="graph-build-filter-type" v-model="filterTaskTypeSelect" class="gb-filter-select" placeholder="类型" allow-clear>
-            <a-option value="">未选择</a-option>
             <a-option value="extract">单脚本抽取</a-option>
             <a-option value="single">单脚本（历史）</a-option>
             <a-option value="chain">多脚本串行</a-option>

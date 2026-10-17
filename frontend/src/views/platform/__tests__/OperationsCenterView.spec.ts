@@ -142,16 +142,18 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     )
   })
 
-  it('状态下拉提供未选择，具体状态与表格徽标 1:1；C 类追加重跑中/重跑失败', async () => {
+  it('下拉仅提供具体筛选值，C 类状态追加重跑中/重跑失败', async () => {
     const wrapper = renderReview()
     await flushPromises()
     // 状态下拉是筛选行第一个 a-select（已驳回/已撤销现网无案，不设幽灵选项）
     expect(wrapper.findAllComponents({ name: 'ASelect' })[0].props('options'))
-      .toEqual(['全部', '待处理', '已完成'].map(value => ({ value, label: value === '全部' ? '未选择' : value })))
+      .toEqual(['待处理', '已完成'])
+    expect(wrapper.findAllComponents({ name: 'ASelect' })[1].props('options')).toEqual(['实体', '关系'])
+    expect(wrapper.findAllComponents({ name: 'ASelect' })[2].props('options')).toEqual(['近1小时', '近24小时', '近7天', '近30天'])
 
     await switchToCategoryC(wrapper)
     expect(wrapper.findAllComponents({ name: 'ASelect' })[0].props('options'))
-      .toEqual(['全部', '待处理', '重跑中', '重跑失败', '已完成'].map(value => ({ value, label: value === '全部' ? '未选择' : value })))
+      .toEqual(['待处理', '重跑中', '重跑失败', '已完成'])
   })
 
   it('状态筛选下发精确 status 参数（与徽标 1:1），重跑失败下发只读推导态 RERUN_FAILED', async () => {

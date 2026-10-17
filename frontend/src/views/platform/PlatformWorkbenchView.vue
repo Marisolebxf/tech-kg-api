@@ -5205,12 +5205,12 @@ print(response.json())</pre>
 </style>
 <style scoped>
 .platform-query.platform-content{scrollbar-width:thin!important;scrollbar-color:transparent transparent!important}
-.platform-query.platform-content:hover,.platform-query.platform-content.kg-is-scrolling{scrollbar-color:rgba(78,89,105,.55) transparent!important}
+.platform-query.platform-content:hover{scrollbar-color:rgba(78,89,105,.55) transparent!important}
 .platform-query :deep(pre),.platform-query :deep(textarea){scrollbar-width:thin;scrollbar-color:transparent transparent}
-.platform-query:hover,.platform-query.kg-is-scrolling,.platform-query :deep(pre:hover),.platform-query :deep(pre.kg-is-scrolling),.platform-query :deep(textarea:hover),.platform-query :deep(textarea.kg-is-scrolling){scrollbar-color:rgba(78,89,105,.55) transparent}
+.platform-query :deep(pre:hover),.platform-query :deep(pre.kg-is-scrolling),.platform-query :deep(textarea:hover),.platform-query :deep(textarea.kg-is-scrolling){scrollbar-color:rgba(78,89,105,.55) transparent}
 .platform-query::-webkit-scrollbar,.platform-query :deep(pre::-webkit-scrollbar),.platform-query :deep(textarea::-webkit-scrollbar){width:8px!important;height:8px!important}
 .platform-query::-webkit-scrollbar-track,.platform-query :deep(pre::-webkit-scrollbar-track),.platform-query :deep(textarea::-webkit-scrollbar-track){background:transparent}
 .platform-query::-webkit-scrollbar-thumb,.platform-query :deep(pre::-webkit-scrollbar-thumb),.platform-query :deep(textarea::-webkit-scrollbar-thumb){border:2px solid transparent;border-radius:999px;background-color:transparent!important;background-clip:padding-box}
-.platform-query:hover::-webkit-scrollbar-thumb,.platform-query.kg-is-scrolling::-webkit-scrollbar-thumb,.platform-query :deep(pre:hover::-webkit-scrollbar-thumb),.platform-query :deep(pre.kg-is-scrolling::-webkit-scrollbar-thumb),.platform-query :deep(textarea:hover::-webkit-scrollbar-thumb),.platform-query :deep(textarea.kg-is-scrolling::-webkit-scrollbar-thumb){background-color:rgba(78,89,105,.55)!important}
+.platform-query:hover::-webkit-scrollbar-thumb,.platform-query :deep(pre:hover::-webkit-scrollbar-thumb),.platform-query :deep(pre.kg-is-scrolling::-webkit-scrollbar-thumb),.platform-query :deep(textarea:hover::-webkit-scrollbar-thumb),.platform-query :deep(textarea.kg-is-scrolling::-webkit-scrollbar-thumb){background-color:rgba(78,89,105,.55)!important}
 .platform-query::-webkit-scrollbar-thumb:hover,.platform-query :deep(pre::-webkit-scrollbar-thumb:hover),.platform-query :deep(textarea::-webkit-scrollbar-thumb:hover){background-color:rgba(78,89,105,.8)!important}
 </style>

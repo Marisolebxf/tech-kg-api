@@ -24,9 +24,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{ sort: [column: string, direction: 'asc' | 'desc' | undefined] }>()
 const tableRoot = ref<HTMLElement | null>(null)
 const hasHiddenColumns = ref(false)
-const scrollActive = ref(false)
 const viewportHeight = ref(280)
-let scrollIdleTimer: ReturnType<typeof setTimeout> | undefined
 let resizeObserver: ResizeObserver | undefined
 function updateColumnShadow(): void {
   const scroller = tableRoot.value?.querySelector<HTMLElement>('.arco-table-content')
@@ -40,9 +38,6 @@ function updateTableViewport(): void {
 }
 function handleScroll(): void {
   updateColumnShadow()
-  scrollActive.value = true
-  clearTimeout(scrollIdleTimer)
-  scrollIdleTimer = setTimeout(() => { scrollActive.value = false }, 700)
 }
 onMounted(() => {
   if (typeof ResizeObserver !== 'undefined') {
@@ -60,7 +55,6 @@ onMounted(() => {
 onUnmounted(() => {
   resizeObserver?.disconnect()
   window.removeEventListener('resize', updateTableViewport)
-  clearTimeout(scrollIdleTimer)
 })
 watch(() => [props.rows, props.columns], async () => {
   await nextTick()
@@ -118,7 +112,7 @@ function showDetails(row: Record<string, unknown>, index: number): void {
 </script>
 
 <template>
-  <div ref="tableRoot" class="query-result-table" :class="{ 'query-result-table--hidden-columns': hasHiddenColumns, 'query-result-table--scroll-active': scrollActive }" @scroll.capture="handleScroll">
+  <div ref="tableRoot" class="query-result-table" :class="{ 'query-result-table--hidden-columns': hasHiddenColumns }" :style="{ '--query-table-max-height': `${viewportHeight}px` }" @scroll.capture="handleScroll">
     <ATable
       :columns="tableColumns"
       :data="tableRows"
@@ -129,7 +123,7 @@ function showDetails(row: Record<string, unknown>, index: number): void {
       :hoverable="true"
       :loading="loading"
       :table-layout-fixed="true"
-      :scroll="{ x: tableWidth, maxHeight: `${viewportHeight}px` }"
+      :scroll="{ x: tableWidth }"
       :scrollbar="false"
       @sorter-change="handleSort"
     >
@@ -165,24 +159,24 @@ function showDetails(row: Record<string, unknown>, index: number): void {
 
 <style scoped>
 .query-result-table{min-width:0;overflow:hidden}
-/* A single viewport contains the header and rows, so the vertical scrollbar
-   starts at the field-name row. Sticky cells preserve the header on scroll. */
-/* 原生滚动条只在内容溢出时占位，避免固定操作列右侧始终留出空白竖槽。 */
-.query-result-table :deep(.arco-table-content){overflow:auto;scrollbar-gutter:auto}
+/* 高度限制放在 CSS 中：向 Arco 的 scroll 传 maxHeight 会拆分表头/表体，
+   产生额外表头滚动条和右侧占位。单一容器保留 sticky 表头和操作列。 */
+.query-result-table :deep(.arco-table-content){max-height:var(--query-table-max-height);overflow:auto;scrollbar-gutter:auto}
 .query-result-table :deep(thead .arco-table-th){position:sticky;top:0;z-index:11}
 .query-result-table :deep(thead .arco-table-col-fixed-right){z-index:12}
 .query-details-button{height:auto;padding:0;border:0;background:transparent;color:#165dff;font-size:14px;line-height:22px;font-weight:400;white-space:nowrap;cursor:pointer}
 .query-details-button:hover,.query-details-button:active{background:transparent;color:#4080ff}
 /* Horizontal overflow is indicated by the fixed action column only. */
 .query-result-table :deep(.arco-table-container::before),.query-result-table :deep(.arco-table-container::after){display:none;box-shadow:none}
-/* The fixed action column only signals data still hidden to its left. */
-.query-result-table:not(.query-result-table--hidden-columns) :deep(.arco-table-col-fixed-right-first::after){box-shadow:none}
+/* 与 Schema 管理一致：仅在右侧仍有隐藏内容时显示操作列左侧的竖向阴影。 */
+.query-result-table :deep(.arco-table-col-fixed-right-first::after){width:12px;box-shadow:none}
+.query-result-table--hidden-columns :deep(.arco-table-col-fixed-right-first::after){box-shadow:inset -10px 0 8px -8px rgba(78,89,105,.28)}
 .query-result-table :deep(.arco-table-content),.query-record-details{scrollbar-width:thin;scrollbar-color:transparent transparent}
-.query-result-table:hover :deep(.arco-table-content),.query-result-table--scroll-active :deep(.arco-table-content),.query-result-table :deep(.arco-table-content.kg-is-scrolling),.query-record-details:hover,.query-record-details.kg-is-scrolling{scrollbar-color:rgba(78,89,105,.55) transparent}
+.query-result-table :deep(.arco-table-content:hover),.query-record-details:hover,.query-record-details.kg-is-scrolling{scrollbar-color:rgba(78,89,105,.55) transparent}
 .query-result-table :deep(.arco-table-content::-webkit-scrollbar),.query-record-details::-webkit-scrollbar{width:8px;height:8px}
 .query-result-table :deep(.arco-table-content::-webkit-scrollbar-track),.query-record-details::-webkit-scrollbar-track{background:transparent}
 .query-result-table :deep(.arco-table-content::-webkit-scrollbar-thumb),.query-record-details::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background-color:transparent;background-clip:padding-box}
-.query-result-table:hover :deep(.arco-table-content::-webkit-scrollbar-thumb),.query-result-table--scroll-active :deep(.arco-table-content::-webkit-scrollbar-thumb),.query-result-table :deep(.arco-table-content.kg-is-scrolling::-webkit-scrollbar-thumb),.query-record-details:hover::-webkit-scrollbar-thumb,.query-record-details.kg-is-scrolling::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
+.query-result-table :deep(.arco-table-content:hover::-webkit-scrollbar-thumb),.query-record-details:hover::-webkit-scrollbar-thumb,.query-record-details.kg-is-scrolling::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
 .query-result-table :deep(.arco-table-content::-webkit-scrollbar-thumb:hover),.query-record-details::-webkit-scrollbar-thumb:hover{background-color:rgba(78,89,105,.8)}
 .query-result-table :deep(.arco-table){color:var(--color-text-1)}
 .query-result-table :deep(.arco-table-container){border:0;border-radius:0}

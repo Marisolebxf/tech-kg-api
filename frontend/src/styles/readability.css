@@ -243,18 +243,18 @@ small {
   background-clip: padding-box !important;
 }
 
-/* Other modules keep their dedicated inner scrolling behavior. */
-.app-main:not(.is-overview-page) .platform-content {
+/* 综合查询由自身控制悬停显隐，其余页面维持现有滚动条规则。 */
+.app-main:not(.is-overview-page) .platform-content:not(.platform-query) {
   scrollbar-color: #91acd2 transparent !important;
   scrollbar-width: thin !important;
 }
 
-.app-main:not(.is-overview-page) .platform-content::-webkit-scrollbar {
+.app-main:not(.is-overview-page) .platform-content:not(.platform-query)::-webkit-scrollbar {
   display: block;
   width: 8px;
 }
 
-.app-main:not(.is-overview-page) .platform-content::-webkit-scrollbar-thumb {
+.app-main:not(.is-overview-page) .platform-content:not(.platform-query)::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
   border-radius: 999px;
   background: #91acd2 !important;

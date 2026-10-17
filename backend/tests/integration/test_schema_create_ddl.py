@@ -122,14 +122,14 @@ async def test_create_entity_executes_ddl(schema_api) -> None:
     assert data["ddlStatus"] == "succeeded"
     assert data["ddlError"] is None
     # 公共必选属性（id/name/create_time/update_time/source_table）注入头部 + 用户属性；
-    # TAG 建成后自动补 name 属性原生索引（实体检索精确名称查找依赖）
+    # TAG 建成后自动补 name 属性原生索引（实体检索精确名称查找依赖）。
+    # 新建 TAG 零数据不执行 REBUILD（REBUILD 会撞 graphd schema 传播延迟拖住创建请求）
     assert data["ddlStatement"] == (
         "CREATE TAG IF NOT EXISTS Gadget("
         "id string NOT NULL, name string NOT NULL, create_time string NOT NULL, "
         "update_time string NOT NULL, source_table string NOT NULL, "
         "gadget_id string NOT NULL, weight double);\n"
-        "CREATE TAG INDEX IF NOT EXISTS idx_gadget_name ON Gadget(name(64));\n"
-        "REBUILD TAG INDEX idx_gadget_name;"
+        "CREATE TAG INDEX IF NOT EXISTS idx_gadget_name ON Gadget(name(64));"
     )
     assert fake_graph.writes == data["ddlStatement"].split("\n")
 

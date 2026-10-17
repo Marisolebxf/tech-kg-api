@@ -141,14 +141,22 @@ def _run_name_index_ddls(
     properties: list[dict[str, Any]],
     graph_space: str | None,
     statements: list[str],
+    *,
+    rebuild: bool = True,
 ) -> tuple[str, str | None] | None:
     """执行 name 索引 DDL 并追加进 ``statements``；返回失败 ``(status, error)`` 或 ``None``。
 
     CREATE INDEX 失败返回失败（避免「TAG 建成但索引缺失」的静默缺口）；
     REBUILD 失败仅告警——索引定义已生效、新写入自动进索引，可事后重建。
+    ``rebuild=False``（新建 TAG 路径）跳过 REBUILD：全新 TAG 零数据，REBUILD
+    无事可做，却必然撞 graphd schema 传播延迟（实测 CREATE INDEX 后 ~4s 内
+    REBUILD 报 "Index not found"），按退避重试会把创建请求拖住 6~30s；新
+    写入自动进索引，REBUILD 语义留给后补 name 列的 alter 路径（存量数据）。
     """
     for stmt in build_name_index_ddls(tag, properties):
         is_rebuild = stmt.startswith("REBUILD")
+        if is_rebuild and not rebuild:
+            continue
         idx_status, idx_error = execute_schema_ddl(stmt, graph_space, query_channel=is_rebuild)
         statements.append(stmt)
         if idx_status != "succeeded":
@@ -173,7 +181,9 @@ def run_schema_ddl(
     status, error = execute_schema_ddl(ddl, graph_space)
     statements = [ddl]
     if status == "succeeded" and kind == "entity":
-        failure = _run_name_index_ddls(name, properties, graph_space, statements)
+        # 新建 TAG 零数据：只建索引不 REBUILD（REBUILD 是给存量数据回填用的，
+        # 还会撞 graphd schema 传播延迟把创建请求拖住数十秒，见 _run_name_index_ddls）
+        failure = _run_name_index_ddls(name, properties, graph_space, statements, rebuild=False)
         if failure:
             status, error = failure
     return {

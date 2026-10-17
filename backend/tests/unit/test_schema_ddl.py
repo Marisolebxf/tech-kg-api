@@ -143,9 +143,10 @@ class _SequenceExecute:
         return self.results.get(key, ("succeeded", None))  # type: ignore[return-value]
 
 
-def test_run_schema_ddl_entity_builds_and_rebuilds_name_index(
+def test_run_schema_ddl_entity_creates_name_index_without_rebuild(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """新建 TAG 零数据：只建索引不 REBUILD（REBUILD 会撞 schema 传播延迟拖住创建请求）。"""
     fake = _SequenceExecute()
     monkeypatch.setattr("service.schema_ddl.execute_schema_ddl", fake)
     result = run_schema_ddl(
@@ -154,7 +155,6 @@ def test_run_schema_ddl_entity_builds_and_rebuilds_name_index(
     assert fake.calls == [
         ("CREATE TAG IF NOT EXISTS Course(name string);", False),
         ("CREATE TAG INDEX IF NOT EXISTS idx_course_name ON Course(name(64));", False),
-        ("REBUILD TAG INDEX idx_course_name;", True),
     ]
     assert result["status"] == "succeeded"
     assert result["statement"] == "\n".join(ddl for ddl, _ in fake.calls)
@@ -189,11 +189,14 @@ def test_run_schema_ddl_index_create_failure_fails_whole_ddl(
     assert fake.calls[-1] == (create_index, False)
 
 
-def test_run_schema_ddl_rebuild_failure_tolerated(monkeypatch: pytest.MonkeyPatch) -> None:
-    rebuild = "REBUILD TAG INDEX idx_course_name;"
+def test_run_alter_add_ddl_rebuild_failure_tolerated(monkeypatch: pytest.MonkeyPatch) -> None:
+    """REBUILD 只在 alter 补 name 列路径执行（存量数据要回填），失败仅告警不判失败。"""
+    rebuild = "REBUILD TAG INDEX idx_scholar_name;"
     fake = _SequenceExecute(results={rebuild: ("failed", "timeout")})
     monkeypatch.setattr("service.schema_ddl.execute_schema_ddl", fake)
-    result = run_schema_ddl("entity", "Course", [{"name": "name", "data_type": "string"}])
+    result = run_alter_add_ddl(
+        "entity", "Scholar", {"name": "name", "data_type": "string"}
+    )
     assert result["status"] == "succeeded"
     assert result["error"] is None
 

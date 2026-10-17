@@ -886,6 +886,15 @@ class SchemaManagementService:
                 return
 
             verdict = review_script_security(client, filename, source)
+            if verdict.unavailable:
+                # 校验服务限流/超时 ≠ 脚本不安全：明确提示重传，避免误导用户改脚本
+                yield {
+                    "type": "error",
+                    "stage": "llm",
+                    "message": "LLM 安全校验暂不可用（限流或超时），请稍后重传",
+                    "issues": verdict.issues,
+                }
+                return
             if not verdict.safe:
                 yield {
                     "type": "error",

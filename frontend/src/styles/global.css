@@ -91,7 +91,7 @@ html.portal-embedded .kg-page {
 
 .kg-stat__label {
   color: var(--text-tertiary);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .kg-control {
@@ -113,7 +113,7 @@ html.portal-embedded .kg-page {
   color: var(--text-inverse);
   background: var(--primary);
   font-size: 14px;
-  line-height: 20px;
+  line-height: 22px;
 }
 
 .kg-button:hover {
@@ -162,7 +162,7 @@ html.portal-embedded .kg-page {
   cursor: pointer;
   color: var(--text-secondary);
   background: transparent;
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .kg-tabs__item.is-active {

@@ -279,7 +279,7 @@ defineEmits<{
   color: var(--text-secondary);
   text-align: left;
   font-size: 14px;
-  line-height: 20px;
+  line-height: 22px;
   vertical-align: top;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -308,7 +308,7 @@ defineEmits<{
   color: #2f3442;
   background: #f7f9fc;
   font-family: Consolas, Monaco, monospace;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.65;
   white-space: pre-wrap;
   overflow: auto;

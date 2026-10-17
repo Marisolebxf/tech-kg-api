@@ -868,7 +868,7 @@ const runPrimary = () => {
 .rw-diag strong {
   display: block;
   margin-bottom: 2px;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .rw-diag span {
@@ -882,7 +882,7 @@ const runPrimary = () => {
   color: #344054;
   font-size: 12px;
   font-style: normal;
-  line-height: 16px;
+  line-height: 20px;
 }
 
 .rw-diag__evidence {
@@ -894,7 +894,7 @@ const runPrimary = () => {
   background: #fff6f5;
   color: #344054;
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .rw-body {
@@ -916,7 +916,7 @@ const runPrimary = () => {
 
 .rw-zone-head h2 {
   margin: 0;
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .rw-zone-head p {
@@ -994,7 +994,7 @@ const runPrimary = () => {
 
 .tri-grid strong {
   font-size: 12px;
-  line-height: 17px;
+  line-height: 20px;
 }
 
 .tri-grid em {
@@ -1437,7 +1437,7 @@ const runPrimary = () => {
 
 /* === T_DIRECT 五段式入库决策区（扁平布局，匹配 demo） === */
 .zone-direct{display:grid;gap:24px;padding:0;border:0;background:transparent}
-.zone-direct h3{margin:0 0 10px;padding-left:10px;border-left:3px solid #165dff;font-size:13px;font-weight:600;color:#344054}
+.zone-direct h3{margin:0 0 10px;padding-left:10px;border-left:3px solid #165dff;font-size:12px;font-weight:600;color:#344054}
 /* 共享字段表（① 原始记录 + ③ 候选）+ 占位 */
 .direct-fields{width:100%;border-collapse:collapse;border:1px solid #eef2f7;border-radius:6px;overflow:hidden;font-size:12px}
 .direct-fields th,.direct-fields td{padding:8px 12px;border-bottom:1px solid #eef2f7;text-align:left;vertical-align:top}
@@ -1458,7 +1458,7 @@ const runPrimary = () => {
 .direct-accept-fix:disabled{border-color:#f2d5a8;background:#fdeccd}
 /* ① 原始记录（折叠块） */
 .direct-section-details{padding-left:10px;border-left:3px solid #165dff}
-.direct-section-details summary{cursor:pointer;font-size:13px;font-weight:600;color:#344054;list-style:none;margin:0;padding:0}
+.direct-section-details summary{cursor:pointer;font-size:12px;font-weight:600;color:#344054;list-style:none;margin:0;padding:0}
 .direct-section-details summary::-webkit-details-marker{display:none}
 .direct-section-details summary::before{content:"▶ ";font-size:12px;color:#9aa5b5;font-weight:400}
 .direct-section-details[open] summary::before{content:"▼ "}
@@ -1479,10 +1479,10 @@ const runPrimary = () => {
 .direct-llm-section pre:last-child{margin-bottom:0}
 /* ③ 候选（header 扁平 inline，无 box） */
 .direct-target{display:flex;align-items:baseline;gap:12px;margin-bottom:10px;flex-wrap:wrap;padding:0;border:0;background:transparent}
-.direct-target-tag{padding:6px 14px;border-radius:4px;background:#b54708;color:#fff;font-size:13px;font-weight:600;letter-spacing:.5px}
+.direct-target-tag{padding:6px 14px;border-radius:4px;background:#b54708;color:#fff;font-size:12px;font-weight:600;letter-spacing:.5px}
 .direct-target-nodelabel{font-size:18px;color:#17233b;font-weight:700}
 .direct-target-id{padding:2px 8px;border-radius:4px;background:#f1f5fa;color:#344f73;font:12px Consolas,monospace}
-.direct-target-name{color:#718099;font-style:normal;font-size:13px}
+.direct-target-name{color:#718099;font-style:normal;font-size:12px}
 .direct-target-edge{color:#7f56d9;font-style:normal;font-size:12px;font-weight:600;padding:3px 8px;border-radius:4px;background:#eee8ff}
 /* ④ 为什么需要你确认 */
 .direct-why p{margin:0 0 10px;color:#475569;line-height:1.7}
@@ -1509,7 +1509,7 @@ const runPrimary = () => {
 .direct-accept,.direct-reject{display:grid;gap:4px;padding:14px;border-radius:8px;cursor:pointer;font-size:14px;transition:opacity .15s}
 .direct-accept{border:2px solid #12b76a;background:#12b76a;color:#fff}
 .direct-reject{border:2px solid #d92d20;background:#d92d20;color:#fff}
-.direct-accept strong,.direct-reject strong{font-size:15px;font-weight:700}
+.direct-accept strong,.direct-reject strong{font-size:14px;font-weight:700}
 .direct-accept em,.direct-reject em{color:rgba(255,255,255,.85);font-style:normal;font-size:12px}
 /* 终态/提交中置灰（与底部 footer 禁用色一致） */
 .direct-accept:disabled,.direct-reject:disabled{border-color:#d0d5dd;background:#eaecf0;color:#98a2b3;cursor:not-allowed}

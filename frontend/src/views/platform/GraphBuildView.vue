@@ -671,7 +671,7 @@ span.run{color:var(--status-info)}
 .gb-actions .primary:disabled{background:#f2f3f5;border-color:#e5e6eb;color:#a9aeb8;cursor:not-allowed}
 /* 脚本列悬停浮层（teleport 到 body，需全局控制；样式对齐实体列表「公共属性」浮层） */
 .gb-script-popover{box-sizing:border-box;width:320px;max-width:calc(100vw - 48px);padding:12px 16px!important}
-.gb-script-popover__title{margin:0 0 8px;color:#1d2129;font-size:13px;line-height:20px;font-weight:500}
+.gb-script-popover__title{margin:0 0 8px;color:#1d2129;font-size:12px;line-height:20px;font-weight:500}
 .gb-script-popover__list{display:grid;gap:6px;max-height:280px;margin:0;padding:0;overflow:auto;list-style:none}
 .gb-script-popover__list li{display:flex;align-items:center;min-width:0;gap:8px;padding:4px 8px;border:1px solid #e5e6eb;border-radius:4px;background:#f7f8fa;font-size:12px;line-height:20px}
 .gb-script-popover__idx{flex:0 0 auto;min-width:20px;height:20px;border-radius:10px;background:#e8f3ff;color:#165dff;font-size:12px;line-height:20px;text-align:center}

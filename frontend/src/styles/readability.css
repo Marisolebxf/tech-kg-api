@@ -24,7 +24,7 @@ small {
 .app-viewport input,
 .app-viewport select,
 .app-viewport textarea {
-  font-size: 15px !important;
+  font-size: 14px !important;
   line-height: 22px;
 }
 
@@ -48,7 +48,7 @@ small {
 }
 
 .app-sidebar .app-nav__item--sub {
-  font-size: 15px;
+  font-size: 14px;
 }
 
 /* Schema details */
@@ -67,13 +67,13 @@ small {
 .schema-page .schema-table-wrap code,
 .schema-page .trace-layout code,
 .schema-page .mono-list {
-  font-size: 13px !important;
+  font-size: 12px !important;
 }
 
 .schema-page :is(.core, .support, .evidence, .auto, .review),
 .schema-page .schema-version-actions button {
   font-size: 12px !important;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .schema-page .schema-toolbar > div span,
@@ -81,13 +81,13 @@ small {
 .schema-page .trace-card p,
 .schema-page .trace-card dd,
 .schema-page .trace-layout > aside span {
-  font-size: 13px !important;
+  font-size: 12px !important;
   line-height: 20px !important;
 }
 
 .schema-page .mention-fields span {
   font-size: 12px !important;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 /* Task center rows and task-instance details */
@@ -102,7 +102,7 @@ small {
 .task-center .task-filter > span,
 .task-center .task-summary em {
   font-size: 12px !important;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .task-center .task-table button,
@@ -114,7 +114,7 @@ small {
 .task-center .auto-update-body :is(span, p, button, small),
 .task-center .auto-update-monitor header :is(span, em) {
   font-size: 12px !important;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .detail-page .update-record-panel header p,
@@ -123,7 +123,7 @@ small {
 .detail-page .rollback-confirm p,
 .detail-page .update-error-banner p {
   font-size: 12px !important;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .detail-page .update-record-panel article strong,
@@ -148,7 +148,7 @@ small {
 .ops-page .review-pagination,
 .ops-page .review-tabs em {
   font-size: 12px !important;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .ops-page .ops-review-table-scroll .link,
@@ -163,7 +163,7 @@ small {
 .review-task-detail .decision-options p,
 .review-task-detail .review-task-footer > span {
   font-size: 12px !important;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .review-task-detail .review-meta-grid strong,
@@ -278,7 +278,7 @@ small {
 }
 
 .platform-hero__flow {
-  font-size: 13px !important;
+  font-size: 12px !important;
   line-height: 20px;
 }
 
@@ -300,7 +300,7 @@ small {
 .platform-summary-card > header span,
 .platform-summary-card > header a,
 .platform-summary-card > header button {
-  font-size: 13px !important;
+  font-size: 12px !important;
   line-height: 20px;
 }
 
@@ -342,7 +342,7 @@ small {
   .platform-donut em
 ) {
   font-size: 12px !important;
-  line-height: 18px !important;
+  line-height: 20px !important;
 }
 
 .platform-summary-card__items {
@@ -351,19 +351,19 @@ small {
 
 .platform-summary-card__items em {
   font-size: 12px !important;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .platform-summary-card__items strong {
   font-size: 14px !important;
-  line-height: 20px;
+  line-height: 22px;
 }
 
 .platform-latest-changes .kg-panel__header span,
 .platform-risk-panel .kg-panel__header span,
 .platform-latest-changes .kg-panel__header > a,
 .platform-risk-panel .kg-panel__header > a {
-  font-size: 13px !important;
+  font-size: 12px !important;
 }
 
 .platform-change-feed > a {
@@ -374,12 +374,12 @@ small {
 }
 
 .platform-change-feed time {
-  font-size: 13px !important;
+  font-size: 12px !important;
 }
 
 .platform-change-feed > a > span {
   font-size: 12px !important;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .platform-change-feed > a > div {
@@ -387,19 +387,19 @@ small {
 }
 
 .platform-change-feed > a > div strong {
-  font-size: 15px !important;
+  font-size: 14px !important;
   line-height: 22px;
 }
 
 .platform-change-feed > a > div p {
-  font-size: 13px !important;
+  font-size: 12px !important;
   line-height: 20px !important;
 }
 
 .platform-change-feed > a > div em,
 .platform-change-feed > a > b {
   font-size: 12px !important;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .platform-risk-list article {
@@ -409,11 +409,11 @@ small {
 
 .platform-risk-list article span b {
   font-size: 12px !important;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .platform-risk-list article strong {
-  font-size: 15px !important;
+  font-size: 14px !important;
   line-height: 22px;
 }
 
@@ -441,13 +441,13 @@ small {
 .platform-structure-legend article > span,
 .platform-structure-legend article > strong {
   font-size: 14px !important;
-  line-height: 20px;
+  line-height: 22px;
 }
 
 .platform-structure-legend article em,
 .platform-donut em {
   font-size: 12px !important;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .platform-page-head__action,
@@ -467,11 +467,11 @@ small {
 .platform-table td em,
 .platform-table td code {
   font-size: 12px !important;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .platform-status {
-  font-size: 13px !important;
+  font-size: 12px !important;
   line-height: 20px;
 }
 
@@ -486,7 +486,7 @@ small {
 .platform-page .kg-panel__header > span,
 .platform-page .kg-panel__header > a,
 .platform-page .kg-panel__header > div > span {
-  font-size: 13px !important;
+  font-size: 12px !important;
 }
 
 /* Unified typography baseline for every right-side workspace page. The
@@ -509,18 +509,18 @@ small {
 
 .app-workspace :where(small, time) {
   font-size: 12px !important;
-  line-height: 18px !important;
+  line-height: 20px !important;
 }
 
 .app-workspace :where(code) {
-  font-size: 13px !important;
+  font-size: 12px !important;
   line-height: 20px !important;
 }
 
 .app-workspace :where(.kg-panel__header > span),
 .app-workspace :where(.kg-panel__header > a),
 .app-workspace :where(.kg-panel__header > div > span) {
-  font-size: 13px !important;
+  font-size: 12px !important;
   line-height: 20px !important;
 }
 
@@ -531,14 +531,14 @@ small {
 .result-panel :where(em),
 .service-console :where(em) {
   font-size: 12px !important;
-  line-height: 18px !important;
+  line-height: 20px !important;
 }
 
 .knowledge-query :where(header span, .query-examples span, .trace-column span),
 .version-page :where(header span, td small),
 .business-service :where(.service-console__head span, .graph-panel__time),
 .result-panel :where(dt, dd) {
-  font-size: 13px !important;
+  font-size: 12px !important;
   line-height: 20px !important;
 }
 

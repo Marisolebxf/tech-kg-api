@@ -45,12 +45,12 @@ const { toasts, dismissToast } = useToast()
 .kg-toast-stack {
   /* 提示顶部居中展示（业界惯例，同 Ant Design / Element Message）：多条向下堆叠 */
   position: fixed;
-  top: 20px;
+  top: 16px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 10000;
   display: grid;
-  gap: 10px;
+  gap: 8px;
   width: min(360px, calc(100vw - 32px));
   pointer-events: none;
 }
@@ -59,15 +59,15 @@ const { toasts, dismissToast } = useToast()
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 12px 14px;
+  gap: 8px;
+  padding: 8px 16px;
   border: 1px solid rgba(22, 93, 255, 0.18);
   border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.98);
   box-shadow: var(--shadow-card);
   color: var(--text-primary);
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 14px;
+  line-height: 22px;
   pointer-events: auto;
 }
 

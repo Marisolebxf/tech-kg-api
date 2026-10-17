@@ -481,7 +481,7 @@ const handleDecide = (accepted: boolean) => {
   margin: 0 auto;
   padding: 24px 28px 40px;
   color: #17233b;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.6;
 }
 
@@ -563,7 +563,7 @@ const handleDecide = (accepted: boolean) => {
   margin: 0 0 10px;
   padding-left: 10px;
   border-left: 3px solid #165dff;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   color: #344054;
 }
@@ -601,7 +601,7 @@ const handleDecide = (accepted: boolean) => {
   padding: 9px 14px;
   border-bottom: 1px solid #eef2f7;
   text-align: left;
-  font-size: 13px;
+  font-size: 12px;
   vertical-align: top;
 }
 
@@ -730,7 +730,7 @@ const handleDecide = (accepted: boolean) => {
 }
 
 .dd-relation-node {
-  font-size: 13px;
+  font-size: 12px;
   color: #475569;
 }
 
@@ -888,7 +888,7 @@ const handleDecide = (accepted: boolean) => {
 
 .dd-accept strong,
 .dd-reject strong {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
 }
 

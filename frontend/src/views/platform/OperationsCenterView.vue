@@ -556,6 +556,7 @@ async function confirmDelete() {
 /** 批量删除确认弹窗与提交态（>N 条与重跑同栏展示，勾选集即删除集）。 */
 const batchDeleteVisible = ref(false)
 const batchDeleteSubmitting = ref(false)
+const batchDeleteError = ref('')
 
 /** 跳过原因摘要：按原因聚合计数，至多列 3 类防刷屏。 */
 function summarizeBatchSkipReasons(skipped: Array<{ id: string; reason: string }>): string {
@@ -567,6 +568,7 @@ function summarizeBatchSkipReasons(skipped: Array<{ id: string; reason: string }
 
 function askBatchDelete() {
   if (!canReview.value || !rerunSelection.value.size || batchDeleteSubmitting.value) return
+  batchDeleteError.value = ''
   batchDeleteVisible.value = true
 }
 
@@ -575,6 +577,7 @@ async function confirmBatchDelete() {
   if (!canReview.value) return
   const ids = [...rerunSelection.value]
   if (!ids.length || batchDeleteSubmitting.value) return
+  batchDeleteError.value = ''
   batchDeleteSubmitting.value = true
   try {
     const result = await batchDeleteProductionReviews({ caseIds: ids })
@@ -590,7 +593,7 @@ async function confirmBatchDelete() {
     clearReviewPageCache()
     void loadReviews()
   } catch (error) {
-    showRerunFeedback('error', error instanceof Error ? error.message : '批量删除失败', [])
+    batchDeleteError.value = error instanceof Error ? error.message : '批量删除失败'
   } finally {
     batchDeleteSubmitting.value = false
   }
@@ -914,18 +917,15 @@ onMounted(() => {
       <AppAlert type="warning" class="rerun-confirm-text">即将对已勾选的 {{ rerunSelection.size }} 条失败记录下发重跑，按 schema 合并为新执行（类别=重新执行）。重跑成功的记录自动关闭，仍失败的会重新进入失败列表。</AppAlert>
     </a-modal>
 
-    <a-modal
+    <DeleteConfirmDialog
       v-model:visible="batchDeleteVisible"
-      modal-class="rerun-confirm-modal"
       title="确认批量删除"
-      :width="560"
-      ok-text="删除"
-      cancel-text="取消"
-      :ok-loading="batchDeleteSubmitting"
-      @ok="confirmBatchDelete"
-    >
-      <AppAlert type="warning" class="rerun-confirm-text">即将物理删除已勾选的 {{ rerunSelection.size }} 条失败记录，连同草稿、决议、附件与审计记录一并清除，不可恢复。仅未处理记录可删除，已处理或不存在的会自动跳过。</AppAlert>
-    </a-modal>
+      :name="`已勾选的 ${rerunSelection.size} 条失败记录`"
+      description="继续操作将物理删除已勾选的失败记录，连同草稿、决议、附件与审计记录一并清除，不可恢复。仅未处理记录可删除，已处理或不存在的会自动跳过。"
+      :loading="batchDeleteSubmitting"
+      :error="batchDeleteError"
+      @confirm="confirmBatchDelete"
+    />
 
     <a-modal
       v-model:visible="logVisible"

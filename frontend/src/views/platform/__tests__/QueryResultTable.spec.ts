@@ -11,7 +11,7 @@ afterEach(() => {
 })
 
 describe('Query result action column shadow', () => {
-  it('tracks remaining overflow on scrolling, resizing and changing columns', async () => {
+  it.each([false, true])('uses one viewport and tracks the action shadow (sortable=%s)', async (sortable) => {
     let onResize = () => {}
     const disconnect = vi.fn()
     vi.stubGlobal('ResizeObserver', class {
@@ -20,9 +20,17 @@ describe('Query result action column shadow', () => {
       disconnect = disconnect
     })
     wrapper = mount(QueryResultTable, {
-      props: { rows: [{ name: 'node' }], columns: ['name'], page: 1, pageSize: 20 },
+      props: { rows: [{ name: 'node' }], columns: ['name'], page: 1, pageSize: 20, sortable },
     })
     const scroller = wrapper.get('.arco-table-content')
+    // maxHeight must not be passed to Arco: it creates separate header/body
+    // viewports and a second scrollbar even when the outer CSS looks correct.
+    expect(wrapper.find('.arco-table-header').exists()).toBe(false)
+    expect(wrapper.find('.arco-table-body').exists()).toBe(false)
+    expect(scroller.findAll('table')).toHaveLength(1)
+    expect(scroller.find('thead').exists()).toBe(true)
+    expect(scroller.find('tbody').exists()).toBe(true)
+    expect(scroller.find('thead .arco-table-col-fixed-right').exists()).toBe(true)
     let width = 500
     let contentWidth = 500
     Object.defineProperties(scroller.element, {

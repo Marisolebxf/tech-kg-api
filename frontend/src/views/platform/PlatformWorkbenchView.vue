@@ -491,6 +491,7 @@ const algoNowTick = ref(Date.now())
 let algoNowTimer: number | undefined
 
 function startAlgoNowTicker(): void {
+  algoNowTick.value = Date.now()
   if (algoNowTimer !== undefined) return
   algoNowTimer = window.setInterval(() => {
     algoNowTick.value = Date.now()
@@ -529,7 +530,7 @@ const algoJobElapsedText = computed(() => {
   const ms = algoJobElapsedMs.value
   if (ms === null) return ''
   // 亚秒级作业（如 nGQL 度数计算几十毫秒完成）显示毫秒，避免「耗时 0 秒」被当成计时故障
-  if (ms < 1000) return `${Math.round(ms)} 毫秒`
+  if (ms < 1000 && !isAlgoJobRunning.value) return `${Math.round(ms)} 毫秒`
   const seconds = Math.floor(ms / 1000)
   return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${String(seconds % 60).padStart(2, '0')} 秒`
 })
@@ -1052,6 +1053,18 @@ async function handleNgqlQuery(): Promise<void> {
 
 let algoMetadataLoadedFor = ''
 
+/** 旧图服务的轮询/终止快照可能缺时间；同一作业保留已确认的时间，不能刷新后丢失。 */
+function updateAlgoJob(state: AlgorithmState, job: AlgorithmJobSnapshot): void {
+  const previous = state.job?.jobId === job.jobId ? state.job : null
+  state.job = {
+    ...job,
+    createdAt: job.createdAt ?? previous?.createdAt,
+    startedAt: job.startedAt ?? previous?.startedAt ?? job.createdAt ?? previous?.createdAt,
+    finishedAt: job.finishedAt ?? previous?.finishedAt,
+  }
+  algoNowTick.value = Date.now()
+}
+
 // 关系类型选项的 Schema 目录中文名（name=图库英文边类型 → label=中文）；
 // 目录拿不到/加载失败不阻塞算法面板，选项与已选标签回退英文原名。
 const algoEdgeTypeLabels = ref(new Map<string, string>())
@@ -1150,7 +1163,7 @@ async function pollAlgoJob(): Promise<void> {
   try {
     const job = await getAlgorithmJob(state.space, jobId)
     if (context !== graphContextVersion || state.job?.jobId !== jobId || version !== state.version) return
-    state.job = job
+    updateAlgoJob(state, job)
     if (job.status !== 'running') state.cancelling = false
     state.pollFailures = 0
     if (job.status === 'succeeded') {
@@ -1195,7 +1208,7 @@ async function refreshAlgoJob(): Promise<void> {
   try {
     const job = await getAlgorithmJob(state.space, jobId)
     if (context !== graphContextVersion || state.job?.jobId !== jobId || version !== state.version) return
-    state.job = job
+    updateAlgoJob(state, job)
     if (job.status !== 'running') state.cancelling = false
     if (job.status === 'succeeded') await fetchAlgoResult(state)
     else if (job.status === 'running') scheduleAlgoPoll(state)
@@ -1216,7 +1229,7 @@ async function handleAlgoCancel(): Promise<void> {
   try {
     const job = await cancelAlgorithmJob(state.space, jobId)
     if (context !== graphContextVersion || state.job?.jobId !== jobId || version !== state.version) return
-    state.job = job
+    updateAlgoJob(state, job)
     state.cancelling = job.status === 'running'
     if (job.status === 'running') scheduleAlgoPoll(state)
     else if (job.status === 'succeeded') await fetchAlgoResult(state)
@@ -1308,7 +1321,7 @@ async function handleAlgoSubmit(): Promise<void> {
       partitionNum: algoPartitionNum.value,
     })
     if (context !== graphContextVersion) return
-    state.job = job
+    updateAlgoJob(state, job)
     // 使用发出请求时的空间；切换空间后旧请求不会再回写页面。
     state.space = space
     state.result = null
@@ -1960,7 +1973,7 @@ const pageMeta = computed(() => {
             <div class="platform-query-algo__job-meta">
               <span :class="['platform-status', algoJobStatus?.tone]">{{ algoJobStatus?.label }}</span>
               <span class="platform-query-algo__job-id">作业 {{ algoJob.jobId }}</span>
-              <span v-if="algoJob.startedAt">开始 {{ formatAlgoTime(algoJob.startedAt) }}</span>
+              <span v-if="algoJob.startedAt">开始时间：{{ formatAlgoTime(algoJob.startedAt) }}</span>
               <span v-if="algoJob.finishedAt">完成 {{ formatAlgoTime(algoJob.finishedAt) }}</span>
               <span v-if="algoJob.status !== 'running' && algoJobElapsedText">耗时 {{ algoJobElapsedText }}</span>
               <span v-if="algoJob.driverState">Spark Driver：{{ algoJob.driverState }}</span>

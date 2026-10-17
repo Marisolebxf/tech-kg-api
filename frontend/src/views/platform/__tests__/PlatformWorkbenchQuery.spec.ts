@@ -1,5 +1,5 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
-import { createPinia, setActivePinia } from 'pinia'
+import { createPinia, getActivePinia, setActivePinia } from 'pinia'
 import { Popover } from '@arco-design/web-vue'
 import { defineComponent, nextTick } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
@@ -92,14 +92,18 @@ beforeEach(() => {
   vi.mocked(submitAlgorithmJob).mockResolvedValue({ jobId: 'job-a', status: 'running' })
   vi.mocked(getAlgorithmJob).mockResolvedValue({ jobId: 'job-a', status: 'running' })
   vi.mocked(getAlgorithmJobResult).mockResolvedValue(algorithmResult('current-result'))
-  wrapper = mount(PlatformWorkbenchView, {
+  wrapper = mountWorkbench(pinia)
+})
+
+function mountWorkbench(pinia: ReturnType<typeof createPinia>) {
+  return mount(PlatformWorkbenchView, {
     props: { initialTab: 'query' },
     global: {
       plugins: [pinia],
       stubs: { 'a-select': SelectStub, 'a-option': OptionStub, ListPagination: PaginationStub },
     },
   })
-})
+}
 
 afterEach(() => {
   wrapper.unmount()
@@ -885,6 +889,78 @@ describe('Per-algorithm help', () => {
         expect(tab.classes().includes('is-active')).toBe(labels[index] === label)
       }
     }
+  })
+})
+
+describe('Algorithm job timing', () => {
+  const startedAt = '2026-10-17T03:00:00.123Z'
+
+  beforeEach(() => {
+    const pinia = getActivePinia()!
+    wrapper.unmount()
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    vi.setSystemTime(new Date('2026-10-17T03:00:10.123Z'))
+    // Vue 的事件时间戳与假时钟保持一致，避免时钟回拨后点击被当成过期事件。
+    wrapper = mountWorkbench(pinia)
+  })
+
+  it.each(['poll', 'refresh'])('keeps the original start when %s omits timestamps and ticks every second', async (mode) => {
+    vi.mocked(submitAlgorithmJob).mockResolvedValueOnce({ jobId: 'job-a', status: 'running', startedAt })
+    vi.mocked(getAlgorithmJob).mockResolvedValue({ jobId: 'job-a', status: 'running', startedAt: null })
+    await enterAlgorithms()
+    await submitAlgorithm()
+    const startText = wrapper.get('.platform-query-algo__job-meta').text()
+    expect(startText).toContain('开始时间：')
+    expect(wrapper.get('.platform-query-algo__job-running').text()).toContain('已运行 10 秒')
+
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(wrapper.get('.platform-query-algo__job-running').text()).toContain('已运行 11 秒')
+    if (mode === 'poll') await vi.advanceTimersByTimeAsync(2000)
+    else await clickButton('刷新状态')
+    await flushPromises()
+    expect(getAlgorithmJob).toHaveBeenCalledWith('space-a', 'job-a')
+    expect(wrapper.get('.platform-query-algo__job-meta').text()).toBe(startText)
+    expect(wrapper.get('.platform-query-algo__job-running').text()).toContain(mode === 'poll' ? '已运行 13 秒' : '已运行 11 秒')
+  })
+
+  it('uses the server creation timestamp for legacy submissions without startedAt', async () => {
+    vi.mocked(submitAlgorithmJob).mockResolvedValueOnce({
+      jobId: 'job-a', status: 'running', createdAt: startedAt, startedAt: null,
+    })
+    await enterAlgorithms()
+    await submitAlgorithm()
+    expect(wrapper.get('.platform-query-algo__job-meta').text()).toContain('开始时间：')
+    expect(wrapper.get('.platform-query-algo__job-running').text()).toContain('已运行 10 秒')
+  })
+
+  it.each(['succeeded', 'failed', 'cancelled'] as const)('freezes duration at the server finish time for %s jobs', async (status) => {
+    vi.mocked(submitAlgorithmJob).mockResolvedValueOnce({ jobId: 'job-a', status: 'running', startedAt })
+    vi.mocked(getAlgorithmJob).mockResolvedValueOnce({
+      jobId: 'job-a', status, finishedAt: '2026-10-17T03:00:12.456Z',
+    })
+    await enterAlgorithms()
+    await submitAlgorithm()
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+    const finishedText = wrapper.get('.platform-query-algo__job-meta').text()
+    expect(finishedText).toContain('开始时间：')
+    expect(finishedText).toContain('耗时 12 秒')
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(wrapper.get('.platform-query-algo__job-meta').text()).toBe(finishedText)
+    expect(getAlgorithmJob).toHaveBeenCalledTimes(1)
+  })
+
+  it('preserves timing when a cancellation response omits the start', async () => {
+    vi.mocked(submitAlgorithmJob).mockResolvedValueOnce({ jobId: 'job-a', status: 'running', startedAt })
+    vi.mocked(cancelAlgorithmJob).mockResolvedValueOnce({
+      jobId: 'job-a', status: 'cancelled', finishedAt: '2026-10-17T03:00:10.789Z',
+    })
+    await enterAlgorithms()
+    await submitAlgorithm()
+    await clickButton('终止算法作业')
+    await flushPromises()
+    expect(wrapper.get('.platform-query-algo__job-meta').text()).toContain('耗时 10 秒')
+    expect(wrapper.get('.platform-query-algo__job-meta').text()).toContain('开始时间：')
   })
 })
 

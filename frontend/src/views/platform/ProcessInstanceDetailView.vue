@@ -958,7 +958,15 @@ const publicSpaceReadOnly = computed(() => {
           <template v-if="processingInstance">
             <section class="lineage-compare">
               <header><div><h3>来源与执行依据</h3><p>Schema 来源绑定、抽取脚本与任务真实参数；行级原始值不落库，不做编造展示</p></div><span>{{ lineageSourceRows.length }} 条依据</span></header>
-              <table><thead><tr><th>对象</th><th>关键字段</th><th>当前值</th><th>用途</th></tr></thead><tbody><tr v-for="row in lineageSourceRows" :key="`${row.table}-${row.field}`"><td><code>{{ row.table }}</code></td><td><code>{{ row.field }}</code></td><td class="raw-value"><a-tooltip position="top" content-class="lineage-value-tooltip"><span class="raw-value-text">{{ row.raw }}</span><template #content><div class="lineage-tooltip-content">{{ row.raw }}</div></template></a-tooltip></td><td>{{ row.basis }}</td></tr></tbody></table>
+              <table>
+                <thead><tr><th>对象</th><th>关键字段</th><th>当前值</th><th>用途</th></tr></thead>
+                <tbody><tr v-for="row in lineageSourceRows" :key="`${row.table}-${row.field}`">
+                  <td class="raw-value"><a-tooltip position="top" content-class="lineage-value-tooltip"><code class="raw-value-text">{{ row.table }}</code><template #content><div class="lineage-tooltip-content">{{ row.table }}</div></template></a-tooltip></td>
+                  <td><code>{{ row.field }}</code></td>
+                  <td class="raw-value"><a-tooltip position="top" content-class="lineage-value-tooltip"><span class="raw-value-text">{{ row.raw }}</span><template #content><div class="lineage-tooltip-content">{{ row.raw }}</div></template></a-tooltip></td>
+                  <td>{{ row.basis }}</td>
+                </tr></tbody>
+              </table>
             </section>
             <section v-if="lineageResultRows.length" class="lineage-compare">
               <header><div><h3>本次执行来源结果</h3><p>工作流回写的真实分批统计与水位推进（游标在来源全部批次成功后一次性推进）</p></div><span>{{ lineageResultRows.length }} 个来源</span></header>
@@ -1077,9 +1085,10 @@ const publicSpaceReadOnly = computed(() => {
 .job-executions-panel :deep(.execution-pagination){margin:0;padding:16px 0 0}
 /* 外层工作区已有 16px 内边距，详情页不再叠加额外底部留白。 */
 .task-detail-page{box-sizing:border-box;padding-bottom:0}
-/* 验收通过与执行结果使用一致的绿色状态底，不再强调卡片边框。 */
-.issue-list.safe{border:0;background:#f6fef9}
-/* 溯源字段保留等宽文本，不使用灰色标签底；长当前值单行省略并由 Tooltip 展开。 */
+/* 异常与日志内容区不显示外框或分隔描边，状态仍由底色与文字表达。 */
+.log-content :is(.issue-list,.issue-list h3,.log-meta,.io-empty,.process-empty){border:0}
+.issue-list.safe{background:#f6fef9}
+/* 溯源字段保留等宽文本；对象与当前值共用单行省略和全文 Tooltip。 */
 .lineage-compare table{table-layout:fixed}
 .lineage-compare code{padding:0;background:transparent}
 .lineage-compare .raw-value{max-width:0;overflow:hidden;white-space:nowrap}

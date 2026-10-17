@@ -9,6 +9,10 @@ issue 附 evidence——源码中逐字存在的片段；引不出真实代码�
 摘要说成"网络访问风险"。证据过滤挡不住这类误报，因此 unsafe 判定还需通过
 一道静态高危 pattern 检查：源码连 eval/exec/网络/进程/敏感文件等调用都没
 出现时，按误报放行；真出现时维持拦截。
+
+模型输出损坏（2026-10-18）：模型偶尔返回非约定 JSON（46 脚本实测 4 例），
+旧逻辑直接判 unsafe。现与限流同待遇：重试一次，仍坏归入校验不可用，
+提示稍后重传。
 """
 
 from __future__ import annotations
@@ -193,6 +197,15 @@ def _parse_verdict(raw: str, source: str) -> ScriptSecurityVerdict:
     return ScriptSecurityVerdict(safe=True, issues=[], summary=merged_summary)
 
 
+def _unavailable(message: str) -> ScriptSecurityVerdict:
+    return ScriptSecurityVerdict(
+        safe=False,
+        unavailable=True,
+        issues=[message],
+        summary=LLM_UNAVAILABLE,
+    )
+
+
 def review_script_security(client: LLMClient, filename: str, source: str) -> ScriptSecurityVerdict:
     prompt = _build_prompt(filename, source)
     raw = client.synthesize(prompt, max_tokens=1024)
@@ -201,10 +214,15 @@ def review_script_security(client: LLMClient, filename: str, source: str) -> Scr
         # "校验服务不可用"与"脚本不安全"，不把网络问题伪装成安全结论。
         raw = client.synthesize(prompt, max_tokens=1024)
     if raw is None:
-        return ScriptSecurityVerdict(
-            safe=False,
-            unavailable=True,
-            issues=["LLM 安全校验暂不可用（限流或超时），请稍后重传"],
-            summary=LLM_UNAVAILABLE,
-        )
-    return _parse_verdict(raw, source)
+        return _unavailable("LLM 安全校验暂不可用（限流或超时），请稍后重传")
+    verdict = _parse_verdict(raw, source)
+    if verdict.summary != LLM_RESPONSE_FORMAT_ERROR:
+        return verdict
+    # 模型输出损坏（非约定 JSON）与限流同待遇：重试一次，仍坏按校验不可用
+    # 处理——"裁判输出抽风"同样不该伪装成"脚本不安全"（实测 46 脚本 4 例）。
+    retry = client.synthesize(prompt, max_tokens=1024)
+    if retry is not None:
+        verdict = _parse_verdict(retry, source)
+    if retry is None or verdict.summary == LLM_RESPONSE_FORMAT_ERROR:
+        return _unavailable("LLM 安全校验暂不可用（模型返回格式异常），请稍后重传")
+    return verdict

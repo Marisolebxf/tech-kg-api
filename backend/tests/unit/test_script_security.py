@@ -178,6 +178,26 @@ def test_review_llm_none_then_success() -> None:
     assert client.calls == 2
 
 
+def test_review_format_error_retries_then_succeeds() -> None:
+    """模型输出非约定 JSON：重试一次拿到合法结论，不判死（46 脚本实测 4 例）。"""
+    client = _ScriptedLLM(["抱歉，我无法", '{"safe": true, "issues": [], "summary": "安全"}'])
+    verdict = review_script_security(client, "transform.py", CLEAN_SOURCE)
+    assert verdict.safe is True
+    assert verdict.unavailable is False
+    assert client.calls == 2
+
+
+def test_review_format_error_twice_marks_unavailable() -> None:
+    """连续两次输出损坏：按校验不可用处理（稍后重传），不当脚本不安全。"""
+    client = _FakeLLM("!!!不是JSON!!!")
+    verdict = review_script_security(client, "transform.py", CLEAN_SOURCE)
+    assert verdict.safe is False
+    assert verdict.unavailable is True
+    assert any("格式异常" in i for i in verdict.issues)
+    assert "不安全" not in (verdict.summary or "")
+    assert len(client.calls) == 2  # 格式异常重试一次
+
+
 def test_review_malformed_non_json() -> None:
     client = _FakeLLM("这不是 JSON")
     verdict = review_script_security(client, "transform.py", "x = 1\n")

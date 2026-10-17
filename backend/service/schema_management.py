@@ -723,6 +723,7 @@ class SchemaManagementService:
         content_type: str | None,
         script_data: bytes,
         is_platform_admin: bool = False,
+        llm_client: LLMClient | None = None,
     ) -> dict[str, Any]:
         user_id = user_id.strip()
         if not user_id or len(user_id) > 128:
@@ -733,6 +734,24 @@ class SchemaManagementService:
             is_platform_admin=is_platform_admin,
         )
         workflow_function = self._validate_script(filename, script_data)
+        # 全员过门（2026-10-18）：PUT 通道与页面 SSE 通道走同一道 LLM 安全校验，
+        # 关闭"API 直灌不经校验"的旁路（实测 8093 全部 205 个脚本均经此绕过）；
+        # 拒绝理由与页面通道一致。
+        client = llm_client if llm_client is not None else get_llm_client()
+        if client is None:
+            raise SchemaScriptError("LLM 安全校验服务不可用，请联系管理员配置 LLM_API_KEY")
+        try:
+            source = script_data.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            source = script_data.decode("utf-8", errors="replace")
+        verdict = review_script_security(client, filename, source)
+        if verdict.unavailable:
+            raise SchemaScriptError(
+                verdict.issues[0] if verdict.issues else "LLM 安全校验暂不可用，请稍后重传"
+            )
+        if not verdict.safe:
+            detail = "；".join(verdict.issues[:3]) or verdict.summary
+            raise SchemaScriptError(f"脚本未通过 LLM 安全校验：{detail}")
         _, cleanup_succeeded = self._persist_script(
             definition=definition,
             filename=filename,
@@ -887,11 +906,12 @@ class SchemaManagementService:
 
             verdict = review_script_security(client, filename, source)
             if verdict.unavailable:
-                # 校验服务限流/超时 ≠ 脚本不安全：明确提示重传，避免误导用户改脚本
+                # 校验服务限流/超时/输出损坏 ≠ 脚本不安全：明确提示重传，
+                # 避免误导用户改脚本（issues 首条即具体原因文案）。
                 yield {
                     "type": "error",
                     "stage": "llm",
-                    "message": "LLM 安全校验暂不可用（限流或超时），请稍后重传",
+                    "message": (verdict.issues or ["LLM 安全校验暂不可用，请稍后重传"])[0],
                     "issues": verdict.issues,
                 }
                 return

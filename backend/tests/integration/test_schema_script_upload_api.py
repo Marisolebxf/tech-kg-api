@@ -39,6 +39,21 @@ class FakeS3Storage:
         self.objects.pop((bucket, object_key), None)
 
 
+class _SafeLLM:
+    """固定放行的假 LLM（fixture 默认；安全门行为专项测试内覆写）。"""
+
+    def synthesize(self, prompt: str, max_tokens: int = 2048) -> str | None:
+        return '{"safe": true, "issues": [], "summary": "安全"}'
+
+
+class _FakeLLM:
+    def __init__(self, response: str | None) -> None:
+        self._response = response
+
+    def synthesize(self, prompt: str, max_tokens: int = 2048) -> str | None:
+        return self._response
+
+
 def _actor(user_id: str, is_admin: bool) -> PlatformActor:
     return PlatformActor(
         user_id=user_id,
@@ -80,6 +95,8 @@ def script_api(monkeypatch):
     monkeypatch.setattr("service.schema_management.get_schema_s3_storage", lambda: storage)
     monkeypatch.setenv("SCHEMA_AUTO_PROVENANCE", "false")
     monkeypatch.setattr("service.schema_management._validate_datasource_exists", lambda ds_id: None)
+    # PUT 通道已全员过门：默认给一个"放行"的假 LLM，安全门行为专项测试内覆写。
+    monkeypatch.setattr("service.schema_management.get_llm_client", lambda: _SafeLLM())
 
     def set_actor(user_id: str, is_admin: bool) -> None:
         actor = _actor(user_id, is_admin)
@@ -222,3 +239,78 @@ async def test_upload_rejects_legacy_transform_script(script_api) -> None:
         )
         assert response.status_code == 400
         assert "已下线" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_put_upload_blocked_when_llm_unsafe_with_evidence(script_api, monkeypatch) -> None:
+    """PUT 全员过门：真高危（有实证 os.system）照样被拒，理由透出。"""
+    _, _set_actor, _storage = script_api
+    monkeypatch.setattr(
+        "service.schema_management.get_llm_client",
+        lambda: _FakeLLM(
+            '{"safe": false, "issues": [{"problem": "调用 os.system 执行系统命令",'
+            ' "evidence": "os.system(\'rm -rf /\')"}], "summary": "危险脚本"}'
+        ),
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        entity = await _create_entity(client)
+        response = await client.put(
+            f"/api/v1/schema-management/schemas/{entity['id']}/script",
+            files={
+                "script": (
+                    "evil.py",
+                    b"import os\n\nfrom kg_sdk import step\n\n\n@step\ndef run(payload):\n"
+                    b"    os.system('rm -rf /')\n    return payload\n",
+                    "text/x-python",
+                )
+            },
+        )
+        assert response.status_code == 400
+        assert "未通过 LLM 安全校验" in response.json()["detail"]
+        assert "os.system" in response.json()["detail"]
+        # 拒绝后不应落任何脚本对象
+        detail = await _detail(client, entity["id"])
+        assert detail.get("script") is None
+
+
+@pytest.mark.asyncio
+async def test_put_upload_unavailable_when_llm_rate_limited(script_api, monkeypatch) -> None:
+    """PUT 全员过门：LLM 限流（两次 None）→ 400 且文案是"稍后重传"，非"脚本不安全"。"""
+    _, _set_actor, _storage = script_api
+    monkeypatch.setattr("service.schema_management.get_llm_client", lambda: _FakeLLM(None))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        entity = await _create_entity(client)
+        response = await client.put(
+            f"/api/v1/schema-management/schemas/{entity['id']}/script",
+            files={
+                "script": (
+                    "widget.py",
+                    b"from kg_sdk import step\n\n\n@step\ndef f(payload):\n    return payload\n",
+                    "text/x-python",
+                )
+            },
+        )
+        assert response.status_code == 400
+        assert "暂不可用" in response.json()["detail"]
+        assert "不安全" not in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_put_upload_rejected_when_llm_not_configured(script_api, monkeypatch) -> None:
+    """PUT 全员过门：LLM 未配置（client 为 None）→ 400 提示配置 LLM_API_KEY。"""
+    _, _set_actor, _storage = script_api
+    monkeypatch.setattr("service.schema_management.get_llm_client", lambda: None)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        entity = await _create_entity(client)
+        response = await client.put(
+            f"/api/v1/schema-management/schemas/{entity['id']}/script",
+            files={
+                "script": (
+                    "widget.py",
+                    b"from kg_sdk import step\n\n\n@step\ndef f(payload):\n    return payload\n",
+                    "text/x-python",
+                )
+            },
+        )
+        assert response.status_code == 400
+        assert "LLM_API_KEY" in response.json()["detail"]

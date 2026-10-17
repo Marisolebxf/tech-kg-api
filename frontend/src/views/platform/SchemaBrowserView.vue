@@ -210,6 +210,12 @@ function validatePropName(value: string, callback: (error?: string) => void) {
 }
 const creating = ref(false)
 const confirming = ref(false)
+// 创建中的弹窗封闭管理：期间掩码/Esc/表单全部不可交互，只有「取消」和右上角 ×
+// 能终止创建（× 多一步确认）。HTTP 中断不会回滚服务端已提交的创建，终止时
+// 凭快照按名轮询补偿删除。
+const createAbort = ref<AbortController | null>(null)
+const createSnapshot = ref<{ kind: 'entity' | 'relation'; name: string; graphSpace: string } | null>(null)
+const createCancelConfirmOpen = ref(false)
 const scriptByRow = ref<Record<string, SchemaScript>>({})
 
 // Schema 拓扑总览（实体 -关系-> 实体 元图谱）
@@ -896,6 +902,13 @@ async function saveItem() {
   }))
 
   creating.value = true
+  const abort = new AbortController()
+  createAbort.value = abort
+  createSnapshot.value = {
+    kind: relation ? 'relation' : 'entity',
+    name: f.name.trim(),
+    graphSpace: activeSpace.value || '',
+  }
   try {
     if (relation) {
       const source = entityOptions.value.find((e) => e.id === f.sourceEntityId)
@@ -914,7 +927,9 @@ async function saveItem() {
         llmConfigId: null,
         graphSpace: activeSpace.value,
       }
-      const result = await createRelationSchema(payload, currentUserId)
+      const result = await createRelationSchema(payload, currentUserId, abort.signal)
+      // 用户已点终止：后续绑定/刷新全部交给 cancelCreate 的回滚，不再继续成功链路
+      if (abort.signal.aborted) return
       toastCreateResult(result)
       await bindSourcesAfterCreate(result.id, f.sources)
     } else {
@@ -929,18 +944,89 @@ async function saveItem() {
         llmConfigId: null,
         graphSpace: activeSpace.value,
       }
-      const result = await createEntitySchema(payload, currentUserId)
+      const result = await createEntitySchema(payload, currentUserId, abort.signal)
+      if (abort.signal.aborted) return
       toastCreateResult(result)
       await bindSourcesAfterCreate(result.id, f.sources)
     }
+    // 绑定来源表期间也可能点了终止：成功链路（关弹窗/刷新）同样交给回滚
+    if (abort.signal.aborted) return
     modalOpen.value = false
     // 展开状态下同步刷拓扑，让新建实体/关系立即出现在浏览图（收起态展开时会重拉）
     await Promise.all([loadSchemas(), ...(topologyExpanded.value ? [loadTopology()] : [])])
     void loadEntityOptions()
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'error')
+    // 中止引发的取消异常不报错：弹窗与回滚已由 cancelCreate 接管
+    if (!abort.signal.aborted) showToast(schemaErrorMessage(error), 'error')
   } finally {
     creating.value = false
+    createAbort.value = null
+    createSnapshot.value = null
+  }
+}
+
+/** 掩码/Esc 关闭：创建中不允许（否则「弹窗关了、Schema 还在建」），只能「取消」或 × 终止。 */
+function closeCreateModal() {
+  if (!creating.value) modalOpen.value = false
+}
+
+/** 右上角 ×：非创建中直接关闭；创建中需二次确认是否终止创建。 */
+function requestCloseCreate() {
+  if (!creating.value) {
+    modalOpen.value = false
+    return
+  }
+  createCancelConfirmOpen.value = true
+}
+
+/** 「取消」：非创建中直接关闭；创建中中止请求、关闭弹窗并回滚已提交的创建。 */
+function cancelCreate() {
+  if (!creating.value) {
+    modalOpen.value = false
+    return
+  }
+  // 先取局部引用再 abort：abort 后 saveItem 的 finally 会清空 refs
+  const abort = createAbort.value
+  const snapshot = createSnapshot.value
+  confirming.value = false
+  createCancelConfirmOpen.value = false
+  modalOpen.value = false
+  creating.value = false
+  if (!abort || !snapshot) return
+  abort.abort()
+  showToast('已终止创建，正在回滚...', 'warning')
+  void rollbackCreate(snapshot)
+}
+
+/** 中止只断了 HTTP，服务端可能仍把创建走完：轮询同名 Schema（~8s），出现即补偿删除。 */
+async function rollbackCreate(snapshot: {
+  kind: 'entity' | 'relation'
+  name: string
+  graphSpace: string
+}) {
+  const deadline = Date.now() + 8000
+  try {
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+      const page = await listSchemasPaged(currentUserId, {
+        kind: snapshot.kind,
+        keyword: snapshot.name,
+        page: 1,
+        pageSize: 100,
+        graphSpace: snapshot.graphSpace || undefined,
+      })
+      // keyword 同时模糊匹配 name/label/schemaKey，这里按英文名精确认领，避免误删同名者
+      const created = page.items.find((item) => item.name === snapshot.name)
+      if (created) {
+        await deleteSchema(created.id, currentUserId)
+        showToast(`已终止创建并删除「${snapshot.name}」`, 'success')
+        await loadSchemas()
+        return
+      }
+    }
+    showToast('已终止创建；若列表出现残留 Schema 请手动删除', 'warning')
+  } catch {
+    showToast('已终止创建，但自动回滚失败；若列表出现残留 Schema 请手动删除', 'error')
   }
 }
 
@@ -1186,10 +1272,10 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 
     <Teleport to="body">
       <div v-if="modalOpen" class="schema-modal schema-create-modal">
-        <button class="schema-modal__mask" type="button" tabindex="-1" aria-label="关闭弹窗" @click="modalOpen = false"></button>
-        <aside v-dialog-focus="{ close: () => { modalOpen = false } }" class="schema-modal__panel schema-create-panel">
-          <header><h2>新增{{ activeTab }}</h2><button type="button" @click="modalOpen = false">×</button></header>
-          <a-form ref="createFormRef" :model="createForm" :rules="createFormRules" class="schema-modal__body schema-create-body" layout="vertical">
+        <button class="schema-modal__mask" type="button" tabindex="-1" aria-label="关闭弹窗" @click="closeCreateModal"></button>
+        <aside v-dialog-focus="{ close: closeCreateModal, busy: creating }" class="schema-modal__panel schema-create-panel">
+          <header><h2>新增{{ activeTab }}</h2><button type="button" @click="requestCloseCreate">×</button></header>
+          <a-form ref="createFormRef" :model="createForm" :rules="createFormRules" class="schema-modal__body schema-create-body" layout="vertical" :inert="creating">
             <div class="create-row">
               <a-form-item class="create-field create-field--limit-note" field="name" :label="isRelationTab() ? '关系英文名' : '实体名'" required>
                 <input aria-label="name" v-model="createForm.name" class="create-text-input" :class="{ 'is-at-limit': atLimit(createForm.name, nameRuleMax) }" :maxlength="nameRuleMax" :placeholder="isRelationTab() ? 'USES_TECHNOLOGY' : 'Gadget'" />
@@ -1280,9 +1366,33 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
             </div>
           </a-form>
           <footer>
-            <button type="button" @click="modalOpen = false">取消</button>
-            <button v-if="confirming" type="button" @click="confirming = false">返回修改</button>
+            <button type="button" @click="cancelCreate">{{ creating ? '取消并终止创建' : '取消' }}</button>
+            <button v-if="confirming && !creating" type="button" @click="confirming = false">返回修改</button>
             <button type="button" class="primary" :disabled="!canWrite || creating" @click="saveItem">{{ creating ? '创建中...' : confirming ? '确认创建' : '预览并创建' }}</button>
+          </footer>
+        </aside>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="createCancelConfirmOpen" class="schema-modal schema-delete-modal">
+        <button class="schema-modal__mask" type="button" tabindex="-1" aria-label="关闭弹窗" @click="createCancelConfirmOpen = false"></button>
+        <aside v-dialog-focus="{ close: () => { createCancelConfirmOpen = false } }" class="schema-modal__panel schema-delete-panel">
+          <header><h2>终止创建</h2><button type="button" @click="createCancelConfirmOpen = false">×</button></header>
+          <div class="schema-modal__body">
+            <div class="schema-delete-summary">
+              <span class="schema-delete-summary__icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M12 3 2.8 19a1.4 1.4 0 0 0 1.2 2h16a1.4 1.4 0 0 0 1.2-2L12 3Zm0 6v5m0 3.5v.1" /></svg>
+              </span>
+              <div>
+                <h3>是否终止 Schema 的创建？</h3>
+                <p>将中止「{{ createSnapshot?.name }}」的创建请求，并删除可能已提交的 Schema 定义。</p>
+              </div>
+            </div>
+          </div>
+          <footer>
+            <button type="button" @click="createCancelConfirmOpen = false">继续创建</button>
+            <button type="button" class="danger" @click="cancelCreate">终止创建</button>
           </footer>
         </aside>
       </div>

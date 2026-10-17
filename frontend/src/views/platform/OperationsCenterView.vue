@@ -748,11 +748,11 @@ onMounted(() => {
       </nav>
       <div class="review-toolbar-actions">
         <form class="ops-filter is-review review-filter-row" role="search" @submit.prevent="submitReviewSearch">
-          <a-select v-model="reviewStatusSelect" class="review-filter-select" aria-label="状态" placeholder="状态" allow-clear :options="reviewStatusOptions.map(value => ({ value, label: value === '全部' ? '未选择' : value }))">
+          <a-select v-model="reviewStatusSelect" class="review-filter-select" aria-label="状态" placeholder="状态" allow-clear :options="reviewStatusOptions.filter(value => value !== '全部')">
           </a-select>
-          <a-select v-model="reviewKindSelect" class="review-filter-select" aria-label="类型" placeholder="类型" allow-clear :options="[{ value: '全部', label: '未选择' }, '实体', '关系']">
+          <a-select v-model="reviewKindSelect" class="review-filter-select" aria-label="类型" placeholder="类型" allow-clear :options="['实体', '关系']">
           </a-select>
-          <a-select v-model="reviewTimeSelect" class="review-filter-select" aria-label="时间" placeholder="时间" allow-clear :options="reviewTimeOptions.map(value => ({ value, label: value === '全部' ? '未选择' : value }))">
+          <a-select v-model="reviewTimeSelect" class="review-filter-select" aria-label="时间" placeholder="时间" allow-clear :options="reviewTimeOptions.filter(value => value !== '全部')">
           </a-select>
           <a-input v-model="keyword" class="review-search-input review-filter-search" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索处理实例 ID、对象或来源记录" placeholder="搜索处理实例 ID、对象或来源记录" allow-clear @clear="clearReviewSearch" />
           <button class="review-search-button" type="submit">查询</button>

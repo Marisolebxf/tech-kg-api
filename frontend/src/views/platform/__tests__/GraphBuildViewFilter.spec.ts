@@ -117,39 +117,40 @@ afterEach(() => {
   wrapper.unmount()
 })
 
-describe('图谱构建任务筛选「未选择」伪选项（00843/00847）', () => {
-  it('状态下拉提供「未选择」选项，value 为空串', () => {
+describe('图谱构建任务筛选与清空', () => {
+  it('状态下拉仅提供真实状态，不提供空值选项', () => {
     const statusSelect = wrapper.find('#graph-build-filter-status')
     const options = statusSelect.findAll('option')
-    expect(options[0].attributes('value')).toBe('')
-    expect(options[0].text()).toBe('未选择')
+    expect(options.map(option => option.text())).toEqual(['未运行', '运行中', '已暂停', '已完成', '运行异常', '运行失败'])
+    expect(options.every(option => option.attributes('value') !== '')).toBe(true)
   })
 
-  it('类型下拉提供「未选择」选项，value 为空串', () => {
+  it('类型下拉仅提供真实类型，不提供空值选项', () => {
     const typeSelect = wrapper.find('#graph-build-filter-type')
     const options = typeSelect.findAll('option')
-    expect(options[0].attributes('value')).toBe('')
-    expect(options[0].text()).toBe('未选择')
+    expect(options.map(option => option.attributes('value'))).toEqual(['extract', 'single', 'chain', 'upload'])
   })
 
-  it('状态选真实值过滤、选「未选择」清空恢复全部', async () => {
+  it('状态选择后可通过清除按钮恢复全部', async () => {
     expect(rowCount()).toBe(3)
     const statusSelect = wrapper.find('#graph-build-filter-status')
     await statusSelect.setValue('已完成')
     expect(rowCount()).toBe(1)
-    await statusSelect.setValue('')
+    wrapper.findAllComponents(ASelectStub)[0].vm.$emit('update:modelValue', undefined)
+    await flushPromises()
     expect(rowCount()).toBe(3)
   })
 
-  it('类型选真实值过滤、选「未选择」清空恢复全部', async () => {
+  it('类型选择后可通过清除按钮恢复全部', async () => {
     const typeSelect = wrapper.find('#graph-build-filter-type')
     await typeSelect.setValue('chain')
     expect(rowCount()).toBe(1)
-    await typeSelect.setValue('')
+    wrapper.findAllComponents(ASelectStub)[1].vm.$emit('update:modelValue', undefined)
+    await flushPromises()
     expect(rowCount()).toBe(3)
   })
 
-  it('「未选择」与名称筛选可叠加：清空状态不影响名称条件', async () => {
+  it('清空状态不影响已提交的名称筛选条件', async () => {
     await wrapper.find('#graph-build-filter-name').setValue('任务j2')
     expect(rowCount()).toBe(3)
     await wrapper.find('.gb-filters').trigger('submit')
@@ -158,8 +159,9 @@ describe('图谱构建任务筛选「未选择」伪选项（00843/00847）', ()
     // 名称锁定 j2（运行中）后选「已完成」→ 交集为空
     await statusSelect.setValue('已完成')
     expect(rowCount()).toBe(0)
-    // 选「未选择」只清空状态维度，名称条件仍在
-    await statusSelect.setValue('')
+    // 清除按钮只清空状态维度，名称条件仍在
+    wrapper.findAllComponents(ASelectStub)[0].vm.$emit('update:modelValue', undefined)
+    await flushPromises()
     expect(rowCount()).toBe(1)
   })
 

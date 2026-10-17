@@ -241,10 +241,8 @@ watch(
             aria-label="实体类型"
             allow-clear
             :scrollbar="false"
-            :trigger-props="{ contentStyle: { width: '240px' } }"
             @change="onEntityTypeChange"
           >
-            <a-option value="">未选择</a-option>
             <a-option v-for="t in types" :key="t.name" :value="t.name" :label="t.label || t.name">
               <span class="entity-type-option" :title="typeTitle(t.name)">
                 <span class="entity-type-option__text">{{ t.label || t.name }}</span>

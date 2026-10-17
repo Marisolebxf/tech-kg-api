@@ -1000,6 +1000,8 @@ const publicSpaceReadOnly = computed(() => {
 .pipeline-message{margin:0 0 10px}
 /* 执行标记原因说明条：FAILED 红 / ABNORMAL（抽取完成含失败行）橙 */
 /* 执行标记提示（失败=错误态 / 异常=警告态）：底色与提示符由 AppAlert 提供 */
+/* 规范未单列 Alert 圆角，这两块过程/验收提示按普通卡片使用 6px 圆角。 */
+.task-detail-page :is(.exec-failure-alert,.result-card){border-radius:var(--radius-md,6px)}
 .exec-failure-alert{margin:0 0 12px}
 /* 真实输入输出（脚本上报 JSON）：跨两列，输入/输出分块，超长 JSON 内部滚动 */
 .io-content h3 span{padding:2px 6px;border-radius:4px;background:#eef4ff;color:#165dff;font-size:12px;font-weight:500}

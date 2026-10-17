@@ -315,7 +315,11 @@ async def test_delete_property_hard_delete_semantics(
         data = deleted.json()["data"]
         assert data["deleted"] is True
         assert data["propertyName"] == "rank"
-        assert data["warnings"] == []
+        # 真删列（图里存在）→ 提示同名属性将无法重新添加（图库版本历史限制）
+        assert data["warnings"] == [
+            "图库限制：属性「rank」删除后，同名属性将无法重新添加"
+            "（TAG 版本历史冲突），如需恢复请删除并重建整个 Schema"
+        ]
         assert data["ddlStatus"] == "succeeded"
         assert "ALTER TAG Widget DROP (rank)" in data["ddlStatement"]
 
@@ -337,7 +341,9 @@ async def test_delete_property_hard_delete_semantics(
         )
         assert again.status_code == 404
 
-        # 硬删除后可重新新增同名属性（全新行，非复活）
+        # 硬删除后目录可重新新增同名属性（全新行，非复活）。DDL 这里被 mock：
+        # 真实图库会以「Schema exisited before!」拒绝（版本历史冲突），见
+        # DETERMINISTIC_DDL_ERRORS 与 test_add_property_readding_dropped_name_gets_actionable_error
         readd = await client.post(
             f"/api/v1/schema-management/schemas/{entity['id']}/properties",
             json={"name": "rank", "dataType": "string"},
@@ -412,6 +418,55 @@ async def test_delete_property_collects_warnings(
         assert response.status_code == 200
         warnings = response.json()["data"]["warnings"]
         assert warnings and any("identity_key" in item for item in warnings)
+
+
+@pytest.mark.asyncio
+async def test_add_property_readding_dropped_name_gets_actionable_error(
+    property_api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """删过的同名列 ALTER ADD 被 TRS 拒（TAG 版本历史冲突）：502 且报错带换名/重建指引。"""
+    _, _set_actor = property_api
+    monkeypatch.setattr(
+        "service.schema_management.run_alter_add_ddl",
+        lambda kind, name, prop, graph_space=None: {
+            "statement": "ALTER ...",
+            "status": "failed",
+            "error": "POST /api/v1/query/write -> 400: Schema exisited before!",
+            "executed_at": None,
+        },
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        entity = await _create_entity(client)
+        response = await client.post(
+            f"/api/v1/schema-management/schemas/{entity['id']}/properties",
+            json={"name": "rank", "dataType": "int64"},
+        )
+        assert response.status_code == 502
+        assert "换一个属性名" in response.json()["detail"]
+        # 目录行已回滚
+        detail = await _detail(client, entity["id"])
+        assert "rank" not in [p["name"] for p in detail["properties"]]
+
+
+@pytest.mark.asyncio
+async def test_delete_property_warns_name_cannot_be_readded(
+    property_api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """真删列（图里存在）时提前警告：同名属性将无法重新添加（图库版本历史限制）。"""
+    _, _set_actor = property_api
+    # widget_id 在图里存在 → 走真 DROP
+    _patch_drop(
+        monkeypatch,
+        ["id", "name", "create_time", "update_time", "source_table", "widget_id"],
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        entity = await _create_entity(client)
+        response = await client.delete(
+            f"/api/v1/schema-management/schemas/{entity['id']}/properties/widget_id"
+        )
+        assert response.status_code == 200
+        warnings = response.json()["data"]["warnings"]
+        assert any("同名属性将无法重新添加" in item for item in warnings)
 
 
 @pytest.mark.asyncio

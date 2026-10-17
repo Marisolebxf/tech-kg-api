@@ -1060,6 +1060,14 @@ class SchemaManagementService:
         )
         if ddl_result["status"] != "succeeded":
             self._session.rollback()
+            # 图库限制：删除过的同名列永久无法 ALTER ADD 回来（metad TAG 版本
+            # 历史冲突，重试无效）。给出可行动的报错，而不是让前端等出「超时」。
+            if ddl_result["error"] and "Schema exisited before!" in ddl_result["error"]:
+                raise SchemaDdlError(
+                    f"图库不支持重新添加已删除的同名属性「{prop.name}」（TRS Nebula 的"
+                    " TAG 版本历史限制，重试无效），请换一个属性名；如必须沿用原名，"
+                    "只能删除整个 Schema 后重建"
+                )
             raise SchemaDdlError(f"图 ALTER DDL 执行失败: {ddl_result['error']}")
 
         definition.property_revision += 1
@@ -1120,6 +1128,13 @@ class SchemaManagementService:
             ddl_statement = ddl_result["statement"]
             ddl_status = ddl_result["status"]
             ddl_error = ddl_result["error"]
+            if ddl_status == "succeeded":
+                # 图库限制（见 DETERMINISTIC_DDL_ERRORS）：删过的列名永久加不回来。
+                # 删除前就把后果说清，避免用户删完想恢复才发现只有换名/重建两条路。
+                warnings.append(
+                    f"图库限制：属性「{property_name}」删除后，同名属性将无法重新添加"
+                    "（TAG 版本历史冲突），如需恢复请删除并重建整个 Schema"
+                )
 
         definition.properties.remove(row)
         definition.property_revision += 1

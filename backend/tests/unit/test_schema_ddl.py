@@ -6,11 +6,13 @@ import pytest
 
 from infra.graph_db.exceptions import GraphRequestError
 from service.schema_ddl import (
+    DDL_MAX_RETRIES,
     build_alter_add_ddl,
     build_alter_drop_ddl,
     build_create_ddl,
     build_name_index_ddls,
     describe_schema_columns,
+    execute_schema_ddl,
     is_valid_data_type,
     run_alter_add_ddl,
     run_alter_drop_ddl,
@@ -194,9 +196,7 @@ def test_run_alter_add_ddl_rebuild_failure_tolerated(monkeypatch: pytest.MonkeyP
     rebuild = "REBUILD TAG INDEX idx_scholar_name;"
     fake = _SequenceExecute(results={rebuild: ("failed", "timeout")})
     monkeypatch.setattr("service.schema_ddl.execute_schema_ddl", fake)
-    result = run_alter_add_ddl(
-        "entity", "Scholar", {"name": "name", "data_type": "string"}
-    )
+    result = run_alter_add_ddl("entity", "Scholar", {"name": "name", "data_type": "string"})
     assert result["status"] == "succeeded"
     assert result["error"] is None
 
@@ -216,6 +216,54 @@ def test_run_alter_add_ddl_name_property_creates_index(
     ]
     assert result["status"] == "succeeded"
     assert result["statement"] == "\n".join(ddl for ddl, _ in fake.calls)
+
+
+class _RaisingWriteClient:
+    """execute_schema_ddl 重试策略测试桩：写通道恒抛 GraphRequestError。"""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        self.calls = 0
+
+    def execute_write(self, query: str) -> None:
+        self.calls += 1
+        raise GraphRequestError(self.message, status_code=400)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "POST /api/v1/query/write -> 400: Schema exisited before!",
+        "POST /api/v1/query/write -> 400: Tag prop not existed!",
+    ],
+)
+def test_execute_schema_ddl_deterministic_conflict_fails_fast(
+    monkeypatch: pytest.MonkeyPatch, message: str
+) -> None:
+    """确定性冲突（删过列再 ADD / DROP 不存在的列）立即失败，不进退避白烧 20s+。"""
+    client = _RaisingWriteClient(message)
+    monkeypatch.setattr("service.schema_ddl.get_trs_graph_client", lambda: client)
+    sleeps: list[float] = []
+    monkeypatch.setattr("service.schema_ddl.time.sleep", lambda sec: sleeps.append(sec))
+    status, error = execute_schema_ddl("ALTER TAG Scholar ADD (rank int64);")
+    assert status == "failed"
+    assert message in (error or "")
+    assert client.calls == 1
+    assert sleeps == []
+
+
+def test_execute_schema_ddl_transient_error_keeps_retrying(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """会话池/超时类瞬时错误仍走完整退避重试（传播延迟靠它扛）。"""
+    client = _RaisingWriteClient("POST /api/v1/query/write -> 500: no extra session available")
+    monkeypatch.setattr("service.schema_ddl.get_trs_graph_client", lambda: client)
+    sleeps: list[float] = []
+    monkeypatch.setattr("service.schema_ddl.time.sleep", lambda sec: sleeps.append(sec))
+    status, _error = execute_schema_ddl("CREATE TAG IF NOT EXISTS Scholar(id string);")
+    assert status == "failed"
+    assert client.calls == DDL_MAX_RETRIES
+    assert len(sleeps) == DDL_MAX_RETRIES - 1
 
 
 def test_build_alter_drop_tag() -> None:

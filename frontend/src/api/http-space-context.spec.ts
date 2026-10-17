@@ -13,6 +13,25 @@ beforeEach(() => {
 })
 
 describe('请求空间隔离', () => {
+  it('算法提交跨空间切换后仍返回作业 ID，以便终止已接收的作业', async () => {
+    const result = await http.post('/v1/graph-algorithms/jobs', { space: 'a' }, { adapter: async config => {
+      expect(config.headers.get('X-Graph-Space')).toBe('a')
+      expect(config.headers.get('X-Business-Id')).toBe('business-a')
+      useGraphSpaceStore().setCurrent('b')
+      return { data: { jobId: 'old-job', status: 'running' }, status: 200, statusText: 'OK', headers: new AxiosHeaders(), config }
+    } })
+    expect(result).toEqual({ jobId: 'old-job', status: 'running' })
+  })
+  it('切换后按作业原空间和原所属业务发送终止及状态请求', async () => {
+    useGraphSpaceStore().setCurrent('b')
+    const adapter = async (config: InternalAxiosRequestConfig) => {
+      expect(config.headers.get('X-Graph-Space')).toBe('a')
+      expect(config.headers.get('X-Business-Id')).toBe('business-a')
+      return { data: { jobId: 'old-job', status: 'cancelled' }, status: 200, statusText: 'OK', headers: new AxiosHeaders(), config }
+    }
+    await http.post('/v1/graph-algorithms/jobs/old-job/cancel', null, { params: { space: 'a' }, adapter })
+    await http.get('/v1/graph-algorithms/jobs/old-job', { params: { space: 'a' }, adapter })
+  })
   it('九大请求携带空间与所属业务，不触发机器认证', async () => {
     let sent!: InternalAxiosRequestConfig
     await http.post('/v1/kg-construction/expert-direct-relations/query', {}, { adapter: async config => {

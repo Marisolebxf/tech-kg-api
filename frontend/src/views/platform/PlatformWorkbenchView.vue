@@ -6,7 +6,7 @@ import {
   ref,
   watch,
 } from 'vue'
-import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, RouterLink, useRoute, useRouter } from 'vue-router'
 import { runNgql, type GraphConsoleResult } from '../../api/graphConsole'
 import { currentGraphSpace } from '../../api/currentGraphSpace'
 import AppAlert from '../../components/AppAlert.vue'
@@ -348,6 +348,12 @@ function createAlgorithmStates(): Record<string, AlgorithmState> {
   }]))
 }
 const algorithmStates = ref(createAlgorithmStates())
+// 切空间后面板状态会重置，作业所有权仍保留到后端确认终态，避免遗留后台作业。
+const ownedAlgorithmStates = new Set<AlgorithmState>()
+const pendingAlgoSubmissions = new Map<AlgorithmState, Promise<AlgorithmJobSnapshot>>()
+const algoExitTasks = new Map<AlgorithmState, Promise<void>>()
+const algoCancelRequests = new Map<string, Promise<AlgorithmJobSnapshot>>()
+const algoAutoStopping = ref(0)
 const activeAlgorithmState = computed(() => algorithmStates.value[selectedAlgorithm.value])
 const algoLabels = computed({
   get: () => activeAlgorithmState.value.labels,
@@ -491,6 +497,7 @@ const algoNowTick = ref(Date.now())
 let algoNowTimer: number | undefined
 
 function startAlgoNowTicker(): void {
+  algoNowTick.value = Date.now()
   if (algoNowTimer !== undefined) return
   algoNowTimer = window.setInterval(() => {
     algoNowTick.value = Date.now()
@@ -529,7 +536,7 @@ const algoJobElapsedText = computed(() => {
   const ms = algoJobElapsedMs.value
   if (ms === null) return ''
   // 亚秒级作业（如 nGQL 度数计算几十毫秒完成）显示毫秒，避免「耗时 0 秒」被当成计时故障
-  if (ms < 1000) return `${Math.round(ms)} 毫秒`
+  if (ms < 1000 && !isAlgoJobRunning.value) return `${Math.round(ms)} 毫秒`
   const seconds = Math.floor(ms / 1000)
   return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${String(seconds % 60).padStart(2, '0')} 秒`
 })
@@ -1052,6 +1059,19 @@ async function handleNgqlQuery(): Promise<void> {
 
 let algoMetadataLoadedFor = ''
 
+/** 旧图服务的轮询/终止快照可能缺时间；同一作业保留已确认的时间，不能刷新后丢失。 */
+function updateAlgoJob(state: AlgorithmState, job: AlgorithmJobSnapshot): void {
+  const previous = state.job?.jobId === job.jobId ? state.job : null
+  state.job = {
+    ...job,
+    createdAt: job.createdAt ?? previous?.createdAt,
+    startedAt: job.startedAt ?? previous?.startedAt ?? job.createdAt ?? previous?.createdAt,
+    finishedAt: job.finishedAt ?? previous?.finishedAt,
+  }
+  algoNowTick.value = Date.now()
+  if (job.status !== 'running') ownedAlgorithmStates.delete(state)
+}
+
 // 关系类型选项的 Schema 目录中文名（name=图库英文边类型 → label=中文）；
 // 目录拿不到/加载失败不阻塞算法面板，选项与已选标签回退英文原名。
 const algoEdgeTypeLabels = ref(new Map<string, string>())
@@ -1132,7 +1152,7 @@ function stopAlgoPoll(): void {
 function scheduleAlgoPoll(state = activeAlgorithmState.value): void {
   if (state !== activeAlgorithmState.value) return
   stopAlgoPoll()
-  if (queryMode.value !== 'algo' || activeTab.value !== 'query') return
+  if (algoAutoStopping.value || queryMode.value !== 'algo' || activeTab.value !== 'query') return
   algoPollTimer = window.setTimeout(() => {
     void pollAlgoJob()
   }, 3000)
@@ -1150,7 +1170,7 @@ async function pollAlgoJob(): Promise<void> {
   try {
     const job = await getAlgorithmJob(state.space, jobId)
     if (context !== graphContextVersion || state.job?.jobId !== jobId || version !== state.version) return
-    state.job = job
+    updateAlgoJob(state, job)
     if (job.status !== 'running') state.cancelling = false
     state.pollFailures = 0
     if (job.status === 'succeeded') {
@@ -1195,7 +1215,7 @@ async function refreshAlgoJob(): Promise<void> {
   try {
     const job = await getAlgorithmJob(state.space, jobId)
     if (context !== graphContextVersion || state.job?.jobId !== jobId || version !== state.version) return
-    state.job = job
+    updateAlgoJob(state, job)
     if (job.status !== 'running') state.cancelling = false
     if (job.status === 'succeeded') await fetchAlgoResult(state)
     else if (job.status === 'running') scheduleAlgoPoll(state)
@@ -1214,9 +1234,9 @@ async function handleAlgoCancel(): Promise<void> {
   state.cancelling = true
   stopAlgoPoll()
   try {
-    const job = await cancelAlgorithmJob(state.space, jobId)
+    const job = await requestAlgoCancellation(state.space, jobId)
     if (context !== graphContextVersion || state.job?.jobId !== jobId || version !== state.version) return
-    state.job = job
+    updateAlgoJob(state, job)
     state.cancelling = job.status === 'running'
     if (job.status === 'running') scheduleAlgoPoll(state)
     else if (job.status === 'succeeded') await fetchAlgoResult(state)
@@ -1228,6 +1248,77 @@ async function handleAlgoCancel(): Promise<void> {
     scheduleAlgoPoll(state)
   }
 }
+
+/** 手动终止和离页清理共用同一个请求，避免重复发送 kill。 */
+function requestAlgoCancellation(space: string, jobId: string): Promise<AlgorithmJobSnapshot> {
+  const key = `${space}/${jobId}`
+  const existing = algoCancelRequests.get(key)
+  if (existing) return existing
+  const request = cancelAlgorithmJob(space, jobId).finally(() => algoCancelRequests.delete(key))
+  algoCancelRequests.set(key, request)
+  return request
+}
+
+function stopOwnedAlgorithm(state: AlgorithmState): Promise<void> {
+  const existing = algoExitTasks.get(state)
+  if (existing) return existing
+  state.version += 1 // 作废离页前已发出的轮询和手动刷新结果。
+  algoAutoStopping.value += 1
+  const submission = pendingAlgoSubmissions.get(state)
+  const task = (async () => {
+    let job = state.job
+    if (submission) {
+      try { job = await submission } catch { return } // 未提交成功，无后端作业可终止。
+    }
+    if (!job || job.status !== 'running') return
+    // 提交可能在切空间/卸载后才返回，仍使用原空间和原作业 ID 发起终止。
+    updateAlgoJob(state, job)
+    state.cancelling = true
+    let snapshot = await requestAlgoCancellation(state.space, job.jobId)
+    const deadline = Date.now() + 30_000
+    while (snapshot.status === 'running') {
+      updateAlgoJob(state, snapshot)
+      if (Date.now() >= deadline) throw new Error('算法作业终止尚未完成，请稍后重试')
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 500))
+      snapshot = await getAlgorithmJob(state.space, job.jobId)
+    }
+    updateAlgoJob(state, snapshot)
+    state.result = null
+  })().finally(() => {
+    state.cancelling = false
+    algoAutoStopping.value -= 1
+    algoExitTasks.delete(state)
+  })
+  algoExitTasks.set(state, task)
+  return task
+}
+
+async function stopAllOwnedAlgorithms(): Promise<void> {
+  stopAlgoPoll()
+  const results = await Promise.allSettled([...ownedAlgorithmStates].map(stopOwnedAlgorithm))
+  const failure = results.find((result) => result.status === 'rejected')
+  if (failure?.status === 'rejected') throw failure.reason
+}
+
+function reportAlgoExitFailure(error: unknown): void {
+  showToast(getErrorMessage(error, '自动终止算法作业失败，请在算法页面重试终止'), 'warning')
+}
+
+async function leaveAlgorithmPage(): Promise<boolean> {
+  try {
+    await stopAllOwnedAlgorithms()
+    return true
+  } catch (error) {
+    // 终止失败时留在当前页，保留可重试的作业，不能假装已释放引擎。
+    reportAlgoExitFailure(error)
+    if (algoJob.value?.status === 'running') scheduleAlgoPoll()
+    return false
+  }
+}
+
+onBeforeRouteLeave(leaveAlgorithmPage)
+// 总览与综合查询复用同一组件，路由切换不一定触发卸载。
+onBeforeRouteUpdate((to, from) => to.path !== from.path ? leaveAlgorithmPage() : true)
 
 /** 收集当前算法的参数：只带有值的键，空值交由服务端默认值兜底。 */
 function collectAlgoParams(): Record<string, number | string | boolean> {
@@ -1243,7 +1334,7 @@ function collectAlgoParams(): Record<string, number | string | boolean> {
 
 async function handleAlgoSubmit(): Promise<void> {
   const state = activeAlgorithmState.value
-  if (state.submitting || state.cancelling || state.job?.status === 'running') return
+  if (algoAutoStopping.value || state.submitting || state.cancelling || state.job?.status === 'running') return
   if (!algoSpace.value) {
     showToast('请选择图空间', 'warning')
     return
@@ -1293,11 +1384,13 @@ async function handleAlgoSubmit(): Promise<void> {
   stopAlgoPoll()
   const context = graphContextVersion
   const space = algoSpace.value
+  state.space = space
+  ownedAlgorithmStates.add(state)
   state.job = null
   state.result = null
   state.pollFailures = 0
   try {
-    const job = await submitAlgorithmJob({
+    const submission = submitAlgorithmJob({
       space,
       algorithm: def.id,
       labels: [...algoLabels.value],
@@ -1307,8 +1400,10 @@ async function handleAlgoSubmit(): Promise<void> {
       encodeId: algoEncodeId.value,
       partitionNum: algoPartitionNum.value,
     })
+    pendingAlgoSubmissions.set(state, submission)
+    const job = await submission
     if (context !== graphContextVersion) return
-    state.job = job
+    updateAlgoJob(state, job)
     // 使用发出请求时的空间；切换空间后旧请求不会再回写页面。
     state.space = space
     state.result = null
@@ -1324,7 +1419,9 @@ async function handleAlgoSubmit(): Promise<void> {
     if (context !== graphContextVersion) return
     showToast(getErrorMessage(error, '算法作业提交失败'), 'warning')
   } finally {
-    if (context === graphContextVersion) state.submitting = false
+    pendingAlgoSubmissions.delete(state)
+    state.submitting = false
+    if (!state.job && !algoExitTasks.has(state)) ownedAlgorithmStates.delete(state)
   }
 }
 
@@ -1341,16 +1438,17 @@ watch(algoLabels, (labels) => {
   if (labels.length) algoLabelsValidationError.value = false
 })
 
-// 进入图算法模式：懒加载元数据；离开：停轮询
+// 进入图算法模式懒加载元数据；离开面板时真正终止后端作业。
 watch([queryMode, activeTab], ([mode, tab]) => {
   if (mode === 'algo' && tab === 'query') {
     void loadAlgoMetadata()
     if (algoJob.value?.status === 'running') scheduleAlgoPoll()
-  } else stopAlgoPoll()
+  } else void stopAllOwnedAlgorithms().catch(reportAlgoExitFailure)
 })
 
 // 切换图空间：边类型与引擎状态按空间重新加载
 watch(algoSpace, () => {
+  void stopAllOwnedAlgorithms().catch(reportAlgoExitFailure)
   graphContextVersion += 1
   stopAlgoPoll()
   ngqlResult.value = null
@@ -1370,6 +1468,7 @@ watch(algoSpace, () => {
 }, { flush: 'sync' })
 
 onUnmounted(() => {
+  void stopAllOwnedAlgorithms().catch(reportAlgoExitFailure)
   graphContextVersion += 1
   overviewCardsRequest += 1
   stopAlgoPoll()
@@ -1937,7 +2036,7 @@ const pageMeta = computed(() => {
             <div class="platform-query-algo__actions">
               <AButton
                 type="primary"
-                :disabled="algoSubmitLoading || isAlgoJobRunning"
+                :disabled="algoAutoStopping > 0 || algoSubmitLoading || isAlgoJobRunning"
                 @click="handleAlgoSubmit"
               >
                 提交算法作业
@@ -1960,7 +2059,7 @@ const pageMeta = computed(() => {
             <div class="platform-query-algo__job-meta">
               <span :class="['platform-status', algoJobStatus?.tone]">{{ algoJobStatus?.label }}</span>
               <span class="platform-query-algo__job-id">作业 {{ algoJob.jobId }}</span>
-              <span v-if="algoJob.startedAt">开始 {{ formatAlgoTime(algoJob.startedAt) }}</span>
+              <span v-if="algoJob.startedAt">开始时间：{{ formatAlgoTime(algoJob.startedAt) }}</span>
               <span v-if="algoJob.finishedAt">完成 {{ formatAlgoTime(algoJob.finishedAt) }}</span>
               <span v-if="algoJob.status !== 'running' && algoJobElapsedText">耗时 {{ algoJobElapsedText }}</span>
               <span v-if="algoJob.driverState">Spark Driver：{{ algoJob.driverState }}</span>

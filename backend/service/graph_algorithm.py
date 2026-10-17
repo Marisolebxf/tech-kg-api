@@ -124,7 +124,8 @@ def _job_to_data(job: Any) -> dict:
         "status": "cancelled" if job.driver_state == "KILLED" else job.status,
         "createdAt": utc_to_cst_str(job.created_at),
         # 开始/完成保留毫秒：亚秒级作业（如 nGQL 度数计算）秒精度会显示成「耗时 0 秒」
-        "startedAt": utc_to_cst_str_ms(job.started_at),
+        # 兼容旧图服务：提交时 startedAt=createdAt，但轮询曾漏掉 startedAt。
+        "startedAt": utc_to_cst_str_ms(job.started_at or job.created_at),
         "finishedAt": utc_to_cst_str_ms(job.finished_at),
         "submissionId": job.submission_id,
         "driverState": job.driver_state,

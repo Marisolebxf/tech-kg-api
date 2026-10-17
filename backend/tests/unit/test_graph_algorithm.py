@@ -356,6 +356,21 @@ def test_job_snapshot_keeps_millisecond_precision() -> None:
     assert data["finishedAt"] == "2026-10-12 14:49:48.499"
 
 
+def test_legacy_poll_snapshot_uses_created_time_when_start_is_missing() -> None:
+    snapshot = _job_snapshot(created_at="2026-10-17T03:11:00.123Z", started_at=None)
+    data = graph_algorithm._job_to_data(snapshot)
+    assert data["startedAt"] == "2026-10-17 11:11:00.123"
+
+
+def test_snapshot_prefers_explicit_start_and_does_not_invent_missing_times() -> None:
+    snapshot = _job_snapshot(
+        created_at="2026-10-17T03:11:00.123Z", started_at="2026-10-17T03:11:02.456Z"
+    )
+    assert graph_algorithm._job_to_data(snapshot)["startedAt"] == "2026-10-17 11:11:02.456"
+    snapshot.created_at = snapshot.started_at = None
+    assert graph_algorithm._job_to_data(snapshot)["startedAt"] is None
+
+
 def test_get_job_not_found_maps_404(algo_backend) -> None:
     def raise_not_found(job_id):
         raise GraphNotFoundError(f"GET /api/v1/algorithms/jobs/{job_id} -> 404")

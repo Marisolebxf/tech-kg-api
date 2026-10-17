@@ -361,6 +361,8 @@ async function saveSources(): Promise<boolean> {
     await replaceSchemaSources(target.id, payloads, currentUserId)
     showToast('来源表绑定已保存', 'success')
     await loadSchemas()
+    // 保存成功即关闭：同文件上传/属性弹窗的既有口径，弹窗文案本就引导保存后离开
+    sourcesModalOpen.value = false
     return true
   } catch (error) {
     showToast(schemaErrorMessage(error), 'error')

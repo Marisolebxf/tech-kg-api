@@ -314,3 +314,44 @@ async def test_put_upload_rejected_when_llm_not_configured(script_api, monkeypat
         )
         assert response.status_code == 400
         assert "LLM_API_KEY" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_put_upload_persists_safety_verdict(script_api, monkeypatch) -> None:
+    """审计落库：放行时把 LLM 校验结论写入 kg_schema_script.safety_*，详情可回读。"""
+    _, _set_actor, _storage = script_api
+    monkeypatch.setattr(
+        "service.schema_management.get_llm_client",
+        lambda: _FakeLLM(
+            '{"safe": true, "issues": [{"problem": "备注：使用 hashlib 生成指纹",'
+            ' "evidence": "import hashlib"}], "summary": "安全（含备注）"}'
+        ),
+    )
+    source = (
+        b"import hashlib\n\nfrom kg_sdk import step\n\n\n@step\ndef fingerprint(payload):\n"
+        b'    return {"entities": []}\n'
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        entity = await _create_entity(client)
+        response = await client.put(
+            f"/api/v1/schema-management/schemas/{entity['id']}/script",
+            files={"script": ("fingerprint.py", source, "text/x-python")},
+        )
+        assert response.status_code == 200
+        script = (await _detail(client, entity["id"]))["script"]
+        assert script["safetySummary"] == "安全（含备注）"
+        assert script["safetyIssues"] == ["备注：使用 hashlib 生成指纹"]
+
+        # 重传换 verdict：safety_* 随最新一次校验覆盖，不残留旧值
+        monkeypatch.setattr(
+            "service.schema_management.get_llm_client",
+            lambda: _FakeLLM('{"safe": true, "issues": [], "summary": "安全"}'),
+        )
+        response = await client.put(
+            f"/api/v1/schema-management/schemas/{entity['id']}/script",
+            files={"script": ("fingerprint.py", source, "text/x-python")},
+        )
+        assert response.status_code == 200
+        script = (await _detail(client, entity["id"]))["script"]
+        assert script["safetySummary"] == "安全"
+        assert script["safetyIssues"] == []

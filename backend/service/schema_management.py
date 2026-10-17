@@ -38,7 +38,7 @@ from service.schema_ddl import (
     run_alter_drop_ddl,
     run_schema_ddl,
 )
-from service.script_security import review_script_security
+from service.script_security import ScriptSecurityVerdict, review_script_security
 from service.script_steps import declared_steps_from_tree
 from utils.time_display import utc_to_cst_str
 
@@ -759,6 +759,7 @@ class SchemaManagementService:
             script_data=script_data,
             user_id=user_id,
             workflow_function_name=workflow_function,
+            safety=verdict,
         )
         result = self._serialize(
             self._require_schema(schema_id),
@@ -934,6 +935,7 @@ class SchemaManagementService:
                     script_data=script_data,
                     user_id=user_id,
                     workflow_function_name=workflow_function,
+                    safety=verdict,
                 )
             except SchemaManagementError as exc:
                 yield {
@@ -991,6 +993,7 @@ class SchemaManagementService:
         script_data: bytes,
         user_id: str,
         workflow_function_name: str | None,
+        safety: ScriptSecurityVerdict | None = None,
     ) -> tuple[GraphSchemaDefinition, bool]:
         """上传 S3 + 写 DB + commit；失败回滚并清理 S3。
 
@@ -1025,6 +1028,13 @@ class SchemaManagementService:
                     "workflow_function_name": workflow_function_name,
                     # 上传时快照属性修订号：脚本是否"落后于 Schema"由此判定
                     "captured_revision": definition.property_revision,
+                    # LLM 安全校验结论落库（2026-10-18 补上 #88 欠的账）：safety_*
+                    # 两列自 #91 起就存在但从未被写入。放行时快照模型判了什么
+                    # （含"无实证放行/误报放行"审计说明），事后可回溯放行依据。
+                    "safety_summary": safety.summary if safety else "",
+                    "safety_issues": (
+                        json.dumps(safety.issues, ensure_ascii=False) if safety else "[]"
+                    ),
                 },
             )
             self._session.commit()
@@ -1581,6 +1591,14 @@ class SchemaManagementService:
             or script.uploaded_at is None
             or script.uploaded_at > script.last_run_at
         )
+        # 安全校验结论（2026-10-18 起写入；存量行/旁路时代为空）。issues 存的是
+        # JSON 数组文本，脏值按空清单处理，不让展示层抛错。
+        try:
+            safety_issues = json.loads(script.safety_issues) if script.safety_issues else []
+            if not isinstance(safety_issues, list):
+                safety_issues = []
+        except (ValueError, TypeError):
+            safety_issues = []
         return {
             "filename": script.original_filename,
             "contentType": script.content_type,
@@ -1595,6 +1613,8 @@ class SchemaManagementService:
             "lastRunStatus": script.last_run_status,
             "lastRunError": script.last_run_error,
             "lastRunAt": _iso(script.last_run_at),
+            "safetySummary": script.safety_summary or "",
+            "safetyIssues": safety_issues,
             "stale": stale_behind > 0,
             "staleBehind": stale_behind,
             "available": available,

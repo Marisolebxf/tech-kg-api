@@ -913,7 +913,7 @@ onBeforeUnmount(() => {
 
 .app-nav__group em {
   color: #91a5c0;
-  font-size: 10px;
+  font-size: 12px;
   font-style: normal;
   font-weight: 400;
   letter-spacing: 0.02em;
@@ -1439,7 +1439,7 @@ onBeforeUnmount(() => {
   stroke-linejoin: round;
 }
 .knowledge-assistant-entry span {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
 }
 .knowledge-assistant-entry.dragging {
@@ -1479,7 +1479,7 @@ onBeforeUnmount(() => {
   border-radius: 9px;
   background: #004ecc;
   color: #fff;
-  font-size: 10px;
+  font-size: 12px;
   font-style: normal;
   font-weight: 700;
 }
@@ -1492,7 +1492,7 @@ onBeforeUnmount(() => {
 }
 .knowledge-assistant > header em {
   color: #72819a;
-  font-size: 9px;
+  font-size: 12px;
   font-style: normal;
 }
 .knowledge-assistant > header button {
@@ -1531,7 +1531,7 @@ onBeforeUnmount(() => {
 }
 .knowledge-assistant__messages p {
   margin: 0;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 18px;
 }
 .knowledge-assistant__messages article > div {
@@ -1546,14 +1546,14 @@ onBeforeUnmount(() => {
 .knowledge-assistant__messages article > div span {
   width: 100%;
   color: #8491a5;
-  font-size: 8px;
+  font-size: 12px;
 }
 .knowledge-assistant__messages article > div b {
   padding: 2px 6px;
   border-radius: 99px;
   background: #eaf2ff;
   color: #004ecc;
-  font-size: 8px;
+  font-size: 12px;
   font-weight: 500;
 }
 .knowledge-assistant__full {
@@ -1561,7 +1561,7 @@ onBeforeUnmount(() => {
   border-top: 1px solid #e2eaf5;
   background: #fff;
   color: #004ecc;
-  font-size: 9px;
+  font-size: 12px;
   text-decoration: none;
 }
 .knowledge-assistant > form {
@@ -1579,7 +1579,7 @@ onBeforeUnmount(() => {
   border: 1px solid #bdd0ea;
   border-radius: 6px;
   color: #344761;
-  font: 10px/16px inherit;
+  font: 12px/16px inherit;
   resize: none;
 }
 .knowledge-assistant form button {
@@ -1587,7 +1587,7 @@ onBeforeUnmount(() => {
   border-radius: 6px;
   background: #004ecc;
   color: #fff;
-  font-size: 10px;
+  font-size: 12px;
   cursor: pointer;
 }
 .knowledge-assistant form button:disabled {

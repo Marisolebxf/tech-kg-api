@@ -12,6 +12,11 @@
   --control-height: 36px;
 }
 
+/* Native small text must not shrink a 12px parent below the system minimum. */
+small {
+  font-size: max(12px, 0.833333em);
+}
+
 .app-viewport {
   font-size: 16px;
 }
@@ -33,7 +38,7 @@
 }
 
 .app-nav__group em {
-  font-size: 10px !important;
+  font-size: 12px !important;
 }
 
 /* Sidebar navigation keeps its original compact hierarchy. Typography below

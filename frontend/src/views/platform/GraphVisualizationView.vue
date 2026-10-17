@@ -1140,10 +1140,10 @@ onUnmounted(() => {
 .graphviz-provenance__rows>div{display:flex;flex-direction:column;gap:2px;padding:5px 0;border-bottom:1px dashed #f2f3f5}
 .graphviz-provenance__rows dt{color:#86909c;font-size:12px;line-height:18px}
 .graphviz-provenance__rows dd{margin:0;color:#1d2129;font-size:12px;line-height:20px;overflow-wrap:anywhere}
-.graphviz-provenance__rows code{padding:1px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:11px;word-break:break-all}
+.graphviz-provenance__rows code{padding:1px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:12px;word-break:break-all}
 .graphviz-provenance__endpoints{display:flex;flex-direction:column;gap:8px}
 .graphviz-provenance__endpoints article{display:flex;flex-direction:column;gap:4px;padding:8px 12px;border:1px solid #e5e6eb;border-radius:4px;background:#fafbfc;font-size:12px;line-height:18px}
 .graphviz-provenance__endpoints article header{color:#1d2129;font-weight:600}
 .graphviz-provenance__endpoints article span{color:#4e5969}
-.graphviz-provenance__endpoints article code{padding:1px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:11px;word-break:break-all}
+.graphviz-provenance__endpoints article code{padding:1px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:12px;word-break:break-all}
 </style>

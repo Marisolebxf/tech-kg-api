@@ -471,7 +471,7 @@ async function submit() {
 .space-scope-chip{flex:0 0 auto;padding:0 8px;border:1px solid #94bfff;border-radius:10px;background:#e8f3ff;color:#165dff;font-size:12px;line-height:20px;font-weight:400;white-space:nowrap;cursor:help}
 .schedule-preview{margin:0;color:#4e5969;font-size:12px;line-height:20px}
 .field-error{color:#e4322d;font-size:12px;line-height:18px}
-.job-launch-dialog .field-help{display:grid;flex:0 0 auto;width:16px;height:16px;place-items:center;border:1px solid #c9cdd4;border-radius:50%;background:#fff;color:#86909c;cursor:help;font-size:11px;line-height:14px}
+.job-launch-dialog .field-help{display:grid;flex:0 0 auto;width:16px;height:16px;place-items:center;border:1px solid #c9cdd4;border-radius:50%;background:#fff;color:#86909c;cursor:help;font-size:12px;line-height:14px}
 .job-launch-dialog .field-help:hover,.job-launch-dialog .field-help:focus-visible{border-color:#4080ff;color:#165dff;outline:0}
 .resource-hint{margin:0;color:#86909c;font-size:12px;line-height:20px}
 .schedule-preview strong{color:#165dff;font-weight:600}

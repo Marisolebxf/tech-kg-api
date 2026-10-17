@@ -830,7 +830,7 @@ const runPrimary = () => {
 .status {
   padding: 4px 10px;
   border-radius: 99px;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .scope.is-batch {
@@ -873,14 +873,14 @@ const runPrimary = () => {
 
 .rw-diag span {
   color: #7890b5;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .rw-diag em {
   display: block;
   margin-top: 2px;
   color: #344054;
-  font-size: 11px;
+  font-size: 12px;
   font-style: normal;
   line-height: 16px;
 }
@@ -949,7 +949,7 @@ const runPrimary = () => {
 .rw-sec__head p {
   margin: 3px 0 0;
   color: #667085;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .rw-sec .rw-diag {
@@ -969,7 +969,7 @@ const runPrimary = () => {
   border-radius: 99px;
   background: #eef4ff;
   color: #175cd3;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .tri-grid {
@@ -989,7 +989,7 @@ const runPrimary = () => {
 
 .tri-grid span {
   color: #7890b5;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .tri-grid strong {
@@ -999,7 +999,7 @@ const runPrimary = () => {
 
 .tri-grid em {
   color: #7890b5;
-  font-size: 10px;
+  font-size: 12px;
   font-style: normal;
 }
 
@@ -1020,7 +1020,7 @@ const runPrimary = () => {
 .pipeline-hint {
   margin: 10px 0 0;
   color: #667085;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .pipeline-hint code {
@@ -1028,7 +1028,7 @@ const runPrimary = () => {
   border-radius: 4px;
   background: #eef4ff;
   color: #175cd3;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .status.is-已撤销 {
@@ -1086,7 +1086,7 @@ const runPrimary = () => {
 
 .entity-compare span {
   color: #7890b5;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .entity-compare strong {
@@ -1098,7 +1098,7 @@ const runPrimary = () => {
 .entity-compare p {
   margin: 4px 0 0;
   color: #475467;
-  font-size: 11px;
+  font-size: 12px;
   font-style: normal;
 }
 
@@ -1141,7 +1141,7 @@ const runPrimary = () => {
 .link-incoming-meta dt {
   flex: 0 0 auto;
   color: #7890b5;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .link-incoming-meta dd {
@@ -1168,7 +1168,7 @@ const runPrimary = () => {
 
 .link-incoming span {
   color: #7890b5;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .link-incoming strong {
@@ -1180,7 +1180,7 @@ const runPrimary = () => {
 .link-incoming p {
   margin: 3px 0 0;
   color: #475467;
-  font-size: 11px;
+  font-size: 12px;
   font-style: normal;
 }
 
@@ -1229,7 +1229,7 @@ const runPrimary = () => {
   border-radius: 10px;
   background: #eaf2ff;
   color: #175cd3;
-  font-size: 11px;
+  font-size: 12px;
   font-style: normal;
 }
 
@@ -1237,13 +1237,13 @@ const runPrimary = () => {
 .link-samename-total {
   margin-left: 8px;
   color: #7890b5;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .link-cand-evidence {
   flex-basis: 100%;
   margin: -4px 0 0 22px;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .link-cand-diff {
@@ -1253,7 +1253,7 @@ const runPrimary = () => {
 .link-cand-diff summary {
   padding: 6px 12px 6px 22px;
   color: #475467;
-  font-size: 11px;
+  font-size: 12px;
   cursor: pointer;
 }
 
@@ -1273,7 +1273,7 @@ const runPrimary = () => {
 .link-cand-diff-table thead th {
   background: #f8fafc;
   color: #66758f;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .link-cand-diff-table tr.is-same td {
@@ -1306,7 +1306,7 @@ const runPrimary = () => {
 .link-pending-hint {
   margin: 0;
   color: #b54708;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .link-incoming-props {
@@ -1315,7 +1315,7 @@ const runPrimary = () => {
 
 .link-incoming-props summary {
   color: #475467;
-  font-size: 11px;
+  font-size: 12px;
   cursor: pointer;
 }
 
@@ -1463,7 +1463,7 @@ const runPrimary = () => {
 .direct-section-details summary::before{content:"▶ ";font-size:12px;color:#9aa5b5;font-weight:400}
 .direct-section-details[open] summary::before{content:"▼ "}
 .direct-section-meta{font-weight:400;color:#667085;font-size:12px;margin-left:6px}
-.direct-section-meta code{padding:2px 6px;border-radius:3px;background:#f1f5fa;color:#344f73;font:11px Consolas,monospace}
+.direct-section-meta code{padding:2px 6px;border-radius:3px;background:#f1f5fa;color:#344f73;font:12px Consolas,monospace}
 .direct-section-body{margin-top:10px}
 /* ② 抽取推理过程（LLM I/O 折叠块） */
 .direct-llm-io{margin-top:16px;border:1px solid #eef2f7;border-radius:6px;background:#f8fafc}
@@ -1496,7 +1496,7 @@ const runPrimary = () => {
 .direct-trace dl{margin:10px 0 0;display:grid;grid-template-columns:120px 1fr;gap:6px 14px}
 .direct-trace dt{color:#718099;font-size:12px}
 .direct-trace dd{margin:0;color:#344054;font-size:12px}
-.direct-trace dd code{padding:2px 6px;border-radius:3px;background:#eef4ff;color:#175cd3;font:11px Consolas,monospace}
+.direct-trace dd code{padding:2px 6px;border-radius:3px;background:#eef4ff;color:#175cd3;font:12px Consolas,monospace}
 .direct-trace-link{text-decoration:none}
 .direct-trace-link code{cursor:pointer;transition:background .15s,color .15s}
 .direct-trace-link:hover code{background:#165dff;color:#fff}

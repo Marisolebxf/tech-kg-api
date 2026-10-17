@@ -49,6 +49,10 @@ const SYSTEM_PROPERTY_KEYS = new Set([
 const keyword = ref('')
 const appliedKeyword = ref('')
 const entityType = ref('')
+const entityTypeSelect = computed({
+  get: () => entityType.value || undefined,
+  set: (value: string | undefined) => { entityType.value = value ?? '' },
+})
 // 图空间跟随平台总览页的全局选择器（本页不再有空间筛选控件）
 const space = computed(() => currentGraphSpace())
 const graphSpaceStore = useGraphSpaceStore()
@@ -228,18 +232,19 @@ watch(
   <main class="entity-page">
     <section class="entity-toolbar-shell" aria-label="实体检索">
       <div class="entity-toolbar">
-        <div class="entity-toolbar__left">
+        <div class="entity-toolbar__right">
           <a-select
             id="entity-filter-type"
-            v-model="entityType"
+            v-model="entityTypeSelect"
             class="entity-filter-select"
-            placeholder="全部"
+            placeholder="类型"
             aria-label="实体类型"
             allow-clear
             :scrollbar="false"
             :trigger-props="{ contentStyle: { width: '240px' } }"
             @change="onEntityTypeChange"
           >
+            <a-option value="">未选择</a-option>
             <a-option v-for="t in types" :key="t.name" :value="t.name" :label="t.label || t.name">
               <span class="entity-type-option" :title="typeTitle(t.name)">
                 <span class="entity-type-option__text">{{ t.label || t.name }}</span>
@@ -247,8 +252,6 @@ watch(
               </span>
             </a-option>
           </a-select>
-        </div>
-        <div class="entity-toolbar__right">
           <a-input
             id="entity-filter-name"
             v-model="keyword"
@@ -383,10 +386,9 @@ watch(
 .entity-toolbar-shell{flex:0 0 auto}
 .entity-result-shell{margin-top:16px}
 .entity-toolbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px 16px}
-.entity-toolbar__left,.entity-toolbar__right{display:flex;min-width:0;align-items:center;gap:8px}
-.entity-toolbar__left{flex-wrap:wrap}
+.entity-toolbar__right{display:flex;min-width:0;align-items:center;gap:8px}
 .entity-toolbar button{flex-shrink:0;white-space:nowrap}
-.entity-toolbar__right{min-width:0;flex:1 1 320px;justify-content:flex-end}
+.entity-toolbar__right{min-width:0;flex:1 1 auto;justify-content:flex-end;flex-wrap:wrap;gap:16px}
 .entity-empty{flex:1;display:grid;place-items:center;padding:40px 16px;color:#86909c;font-size:12px;line-height:22px;text-align:center}
 .entity-table-wrap{flex:1;min-height:0;overflow:auto;scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:transparent transparent}
 .entity-loading{position:sticky;top:0;z-index:2;padding:6px 16px;background:#edf4ff;color:#165dff;font-size:12px;line-height:20px}
@@ -438,6 +440,7 @@ watch(
 .app-workspace .entity-toolbar-shell #entity-filter-type .arco-select-view-input-hidden{position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important}
 .app-workspace .entity-toolbar-shell #entity-filter-type .arco-select-view-value{min-width:0;overflow:hidden;font-size:14px;line-height:22px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
 .app-workspace .entity-toolbar-shell #entity-filter-type :is(.arco-select-view-input,.arco-select-view-value){background:transparent!important}
+.app-workspace .entity-toolbar-shell #entity-filter-type .arco-select-view-suffix svg{width:14px;height:14px;font-size:14px;color:#4e5969}
 .entity-property-popover{box-sizing:border-box;width:440px;max-width:calc(100vw - 48px);padding:12px 16px!important}
 .entity-property-popover__content{max-height:240px;overflow:auto}
 .entity-property-popover__title{margin:0 0 8px;color:#1d2129;font-size:12px;line-height:20px;font-weight:500}

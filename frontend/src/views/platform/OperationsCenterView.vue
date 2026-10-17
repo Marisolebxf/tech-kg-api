@@ -80,6 +80,19 @@ const reviewKindFilter = ref<'全部' | '实体' | '关系' | undefined>(pickSna
 /** 时间过滤（按更新时间）：全部/近1小时/近24小时/近7天/近30天 → updatedWithin 查询参数。 */
 const reviewTimeFilter = ref<'全部' | '近1小时' | '近24小时' | '近7天' | '近30天' | undefined>(pickSnapshotOption(queueSnapshot?.time, ['全部', '近1小时', '近24小时', '近7天', '近30天'] as const, '全部'))
 const reviewTimeOptions = ['全部', '近1小时', '近24小时', '近7天', '近30天']
+// 保留队列快照的「全部」值；Select 空态与图谱构建一致，只显示字段占位词。
+const reviewStatusSelect = computed({
+  get: () => reviewStatusFilter.value === '全部' ? undefined : reviewStatusFilter.value,
+  set: (value: ReviewStatusFilter | undefined) => { reviewStatusFilter.value = value ?? '全部' },
+})
+const reviewKindSelect = computed({
+  get: () => reviewKindFilter.value === '全部' ? undefined : reviewKindFilter.value,
+  set: (value: typeof reviewKindFilter.value) => { reviewKindFilter.value = value ?? '全部' },
+})
+const reviewTimeSelect = computed({
+  get: () => reviewTimeFilter.value === '全部' ? undefined : reviewTimeFilter.value,
+  set: (value: typeof reviewTimeFilter.value) => { reviewTimeFilter.value = value ?? '全部' },
+})
 const REVIEW_TIME_PARAMS: Record<string, string | undefined> = { '全部': undefined, '近1小时': '1h', '近24小时': '24h', '近7天': '7d', '近30天': '30d' }
 /** 更新时间排序：default=风险+创建时间（默认）；desc=新→旧；asc=旧→新。 */
 const reviewTimeSort = ref<'default' | 'desc' | 'asc'>(pickSnapshotOption(queueSnapshot?.sort, ['default', 'desc', 'asc'] as const, 'default'))
@@ -732,14 +745,11 @@ onMounted(() => {
       </nav>
       <div class="review-toolbar-actions">
         <form class="ops-filter is-review review-filter-row" role="search" @submit.prevent="submitReviewSearch">
-          <a-select v-model="reviewStatusFilter" class="review-filter-select" aria-label="状态" :options="reviewStatusOptions">
-            <template #prefix>状态</template>
+          <a-select v-model="reviewStatusSelect" class="review-filter-select" aria-label="状态" placeholder="状态" allow-clear :options="reviewStatusOptions.map(value => ({ value, label: value === '全部' ? '未选择' : value }))">
           </a-select>
-          <a-select v-model="reviewKindFilter" class="review-filter-select" aria-label="类型" :options="['全部', '实体', '关系']">
-            <template #prefix>类型</template>
+          <a-select v-model="reviewKindSelect" class="review-filter-select" aria-label="类型" placeholder="类型" allow-clear :options="[{ value: '全部', label: '未选择' }, '实体', '关系']">
           </a-select>
-          <a-select v-model="reviewTimeFilter" class="review-filter-select" aria-label="时间" :options="reviewTimeOptions">
-            <template #prefix>时间</template>
+          <a-select v-model="reviewTimeSelect" class="review-filter-select" aria-label="时间" placeholder="时间" allow-clear :options="reviewTimeOptions.map(value => ({ value, label: value === '全部' ? '未选择' : value }))">
           </a-select>
           <a-input v-model="keyword" class="review-search-input review-filter-search" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索处理实例 ID、对象或来源记录" placeholder="搜索处理实例 ID、对象或来源记录" allow-clear @clear="clearReviewSearch" />
           <button class="review-search-button" type="submit">查询</button>
@@ -1062,7 +1072,8 @@ onMounted(() => {
 .review-search-button{box-sizing:border-box;height:32px;padding:0 16px;border:1px solid #165dff!important;border-radius:4px;background:#165dff!important;color:#fff!important;font-size:14px;line-height:22px;cursor:pointer}
 .review-search-button:hover{border-color:#4080ff!important;background:#4080ff!important}
 .review-search-button:focus-visible{outline:2px solid rgba(22,93,255,.3);outline-offset:2px}
-.review-filter-row :deep(.review-filter-select.arco-select-view){flex:0 0 160px;width:160px}
+.review-filter-row :deep(.review-filter-select.arco-select-view){display:inline-flex;align-items:center;flex:0 0 160px;width:160px;min-height:32px;padding:0 12px!important}
+.review-filter-row :deep(.arco-select-view-suffix svg){width:14px;height:14px;font-size:14px;color:#4e5969}
 .review-filter-row :deep(.review-filter-search.arco-input-wrapper){flex:0 0 280px;width:280px}
 .review-tabs .ops-filter.is-review :deep(.arco-select-view-value){font-size:14px;line-height:22px;font-weight:400}
 .ops-review-table-scroll td{color:#344763;font-size:14px;line-height:22px;font-weight:400;vertical-align:middle}
@@ -1144,8 +1155,7 @@ onMounted(() => {
 .ops-review-table-scroll::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background-color:transparent;background-clip:padding-box}
 .ops-review-table-scroll:hover::-webkit-scrollbar-thumb,.ops-review-table-scroll.review-scroll--active::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
 .ops-review-table-scroll::-webkit-scrollbar-thumb:hover{background-color:rgba(78,89,105,.8)}
-/* 筛选字段标签 / 类型徽标 / 勾选禁用态 / 删除按钮 */
-.review-filter-row :deep(.arco-select-view-prefix){margin-right:8px;color:#86909c;font-size:14px;line-height:22px;white-space:nowrap}
+/* 类型徽标 / 勾选禁用态 / 删除按钮 */
 /* 处理实例 ID 纯文本：中性色，区别于可点击的链接蓝 */
 .review-id-cell .review-id-plain{color:#4e5969}
 .review-kind-badge{display:inline-flex;white-space:nowrap;padding:0 8px;border-radius:4px;background:#f2f3f5;color:#4e5969;font-size:12px;line-height:20px}

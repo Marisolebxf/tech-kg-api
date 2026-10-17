@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { vDialogFocus } from '../directives/dialog-focus'
 import { useSpacePermissions } from "../composables/use-space-permissions"
 const { canWrite } = useSpacePermissions()
 
@@ -276,7 +277,7 @@ async function submit() {
 <template>
   <Teleport to="body">
     <button v-if="open" class="job-launch-mask" type="button" aria-label="关闭" @click="emit('close')" />
-    <aside v-if="open" class="job-launch-dialog">
+    <aside v-if="open" v-dialog-focus="{ close: () => emit('close'), busy: submitting }" class="job-launch-dialog">
       <header>
         <h2>新建任务</h2>
         <button type="button" aria-label="关闭弹窗" title="关闭" @click="emit('close')">×</button>
@@ -429,7 +430,7 @@ async function submit() {
 
 <style scoped>
 .job-launch-mask{position:fixed;inset:0;z-index:49;border:0;background:rgba(16,38,76,0.42);backdrop-filter:blur(2px);cursor:pointer}
-.job-launch-dialog{position:fixed;z-index:50;top:50%;left:50%;width:min(720px,calc(100vw - 48px));max-height:calc(100vh - 48px);display:flex;flex-direction:column;overflow:hidden;border-radius:8px;background:#fff;box-shadow:0 24px 70px rgba(28,58,107,0.3);font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0;transform:translate(-50%,-50%)}
+.job-launch-dialog{position:fixed;z-index:50;top:50%;left:50%;width:min(640px,calc(100vw - 48px));max-height:calc(100vh - 48px);display:flex;flex-direction:column;overflow:hidden;border-radius:8px;background:#fff;box-shadow:0 24px 70px rgba(28,58,107,0.3);font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0;transform:translate(-50%,-50%)}
 .job-launch-dialog :deep(*){font-family:inherit;letter-spacing:0}
 .job-launch-dialog>header{display:flex;box-sizing:border-box;flex:0 0 56px;height:56px;align-items:center;justify-content:space-between;padding:0 24px;border-bottom:1px solid #e5e6eb;background:#fff}
 .job-launch-dialog h2{margin:0;color:#1d2129;font-size:16px;line-height:24px;font-weight:600}
@@ -442,7 +443,7 @@ async function submit() {
 .job-field>span{color:#4e5969;font-size:14px;line-height:22px}
 .job-field .job-required{margin-right:4px;color:#b42318;font-style:normal}
 .job-field__label-row{display:flex;min-width:0;align-items:center;gap:8px;flex-wrap:wrap}.job-field__label-row>span{flex:0 0 auto;color:#4e5969;font-size:14px;line-height:22px}.job-field__label-row>.muted-warn{color:#ff7d00!important}
-.job-field>input:not([type="file"]){box-sizing:border-box;width:100%;height:32px;padding:0 12px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#1d2129;font-size:14px;line-height:14px;outline:0;box-shadow:none}
+.job-field>input:not([type="file"]){box-sizing:border-box;width:100%;height:32px;padding:0 12px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#1d2129;font-size:14px;line-height:22px;outline:0;box-shadow:none}
 .job-field>input:not([type="file"]):hover{border-color:#4080ff}
 .job-field>input:not([type="file"]):focus,.job-field>input:not([type="file"]):focus-visible{border-color:#165dff;outline:0;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
 :deep(.job-select.arco-select-view){display:inline-flex;box-sizing:border-box;width:100%;min-width:0;height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;align-items:center}
@@ -456,7 +457,7 @@ async function submit() {
 .job-mode-row{grid-template-columns:minmax(0,1fr)}
 .job-field.checkbox-field.job-mode-option{justify-content:flex-start}
 .job-launch-dialog>footer{display:flex;box-sizing:border-box;flex:0 0 64px;height:64px;align-items:center;justify-content:flex-end;gap:16px;padding:16px 24px;border-top:1px solid #e5e6eb;background:#fff}
-.job-launch-dialog footer button{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:14px;font-weight:400;cursor:pointer}
+.job-launch-dialog footer button{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
 .job-launch-dialog footer .primary{border-color:#165dff;background:#165dff;color:#fff}
 .job-launch-dialog footer button:disabled{opacity:.5;cursor:not-allowed}
 .chain-steps{display:flex;flex-direction:column;gap:6px;margin:6px 0 0;padding:0;list-style:none}
@@ -470,8 +471,8 @@ async function submit() {
 /* 目标 Schema 的空间作用域标签：弹窗无空间选择器、静默跟随全局选择器，标签把它显式化 */
 .space-scope-chip{flex:0 0 auto;padding:0 8px;border:1px solid #94bfff;border-radius:10px;background:#e8f3ff;color:#165dff;font-size:12px;line-height:20px;font-weight:400;white-space:nowrap;cursor:help}
 .schedule-preview{margin:0;color:#4e5969;font-size:12px;line-height:20px}
-.field-error{color:#e4322d;font-size:12px;line-height:18px}
-.job-launch-dialog .field-help{display:grid;flex:0 0 auto;width:16px;height:16px;place-items:center;border:1px solid #c9cdd4;border-radius:50%;background:#fff;color:#86909c;cursor:help;font-size:11px;line-height:14px}
+.field-error{color:#e4322d;font-size:12px;line-height:20px}
+.job-launch-dialog .field-help{display:grid;flex:0 0 auto;width:16px;height:16px;place-items:center;border:1px solid #c9cdd4;border-radius:50%;background:#fff;color:#86909c;cursor:help;font-size:12px;line-height:14px}
 .job-launch-dialog .field-help:hover,.job-launch-dialog .field-help:focus-visible{border-color:#4080ff;color:#165dff;outline:0}
 .resource-hint{margin:0;color:#86909c;font-size:12px;line-height:20px}
 .schedule-preview strong{color:#165dff;font-weight:600}

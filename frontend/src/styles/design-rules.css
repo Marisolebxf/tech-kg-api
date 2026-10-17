@@ -21,6 +21,12 @@ body {
   letter-spacing: 0;
 }
 
+.app-workspace h1 {
+  font-size: 20px !important;
+  line-height: 28px !important;
+  font-weight: 600;
+}
+
 .app-workspace .kg-panel {
   border: 1px solid var(--gkx-border) !important;
   border-radius: 6px !important;
@@ -406,7 +412,7 @@ body {
 }
 
 .app-workspace .business-service__toolbar .kg-tabs__item.is-active {
-  color: #004ecc;
+  color: var(--gkx-brand);
   font-weight: 500;
 }
 
@@ -510,7 +516,7 @@ body {
   padding: 0;
   border: 0 !important;
   background: transparent !important;
-  color: #004ecc;
+  color: var(--gkx-brand);
   line-height: 22px;
 }
 
@@ -1106,12 +1112,12 @@ body {
   }
 
   .arco-modal {
-    width: calc(100vw - 24px) !important;
-    max-width: calc(100vw - 24px);
+    width: calc(100vw - 48px) !important;
+    max-width: calc(100vw - 48px);
   }
 
   .arco-modal-body {
-    padding: 16px;
+    padding: 24px;
   }
 }
 
@@ -1167,7 +1173,7 @@ body {
     grid-template-rows: auto auto auto !important;
     height: auto !important;
     min-height: 0 !important;
-    gap: 20px !important;
+    gap: 24px !important;
     overflow: visible !important;
   }
 
@@ -1420,7 +1426,7 @@ body {
   padding-inline: 16px !important;
   border: 1px solid transparent !important;
   border-radius: 4px;
-  background: #004ecc !important;
+  background: var(--gkx-brand) !important;
   color: #fff;
 }
 
@@ -1440,9 +1446,9 @@ body {
 }
 
 .app-workspace .business-service .service-console__actions .kg-button--secondary:hover {
-  border-color: #004ecc !important;
+  border-color: var(--gkx-brand) !important;
   background: #e8f3ff !important;
-  color: #004ecc;
+  color: var(--gkx-brand);
 }
 
 .app-workspace .business-service .prototype-table tbody tr:hover td {
@@ -1732,7 +1738,7 @@ body {
     width: 100% !important;
     height: auto !important;
     min-height: 0 !important;
-    gap: 20px !important;
+    gap: 24px !important;
     padding: 0 !important;
     overflow: visible !important;
     flex-direction: column !important;
@@ -1745,7 +1751,7 @@ body {
     width: 100% !important;
     height: auto !important;
     min-height: 0 !important;
-    gap: 12px !important;
+    gap: 16px !important;
   }
 
   .app-workspace .business-service .developer-view__meta label {
@@ -1762,7 +1768,7 @@ body {
     width: 100% !important;
     height: auto !important;
     min-height: auto !important;
-    gap: 20px !important;
+    gap: 24px !important;
     overflow: visible !important;
   }
 

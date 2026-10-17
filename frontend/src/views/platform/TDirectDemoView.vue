@@ -481,7 +481,7 @@ const handleDecide = (accepted: boolean) => {
   margin: 0 auto;
   padding: 24px 28px 40px;
   color: #17233b;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.6;
 }
 
@@ -508,13 +508,13 @@ const handleDecide = (accepted: boolean) => {
   border-radius: 4px;
   background: #eef4ff;
   color: #175cd3;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .dd-status {
   padding: 3px 10px;
   border-radius: 99px;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .dd-status.is-open { background: #fff0e8; color: #c4320a; }
@@ -535,7 +535,7 @@ const handleDecide = (accepted: boolean) => {
 
 .dd-switcher-label {
   color: #667085;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .dd-switch {
@@ -563,7 +563,7 @@ const handleDecide = (accepted: boolean) => {
   margin: 0 0 10px;
   padding-left: 10px;
   border-left: 3px solid #165dff;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   color: #344054;
 }
@@ -571,7 +571,7 @@ const handleDecide = (accepted: boolean) => {
 .dd-hint {
   margin: 0 0 10px;
   color: #667085;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .dd-source-head {
@@ -601,7 +601,7 @@ const handleDecide = (accepted: boolean) => {
   padding: 9px 14px;
   border-bottom: 1px solid #eef2f7;
   text-align: left;
-  font-size: 13px;
+  font-size: 12px;
   vertical-align: top;
 }
 
@@ -639,7 +639,7 @@ const handleDecide = (accepted: boolean) => {
 
 .dd-extract-meta dt {
   color: #718099;
-  font-size: 10px;
+  font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 4px;
@@ -682,7 +682,7 @@ const handleDecide = (accepted: boolean) => {
 .dd-llm-section h4 {
   margin: 12px 14px 6px;
   color: #66758f;
-  font-size: 10px;
+  font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   font-weight: 600;
@@ -730,7 +730,7 @@ const handleDecide = (accepted: boolean) => {
 }
 
 .dd-relation-node {
-  font-size: 13px;
+  font-size: 12px;
   color: #475569;
 }
 
@@ -794,7 +794,7 @@ const handleDecide = (accepted: boolean) => {
 
 .dd-trace dt {
   color: #718099;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .dd-trace dd {
@@ -808,7 +808,7 @@ const handleDecide = (accepted: boolean) => {
   border-radius: 3px;
   background: #eef4ff;
   color: #175cd3;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .dd-trace-link {
@@ -845,7 +845,7 @@ const handleDecide = (accepted: boolean) => {
 
 .dd-note span {
   color: #718099;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .dd-note input {
@@ -888,7 +888,7 @@ const handleDecide = (accepted: boolean) => {
 
 .dd-accept strong,
 .dd-reject strong {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
 }
 
@@ -896,7 +896,7 @@ const handleDecide = (accepted: boolean) => {
 .dd-reject em {
   color: rgba(255, 255, 255, 0.85);
   font-style: normal;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .dd-accept:disabled,

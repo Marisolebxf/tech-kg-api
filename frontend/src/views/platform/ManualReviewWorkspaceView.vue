@@ -504,6 +504,7 @@ const runPrimary = () => {
     </header>
 
     <main class="rw-body">
+      <div class="rw-body__content">
       <a-form ref="manualReviewFormRef" :model="manualReviewFormModel" :rules="manualReviewFormRules" class="manual-review-form" layout="vertical">
       <!-- T_EXTRACT_FAIL：抽取失败记录重跑 -->
       <section v-if="templateId === 'T_EXTRACT_FAIL'" class="zone zone-direct">
@@ -759,7 +760,8 @@ const runPrimary = () => {
       </a-form>
       <AppAlert v-if="feedback" :type="feedback.type" class="rw-feedback">{{ feedback.text }}</AppAlert>
 
-      <!-- 确认操作放在详情框内右下角（吸底悬浮：长表单滚动时确认按钮始终可见）；查看档只读 case 仅展示权限提示。 -->
+      </div>
+      <!-- 确认底栏与详情容器相接，表单内容独立滚动。 -->
       <footer class="rw-foot">
         <AppAlert v-if="isReadOnlyCase" type="warning" class="rw-readonly-hint">
           当前图空间仅可查看，无法提交审核操作。
@@ -828,7 +830,7 @@ const runPrimary = () => {
 .status {
   padding: 4px 10px;
   border-radius: 99px;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .scope.is-batch {
@@ -866,21 +868,21 @@ const runPrimary = () => {
 .rw-diag strong {
   display: block;
   margin-bottom: 2px;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .rw-diag span {
   color: #7890b5;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .rw-diag em {
   display: block;
   margin-top: 2px;
   color: #344054;
-  font-size: 11px;
+  font-size: 12px;
   font-style: normal;
-  line-height: 16px;
+  line-height: 20px;
 }
 
 .rw-diag__evidence {
@@ -892,7 +894,7 @@ const runPrimary = () => {
   background: #fff6f5;
   color: #344054;
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .rw-body {
@@ -914,7 +916,7 @@ const runPrimary = () => {
 
 .rw-zone-head h2 {
   margin: 0;
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .rw-zone-head p {
@@ -947,7 +949,7 @@ const runPrimary = () => {
 .rw-sec__head p {
   margin: 3px 0 0;
   color: #667085;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .rw-sec .rw-diag {
@@ -967,7 +969,7 @@ const runPrimary = () => {
   border-radius: 99px;
   background: #eef4ff;
   color: #175cd3;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .tri-grid {
@@ -987,17 +989,17 @@ const runPrimary = () => {
 
 .tri-grid span {
   color: #7890b5;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .tri-grid strong {
   font-size: 12px;
-  line-height: 17px;
+  line-height: 20px;
 }
 
 .tri-grid em {
   color: #7890b5;
-  font-size: 10px;
+  font-size: 12px;
   font-style: normal;
 }
 
@@ -1018,7 +1020,7 @@ const runPrimary = () => {
 .pipeline-hint {
   margin: 10px 0 0;
   color: #667085;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .pipeline-hint code {
@@ -1026,7 +1028,7 @@ const runPrimary = () => {
   border-radius: 4px;
   background: #eef4ff;
   color: #175cd3;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .status.is-已撤销 {
@@ -1084,7 +1086,7 @@ const runPrimary = () => {
 
 .entity-compare span {
   color: #7890b5;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .entity-compare strong {
@@ -1096,7 +1098,7 @@ const runPrimary = () => {
 .entity-compare p {
   margin: 4px 0 0;
   color: #475467;
-  font-size: 11px;
+  font-size: 12px;
   font-style: normal;
 }
 
@@ -1139,7 +1141,7 @@ const runPrimary = () => {
 .link-incoming-meta dt {
   flex: 0 0 auto;
   color: #7890b5;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .link-incoming-meta dd {
@@ -1166,7 +1168,7 @@ const runPrimary = () => {
 
 .link-incoming span {
   color: #7890b5;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .link-incoming strong {
@@ -1178,7 +1180,7 @@ const runPrimary = () => {
 .link-incoming p {
   margin: 3px 0 0;
   color: #475467;
-  font-size: 11px;
+  font-size: 12px;
   font-style: normal;
 }
 
@@ -1227,7 +1229,7 @@ const runPrimary = () => {
   border-radius: 10px;
   background: #eaf2ff;
   color: #175cd3;
-  font-size: 11px;
+  font-size: 12px;
   font-style: normal;
 }
 
@@ -1235,13 +1237,13 @@ const runPrimary = () => {
 .link-samename-total {
   margin-left: 8px;
   color: #7890b5;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .link-cand-evidence {
   flex-basis: 100%;
   margin: -4px 0 0 22px;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .link-cand-diff {
@@ -1251,7 +1253,7 @@ const runPrimary = () => {
 .link-cand-diff summary {
   padding: 6px 12px 6px 22px;
   color: #475467;
-  font-size: 11px;
+  font-size: 12px;
   cursor: pointer;
 }
 
@@ -1271,7 +1273,7 @@ const runPrimary = () => {
 .link-cand-diff-table thead th {
   background: #f8fafc;
   color: #66758f;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .link-cand-diff-table tr.is-same td {
@@ -1304,7 +1306,7 @@ const runPrimary = () => {
 .link-pending-hint {
   margin: 0;
   color: #b54708;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .link-incoming-props {
@@ -1313,7 +1315,7 @@ const runPrimary = () => {
 
 .link-incoming-props summary {
   color: #475467;
-  font-size: 11px;
+  font-size: 12px;
   cursor: pointer;
 }
 
@@ -1341,11 +1343,8 @@ const runPrimary = () => {
   margin: 14px 0 0;
 }
 
-/* 确认按钮吸底悬浮：case 表单很长，滚动途中确认/拒绝操作始终可见（白底浮条，不遮内容） */
+/* 与列表分页一致的整宽底栏。 */
 .rw-foot {
-  position: sticky;
-  bottom: 0;
-  z-index: 3;
   display: flex;
   flex: 0 0 auto;
   align-items: center;
@@ -1353,10 +1352,8 @@ const runPrimary = () => {
   gap: 12px;
   margin-top: 16px;
   padding: 12px 16px;
-  border: 1px solid #e5e6eb;
-  border-radius: 6px;
+  border-top: 1px solid #e5e6eb;
   background: #fff;
-  box-shadow: 0 -4px 16px rgba(29, 33, 41, 0.06);
 }
 
 .rw-foot > span {
@@ -1440,7 +1437,7 @@ const runPrimary = () => {
 
 /* === T_DIRECT 五段式入库决策区（扁平布局，匹配 demo） === */
 .zone-direct{display:grid;gap:24px;padding:0;border:0;background:transparent}
-.zone-direct h3{margin:0 0 10px;padding-left:10px;border-left:3px solid #165dff;font-size:13px;font-weight:600;color:#344054}
+.zone-direct h3{margin:0 0 10px;padding-left:10px;border-left:3px solid #165dff;font-size:12px;font-weight:600;color:#344054}
 /* 共享字段表（① 原始记录 + ③ 候选）+ 占位 */
 .direct-fields{width:100%;border-collapse:collapse;border:1px solid #eef2f7;border-radius:6px;overflow:hidden;font-size:12px}
 .direct-fields th,.direct-fields td{padding:8px 12px;border-bottom:1px solid #eef2f7;text-align:left;vertical-align:top}
@@ -1461,12 +1458,12 @@ const runPrimary = () => {
 .direct-accept-fix:disabled{border-color:#f2d5a8;background:#fdeccd}
 /* ① 原始记录（折叠块） */
 .direct-section-details{padding-left:10px;border-left:3px solid #165dff}
-.direct-section-details summary{cursor:pointer;font-size:13px;font-weight:600;color:#344054;list-style:none;margin:0;padding:0}
+.direct-section-details summary{cursor:pointer;font-size:12px;font-weight:600;color:#344054;list-style:none;margin:0;padding:0}
 .direct-section-details summary::-webkit-details-marker{display:none}
 .direct-section-details summary::before{content:"▶ ";font-size:12px;color:#9aa5b5;font-weight:400}
 .direct-section-details[open] summary::before{content:"▼ "}
 .direct-section-meta{font-weight:400;color:#667085;font-size:12px;margin-left:6px}
-.direct-section-meta code{padding:2px 6px;border-radius:3px;background:#f1f5fa;color:#344f73;font:11px Consolas,monospace}
+.direct-section-meta code{padding:2px 6px;border-radius:3px;background:#f1f5fa;color:#344f73;font:12px Consolas,monospace}
 .direct-section-body{margin-top:10px}
 /* ② 抽取推理过程（LLM I/O 折叠块） */
 .direct-llm-io{margin-top:16px;border:1px solid #eef2f7;border-radius:6px;background:#f8fafc}
@@ -1482,10 +1479,10 @@ const runPrimary = () => {
 .direct-llm-section pre:last-child{margin-bottom:0}
 /* ③ 候选（header 扁平 inline，无 box） */
 .direct-target{display:flex;align-items:baseline;gap:12px;margin-bottom:10px;flex-wrap:wrap;padding:0;border:0;background:transparent}
-.direct-target-tag{padding:6px 14px;border-radius:4px;background:#b54708;color:#fff;font-size:13px;font-weight:600;letter-spacing:.5px}
+.direct-target-tag{padding:6px 14px;border-radius:4px;background:#b54708;color:#fff;font-size:12px;font-weight:600;letter-spacing:.5px}
 .direct-target-nodelabel{font-size:18px;color:#17233b;font-weight:700}
 .direct-target-id{padding:2px 8px;border-radius:4px;background:#f1f5fa;color:#344f73;font:12px Consolas,monospace}
-.direct-target-name{color:#718099;font-style:normal;font-size:13px}
+.direct-target-name{color:#718099;font-style:normal;font-size:12px}
 .direct-target-edge{color:#7f56d9;font-style:normal;font-size:12px;font-weight:600;padding:3px 8px;border-radius:4px;background:#eee8ff}
 /* ④ 为什么需要你确认 */
 .direct-why p{margin:0 0 10px;color:#475569;line-height:1.7}
@@ -1499,7 +1496,7 @@ const runPrimary = () => {
 .direct-trace dl{margin:10px 0 0;display:grid;grid-template-columns:120px 1fr;gap:6px 14px}
 .direct-trace dt{color:#718099;font-size:12px}
 .direct-trace dd{margin:0;color:#344054;font-size:12px}
-.direct-trace dd code{padding:2px 6px;border-radius:3px;background:#eef4ff;color:#175cd3;font:11px Consolas,monospace}
+.direct-trace dd code{padding:2px 6px;border-radius:3px;background:#eef4ff;color:#175cd3;font:12px Consolas,monospace}
 .direct-trace-link{text-decoration:none}
 .direct-trace-link code{cursor:pointer;transition:background .15s,color .15s}
 .direct-trace-link:hover code{background:#165dff;color:#fff}
@@ -1512,7 +1509,7 @@ const runPrimary = () => {
 .direct-accept,.direct-reject{display:grid;gap:4px;padding:14px;border-radius:8px;cursor:pointer;font-size:14px;transition:opacity .15s}
 .direct-accept{border:2px solid #12b76a;background:#12b76a;color:#fff}
 .direct-reject{border:2px solid #d92d20;background:#d92d20;color:#fff}
-.direct-accept strong,.direct-reject strong{font-size:15px;font-weight:700}
+.direct-accept strong,.direct-reject strong{font-size:14px;font-weight:700}
 .direct-accept em,.direct-reject em{color:rgba(255,255,255,.85);font-style:normal;font-size:12px}
 /* 终态/提交中置灰（与底部 footer 禁用色一致） */
 .direct-accept:disabled,.direct-reject:disabled{border-color:#d0d5dd;background:#eaecf0;color:#98a2b3;cursor:not-allowed}
@@ -1531,13 +1528,14 @@ const runPrimary = () => {
 .rw{overflow:hidden;height:100%;min-height:0;color:#1d2129}.rw-head{align-items:center;gap:16px;margin-bottom:16px}.rw-head h1{margin:4px 0;font-size:20px;line-height:28px;font-weight:600}.rw-head p,.rw-head a{font-size:12px;line-height:20px}
 .scope,.status{display:inline-flex;align-items:center;gap:6px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.scope::before,.status::before{display:block;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}.scope.is-batch,.scope.is-task,.status.is-待处理,.status.is-已完成,.status.is-已撤销,.status.is-已驳回{background:transparent}
 .rw-diag{gap:8px 16px;margin-bottom:16px;padding:16px;border-color:#e5e6eb;border-radius:6px;background:#f7f8fa}.rw-diag strong{font-size:14px;line-height:22px}.rw-diag span,.rw-diag em{font-size:12px;line-height:20px}
-.rw-body{display:flex;box-sizing:border-box;flex:1 1 0;min-height:0;overflow:auto;padding:16px;border-color:#e5e6eb;border-radius:6px;flex-direction:column}
+.rw-body{display:flex;box-sizing:border-box;flex:1 1 0;min-height:0;overflow:hidden;padding:0;border-color:#e5e6eb;border-radius:6px;flex-direction:column}
+.rw-body__content{flex:1;min-height:0;overflow:auto;padding:16px;scrollbar-gutter:stable}
 .rw-zone-head{gap:8px;margin-bottom:16px}.rw-zone-head h2,.rw-sec__head h2{font-size:16px;line-height:24px;font-weight:600}.rw-zone-head p,.rw-sec__head p{font-size:12px;line-height:20px}
 .rw-sec{margin-bottom:16px;padding:16px;border:0;border-radius:6px;background:#f7f8fa}.rw-sec__head{gap:8px;margin-bottom:16px}
 .cat-pill{padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.tri-grid{gap:16px}.tri-grid>div{gap:4px;padding:8px 16px;border-color:#e5e6eb;border-radius:4px}.tri-grid span,.tri-grid em{font-size:12px;line-height:20px}.tri-grid strong{font-size:14px;line-height:22px}
 .rw :is(button,input,select,textarea){font-size:14px;line-height:22px}.rw :is(button,input,select){min-height:32px;border-radius:4px}.rw textarea{border-radius:4px}
 /* 最终确认按钮保持详情框右下角的常规按钮尺寸。 */
-.rw-foot{margin-top:auto;padding-top:16px}.rw-foot__actions{flex:none}.rw-foot button{width:auto;min-width:88px;height:32px;padding:0 20px;font-size:14px;font-weight:500}
+.rw-foot{margin-top:0;padding:12px 16px}.rw-foot__actions{flex:none}.rw-foot button{width:auto;min-width:88px;height:32px;padding:0 20px;font-size:14px;font-weight:500}
 .direct-actions{gap:16px}.direct-accept,.direct-reject{min-height:32px;padding:8px 16px;border-radius:4px;font-size:14px}.direct-accept strong,.direct-reject strong{font-size:14px;line-height:22px}.direct-accept em,.direct-reject em{font-size:12px;line-height:20px}
 @media(max-width:960px){.tri-grid{grid-template-columns:1fr}}
 .direct-edit-toggle:disabled{color:#a9aeb8;background:#f2f3f5;cursor:not-allowed}

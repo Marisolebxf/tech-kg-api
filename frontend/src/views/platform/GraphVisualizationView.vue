@@ -1046,7 +1046,7 @@ onUnmounted(() => {
 .graphviz-page{display:flex;min-height:100%;flex-direction:column;gap:16px;color:#1d2129}
 .graphviz-panel{display:flex;flex-direction:column;min-height:0;border:1px solid #e5e6eb;border-radius:6px;background:#fff}
 .graphviz-panel__header{display:flex;flex:0 0 auto;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid #f2f3f5}
-.graphviz-panel__title{margin:0;font-size:15px;line-height:22px;font-weight:600}
+.graphviz-panel__title{margin:0;font-size:14px;line-height:22px;font-weight:600}
 .graphviz-panel__meta{color:#86909c;font-size:12px;line-height:20px;white-space:nowrap}
 .graphviz-space-hint{color:#86909c;font-size:12px;line-height:20px;white-space:nowrap}
 
@@ -1055,7 +1055,7 @@ onUnmounted(() => {
 .graphviz-form__grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px 16px}
 .graphviz-form__grid--params{grid-template-columns:repeat(5,minmax(0,1fr))}
 .graphviz-field{display:flex;min-width:0;flex-direction:column;gap:4px}
-.graphviz-field>label{color:#4e5969;font-size:12px;line-height:18px}
+.graphviz-field>label{color:#4e5969;font-size:12px;line-height:20px}
 .graphviz-field--grow{grid-column:span 3}
 .graphviz-field--wide{grid-column:span 2}
 .graphviz-field--actions{justify-content:flex-end}
@@ -1066,14 +1066,14 @@ onUnmounted(() => {
 .graphviz-form__reveal{margin-left:8px;padding:0;border:0;background:transparent;color:#165dff;cursor:pointer;font-size:12px;line-height:20px}
 .graphviz-form__reveal:hover{text-decoration:underline}
 .graphviz-start{border:1px solid #f2f3f5;border-radius:4px;padding:8px;background:#fafbfc}
-.graphviz-start__bar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 4px 6px;color:#4e5969;font-size:12px;line-height:18px}
-.graphviz-start__close{flex:0 0 auto;width:20px;height:20px;padding:0;border:0;border-radius:4px;background:transparent;color:#86909c;cursor:pointer;font-size:14px;line-height:20px}
+.graphviz-start__bar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 4px 6px;color:#4e5969;font-size:12px;line-height:20px}
+.graphviz-start__close{flex:0 0 auto;width:20px;height:20px;padding:0;border:0;border-radius:4px;background:transparent;color:#86909c;cursor:pointer;font-size:14px;line-height:22px}
 .graphviz-start__close:hover{background:#f2f3f5;color:#1d2129}
 .graphviz-start__list{display:flex;flex-direction:column;gap:4px;max-height:168px;overflow:auto}
 .graphviz-start__item{display:flex;align-items:center;gap:8px;min-width:0;padding:6px 8px;border:1px solid transparent;border-radius:4px;background:#fff;cursor:pointer;text-align:left;font-size:12px;line-height:20px}
 .graphviz-start__item:hover{border-color:#4080ff}
 .graphviz-start__item.is-selected{border-color:#165dff;background:#f2f7ff}
-.graphviz-start__item b{flex:0 1 auto;max-width:240px;overflow:hidden;font-size:13px;text-overflow:ellipsis;white-space:nowrap}
+.graphviz-start__item b{flex:0 1 auto;max-width:240px;overflow:hidden;font-size:12px;text-overflow:ellipsis;white-space:nowrap}
 .graphviz-start__item span{flex:0 0 auto;color:#165dff}
 .graphviz-start__item code{flex:1;min-width:0;overflow:hidden;color:#86909c;text-overflow:ellipsis;white-space:nowrap}
 
@@ -1082,17 +1082,17 @@ onUnmounted(() => {
 .graphviz-field :deep(.graphviz-select.arco-select-view:hover){border-color:#4080ff!important;background:#fff!important}
 .graphviz-field :deep(.graphviz-select.arco-select-view:focus-within),.graphviz-field :deep(.graphviz-select.arco-select-view-focus){border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
 .graphviz-field :deep(.graphviz-select .arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important}
-.graphviz-field :deep(.graphviz-select .arco-select-view-value){min-width:0;overflow:hidden;background:transparent!important;font-size:13px;line-height:22px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
+.graphviz-field :deep(.graphviz-select .arco-select-view-value){min-width:0;overflow:hidden;background:transparent!important;font-size:12px;line-height:22px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
 /* a-input-number 根节点同样不带 data-v：经 :deep 命中并与 select 视觉对齐 */
 .graphviz-field :deep(.graphviz-input-number.arco-input-number){display:inline-flex;box-sizing:border-box;width:100%;min-width:0;min-height:32px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important}
 .graphviz-field :deep(.graphviz-input-number.arco-input-number:hover){border-color:#4080ff!important}
 .graphviz-field :deep(.graphviz-input-number.arco-input-number:focus-within){border-color:#165dff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
-.graphviz-field :deep(.graphviz-input-number .arco-input-number-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0 12px!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:13px!important;line-height:22px!important;box-shadow:none!important;outline:0!important;text-align:left}
+.graphviz-field :deep(.graphviz-input-number .arco-input-number-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0 12px!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:12px!important;line-height:22px!important;box-shadow:none!important;outline:0!important;text-align:left}
 .graphviz-field :deep(.graphviz-select[multiple] .arco-select-view-value){display:flex;flex-wrap:wrap;gap:4px;overflow:visible;white-space:normal}
 .graphviz-field :deep(.graphviz-input.arco-input-wrapper){display:inline-flex;box-sizing:border-box;width:100%;min-width:0;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important}
 .graphviz-field :deep(.graphviz-input.arco-input-wrapper:hover){border-color:#4080ff!important}
 .graphviz-field :deep(.graphviz-input.arco-input-wrapper:focus-within){border-color:#165dff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
-.graphviz-field :deep(.graphviz-input input.arco-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:13px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
+.graphviz-field :deep(.graphviz-input input.arco-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:12px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
 
 /* ---------- 画布与图例 ---------- */
 .graphviz-lower{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:16px;flex:1;min-height:0}
@@ -1117,7 +1117,7 @@ onUnmounted(() => {
 .graphviz-cap-banner button{flex:0 0 auto;border:0;background:transparent;color:#165dff;cursor:pointer;font-size:12px;line-height:20px;white-space:nowrap}
 .graphviz-cap-banner button:hover{text-decoration:underline}
 .graphviz-canvas{position:relative;flex:1;min-height:480px;overflow:hidden;border-radius:4px}
-.graphviz-canvas__empty{position:absolute;inset:0;z-index:2;display:grid;place-items:center;padding:24px;background:transparent;color:#86909c;font-size:13px;line-height:22px;text-align:center;pointer-events:none}
+.graphviz-canvas__empty{position:absolute;inset:0;z-index:2;display:grid;place-items:center;padding:24px;background:transparent;color:#86909c;font-size:12px;line-height:22px;text-align:center;pointer-events:none}
 
 /* ---------- 详情面板 ---------- */
 .graphviz-detail__tabs{display:flex;flex:0 0 auto;gap:4px;padding:4px;border-radius:4px;background:#f2f3f5}
@@ -1126,24 +1126,24 @@ onUnmounted(() => {
 .graphviz-detail__body{flex:1;min-height:0;overflow:auto;padding:12px 16px}
 .graphviz-detail__body dl{margin:0}
 .graphviz-detail__body dl>div{display:flex;flex-direction:column;gap:2px;padding:6px 0;border-bottom:1px dashed #f2f3f5}
-.graphviz-detail__body dt{color:#86909c;font-size:12px;line-height:18px}
-.graphviz-detail__body dd{margin:0;color:#1d2129;font-size:13px;line-height:20px;overflow-wrap:anywhere}
-.graphviz-detail__empty{margin:0;padding:24px 0;color:#86909c;font-size:13px;line-height:22px;text-align:center}
+.graphviz-detail__body dt{color:#86909c;font-size:12px;line-height:20px}
+.graphviz-detail__body dd{margin:0;color:#1d2129;font-size:12px;line-height:20px;overflow-wrap:anywhere}
+.graphviz-detail__empty{margin:0;padding:24px 0;color:#86909c;font-size:12px;line-height:22px;text-align:center}
 .graphviz-detail__note{margin:8px 0 0;color:#86909c;font-size:12px;line-height:20px}
 .graphviz-detail__recenter{margin-top:12px}
 
 .graphviz-provenance__target{display:flex;flex-direction:column;gap:2px;padding:8px 12px;border:1px solid #e5e6eb;border-radius:4px;background:#f7f8fa}
-.graphviz-provenance__target strong{font-size:13px;line-height:20px}
-.graphviz-provenance__target span{color:#86909c;font-size:12px;line-height:18px}
-.graphviz-provenance h3{margin:14px 0 4px;color:#1d2129;font-size:12px;line-height:18px;font-weight:600}
+.graphviz-provenance__target strong{font-size:12px;line-height:20px}
+.graphviz-provenance__target span{color:#86909c;font-size:12px;line-height:20px}
+.graphviz-provenance h3{margin:14px 0 4px;color:#1d2129;font-size:12px;line-height:20px;font-weight:600}
 .graphviz-provenance__rows{margin:0}
 .graphviz-provenance__rows>div{display:flex;flex-direction:column;gap:2px;padding:5px 0;border-bottom:1px dashed #f2f3f5}
-.graphviz-provenance__rows dt{color:#86909c;font-size:12px;line-height:18px}
+.graphviz-provenance__rows dt{color:#86909c;font-size:12px;line-height:20px}
 .graphviz-provenance__rows dd{margin:0;color:#1d2129;font-size:12px;line-height:20px;overflow-wrap:anywhere}
-.graphviz-provenance__rows code{padding:1px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:11px;word-break:break-all}
+.graphviz-provenance__rows code{padding:1px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:12px;word-break:break-all}
 .graphviz-provenance__endpoints{display:flex;flex-direction:column;gap:8px}
-.graphviz-provenance__endpoints article{display:flex;flex-direction:column;gap:4px;padding:8px 12px;border:1px solid #e5e6eb;border-radius:4px;background:#fafbfc;font-size:12px;line-height:18px}
+.graphviz-provenance__endpoints article{display:flex;flex-direction:column;gap:4px;padding:8px 12px;border:1px solid #e5e6eb;border-radius:4px;background:#fafbfc;font-size:12px;line-height:20px}
 .graphviz-provenance__endpoints article header{color:#1d2129;font-weight:600}
 .graphviz-provenance__endpoints article span{color:#4e5969}
-.graphviz-provenance__endpoints article code{padding:1px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:11px;word-break:break-all}
+.graphviz-provenance__endpoints article code{padding:1px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:12px;word-break:break-all}
 </style>

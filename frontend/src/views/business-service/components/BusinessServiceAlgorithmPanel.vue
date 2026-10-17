@@ -5432,7 +5432,7 @@ function clearGraphSelection() {
 .service-console__params span {
   color: var(--text-secondary);
   font-size: 14px;
-  line-height: 20px;
+  line-height: 22px;
 }
 
 .service-console__params i {
@@ -5519,7 +5519,7 @@ function clearGraphSelection() {
   border-radius: var(--radius-sm);
   background: #fff;
   color: var(--text-primary);
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .service-console__params > label > input::placeholder {
@@ -5787,7 +5787,7 @@ function clearGraphSelection() {
   color: var(--danger);
   font-size: 12px;
   font-weight: 400;
-  line-height: 18px;
+  line-height: 20px;
   white-space: nowrap;
 }
 
@@ -5926,7 +5926,7 @@ function clearGraphSelection() {
   border-radius: var(--radius-sm);
   background: #fff;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .graph-panel__filters button {
@@ -6225,7 +6225,7 @@ function clearGraphSelection() {
   background: #fff;
   margin: 0;
   padding: 10px 14px;
-  font-size: 15px;
+  font-size: 14px;
   line-height: 24px;
   word-break: break-word;
   overflow-wrap: anywhere;
@@ -6298,20 +6298,20 @@ function clearGraphSelection() {
 .result-provenance__target strong {
   color: #16355f;
   font-size: 14px;
-  line-height: 20px;
+  line-height: 22px;
 }
 
 .result-provenance__target span {
   color: var(--text-secondary);
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .result-provenance h3 {
   margin: 0;
   color: #536987;
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
   font-weight: 600;
 }
 
@@ -6348,7 +6348,7 @@ function clearGraphSelection() {
   background: #f3f7fd;
   color: var(--text-secondary);
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .result-provenance__evidence-list {
@@ -6372,7 +6372,7 @@ function clearGraphSelection() {
 .colleague-provenance-section h4 {
   margin: 0;
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .colleague-provenance-section p span {
@@ -6403,13 +6403,13 @@ function clearGraphSelection() {
 .result-provenance__evidence-list article p b {
   color: #243b62;
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .result-provenance__evidence-list article > span {
   color: var(--text-secondary);
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .result-provenance__task-meta {
@@ -6424,7 +6424,7 @@ function clearGraphSelection() {
 .result-provenance__task-meta span {
   color: var(--text-secondary);
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .result-provenance__task-meta a {
@@ -6448,7 +6448,7 @@ function clearGraphSelection() {
   color: #2f3442;
   background: #f7f9fc;
   font-family: Consolas, Monaco, monospace;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.65;
   white-space: pre-wrap;
 }
@@ -6483,7 +6483,7 @@ function clearGraphSelection() {
 
 .result-panel__rules strong {
   color: var(--primary);
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .result-panel__rules header span {
@@ -6493,7 +6493,7 @@ function clearGraphSelection() {
   background: var(--primary-subtle);
   color: var(--primary);
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .result-panel__rules dl {
@@ -6837,7 +6837,7 @@ function clearGraphSelection() {
   padding: 6px 12px;
   background: #e8f3ff;
   border-radius: 4px;
-  font-size: 13px;
+  font-size: 12px;
   color: #165dff;
 }
 

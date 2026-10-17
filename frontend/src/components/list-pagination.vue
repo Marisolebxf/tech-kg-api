@@ -133,7 +133,7 @@ function onSelectChange(value: unknown) {
 .list-pagination__window{display:flex;max-width:100%;flex-wrap:wrap;align-items:center;gap:8px}
 .list-pagination__page{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;min-width:32px;height:32px;min-height:32px!important;padding:0 8px!important;border:0;border-radius:4px;background:transparent;color:#4e5969;font-family:inherit;font-size:14px!important;line-height:32px!important;cursor:pointer}
 .list-pagination__page:hover:not(:disabled){background:#f2f3f5}
-.list-pagination__page--active,.list-pagination__page--active:hover:not(:disabled){background:#165dff;color:#fff}
+.list-pagination__page--active,.list-pagination__page--active:hover:not(:disabled){background:#e8f3ff;color:#165dff}
 .list-pagination__page:disabled{cursor:not-allowed;opacity:.5}
 .list-pagination__page:focus-visible{outline:2px solid #165dff;outline-offset:2px}
 .list-pagination :deep(.arco-select-view){box-sizing:border-box;width:88px;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;font-size:14px;line-height:22px}
@@ -146,7 +146,7 @@ function onSelectChange(value: unknown) {
 /* line-height 须带 !important：readability.css 对 .app-workspace 内所有 li 强刷
    line-height:22px !important，页码按钮是 <li>，不压过它数字会在 32px 按钮里偏上。 */
 .list-pagination :deep(.arco-pagination-item){min-width:32px;height:32px;border-radius:4px;font-size:14px;line-height:32px!important}
-.list-pagination :deep(.arco-pagination-item-active){background:#165dff;color:#fff}
+.list-pagination :deep(.arco-pagination-item-active){background:#e8f3ff;color:#165dff}
 /* 跳页框（前往 X 页）：全局 readability.css 会把原生 input 刷成 15px 字号，把 Arco 的
    自适应高度撑到 33.5px，比 32px 的页码按钮/每页下拉高一截；这里钉回 32px、14px 字号，
    白底描边口径与“每页”下拉一致，宽度 40→48px 容下 4 位页码。 */

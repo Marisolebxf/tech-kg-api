@@ -656,7 +656,7 @@ onUnmounted(() => {
 /* 边名称：白色描边光晕保证压在线上也清晰，不拦截点击（点击走 hit-area 线） */
 .platform-network-line__label {
   fill: #4e5969;
-  font-size: 8px;
+  font-size: 12px;
   font-weight: 500;
   text-anchor: middle;
   dominant-baseline: middle;
@@ -745,13 +745,13 @@ onUnmounted(() => {
 
 .platform-node__title {
   fill: #1d2129;
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 600;
 }
 
 .platform-node__meta {
   fill: #59636f;
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 400;
 }
 
@@ -812,13 +812,13 @@ onUnmounted(() => {
 
 .platform-node.is-solid-circle .platform-node__title {
   fill: #5f6b7a;
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 500;
 }
 
 .platform-node.is-solid-circle.platform-node--center .platform-node__title {
   fill: #1d2129;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
 }
 

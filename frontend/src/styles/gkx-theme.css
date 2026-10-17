@@ -97,27 +97,44 @@ body {
 
 /* Keep the required marker in the design system's danger color. */
 .arco-form-item-label-required-symbol {
-  color: #b42318;
+  color: #f53f3f;
 }
 
 .arco-modal {
+  display: flex;
+  flex-direction: column;
+  max-width: calc(100vw - 48px) !important;
+  max-height: calc(100dvh - 48px);
+  overflow: hidden;
   border-radius: var(--radius-lg);
   box-shadow: 0 12px 32px rgba(29, 33, 41, 0.16);
 }
 
 .arco-modal-header {
-  height: 56px;
-  padding-inline: 24px;
+  box-sizing: border-box;
+  flex: 0 0 56px;
+  height: 56px !important;
+  padding: 0 24px !important;
   border-bottom: 1px solid var(--gkx-border);
 }
 
 .arco-modal-body {
-  padding: 24px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 24px !important;
 }
 
 .arco-modal-footer {
-  min-height: 64px;
-  padding: 16px 24px;
+  box-sizing: border-box;
+  display: flex;
+  flex: 0 0 64px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 16px;
+  height: 64px !important;
+  padding: 16px 24px !important;
   border-top: 1px solid var(--gkx-border);
 }
 
@@ -323,7 +340,7 @@ body {
 
 @media (max-width: 960px) {
   .app-workspace {
-    padding: 12px;
+    padding: 16px;
   }
 
   .app-workspace :is(.summary-grid, .task-summary, .schema-stats, .platform-metrics) {
@@ -344,4 +361,24 @@ body .arco-tooltip-content {
 
 body .arco-tooltip-popup-arrow {
   background-color: #ffffff;
+}
+
+/* Footer spacing is owned by the shared shell, including destructive confirms. */
+.arco-modal-footer > .arco-btn + .arco-btn { margin-left: 0 !important; }
+.arco-modal-footer > .arco-btn { height: 32px; padding-inline: 16px; }
+.arco-select-dropdown { padding: 4px; border: 1px solid var(--gkx-border); border-radius: 4px; }
+.arco-select-option { min-height: 32px; font-size: 14px; line-height: 22px; }
+.arco-select-option-selected { color: var(--gkx-brand); background: var(--gkx-brand-light); }
+.arco-pagination-item-active { color: var(--gkx-brand); background: var(--gkx-brand-light); }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+@media (pointer: coarse) {
+  :is(button, .arco-btn, .arco-select-view, .arco-input-wrapper, .arco-picker, .arco-pagination-item) { min-height: 40px !important; }
+  .arco-pagination-item { min-width: 40px; line-height: 40px !important; }
 }

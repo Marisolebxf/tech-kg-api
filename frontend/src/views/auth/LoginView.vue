@@ -189,14 +189,14 @@ onBeforeUnmount(() => window.removeEventListener("pageshow", resetSubmitting));
   color: rgba(255, 255, 255, 0.72);
   font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.18em;
+  letter-spacing: 0;
 }
 .login-intro h1 {
   max-width: 620px;
   margin: 0;
-  font-size: clamp(38px, 4vw, 62px);
+  font-size: 32px;
   line-height: 1.17;
-  letter-spacing: -0.03em;
+  letter-spacing: 0;
 }
 .login-intro__content > p:not(.login-kicker) {
   max-width: 570px;
@@ -226,11 +226,11 @@ onBeforeUnmount(() => window.removeEventListener("pageshow", resetSubmitting));
 }
 .login-intro li span {
   color: rgba(236, 247, 255, 0.72);
-  font-size: 11px;
+  font-size: 12px;
 }
 .login-intro footer {
   color: rgba(228, 243, 255, 0.58);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .login-panel {
@@ -252,7 +252,7 @@ onBeforeUnmount(() => window.removeEventListener("pageshow", resetSubmitting));
   border-radius: 999px;
   background: #eaf3ff;
   color: #004ecc;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
 }
 .login-card h2 {
@@ -263,7 +263,7 @@ onBeforeUnmount(() => window.removeEventListener("pageshow", resetSubmitting));
 .login-card > p {
   margin: 0;
   color: var(--gkx-text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.8;
 }
 .login-card__security {
@@ -276,7 +276,7 @@ onBeforeUnmount(() => window.removeEventListener("pageshow", resetSubmitting));
   border-radius: 6px;
   background: var(--gkx-bg-subtle);
   color: var(--gkx-text-secondary);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.65;
 }
 .login-card__security i {
@@ -302,12 +302,12 @@ onBeforeUnmount(() => window.removeEventListener("pageshow", resetSubmitting));
   background: #fff0ee;
   color: #b42318;
 }
-.login-portals{display:grid;gap:10px}.login-portals button{display:flex;align-items:center;justify-content:space-between;width:100%;height:58px;padding:0 18px;border:1px solid #dce8f8;border-radius:6px;background:#fff;color:var(--gkx-text-primary);text-align:left;cursor:pointer}.login-portals button:hover{border-color:var(--gkx-primary);background:#f7faff}.login-portals button:disabled{opacity:.6;cursor:not-allowed}.login-portals strong{font-size:15px}.login-portals b{color:var(--gkx-primary);font-size:11px;white-space:nowrap}
+.login-portals{display:grid;gap:10px}.login-portals button{display:flex;align-items:center;justify-content:space-between;width:100%;height:58px;padding:0 18px;border:1px solid #dce8f8;border-radius:6px;background:#fff;color:var(--gkx-text-primary);text-align:left;cursor:pointer}.login-portals button:hover{border-color:var(--gkx-primary);background:#f7faff}.login-portals button:disabled{opacity:.6;cursor:not-allowed}.login-portals strong{font-size:14px}.login-portals b{color:var(--gkx-primary);font-size:12px;white-space:nowrap}
 .login-card small {
   display: block;
   margin-top: 17px;
   color: #9aa7b8;
-  font-size: 10px;
+  font-size: 12px;
   text-align: center;
 }
 
@@ -327,7 +327,7 @@ onBeforeUnmount(() => window.removeEventListener("pageshow", resetSubmitting));
     margin: 24px 0 0;
   }
   .login-intro h1 {
-    font-size: 34px;
+    font-size: 32px;
   }
   .login-intro ul,
   .login-intro footer {

@@ -1667,7 +1667,6 @@ const pageMeta = computed(() => {
         <aside class="kg-panel platform-review-panel">
           <div class="kg-panel__header"><div><h2 class="kg-panel__title">人工审核</h2></div><RouterLink to="/manual-review">查看处理队列</RouterLink></div>
           <template v-if="overviewReviewsState === 'ready'">
-            <div class="platform-review-count">待处理 <strong>{{ overviewReviewsTotal }}</strong> 条</div>
             <div class="platform-review-list">
               <RouterLink v-for="row in overviewReviewRows" :key="row.id" :to="reviewItemRoute(row.case)">
                 <strong :title="row.name">{{ row.name }}</strong>
@@ -2618,6 +2617,11 @@ print(response.json())</pre>
 .platform-jobs-stats article { display:grid;gap:2px;padding:12px 8px;text-align:center;border-right:1px solid #edf2f8; }
 .platform-jobs-stats article:last-child { border-right:0; }
 .platform-jobs-stats article span { color:#1d2129;font-size:18px;font-weight:600; }
+.platform-jobs-stats article span.is-idle { color:var(--status-neutral); }
+.platform-jobs-stats article span.is-run { color:var(--status-info); }
+.platform-jobs-stats article span.is-ok { color:var(--status-success); }
+.platform-jobs-stats article span.is-warn { color:var(--status-warning); }
+.platform-jobs-stats article span.is-err { color:var(--status-danger); }
 .platform-jobs-stats article em { color:#52627a;font-size:12px;line-height:20px;font-style:normal; }
 .platform-jobs-list { display:grid;flex:1;grid-template-rows:repeat(5,minmax(44px,1fr));overflow-y:auto; }
 .platform-jobs-list a { display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:10px;min-height:44px;padding:9px 14px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
@@ -2628,8 +2632,6 @@ print(response.json())</pre>
 .platform-jobs-list a>span::before { flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor;content:""; }
 .platform-jobs-list a>span.ok { color:var(--status-success);background:transparent; }.platform-jobs-list a>span.err { color:var(--status-danger);background:transparent; }.platform-jobs-list a>span.warn { color:var(--status-warning);background:transparent; }
 .platform-jobs-list em { color:#59636f;font-size:12px;line-height:20px;font-style:normal;white-space:nowrap; }
-.platform-review-count { display:flex;align-items:baseline;gap:8px;padding:11px 14px;border-bottom:1px solid #e4ecf6;color:#62728a;font-size:14px;line-height:22px; }
-.platform-review-count strong { margin:0;color:#10264c;font-size:18px; }
 /* 行紧贴左侧任务行（44px 上下限 + 弹性摊高），类别列在行内右侧而非换行堆叠——
  * 8 行与「图谱构建」卡等高，更多的走粘底「还有 N 条待处理」。 */
 .platform-review-list { display:grid;flex:1;grid-template-rows:repeat(8,minmax(44px,1fr));overflow-y:auto; }

@@ -126,7 +126,11 @@ const items = ref<ConfigItem[]>([])
 const activeCategory = ref('语言模型')
 const keyword = ref('')
 const submittedKeyword = ref('')
-const statusFilter = ref<string | undefined>('全部状态')
+const statusFilter = ref<string | undefined>()
+const statusFilterSelect = computed({
+  get: () => statusFilter.value || undefined,
+  set: (value: string | undefined) => { statusFilter.value = value || undefined },
+})
 const selected = ref<ConfigItem | null>(null)
 const dialogOpen = ref(false)
 const testingId = ref('')
@@ -252,7 +256,7 @@ const visibleItems = computed(() => items.value.filter((item) => {
   const query = submittedKeyword.value.toLowerCase()
   const endpointOrUrl = item.baseUrl || (item.host ? `${item.host}:${item.port}` : '') || item.endpoint
   const matchKeyword = !query || `${item.name}${item.id}${item.type}${endpointOrUrl}${item.model || ''}`.toLowerCase().includes(query)
-  const matchStatus = !statusFilter.value || statusFilter.value === '全部状态' || item.status === statusFilter.value
+  const matchStatus = !statusFilter.value || item.status === statusFilter.value
   return matchCategory && matchKeyword && matchStatus
 }).sort((a, b) => Number(b.isDefault) - Number(a.isDefault)))
 
@@ -800,7 +804,7 @@ onUnmounted(() => {
       </aside>
 
       <main class="config-list">
-        <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" :disabled="!canCreateConfig" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilter" class="config-status-select" allow-clear placeholder="全部状态"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><form class="config-search-form" role="search" @submit.prevent="submitConfigSearch"><a-input v-model="keyword" class="config-search-input" allow-clear :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识、类型或地址" placeholder="搜索名称、标识、类型或地址" /><button class="primary config-search-button" type="submit">查询</button></form></nav><nav v-else class="config-list-actions"><button class="primary create-entry" type="button" :disabled="!canManageSpaces" @click="spaceDialogOpen = true">＋ 新建图数据空间</button><form class="config-search-form" role="search" @submit.prevent="submitSpaceSearch"><a-input v-model="spaceKeyword" class="config-search-input" allow-clear :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索图空间名称" placeholder="搜索图空间名称" /><button class="primary config-search-button" type="submit">查询</button></form></nav></header>
+        <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" :disabled="!canCreateConfig" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilterSelect" class="config-status-select" allow-clear placeholder="状态" aria-label="状态"><a-option value="">未选择</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><form class="config-search-form" role="search" @submit.prevent="submitConfigSearch"><a-input v-model="keyword" class="config-search-input" allow-clear :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识、类型或地址" placeholder="搜索名称、标识、类型或地址" /><button class="primary config-search-button" type="submit">查询</button></form></nav><nav v-else class="config-list-actions"><button class="primary create-entry" type="button" :disabled="!canManageSpaces" @click="spaceDialogOpen = true">＋ 新建图数据空间</button><form class="config-search-form" role="search" @submit.prevent="submitSpaceSearch"><a-input v-model="spaceKeyword" class="config-search-input" allow-clear :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索图空间名称" placeholder="搜索图空间名称" /><button class="primary config-search-button" type="submit">查询</button></form></nav></header>
         <div v-if="isGraphSpaceCategory" class="table-wrap space-table">
           <table>
             <thead><tr><th>图空间名称 / 说明</th><th>标识</th><th class="config-status-col">绑定状态</th><th class="config-action-col">操作</th></tr></thead>
@@ -1018,10 +1022,13 @@ onUnmounted(() => {
 .config-list nav :deep(.arco-select){width:160px;min-width:160px;flex-shrink:0}
 /* 注意：Arco select 根节点同时挂 arco-select 与 arco-select-view，两条规则同特异性，
    这里绝不能再写 width:100%，否则会覆盖上一条的 width:160px，把新建按钮挤出视口。 */
-.config-list nav :deep(.arco-select-view){box-sizing:border-box;height:32px;border:1px solid #e5e6eb;border-radius:4px;background:#fff}
+.config-list nav :deep(.arco-select-view){display:inline-flex;box-sizing:border-box;align-items:center;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important}
+.config-list nav :deep(.arco-select-view:hover){border-color:#4080ff!important}
+.config-list nav :deep(.arco-select-view-focus),.config-list nav :deep(.arco-select-view:focus-within){border-color:#165dff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
+.config-list nav :deep(.arco-select-view-suffix svg){width:14px;height:14px;font-size:14px;color:#4e5969}
 .config-list nav :deep(.arco-select-view-input){height:100%!important;min-height:0!important;padding:0!important;border:0!important;background:transparent!important;box-shadow:none!important}
 .config-list nav :deep(.arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;pointer-events:none!important}
-.config-list nav :deep(.arco-select-view-value){min-width:0;line-height:30px}
+.config-list nav :deep(.arco-select-view-value){min-width:0;overflow:hidden;font-size:14px;line-height:22px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
 /* 窄侧栏（≤1024px）：图标已移除，改为只显示分类名（计数隐藏，超长省略） */
 @media(max-width:1024px){.config-workbench{grid-template-columns:84px minmax(0,1fr)}.category-nav>header span,.category-nav>button em{display:none}.category-nav>button{grid-template-columns:minmax(0,1fr);height:40px;min-height:40px;justify-content:center;padding:0 8px}.category-nav>button strong{text-align:center}}
 .dialog-form :deep(.arco-form-item){margin-bottom:0}.dialog-form :deep(.arco-form-item-layout-vertical>.arco-form-item-label-col){margin-bottom:8px}

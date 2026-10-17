@@ -36,11 +36,11 @@ async function setup() {
 }
 
 describe('实体搜索结果', () => {
-  it('类型筛选默认显示全部，并通过原生 title 展示选项全称', async () => {
+  it('类型筛选默认显示类型，并通过原生 title 展示选项全称', async () => {
     const name = '非常长的实体类型名称用于完整显示测试'
     vi.mocked(getEntitySearchTypes).mockResolvedValue([{ name, count: 123 }])
     const wrapper = await setup()
-    expect(wrapper.get('select').attributes('placeholder')).toBe('全部')
+    expect(wrapper.get('select').attributes('placeholder')).toBe('类型')
     expect(wrapper.get('select').attributes('aria-label')).toBe('实体类型')
     const option = wrapper.get('.entity-type-option')
     expect(option.text()).toBe(name)

@@ -1460,7 +1460,9 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
                 </div>
                 <div v-for="p in propertyTarget?.properties || []" :key="p.name" class="property-table__row" :class="{ 'property-table__row--locked': p.locked }">
                   <span class="property-table__name">
-                    <code>{{ p.name }}</code>
+                    <a-tooltip :trigger="['hover', 'focus']" :content="p.name" position="top" :content-style="{ maxWidth: '480px', overflowWrap: 'anywhere' }">
+                      <code tabindex="0">{{ schemaNameCell(p.name) }}</code>
+                    </a-tooltip>
                     <svg v-if="p.locked" class="property-table__lock" viewBox="0 0 24 24" aria-label="锁定" role="img" title="公共必选属性，不可删除">
                       <path d="M7 10V7a5 5 0 0 1 10 0v3M6 10h12a2 2 0 0 1 2 2v8H4v-8a2 2 0 0 1 2-2Zm6 4v3" />
                     </svg>
@@ -1801,7 +1803,7 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 .property-table__row--head{background:#f7f8fa;font-size:12px;color:#86909c}
 .property-table__row--locked{background:#fff}
 .property-table__name{display:flex;align-items:center;gap:6px;min-width:0}
-.property-table__name code{overflow:hidden;padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+.property-table__name code{min-width:0;max-width:100%;overflow:hidden;padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:12px;text-overflow:ellipsis;white-space:nowrap}
 .property-table__lock{flex:0 0 auto;width:16px;height:16px;fill:none;stroke:#4e5969;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 .property-table__type{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;color:#86909c}
 .property-table__category{color:#86909c;white-space:nowrap}

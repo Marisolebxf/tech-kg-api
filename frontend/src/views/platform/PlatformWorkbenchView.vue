@@ -2627,7 +2627,7 @@ print(response.json())</pre>
 .platform-jobs-list a { display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:10px;min-height:44px;padding:9px 14px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
 .platform-jobs-list a:nth-child(5):last-child { border-bottom:0; }
 .platform-jobs-list a:hover,.asset-change-table tbody tr:hover { background:#f4f8ff; }
-.platform-jobs-list strong { overflow:hidden;color:#253752;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap; }
+.platform-jobs-list strong { overflow:hidden;color:#1d2129;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap; }
 .platform-jobs-list a>span { display:inline-flex;align-items:center;gap:6px;padding:0;border-radius:0;background:transparent;color:#004ecc;font-size:14px;line-height:22px;white-space:nowrap; }
 .platform-jobs-list a>span::before { flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor;content:""; }
 .platform-jobs-list a>span.ok { color:var(--status-success);background:transparent; }.platform-jobs-list a>span.err { color:var(--status-danger);background:transparent; }.platform-jobs-list a>span.warn { color:var(--status-warning);background:transparent; }

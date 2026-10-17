@@ -162,6 +162,8 @@ function showDetails(row: Record<string, unknown>, index: number): void {
 /* 高度限制放在 CSS 中：向 Arco 的 scroll 传 maxHeight 会拆分表头/表体，
    产生额外表头滚动条和右侧占位。单一容器保留 sticky 表头和操作列。 */
 .query-result-table :deep(.arco-table-content){max-height:var(--query-table-max-height);overflow:auto;scrollbar-gutter:auto}
+/* 透明滚动条轨道下的表头区域也使用表头底色，避免最右侧出现白条。 */
+.query-result-table :deep(.arco-table-content){background-image:linear-gradient(#f7f8fa,#f7f8fa);background-origin:border-box;background-position:top;background-size:100% 40px;background-repeat:no-repeat}
 .query-result-table :deep(thead .arco-table-th){position:sticky;top:0;z-index:11}
 .query-result-table :deep(thead .arco-table-col-fixed-right){z-index:12}
 .query-details-button{height:auto;padding:0;border:0;background:transparent;color:#165dff;font-size:14px;line-height:22px;font-weight:400;white-space:nowrap;cursor:pointer}

@@ -1144,7 +1144,8 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
         <div class="schema-tabs__items">
           <button v-for="tab in tabs" :key="tab" type="button" :class="{ active: activeTab === tab }" @click="switchTab(tab)">{{ tab }}</button>
         </div>
-        <!-- ＋增加 紧跟类型页签放左侧；搜索/查询收右侧（设计规范：主操作左、筛选右） -->
+      </nav>
+      <div class="schema-list-toolbar">
         <button class="primary schema-tabs__create" type="button" :disabled="!canWrite" @click="openCreate">＋ 增加</button>
         <form class="schema-toolbar__actions" role="search" @submit.prevent="submitKeyword">
           <span class="limit-field">
@@ -1153,7 +1154,7 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
           </span>
           <button class="primary" type="submit" :disabled="listLoading">查询</button>
         </form>
-      </nav>
+      </div>
       <AppAlert v-if="publicSpaceReadOnly" type="warning" class="space-readonly-bar">当前图空间为共享生产空间：Schema 管理仅可查看，操作需管理员执行。</AppAlert>
       <div class="schema-shell schema-table-shell">
 
@@ -1590,8 +1591,8 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 
 .schema-toolbar__actions{display:flex;min-width:0;flex-wrap:wrap;align-items:center;gap:10px}
 .schema-toolbar__actions>.primary{flex-shrink:0;white-space:nowrap}
-.schema-tabs>.schema-toolbar__actions{min-width:0;width:auto;justify-content:flex-end;margin-left:auto}
-.schema-tabs__create{flex:0 0 auto;white-space:nowrap}
+.schema-list-toolbar>.schema-toolbar__actions{min-width:0;width:auto;justify-content:flex-end;margin-left:auto}
+.schema-tabs__create{flex:0 0 auto;width:auto;align-self:center;white-space:nowrap}
 .prop-len--invalid,.property-add-form__len--invalid{border-color:#e5484d!important;background:#fff3f3!important}
 /* 长度达上限：与校验失败同款红边高亮（可见文案见 .limit-field-note / .limit-field__hint） */
 .is-at-limit{border-color:#e5484d!important;background:#fff3f3!important}
@@ -1809,7 +1810,7 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
     flex-wrap: wrap;
   }
 
-  .schema-tabs > .schema-toolbar__actions {
+  .schema-list-toolbar > .schema-toolbar__actions {
     width: 100%;
     margin-left: 0;
   }
@@ -1826,7 +1827,7 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 .schema-toolbar{min-height:48px;gap:16px;padding:8px 16px;background:#fff}.schema-toolbar>div,.schema-toolbar__actions{gap:16px}
 .schema-toolbar strong{font-size:16px;line-height:24px;font-weight:600}.schema-toolbar>div span{font-size:12px;line-height:20px}
 .schema-toolbar label{gap:8px;width:280px;height:32px;padding:0 12px;border-color:#e5e6eb;border-radius:4px}.schema-toolbar input{height:30px;padding:0!important;font-size:14px;line-height:22px}
-.schema-toolbar .primary,.schema-tabs .primary{height:32px;padding:0 16px;border:0;border-radius:4px;background:#165dff;color:#fff;font-size:14px;line-height:22px;white-space:nowrap;cursor:pointer}.schema-tabs .primary:hover{background:#4080ff}.schema-tabs .primary:active{background:#0e42d2}
+.schema-toolbar .primary,.schema-list-toolbar .primary{height:32px;padding:0 16px;border:0;border-radius:4px;background:#165dff;color:#fff;font-size:14px;line-height:22px;white-space:nowrap;cursor:pointer}.schema-list-toolbar .primary:hover{background:#4080ff}.schema-list-toolbar .primary:active{background:#0e42d2}
 .schema-table-wrap table,.trace-layout table{font-size:14px;line-height:22px}.schema-table-wrap th,.schema-table-wrap td,.trace-layout td{height:40px;padding:0 16px;line-height:22px;vertical-align:middle}
 .schema-table-wrap th{background:#f7f8fa;color:#1d2129;font-weight:500}.schema-action-link{font-size:14px;line-height:22px}
 .core,.support,.evidence,.auto,.review{gap:6px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}
@@ -1900,8 +1901,9 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 .schema-create-panel .create-ddl__label{color:#4e5969;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}.schema-create-panel .create-ddl__confirm{font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
 .schema-create-panel .create-ddl__pre{font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
 .schema-create-panel footer button{font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
-@media(max-width:900px){.schema-tabs{align-items:stretch;flex-direction:column}.schema-tabs__items{min-height:36px}.schema-tabs__create{align-self:flex-start}.schema-tabs>.schema-toolbar__actions{width:100%;margin-left:0;justify-content:flex-end}.create-row{grid-template-columns:1fr}.create-field--full{grid-column:auto}}
+@media(max-width:900px){.schema-tabs{align-items:stretch;flex-direction:column}.schema-tabs__items{min-height:36px}.schema-tabs__create{align-self:center}.schema-list-toolbar>.schema-toolbar__actions{width:100%;margin-left:0;justify-content:flex-end}.create-row{grid-template-columns:1fr}.create-field--full{grid-column:auto}}
 .schema-create-body>.create-field,.create-row>.create-field{margin-bottom:0;gap:0}.schema-create-body>.create-props{margin-bottom:0}.create-ddl{margin-top:0;gap:8px}.create-ddl__confirm{margin:0}
+.schema-list-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex:0 0 auto;flex-wrap:wrap}
 /* Schema 拓扑总览 */
 .schema-topology-shell{margin-bottom:16px;padding-bottom:0}
 .schema-topology-shell--collapsed{flex:0 0 auto}
@@ -1941,7 +1943,7 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 .schema-page,.schema-modal{font-size:14px;line-height:22px;font-weight:400}
 .schema-page :is(button,input,textarea,select),.schema-modal :is(button,input,textarea,select){font-family:inherit;letter-spacing:0}
 .schema-toolbar strong,.trace-card h2,.trace-layout h2,.property-section__head strong,.schema-modal__panel header h2{font-size:16px;line-height:24px;font-weight:600}
-.schema-tabs button,.schema-toolbar .primary,.schema-tabs .primary,.schema-action-link{font-size:14px;line-height:22px;font-weight:400}
+.schema-tabs button,.schema-toolbar .primary,.schema-list-toolbar .primary,.schema-action-link{font-size:14px;line-height:22px;font-weight:400}
 .schema-tabs button.active{font-weight:500}
 .schema-search-input :deep(.arco-input),.schema-llm-select :deep(.arco-select-view-input),.schema-llm-select :deep(.arco-select-view-value){font-size:14px!important;line-height:22px!important;font-weight:400;letter-spacing:0}
 .schema-table-wrap table,.trace-layout table,.schema-table-wrap td,.trace-layout td{font-size:14px;line-height:22px;font-weight:400}
@@ -1961,8 +1963,8 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 /* Schema 类型切换沿用科技专家同事关系页的摘要/实体分段按钮，并置于表格边框之外。 */
 .schema-catalog{display:flex;flex-direction:column;gap:12px}
 .schema-tabs{min-height:40px;padding:0;border-bottom:0;background:transparent;overflow:visible;flex-direction:column;align-items:stretch}
-.schema-tabs>.schema-toolbar__actions{align-self:flex-end;margin-left:0;flex-wrap:nowrap;gap:16px}
-.schema-tabs>.schema-toolbar__actions .limit-field{flex:0 1 280px;width:280px}
+.schema-list-toolbar>.schema-toolbar__actions{align-self:flex-end;margin-left:0;flex-wrap:nowrap;gap:16px}
+.schema-list-toolbar>.schema-toolbar__actions .limit-field{flex:0 1 280px;width:280px}
 .schema-tabs__items{box-sizing:border-box;height:40px;padding:4px;border-radius:4px;background:#f2f3f5;align-self:flex-start;overflow:visible}
 .schema-tabs__items button{display:inline-flex;box-sizing:border-box;align-items:center;justify-content:center;width:88px;height:32px;padding:5px 16px;border:0;border-radius:4px;background:transparent;color:#4e5969;text-align:center}
 .schema-tabs__items button+button{border-left:1px solid #c9cdd4}

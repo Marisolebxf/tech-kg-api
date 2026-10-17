@@ -504,6 +504,7 @@ const runPrimary = () => {
     </header>
 
     <main class="rw-body">
+      <div class="rw-body__content">
       <a-form ref="manualReviewFormRef" :model="manualReviewFormModel" :rules="manualReviewFormRules" class="manual-review-form" layout="vertical">
       <!-- T_EXTRACT_FAIL：抽取失败记录重跑 -->
       <section v-if="templateId === 'T_EXTRACT_FAIL'" class="zone zone-direct">
@@ -759,7 +760,8 @@ const runPrimary = () => {
       </a-form>
       <AppAlert v-if="feedback" :type="feedback.type" class="rw-feedback">{{ feedback.text }}</AppAlert>
 
-      <!-- 确认操作放在详情框内右下角（吸底悬浮：长表单滚动时确认按钮始终可见）；查看档只读 case 仅展示权限提示。 -->
+      </div>
+      <!-- 确认底栏与详情容器相接，表单内容独立滚动。 -->
       <footer class="rw-foot">
         <AppAlert v-if="isReadOnlyCase" type="warning" class="rw-readonly-hint">
           当前图空间仅可查看，无法提交审核操作。
@@ -1341,11 +1343,8 @@ const runPrimary = () => {
   margin: 14px 0 0;
 }
 
-/* 确认按钮吸底悬浮：case 表单很长，滚动途中确认/拒绝操作始终可见（白底浮条，不遮内容） */
+/* 与列表分页一致的整宽底栏。 */
 .rw-foot {
-  position: sticky;
-  bottom: 0;
-  z-index: 3;
   display: flex;
   flex: 0 0 auto;
   align-items: center;
@@ -1353,10 +1352,8 @@ const runPrimary = () => {
   gap: 12px;
   margin-top: 16px;
   padding: 12px 16px;
-  border: 1px solid #e5e6eb;
-  border-radius: 6px;
+  border-top: 1px solid #e5e6eb;
   background: #fff;
-  box-shadow: 0 -4px 16px rgba(29, 33, 41, 0.06);
 }
 
 .rw-foot > span {
@@ -1531,13 +1528,14 @@ const runPrimary = () => {
 .rw{overflow:hidden;height:100%;min-height:0;color:#1d2129}.rw-head{align-items:center;gap:16px;margin-bottom:16px}.rw-head h1{margin:4px 0;font-size:20px;line-height:28px;font-weight:600}.rw-head p,.rw-head a{font-size:12px;line-height:20px}
 .scope,.status{display:inline-flex;align-items:center;gap:6px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.scope::before,.status::before{display:block;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}.scope.is-batch,.scope.is-task,.status.is-待处理,.status.is-已完成,.status.is-已撤销,.status.is-已驳回{background:transparent}
 .rw-diag{gap:8px 16px;margin-bottom:16px;padding:16px;border-color:#e5e6eb;border-radius:6px;background:#f7f8fa}.rw-diag strong{font-size:14px;line-height:22px}.rw-diag span,.rw-diag em{font-size:12px;line-height:20px}
-.rw-body{display:flex;box-sizing:border-box;flex:1 1 0;min-height:0;overflow:auto;padding:16px;border-color:#e5e6eb;border-radius:6px;flex-direction:column}
+.rw-body{display:flex;box-sizing:border-box;flex:1 1 0;min-height:0;overflow:hidden;padding:0;border-color:#e5e6eb;border-radius:6px;flex-direction:column}
+.rw-body__content{flex:1;min-height:0;overflow:auto;padding:16px;scrollbar-gutter:stable}
 .rw-zone-head{gap:8px;margin-bottom:16px}.rw-zone-head h2,.rw-sec__head h2{font-size:16px;line-height:24px;font-weight:600}.rw-zone-head p,.rw-sec__head p{font-size:12px;line-height:20px}
 .rw-sec{margin-bottom:16px;padding:16px;border:0;border-radius:6px;background:#f7f8fa}.rw-sec__head{gap:8px;margin-bottom:16px}
 .cat-pill{padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.tri-grid{gap:16px}.tri-grid>div{gap:4px;padding:8px 16px;border-color:#e5e6eb;border-radius:4px}.tri-grid span,.tri-grid em{font-size:12px;line-height:20px}.tri-grid strong{font-size:14px;line-height:22px}
 .rw :is(button,input,select,textarea){font-size:14px;line-height:22px}.rw :is(button,input,select){min-height:32px;border-radius:4px}.rw textarea{border-radius:4px}
 /* 最终确认按钮保持详情框右下角的常规按钮尺寸。 */
-.rw-foot{margin-top:auto;padding-top:16px}.rw-foot__actions{flex:none}.rw-foot button{width:auto;min-width:88px;height:32px;padding:0 20px;font-size:14px;font-weight:500}
+.rw-foot{margin-top:0;padding:12px 16px}.rw-foot__actions{flex:none}.rw-foot button{width:auto;min-width:88px;height:32px;padding:0 20px;font-size:14px;font-weight:500}
 .direct-actions{gap:16px}.direct-accept,.direct-reject{min-height:32px;padding:8px 16px;border-radius:4px;font-size:14px}.direct-accept strong,.direct-reject strong{font-size:14px;line-height:22px}.direct-accept em,.direct-reject em{font-size:12px;line-height:20px}
 @media(max-width:960px){.tri-grid{grid-template-columns:1fr}}
 .direct-edit-toggle:disabled{color:#a9aeb8;background:#f2f3f5;cursor:not-allowed}

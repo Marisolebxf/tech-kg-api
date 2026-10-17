@@ -732,18 +732,15 @@ onMounted(() => {
       </nav>
       <div class="review-toolbar-actions">
         <form class="ops-filter is-review review-filter-row" role="search" @submit.prevent="submitReviewSearch">
-          <div class="review-filter-field">
-            <span class="review-filter-label">状态</span>
-            <a-select v-model="reviewStatusFilter" class="review-filter-select" :options="reviewStatusOptions" />
-          </div>
-          <div class="review-filter-field">
-            <span class="review-filter-label">类型</span>
-            <a-select v-model="reviewKindFilter" class="review-filter-select" :options="['全部', '实体', '关系']" />
-          </div>
-          <div class="review-filter-field">
-            <span class="review-filter-label">时间</span>
-            <a-select v-model="reviewTimeFilter" class="review-filter-select" :options="reviewTimeOptions" />
-          </div>
+          <a-select v-model="reviewStatusFilter" class="review-filter-select" aria-label="状态" :options="reviewStatusOptions">
+            <template #prefix>状态</template>
+          </a-select>
+          <a-select v-model="reviewKindFilter" class="review-filter-select" aria-label="类型" :options="['全部', '实体', '关系']">
+            <template #prefix>类型</template>
+          </a-select>
+          <a-select v-model="reviewTimeFilter" class="review-filter-select" aria-label="时间" :options="reviewTimeOptions">
+            <template #prefix>时间</template>
+          </a-select>
           <a-input v-model="keyword" class="review-search-input review-filter-search" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索处理实例 ID、对象或来源记录" placeholder="搜索处理实例 ID、对象或来源记录" allow-clear @clear="clearReviewSearch" />
           <button class="review-search-button" type="submit">查询</button>
         </form>
@@ -1148,8 +1145,7 @@ onMounted(() => {
 .ops-review-table-scroll:hover::-webkit-scrollbar-thumb,.ops-review-table-scroll.review-scroll--active::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
 .ops-review-table-scroll::-webkit-scrollbar-thumb:hover{background-color:rgba(78,89,105,.8)}
 /* 筛选字段标签 / 类型徽标 / 勾选禁用态 / 删除按钮 */
-.review-filter-field{display:flex;flex:0 0 auto;align-items:center;gap:8px}
-.review-filter-label{color:#4e5969;font-size:14px;line-height:22px;white-space:nowrap}
+.review-filter-row :deep(.arco-select-view-prefix){margin-right:8px;color:#86909c;font-size:14px;line-height:22px;white-space:nowrap}
 /* 处理实例 ID 纯文本：中性色，区别于可点击的链接蓝 */
 .review-id-cell .review-id-plain{color:#4e5969}
 .review-kind-badge{display:inline-flex;white-space:nowrap;padding:0 8px;border-radius:4px;background:#f2f3f5;color:#4e5969;font-size:12px;line-height:20px}

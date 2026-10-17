@@ -248,7 +248,7 @@ describe('Schema 管理输入框达上限提示', () => {
   it('新建弹窗实体名/中文名达 128 字上限：输入框红边高亮 + 下方提示行', async () => {
     const view = mountView()
     await flushPromises()
-    await view.get('.schema-tabs .primary').trigger('click')
+    await view.get('.schema-tabs__create').trigger('click')
 
     const [nameInput, labelInput] = view.findAll('input.create-text-input')
     await nameInput.setValue('A'.repeat(128))
@@ -270,7 +270,7 @@ describe('Schema 管理输入框达上限提示', () => {
     const relationTab = view.findAll('.schema-tabs__items button').find((button) => button.text() === '关系')
     expect(relationTab).toBeTruthy()
     await relationTab!.trigger('click')
-    await view.get('.schema-tabs .primary').trigger('click')
+    await view.get('.schema-tabs__create').trigger('click')
 
     const nameInput = view.findAll('input.create-text-input')[0]
     expect(nameInput.attributes('maxlength')).toBe('64')
@@ -286,7 +286,7 @@ describe('Schema 管理输入框达上限提示', () => {
     // 实体页维持 128
     const entityTab = view.findAll('.schema-tabs__items button').find((button) => button.text() === '标准实体')
     await entityTab!.trigger('click')
-    await view.get('.schema-tabs .primary').trigger('click')
+    await view.get('.schema-tabs__create').trigger('click')
     const entityNameInput = view.findAll('input.create-text-input')[0]
     expect(entityNameInput.attributes('maxlength')).toBe('128')
   })
@@ -294,7 +294,7 @@ describe('Schema 管理输入框达上限提示', () => {
   it('属性列表行达 128 字上限：该行输入框红边 + 列表下方汇总提示（含行号）', async () => {
     const view = mountView()
     await flushPromises()
-    await view.get('.schema-tabs .primary').trigger('click')
+    await view.get('.schema-tabs__create').trigger('click')
 
     await view.get('.create-props__add').trigger('click')
     const propInputs = view.findAll('input.prop-name')
@@ -325,7 +325,7 @@ describe('Schema 管理输入框达上限提示', () => {
   it('新建弹窗属性行 fixed_string 长度实时提示随输入变化', async () => {
     const view = mountView()
     await flushPromises()
-    await view.get('.schema-tabs .primary').trigger('click')
+    await view.get('.schema-tabs__create').trigger('click')
     await view.get('.create-props__add').trigger('click')
 
     // 新增行（唯一可编辑行）类型切到 fixed_string，出现长度输入框与实时提示（默认 64）
@@ -506,7 +506,7 @@ describe('Schema 新增弹窗必填提示文案', () => {
 
     const relationTab = view.findAll('.schema-tabs__items button').find((button) => button.text() === '关系')
     await relationTab!.trigger('click')
-    await view.get('.schema-tabs .primary').trigger('click')
+    await view.get('.schema-tabs__create').trigger('click')
 
     await view.get('.schema-create-modal footer .primary').trigger('click')
     await flushPromises()
@@ -522,7 +522,7 @@ describe('Schema 新增弹窗必填提示文案', () => {
     const view = mountViewWithRealForm()
     await flushPromises()
 
-    await view.get('.schema-tabs .primary').trigger('click')
+    await view.get('.schema-tabs__create').trigger('click')
     await view.get('.schema-create-modal footer .primary').trigger('click')
     await flushPromises()
 
@@ -538,7 +538,7 @@ describe('Create Schema incremental rows', () => {
     const view = mountView()
     await flushPromises()
     if (tab === '关系') await view.findAll('.schema-tabs__items button').find((button) => button.text() === tab)!.trigger('click')
-    await view.get('.schema-tabs .primary').trigger('click')
+    await view.get('.schema-tabs__create').trigger('click')
     const lockedCount = tab === '标准实体' ? 5 : 3
     expect(view.find('.create-props__head .create-props__add').exists()).toBe(false)
     const add = view.get('.create-props__add')
@@ -562,7 +562,7 @@ describe('Create Schema incremental rows', () => {
   it('blocks incomplete source bindings, allows complete rows and clears errors when reopened', async () => {
     const view = mountView()
     await flushPromises()
-    await view.get('.schema-tabs .primary').trigger('click')
+    await view.get('.schema-tabs__create').trigger('click')
     expect(view.find('.create-sources__head .create-sources__add').exists()).toBe(false)
     const add = view.get('.create-sources__add')
     await add.trigger('click')
@@ -582,7 +582,7 @@ describe('Create Schema incremental rows', () => {
     await add.trigger('click')
     expect(view.find('.create-sources [role="alert"]').exists()).toBe(true)
     await view.get('.schema-create-panel header button').trigger('click')
-    await view.get('.schema-tabs .primary').trigger('click')
+    await view.get('.schema-tabs__create').trigger('click')
     expect(view.findAll('.create-add-error')).toHaveLength(0)
     expect(view.getComponent(SourceBindings).props('modelValue')).toHaveLength(0)
   })

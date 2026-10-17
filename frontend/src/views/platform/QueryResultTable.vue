@@ -167,14 +167,14 @@ function showDetails(row: Record<string, unknown>, index: number): void {
 .query-result-table{min-width:0;overflow:hidden}
 /* A single viewport contains the header and rows, so the vertical scrollbar
    starts at the field-name row. Sticky cells preserve the header on scroll. */
-/* scrollbar-gutter:stable —— 结果出滚动条时不再压住/推移最后一列内容（同图谱构建任务表的口径） */
-.query-result-table :deep(.arco-table-content){overflow:auto;scrollbar-gutter:stable}
+/* 原生滚动条只在内容溢出时占位，避免固定操作列右侧始终留出空白竖槽。 */
+.query-result-table :deep(.arco-table-content){overflow:auto;scrollbar-gutter:auto}
 .query-result-table :deep(thead .arco-table-th){position:sticky;top:0;z-index:11}
 .query-result-table :deep(thead .arco-table-col-fixed-right){z-index:12}
 .query-details-button{height:auto;padding:0;border:0;background:transparent;color:#165dff;font-size:14px;line-height:22px;font-weight:400;white-space:nowrap;cursor:pointer}
 .query-details-button:hover,.query-details-button:active{background:transparent;color:#4080ff}
 /* Horizontal overflow is indicated by the fixed action column only. */
-.query-result-table :deep(.arco-table-container::before){display:none;box-shadow:none}
+.query-result-table :deep(.arco-table-container::before),.query-result-table :deep(.arco-table-container::after){display:none;box-shadow:none}
 /* The fixed action column only signals data still hidden to its left. */
 .query-result-table:not(.query-result-table--hidden-columns) :deep(.arco-table-col-fixed-right-first::after){box-shadow:none}
 .query-result-table :deep(.arco-table-content),.query-record-details{scrollbar-width:thin;scrollbar-color:transparent transparent}

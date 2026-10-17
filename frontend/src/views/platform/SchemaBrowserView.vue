@@ -1788,8 +1788,8 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 .script-badge--failed{color:var(--status-danger)}
 .script-badge--rerun{color:var(--status-neutral)}
 
-/* 属性管理恢复历史实际宽度；保留共享弹窗的视口上限和 Body 内滚动。 */
-.schema-modal__panel.property-panel{width:min(560px,100%)}
+/* 属性管理适当加宽，保留共享弹窗的视口上限和 Body 内滚动。 */
+.schema-modal__panel.property-panel{width:min(640px,100%)}
 .property-body{gap:18px}
 .property-section{display:flex;flex-direction:column;gap:8px}
 .property-section__head{display:flex;align-items:baseline;justify-content:space-between}
@@ -1895,11 +1895,8 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 .create-sources__head{display:grid;align-items:center;grid-template-columns:minmax(0,1fr) auto;column-gap:8px;row-gap:8px;font-size:12px;color:#4e5969}
 .create-sources__head>span:first-child,.create-ddl__label{color:#4e5969;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
 .create-sources__hint{grid-column:1/-1;color:#86909c;font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
-/* 来源表弹窗加宽：绑定行五列有 720px 像素下限，760px 宽时整块横向拖动；
-   880px 刚好完整展示行内选项且无多余留白，内容区加高到 72vh 多看几行绑定。
-   双类名提高优先级：压过后方可读性规范化块的 .schema-modal__panel{min(560px)} 统一宽度。
-   footer 纵向居中由规范化块的通用 .schema-modal__panel footer{align-items:center} 提供 */
-.schema-modal__panel.sources-panel{width:min(1280px,100%)}
+/* 来源表由 1280px 微调为 1200px，仍为绑定行保留完整编辑空间。 */
+.schema-modal__panel.sources-panel{width:min(1200px,100%)}
 .sources-panel .schema-modal__body{min-height:0}
 .sources-note{margin:0;font-size:12px;line-height:20px;color:#86909c}
 .schema-create-body>.create-field,.schema-create-body>.create-props,.create-row>.create-field{margin-bottom:0;gap:0}.schema-create-body>.create-props{gap:0}.create-ddl{margin-top:0;gap:8px}.create-ddl__confirm{margin:0}

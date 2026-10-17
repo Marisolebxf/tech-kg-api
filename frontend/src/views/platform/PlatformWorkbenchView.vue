@@ -5037,7 +5037,8 @@ print(response.json())</pre>
 .platform-query .kg-button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
 
 /* 综合图谱展示 / 查询结果：复用科技专家同事关系页的预览与详情布局。 */
-.platform-query{grid-row:1/-1;box-sizing:border-box;height:100%;min-height:0;align-self:stretch;overflow:auto;scrollbar-gutter:stable;padding-right:16px}
+/* 与实体列表一致，结果区不再叠加右内距；滚动条按实际溢出出现并贴右边缘。 */
+.platform-query{grid-row:1/-1;box-sizing:border-box;height:100%;min-height:0;align-self:stretch;overflow:auto;scrollbar-gutter:auto;padding-right:0}
 
 .platform-query .platform-status{display:inline-flex;align-items:center;gap:6px;min-height:22px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.platform-query .platform-status::before{display:block;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
 .platform-query .platform-table th,.platform-query .platform-table td{height:40px;padding:0 16px;font-size:14px;line-height:22px}.platform-query .platform-table th{background:#f7f8fa;font-weight:500}

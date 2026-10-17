@@ -15,6 +15,7 @@ import { useGraphSpaceStore } from '../../stores/graphSpace'
 import { clampSearchKeyword, SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
 import ListPagination from '../../components/list-pagination.vue'
 import { PAGE_SIZE_OPTIONS } from '../../composables/use-client-pagination'
+import { useToast } from '../../composables/use-toast'
 import {
   extractCaseStatusBadge,
   type ReviewRecord,
@@ -23,6 +24,7 @@ import {
 type CenterMode = 'review'
 
 const props = defineProps<{ mode: CenterMode }>()
+const { showToast } = useToast()
 const route = useRoute()
 const graphSpaceStore = useGraphSpaceStore()
 
@@ -554,7 +556,7 @@ async function confirmDelete() {
     await deleteProductionReview(target.id)
     deleteVisible.value = false
     rerunSelection.value.delete(target.id)
-    showRerunFeedback('success', `已删除失败记录 ${target.id}`, [])
+    showToast(`已删除失败记录 ${target.id}`, 'success')
     clearReviewPageCache()
     void loadReviews()
   } catch (error) {
@@ -585,7 +587,7 @@ function askBatchDelete() {
   batchDeleteVisible.value = true
 }
 
-/** 确认批量删除：已处理的/不存在的按条跳过不中断整批，结果经反馈条展示（有跳过转警告态）。 */
+/** 删除成功与图谱构建共用顶部提示；有跳过时额外保留页内明细，便于核对。 */
 async function confirmBatchDelete() {
   if (!canReview.value) return
   const ids = [...rerunSelection.value]
@@ -596,11 +598,9 @@ async function confirmBatchDelete() {
     const result = await batchDeleteProductionReviews({ caseIds: ids })
     const skipped = result.skipped ?? []
     const skippedText = skipped.length ? `；跳过 ${skipped.length} 条（${summarizeBatchSkipReasons(skipped)}）` : ''
-    showRerunFeedback(
-      skipped.length ? 'warning' : 'success',
-      `已删除失败记录 ${result.deleted} 条${skippedText}`,
-      [],
-    )
+    const message = `已删除失败记录 ${result.deleted} 条${skippedText}`
+    showToast(message, skipped.length ? 'warning' : 'success')
+    if (skipped.length) showRerunFeedback('warning', message, [])
     batchDeleteVisible.value = false
     rerunSelection.value = new Set()
     clearReviewPageCache()

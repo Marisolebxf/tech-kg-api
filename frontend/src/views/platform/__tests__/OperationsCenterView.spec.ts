@@ -12,12 +12,14 @@ const mocks = vi.hoisted(() => ({
   getProductionReview: vi.fn(),
   deleteProductionReview: vi.fn(),
   batchDeleteProductionReviews: vi.fn(),
+  showToast: vi.fn(),
   getExecution: vi.fn(),
   getTask: vi.fn(),
   TRIGGER_SOURCE_LABEL: { MANUAL: '手动触发', SCHEDULE: '定期触发', RERUN: '重新执行' },
   executionStatusLabel: (status?: string | null) => status || '—',
 }))
 vi.mock('../../../api/workflowOperations', () => ({ ...mocks }))
+vi.mock('../../../composables/use-toast', () => ({ useToast: () => ({ showToast: mocks.showToast }) }))
 // 路由 query 可按用例覆写（?category=C 深链直达抽取失败重跑子页）
 const routeState = vi.hoisted(() => ({ query: {} as Record<string, string> }))
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: routeState.query }), useRouter: () => ({ replace: vi.fn() }) }))
@@ -97,6 +99,7 @@ beforeEach(() => {
   mocks.rerunExtractFailures.mockReset().mockResolvedValue({ executions: [], cases: 2 })
   mocks.getProductionReview.mockReset()
   mocks.deleteProductionReview.mockReset()
+  mocks.showToast.mockReset()
   mocks.batchDeleteProductionReviews.mockReset().mockResolvedValue({ requested: 0, deleted: 0, skipped: [] })
   mocks.getExecution.mockReset()
   mocks.getTask.mockReset()
@@ -506,9 +509,8 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     await flushPromises()
 
     expect(mocks.batchDeleteProductionReviews).toHaveBeenCalledWith({ caseIds: ['MR-1', 'MR-2'] })
-    const bar = wrapper.get('.rerun-feedback')
-    expect(bar.classes()).toContain('app-alert--success')
-    expect(bar.text()).toContain('已删除失败记录 2 条')
+    expect(mocks.showToast).toHaveBeenCalledWith('已删除失败记录 2 条', 'success')
+    expect(wrapper.find('.rerun-feedback').exists()).toBe(false)
     // 删除完成：清空勾选并刷新列表
     expect(rowCheckboxes(wrapper).every((input) => !(input.element as HTMLInputElement).checked)).toBe(true)
     expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ category: 'C' }))
@@ -537,6 +539,7 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     expect(bar.text()).toContain('已删除失败记录 1 条')
     expect(bar.text()).toContain('跳过 1 条')
     expect(bar.text()).toContain('已处理的记录不可删除×1')
+    expect(mocks.showToast).toHaveBeenCalledWith('已删除失败记录 1 条；跳过 1 条（已处理的记录不可删除×1）', 'warning')
   })
 
   it('批量删除失败时保留确认框与勾选，展示错误并允许重试', async () => {

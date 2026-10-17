@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
+
+from temporalio.client import WorkflowExecutionStatus
 
 from service.stage_normalizer import normalize_stages, pipeline_steps
 from service.temporal_runtime import temporal_runtime
 from service.workflow_repository import WorkflowRepository, repository
+
+# 已结束 workflow 的 Temporal query 无人应答，会挂满 SDK 默认 30s RPC 超时——
+# 前端 axios 20s 中止后任务详情整页空白（2026-10-18）。query_step_state 的
+# describe/query 一律收紧到 2s：超时回退落库 steps，最坏路径仍稳在 20s 内。
+STEP_STATE_RPC_TIMEOUT = timedelta(seconds=2)
 
 
 def _now() -> str:
@@ -231,9 +238,11 @@ class WorkflowOperationsService:
     async def query_step_state(self, task: dict[str, Any]) -> dict[str, Any] | None:
         """抽取任务查 Temporal 实时状态填 pipeline（chain 用 get_steps，单 Schema 用 get_progress）。
 
-        已结束且被历史淘汰的 workflow 查询会抛错——吞掉返回 None，调用方回退
-        落库 output.steps（stage_normalizer.pipeline_steps 渲染嵌套抽屉）。
-        单 Schema 抽取只取 paused（前端「暂停中 → 已暂停」确认用）。
+        只对台账「执行中」且 Temporal 侧仍在 RUNNING 的 workflow 发 query：
+        已结束（含被历史淘汰）的查询无人应答，曾挂满 SDK 默认 30s RPC 超时，
+        前端 20s 中止导致任务详情整页空白。查询失败（超时/已淘汰）吞掉返回
+        None，调用方回退落库 output.steps（stage_normalizer.pipeline_steps
+        渲染嵌套抽屉）。单 Schema 抽取只取 paused（前端「暂停中 → 已暂停」确认用）。
         """
         workflow_type = task.get("workflowType")
         if workflow_type not in {"kg.schema.extract.chain", "kg.schema.extract"}:
@@ -241,11 +250,20 @@ class WorkflowOperationsService:
         workflow_id = task.get("workflowId")
         if not workflow_id:
             return None
+        # 终态任务（执行完成/执行出错/执行异常）实时查询无意义：chain 终态 steps
+        # 已随执行落库、单 Schema 只查 paused——直接走落库回退，省一次 RPC
+        if task.get("taskStatus") != "执行中":
+            return None
         query = "get_steps" if workflow_type == "kg.schema.extract.chain" else "get_progress"
         try:
             client = await temporal_runtime.client()
             handle = client.get_workflow_handle(workflow_id)
-            state = await handle.query(query)
+            # describe 由 Temporal 服务端直答（不经 worker）：台账卡「执行中」但
+            # workflow 实际已终态（历史超限 TERMINATED/孤儿）的同样短路走回退
+            described = await handle.describe(rpc_timeout=STEP_STATE_RPC_TIMEOUT)
+            if described.status != WorkflowExecutionStatus.RUNNING:
+                return None
+            state = await handle.query(query, rpc_timeout=STEP_STATE_RPC_TIMEOUT)
         except Exception:  # noqa: BLE001
             return None
         if not isinstance(state, dict):

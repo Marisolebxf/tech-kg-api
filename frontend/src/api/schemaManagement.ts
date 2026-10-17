@@ -270,10 +270,11 @@ async function createSchema<T extends object>(
   path: string,
   payload: T,
   userId: string,
+  signal?: AbortSignal,
 ): Promise<SchemaDefinition> {
   return unwrap(
     await asApiPromise<SchemaDefinition>(
-      http.post(`${PREFIX}${path}`, payload, { headers: headers(userId) }),
+      http.post(`${PREFIX}${path}`, payload, { headers: headers(userId), signal }),
     ),
   )
 }
@@ -281,15 +282,17 @@ async function createSchema<T extends object>(
 export function createEntitySchema(
   payload: EntitySchemaCreatePayload,
   userId: string,
+  signal?: AbortSignal,
 ) {
-  return createSchema('/schemas/entities', payload, userId)
+  return createSchema('/schemas/entities', payload, userId, signal)
 }
 
 export function createRelationSchema(
   payload: RelationSchemaCreatePayload,
   userId: string,
+  signal?: AbortSignal,
 ) {
-  return createSchema('/schemas/relations', payload, userId)
+  return createSchema('/schemas/relations', payload, userId, signal)
 }
 
 export interface SchemaDeleteResult {

@@ -29,6 +29,15 @@ FIXED_STRING_MAX_LENGTH = 1024
 DDL_MAX_RETRIES = 5
 DDL_BACKOFF_SECONDS = (2, 4, 6, 8, 10)
 
+# TRS 图库的确定性 400（重试必然原样失败，且非传播延迟）：
+# - "Schema exisited before!"（TRS 拼写如此）：ALTER ADD 一个删除过的同名列——
+#   metad TAG 版本历史冲突，换属性名才能建（2026-10-18 ProbeProp1018b 实测，
+#   分钟级后依旧、DESCRIBE 不可见、DROP 报不存在，三态死锁）；
+# - "Tag prop not existed!"：ALTER DROP 不存在的列。
+# 按退避白烧 20s+ 会被前端 20s axios 超时抢先呈现成「超时」。注意
+# CREATE INDEX 后立刻 REBUILD 的 "Index not found" 是传播延迟会自愈，不进此表。
+DETERMINISTIC_DDL_ERRORS = ("Schema exisited before!", "Tag prop not existed!")
+
 # 实体 TAG name 属性索引长度：string 列的索引必须显式给长度；64 与实体检索
 # graph-exact 名称查找、消歧 recall_same_name 的口径一致（idx_*_name 同款）
 NAME_INDEX_LENGTH = 64
@@ -102,6 +111,9 @@ def execute_schema_ddl(
             return "succeeded", None
         except GraphRequestError as exc:
             last_err = str(exc)
+            if any(token in last_err for token in DETERMINISTIC_DDL_ERRORS):
+                logger.warning("DDL 确定性冲突，不再重试: %s", last_err)
+                break
             logger.warning("DDL 执行失败（第 %d 次）: %s", attempt + 1, last_err)
             if attempt < DDL_MAX_RETRIES - 1:
                 time.sleep(DDL_BACKOFF_SECONDS[min(attempt, len(DDL_BACKOFF_SECONDS) - 1)])
@@ -141,14 +153,22 @@ def _run_name_index_ddls(
     properties: list[dict[str, Any]],
     graph_space: str | None,
     statements: list[str],
+    *,
+    rebuild: bool = True,
 ) -> tuple[str, str | None] | None:
     """执行 name 索引 DDL 并追加进 ``statements``；返回失败 ``(status, error)`` 或 ``None``。
 
     CREATE INDEX 失败返回失败（避免「TAG 建成但索引缺失」的静默缺口）；
     REBUILD 失败仅告警——索引定义已生效、新写入自动进索引，可事后重建。
+    ``rebuild=False``（新建 TAG 路径）跳过 REBUILD：全新 TAG 零数据，REBUILD
+    无事可做，却必然撞 graphd schema 传播延迟（实测 CREATE INDEX 后 ~4s 内
+    REBUILD 报 "Index not found"），按退避重试会把创建请求拖住 6~30s；新
+    写入自动进索引，REBUILD 语义留给后补 name 列的 alter 路径（存量数据）。
     """
     for stmt in build_name_index_ddls(tag, properties):
         is_rebuild = stmt.startswith("REBUILD")
+        if is_rebuild and not rebuild:
+            continue
         idx_status, idx_error = execute_schema_ddl(stmt, graph_space, query_channel=is_rebuild)
         statements.append(stmt)
         if idx_status != "succeeded":
@@ -173,7 +193,9 @@ def run_schema_ddl(
     status, error = execute_schema_ddl(ddl, graph_space)
     statements = [ddl]
     if status == "succeeded" and kind == "entity":
-        failure = _run_name_index_ddls(name, properties, graph_space, statements)
+        # 新建 TAG 零数据：只建索引不 REBUILD（REBUILD 是给存量数据回填用的，
+        # 还会撞 graphd schema 传播延迟把创建请求拖住数十秒，见 _run_name_index_ddls）
+        failure = _run_name_index_ddls(name, properties, graph_space, statements, rebuild=False)
         if failure:
             status, error = failure
     return {

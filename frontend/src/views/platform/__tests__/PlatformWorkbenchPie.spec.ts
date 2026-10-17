@@ -8,7 +8,7 @@ import { useAuthStore } from '../../../stores/auth'
 import PlatformWorkbenchView from '../PlatformWorkbenchView.vue'
 import { pieSlices } from '../pieSlices'
 
-vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }), useRouter: () => ({ push: vi.fn() }), RouterLink: { template: '<a><slot /></a>' } }))
+vi.mock('vue-router', () => ({ onBeforeRouteLeave: vi.fn(), onBeforeRouteUpdate: vi.fn(), useRoute: () => ({ query: {} }), useRouter: () => ({ push: vi.fn() }), RouterLink: { template: '<a><slot /></a>' } }))
 vi.mock('../../../api/graphConsole', () => ({ runNgql: vi.fn() }))
 vi.mock('../../../api/graphAlgorithm', () => ({
   fetchGraphAlgorithmMetadata: vi.fn(),

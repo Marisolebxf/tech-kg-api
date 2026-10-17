@@ -21,6 +21,8 @@ vi.mock('../../../config', async (importOriginal) => ({
 }))
 
 vi.mock('vue-router', () => ({
+  onBeforeRouteLeave: vi.fn(),
+  onBeforeRouteUpdate: vi.fn(),
   useRoute: () => ({ query: routeQuery }),
   useRouter: () => ({ push: routerPush }),
   RouterLink: { template: '<a><slot /></a>' },

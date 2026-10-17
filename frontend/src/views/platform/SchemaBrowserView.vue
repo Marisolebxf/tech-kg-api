@@ -1460,7 +1460,8 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
                 </div>
                 <div v-for="p in propertyTarget?.properties || []" :key="p.name" class="property-table__row" :class="{ 'property-table__row--locked': p.locked }">
                   <span class="property-table__name">
-                    <a-tooltip :trigger="['hover', 'focus']" :content="p.name" position="top" :content-style="{ maxWidth: '480px', overflowWrap: 'anywhere' }">
+                    <!-- 挂到不裁切内容的弹窗外层，避免 body 上的默认浮层被 z-index:9999 的遮罩盖住。 -->
+                    <a-tooltip :trigger="['hover', 'focus']" :content="p.name" position="top" popup-container=".property-modal" :content-style="{ maxWidth: '480px', overflowWrap: 'anywhere' }">
                       <code tabindex="0">{{ schemaNameCell(p.name) }}</code>
                     </a-tooltip>
                     <svg v-if="p.locked" class="property-table__lock" viewBox="0 0 24 24" aria-label="锁定" role="img" title="公共必选属性，不可删除">

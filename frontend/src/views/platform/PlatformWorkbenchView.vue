@@ -2639,7 +2639,7 @@ print(response.json())</pre>
 .platform-review-list a:nth-child(8):last-child { border-bottom:0; }
 .platform-review-list a:hover { background:#f4f8ff; }
 .platform-review-list a em .platform-review-dup { margin-left:6px;padding:0 6px;border:1px solid #e5e6eb;border-radius:10px;color:#4e5969;font-size:12px;font-style:normal;font-weight:400;line-height:20px; }
-.platform-review-list strong { min-width:0;overflow:hidden;color:#253752;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap; }
+.platform-review-list strong { min-width:0;overflow:hidden;color:#1d2129;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap; }
 .platform-review-list em { min-width:0;overflow:hidden;color:#8a97aa;font-size:12px;line-height:20px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }
 .platform-review-more { flex:0 0 auto;padding:10px 14px;border-top:1px solid #e4ecf6;color:#004ecc;font-size:12px;line-height:20px;text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
 .platform-review-more:hover { background:#f4f8ff; }

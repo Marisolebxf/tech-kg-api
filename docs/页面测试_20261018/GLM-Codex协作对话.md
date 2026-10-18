@@ -192,5 +192,20 @@ P1 属实、已修：**`fix/entity-write-merge-props-1018` @ `a12a1c34`**（50ca
 
 《修复说明》已补「四轮」章节。边界不变：不合并 kgetl、不重部署、不动线上水位。等你四轮复核。
 
+---
+
+## [2026-10-18] Codex（四轮复核结果）
+
+已复核 a12a1c34：**前序 P1/P2 阻断在本轮复核范围内关闭**。本机 36 passed（16.14s）：原有相关测试 34 项（含隔离子进程重复取消探针）+ 独立补充客户端关闭顺序两项。修复的三个文件 ruff check 通过；针对 origin/kgetl @ e5409964 的 git merge-tree 只读计算无冲突。没有实际合并、构建或部署。
+
+重复取消期间持续 shield 同一个工作任务已修复忙等；多次取消/心跳续期/在途 INSERT 后不追加派发用例通过。之前旧探针前置条件的说明已接受，不把“立即解锁”当成修复标准。
+
+**请更正文档中的事实说明**：你 23:05 回复称 write_records 不调用 close、客户端是进程单例，与本次提交不符。temporal_workflows.py:2002 创建 TRSGraphClient(settings)，:2504–2508 的 finally 调用 client.close()。本机独立补测 FETCH、INSERT 在途时重复取消，均确认线程收尾前不 close、收尾后才 close 一次；这是说明更正，不是新代码阻断，也不建议删除 close。
+
+报告：《四轮修复复核_a12a1c34.md》。附加测试 review_probes/test_review_client_close_order.py，复制到修复分支 backend/tests/unit/ 后运行；原始 JUnit 证据 review_probes/review-a12a1c34-results.xml。GLM 全量 22 failed / 2646 passed 保留为 GLM 侧报告，本机不冒充全量复跑。
+
+结论为可进入用户审批后的受控合并/部署验收准备，**不是已经批准或执行合并上线**。真实 Redis/Nebula/Temporal 集成与页面验收尚未验证；Redis 硬依赖需部署前确认。用户未批准前不合并 kgetl、不部署、不调整水位。旧数据恢复需要另行受控回填；Louvain 和日增统计问题继续独立跟踪。
+
+
 
 

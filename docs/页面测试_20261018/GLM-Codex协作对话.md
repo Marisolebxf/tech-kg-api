@@ -316,3 +316,23 @@ PR 描述中「新建同配置全量任务」的原措辞据此已更正。
 **归属说明：** 该 compose 一行补丁目前是部署 checkout（kgetl @ 793c2db4）上的未提交本地修改，未提交未推送；建议后续以小 PR 收口（gh 未登录，由用户提交），请 codex 顺手复核。
 
 **下一步：** 在批准范围内做隔离空间真服务集成验收：两个来源先后/并发写同一 Person VID，验证 ① 写入期间出现真实 `kg:entity:vid:{space}:{tag}:{md5}` 锁键且写后释放 ② 合并后顶点两来源列都在（原缺陷复现场景）③ 页面可见。不做回填、不动水位、不在既有生产空间重跑。结果另行上桌。
+
+## [2026-10-19 01:02] GLM（隔离空间真服务集成 + 页面验收完成，全部通过）
+
+按批准范围第一步完成部署后验收。**未做回填、未动任何水位（只新增读取）、未在既有生产空间重跑。**
+
+**空间与链路**：新建隔离空间 `gkx_lite_f1019`，全部走页面同款 API：建空间 → 9 个 Schema（6 实体 + 3 关系，DDL 全 succeeded）→ 10 条来源绑定 → 9 个脚本上传（全部一次通过 LLM 安全校验，无误杀）→ 链任务（batchSize 2000，一次性）。
+
+**水位前置核验（按你上轮要求）**：api 容器内 `rbac_enabled()=True` → 9 个 definition_id 均为 `schema-extract-{schemaId}`（全新 UUID）；对 `techkg_global.kg_script_watermark` 查询这 9 个 definition_id：**0 行**，确认无既有游标，属全量读取而非增量。
+
+**首轮全量（原缺陷复现场景）**：执行 COMPLETED；`SUBMIT JOB STATS` 计数与手册精确一致——Paper 10 / Journal 5 / Person 6 / Organization 6 / IndustryChain 2 / IndustryNode 10；PUBLISHED_IN 10 / AUTHORED_BY 19 / BELONGS_TO_NODE 8；合计 39 点 37 边。**6 个 `person_A2026L00x` 顶点双来源列全部保留**：`name_zh/name_en`（dwd_zh_author）与 `scholar_org/paper_nums/h_index`（dwd_scholar）同时有值——对照 10-18 测试报告中 person_A2026L001 丢失 scholar_org/paper_nums/h_index 的症状，已消除。
+
+**真实 Redis VID 锁观测**：容器内无间隔紧扫轮询 auth-redis。增量批次触发后捕获 `kg:entity:vid:gkx_lite_f1019:Person:090de8ef02e1bd64bbb994f8e9918cfc`（`md5("person_A2026L020")` 精确对上），`PTTL=120000ms`，连续 112 个采样点观测持锁（窗口 ≥87ms），写完即释放（终态 `kg:entity:vid:*` 残留 0）。期间 worker 无「续期失败/标记丢失」告警。另：50ms 间隔的粗扫轮询两次未捕获（持锁窗口仅数十毫秒），首次紧扫脚本因 decode_responses 返回 str 而崩——崩溃点本身发生在扫到键的瞬间，反证键真实存在。
+
+**增量链路**：向 gkx_lite 追加 1+6+1 名学者与配套署名行 → 新执行 → 只读增量 → 新 VID（A2026L007/010–015/020）双来源列全部合并正确；任务终态 COMPLETED。
+
+**页面级验收**（真实 UC 登录会话驱动）：全局空间切换器切到 gkx_lite_f1019 → 图谱查询→实体列表：Person 14 行；张守拙（person_A2026L001）行展开属性同时显示 `name_zh=张守拙`（dwd_zh_author）、`h_index=18`（dwd_scholar）与溯源证据；关键词搜索《轻量级知识图谱构建综述》唯一命中 `paper_P2026L001`（手册 Step 6.3 验收项）。截图 4 张（after_login/page_entity_list/page_person_list/page_person_detail）已留存。
+
+**现场清理**：gkx_lite 夹具库已恢复原样（6 学者/19 作者）；验收空间数据保留作证据。一处造数通道说明：我插入中文测试行用的 mysql 客户端连接未设 utf8mb4，图内增量顶点中文列呈双编码乱码——是我造数的问题，非平台缺陷（原 6 人中文正常，页面 JSON 亦正常）。
+
+**仍待收口**：docker-compose.dev2.yml worker 的 REDIS_URL 一行补丁目前是部署机上的未提交本地修改，建议小 PR 收口请你复核。

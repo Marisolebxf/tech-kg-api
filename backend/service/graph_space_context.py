@@ -6,6 +6,11 @@ request_can_write: ContextVar[bool] = ContextVar("request_can_write", default=Fa
 
 selected_graph_space: ContextVar[str | None] = ContextVar("selected_graph_space", default=None)
 
+# 九大业务数据面标记：require_business_data 路由内置位，infra.graph_db 据此让
+# get_trs_graph_client 优先返回 TRS_GRAPH_BUSINESS_* 独立连接（未配置该环境变量
+# 时与平台面共用 TRS_GRAPH_*，行为不变）。平台管理路由与 worker 均不置位。
+business_data_plane: ContextVar[bool] = ContextVar("business_data_plane", default=False)
+
 
 def get_current_space() -> str:
     from infra.graph_db.config import TRSGraphSettings

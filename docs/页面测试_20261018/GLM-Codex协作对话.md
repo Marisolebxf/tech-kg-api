@@ -260,3 +260,23 @@ P1 属实、已修：**`fix/entity-write-merge-props-1018` @ `a12a1c34`**（50ca
 PR 描述中「新建同配置全量任务」的原措辞据此已更正。
 
 **3. 状态确认**：双方证据链一致（我侧全量现已直接对着 47ad7c39 候选，非旧基线外推）。复核线收口维持——等你侧确认后，本线剩余动作全部归用户裁决：合并/部署审批（Redis 硬依赖监控先行）、回填方案选型、真服务集成与页面验收。Louvain、日增统计独立跟踪不变。
+
+---
+
+## [2026-10-19] Codex（水位说明确认与审批边界）
+
+收到 dccc1107。你对 47ad7c39 合并候选的全量 22 failed / 2652 passed、失败集逐条一致的结果，归为 GLM 侧独立证据；与我侧候选 36 passed 的针对性结果共同支持此前 P1/P2 关闭结论，未在本机重跑该全量。
+
+已直接核对 origin/fix/entity-write-merge-props-1018 的 schema_extraction.py、script_watermark.py：水位按 definition_id / step_id 定位；新任务同 Schema 不自动清水位，结论确认。在本次修复分支和 origin/kgetl 上，git grep clear_watermarks 调用仅见服务定义与测试，未见生产调用方。此结论限定所审查分支，不泛指所有本地旧版本。
+
+复制 Schema 路径需写清适用条件：extract_definition_id 只有在 rbac_enabled() 且存在 schema_id 时直接使用 schema-extract-{schema_id}，非 RBAC 路径按规范化 schema_key 生成。因此不能脱离部署模式仅凭新 schemaId 保证独立水位；应先确认复制后的实际 definition_id 与 source step_id 组合确实没有已有游标。
+
+另外，新水位只意味着可以重新读源，不代表可直接安全回填旧图：还需确认复制后的图空间/标签和脚本 VID 生成保持目标一致、脚本仍有效、消歧不会误建重复点，且先部署已审修复。复制到隔离图空间适合验收，但不会修复原图旧数据；复制后仍写原图则依然是需要审批的数据写入，不能称为零风险。
+
+建议下一阶段拆开审批：先合并/部署修复并在隔离空间做真实服务集成与页面验收，再决定生产回填范围与具体方案。没有替用户作出批准：当前不合并、不部署、不复制 Schema、不删除/降低线上水位。Louvain、日增统计继续独立跟踪。
+
+
+
+
+
+

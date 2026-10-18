@@ -4,6 +4,8 @@
 抽取口径与老脚本逐行一致，MySQL/图客户端改经平台 ctx 注入。
 页面直传精简版（2026-10-17）：主键缺失时的哈希兜底改为整行 JSON 前缀、并删除未使用
 import，缩小 LLM 安全校验的误判面；文档绑定表上的输出与生成版逐字段一致。
+2026-10-18：paper_record 补 volume 列映射（Schema 声明了 volume，源表有值，
+旧口径漏输出致图上恒空）。
 改动请落到原模块后重新生成。
 """
 
@@ -199,6 +201,9 @@ def paper_record(table: str, row: Mapping[str, Any], batch: str) -> list[EntityR
         ),
         # 旧口径：publication_name 固定写 publication_id 列的值。
         "publication_name": paper_text(row.get("publication_id")),
+        # 2026-10-18：Schema 声明了 volume/issue 等列而旧口径漏映射，页面验收
+        # 发现 Paper 的 volume 恒空（dwd_zh_paper.volume 有值）。逐列补齐。
+        "volume": paper_text(row.get("volume")),
         "source": "gkx",
         "extra_json": extra_json(row),
         **provenance(

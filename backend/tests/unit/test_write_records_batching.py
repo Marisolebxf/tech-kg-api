@@ -61,6 +61,7 @@ def client(monkeypatch):
     # test_entity_write_guard
     monkeypatch.setenv("ENTITY_DISAMBIGUATION_PREWRITE_RECHECK", "0")
     monkeypatch.setenv("ENTITY_DISAMBIGUATION_NAME_LOCK", "0")
+    monkeypatch.setenv("ENTITY_WRITE_VID_LOCK_ENABLED", "0")
     return FakeGraphClient
 
 

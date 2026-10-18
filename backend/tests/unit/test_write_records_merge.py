@@ -77,6 +77,9 @@ def client(monkeypatch):
     monkeypatch.setenv("SCHEMA_EXTRACT_WRITE_BATCH_ROWS", "64")
     monkeypatch.setenv("ENTITY_DISAMBIGUATION_PREWRITE_RECHECK", "0")
     monkeypatch.setenv("ENTITY_DISAMBIGUATION_NAME_LOCK", "0")
+    # per-VID 写锁关掉：本文件测合并语义本身，锁行为见
+    # test_write_records_vid_lock（那里用假 Redis 逐项断言）
+    monkeypatch.setenv("ENTITY_WRITE_VID_LOCK_ENABLED", "0")
     return MergeFakeGraphClient
 
 

@@ -60,6 +60,7 @@ def _no_write_guard(monkeypatch: pytest.MonkeyPatch):
     # 写前守卫关掉：本文件只测写图自愈，终判/锁行为见 test_entity_write_guard
     monkeypatch.setenv("ENTITY_DISAMBIGUATION_PREWRITE_RECHECK", "0")
     monkeypatch.setenv("ENTITY_DISAMBIGUATION_NAME_LOCK", "0")
+    monkeypatch.setenv("ENTITY_WRITE_VID_LOCK_ENABLED", "0")
 
 
 class FakeGraphClient:

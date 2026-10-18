@@ -45,6 +45,11 @@ def fake_graph(monkeypatch: pytest.MonkeyPatch):
         return client
 
     monkeypatch.setattr("infra.graph_db.client.TRSGraphClient", factory)
+    # per-VID 写锁关掉（fail-closed，CI 无 Redis 会让写图用例失败；锁行为
+    # 见 test_write_records_vid_lock）。写前终判/同名锁同因不在本文件覆盖
+    monkeypatch.setenv("ENTITY_WRITE_VID_LOCK_ENABLED", "0")
+    monkeypatch.setenv("ENTITY_DISAMBIGUATION_PREWRITE_RECHECK", "0")
+    monkeypatch.setenv("ENTITY_DISAMBIGUATION_NAME_LOCK", "0")
     return clients
 
 

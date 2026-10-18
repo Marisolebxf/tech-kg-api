@@ -2134,7 +2134,12 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
             64 个 vid 一条语句（与写批同量级）。trs-graph 可能把 map 序列化成
             JSON 字符串，两种形状都兜住。读失败经 _with_watermark_retry 烧尽后
             上抛——合并失败宁可让活动重试，不能静默退回「覆盖清列」旧行为。
+            同理，**旧属性无法解析或形状异常也必须抛错**（P2 熔断）：按「无
+            旧值」继续写 = 静默覆盖清列，且发生在任何 INSERT 之前，抛错时本批
+            零写入。
             """
+            from infra.graph_db.exceptions import GraphRequestError
+
             out: dict[str, dict[str, Any]] = {}
             for start in range(0, len(vids), 64):
                 part = vids[start : start + 64]
@@ -2148,16 +2153,27 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                 )
                 for row in getattr(result, "records", None) or []:
                     vid = str(row.get("vid") or "")
+                    if not vid:
+                        continue
                     value = row.get("props")
                     if isinstance(value, str):
                         try:
                             value = json.loads(value)
-                        except ValueError:
-                            value = None
-                    if vid and isinstance(value, dict):
-                        # 图上 NULL（从未置过的列）不进合并，交给 filtered 的
-                        # NOT NULL 兜底，避免把 NULL 显式写回
-                        out[vid] = {k: v for k, v in value.items() if v is not None}
+                        except ValueError as exc:
+                            raise GraphRequestError(
+                                f"图上旧属性无法解析（{name} vid={vid}，值形如 "
+                                f"{str(value)[:60]!r}）——中止写入防覆盖清列",
+                                status_code=502,
+                            ) from exc
+                    if not isinstance(value, dict):
+                        raise GraphRequestError(
+                            f"图上旧属性形状异常（{name} vid={vid}，"
+                            f"type={type(value).__name__}）——中止写入防覆盖清列",
+                            status_code=502,
+                        )
+                    # 图上 NULL（从未置过的列）不进合并，交给 filtered 的
+                    # NOT NULL 兜底，避免把 NULL 显式写回
+                    out[vid] = {k: v for k, v in value.items() if v is not None}
             return out
 
         def _merge_entity_rows() -> list[dict[str, Any]]:
@@ -2286,6 +2302,9 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
         # 增量索引用；在 _write_chunk 语句成功后按 chunk 收集（chunk 是组内
         # 去重后的实际写入行，回退逐条路径同样以整 chunk 成功返回）。
         written_vids: list[str] = []
+        # per-VID 写锁丢失标记（fail-closed）：心跳续期失败置位，_write_all
+        # 在 chunk 间检查并中止
+        vid_lost: dict[str, Any] = {}
 
         def _write_all() -> int:
             written_local = 0
@@ -2310,6 +2329,10 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                 cols = list(items[0][2].keys())
                 start = 0
                 while start < len(rows):
+                    if vid_lost.get("lost"):
+                        raise RuntimeError(
+                            "VID 写锁续期失败，中止本批后续写入（已写 chunk 幂等，活动层整批重试）"
+                        )
                     chunk: list[tuple[dict[str, Any], dict[str, Any]]] = []
                     size = 0
                     while start < len(rows) and len(chunk) < batch_rows:
@@ -2330,6 +2353,25 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
             return written_local
 
         guard_stats: dict[str, int] = {}
+
+        async def _run_write_all() -> int:
+            # per-VID fail-closed 写锁包住「FETCH 旧值 → 合并 → INSERT」整个读改写
+            # 窗口（多来源 asyncio.gather 并行 + 来源内 N worker 下，同名锁按显示名
+            # 加键管不到无名/异名同 VID 的并发子集写）。在调用点惰性取 records 的
+            # vid——终判会原地改写目标 vid（合并→既有节点），按最终写入目标加锁；
+            # FETCH 在 _write_all 内，锁全程覆盖。与同名锁分野：同名锁保消歧活性
+            # （fail-open），VID 锁保数据正确性（fail-closed，Redis 故障即重试，
+            # 不降级）。
+            vid_lock = (
+                _entity_write_guard.vid_write_locks(
+                    space, name, (r.get("id") for r in records), lost=vid_lost
+                )
+                if kind == "entity" and records and _entity_write_guard.vid_lock_enabled()
+                else nullcontext()
+            )
+            async with vid_lock:
+                return await asyncio.to_thread(_write_all)
+
         if kind == "entity" and records and _entity_write_guard.prewrite_recheck_enabled():
             from service.entity_disambiguation import display_name as _entity_display_name
 
@@ -2341,7 +2383,9 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                 }
             )
             # 同名微锁包住「终判 + INSERT」临界区：同名写入方跨批/跨来源/跨 job
-            # 串行（Redis SET NX PX，fail-open），异名完全并行
+            # 串行（Redis SET NX PX，fail-open），异名完全并行。终判后 INSERT
+            # （含 VID 锁）仍在同名锁内——后到者的终判召回必须能看到先到者
+            # 已提交的 INSERT，否则同名双写根治被退化
             lock = (
                 _entity_write_guard.name_write_locks(settings.space, name, names)
                 if names and _entity_write_guard.name_lock_enabled()
@@ -2356,9 +2400,9 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                     source_table=source_table,
                     step_id=request.get("stepId") or "write",
                 )
-                written = await asyncio.to_thread(_write_all)
+                written = await _run_write_all()
         else:
-            written = await asyncio.to_thread(_write_all)
+            written = await _run_write_all()
         result: dict[str, Any] = {"written": written, **guard_stats}
         if kind == "entity" and index_vids and vid_step_id and written_vids:
             # S3 中转未开 = 本栈增量索引不可用：计划内不带 key（索引步跳过），

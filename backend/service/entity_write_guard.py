@@ -24,6 +24,16 @@ Redis 微锁——同名写入方跨批/跨来源/跨 job 串行，异名完全�
   （覆盖写图步调歇速 + 水位退避重试的批级耗时）。
 - ``ENTITY_DISAMBIGUATION_NAME_LOCK_WAIT_SECONDS``：获取等待上限，默认 30s
   （超时降级无锁，只告警不阻塞流水）。
+
+另有 **per-VID 写锁**（``vid_write_locks``，2026-10-18 实体列保留修复引入）：
+锁的是「FETCH 旧值 → 合并 → INSERT」读改写窗口，按 (graph_space, label, vid)
+加键，无名记录/异名同 VID 同样互斥。与同名锁分野：同名锁保消歧活性
+（fail-open），VID 锁保数据正确性（**fail-closed**——拿不到/续期失败宁可
+让活动重试，不冒丢列风险；代价是 Redis 成为实体写路径的硬依赖）。开关：
+
+- ``ENTITY_WRITE_VID_LOCK_ENABLED``：默认开，``"0"`` 关（仅排障/语句形状单测）。
+- ``ENTITY_WRITE_VID_LOCK_WAIT_SECONDS``：获取等待上限，默认 30s（超时抛错重试）。
+- ``ENTITY_WRITE_VID_LOCK_HEARTBEAT_SECONDS``：续期心跳间隔，默认 TTL/3。
 """
 
 from __future__ import annotations
@@ -171,3 +181,138 @@ async def name_write_locks(space: str | None, label: str, names: list[str] | set
         yield
     finally:
         await _release_quiet(acquired, token)
+
+
+# ---------------------------------------------------------------------------
+# per-VID 写锁（fail-closed）：包住实体写图的「FETCH 旧值 → 合并 → INSERT」
+# 读改写窗口。多来源 asyncio.gather 并行 / 来源内多 worker 下，同名锁只按
+# 显示名加键——无名记录不进锁、异名同 VID 不互斥；而 INSERT VERTEX 是整标签
+# 覆盖，并发子集写会互相清列。VID 锁补上这个互斥面，且**不降级**：
+# 获取失败/等待超时/续期失败 → 抛错让活动层整批重试（幂等），绝无锁写入。
+# ---------------------------------------------------------------------------
+
+_RENEW_LUA = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('pexpire', KEYS[1], ARGV[2])
+end
+return 0
+"""
+
+
+def vid_lock_enabled() -> bool:
+    """per-VID 写锁开关，默认开，``"0"`` 关（仅排障/语句形状单测）。"""
+    return os.getenv("ENTITY_WRITE_VID_LOCK_ENABLED", "1") != "0"
+
+
+def _vid_lock_wait_seconds() -> float:
+    try:
+        return max(0.0, float(os.getenv("ENTITY_WRITE_VID_LOCK_WAIT_SECONDS", "30")))
+    except ValueError:
+        return 30.0
+
+
+def _vid_heartbeat_interval(ttl_seconds: float) -> float:
+    """续期间隔：默认 TTL/3；允许显式覆盖（单测提速用）。"""
+    raw = os.getenv("ENTITY_WRITE_VID_LOCK_HEARTBEAT_SECONDS")
+    if raw:
+        try:
+            return max(0.05, float(raw))
+        except ValueError:
+            pass
+    return max(0.2, ttl_seconds / 3)
+
+
+def vid_lock_keys(space: str | None, label: str, vids) -> list[str]:
+    """per-VID 锁键（排序去重——批内多 vid 按固定序获取，防交叉死锁）。
+
+    键按 vid 而非显示名：无名记录、异名同 VID 都落在同一把锁上。vid 进
+    md5 与同名锁同理（键长可控、避开特殊字符）。
+    """
+    keys: set[str] = set()
+    for raw in vids:
+        vid = str(raw or "").strip()
+        if vid:
+            keys.add(f"kg:entity:vid:{space or ''}:{label}:{hashlib.md5(vid.encode()).hexdigest()}")
+    return sorted(keys)
+
+
+async def _renew_pass(keys: list[str], token: str, ttl_ms: int) -> bool:
+    """pipeline 续期全部键（Lua 校验 token 才 PEXPIRE）；任一未续上返回 False。"""
+    pipe = _redis_client().pipeline(transaction=False)
+    for key in keys:
+        pipe.eval(_RENEW_LUA, 1, key, token, ttl_ms)
+    results = await pipe.execute()
+    return all(bool(ok) for ok in results)
+
+
+async def _vid_lock_heartbeat(keys: list[str], token: str, ttl_ms: int, lost: dict) -> None:
+    """持锁心跳：TTL/3 续期一次；续期失败即标记丢失（写入方据此中止/整体重试）。"""
+    interval = _vid_heartbeat_interval(ttl_ms / 1000)
+    try:
+        while True:
+            await asyncio.sleep(interval)
+            if not await _renew_pass(keys, token, ttl_ms):
+                lost["lost"] = True
+                logger.error("VID 写锁续期失败，标记丢失（keys=%d）——本批写入需整体重试", len(keys))
+                return
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        lost["lost"] = True
+        logger.error("VID 写锁心跳异常，标记丢失: %s", exc)
+
+
+@asynccontextmanager
+async def vid_write_locks(space: str | None, label: str, vids, *, lost: dict | None = None):
+    """per-VID fail-closed 微锁（详见模块 docstring）。
+
+    ``lost`` 是调用方持有的共享标记：心跳续期失败时置 ``lost["lost"]=True``，
+    写入方在 chunk 间检查并中止；即便最后一 chunk 已写完，退出临界区时仍会
+    抛错让活动层重试（写图幂等，重试安全）。
+    """
+    keys = vid_lock_keys(space, label, vids)
+    if lost is None:
+        lost = {}
+    if not keys:
+        yield lost
+        return
+    token = f"wr-{uuid.uuid4().hex}"
+    ttl_ms = _lock_ttl_seconds() * 1000
+    acquired: list[str] = []
+    # fail-closed：与同名锁不同，这里任何失败都上抛（获取途中失败也先归还
+    # 已拿到的键），绝不降级无锁——无锁并发子集写 = 确定性丢列
+    deadline = asyncio.get_running_loop().time() + _vid_lock_wait_seconds()
+    remaining = keys
+    try:
+        while remaining:
+            got = await _acquire_pass(remaining, token, ttl_ms)
+            acquired.extend(got)
+            remaining = [key for key in remaining if key not in set(got)]
+            if not remaining:
+                break
+            if asyncio.get_running_loop().time() >= deadline:
+                raise TimeoutError(
+                    f"VID 写锁等待超时（{len(remaining)}/{len(keys)} 个 vid 被占用）"
+                )
+            await asyncio.sleep(0.05)
+    except BaseException:
+        await _release_quiet(acquired, token)
+        raise
+    heartbeat = asyncio.create_task(_vid_lock_heartbeat(acquired, token, ttl_ms, lost))
+    body_failed = False
+    try:
+        yield lost
+    except BaseException:
+        body_failed = True
+        raise
+    finally:
+        heartbeat.cancel()
+        try:
+            await heartbeat
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # noqa: BLE001
+            logger.exception("VID 写锁心跳任务收尾异常")
+        await _release_quiet(acquired, token)
+    if not body_failed and lost.get("lost"):
+        raise RuntimeError("VID 写锁租期丢失，本批写入不可信——活动层将整批重试（写图幂等）")

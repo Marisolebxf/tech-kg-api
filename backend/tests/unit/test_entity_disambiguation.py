@@ -24,7 +24,7 @@ def test_name_columns_in_picks_existing_by_priority():
     # vendor ETL 的 Organization 只有 name_cn；schema 管理的 tag 有 name
     assert name_columns_in({"name_cn", "province"}) == ["name_cn"]
     assert name_columns_in({"name", "name_cn"}) == ["name", "name_cn"]
-    assert name_columns_in({"name_en", "name_zh"}) == ["name_en", "name_zh"]
+    assert name_columns_in({"name_en", "name_zh"}) == ["name_zh", "name_en"]
     assert name_columns_in({"org_id", "address"}) == []  # 无显示名列 → 召回跳过
 
 
@@ -32,6 +32,9 @@ def test_display_name_prefers_name_then_localized():
     assert display_name({"name": "A", "name_cn": "B"}) == "A"
     assert display_name({"name_cn": "B"}) == "B"
     assert display_name({"name_en": "C"}) == "C"
+    # 中文优先于英文：同英文名的不同学者（王毅/王祎/王翊 都叫 Yi Wang）
+    # 不能坍缩成同一显示名，否则批内去重会错并（2026-10-16 一2/一3 根因）
+    assert display_name({"name_zh": "王祎", "name_en": "Yi Wang"}) == "王祎"
     assert display_name({"id": "x"}) == ""
 
 
@@ -75,6 +78,37 @@ def test_meta_columns_do_not_count_as_evidence():
         {"create_time": "2", "source_table": "b", "province": "京"},
     )
     assert score == 1.0
+
+
+def test_platform_lineage_columns_do_not_count_as_evidence():
+    # 摄取/溯源元数据列同源近乎恒定（source_system/ingest_batch）、或与身份无关
+    # （match_method/scholar_status 是厂商匹配过程标注）——参与评分会把同名不同人
+    # 的属性一致率基线抬高到灰区（2026-10-16 王祎/王翊 实测 ~0.37 → 总分 ~0.74）。
+    # 排除后唯一可比业务列 org 不一致 → 属性分 0，同名总分 0.6 低于灰区下界。
+    score, detail = score_candidate(
+        "王伟",
+        {
+            "source_system": "gkx",
+            "source_record_id": "a1",
+            "ingest_batch": "20261016",
+            "match_method": "exact",
+            "scholar_status": "active",
+            "confidence": "0.9",
+            "org": "清华大学",
+        },
+        "王伟",
+        {
+            "source_system": "gkx",
+            "source_record_id": "b2",
+            "ingest_batch": "20261016",
+            "match_method": "fuzzy",
+            "scholar_status": "active",
+            "confidence": "0.7",
+            "org": "北京大学",
+        },
+    )
+    assert detail["comparedProps"] == ["org"]
+    assert score < GRAY_LOW
 
 
 def test_decide_no_candidates_is_new():

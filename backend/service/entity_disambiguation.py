@@ -37,9 +37,35 @@ NAME_WEIGHT = 0.6
 PROPS_WEIGHT = 0.4
 TOP_K = 5
 
-# 显示名按序取值；平台溯源列与身份列不参与属性一致性计算
-_NAME_KEYS = ("name", "name_cn", "name_en", "name_zh")
-_META_PROP_KEYS = {"id", "vid", "create_time", "update_time", "source_table", *_NAME_KEYS}
+# 显示名按序取值；平台溯源列与身份列不参与属性一致性计算。
+# 中文优先：name_en 提前会把 王毅/王祎/王翊 这类同英文名的不同学者坍缩成
+# 同一显示名，批内去重直接错并（2026-10-16 一2/一3 幽灵点根因）
+_NAME_KEYS = ("name", "name_zh", "name_cn", "name_en")
+# 平台溯源/摄取元数据列整组排除：同一源表内这些列近乎恒定（source_system、
+# ingest_batch 全批同值）或与身份无关（match_method、scholar_status 是厂商
+# 匹配过程标注）——参与评分会把「同名不同人」的属性一致率基线抬高到 ~0.37
+# （总分 ~0.74），真实业务特征（机构/领域/学历）的分歧被稀释，灰区 case 虚高
+# （2026-10-16 王祎/王翊 样本实测）。业务列不同来源命名不一，无法穷举，这里
+# 只收平台与摄取管线自身的元数据列。
+_META_PROP_KEYS = {
+    "id",
+    "vid",
+    "create_time",
+    "update_time",
+    "source_table",
+    *_NAME_KEYS,
+    "source",
+    "source_system",
+    "source_record_id",
+    "source_url",
+    "source_update_time",
+    "ingest_batch",
+    "ingest_time",
+    "match_evidence",
+    "match_method",
+    "scholar_status",
+    "confidence",
+}
 
 
 def display_name(props: dict[str, Any] | None) -> str:
@@ -177,7 +203,7 @@ def recall_same_name(client: Any, tag: str, names: list[str]) -> dict[str, list[
         logger.warning("DESCRIBE TAG %s 失败，同名召回按 name 列兜底", tag)
         name_cols = ["name"]
     if not name_cols:
-        logger.info("tag %s 无显示名列（name/name_cn/name_en/name_zh），跳过同名召回", tag)
+        logger.info("tag %s 无显示名列（name/name_zh/name_cn/name_en），跳过同名召回", tag)
         return {}
     existing: dict[str, list[dict[str, Any]]] = {}
     for start in range(0, len(names), _RECALL_NAME_CHUNK):

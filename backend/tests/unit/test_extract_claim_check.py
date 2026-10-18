@@ -611,6 +611,83 @@ class TestDownstreamRecordsKey:
         assert result == {"collisions": 0}
 
 
+class TestResolveBatchSameName:
+    """批内同名合并必须过评分器：≥0.85 并入 / 灰区开案扣留 / 低分各自建点。
+
+    旧实现同显示名无条件改写 vid（同字重名同批必并——2026-10-16 消歧两修的洞）。
+    """
+
+    async def test_same_name_same_props_merges_into_first(self, fake_graph):
+        result = await resolve_entity_batch(
+            {
+                "name": "Person",
+                "records": [
+                    {"id": "n1", "props": {"name": "王伟", "org": "清华大学"}},
+                    {"id": "n2", "props": {"name": "王伟", "org": "清华大学"}},
+                ],
+                "graph": {},
+                "stepId": "source:bind-1",
+                "sourceTable": "gkx.scholar",
+            }
+        )
+        # 同名且业务属性全一致（1.0 ≥ 0.85）→ 后到记录改写为先到 vid，同批 upsert 合并
+        assert result["deduped"] == 1
+        assert result["withheld"] == 0
+        assert [r["id"] for r in result["records"]] == ["n1", "n1"]
+
+    async def test_same_name_no_evidence_withheld_as_gray(self, fake_graph, monkeypatch):
+        from service.manual_review_production import manual_review_service
+
+        created: list[dict] = []
+
+        def fake_create(**kwargs):
+            created.append(kwargs)
+            return {"reviewId": "MR-1"}
+
+        monkeypatch.setattr(manual_review_service, "create_direct_case", fake_create)
+        result = await resolve_entity_batch(
+            {
+                "name": "Person",
+                "records": [
+                    {"id": "n1", "props": {"name": "王伟"}},
+                    {"id": "n2", "props": {"name": "王伟"}},
+                ],
+                "graph": {},
+                "stepId": "source:bind-1",
+                "sourceTable": "gkx.scholar",
+            }
+        )
+        # 同名无可比属性 → 0.6+0.4*0.5=0.8 落灰区：后到记录扣留开 T_LINK 案（批内同名），
+        # 先到记录照常走图库召回写图
+        assert result["withheld"] == 1
+        assert result["deduped"] == 0
+        assert [r["id"] for r in result["records"]] == ["n1"]
+        assert len(created) == 1
+        assert created[0]["template_id"] == "T_LINK"
+        assert "批内同名" in created[0]["reason"]
+        snapshot = created[0]["candidate"]
+        assert snapshot["_incoming"]["vid"] == "n2"
+        assert snapshot["existingCandidates"][0]["vid"] == "n1"
+
+    async def test_same_name_conflicting_props_both_kept(self, fake_graph):
+        result = await resolve_entity_batch(
+            {
+                "name": "Person",
+                "records": [
+                    {"id": "n1", "props": {"name": "王伟", "org": "清华大学", "field": "AI"}},
+                    {"id": "n2", "props": {"name": "王伟", "org": "北京大学", "field": "化工"}},
+                ],
+                "graph": {},
+                "stepId": "source:bind-1",
+                "sourceTable": "gkx.scholar",
+            }
+        )
+        # 业务属性全冲突 → 0.6 低于灰区下界：同名异体各自建点，不再无条件并
+        assert result["deduped"] == 0
+        assert result["withheld"] == 0
+        assert [r["id"] for r in result["records"]] == ["n1", "n2"]
+
+
 class TestFailureRefs:
     async def test_record_failures_expands_refs_and_caps(self, fake_s3, monkeypatch):
         from service.manual_review_production import manual_review_service

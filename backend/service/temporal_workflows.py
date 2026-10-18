@@ -2408,6 +2408,8 @@ def _open_entity_gray_case(
 async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
     """消歧 v2（写前判定）：转换产出的实体在写图前先做多路召回 + 多证据评分。
 
+    批内同名同样走评分（先到记录作为唯一候选）：≥0.85 才并（同批 upsert）、
+    灰区开 T_LINK 案扣留、低分各自建点——同名不自动等于同一实体。
     三分支：得分 ≥0.85 且分差足够 → 改写 vid 并入已有实体（后续 INSERT VERTEX
     幂等 upsert，"合并"=属性覆盖到目标节点）；灰区 [0.65, 0.85) → 扣留该记录
     并创建 T_LINK case（候选+得分+待定关系随快照走，case 即待写队列）；<0.65 →
@@ -2435,17 +2437,38 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
     source_table = str(request.get("sourceTable") or "")
     batch_vids = {str(r.get("id")) for r in records}
 
-    # 1) 批内同名去重：同显示名的后到记录改写为先到记录的 vid（同批 upsert 合并）
-    first_by_name: dict[str, str] = {}
+    # 1) 批内同名合并走评分：后到记录与先到记录过 score_candidate/decide——
+    #    ≥0.85 改写 vid 并入（同批 upsert）；灰区打标 _batchGray（步骤 3 统一
+    #    开 T_LINK 案扣留）；<0.65 各自建点。不再无条件并：同批同显示名不等于
+    #    同一实体，重名（张伟×N）必须交给评分器（2026-10-16 同字重名同批必并的洞）
+    first_by_name: dict[str, dict[str, Any]] = {}
     deduped = 0
     for record in records:
-        key = normalize_display_name(display_name(record.get("props")))
+        display = display_name(record.get("props"))
+        key = normalize_display_name(display)
         if not key:
             continue
-        first_vid = first_by_name.setdefault(key, str(record.get("id")))
-        if first_vid != str(record.get("id")):
-            record["id"] = first_vid
+        first = first_by_name.setdefault(key, record)
+        if first is record:
+            continue
+        first_display = display_name(first.get("props"))
+        score, detail = score_candidate(
+            display, record.get("props"), first_display, first.get("props")
+        )
+        scored = [
+            {
+                "vid": str(first.get("id")),
+                "name": first_display,
+                "score": round(score, 3),
+                **detail,
+            }
+        ]
+        outcome = decide(scored)
+        if outcome["decision"] == "merge":
+            record["id"] = str(first.get("id"))
             deduped += 1
+        elif outcome["decision"] == "gray":
+            record["_batchGray"] = {"scored": scored, "outcome": outcome}
 
     # 2) 多路召回（图库同名精确 ∪ Milvus 近邻；带候选完整属性供评分，
     #    近邻路 fail-open 不可用即退化为仅同名精确——properties() 失败降级为仅名称）
@@ -2488,6 +2511,33 @@ async def resolve_entity_batch(request: dict[str, Any]) -> dict[str, Any]:
     stats = {"merged": 0, "withheld": 0, "deduped": deduped, "new": 0}
     for record in records:
         display = display_name(record.get("props"))
+        batch_gray = record.pop("_batchGray", None)
+        if batch_gray is not None:
+            # 批内同名灰区：与先到记录分数落入灰区，扣留开案人工裁决
+            # （建案失败 fail-open 照写，与图库灰区同口径）
+            try:
+                _open_entity_gray_case(
+                    graph=graph,
+                    name_tag=name_tag,
+                    display=display,
+                    record=record,
+                    scored=batch_gray["scored"],
+                    outcome=batch_gray["outcome"],
+                    step_id=request.get("stepId") or "align",
+                    source_table=source_table,
+                    info=info,
+                    task_id=task_id,
+                    execution_id=execution_id,
+                    execution=execution,
+                    stage="批内同名",
+                )
+                stats["withheld"] += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "批内同名灰区建案失败 vid=%s，记录按原样写图: %s", record.get("id"), exc
+                )
+                kept.append(record)
+            continue
         scored = []
         for cand in existing.get(display, []):
             if cand["vid"] in batch_vids:

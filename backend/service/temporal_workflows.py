@@ -2414,9 +2414,19 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                     logger.warning("写图活动取消：置停止派发标志，排空在途写线程后再解锁")
                     while True:
                         try:
-                            await write_task
+                            # 排空期间每次等待同样 shield：外层重复取消只落在
+                            # shield 外壳上，不传染 write_task。一旦传染，任务已
+                            # 取消而底层同步线程停不下来，再 await 已取消任务会
+                            # 立即抛错且不让出事件循环——无让出点忙等，饿死同
+                            # 循环的心跳与一切协程（Codex 三轮探针：watchdog 42）。
+                            await asyncio.shield(write_task)
                         except asyncio.CancelledError:
-                            continue  # 排空期间的再次取消：继续等线程收尾
+                            if write_task.cancelled():
+                                # 防御分支（持续 shield 下不可达）：工作任务自身
+                                # 已取消，其结果不再承载线程收尾信号，继续等只会
+                                # 忙等；取消标志已置、线程不会再派发，跳出上抛。
+                                break
+                            continue  # 外层重复取消：write_task 未受传染，继续排空
                         except Exception:  # noqa: BLE001
                             break  # 线程以错误收尾（含失锁熔断）：取消仍优先上抛
                         break

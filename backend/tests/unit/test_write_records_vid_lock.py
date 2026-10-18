@@ -450,6 +450,107 @@ class TestActivityCancellation:
                 await asyncio.gather(task, return_exceptions=True)
 
 
+class TestRepeatedCancellation:
+    async def test_repeated_cancel_during_drain_keeps_loop_and_heartbeat_alive(
+        self, vid_lock_env, monkeypatch
+    ):
+        """排空期间的重复取消：事件循环与心跳必须保持可调度（Codex 三轮 P1）。
+
+        旧实现排空循环裸 await write_task：二次取消传染给工作任务后，循环反复
+        await 已取消任务、立即抛错且不让出——同循环上一切协程（含锁心跳）饿
+        死。修复语义：排空等待持续 shield，外层重复取消只被吸收、继续等线程
+        收尾；期间锁仍持有、心跳仍在续期。
+        """
+        monkeypatch.setenv("ENTITY_WRITE_VID_LOCK_HEARTBEAT_SECONDS", "0.05")
+        fetched = threading.Event()
+        resume = threading.Event()
+        original_read = LockProbeGraphClient.execute_read
+        first = True
+
+        def delayed_read(self, query, *args, **kwargs):
+            nonlocal first
+            result = original_read(self, query, *args, **kwargs)
+            if query.startswith("FETCH PROP ON") and first:
+                first = False
+                fetched.set()
+                assert resume.wait(5), "探针未放行，写线程收尾卡死"
+            return result
+
+        monkeypatch.setattr(LockProbeGraphClient, "execute_read", delayed_read)
+        task = asyncio.create_task(
+            write_records(_request([{"id": "v1", "props": {"id": "v1", "scholar_org": "org-A"}}]))
+        )
+        try:
+            await _wait_event(fetched)
+            task.cancel()  # 第一次取消：进入排空
+            await asyncio.sleep(0.1)
+            assert FakeVidLockRedis.store, "排空期间 VID 写锁被提前释放"
+            renew_before = FakeVidLockRedis.renew_calls
+            # 第二、三次取消：每次后事件循环必须仍能调度（旧实现在此忙等冻结）
+            task.cancel()
+            await asyncio.sleep(0.05)
+            task.cancel()
+            await asyncio.sleep(0.05)
+            # 心跳在排空期间持续续期 = 同循环协程未被饿死
+            assert FakeVidLockRedis.renew_calls > renew_before, "排空期间锁心跳被饿死"
+            assert FakeVidLockRedis.store, "重复取消后 VID 写锁被提前释放"
+            resume.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert FakeVidLockRedis.store == {}
+            assert LockProbeGraphClient.write_stmts == []
+        finally:
+            resume.set()
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    async def test_cancel_during_inflight_insert_no_further_dispatch(
+        self, vid_lock_env, monkeypatch
+    ):
+        """在途 INSERT 阶段（而非 FETCH 阶段）取消：已派发的在途语句允许完成，
+        取消之后不得再追加任何派发；排空期间持锁，结束后才释放。"""
+        monkeypatch.setenv("ENTITY_WRITE_VID_LOCK_HEARTBEAT_SECONDS", "0.05")
+        inflight = threading.Event()
+        resume = threading.Event()
+        original_write = LockProbeGraphClient.execute_write
+
+        def paused_first_write(self, query, *args, **kwargs):
+            if not LockProbeGraphClient.write_stmts:
+                inflight.set()
+                assert resume.wait(5), "探针未放行，在途 INSERT 卡死"
+            return original_write(self, query, *args, **kwargs)
+
+        monkeypatch.setattr(LockProbeGraphClient, "execute_write", paused_first_write)
+        # 两个不同列集组 = 两个 chunk：第一 chunk 在途暂停，第二 chunk 待派发
+        records = [
+            {"id": "va", "props": {"id": "va", "scholar_org": "清华"}},
+            {"id": "vb", "props": {"id": "vb", "h_index": "5"}},
+        ]
+        task = asyncio.create_task(write_records(_request(records)))
+        try:
+            await _wait_event(inflight)
+            task.cancel()
+            await asyncio.sleep(0.1)
+            assert FakeVidLockRedis.store, "在途 INSERT 排空期间 VID 写锁被提前释放"
+            renew_before = FakeVidLockRedis.renew_calls
+            await asyncio.sleep(0.1)
+            assert FakeVidLockRedis.renew_calls > renew_before, "排空期间锁心跳被饿死"
+            resume.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            # 第一 chunk 取消前已派发、允许完成；第二 chunk 被熔断，零追加派发
+            assert len(LockProbeGraphClient.write_stmts) == 1
+            assert "va" in LockProbeGraphClient.state
+            assert "vb" not in LockProbeGraphClient.state
+            assert FakeVidLockRedis.store == {}
+        finally:
+            resume.set()
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+
 class TestCorruptExistingProps:
     async def test_corrupt_existing_properties_must_not_allow_overwrite(self, vid_lock_env):
         """P2：图上旧属性是无法解析的字符串 → 抛错 + 零写入（Codex 探针名沿用）。"""

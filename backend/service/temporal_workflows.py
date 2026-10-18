@@ -1767,16 +1767,31 @@ _GRAPH_TRANSIENT_RE = re.compile(
 _WATERMARK_RETRY_SLEEP_SECONDS = 20.0
 
 
-def _with_watermark_retry(fn: Callable[[], Any], *, label: str, max_attempts: int = 18) -> Any:
+def _with_watermark_retry(
+    fn: Callable[[], Any],
+    *,
+    label: str,
+    max_attempts: int = 18,
+    should_abort: Callable[[], bool] | None = None,
+) -> Any:
     """图库高水位错误的专用退避重试；非水位错误原样上抛（活动层重试兜底）。
 
     默认 18 × 20s = 6 分钟窗口（write_records STC 600s：2000 条限步调写入
     ~20s + 退避上限 360s 仍有余量）；调用方活动 STC 更紧时显式传小
     max_attempts（消歧召回 300s 内用 10、碰撞探测 120s 内用 4）。
+
+    ``should_abort``：**每次真正派发前**（含退避睡醒后的重试）检查，真值即
+    抛 RuntimeError 中止——写图路径用来在 VID 锁租期丢失/活动取消后阻止旧
+    快照继续派发 INSERT（失锁后的重试写入不能用「整批幂等重试」兜底）。
     """
     from infra.graph_db.exceptions import GraphRequestError
 
+    def _abort_check() -> None:
+        if should_abort is not None and should_abort():
+            raise RuntimeError(f"{label}：VID 写锁租期丢失/活动取消，中止派发（旧快照不可再写）")
+
     for attempt in range(1, max_attempts + 1):
+        _abort_check()
         try:
             return fn()
         except GraphRequestError as exc:
@@ -1790,6 +1805,7 @@ def _with_watermark_retry(fn: Callable[[], Any], *, label: str, max_attempts: in
                 _WATERMARK_RETRY_SLEEP_SECONDS,
             )
             time.sleep(_WATERMARK_RETRY_SLEEP_SECONDS)
+    _abort_check()
     return fn()
 
 
@@ -2056,6 +2072,10 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
 
         def write_with_self_heal(record: dict[str, Any], props: dict[str, Any]) -> None:
             while True:
+                if _abort_write():
+                    raise RuntimeError(
+                        "写图自愈：VID 写锁租期丢失/活动取消，中止派发（旧快照不可再写）"
+                    )
                 try:
                     if kind == "entity":
                         cols = ", ".join(f"`{key}`" for key in props)
@@ -2126,6 +2146,14 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
         # 语句字符上限：防大文本行（abstract 级）把单条语句撑过 graphd 语句
         # 长度/REST body 限制；超限即切块（单行超限仍独占一条语句）。
         max_stmt_chars = 2_000_000
+        # per-VID 写锁状态（fail-closed）：lost=心跳续期失败置位；cancel=活动
+        # 取消排空置位。_write_all 在 chunk 间、_write_chunk/write_with_self_heal
+        # 在每次真正派发前（含高水位退避重试、未知列自愈、逐条回退）检查——
+        # 失锁/取消后旧快照不得再派发 INSERT
+        vid_lost: dict[str, Any] = {}
+
+        def _abort_write() -> bool:
+            return bool(vid_lost.get("lost") or vid_lost.get("cancel"))
 
         def _fetch_existing_props(vids: list[str]) -> dict[str, dict[str, Any]]:
             """批量读图上已有属性（实体写前合并用）。
@@ -2251,6 +2279,10 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
             cols: list[str], chunk: list[tuple[dict[str, Any], dict[str, Any]]]
         ) -> int:
             while True:
+                if _abort_write():
+                    raise RuntimeError(
+                        "批量写图：VID 写锁租期丢失/活动取消，中止本 chunk 派发（旧快照不可再写）"
+                    )
                 cols_sql = ", ".join(f"`{col}`" for col in cols)
                 values_sql = ", ".join(_row_segment(record, props, cols) for record, props in chunk)
                 if kind == "entity":
@@ -2261,6 +2293,7 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                     _with_watermark_retry(
                         lambda stmt=stmt: client.execute_write(stmt),
                         label=f"批量写图 {name} ×{len(chunk)}",
+                        should_abort=_abort_write,
                     )
                     return len(chunk)
                 except GraphRequestError as exc:
@@ -2294,6 +2327,7 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                                     record, props
                                 ),
                                 label=f"写图 {name} {record.get('id') or record.get('fromId')}",
+                                should_abort=_abort_write,
                             )
                         return len(chunk)
                     raise
@@ -2302,9 +2336,6 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
         # 增量索引用；在 _write_chunk 语句成功后按 chunk 收集（chunk 是组内
         # 去重后的实际写入行，回退逐条路径同样以整 chunk 成功返回）。
         written_vids: list[str] = []
-        # per-VID 写锁丢失标记（fail-closed）：心跳续期失败置位，_write_all
-        # 在 chunk 间检查并中止
-        vid_lost: dict[str, Any] = {}
 
         def _write_all() -> int:
             written_local = 0
@@ -2329,9 +2360,10 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                 cols = list(items[0][2].keys())
                 start = 0
                 while start < len(rows):
-                    if vid_lost.get("lost"):
+                    if _abort_write():
                         raise RuntimeError(
-                            "VID 写锁续期失败，中止本批后续写入（已写 chunk 幂等，活动层整批重试）"
+                            "VID 写锁租期丢失/活动取消，中止本批后续 chunk"
+                            "（已写 chunk 幂等，活动层整批重试）"
                         )
                     chunk: list[tuple[dict[str, Any], dict[str, Any]]] = []
                     size = 0
@@ -2370,7 +2402,25 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                 else nullcontext()
             )
             async with vid_lock:
-                return await asyncio.to_thread(_write_all)
+                # 同步写线程不随协程取消而停（to_thread 取消只放弃等待）：
+                # shield + 取消排空——置停止派发标志后**等在途线程收尾**再退
+                # 出临界区（期间仍持锁 + 心跳续期），杜绝「锁已还、僵尸线程
+                # 持旧快照继续 INSERT」的并发清列窗口；只 shield 不排空无效。
+                write_task = asyncio.create_task(asyncio.to_thread(_write_all))
+                try:
+                    return await asyncio.shield(write_task)
+                except asyncio.CancelledError:
+                    vid_lost["cancel"] = True
+                    logger.warning("写图活动取消：置停止派发标志，排空在途写线程后再解锁")
+                    while True:
+                        try:
+                            await write_task
+                        except asyncio.CancelledError:
+                            continue  # 排空期间的再次取消：继续等线程收尾
+                        except Exception:  # noqa: BLE001
+                            break  # 线程以错误收尾（含失锁熔断）：取消仍优先上抛
+                        break
+                    raise
 
         if kind == "entity" and records and _entity_write_guard.prewrite_recheck_enabled():
             from service.entity_disambiguation import display_name as _entity_display_name

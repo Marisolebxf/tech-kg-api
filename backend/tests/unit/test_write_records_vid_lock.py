@@ -31,7 +31,17 @@ from typing import Any
 import pytest
 
 from service import entity_write_guard as guard
+from service import temporal_workflows as workflows
 from service.temporal_workflows import write_records
+
+
+async def _wait_event(event: threading.Event, timeout_s: float = 5.0) -> None:
+    for _ in range(int(timeout_s / 0.01)):
+        if event.is_set():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("探针事件等待超时")
+
 
 _AUDIT_COLS = {"id", "source_table", "create_time", "update_time"}
 
@@ -359,6 +369,85 @@ class TestLeaseRenewal:
             await write_records(req)
         assert len(LockProbeGraphClient.write_stmts) == 1
         assert FakeVidLockRedis.store == {}
+
+    async def test_lease_loss_must_stop_current_chunk_retry(self, vid_lock_env, monkeypatch):
+        """失锁后当前 chunk 内的重试不得再派发（Codex 探针吸收，名字沿用）。
+
+        首次 INSERT 抛高水位瞬态，退避睡醒前心跳已报租期丢失——重试必须在
+        真正派发前被拦下：只有一次尝试、零成功写入、退出时报租期丢失。
+        """
+        from infra.graph_db.exceptions import GraphRequestError
+
+        monkeypatch.setenv("ENTITY_WRITE_VID_LOCK_HEARTBEAT_SECONDS", "0.05")
+        monkeypatch.setattr(workflows, "_WATERMARK_RETRY_SLEEP_SECONDS", 0.2)
+        FakeVidLockRedis.renew_ok = False
+        original_write = LockProbeGraphClient.execute_write
+        attempts: list[str] = []
+
+        def transient_first_write(self, query, *args, **kwargs):
+            attempts.append(query)
+            if len(attempts) == 1:
+                raise GraphRequestError("high watermark", status_code=503)
+            return original_write(self, query, *args, **kwargs)
+
+        monkeypatch.setattr(LockProbeGraphClient, "execute_write", transient_first_write)
+        with pytest.raises(RuntimeError, match="租期丢失"):
+            await write_records(
+                _request([{"id": "v1", "props": {"id": "v1", "scholar_org": "org-A"}}])
+            )
+        assert FakeVidLockRedis.renew_calls >= 1  # 丢失确实在重试睡醒前被观察到
+        assert len(attempts) == 1, "失锁已被心跳观察到，INSERT 仍被再次派发"
+        assert LockProbeGraphClient.write_stmts == []
+
+
+class TestActivityCancellation:
+    async def test_cancelled_activity_must_not_unlock_running_write_thread(
+        self, vid_lock_env, monkeypatch
+    ):
+        """活动取消不得在写线程仍在跑时解锁（Codex 探针吸收，名字沿用）。
+
+        旧实现：协程取消 → 上下文立即停心跳/释放锁，同步线程持旧快照继续
+        INSERT，与后到写方并发清列。修复语义：取消 → 置停止派发标志 →
+        **排空等待在途线程收尾**（期间锁仍被持有）→ 才释放 → 取消上抛。
+        """
+        fetched = threading.Event()
+        resume = threading.Event()
+        original_read = LockProbeGraphClient.execute_read
+        first = True
+
+        def delayed_read(self, query, *args, **kwargs):
+            nonlocal first
+            result = original_read(self, query, *args, **kwargs)
+            if query.startswith("FETCH PROP ON") and first:
+                first = False
+                fetched.set()
+                assert resume.wait(5), "探针未放行，写线程收尾卡死"
+            return result
+
+        monkeypatch.setattr(LockProbeGraphClient, "execute_read", delayed_read)
+        task = asyncio.create_task(
+            write_records(_request([{"id": "v1", "props": {"id": "v1", "scholar_org": "org-A"}}]))
+        )
+        try:
+            await _wait_event(fetched)
+            task.cancel()
+            await asyncio.sleep(0.1)  # 取消已送达、排空中：线程仍暂停在 FETCH
+            # 排空期间锁必须仍被持有——后到写方此刻无法插队获取
+            assert FakeVidLockRedis.store, "取消排空期间 VID 写锁被提前释放"
+            resume.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            # 排空完成才释放；被取消的写方未派发任何 INSERT（旧快照不再落图）
+            assert FakeVidLockRedis.store == {}
+            assert LockProbeGraphClient.write_stmts == []
+            # 后到写方照常落列，不会被已取消的旧快照覆盖
+            await write_records(_request([{"id": "v1", "props": {"id": "v1", "h_index": "5"}}]))
+            assert LockProbeGraphClient.state["v1"]["h_index"] == "5"
+        finally:
+            resume.set()
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
 
 
 class TestCorruptExistingProps:

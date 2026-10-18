@@ -1,0 +1,92 @@
+{
+  "jobId": "915d08d8f3fe4973bea6cb9e4a6a1680",
+  "sink": "csv",
+  "rows": [
+    {
+      "_id": "person_A2026L004",
+      "louvain": "paper_P2026L005"
+    },
+    {
+      "_id": "paper_P2026L004",
+      "louvain": "paper_P2026L005"
+    },
+    {
+      "_id": "paper_P2026L005",
+      "louvain": "paper_P2026L005"
+    },
+    {
+      "_id": "journal_J002",
+      "louvain": "paper_P2026L005"
+    },
+    {
+      "_id": "journal_J004",
+      "louvain": "person_A2026L002"
+    },
+    {
+      "_id": "person_A2026L002",
+      "louvain": "person_A2026L002"
+    },
+    {
+      "_id": "paper_P2026L001",
+      "louvain": "person_A2026L002"
+    },
+    {
+      "_id": "paper_P2026L008",
+      "louvain": "person_A2026L002"
+    },
+    {
+      "_id": "paper_P2026L009",
+      "louvain": "journal_J005"
+    },
+    {
+      "_id": "journal_J005",
+      "louvain": "journal_J005"
+    },
+    {
+      "_id": "paper_P2026L010",
+      "louvain": "journal_J005"
+    },
+    {
+      "_id": "paper_P2026L006",
+      "louvain": "journal_J005"
+    },
+    {
+      "_id": "person_A2026L001",
+      "louvain": "journal_J005"
+    },
+    {
+      "_id": "person_A2026L005",
+      "louvain": "journal_J005"
+    },
+    {
+      "_id": "person_A2026L006",
+      "louvain": "journal_J005"
+    },
+    {
+      "_id": "paper_P2026L003",
+      "louvain": "journal_J001"
+    },
+    {
+      "_id": "paper_P2026L002",
+      "louvain": "journal_J001"
+    },
+    {
+      "_id": "journal_J001",
+      "louvain": "journal_J001"
+    },
+    {
+      "_id": "journal_J003",
+      "louvain": "journal_J003"
+    },
+    {
+      "_id": "person_A2026L003",
+      "louvain": "journal_J003"
+    },
+    {
+      "_id": "paper_P2026L007",
+      "louvain": "journal_J003"
+    }
+  ],
+  "count": 21,
+  "truncated": false
+}

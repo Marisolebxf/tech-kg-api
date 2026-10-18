@@ -1,0 +1,84 @@
+{
+  "edgeCount": 37,
+  "vertexCount": 34,
+  "degree": {
+    "rows": 34,
+    "mismatches": [],
+    "sumIn": 37,
+    "sumOut": 37,
+    "sumDegree": 74
+  },
+  "pagerank": {
+    "rows": 34,
+    "resetProb": 0.15,
+    "maxIter": 10,
+    "normalization": "sum of ranks = vertex count; no dangling-mass redistribution in recurrence",
+    "maximumAbsoluteError": 4.440892098500626e-16,
+    "sum": 33.999999999999986,
+    "pass": true
+  },
+  "louvain": {
+    "expectedVertices": 34,
+    "returnedVertices": 21,
+    "truncated": false,
+    "missing": [
+      "org_O2026L003",
+      "node_IC0101002",
+      "node_IC0101004",
+      "org_O2026L001",
+      "node_IC0101001",
+      "node_IC0101003",
+      "org_O2026L005",
+      "node_IC0101005",
+      "org_O2026L004",
+      "node_IC0202005",
+      "org_O2026L002",
+      "node_IC0202001",
+      "node_IC0202003"
+    ],
+    "communityCount": 5,
+    "groups": {
+      "paper_P2026L005": [
+        "person_A2026L004",
+        "paper_P2026L004",
+        "paper_P2026L005",
+        "journal_J002"
+      ],
+      "person_A2026L002": [
+        "journal_J004",
+        "person_A2026L002",
+        "paper_P2026L001",
+        "paper_P2026L008"
+      ],
+      "journal_J005": [
+        "paper_P2026L009",
+        "journal_J005",
+        "paper_P2026L010",
+        "paper_P2026L006",
+        "person_A2026L001",
+        "person_A2026L005",
+        "person_A2026L006"
+      ],
+      "journal_J001": [
+        "paper_P2026L003",
+        "paper_P2026L002",
+        "journal_J001"
+      ],
+      "journal_J003": [
+        "journal_J003",
+        "person_A2026L003",
+        "paper_P2026L007"
+      ]
+    },
+    "singleRelation": {
+      "labels": [
+        "BELONGS_TO_NODE"
+      ],
+      "edges": 8,
+      "expectedVertices": 13,
+      "returnedVertices": 0,
+      "jobStatus": "succeeded",
+      "truncated": false
+    }
+  }
+}

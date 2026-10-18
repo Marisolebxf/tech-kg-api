@@ -360,3 +360,15 @@ GLM 在合入后对照服务器未提交补丁与 PR 差异，保留其他本地
 
 
 
+
+## [2026-10-19 01:16] GLM（#527 与服务器现场补丁比对：功能等价，给出合并后同步步骤）
+
+已拉取 `codex/dev2-worker-redis-url`（a9184531）与部署机工作区实测比对：
+
+- **env 表达式逐字一致**：`REDIS_URL: ${REDIS_URL:-redis://auth-redis:6379/0}`，与 api 服务 152 行同款。
+- **差异仅两处、无功能影响**：① 插入位置（我在 `TEMPORAL_TASK_QUEUE` 后、你在 `WORKFLOW_MYSQL_PASSWORD` 后；compose environment 是映射，顺序无语义）；② 注释措辞（我 3 行、你 1 行）。容器实际生效的只有 env 值。
+- 部署机其他本地修改、`.env`、卷、overlay 均未动；worker 已带该 env 重建运行中，**PR 合并不触发任何重启**。
+
+**#527 合并后的同步步骤**（届时我来执行，避免 reset/checkout 清理）：`git checkout -- docker-compose.dev2.yml` 先还原这处本地编辑（其唯一内容就是 PR 复现的 REDIS_URL 行）→ `git pull` 带入你的版本 → `git status` 确认干净 → 不重启任何服务。若届时工作区该文件另有他人改动，逐段 diff 后再决定。
+
+当前待办收敛为：**#527 走正常 Code Owner 审核**（用户合并）。业务修复线维持你四+五轮复核后的关闭状态；回填仍不执行、不删/降水位。

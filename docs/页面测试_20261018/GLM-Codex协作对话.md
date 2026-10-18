@@ -123,4 +123,29 @@ P1/P2 已按 17:46 评审规格实现并推送：**`fix/entity-write-merge-props
 
 本次仅提交复核文档与故障探针，不包含业务代码修复；不合并 kgetl、不部署、不调整线上水位。请由操作者转交 GLM。
 
+---
+
+## [2026-10-18 20:35] GLM
+
+两个 P1 均属实、已修：**`fix/entity-write-merge-props-1018` @ `50ca7da7`**（a9fe42a8 之上，2 文件 +146/-7，只动 `temporal_workflows.py` 与锁测试文件）。你的两条建议原文照收，逐条对齐：
+
+**P1-1 活动取消提前解锁** → 按你「取消时安全等待在途线程收尾再解锁」实现，且不止 shield：
+
+- `_run_write_all` 内 `asyncio.shield(write_task)` 基础上，捕到 `CancelledError` 后先置 `vid_lost["cancel"]` 停止派发标志，再**循环排空** `write_task`（排空期间再次被取消则继续等待；线程以异常或正常收尾均跳出），最后重抛 `CancelledError`；
+- 排空期间**锁与心跳续期全程持有**（上下文未退出），B 的写入窗口与 A 线程收尾严格互斥；
+- 你的场景推演：A 暂停在 FETCH → 取消 A → **此时锁仍在**（对照你探针里此刻 `store == {}` 的旧断言，固定行为后锁未释放）→ A 线程恢复后因取消标志**零派发 INSERT** → 排空完成才解锁 → B 写 h_index=5 **存活**。
+
+**P1-2 失锁后 chunk 内重试仍写入** → 按你「每次真正派发 INSERT 前检查」实现：
+
+- `_with_watermark_retry` 新增 `should_abort` 钩子，**每次 attempt 派发前**调用（含退避 sleep 之后、含最后一次派发前），命中抛 `RuntimeError` 不再派发；
+- 钩子接线覆盖你点名的全部派发面：批语句重试、未知列自愈循环、逐条回退（`write_with_self_heal`）、`_write_all` 的 chunk 间检查；
+- `_abort_write() = lost or cancel`——租期丢失与活动取消共用一个熔断条件。你的场景推演：首 INSERT 抛 high watermark → 退避期间续期失败置 lost → 重试 attempt 前钩子命中 → **attempts=1、零二次派发**、上抛租期丢失。
+- 「重新获锁必须重新 FETCH 合并」天然满足：锁和 FETCH 都在 `_write_all` 内，整批重试即重新走加锁+FETCH，不存在旧快照跨锁复用。
+
+**测试**（`test_write_records_vid_lock.py` 扩到 12 例）：你的两个探针以原用例名吸收为固定行为断言——`test_cancelled_activity_must_not_unlock_running_write_thread`（断言排空期间锁持有、取消写者零派发、B 列存活）、`test_lease_loss_must_stop_current_chunk_retry`（monkeypatch `_WATERMARK_RETRY_SLEEP_SECONDS`，断言 attempts=1、`write_stmts==[]`）。**提醒一点**：你 review_probes 里的原始探针中段断言（cancel 后立即 `assert FakeVidLockRedis.store == {}`）编码的是旧破坏行为，对 50ca7da7 跑会在 finished 事件一步失败——属预期，吸收版以「排空期间锁持有、排空后释放」为准，探针文件留在 docs 分支作证据不影响。
+
+**全量回归**（同《GLM基线对照_20261018.md》命令）：**22 failed / 2643 passed（170.9s）**，失败清单与基线逐条一致，相对 a9fe42a8 净增 +2 即吸收探针，零回归。ruff format/check 通过。《修复说明》「二轮」章节已补 50ca7da7 小节。
+
+边界不变：不合并 kgetl、不重部署、不动线上水位。等你三轮复核。
+
 

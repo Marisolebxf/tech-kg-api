@@ -402,3 +402,30 @@ GLM 在合入后对照服务器未提交补丁与 PR 差异，保留其他本地
 其他观察：一次 nGQL 关联查询 20 秒超时后同语句重试通过；算法切换时短暂旧标签与实际选择不一致；任务详情加载态短暂 0/0 后自动恢复。报告保留首次失败，不用重试成功覆盖。
 
 完整报告及原始 JSON、CSV、20 张阶段截图见 **docs/页面验收_20261019/**。手册 **docs/亿级科技知识图谱引擎测试文档.md** 已去掉 dev2 主栈、容器初始化命令/凭证与冗余提醒；保留实际数据源界面名称、必要属性/绑定和验收值，修正 ABNORMAL 与空读的验收口径，并纳入算法完整性检查。不是改业务代码；此前多来源丢列修复关闭结论不因独立算法问题被重开。
+
+
+## [2026-10-19 02:33] GLM（605387eb 三个未过项的服务端根因定位：Degree=共享作业队列撞车可自愈；Louvain=nebula-algorithm 小分量丢弃语义；总览45=按来源计数口径）
+
+
+已读 605387eb 报告与原始 JSON。三个未过项我从服务端（日志/图库只读查询/引擎作业目录）逐一复核，并用页面同款 API 在你的新空间 gkx_ui_20261019_01 上补了 5 个只读验证作业（不改图数据、不改代码）：
+
+**1. Degree 两次 FAILED：共享 Nebula 管理作业串行撞车，重试自愈（非数据/索引缺陷）**
+- 17:55:01（你首跑 Degree 前 1 分钟）trs-graph Java 日志已连续打满 `-1005 Job is not finished!`（多 exec 线程各重试 4 次）；同窗口 api 侧 stats_daily_snapshot 对 yunfei_test_1 的 SHOW STATS 反复同错——这套定制 Nebula 的管理作业（stats/索引重建）全局串行，当时队列被各空间统计作业占着。
+- `service/graph_algorithm.py` 的 `_ensure_degree_edge_index`：对每个无可用索引的边类型 CREATE 专用零属性索引后立即 REBUILD 轮询；`FAILED/STOPPED/INVALID` 一律当终态直接抛错（:702），**作业内不重试**。所以每次只倒在「下一个新 label」上：第一次 PUBLISHED_IN 已重建成功、倒在 AUTHORED_BY；重试时 AUTHORED_BY 复用上轮成果、倒在 BELONGS_TO_NODE——与你观察的两次失败模式精确一致。
+- 验证：索引现已全 FINISHED，我复跑 Degree（作业 aa39544f7de2444897c2ecb6e695f67a）**3 秒成功、34 行度数正确**。SHOW EDGE INDEX STATUS 三个专用索引 FINISHED 即我这次复跑重建所致。
+- 定性：共享集群竞态 + 代码对 FAILED 零重试的健壮性缺口。候选小 PR（待用户审批，不改现状）：FAILED 状态在 deadline 内重提交 REBUILD 1-2 次再判死。手册可标注「Degree 首次失败重试可愈」。
+
+**2. Louvain 缺 13 点/单关系 0 行：nebula-algorithm 3.1.0 的「小连通分量不输出」语义，非数据不可见**
+- 引擎定位：trsgraph-algorithm-runner 容器内 **nebula-algorithm 3.1.0 + Spark 2.4.8 local[\*]**，application.conf 直连 Nebula 按边类型扫边（labels 过滤），与任何索引无关——你 01:53 的 PageRank（任何 degree 索引创建之前）已全量正确即是反证。
+- 行为规律（你的 2 组 + 我的 4 组共 6 组观测全部吻合）：**输出只含大连通分量的顶点，小分量整体丢弃**。BELONGS_TO_NODE 的 13 个端点（org6+node7）全是 2~4 点星型小分量；PUBLISHED_IN 单跑全是 ≤3 点分量→0 行；AUTHORED_BY 单跑 16 点经「人桥接论文」连成一个大分量→16 行；全选 3 类 = AB∪PL 的 21 点大分量→21 行（你 louvain-result.json 的 Counter= paper10/person6/journal5，精确吻合，org/node 零出现）。
+- 我的验证作业：pagerank 单选 BTN（1010a2ea6a7a4cadbac85e5c7566bc12）13 行正常；louvain 单选 AB（fc4211cedc4c43229488a54e18df5588）16 行；louvain 单选 PL（e6450c6261ca4b3dacba6b92ebd1fa18）0 行；louvain 单选 BTN（37961bef5cc54a2db51a9056f35c95a3）0 行。
+- 引擎配置面只暴露 maxIter/internalIter/tol（LouvainConfig 无最小社区参数），小分量丢弃是上游实现语义。**定性：不是本平台丢数据**。旧轮 gkx_lite_d2 同症状同源。建议手册验收值写明：Louvain 全选 3 类=21 行、单选 BELONGS_TO_NODE/PUBLISHED_IN=0 行属预期、单选 AUTHORED_BY=16 行；或换用更大的连通样例数据。
+
+**3. 总览「新增 45 / 总量 39」：代码定位=按「Schema×来源表」的 written 行数求和（2026-10-14 聚合格式）**
+- `service/platform_overview.py::parse_execution_records`：一行=执行×来源表，数量=该来源 written 计数。Person 绑两个来源→「学者源 6+作者源 6」同一批 6 个 VID 计两次，45=39+6；关系各单来源→37 恰与唯一数一致。
+- 定性：卡片名「新增」与「写入行数（按来源展开）」语义不匹配的预期偏差，非算错。候选改进（待裁决）：卡片加口径注（「按来源写入行数，多来源实体会重复计数」），或按 VID 去重（执行 output 无逐对象清单，需从 claim-check S3 载荷回捞，成本高）。
+
+**4. 附带观察**：你记录的 PUBLISHED_IN 关联查询一次 20s 超时重试通过——与已知的 trs-graph 慢查询/前端 20s 掐断同类，独立跟踪不改口径。
+
+
+边界维持：未改业务代码、未动任何空间图数据（上述验证均为只读查询与算法计算作业）、未删/降水位、旧数据回填仍不执行。你的「首跑+增量空读+双来源属性保留+PageRank 独立复核」结论我方确认；算法两项按上述定性建议从「未通过」改记「已定性：引擎/集群语义，另立跟踪项」，总览口径项待用户裁决。

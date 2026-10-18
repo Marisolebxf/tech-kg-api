@@ -1926,11 +1926,16 @@ async def _prewrite_recheck(
 async def write_records(request: dict[str, Any]) -> dict[str, Any]:
     """把转换结果写图：实体/关系各走 nGQL 多行批量 INSERT。
 
-    实体走 nGQL ``INSERT VERTEX``（vid=记录 id，列级 upsert 幂等）——REST
-    ``/nodes/merge`` 会把 id/name/vid 当身份键从属性剥离，而 Schema DDL 把
-    id/name 建成 NOT NULL 列，merge 永远缺列。只写 activeProps 内的属性，
-    Schema 注入的 NOT NULL 溯源列（create_time/update_time/source_table）
-    缺省时由平台补默认值（脚本只管业务字段）。``graph.space`` 指定目标图空间。
+    实体走 nGQL ``INSERT VERTEX``（vid=记录 id）——REST ``/nodes/merge`` 会把
+    id/name/vid 当身份键从属性剥离，而 Schema DDL 把 id/name 建成 NOT NULL 列，
+    merge 永远缺列。只写 activeProps 内的属性，Schema 注入的 NOT NULL 溯源列
+    （create_time/update_time/source_table）缺省时由平台补默认值（脚本只管业务
+    字段）。``graph.space`` 指定目标图空间。
+
+    实体写前合并：Nebula 的 INSERT VERTEX 对已存在顶点是**整标签覆盖**（未列出
+    的列被重置，非列级 upsert），多来源绑同一实体或跨批重写同 vid 时后写会把
+    先写的列清掉——写前先做同 VID 列级合并（批内累积 + FETCH 图上旧值，未携带
+    的列保留，create_time/update_time 每次刷新），见 ``_merge_entity_rows``。
 
     批量多行：一批记录按属性列集分组，同组拼成一条多行 INSERT（一条语句一次
     HTTP 往返，替代逐条写；行数上限 ``SCHEMA_EXTRACT_WRITE_BATCH_ROWS``，默认
@@ -2062,9 +2067,9 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                             f"INSERT VERTEX `{name}`({cols}) VALUES {vid}:({values})"
                         )
                     else:
-                        # 关系也走 nGQL INSERT EDGE（列级 upsert，同实体结论）：
-                        # REST /edges/merge 要求 identityProps 非空（平台语义里
-                        # 边以 from/to/rank 定位），空 identity 会被 400 拒绝
+                        # 关系也走 nGQL INSERT EDGE：REST /edges/merge 要求
+                        # identityProps 非空（平台语义里边以 from/to/rank 定位），
+                        # 空 identity 会被 400 拒绝
                         ecols = ", ".join(f"`{key}`" for key in props)
                         evalues = ", ".join(
                             ngql_value_typed(value, key) for key, value in props.items()
@@ -2110,9 +2115,10 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
 
         # 批量多行写图下放线程：一批记录按「属性列集」分组拼成多行 INSERT 语句
         # （一条语句一次 HTTP 往返，摊薄逐条写的会话/解析成本，吞吐 5-10×）。
-        # 语义与逐条写等价：同列集组内同目标（同 vid / 同 from->to）后者覆盖前者
-        # = 顺序写的最后写者；不同列集的组各写各的列，列级 upsert 互不覆盖，
-        # 组间按「组内最后一条记录的原始序」排序保证共享列的终值与逐条一致。
+        # 注意 Nebula 的 INSERT VERTEX/EDGE 对已存在目标是整标签/整边覆盖：
+        # 未列出的列会被重置成默认值，「不同列集的组各写各的列」并不成立
+        # （2026-10-18 页面测试实测证伪）。实体的多来源/跨批同 VID 由
+        # _merge_entity_rows 先做列级合并兜住；分组只影响语句拼装形状。
         # 组内单行级错误（类型不匹配等）回退逐条隔离；高水位/瞬态错误走专用
         # 退避（_with_watermark_retry），每累计 pace_every 行歇 pace_sleep 秒。
         pace_every, pace_sleep = _write_pacing()
@@ -2121,9 +2127,85 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
         # 长度/REST body 限制；超限即切块（单行超限仍独占一条语句）。
         max_stmt_chars = 2_000_000
 
-        def _prepared() -> list[tuple[int, dict[str, Any], dict[str, Any]]]:
+        def _fetch_existing_props(vids: list[str]) -> dict[str, dict[str, Any]]:
+            """批量读图上已有属性（实体写前合并用）。
+
+            ``FETCH PROP ON tag v1,v2,... YIELD id(vertex), properties(vertex)``；
+            64 个 vid 一条语句（与写批同量级）。trs-graph 可能把 map 序列化成
+            JSON 字符串，两种形状都兜住。读失败经 _with_watermark_retry 烧尽后
+            上抛——合并失败宁可让活动重试，不能静默退回「覆盖清列」旧行为。
+            """
+            out: dict[str, dict[str, Any]] = {}
+            for start in range(0, len(vids), 64):
+                part = vids[start : start + 64]
+                quoted = ", ".join(json.dumps(v, ensure_ascii=False) for v in part)
+                result = _with_watermark_retry(
+                    lambda quoted=quoted: client.execute_read(
+                        f"FETCH PROP ON `{name}` {quoted} "
+                        "YIELD id(vertex) AS vid, properties(vertex) AS props"
+                    ),
+                    label=f"读旧值合并 {name} ×{len(part)}",
+                )
+                for row in getattr(result, "records", None) or []:
+                    vid = str(row.get("vid") or "")
+                    value = row.get("props")
+                    if isinstance(value, str):
+                        try:
+                            value = json.loads(value)
+                        except ValueError:
+                            value = None
+                    if vid and isinstance(value, dict):
+                        # 图上 NULL（从未置过的列）不进合并，交给 filtered 的
+                        # NOT NULL 兜底，避免把 NULL 显式写回
+                        out[vid] = {k: v for k, v in value.items() if v is not None}
+            return out
+
+        def _merge_entity_rows() -> list[dict[str, Any]]:
+            """实体同 VID 列级合并：批内累积 + 图上旧值保留。
+
+            多来源绑同一实体（如 Person=dwd_scholar+dwd_zh_author）或跨批重写
+            同一 vid 时，后写只携带子集列，裸 INSERT 会把先写的列重置掉。合并
+            规则（列级「后写覆盖、未携带保留」）：
+            1) 批内同 VID 多条按出现序累积 props（同列后者覆盖，先出现的列保留）；
+            2) FETCH 图上已有属性，记录未携带的列保留图上值——create_time/
+               update_time 除外（每次写入由平台兜底刷新，维持旧口径）；
+            3) DESCRIBE 可知标签全列且本批已覆盖全部列时跳过 FETCH 省一次往返。
+            """
+            if not records:
+                return records
+            accumulated: dict[str, dict[str, Any]] = {}
+            order: list[str] = []
+            for record in records:
+                vid = str(record.get("id") or "")
+                if not vid:
+                    continue
+                if vid not in accumulated:
+                    accumulated[vid] = {"id": record["id"], "props": {}}
+                    order.append(vid)
+                accumulated[vid]["props"].update(record.get("props") or {})
+            if not order:
+                return records
+            tag_cols = set(column_types) if column_types else None
+            fetch_vids = [
+                vid
+                for vid in order
+                if tag_cols is None or (tag_cols - set(accumulated[vid]["props"]))
+            ]
+            existing = _fetch_existing_props(fetch_vids) if fetch_vids else {}
+            for vid in order:
+                old = existing.get(vid) or {}
+                merged = {
+                    **{k: v for k, v in old.items() if k not in ("create_time", "update_time")},
+                    **accumulated[vid]["props"],
+                }
+                accumulated[vid]["props"] = merged
+            return [accumulated[vid] for vid in order]
+
+        def _prepared(
+            rows: list[dict[str, Any]] | None = None,
+        ) -> list[tuple[int, dict[str, Any], dict[str, Any]]]:
             prepared_rows: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
-            for idx, record in enumerate(records):
+            for idx, record in enumerate(records if rows is None else rows):
                 props = filtered(record.get("props"))
                 if kind == "entity" and not props:
                     continue
@@ -2208,8 +2290,11 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
         def _write_all() -> int:
             written_local = 0
             unslept = 0
+            # 实体写前合并（守卫锁临界区内）：多来源/跨批同 VID 未携带的列
+            # 保留图上旧值，不再被后写覆盖清空
+            write_rows = _merge_entity_rows() if kind == "entity" else records
             groups: dict[tuple[str, ...], list[tuple[int, dict[str, Any], dict[str, Any]]]] = {}
-            for idx, record, props in _prepared():
+            for idx, record, props in _prepared(write_rows):
                 groups.setdefault(tuple(props.keys()), []).append((idx, record, props))
             # 组间按组内最后一条记录的原始序执行（共享列终值与逐条写一致）
             ordered = sorted(groups.items(), key=lambda kv: kv[1][-1][0])

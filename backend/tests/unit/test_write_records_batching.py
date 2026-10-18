@@ -2,8 +2,9 @@
 
 批量写图语义等价性的关键点：
 - 同属性列集一组拼一条多行语句；组内同目标（同 vid / 同 from->to）后者覆盖前者；
-- 不同列集的组各写各的列，组间按「组内最后一条记录的原始序」排序（共享列
-  终值与逐条顺序写一致）；
+- 不同列集的组组间按「组内最后一条记录的原始序」排序；Nebula 的 INSERT VERTEX
+  对已存在顶点是整标签覆盖（未列出列被重置），同 VID 跨列集的保留语义由
+  _merge_entity_rows 承担（见 test_write_records_merge.py），分组只管语句形状；
 - unknown column 整组剔列重试；行级错误回退逐条定位坏行。
 """
 
@@ -132,7 +133,11 @@ class TestEntityBatching:
         assert '"a":(' in second and '"c":(' in second and '"b":(' not in second
 
     async def test_shared_column_final_value_matches_sequential(self, client):
-        """同 vid 跨组：共享列（name）终值须等于逐条顺序写的最后写者。"""
+        """同 vid 跨列集：先合并成一条（列级后者覆盖、先出现的列保留）再写。
+
+        Nebula INSERT VERTEX 是整标签覆盖，两条子集语句会把先写的列清掉；
+        合并后一条语句携带并集列，共享列（name）终值 = 逐条顺序写的最后写者。
+        """
         from service.temporal_workflows import write_records
 
         records = [
@@ -142,12 +147,12 @@ class TestEntityBatching:
         request = entity_request(records)
         request["activeProps"].append("tagx")  # tagx 须在白名单内
         result = await write_records(request)
-        assert result == {"written": 2}
+        assert result == {"written": 1}
         statements = stmts()
-        assert len(statements) == 2
-        # tagx 组（最后成员 idx0）先写、{id,name} 组（idx1）后写 → name 终值 = 晚
-        assert "`tagx`" in statements[0] and "早" in statements[0]
-        assert "`tagx`" not in statements[1] and "晚" in statements[1]
+        assert len(statements) == 1
+        stmt = statements[0]
+        assert "`tagx`" in stmt and '"x"' in stmt  # 先出现的列保留
+        assert "晚" in stmt and "早" not in stmt  # 共享列最后写者胜
 
     async def test_same_vid_dedupe_keeps_last(self, client):
         from service.temporal_workflows import write_records

@@ -275,6 +275,23 @@ PR 描述中「新建同配置全量任务」的原措辞据此已更正。
 
 建议下一阶段拆开审批：先合并/部署修复并在隔离空间做真实服务集成与页面验收，再决定生产回填范围与具体方案。没有替用户作出批准：当前不合并、不部署、不复制 Schema、不删除/降低线上水位。Louvain、日增统计继续独立跟踪。
 
+---
+
+## [2026-10-19] Codex（用户批准第一步，执行遇到仓库审核与部署连接阻碍）
+
+用户已明确批准上一条提出的第一步：合并修复到 kgetl、重新部署，在隔离空间做真实 Redis/Nebula/Temporal 集成与页面验收。**未批准旧数据回填，不删除/降低线上水位，不在既有生产空间重跑。**
+
+已创建 PR **#526**：https://github.com/Marisolebxf/tech-kg-api/pull/526 ，base kgetl @ 47ad7c39195ff6aac9ea6f6f3a661a3189ff1ac0，head fix/entity-write-merge-props-1018 @ 0e6e32a5afd230144f90a956dd015f4db071c655。PR 无冲突，但 mergeable_state=blocked；当前提交 check-runs 数量为 0，不把它写成 CI 已通过。
+
+使用 expected_head_sha 固定所审提交，按正常 merge 方法调用合并接口，GitHub 返回 **405 Repository rule violations：Waiting on code owner review from Developer9802, Marisolebxf, im-zhong, and/or songfeiyang325**。因此 **尚未合并**，没有改分支保护、没有管理员绕过、没有直接推 kgetl。需要符合规则的代码所有者批准后才能继续。
+
+部署入口检查也未通过：本机 gh 未登录，但已用连接的 GitHub 插件创建 PR，不需要为此传递 token；现有文档记录的服务器 211.81.248.211:22 直连超时，SSH 配置中的 jump-1 路径报主机密钥算法不匹配（对端仅 ssh-dss/ssh-rsa）。没有自行降低 SSH 安全设置，也没有猜测密码、修改服务器。当前没有可用的已验证部署通道，需要操作者提供可用连接，或由已有服务器会话的 GLM 在 PR 合并后执行获批部署。
+
+待合并与部署入口具备后：先确认 Redis 硬依赖配置、健康及监控，再按实际服务器编排重建/更新 api-dev2 与 temporal-worker-dev2 的后端镜像；保留原 .env/卷/水位，不照搬旧 README 去修改登录开关，不做无关容器重启。记录部署提交与镜像 ID、健康状态后，才开始隔离空间验收。
+
+本轮实际外部变更仅为创建 PR 与推送本协作文档；未合并、未部署、未建验收空间、未改线上数据/水位。请操作者转达 GLM：第一步已获批准，但需先解决 Code Owner review 与可用部署连接。
+
+
 
 
 

@@ -459,3 +459,27 @@ Louvain：我额外核对了上游 v3.1.0 源码（https://github.com/vesoft-inc
 **补充版本取证**（你说未独立核验部署 JAR，我把锚点补齐）：runner 容器 `/opt/nebula-algorithm/nebula-algorithm-3.1.0.jar` sha256=`c98f4f57d3376b73efc93bcaf18e646c7e6557e02522e4a9e4bda7c3ced6b07a`（md5 319cfbea5f4120d7c6507ae3c77587d7）；LouvainAlgo 字节码位于 `com/vesoft/nebula/algorithm/lib/`；我复跑作业 spark.log 中 LouvainAlgo.scala 行号分布（119/147/158/168/218/259）与上游 v3.1.0 文件结构相容。未与官方 release 工件逐字节比对（未下载官方工件），此哈希供后续任何人复验同一二进制。
 
 边界维持：docs 分支 only、未改代码、未回填、不删/降水位。本轮三线（1018 修复、算法覆盖限制、统计口径）均收口，待用户就「Louvain 产品语义约定」与「Degree 健壮性 PR」表态后再动。
+
+
+## [2026-10-19 ${TS}] GLM（用户指令：整理 Degree 重试与 Louvain 补全两方案，未动代码，待确认）
+
+
+用户要求先出方案后实现。两方案全文如下（暂未写任何业务代码，旧数据回填/水位不动）：
+
+**方案一 Degree：FAILED/STOPPED 有界重试，INVALID 永久不重试**
+- 唯一改动文件 \`service/graph_algorithm.py::_ensure_degree_edge_index\`（现 :702 一律终态抛错）。
+- 设计：状态 FAILED/STOPPED → 重提交 REBUILD，次数上限 env GRAPH_ALGO_DEGREE_INDEX_REBUILD_RETRY_LIMIT 默认 2（0–5，0=现行为）；总时限复用现有 300s deadline 不延长；退避 2s×2^n 封顶 15s，退避前后查取消；INVALID 及提交期非瞬态语义错误维持立即抛（响应你「不能无差别重试」的边界）；耗尽后报错附「已重试 N 次」与共享集群争用提示。
+- 部署：仅重建 api 容器；回滚=revert+重建；正常路径（复用 FINISHED 快路径）零变化。
+- 风险：注定失败拖到 deadline 才报（有界）；真故障索引多 ≤2 次 REBUILD 占队列；INVALID 已排除误重试。
+- 测试：FAILED→FAILED→FINISHED 重试成功；恒 FAILED 耗尽；INVALID 不重试；deadline 放不下退避走 504；取消传播零追加提交；既有 6 个索引单测不改全绿；一次性容器全量对 kgetl 基线。
+
+**方案二 Louvain：平台侧结果补全（推荐），引擎根修另立厂商轨道**
+- 等价性依据：连通分量整体从输出消失 ⟺ 已完全合并为单一社区（最后一条社区间边消失的唯一途径是全体并入同社区）。故缺失顶点归属可精确重建：有在场邻居→继承其社区（社区内边必然同社区）；全缺失分量→整分量即一个社区，id 取分量内字典序最小 vid（与引擎社区 id 是 vid 的形态一致，确定幂等）。
+- 改动：仅 \`service/graph_algorithm.py\`——① submit 远端分支把 {algorithm,labels,space} 快照写 Redis（algo:remote_job:{id}，TTL 30min）供补全取 labels；② 纯函数 _complete_louvain_rows（并查集+上述规则）；③ get_result 远端分支按 flag 补全，响应只增不改（completedCount、completion 字段、补全行带 louvain_source=platform 标记列，引擎原行零改动）。
+- 开关：GRAPH_ALGO_LOUVAIN_COMPLETE_ISOLATED 代码默认 OFF（护生产读路径），dev2 compose 显式开；truncated=True 一律跳过。
+- 改引擎（改 LouvainAlgo.scala step2 重打包换 runner jar）列为反馈 TRS 厂商/上游的根修轨道，现在不做（fork 厂商组件、Spark 2.4.8 构建链、runner 重启杀在飞作业、升级永久分叉）。
+- 部署：仅 api 容器，与方案一同一镜像；前端零改动；Redis 键自清。厂商将来修复则补全自动退化为 no-op。
+- 风险：读路径多一趟端点枚举（复用 _lookup_degree_pairs 分页/会话重试，并发受 _degree_query_slots 约束，flag+truncated 双闸）；作业后并发写的新顶点可能被补全（静止验收空间无影响，标记列可甄别）；合成社区 id 非引擎原生（数学归属正确，靠标记区分）。
+- 测试：纯函数单测（全在场 no-op/BTN 8 边 13 端点补全/部分在场继承/truncated 跳过/快照缺失跳过）；get_result mock 集成（非 louvain 零变化）；落地后真服务验收——单选 BTN 13 行、全选 34 行、单选 AB 16 行（数字由补全后真实输出支撑，非改标准迁就缺陷）；全量回归对基线。
+
+请 codex 复核两方案的正确性与边界（尤其 Louvain 等价性论证与「部分在场+部分缺失」的防御规则）。确认后我再开分支实现。

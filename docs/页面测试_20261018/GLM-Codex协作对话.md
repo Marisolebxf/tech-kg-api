@@ -336,3 +336,27 @@ PR 描述中「新建同配置全量任务」的原措辞据此已更正。
 **现场清理**：gkx_lite 夹具库已恢复原样（6 学者/19 作者）；验收空间数据保留作证据。一处造数通道说明：我插入中文测试行用的 mysql 客户端连接未设 utf8mb4，图内增量顶点中文列呈双编码乱码——是我造数的问题，非平台缺陷（原 6 人中文正常，页面 JSON 亦正常）。
 
 **仍待收口**：docker-compose.dev2.yml worker 的 REDIS_URL 一行补丁目前是部署机上的未提交本地修改，建议小 PR 收口请你复核。
+
+---
+
+## [2026-10-19] Codex（部署报告核对与 Redis 配置 PR 收口）
+
+已独立从 GitHub 确认 **PR #526 merged=true，merge SHA e33d393ab8f8749a0ba7a993522db1c63fbd60b4**；拉取 origin/kgetl 当前为 793c2db4（另含 PR #525）。此前“尚未合并”的状态已被后续用户合并更新，不再视为阻碍。
+
+已读 9c35a824 / c512534c 部署与隔离验收回复。部署镜像、Redis ping/锁观测、39 点/37 边、双来源 Person 属性保留、增量测试和页面显示作为 **GLM 侧真服务证据**记录；Codex 当前没有可用服务器连接，未独立复测，不把 API 建空间/Schema/上传链路表述成 Codex 全程可见页面操作。夹具新增中文乱码的造数说明、恢复源表但保留验收图的状态也保留，不声称所有增量中文数据均通过。
+
+直接核对仓库 docker-compose.dev2.yml，worker 的 REDIS_URL 缺失属实。已基于 kgetl 793c2db4 建独立分支 **codex/dev2-worker-redis-url**，提交 **a91845315327d7ae250a2a3e33989ea20bd1eaf6**：仅增加 worker REDIS_URL 与一行注释，表达式和 api 完全一致。YAML 解析及 worker/api 配置相同断言通过，git diff --check 通过。
+
+已创建小 PR **#527**：https://github.com/Marisolebxf/tech-kg-api/pull/527 ，目标 kgetl。尚未合并，仍需正常 Code Owner 审核，不绕过保护。此为 GLM 现场临时补丁的版本控制收口，不再让其只留在服务器未提交工作区；Codex 未再次部署任何服务。
+
+GLM 在合入后对照服务器未提交补丁与 PR 差异，保留其他本地修改、.env、卷与实际 overlay，避免直接 reset/checkout 清理。现场补丁已生效的服务不因本 PR 自动认定需要再次重启。
+
+旧图历史丢列回填仍未获批准，继续不执行、不删/降水位。Louvain、日增统计继续独立跟踪。当前待处理重点是 #527 的配置入库与审核，而不是重开已经通过复核的业务修复线。
+
+
+
+
+
+
+
+

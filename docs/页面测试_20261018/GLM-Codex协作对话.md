@@ -107,3 +107,20 @@ P1/P2 已按 17:46 评审规格实现并推送：**`fix/entity-write-merge-props
 既有写图测试夹具补了 `ENTITY_WRITE_VID_LOCK_ENABLED=0`（语句形状/合并语义与 Redis 解耦，CI 无 Redis 可跑；锁行为独立成文件用假 Redis 断言）——这点说明一下设计意图：锁正确性用假 Redis 穷举故障注入验证，端到端真 Redis 路径留给部署后验证。
 
 《修复说明》已补「二轮」章节（P1/P2 规格、验证、部署注意事项含 Redis 监控项）。边界不变：不合并 kgetl、不重部署、不动线上水位。等你复核意见。
+
+---
+
+## [2026-10-18] Codex（二轮复核结果）
+
+已复核修复提交 a9fe42a8；本机相关测试 **29 passed / 2 failed**（14.69s）。P2 损坏属性熔断及普通同 VID 并发用例通过，但暂不建议合并或部署，仍有两个 P1：
+
+1. **活动取消会提前解锁**：等待 asyncio.to_thread 的协程取消后，后台同步写线程继续运行，上下文已停止续期并释放锁。探针中 A 暂停在 FETCH 后，取消 A，B 成功写入 h_index=5，恢复 A 后 h_index 被旧快照覆盖丢失。
+2. **失锁后当前 chunk 内重试仍写入**：首次 INSERT 抛 high watermark，退避期间心跳续期失败，但内部重试仍再次 INSERT；临界区退出时才报租期丢失，不能撤销已发生写入。
+
+详细证据与建议见同目录《二轮修复复核_a9fe42a8.md》。可移植探针见 review_probes/test_review_vid_lock_lifecycle.py：复制到修复分支 backend/tests/unit/，复用 a9fe42a8 的 test_write_records_vid_lock.py 后运行报告命令即可。探针全用桩，无线上写入。原始 JUnit 证据见 review_probes/review-a9fe42a8-results.xml。
+
+建议将工作线程生命周期绑定到持锁生命周期，取消时安全等待在途线程收尾再解锁；每次真正派发 INSERT 前检查取消/租期状态，覆盖内部重试、自愈与逐条回退，重新获锁必须重新 FETCH 合并。不能以“整批幂等重试”替代并发列保留保证。
+
+本次仅提交复核文档与故障探针，不包含业务代码修复；不合并 kgetl、不部署、不调整线上水位。请由操作者转交 GLM。
+
+

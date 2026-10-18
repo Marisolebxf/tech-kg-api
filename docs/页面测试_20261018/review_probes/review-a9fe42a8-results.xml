@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="31" time="14.686" timestamp="2026-10-18T22:11:20.128349+08:00" hostname="DESKTOP-LUTR1UI"><testcase classname="tests.unit.test_write_records_vid_lock.TestVidLockKeys" name="test_keys_sorted_and_cover_nameless" time="0.006" /><testcase classname="tests.unit.test_write_records_vid_lock.TestParallelSameVid" name="test_parallel_same_vid_without_name_keeps_both_updates" time="0.220" /><testcase classname="tests.unit.test_write_records_vid_lock.TestParallelSameVid" name="test_parallel_diff_name_same_vid_keeps_both_updates" time="0.215" /><testcase classname="tests.unit.test_write_records_vid_lock.TestParallelSameVid" name="test_different_vids_run_concurrently" time="0.009" /><testcase classname="tests.unit.test_write_records_vid_lock.TestFailClosed" name="test_acquire_connection_error_fails_closed_zero_writes" time="0.004" /><testcase classname="tests.unit.test_write_records_vid_lock.TestFailClosed" name="test_wait_timeout_zero_writes_keeps_others_lock" time="0.258" /><testcase classname="tests.unit.test_write_records_vid_lock.TestLeaseRenewal" name="test_renewal_lost_aborts_remaining_chunks" time="0.259" /><testcase classname="tests.unit.test_write_records_vid_lock.TestLeaseRenewal" name="test_renewal_lost_after_all_chunks_still_raises" time="0.259" /><testcase classname="tests.unit.test_write_records_vid_lock.TestCorruptExistingProps" name="test_corrupt_existing_properties_must_not_allow_overwrite" time="0.008" /><testcase classname="tests.unit.test_write_records_vid_lock.TestCorruptExistingProps" name="test_non_dict_existing_properties_must_not_allow_overwrite" time="0.007" /><testcase classname="tests.unit.test_write_records_merge.TestEntityMerge" name="test_cross_write_retains_earlier_source_columns" time="0.009" /><testcase classname="tests.unit.test_write_records_merge.TestEntityMerge" name="test_within_batch_accumulates_across_column_sets" time="0.005" /><testcase classname="tests.unit.test_write_records_merge.TestEntityMerge" name="test_full_column_coverage_skips_fetch" time="0.006" /><testcase classname="tests.unit.test_write_records_merge.TestEntityMerge" name="test_partial_coverage_fetches_existing" time="0.006" /><testcase classname="tests.unit.test_write_records_merge.TestEntityMerge" name="test_audit_columns_not_retained_from_graph" time="0.006" /><testcase classname="tests.unit.test_write_records_merge.TestEntityMerge" name="test_graph_null_values_dropped_and_json_string_props" time="0.006" /><testcase classname="tests.unit.test_write_records_merge.TestEntityMerge" name="test_relation_path_unchanged_no_fetch" time="4.325" /><testcase classname="tests.unit.test_write_records_batching.TestEntityBatching" name="test_same_prop_keys_one_multi_row_statement" time="0.008" /><testcase classname="tests.unit.test_write_records_batching.TestEntityBatching" name="test_different_prop_keys_grouped_order_by_last_record" time="0.007" /><testcase classname="tests.unit.test_write_records_batching.TestEntityBatching" name="test_shared_column_final_value_matches_sequential" time="0.007" /><testcase classname="tests.unit.test_write_records_batching.TestEntityBatching" name="test_same_vid_dedupe_keeps_last" time="0.006" /><testcase classname="tests.unit.test_write_records_batching.TestEntityBatching" name="test_batch_rows_env_chunks_statements" time="0.007" /><testcase classname="tests.unit.test_write_records_batching.TestEntityBatching" name="test_entity_empty_props_skipped" time="0.005" /><testcase classname="tests.unit.test_write_records_batching.TestEntityBatching" name="test_id_backfill_injected_when_missing" time="0.007" /><testcase classname="tests.unit.test_write_records_batching.TestEdgeBatching" name="test_edges_multi_row_statement" time="2.145" /><testcase classname="tests.unit.test_write_records_batching.TestEdgeBatching" name="test_same_edge_target_dedupe_keeps_last" time="2.139" /><testcase classname="tests.unit.test_write_records_batching.TestSelfHealAndFallback" name="test_unknown_column_healed_for_whole_group" time="0.007" /><testcase classname="tests.unit.test_write_records_batching.TestSelfHealAndFallback" name="test_row_level_error_falls_back_to_per_record" time="0.006" /><testcase classname="tests.unit.test_write_records_batching.TestSelfHealAndFallback" name="test_poison_row_still_raises" time="0.007" /><testcase classname="tests.unit.test_review_vid_lock_lifecycle" name="test_cancelled_activity_must_not_unlock_running_write_thread" time="0.009"><failure message="AssertionError: assert None == '5'&#10; +  where None = &lt;built-in method get of dict object at 0x000001CBCF418A40&gt;('h_index')&#10; +    where &lt;built-in method get of dict object at 0x000001CBCF418A40&gt; = {'id': 'v1', 'scholar_org': 'org-A', 'source_table': 'dwd_t', 'create_time': '2026-10-18 22:11:32', ...}.get">vid_lock_env = &lt;class 'tests.unit.test_write_records_vid_lock.LockProbeGraphClient'&gt;
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x000001CBCF40DB10&gt;
+
+    @pytest.mark.asyncio
+    async def test_cancelled_activity_must_not_unlock_running_write_thread(vid_lock_env, monkeypatch):
+        fetched = threading.Event()
+        resume = threading.Event()
+        finished = threading.Event()
+        original_read = LockProbeGraphClient.execute_read
+        original_write = LockProbeGraphClient.execute_write
+        first = True
+    
+        def delayed_read(self, query, *args, **kwargs):
+            nonlocal first
+            result = original_read(self, query, *args, **kwargs)
+            if query.startswith("FETCH PROP ON") and first:
+                first = False
+                fetched.set()
+                assert resume.wait(5), "probe cleanup did not resume worker"
+            return result
+    
+        def observe_write(self, query, *args, **kwargs):
+            result = original_write(self, query, *args, **kwargs)
+            if resume.is_set():
+                finished.set()
+            return result
+    
+        monkeypatch.setattr(LockProbeGraphClient, "execute_read", delayed_read)
+        monkeypatch.setattr(LockProbeGraphClient, "execute_write", observe_write)
+        first_task = asyncio.create_task(workflows.write_records(_request([
+            {"id": "v1", "props": {"id": "v1", "scholar_org": "org-A"}}
+        ])))
+        try:
+            await _wait_event(fetched)
+            first_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await first_task
+            # Current implementation has released its lock while its thread is paused.
+            assert FakeVidLockRedis.store == {}
+            await workflows.write_records(_request([
+                {"id": "v1", "props": {"id": "v1", "h_index": "5"}}
+            ]))
+            resume.set()
+            await _wait_event(finished)
+            # Cancelled writer must not erase the later writer's committed column.
+&gt;           assert LockProbeGraphClient.state["v1"].get("h_index") == "5"
+E           AssertionError: assert None == '5'
+E            +  where None = &lt;built-in method get of dict object at 0x000001CBCF418A40&gt;('h_index')
+E            +    where &lt;built-in method get of dict object at 0x000001CBCF418A40&gt; = {'id': 'v1', 'scholar_org': 'org-A', 'source_table': 'dwd_t', 'create_time': '2026-10-18 22:11:32', ...}.get
+
+tests\unit\test_review_vid_lock_lifecycle.py:66: AssertionError</failure></testcase><testcase classname="tests.unit.test_review_vid_lock_lifecycle" name="test_lease_loss_must_stop_current_chunk_retry" time="0.210"><failure message="AssertionError: INSERT retried after heartbeat had already reported lock loss&#10;assert 2 == 1&#10; +  where 2 = len(['INSERT VERTEX `Person`(`id`, `scholar_org`, `source_table`, `create_time`, `update_time`) VALUES &quot;v1&quot;:(&quot;v1&quot;, &quot;org-A&quot;...le`, `create_time`, `update_time`) VALUES &quot;v1&quot;:(&quot;v1&quot;, &quot;org-A&quot;, &quot;dwd_t&quot;, &quot;2026-10-18 22:11:34&quot;, &quot;2026-10-18 22:11:34&quot;)'])">vid_lock_env = &lt;class 'tests.unit.test_write_records_vid_lock.LockProbeGraphClient'&gt;
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x000001CBCF40DFD0&gt;
+
+    @pytest.mark.asyncio
+    async def test_lease_loss_must_stop_current_chunk_retry(vid_lock_env, monkeypatch):
+        from infra.graph_db.exceptions import GraphRequestError
+    
+        monkeypatch.setenv("ENTITY_WRITE_VID_LOCK_HEARTBEAT_SECONDS", "0.05")
+        monkeypatch.setattr(workflows, "_WATERMARK_RETRY_SLEEP_SECONDS", 0.2)
+        FakeVidLockRedis.renew_ok = False
+        original_write = LockProbeGraphClient.execute_write
+        attempts = []
+    
+        def transient_first_write(self, query, *args, **kwargs):
+            attempts.append(query)
+            if len(attempts) == 1:
+                raise GraphRequestError("high watermark", status_code=503)
+            return original_write(self, query, *args, **kwargs)
+    
+        monkeypatch.setattr(LockProbeGraphClient, "execute_write", transient_first_write)
+        with pytest.raises(RuntimeError, match="租期丢失"):
+            await workflows.write_records(_request([
+                {"id": "v1", "props": {"id": "v1", "scholar_org": "org-A"}}
+            ]))
+        assert FakeVidLockRedis.renew_calls &gt;= 1
+        # Loss was observed during retry sleep, before another INSERT was dispatched.
+&gt;       assert len(attempts) == 1, "INSERT retried after heartbeat had already reported lock loss"
+E       AssertionError: INSERT retried after heartbeat had already reported lock loss
+E       assert 2 == 1
+E        +  where 2 = len(['INSERT VERTEX `Person`(`id`, `scholar_org`, `source_table`, `create_time`, `update_time`) VALUES "v1":("v1", "org-A"...le`, `create_time`, `update_time`) VALUES "v1":("v1", "org-A", "dwd_t", "2026-10-18 22:11:34", "2026-10-18 22:11:34")'])
+
+tests\unit\test_review_vid_lock_lifecycle.py:97: AssertionError</failure></testcase></testsuite></testsuites>

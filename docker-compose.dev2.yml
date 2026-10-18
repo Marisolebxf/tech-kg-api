@@ -211,6 +211,8 @@ services:
       WORKFLOW_MYSQL_DATABASE: techkg_control
       WORKFLOW_MYSQL_USERNAME: root
       WORKFLOW_MYSQL_PASSWORD: temporal
+      # 实体 VID 写锁 fail-closed：worker 与 api 使用同一 Redis，避免回退 localhost。
+      REDIS_URL: ${REDIS_URL:-redis://auth-redis:6379/0}
       # worker 也跑 build_entity_index activity：embedding 缺省会回退智谱默认端点，
       # 吃 401 重试 5 次才降级（执行拖到 3 分钟），补齐与 api 一致的 m3e 配置
       PATENT_EMBEDDING_PROVIDER: ${PATENT_EMBEDDING_PROVIDER:-openai}

@@ -1,0 +1,41 @@
+[
+  {
+    "url": "https://edu.itic-sci.com/bkg_zpt/api/v1/graph-algorithms/jobs",
+    "data": {
+      "jobId": "daa257cf069f4f68af7915ad89c5299b",
+      "status": "running",
+      "createdAt": "2026-10-19 01:56:06",
+      "startedAt": "2026-10-19 01:56:06.204",
+      "finishedAt": null,
+      "submissionId": null,
+      "driverState": null,
+      "error": null
+    }
+  },
+  {
+    "url": "https://edu.itic-sci.com/bkg_zpt/api/v1/graph-algorithms/jobs/daa257cf069f4f68af7915ad89c5299b?space=gkx_ui_20261019_01",
+    "data": {
+      "jobId": "daa257cf069f4f68af7915ad89c5299b",
+      "status": "running",
+      "createdAt": "2026-10-19 01:56:06",
+      "startedAt": "2026-10-19 01:56:06.204",
+      "finishedAt": null,
+      "submissionId": null,
+      "driverState": null,
+      "error": null
+    }
+  },
+  {
+    "url": "https://edu.itic-sci.com/bkg_zpt/api/v1/graph-algorithms/jobs/daa257cf069f4f68af7915ad89c5299b?space=gkx_ui_20261019_01",
+    "data": {
+      "jobId": "daa257cf069f4f68af7915ad89c5299b",
+      "status": "failed",
+      "createdAt": "2026-10-19 01:56:06",
+      "startedAt": "2026-10-19 01:56:06.204",
+      "finishedAt": "2026-10-19 01:56:10.235",
+      "submissionId": null,
+      "driverState": null,
+      "error": "度数计算失败: 关系类型 AUTHORED_BY 的索引 degree_authored_by_9b57520b_idx 重建状态为 FAILED"
+    }
+  }
+]

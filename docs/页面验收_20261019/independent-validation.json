@@ -1,0 +1,36 @@
+{
+  "edgeCount": 37,
+  "edgeEndpointCount": 34,
+  "degreeExpected": {
+    "inSum": 37,
+    "outSum": 37,
+    "total": 74
+  },
+  "louvain": {
+    "returned": 21,
+    "truncated": false,
+    "missing": [
+      "org_O2026L003",
+      "node_IC0101002",
+      "node_IC0101004",
+      "org_O2026L001",
+      "node_IC0101001",
+      "node_IC0101003",
+      "org_O2026L005",
+      "node_IC0101005",
+      "org_O2026L004",
+      "node_IC0202005",
+      "org_O2026L002",
+      "node_IC0202001",
+      "node_IC0202003"
+    ]
+  },
+  "personColumnComplete": true,
+  "paperVolume": "56",
+  "pagerank": {
+    "referenceReset": 0.15,
+    "referenceIterations": 10,
+    "returned": 34,
+    "maxAbsDiff": 4.440892098500626e-16
+  }
+}

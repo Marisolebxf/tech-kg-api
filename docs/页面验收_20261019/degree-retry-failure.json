@@ -1,0 +1,54 @@
+[
+  {
+    "url": "https://edu.itic-sci.com/bkg_zpt/api/v1/graph-algorithms/jobs",
+    "data": {
+      "jobId": "51c0e17a039441fd9f06c1f99bea1c7a",
+      "status": "running",
+      "createdAt": "2026-10-19 01:57:12",
+      "startedAt": "2026-10-19 01:57:12.167",
+      "finishedAt": null,
+      "submissionId": null,
+      "driverState": null,
+      "error": null
+    }
+  },
+  {
+    "url": "https://edu.itic-sci.com/bkg_zpt/api/v1/graph-algorithms/jobs/51c0e17a039441fd9f06c1f99bea1c7a?space=gkx_ui_20261019_01",
+    "data": {
+      "jobId": "51c0e17a039441fd9f06c1f99bea1c7a",
+      "status": "running",
+      "createdAt": "2026-10-19 01:57:12",
+      "startedAt": "2026-10-19 01:57:12.167",
+      "finishedAt": null,
+      "submissionId": null,
+      "driverState": null,
+      "error": null
+    }
+  },
+  {
+    "url": "https://edu.itic-sci.com/bkg_zpt/api/v1/graph-algorithms/jobs/51c0e17a039441fd9f06c1f99bea1c7a?space=gkx_ui_20261019_01",
+    "data": {
+      "jobId": "51c0e17a039441fd9f06c1f99bea1c7a",
+      "status": "running",
+      "createdAt": "2026-10-19 01:57:12",
+      "startedAt": "2026-10-19 01:57:12.167",
+      "finishedAt": null,
+      "submissionId": null,
+      "driverState": null,
+      "error": null
+    }
+  },
+  {
+    "url": "https://edu.itic-sci.com/bkg_zpt/api/v1/graph-algorithms/jobs/51c0e17a039441fd9f06c1f99bea1c7a?space=gkx_ui_20261019_01",
+    "data": {
+      "jobId": "51c0e17a039441fd9f06c1f99bea1c7a",
+      "status": "failed",
+      "createdAt": "2026-10-19 01:57:12",
+      "startedAt": "2026-10-19 01:57:12.167",
+      "finishedAt": "2026-10-19 01:57:20.229",
+      "submissionId": null,
+      "driverState": null,
+      "error": "度数计算失败: 关系类型 BELONGS_TO_NODE 的索引 degree_belongs_to_node_4304e1d8_idx 重建状态为 FAILED"
+    }
+  }
+]

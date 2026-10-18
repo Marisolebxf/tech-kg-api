@@ -1,0 +1,458 @@
+{
+  "edges": {
+    "query": "MATCH (s)-[e]->(t) RETURN id(s) AS src, id(t) AS dst, type(e) AS label",
+    "records": [
+      {
+        "src": "org_O2026L003",
+        "dst": "node_IC0101002",
+        "label": "BELONGS_TO_NODE"
+      },
+      {
+        "src": "org_O2026L003",
+        "dst": "node_IC0101004",
+        "label": "BELONGS_TO_NODE"
+      },
+      {
+        "src": "paper_P2026L006",
+        "dst": "journal_J003",
+        "label": "PUBLISHED_IN"
+      },
+      {
+        "src": "paper_P2026L006",
+        "dst": "person_A2026L001",
+        "label": "AUTHORED_BY"
+      },
+      {
+        "src": "paper_P2026L006",
+        "dst": "person_A2026L005",
+        "label": "AUTHORED_BY"
+      },
+      {
+        "src": "paper_P2026L006",
+        "dst": "person_A2026L006",
+        "label": "AUTHORED_BY"
+      },
+      {
+        "src": "org_O2026L001",
+        "dst": "node_IC0101001",
+        "label": "BELONGS_TO_NODE"
+      },
+      {
+        "src": "org_O2026L001",
+        "dst": "node_IC0101003",
+        "label": "BELONGS_TO_NODE"
+      },
+      {
+        "src": "paper_P2026L010",
+        "dst": "journal_J005",
+        "label": "PUBLISHED_IN"
+      },
+      {
+        "src": "paper_P2026L010",
+        "dst": "person_A2026L001",
+        "label": "AUTHORED_BY"
+      },
+      {
+        "src": "paper_P2026L010",
+        "dst": "person_A2026L005",
+        "label": "AUTHORED_BY"
+      },
+      {
+        "src": "paper_P2026L004",
+        "dst": "journal_J002",
+        "label": "PUBLISHED_IN"
+      },
+      {
+        "src": "paper_P2026L004",
+        "dst": "person_A2026L002",
+        "label": "AUTHORED_BY"
+      },
+      {
+        "src": "paper_P2026L004",
+        "dst": "person_A2026L006",
+        "label": "AUTHORED_BY"
+      },
+      {
+        "src": "org_O2026L005",
+        "dst": "node_IC0101005",
+        "label": "BELONGS_TO_NODE"
+      },
+      {
+        "src": "paper_P2026L002",
+        "dst": "journal_J001",
+        "label": "PUBLISHED_IN"
+      },
+      {
+        "src": "paper_P2026L002",
+        "dst": "person_A2026L001",
+        "label": "AUTHORED_BY"
+      },
+      {
+        "src": "paper_P2026L002",
+        "dst": "person_A2026L004",
+        "label": "AUTHORED_BY"
+      },
+      {
+        "src": "paper_P2026L003",
+        "dst": "journal_J001",
+        "label": "PUBLISHED_IN"
+      },
+      {
+        "src": "paper_P2026L003",
+        "dst": "person_A2026L003",
+        "label": "AUTHORED_BY"
+      },
+      {
+        "src": "paper_P2026L003",
+        "dst": "person_A2026L005",
+        "label": "AUTHORED_BY"
+      },
+      {
+        "src": "org_O2026L004",
+        "dst": "node_IC0202005",
+        "label": "BELONGS_TO_NODE"
+      },
+      {
+        "src": "paper_P2026L007",
+        "dst": "journal_J003",
+        "label": "PUBLISHED_IN"
+      },
+      {
+        "src": "paper_P2026L007",
+        "dst": "person_A2026L003",
+        "label": "AUTHORED_BY"
+      },
+      {
+        "src": "paper_P2026L008",
+        "dst": "journal_J004",
+        "label": "PUBLISHED_IN"
+      },
+      {
+        "src": "paper_P2026L008",
+        "dst": "person_A2026L002",
+        "label": "AUTHORED_BY"
+      },
+      {
+        "src": "paper_P2026L008",
+        "dst": "person_A2026L004",
+        "label": "AUTHORED_BY"
+      },
+      {
+        "src": "paper_P2026L009",
+        "dst": "journal_J005",
+        "label": "PUBLISHED_IN"
+      },
+      {
+        "src": "paper_P2026L009",
+        "dst": "person_A2026L006",
+        "label": "AUTHORED_BY"
+      },
+      {
+        "src": "paper_P2026L001",
+        "dst": "journal_J001",
+        "label": "PUBLISHED_IN"
+      },
+      {
+        "src": "paper_P2026L001",
+        "dst": "person_A2026L001",
+        "label": "AUTHORED_BY"
+      },
+      {
+        "src": "paper_P2026L001",
+        "dst": "person_A2026L002",
+        "label": "AUTHORED_BY"
+      },
+      {
+        "src": "paper_P2026L001",
+        "dst": "person_A2026L003",
+        "label": "AUTHORED_BY"
+      },
+      {
+        "src": "paper_P2026L005",
+        "dst": "journal_J002",
+        "label": "PUBLISHED_IN"
+      },
+      {
+        "src": "paper_P2026L005",
+        "dst": "person_A2026L004",
+        "label": "AUTHORED_BY"
+      },
+      {
+        "src": "org_O2026L002",
+        "dst": "node_IC0202001",
+        "label": "BELONGS_TO_NODE"
+      },
+      {
+        "src": "org_O2026L002",
+        "dst": "node_IC0202003",
+        "label": "BELONGS_TO_NODE"
+      }
+    ],
+    "columns": [
+      "src",
+      "dst",
+      "label"
+    ],
+    "summary": {
+      "spaceName": "gkx_ui_20261019_01",
+      "latency": 6331,
+      "errorCode": 0,
+      "comment": ""
+    }
+  },
+  "entities": {
+    "query": "MATCH (v) RETURN labels(v) AS entity_type, count(v) AS total",
+    "records": [
+      {
+        "entity_type": [
+          "IndustryChain"
+        ],
+        "total": 2
+      },
+      {
+        "entity_type": [
+          "IndustryNode"
+        ],
+        "total": 10
+      },
+      {
+        "entity_type": [
+          "Journal"
+        ],
+        "total": 5
+      },
+      {
+        "entity_type": [
+          "Paper"
+        ],
+        "total": 10
+      },
+      {
+        "entity_type": [
+          "Organization"
+        ],
+        "total": 6
+      },
+      {
+        "entity_type": [
+          "Person"
+        ],
+        "total": 6
+      }
+    ],
+    "columns": [
+      "entity_type",
+      "total"
+    ],
+    "summary": {
+      "spaceName": "gkx_ui_20261019_01",
+      "latency": 6220,
+      "errorCode": 0,
+      "comment": ""
+    }
+  },
+  "relations": {
+    "query": "MATCH ()-[e]->() RETURN type(e) AS relation, count(e) AS total",
+    "records": [
+      {
+        "relation": "AUTHORED_BY",
+        "total": 19
+      },
+      {
+        "relation": "BELONGS_TO_NODE",
+        "total": 8
+      },
+      {
+        "relation": "PUBLISHED_IN",
+        "total": 10
+      }
+    ],
+    "columns": [
+      "relation",
+      "total"
+    ],
+    "summary": {
+      "spaceName": "gkx_ui_20261019_01",
+      "latency": 6602,
+      "errorCode": 0,
+      "comment": ""
+    }
+  },
+  "people": {
+    "query": "FETCH PROP ON Person \"person_A2026L001\", \"person_A2026L002\", \"person_A2026L003\", \"person_A2026L004\", \"person_A2026L005\", \"person_A2026L006\" YIELD properties(vertex) AS props",
+    "records": [
+      {
+        "props": {
+          "name_zh": "钱聚光",
+          "match_method": "source_primary_key",
+          "match_evidence": "dwd_zh_author.person_A2026L005 主键/稳定键直接抽取",
+          "ingest_time": "2026-10-18T17:45:19+00:00",
+          "source_record_id": "person_A2026L005",
+          "create_time": "2026-10-18 17:45:19",
+          "h_index": 16,
+          "source_system": "gkx",
+          "scholar_org": "武汉光谷激光工程有限公司",
+          "confidence": "1.0",
+          "ingest_batch": "se-3a1c0f59",
+          "update_time": "2026-10-18 17:45:19",
+          "name": "",
+          "id": "person_A2026L005",
+          "source_table": "dwd_zh_author",
+          "name_en": "QIAN Juguang",
+          "paper_nums": 39
+        }
+      },
+      {
+        "props": {
+          "name_zh": "赵驭数",
+          "match_evidence": "dwd_zh_author.person_A2026L004 主键/稳定键直接抽取",
+          "match_method": "source_primary_key",
+          "ingest_time": "2026-10-18T17:45:19+00:00",
+          "source_record_id": "person_A2026L004",
+          "h_index": 10,
+          "create_time": "2026-10-18 17:45:19",
+          "source_system": "gkx",
+          "scholar_org": "杭州云枢数据技术有限公司",
+          "confidence": "1.0",
+          "ingest_batch": "se-3a1c0f59",
+          "update_time": "2026-10-18 17:45:19",
+          "name": "",
+          "id": "person_A2026L004",
+          "source_table": "dwd_zh_author",
+          "paper_nums": 21,
+          "name_en": "ZHAO Yushu"
+        }
+      },
+      {
+        "props": {
+          "name_zh": "张守拙",
+          "match_method": "source_primary_key",
+          "match_evidence": "dwd_zh_author.person_A2026L001 主键/稳定键直接抽取",
+          "source_record_id": "person_A2026L001",
+          "ingest_time": "2026-10-18T17:45:19+00:00",
+          "h_index": 18,
+          "create_time": "2026-10-18 17:45:19",
+          "source_system": "gkx",
+          "scholar_org": "中科天玑科技有限公司",
+          "confidence": "1.0",
+          "ingest_batch": "se-3a1c0f59",
+          "update_time": "2026-10-18 17:45:19",
+          "name": "",
+          "id": "person_A2026L001",
+          "source_table": "dwd_zh_author",
+          "paper_nums": 46,
+          "name_en": "ZHANG Shouzhuo"
+        }
+      },
+      {
+        "props": {
+          "name_zh": "李慎行",
+          "match_method": "source_primary_key",
+          "match_evidence": "dwd_zh_author.person_A2026L002 主键/稳定键直接抽取",
+          "source_record_id": "person_A2026L002",
+          "ingest_time": "2026-10-18T17:45:19+00:00",
+          "create_time": "2026-10-18 17:45:19",
+          "h_index": 14,
+          "source_system": "gkx",
+          "scholar_org": "华清智能装备（南京）有限公司",
+          "confidence": "1.0",
+          "ingest_batch": "se-3a1c0f59",
+          "update_time": "2026-10-18 17:45:19",
+          "name": "",
+          "id": "person_A2026L002",
+          "source_table": "dwd_zh_author",
+          "paper_nums": 32,
+          "name_en": "LI Shenxing"
+        }
+      },
+      {
+        "props": {
+          "name_zh": "王铸精",
+          "match_method": "source_primary_key",
+          "match_evidence": "dwd_zh_author.person_A2026L003 主键/稳定键直接抽取",
+          "source_record_id": "person_A2026L003",
+          "ingest_time": "2026-10-18T17:45:19+00:00",
+          "h_index": 24,
+          "create_time": "2026-10-18 17:45:19",
+          "source_system": "gkx",
+          "scholar_org": "深圳市量子芯半导体有限公司",
+          "confidence": "1.0",
+          "ingest_batch": "se-3a1c0f59",
+          "update_time": "2026-10-18 17:45:19",
+          "name": "",
+          "id": "person_A2026L003",
+          "source_table": "dwd_zh_author",
+          "name_en": "WANG Zhujing",
+          "paper_nums": 58
+        }
+      },
+      {
+        "props": {
+          "name_zh": "孙引航",
+          "match_method": "source_primary_key",
+          "match_evidence": "dwd_zh_author.person_A2026L006 主键/稳定键直接抽取",
+          "ingest_time": "2026-10-18T17:45:19+00:00",
+          "source_record_id": "person_A2026L006",
+          "create_time": "2026-10-18 17:45:19",
+          "h_index": 12,
+          "source_system": "gkx",
+          "scholar_org": "北京星图导航技术有限公司",
+          "confidence": "1.0",
+          "ingest_batch": "se-3a1c0f59",
+          "update_time": "2026-10-18 17:45:19",
+          "name": "",
+          "id": "person_A2026L006",
+          "source_table": "dwd_zh_author",
+          "paper_nums": 27,
+          "name_en": "SUN Yinhang"
+        }
+      }
+    ],
+    "columns": [
+      "props"
+    ],
+    "summary": {
+      "spaceName": "gkx_ui_20261019_01",
+      "latency": 1767,
+      "errorCode": 0,
+      "comment": ""
+    }
+  },
+  "paper": {
+    "query": "FETCH PROP ON Paper \"paper_P2026L001\" YIELD properties(vertex) AS props",
+    "records": [
+      {
+        "props": {
+          "match_evidence": "dwd_zh_paper.paper_P2026L001 主键/稳定键直接抽取",
+          "ingest_time": "2026-10-18T17:45:20+00:00",
+          "ingest_batch": "se-f3eacc02",
+          "source": "gkx",
+          "update_time": "2026-10-18 17:45:20",
+          "source_update_time": "2026-10-12 10:00:00",
+          "id": "paper_P2026L001",
+          "match_method": "source_primary_key",
+          "source_record_id": "paper_P2026L001",
+          "create_time": "2026-10-18 17:45:20",
+          "source_system": "gkx",
+          "confidence": "1.0",
+          "volume": "56",
+          "publication_year": "2026",
+          "name": "",
+          "title_en": "A Survey of Lightweight Knowledge Graph Construction",
+          "source_table": "dwd_zh_paper",
+          "doi": "10.3724/lite.2026.001",
+          "title_zh": "轻量级知识图谱构建综述"
+        }
+      }
+    ],
+    "columns": [
+      "props"
+    ],
+    "summary": {
+      "spaceName": "gkx_ui_20261019_01",
+      "latency": 1648,
+      "errorCode": 0,
+      "comment": ""
+    }
+  }
+}

@@ -113,3 +113,33 @@ def test_issue_key_rejects_unknown_or_empty_scopes(client_db):
         )
     with pytest.raises(ValueError):
         service.issue_key("partner-empty", business_name="业务方", expires_days=1, scopes=[])
+
+
+def test_rotation_preserves_scopes_unless_explicitly_replaced(client_db):
+    key = service.issue_key(
+        "partner-kg",
+        business_name="图查询系统",
+        expires_days=365,
+        scopes=[service.KG_OPEN_READ],
+    )
+    rotated = service.issue_key("partner-kg", business_name=None, expires_days=90)
+    with pytest.raises(service.ExternalClientError):
+        service.authenticate_client("partner-kg", key, required_scope=service.KG_OPEN_READ)
+    service.authenticate_client("partner-kg", rotated, required_scope=service.KG_OPEN_READ)
+    both = service.issue_key(
+        "partner-kg",
+        business_name=None,
+        expires_days=90,
+        scopes=[service.PROJECT_RELATIONS_READ, service.KG_OPEN_READ],
+    )
+    service.authenticate_client("partner-kg", both)
+    service.authenticate_client("partner-kg", both, required_scope=service.KG_OPEN_READ)
+    replacement = service.issue_key(
+        "partner-kg",
+        business_name=None,
+        expires_days=90,
+        scopes=[service.PROJECT_RELATIONS_READ],
+    )
+    with pytest.raises(service.ExternalClientError) as exc:
+        service.authenticate_client("partner-kg", replacement, required_scope=service.KG_OPEN_READ)
+    assert exc.value.status_code == 403

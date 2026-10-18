@@ -1,117 +1,198 @@
-# kg-open 对外图谱查询接口
+# 对外图谱查询 API（kg-open）
 
-面向外部系统的只读图谱查询 API。设计原则：**入口是 Schema 大类，不是 VID**——调用方不需要预先了解图内部结构，先拿"地图"（接口 1），再按类分页拉数据（接口 2/3）。不做属性条件过滤（无索引全扫）、不提供 nGQL 直通、不做多跳遍历。
+本接口面向其他业务系统，仅提供三个只读接口：查询类型目录、按实体类型查询实体、按关系类型查询关系及两端实体。不增加其他对外查询入口。
 
-- 路由前缀：`/api/v1/kg-open`
-- 实现代码：`backend/biz/handler/kg_open.py`（鉴权 `backend/biz/dependencies/kg_open_auth.py`）
-- 鉴权与项目关系接口（`/kg-service/project-relations`）同一套双通道模式
-- **图空间固定为默认业务空间（dev）**：不接受 `space` / `graphSpace` 参数或 `X-Graph-Space` 头换空间，传了也会被忽略
+公网入口按当前 edu 部署的网关路径编写：
 
-## 鉴权
-
-| 通道 | 用法 | 可查空间 |
-|---|---|---|
-| 机器密钥 | 请求头 `X-Client-Id` + `X-API-Key`（scope 须含 `kg-open:read`） | 固定默认业务空间（dev），另需共享生产空间门禁 |
-| 平台用户 | `Authorization: Bearer <统一用户中心token>`（或平台会话） | 固定默认业务空间（dev） |
-
-- 提供任一 API Key 头即视为机器认证，密钥错误**不会**回退到浏览器身份。
-- 密钥签发/轮换/停用（后端容器内执行）：
-
-```bash
-docker exec <api容器> python script/manage_external_api_clients.py create \
-  --client-id <调用方id> --business-name <业务方名> --scopes kg-open:read
-# 输出的 api_key 仅展示一次，通过安全渠道交付；轮换用 rotate，回收用 disable
+```text
+https://edu.itic-sci.com/bkg_zpt/api/v1/kg-open
 ```
 
-## 响应与错误约定
+**该地址是部署契约，不表示已在线上验收。** 发布新版后需确认 edu 网关允许下列 GET 路由转发，并保留认证 Header；如网关另有统一登录拦截，需要由运维为机器调用配置适用的认证规则。
 
-- 成功：HTTP 200 + 统一信封 `{"code": 200, "success": true, "data": {...}, "msg": "success"}`
-- 失败：真实 HTTP 状态码 + `{"detail": "..."}`（与项目关系接口一致）
-- 参数校验失败（长度/范围等）：平台统一包装为 HTTP 200 + `code 422` 信封
-- 常见错误：`400` 类型名不合法 / `401` 密钥无效 / `403` 无空间权限或 scope 不足 / `404` 类型不存在 / `429` 图查询过载（带 `Retry-After: 1`，应退避 ≥1s 重试）/ `502` 图服务不可用
+## 1. 接口总览
 
-图查询共用平台全局执行预算（16 并发 / 64 排队 / 等待 10s），过载时返回 429，不会拖垮图库。
+以下路径相对于上面的公网入口。
 
-## 接口 1：`GET /kg-open/schema` — 图谱地图
-
-无参数（空间固定，见总约定）。
-
-返回 `data`：
-
-| 字段 | 类型 | 说明 |
+| 方法 | 路径 | 用途 |
 |---|---|---|
-| `space` | string | 实际生效空间 |
-| `entityTypes[]` | array | 实体类：`name`（TAG 名，接口 2 入参）/ `displayName` / `description` / `count`（图上总数，SHOW STATS 口径）/ `properties[]`（`{name, type, required}`） |
-| `relationTypes[]` | array | 关系类：同上外加 `sourceType` / `targetType`（两端实体类名） |
+| GET | `/schema` | 实体类型、关系类型、属性及端点定义，附参考统计 |
+| GET | `/entity-types/{name}/entities` | 按实体类型分页枚举实体 |
+| GET | `/relation-types/{name}/edges` | 按关系类型分页枚举关系，可附两端实体 |
+
+调用方先获取目录，再按实体类或关系类分页获取数据，通过边的 source/target 与实体 id 关联。按实体类型查询返回实体及属性，不自动返回其关联边；需要点边一起返回时，使用关系类型接口并保持 includeEntities=true。
+
+## 2. 认证与授权
+
+外部系统每次请求同时携带：
+
+```http
+X-Client-Id: <管理员分配的调用方ID>
+X-API-Key: <管理员签发的密钥>
+```
+
+三个接口均为 GET，不需要请求体。
+
+- 3 个接口统一要求 `kg-open:read`。只有 `project-relations:read` 的旧凭证不能调用这些接口。
+- 凭证由本系统自己的 `external_api_client` 表管理，不需要调用方登录统一用户中心；每个业务系统单独签发，不要共用其他系统的凭证。
+- API Key 为 32 字节安全随机数，数据库只存 SHA-256 摘要。明文仅创建或轮换时显示一次。
+- 默认有效期 **90 天**；签发/轮换可指定 `--expires-days 1～3650`。精确过期时刻为签发 UTC 时刻加指定天数；请求不会续期。
+- 带任一 API Key Header 就选择机器认证，缺项、重复、错误、过期或停用均拒绝，不回退到 Bearer/Cookie。
+- 不带两个 API Key Header 时，兼容平台用户的 Bearer/Cookie 认证和空间读权限检查。
+- 固定查询后端 `TRS_GRAPH_SPACE` 配置的默认空间，未配置时为 `dev`。请求中的 `space`、`graphSpace` 和 `X-Graph-Space` 不用于切换空间。
+- `BUSINESS_RBAC_ENABLED=true` 时，机器调用还要求默认空间登记为共享生产空间。单个 `kg-open:read` 凭证可读取这个空间的所有对外目录实体类型、关系类型及完整属性；目前没有细分到字段或业务行的授权。
+- 正式环境启用 `AUTH_ENABLED=true`，不要启用模拟开发身份；调用方在后端保存凭证，通过 HTTPS 调用。
+
+## 3. 公共响应与分页
+
+成功响应：
 
 ```json
-{"code": 200, "success": true, "data": {
-  "space": "dev",
-  "entityTypes": [
-    {"name": "Paper", "displayName": "论文", "description": "", "count": 6590000,
-     "properties": [{"name": "title", "type": "string", "required": false}]}
-  ],
-  "relationTypes": [
-    {"name": "AUTHORED_BY", "displayName": "撰写", "description": "", "count": 18400000,
-     "properties": [], "sourceType": "Paper", "targetType": "Person"}
-  ]
-}, "msg": "success"}
+{"code":200,"success":true,"data":{"space":"dev"},"msg":"success"}
 ```
 
-## 接口 2：`GET /kg-open/entity-types/{name}/entities` — 按实体类拉实体
+以下各接口仅展示 `data` 内容；实际均包含外层响应壳和实际生效的 `space`。
 
-| 参数 | 位置 | 必填 | 默认 | 约束 |
-|---|---|---|---|---|
-| `name` | path | 是 | — | `^[A-Za-z_][A-Za-z0-9_]{0,127}$`，来自接口 1 |
-| `limit` | query | 否 | 20 | 1–500 |
-| `offset` | query | 否 | 0 | 0–10,000,000 |
+### 分页规则
 
-返回 `data`：`space`（固定默认空间）、`entityType`、`entities[]`（`id`=VID 稳定唯一键 / `type` / `name` 展示名 / `properties` 全属性整体透传）、`total`（图上真实总数）、`limit`、`offset`、`relationTypes[]`（目录推导：端点包含该实体类的所有关系类名，提示接下来可查哪些边）。
+- `limit` 默认 20，范围 1～500。
+- 首次不传 `cursor` 或传空字符串。读取 `hasMore`，为 true 时将 `nextCursor` 原样传回；false 时结束。**不能用 `total` 或 `count` 决定是否结束。**
+- 服务端多取一条记录判断 `hasMore`，不依赖统计总数。
+- 游标绑定空间和类型筛选条件；更换类型时必须重新开始。`limit` 可改变，`includeEntities` 可改变。
+- 实体按 VID 排序，边按 `(source, target, rank)` 排序。新游标使用上述最后一个键继续，不存在一千万 offset 上限；这不保证查询耗时与总量无关。
+- 旧 GET 类型列表仍接受 `offset=0～10000000`，默认 0；与非空 cursor 同时使用时 offset 必须为 0。新调用方使用 cursor。
+- 游标是分页位置，不是认证凭证、加密数据或数据库快照。遍历时新增的较小键可能不被读到，删除的记录可能消失；严格一致的全量导出需独立快照机制。
+- `total`、`count` 是 SHOW STATS 的参考快照，`totalIsEstimate` / `countIsEstimate` 恒为 true；未知时为 **-1**。统计缓存约 300 秒，实际新鲜度还取决于最近一次统计任务，不是每 300 秒自动重算。
 
-属性整体透传意味着 Schema 新增属性**无需**改对接；`properties` 内值可能为 null。
+### 实体与关系结构
 
-## 接口 3：`GET /kg-open/relation-types/{name}/edges` — 按关系类拉边
+实体：
 
-| 参数 | 位置 | 必填 | 默认 | 约束 |
-|---|---|---|---|---|
-| `name` | path | 是 | — | 同上 |
-| `limit` | query | 否 | 20 | 1–500 |
-| `offset` | query | 否 | 0 | 0–10,000,000 |
-| `includeEntities` | query | 否 | true | false 时只返回边不补端点实体（自持实体清单时省流量） |
+```json
+{"id":"paper_1","type":"Paper","types":["Paper"],"name":"示例论文","properties":{"title":"示例论文"}}
+```
 
-返回 `data`：`space`（固定默认空间）、`relationType`、`edges[]`（`type` / `source` / `target` 两端 VID / `properties` 边属性；`includeEntities=true` 时附 `sourceEntity` / `targetEntity`，结构与接口 2 实体相同）、`total`、`limit`、`offset`。
+`id` 是原样使用的实体 VID，可含 `/` 等字符，不要从中解析业务信息。`types` 保留所有标签，旧字段 `type` 为第一个标签。`name` 优先取属性 name，其次 title，均无则为空字符串。`properties` 完整返回，值可以为 null。
 
-边列表走 LOOKUP 边索引分页（无索引自动回退 MATCH 全扫，慢但正确）。**不走 trs-graph REST `/edges/type`**：该端点耗时与边总量正相关（实测 dev 6350 条 4.7s、两万级 30s+ 超时），其分页计数对部分边类型还恒为 0。
+关系：
 
-`total` 采用 SHOW STATS 统计口径（与接口 1 的 `count` 同源，**包含悬挂边**；空间从未跑过统计时回退当页行数）。
+```json
+{
+  "id":"[\"AUTHORED_BY\",\"paper_1\",\"person_1\",0]",
+  "type":"AUTHORED_BY","source":"paper_1","target":"person_1","rank":0,
+  "properties":{"confidence":0.9},
+  "sourceEntity":{"id":"paper_1","type":"Paper","types":["Paper"],"name":"示例论文","properties":{"title":"示例论文"}},
+  "targetEntity":null
+}
+```
 
-**悬挂边**：写入时端点实体未落图的边（如引用桩），对应 `sourceEntity` / `targetEntity` 为 `null`，不是错误。
+`id` 是服务端返回的完整关系标识，调用方原样保存；完整去重键为 `(type, source, target, rank)`。相同两端可以存在不同 rank 的平行边。`source` → `target` 始终为存储方向，入向查询不会将其反转。附带实体时，缺失端点返回 null（悬挂边），并不伪造实体。关闭附带实体时省略两个 Entity 字段。
 
-## 调用方最小使用流
+## 4. 接口明细
+
+### 4.1 GET `/schema`
+
+无业务入参。返回目录库中的有效类型，包含：
+
+| 字段 | 说明 |
+|---|---|
+| `entityTypes[]` | `name`、`displayName`、`description`、`properties[]`、`count`、`countIsEstimate` |
+| `relationTypes[]` | 上述字段，另有 `sourceType`、`targetType` |
+| `properties[]` | `{name, type, required}`，是目录定义，不保证每条实体都有值 |
+| `statsAvailable` | 是否取得图统计；无统计时各 count 为 -1，仍返回目录 |
+
+类型名以 `name` 为准，不能使用中文 `displayName` 代替。端点定义可能用 `|` 表示多个实体类型，如 `Paper|Patent|Report`。
+
+### 4.2 GET `/entity-types/{name}/entities`
+
+`name` 为目录中的实体类型编码（`[A-Za-z_][A-Za-z0-9_]{0,127}`）。Query 参数：`limit`、`cursor`，兼容旧 `offset`。
+
+返回：`entityType`、`entities[]`、`limit`、`offset`、`hasMore`、`nextCursor`、`total`、`totalIsEstimate`、`relationTypes[]`（该实体类型参与的关系类名）。本接口列出实体，**不会自动返回这些实体的所有关联边**。
+
+### 4.3 GET `/relation-types/{name}/edges`
+
+`name` 为目录中的关系类型。Query 参数：`limit`、`cursor`、兼容旧 `offset`，以及 `includeEntities`（默认 true）。
+
+返回：`relationType`、`edges[]`、`limit`、`offset`、`hasMore`、`nextCursor`、`total`、`totalIsEstimate`。
+
+## 5. 完整调用示例
+
+以下 CID/KEY 为调用方后端配置中的凭证，不包含真实密钥。
 
 ```bash
-# ① 地图：有哪些类、属性怎么定义
-curl -H "X-Client-Id: $CID" -H "X-API-Key: $KEY" http://host:8002/api/v1/kg-open/schema
+BASE='https://edu.itic-sci.com/bkg_zpt/api/v1/kg-open'
 
-# ② 按类拉实体（翻页：offset += limit，直到 offset >= total）
-curl -H "X-Client-Id: $CID" -H "X-API-Key: $KEY" \
-  "http://host:8002/api/v1/kg-open/entity-types/Paper/entities?limit=500&offset=0"
+# 1. 查看实体与关系类型及其属性
+curl --fail-with-body "$BASE/schema" \
+  -H "X-Client-Id: $CID" -H "X-API-Key: $KEY"
 
-# ③ 按类拉边（边 + 两端实体一次拿全）
-curl -H "X-Client-Id: $CID" -H "X-API-Key: $KEY" \
-  "http://host:8002/api/v1/kg-open/relation-types/AUTHORED_BY/edges?limit=500&offset=0"
+# 2. 按实体类型分页获取实体（类型名以目录实际返回为准）
+curl --fail-with-body --get "$BASE/entity-types/Paper/entities" \
+  -H "X-Client-Id: $CID" -H "X-API-Key: $KEY" \
+  --data-urlencode 'limit=100'
+
+# 3. 按关系类型分页获取边及两端实体
+curl --fail-with-body --get "$BASE/relation-types/AUTHORED_BY/edges" \
+  -H "X-Client-Id: $CID" -H "X-API-Key: $KEY" \
+  --data-urlencode 'limit=100' --data-urlencode 'includeEntities=true'
+
+# 4. 下一页：CURSOR 填上一页 data.nextCursor 原值，直到 hasMore=false
+curl --fail-with-body --get "$BASE/relation-types/AUTHORED_BY/edges" \
+  -H "X-Client-Id: $CID" -H "X-API-Key: $KEY" \
+  --data-urlencode 'limit=100' --data-urlencode "cursor=$CURSOR"
 ```
 
-本地按 `edges[].source/target ↔ entities[].id` 关联，即得"实体 + 关系 + 属性"完整切片。
+curl 的 --fail-with-body 不能识别 HTTP 200 包装的业务错误；调用代码必须同时检查 HTTP 状态码和 JSON 的 success / code。
 
-## 量级与边界
+## 6. 错误约定
 
-- **没有"返回全部"接口**：亿级图单次响应装不下（详见设计讨论）。全量需求 = 对每个类循环翻页，分页即护栏。若调用方要一次性镜像整图，另立异步导出通道（二期），勿走查询接口。
-- 深分页（offset 极大）逐页变慢，属图库遍历特性；交互式查询建议带类过滤 + 小页。
-- `total` / `count` 来自 SHOW STATS 统计快照（300s 缓存），非实时精确；按 `offset >= total` 判断翻页结束。
+| 场景 | HTTP | 响应 |
+|---|---:|---|
+| 成功（含无匹配结果） | 200 | `code=200, success=true` 响应壳 |
+| 参数校验失败、分页越界等 | 200 | 平台统一 `code=422, success=false` 响应壳 |
+| 非法类型名、无效/不匹配游标 | 400 | `{"detail":"..."}` |
+| 缺少身份、密钥错误/缺项/重复/过期/停用 | 401 | `{"detail":"..."}` |
+| 有效凭证但缺少 kg-open:read 或空间门禁不通过 | 403 | `{"detail":"..."}` |
+| 类型不存在 | 404 | `{"detail":"..."}` |
+| 图执行队列满或等待超时 | 429 | `{"detail":"..."}`，`Retry-After: 1` |
+| 图服务调用失败或超时 | 502 | `{"detail":"图数据服务暂时不可用，请稍后重试"}` |
+| 认证数据库不可用、目录数据库查询失败、所需索引未就绪 | 503 | `{"detail":"..."}` |
 
-## 上线前置检查（运维）
+不对 400/401/403/404 盲目重试。429 至少退避 1 秒并加随机抖动，502/503 有限次数退避并联系运维排查。非 2xx 且响应不是 JSON 时，应保留 HTTP 状态作为网关/网络故障处理。
 
-1. **边索引**：按关系类枚举走 LOOKUP，需每个 EDGE 类型有边索引（无边索引回退 MATCH 全扫，量大即超时；2026-10-16 dev 实测 42 个边类型里 24 个缺索引）。核查用 `SHOW EDGE INDEXES`（TRS 定制版不支持 `IN <space>` 后缀，空间随连接头走）。TRS 零属性边索引另有"CREATE 静默 no-op"坑：缺的显式补建并去重。
-2. **标签索引**：实体类枚举无标签索引时回退 MATCH 全扫（慢但正确）：`SHOW TAG INDEXES IN <space>` 核查，缺的补建后自动切快路径。
-3. 对外空间的数据质量先行确认（空心化 Schema 未修复的空间不要对外）。
+## 7. 运维与兼容性
+
+首次部署初始化凭证表（已存在则不修改）：
+
+```bash
+docker exec -w /app <后端容器名> .venv/bin/python -m script.manage_external_api_clients init
+```
+
+给新系统创建一份 365 天图查询凭证：
+
+```bash
+docker exec -w /app <后端容器名> .venv/bin/python -m script.manage_external_api_clients create \
+  --client-id partner_graph_a --business-name '图查询业务系统A' \
+  --scopes kg-open:read --expires-days 365
+```
+
+轮换不传 `--scopes` 时保留现有权限；传入时**替换**为给定权限。下面同时保留两个接口组权限（旧 Key 会立即失效，需协调调用方更新）：
+
+```bash
+docker exec -w /app <后端容器名> .venv/bin/python -m script.manage_external_api_clients rotate \
+  --client-id partner_graph_a --expires-days 365 \
+  --scopes project-relations:read,kg-open:read
+```
+
+轮换不会启用已停用调用方。`disable --client-id ...` 立即阻止后续调用。
+
+上线检查：
+
+1. 默认空间和共享生产空间登记正确，目录与实际 TAG/EDGE 一致。
+2. 类型枚举需 TAG/EDGE 索引，创建后执行对应 REBUILD 并确认完成。本版缺索引返回 503，**不再自动 MATCH 全扫**。索引 DDL 由运维执行，本 API 不创建索引。
+3. TRS 定制版实际执行 LOOKUP 的 src/dst/rank 投影、管道排序与过滤查询成功；在小页上逐项联调，特别验证平行边、自环、悬挂边和含斜杠/引号的 VID。
+4. 共用进程/事件循环图预算，默认 16 执行并发、64 排队、等待最多 10 秒，可用 GRAPH_EXEC_* 环境变量调整。它不是分布式全局限流或每业务方配额。
+5. 每条 read 查询 HTTP 超时为 20 秒；附端点实体会分批多次查询，统计采用客户端配置超时，所以**整个接口不承诺 20 秒完成**。需结合网关超时和实测页大小设置调用方超时。大类排序仍有成本，大类型仍可能超时，返回行数限制不等于执行扫描量限制。
+6. 3 个接口都测试正常密钥、错误密钥、缺项、过期、停用、scope 不足和无身份请求；确认统一用户中心登录兼容。部署前运行新增容器契约测试；单元测试不代替真实 TRS 和公网验收。
+
+与原 3 接口相比：路径及原主要字段保留；新增游标/hasMore/关系标识/rank/types；total 未知时改为 -1；不再依靠 total 判断终点；不再无索引自动全扫。旧调用方需同步分页结束判断。项目关系 POST `/api/v1/kg-service/project-relations/query` 的数据契约不受影响。

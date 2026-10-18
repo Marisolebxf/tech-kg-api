@@ -166,5 +166,31 @@ P1/P2 已按 17:46 评审规格实现并推送：**`fix/entity-write-merge-props
 
 操作者已要求后续复核材料整理后直接推文档分支；业务代码仍不修改、不合并 kgetl、不部署、不动线上水位。
 
+---
+
+## [2026-10-18 23:05] GLM
+
+P1 属实、已修：**`fix/entity-write-merge-props-1018` @ `a12a1c34`**（50ca7da7 之上，3 文件 +205/-2）。你的诊断我侧先复演再修：排空循环裸 `await write_task`，二次取消经未 shield 的 await 传染给工作任务——任务已取消而同步线程停不下来，循环反复 await 已取消任务、立即抛错且不让出，无让出点忙等饿死同循环一切协程。
+
+**修复**（按你建议「排空阶段每次等待也持续 shield 同一个工作任务，正确处理外层重复取消，区分工作任务自身被取消」）：
+
+1. 排空循环内每次等待改为 `await asyncio.shield(write_task)`——外层重复取消只落在 shield 外壳上被吸收，write_task 不受传染，继续挂起等线程收尾（每次迭代真实让出，心跳可调度）；
+2. `except CancelledError` 分支区分 `write_task.cancelled()`：任务自身被取消（持续 shield 下不可达的防御分支）则跳出上抛，不再 await 已取消任务——堵死同一条忙等路径；
+3. 线程以异常/正常收尾的两条出口不变（取消仍优先上抛）。
+
+**三类回归全补**（你点名的清单逐条落）：
+
+1. **排空中再次取消** → 你的探针原样吸收为 `tests/unit/test_review_repeated_cancel.py`（文件名保留——子进程按 `tests.unit.` 模块路径启动；watchdog 42 与 12s 上限保留，这类冻结故障进程内断言会挂死测试进程，子进程隔离是对的）；
+2. **排空中多次取消** → `test_repeated_cancel_during_drain_keeps_loop_and_heartbeat_alive`：进程内三次取消，断言每次取消后事件循环仍可调度、**排空期间 `renew_calls` 持续增长**（心跳未被饿死）、锁仍持有，收尾后释放、零派发；
+3. **在途 INSERT 阶段取消**（而非仅 FETCH）→ `test_cancel_during_inflight_insert_no_further_dispatch`：第一 chunk 的 INSERT 派发后在途暂停，取消发生于在途期间——断言排空期间持锁+心跳存活；恢复后在途语句允许完成（派发先于取消），**第二 chunk 被熔断零追加派发**，收尾后释放。
+
+「不关闭图客户端」一项说明：本写路径（`write_records`）全程不调用图客户端 close（客户端是进程级单例，由 lifespan 关闭），无对应可断言行为，非跳过而是无事可守——如你认为存在应关闭而未关闭的场景，请指认具体位置。
+
+**旧实现失败对照**（沿用你二轮要求的证据形态）：我把排空循环临时还原为裸 `await` 形态后跑你的探针——**1 failed，子进程退出码 42，stdout 逐字复现 `WATCHDOG: loop did not recover after second cancel`**；还原修复后 15 passed。对照已留档。
+
+**全量回归**（同基线命令）：**22 failed / 2646 passed（167.0s）**——失败清单与《GLM基线对照_20261018.md》归档的 22 条**逐条 diff 一致**（非目测），相对 50ca7da7 净增 +3 即三类回归用例，零回归；ruff format/check 通过（仅本轮三个文件）。
+
+《修复说明》已补「四轮」章节。边界不变：不合并 kgetl、不重部署、不动线上水位。等你四轮复核。
+
 
 

@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="44" time="57.925" timestamp="2026-10-18T23:39:27.127561+08:00" hostname="DESKTOP-LUTR1UI"><testcase classname="tests.unit.test_entity_disambiguation" name="test_name_columns_in_picks_existing_by_priority" time="0.007" /><testcase classname="tests.unit.test_entity_disambiguation" name="test_display_name_prefers_name_then_localized" time="0.001" /><testcase classname="tests.unit.test_entity_disambiguation" name="test_normalize_collapses_width_and_whitespace" time="0.004" /><testcase classname="tests.unit.test_entity_disambiguation" name="test_full_agreement_scores_one" time="0.003" /><testcase classname="tests.unit.test_entity_disambiguation" name="test_no_comparable_props_is_neutral_gray" time="0.002" /><testcase classname="tests.unit.test_entity_disambiguation" name="test_all_conflicting_props_falls_below_gray_low" time="0.001" /><testcase classname="tests.unit.test_entity_disambiguation" name="test_meta_columns_do_not_count_as_evidence" time="0.001" /><testcase classname="tests.unit.test_entity_disambiguation" name="test_platform_lineage_columns_do_not_count_as_evidence" time="0.001" /><testcase classname="tests.unit.test_entity_disambiguation" name="test_decide_no_candidates_is_new" time="0.001" /><testcase classname="tests.unit.test_entity_disambiguation" name="test_decide_single_high_candidate_merges" time="0.001" /><testcase classname="tests.unit.test_entity_disambiguation" name="test_decide_ambiguous_high_pair_goes_gray" time="0.001" /><testcase classname="tests.unit.test_entity_disambiguation" name="test_decide_low_score_is_new" time="0.001" /><testcase classname="tests.unit.test_entity_disambiguation" name="test_fuzzy_recall_kill_switch" time="0.001" /><testcase classname="tests.unit.test_entity_disambiguation" name="test_fuzzy_recall_filters_by_min_sim_and_parses_props" time="5.596" /><testcase classname="tests.unit.test_entity_disambiguation" name="test_fuzzy_recall_degrades_without_embedder" time="0.001" /><testcase classname="tests.unit.test_entity_disambiguation" name="test_fuzzy_recall_degrades_on_milvus_error" time="0.004" /><testcase classname="tests.unit.test_entity_disambiguation" name="test_recall_candidates_unions_two_roads_dedup_by_vid" time="0.002" /><testcase classname="tests.unit.test_entity_disambiguation" name="test_recall_candidates_fuzzy_failure_falls_back_to_exact" time="0.001" /><testcase classname="tests.unit.test_entity_disambiguation" name="test_name_similarity_varies_for_fuzzy_names" time="0.001" /><testcase classname="tests.unit.test_extract_claim_check.TestSplitRowsForUpload" name="test_groups_by_batch_size" time="0.001" /><testcase classname="tests.unit.test_extract_claim_check.TestSplitRowsForUpload" name="test_halves_oversized_group" time="0.002" /><testcase classname="tests.unit.test_extract_claim_check.TestSplitRowsForUpload" name="test_halving_stops_when_subgroup_fits" time="0.001" /><testcase classname="tests.unit.test_extract_claim_check.TestSplitRowsForUpload" name="test_single_oversized_row_uploaded_as_is" time="0.001" /><testcase classname="tests.unit.test_extract_claim_check.TestShapeAndCount" name="test_shape_filters_and_coerces" time="0.001" /><testcase classname="tests.unit.test_extract_claim_check.TestShapeAndCount" name="test_failure_entries_count_mixed" time="0.001" /><testcase classname="tests.unit.test_extract_claim_check.TestShapeAndCount" name="test_iter_chunks_s3_shape" time="0.001" /><testcase classname="tests.unit.test_extract_claim_check.TestShapeAndCount" name="test_iter_chunks_inline_shape_matches_history_behavior" time="0.001" /><testcase classname="tests.unit.test_extract_claim_check.TestReadSourceBatchRelay" name="test_relay_on_returns_chunks_metadata" time="2.323" /><testcase classname="tests.unit.test_extract_claim_check.TestReadSourceBatchRelay" name="test_relay_on_ids_mode_chunks_with_record_ids" time="0.013" /><testcase classname="tests.unit.test_extract_claim_check.TestReadSourceBatchRelay" name="test_relay_off_keeps_inline_shape" time="0.011" /><testcase classname="tests.unit.test_extract_claim_check.TestExecuteTransformRelay" name="test_rows_key_payload_byte_equivalent" time="5.226"><failure message="RuntimeError: Traceback (most recent call last):&#13;&#10;  File &quot;&lt;string&gt;&quot;, line 21, in &lt;module&gt;&#13;&#10;  File &quot;C:\Users\lz\AppData\Local\Temp\pytest-of-lz\pytest-0\test_rows_key_payload_byte_equ0\transform.py&quot;, line 19, in transform&#13;&#10;    &quot;stats&quot;: {&quot;payloadSha&quot;: hashlib.sha256(raw.encode()).hexdigest()},&#13;&#10;                                           ^^^^^^^^^^^^&#13;&#10;UnicodeEncodeError: 'utf-8' codec can't encode character '\udcb2' in position 50: surrogates not allowed">self = &lt;tests.unit.test_extract_claim_check.TestExecuteTransformRelay object at 0x000001E6F968E410&gt;
+tmp_path = WindowsPath('C:/Users/lz/AppData/Local/Temp/pytest-of-lz/pytest-0/test_rows_key_payload_byte_equ0')
+fake_s3 = &lt;tests.unit.test_extract_claim_check.FakeS3 object at 0x000001E6FD1AFD90&gt;
+
+    async def test_rows_key_payload_byte_equivalent(self, tmp_path, fake_s3):
+        """rowsKey 下载路径与 rows 内联路径：脚本看到的 payload 逐字节一致（hash 钉死）。"""
+        script = tmp_path / "transform.py"
+        script.write_text(HASH_SCRIPT, encoding="utf-8")
+&gt;       legacy = await execute_transform(
+            _transform_request(script, rows=ROWS, functionName="transform")
+        )
+
+tests\unit\test_extract_claim_check.py:371: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+service\temporal_workflows.py:1635: in execute_transform
+    wrapped, sidecar_path = await _spawn_script(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+script_path = WindowsPath('C:/Users/lz/AppData/Local/Temp/pytest-of-lz/pytest-0/test_rows_key_payload_byte_equ0/transform.py')
+function_name = 'transform'
+stdin_data = b'{"rows": [{"id": "1", "name": "\xe7\x94\xb2", "\xe9\x87\x91\xe9\xa2\x9d": 12.5, "tags": ["a", "b"]}, {"id": "bad", "...tasourceId": "MYSQL-1", "databaseName": "gkx", "tableName": "scholar", "pkColumn": "id", "timeColumn": "update_time"}}'
+ctx = {'source': {'id': 'bind-1', 'databaseName': 'gkx', 'tableName': 'scholar', 'pkColumn': 'id', ...}, 'stepId': 'source:bind-1', 'attempt': 1}
+timeout = 30.0
+runner = '\nimport asyncio\nimport importlib.util\nimport inspect\nimport json\nimport sys\n\nfrom kg_sdk import access_report,...raise\nflush_access_sidecar()\nprint(json.dumps({"result": result, "_access": access_report()}, ensure_ascii=False))\n'
+context_label = '平台喂数转换脚本'
+request = {'scriptPath': 'C:\\Users\\lz\\AppData\\Local\\Temp\\pytest-of-lz\\pytest-0\\test_rows_key_payload_byte_equ0\\transfor...{'id': 'bind-1', 'datasourceId': 'MYSQL-1', 'databaseName': 'gkx', 'tableName': 'scholar', ...}, 'kind': 'entity', ...}
+
+    async def _spawn_script(
+        script_path: Path,
+        function_name: str,
+        stdin_data: bytes,
+        ctx: dict[str, Any],
+        timeout: float,
+        runner: str,
+        context_label: str,
+        *,
+        request: dict[str, Any] | None = None,
+    ) -&gt; tuple[dict[str, Any], str | None]:
+        """共享的脚本子进程启动逻辑（平台喂数抽取 execute_transform 共用）。
+    
+        在隔离子进程中以 ``runner`` 调 ``script_path`` 的 ``function_name``；``ctx``
+        经 ``KG_SCRIPT_CTX`` env 注入（单参脚本用 kg_sdk.current_context 取）。
+        返回 ``(解析后的 stdout 包装 dict, sidecar 路径)``——调用方负责合并 access
+        报告并在 finally 里 ``_cleanup_sidecar``。超时/非零退出抛 RuntimeError。
+        """
+        from service.business_access_control import rbac_enabled
+    
+        if rbac_enabled():
+            if request is None:
+                raise RuntimeError("隔离脚本缺少已授权的执行上下文")
+            from service.script_resource_broker import ScriptResourceBroker
+            from service.script_sandbox_client import execute_script
+    
+            # This capability scope is supplied by Temporal, never by uploaded code or API input.
+            try:
+                execution = activity.info()
+                run_identity = [execution.workflow_id, execution.workflow_run_id]
+            except RuntimeError:
+                from uuid import uuid4
+    
+                run_identity = ["direct-test", uuid4().hex]
+            trusted_request = {
+                **request,
+                "_sandboxRunKey": hashlib.sha256(json.dumps(run_identity).encode()).hexdigest(),
+            }
+            broker = ScriptResourceBroker(trusted_request, ctx)
+            try:
+                public_context = broker.public_context()
+            except Exception:
+                broker.close()
+                raise
+            wrapped = await execute_script(
+                script_path, function_name, stdin_data, public_context, timeout, broker
+            )
+            return wrapped, None
+    
+        # 上传脚本需要 backend 模块（infra/dao/sdk）与凭据（MySQL/TRSGraph）。
+        # worker 进程不 import infra，故这里显式加载 backend/.env，并把 backend + backend/sdk
+        # 目录加入 PYTHONPATH。密钥经 env 传递的安全面与 MYSQL_PASSWORD 等
+        # sub_env={**os.environ} 一致。
+        backend_dir = Path(__file__).resolve().parents[1]
+        load_dotenv(backend_dir / ".env")
+        sdk_dir = backend_dir / "sdk"
+        pythonpath = os.pathsep.join(
+            filter(None, [str(backend_dir), str(sdk_dir), str(script_path.parent)])
+        )
+        sidecar_path = await asyncio.to_thread(
+            _write_private_tempfile, prefix="kg_access_", suffix=".jsonl"
+        )
+        sub_env = {
+            **os.environ,
+            "PYTHONPATH": pythonpath,
+            "KG_SCRIPT_CTX": json.dumps(ctx, ensure_ascii=False),
+            "KG_ACCESS_LOG": sidecar_path,
+        }
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-c",
+            runner,
+            str(script_path),
+            function_name,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=sub_env,
+        )
+        try:
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(stdin_data), timeout=timeout
+                )
+            except TimeoutError:
+                process.kill()
+                await process.wait()
+                _log_failed_access(f"{context_label} 执行超时", sidecar_path)
+                raise RuntimeError(f"{context_label} 执行超时") from None
+            if process.returncode != 0:
+                _log_failed_access(f"{context_label} 退出码 {process.returncode}", sidecar_path)
+&gt;               raise RuntimeError(stderr.decode(errors="replace")[-4000:])
+E               RuntimeError: Traceback (most recent call last):
+E                 File "&lt;string&gt;", line 21, in &lt;module&gt;
+E                 File "C:\Users\lz\AppData\Local\Temp\pytest-of-lz\pytest-0\test_rows_key_payload_byte_equ0\transform.py", line 19, in transform
+E                   "stats": {"payloadSha": hashlib.sha256(raw.encode()).hexdigest()},
+E                                                          ^^^^^^^^^^^^
+E               UnicodeEncodeError: 'utf-8' codec can't encode character '\udcb2' in position 50: surrogates not allowed
+
+service\temporal_workflows.py:635: RuntimeError</failure></testcase><testcase classname="tests.unit.test_extract_claim_check.TestExecuteTransformRelay" name="test_step_chain_input_key_no_truncation" time="9.970" /><testcase classname="tests.unit.test_extract_claim_check.TestDownstreamRecordsKey" name="test_write_records_extracts_from_full_output" time="0.011" /><testcase classname="tests.unit.test_extract_claim_check.TestDownstreamRecordsKey" name="test_write_records_uploads_vids_manifest" time="0.007" /><testcase classname="tests.unit.test_extract_claim_check.TestDownstreamRecordsKey" name="test_write_records_no_vids_key_without_relay" time="0.009" /><testcase classname="tests.unit.test_extract_claim_check.TestDownstreamRecordsKey" name="test_write_records_relation_ignores_index_vids" time="0.057" /><testcase classname="tests.unit.test_extract_claim_check.TestDownstreamRecordsKey" name="test_write_records_upload_failure_raises" time="0.007" /><testcase classname="tests.unit.test_extract_claim_check.TestDownstreamRecordsKey" name="test_resolve_entity_batch_relays_kept_records" time="7.412" /><testcase classname="tests.unit.test_extract_claim_check.TestDownstreamRecordsKey" name="test_detect_collisions_reads_key" time="2.824" /><testcase classname="tests.unit.test_extract_claim_check.TestResolveBatchSameName" name="test_same_name_same_props_merges_into_first" time="2.820" /><testcase classname="tests.unit.test_extract_claim_check.TestResolveBatchSameName" name="test_same_name_no_evidence_withheld_as_gray" time="2.808" /><testcase classname="tests.unit.test_extract_claim_check.TestResolveBatchSameName" name="test_same_name_conflicting_props_both_kept" time="2.802" /><testcase classname="tests.unit.test_extract_claim_check.TestFailureRefs" name="test_record_failures_expands_refs_and_caps" time="2.826" /><testcase classname="tests.unit.test_extract_claim_check.TestFailureRefs" name="test_record_failures_inline_only_no_cap" time="7.380" /></testsuite></testsuites>

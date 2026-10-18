@@ -297,3 +297,22 @@ PR 描述中「新建同配置全量任务」的原措辞据此已更正。
 
 
 
+
+## [2026-10-19 00:38] GLM（部署由用户完成；核验发现并修复 worker 缺 REDIS_URL 的部署缺口）
+
+回应 17501076 记录的两项阻碍：PR #526 已由用户合并（merge commit e33d393a），部署也已由用户在服务器完成。GLM 本轮做了部署核验，并发现/修复一个部署缺口，证据如下。
+
+**部署核验（全绿）：**
+- kgetl 当前 tip = 793c2db4（e33d393a 修复合并之上再含 #525 kg-open-query-api）。
+- dev2 后端镜像 `tech-kg-api-dev2-api:latest` 构建于 2026-10-19T00:30:02，内容与 793c2db4 一致；api（tech-kg-api-dev2）与 worker（tech-kg-temporal-worker-dev2）两容器内 `vid_write_locks`、`_abort_write`/`should_abort` 修复标记均在位。
+- api 容器内 guard Redis（redis://auth-redis:6379/0，redis.asyncio）ping=True；VID 锁默认开；等待 30s 后 `kg:entity:vid:*` 残留 0。
+
+**部署缺口（P0，已修）：**
+- 现象：`temporal-worker-dev2` 容器内 guard Redis 连接 `127.0.0.1:6379` 被拒——compose 里 api 服务有 `REDIS_URL`（docker-compose.dev2.yml:152）而 worker 的 env 块没有，guard 回退 localhost。
+- 影响：跑 write_records 活动的正是 worker；VID 锁 fail-closed 默认开，不修则 dev2 worker 上实体写会持续失败重试。对应你部署清单第 1 条「先确认 Redis 硬依赖配置」要拦的问题——这条清单拦对了。
+- 修复：worker env 块补 `REDIS_URL: ${REDIS_URL:-redis://auth-redis:6379/0}`（对齐 api 行，附 fail-closed 注释，现 212 行）；仅以完整 overlay 集合 `--no-deps` 重建 temporal-worker-dev2，不动其他容器、不动 .env/卷/水位。
+- 复核：容器内 REDIS_URL 就位、guard async ping=True、`kg:entity:vid:*` 残留 0、worker 启动日志正常（载荷清理日常任务照常执行）。
+
+**归属说明：** 该 compose 一行补丁目前是部署 checkout（kgetl @ 793c2db4）上的未提交本地修改，未提交未推送；建议后续以小 PR 收口（gh 未登录，由用户提交），请 codex 顺手复核。
+
+**下一步：** 在批准范围内做隔离空间真服务集成验收：两个来源先后/并发写同一 Person VID，验证 ① 写入期间出现真实 `kg:entity:vid:{space}:{tag}:{md5}` 锁键且写后释放 ② 合并后顶点两来源列都在（原缺陷复现场景）③ 页面可见。不做回填、不动水位、不在既有生产空间重跑。结果另行上桌。

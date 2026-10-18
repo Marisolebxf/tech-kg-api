@@ -1,0 +1,323 @@
+{
+  "space": "gkx_ui_20261018_01",
+  "entities": [
+    {
+      "name": "Paper",
+      "cn": "论文",
+      "props": [
+        {
+          "name": "title_zh",
+          "type": "string"
+        },
+        {
+          "name": "title_en",
+          "type": "string"
+        },
+        {
+          "name": "doi",
+          "type": "string"
+        },
+        {
+          "name": "publication_year",
+          "type": "string"
+        },
+        {
+          "name": "publication_date",
+          "type": "string"
+        },
+        {
+          "name": "language",
+          "type": "string"
+        },
+        {
+          "name": "document_type",
+          "type": "string"
+        },
+        {
+          "name": "publication_type",
+          "type": "string"
+        },
+        {
+          "name": "volume",
+          "type": "string"
+        },
+        {
+          "name": "issue",
+          "type": "string"
+        },
+        {
+          "name": "start_page",
+          "type": "string"
+        },
+        {
+          "name": "end_page",
+          "type": "string"
+        },
+        {
+          "name": "is_oa",
+          "type": "string"
+        },
+        {
+          "name": "source_url",
+          "type": "string"
+        },
+        {
+          "name": "source",
+          "type": "string"
+        },
+        {
+          "name": "created_time",
+          "type": "string"
+        },
+        {
+          "name": "updated_time",
+          "type": "string"
+        },
+        {
+          "name": "output_awards",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "Journal",
+      "cn": "期刊",
+      "props": [
+        {
+          "name": "name_zh",
+          "type": "string"
+        },
+        {
+          "name": "name_en",
+          "type": "string"
+        },
+        {
+          "name": "name_abbr",
+          "type": "string"
+        },
+        {
+          "name": "issn",
+          "type": "string"
+        },
+        {
+          "name": "eissn",
+          "type": "string"
+        },
+        {
+          "name": "country",
+          "type": "string"
+        },
+        {
+          "name": "founding_time",
+          "type": "string"
+        },
+        {
+          "name": "impact_factor",
+          "type": "string"
+        },
+        {
+          "name": "is_sci",
+          "type": "string"
+        },
+        {
+          "name": "jcr_zone",
+          "type": "string"
+        },
+        {
+          "name": "cite_nums",
+          "type": "string"
+        },
+        {
+          "name": "annual_publication",
+          "type": "string"
+        },
+        {
+          "name": "publication_cycle",
+          "type": "string"
+        },
+        {
+          "name": "source",
+          "type": "string"
+        },
+        {
+          "name": "zh_core",
+          "type": "string"
+        },
+        {
+          "name": "sub_quartile",
+          "type": "string"
+        },
+        {
+          "name": "top",
+          "type": "string"
+        },
+        {
+          "name": "scope_zone",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "IndustryChain",
+      "cn": "产业链",
+      "props": [
+        {
+          "name": "chain_code",
+          "type": "string"
+        },
+        {
+          "name": "chain_name",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "IndustryNode",
+      "cn": "产业链节点",
+      "props": [
+        {
+          "name": "node_id",
+          "type": "string"
+        },
+        {
+          "name": "node_name",
+          "type": "string"
+        },
+        {
+          "name": "node_type",
+          "type": "string"
+        },
+        {
+          "name": "level",
+          "type": "string"
+        },
+        {
+          "name": "node_seq",
+          "type": "string"
+        },
+        {
+          "name": "node_imp_level",
+          "type": "string"
+        },
+        {
+          "name": "node_stage",
+          "type": "string"
+        },
+        {
+          "name": "node_path",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "Organization",
+      "cn": "机构",
+      "props": [
+        {
+          "name": "name_cn",
+          "type": "string"
+        },
+        {
+          "name": "name_en",
+          "type": "string"
+        },
+        {
+          "name": "province",
+          "type": "string"
+        },
+        {
+          "name": "city",
+          "type": "string"
+        },
+        {
+          "name": "org_kind",
+          "type": "string"
+        },
+        {
+          "name": "founded_year",
+          "type": "int64"
+        }
+      ]
+    },
+    {
+      "name": "Person",
+      "cn": "科技专家",
+      "props": [
+        {
+          "name": "name_zh",
+          "type": "string"
+        },
+        {
+          "name": "name_en",
+          "type": "string"
+        },
+        {
+          "name": "scholar_org",
+          "type": "string"
+        },
+        {
+          "name": "paper_nums",
+          "type": "int64"
+        },
+        {
+          "name": "h_index",
+          "type": "int64"
+        }
+      ]
+    },
+    {
+      "name": "PUBLISHED_IN",
+      "cn": "论文发表关系",
+      "props": [
+        {
+          "name": "volume",
+          "type": "string"
+        },
+        {
+          "name": "issue",
+          "type": "string"
+        },
+        {
+          "name": "start_page",
+          "type": "string"
+        },
+        {
+          "name": "end_page",
+          "type": "string"
+        },
+        {
+          "name": "publication_year",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "AUTHORED_BY",
+      "cn": "论文署名关系",
+      "props": [
+        {
+          "name": "author_order",
+          "type": "string"
+        },
+        {
+          "name": "is_corresponding",
+          "type": "string"
+        },
+        {
+          "name": "citations",
+          "type": "int64"
+        }
+      ]
+    },
+    {
+      "name": "BELONGS_TO_NODE",
+      "cn": "企业归属产业链节点",
+      "props": [
+        {
+          "name": "chain_score",
+          "type": "double"
+        }
+      ]
+    }
+  ]
+}

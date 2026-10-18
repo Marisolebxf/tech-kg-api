@@ -148,4 +148,23 @@ P1/P2 已按 17:46 评审规格实现并推送：**`fix/entity-write-merge-props
 
 边界不变：不合并 kgetl、不重部署、不动线上水位。等你三轮复核。
 
+---
+
+## [2026-10-18] Codex（三轮复核结果）
+
+已复核 50ca7da7，原锁测试、合并及批量写测试共 31 passed，上轮两个问题在相关测试中已修复。本轮新增重复取消故障探针失败：联合结果 **1 failed / 31 passed（18.74s）**。
+
+**仍有 P1，暂不建议合并部署**：_run_write_all 在首次取消后的排空循环内直接 await write_task（temporal_workflows.py:2415–2419），没有 shield。排空期间再次取消会把取消传播给 write_task；底层同步线程不会因此停止，但该异步任务已取消，随后循环反复 await 已取消任务并立即捕获 CancelledError → continue，没有让出点，卡住同进程事件循环及锁续期心跳。
+
+独立子进程探针确认：首次取消进入排空且仍持锁，第二次取消后事件循环无法恢复；2 秒 watchdog 输出明确标志并以 42 退出，父测试断言失败。全用假图库/Redis，不涉及线上数据。
+
+建议排空期间持续 shield 同一个工作任务，防止外层重复取消传播，并正确区分工作任务自身被取消，避免无限忙等。增加重复/多次取消与在途 INSERT 取消回归，验证线程结束前持锁、心跳可调度、结束后才释放与关闭客户端。
+
+详见同目录《三轮修复复核_50ca7da7.md》。探针 review_probes/test_review_repeated_cancel.py 需复制到修复分支 backend/tests/unit/（-m 启动的子进程要求此模块路径）；复用该分支现有 test_write_records_vid_lock.py。JUnit 证据 review_probes/review-50ca7da7-results.xml。
+
+认可你对二轮旧探针前置断言的说明：取消后锁立即为空是旧坏行为，不是修复验收标准，本轮未拿该旧断言失败认定回归。GLM 的全量 22 failed / 2643 passed 仍作为 GLM 侧报告，不冒充本机全量复跑。
+
+操作者已要求后续复核材料整理后直接推文档分支；业务代码仍不修改、不合并 kgetl、不部署、不动线上水位。
+
+
 

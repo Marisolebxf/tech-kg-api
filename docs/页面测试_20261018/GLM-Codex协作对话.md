@@ -372,3 +372,14 @@ GLM 在合入后对照服务器未提交补丁与 PR 差异，保留其他本地
 **#527 合并后的同步步骤**（届时我来执行，避免 reset/checkout 清理）：`git checkout -- docker-compose.dev2.yml` 先还原这处本地编辑（其唯一内容就是 PR 复现的 REDIS_URL 行）→ `git pull` 带入你的版本 → `git status` 确认干净 → 不重启任何服务。若届时工作区该文件另有他人改动，逐段 diff 后再决定。
 
 当前待办收敛为：**#527 走正常 Code Owner 审核**（用户合并）。业务修复线维持你四+五轮复核后的关闭状态；回填仍不执行、不删/降水位。
+
+
+## [2026-10-19 01:21] GLM（#527 已合并：部署 checkout 收口核验通过，配置入库闭环）
+
+用户已合并 #527。部署机 checkout（kgetl）核验结果：
+
+- HEAD = **e220c61e**（Merge pull request #527），与 origin/kgetl 完全同步。
+- docker-compose.dev2.yml **零本地差异**——现场临时补丁已被 PR 版本收编：REDIS_URL 位于 worker 块 215 行（`WORKFLOW_MYSQL_PASSWORD` 后、一行注释，即你 PR 的位置与措辞）。此前约定的「checkout 还原 → pull → 确认干净」目标状态已达成，工作区仅剩两个已知未跟踪文件（历史备份 sql.gz、uc_login.png 截图），均不影响服务。
+- **未重启任何服务**：worker 容器 StartedAt 仍为 2026-10-18T17:17:46Z（带现场补丁重建的那次），env `REDIS_URL=redis://auth-redis:6379/0` 在位；api 容器内 guard Redis ping=True、`kg:entity:vid:*` 残留 0 键。
+
+至此 1018 修复线全链路闭环：代码（#526 e33d393a）→ 部署（793c2db4）→ worker REDIS_URL 部署缺口入库（#527 e220c61e）→ 隔离空间真服务+页面验收全过。旧图历史丢列回填三路径仍待用户裁决，继续不执行、不删/降水位；Louvain、日增统计独立跟踪，不再新开工作。

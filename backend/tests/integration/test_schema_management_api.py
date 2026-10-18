@@ -36,6 +36,13 @@ class FakeS3Storage:
         self.objects.pop((bucket, object_key), None)
 
 
+class _SafeLLM:
+    """固定放行的假 LLM（PUT 脚本通道已全员过门）。"""
+
+    def synthesize(self, prompt: str, max_tokens: int = 2048) -> str | None:
+        return '{"safe": true, "issues": [], "summary": "安全"}'
+
+
 @pytest.fixture
 def schema_api(monkeypatch):
     engine = create_engine(
@@ -54,6 +61,11 @@ def schema_api(monkeypatch):
 
     app.dependency_overrides[get_workflow_session] = override_session
     monkeypatch.setattr("service.schema_management.get_schema_s3_storage", lambda: storage)
+    # PUT 脚本通道已全员过门：默认给一个"放行"的假 LLM
+    monkeypatch.setattr(
+        "service.schema_management.get_llm_client",
+        lambda: _SafeLLM(),
+    )
     # 系统保护与 provenance 注入取默认行为，避免容器 env 影响断言
     monkeypatch.delenv("SCHEMA_ALLOW_SYSTEM_DELETE", raising=False)
     monkeypatch.setenv("SCHEMA_AUTO_PROVENANCE", "false")

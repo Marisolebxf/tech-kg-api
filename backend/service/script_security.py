@@ -1,4 +1,19 @@
-"""Schema 脚本 LLM 安全校验。"""
+"""Schema 脚本 LLM 安全校验。
+
+幻觉防护（2026-10-17）：LLM 对长脚本的"危险调用"结论可能凭空捏造（实测对
+625 行纯 stdlib 脚本报过不存在的 os.environ / repr(exc)）。因此要求每个
+issue 附 evidence——源码中逐字存在的片段；引不出真实代码的理由直接丢弃，
+全部无实证时按安全放行（语法/入口静态检查仍在前置通道把关）。
+
+静态高危回退（同日）：模型也会"证据真实、结论错误"——把 hashlib 构造 JSON
+摘要说成"网络访问风险"。证据过滤挡不住这类误报，因此 unsafe 判定还需通过
+一道静态高危 pattern 检查：源码连 eval/exec/网络/进程/敏感文件等调用都没
+出现时，按误报放行；真出现时维持拦截。
+
+模型输出损坏（2026-10-18）：模型偶尔返回非约定 JSON（46 脚本实测 4 例），
+旧逻辑直接判 unsafe。现与限流同待遇：重试一次，仍坏归入校验不可用，
+提示稍后重传。
+"""
 
 from __future__ import annotations
 
@@ -9,6 +24,19 @@ from dataclasses import dataclass, field
 from infra.llm import LLMClient
 
 LLM_RESPONSE_FORMAT_ERROR = "LLM 返回格式异常"
+LLM_UNAVAILABLE = "LLM 安全校验暂不可用"
+
+# 静态高危 pattern：与提示词的风险类别对齐。re.compile 等模块前缀调用不算
+# （lookbehind 排除），避免把正则预编译误当代码执行。
+_HIGH_RISK_RE = re.compile(
+    r"""(?x)
+    (?<![\w.])(?:eval|exec|compile)\s*\(
+  | (?<![\w_.])__import__\s*\(
+  | \bos\s*\.\s*(?:system|popen|environ\w*|fork|exec\w*|spawn\w*|remove|unlink|rmdir|listdir|walk|open)\s*[\[(]
+  | (?<![\w.])(?:subprocess|socket|urllib|requests|httpx|pickle|marshal|ctypes|shutil)\b
+  | \bopen\s*\(\s*["'][^"']*(?:/etc/|\.ssh|\.env)
+    """
+)
 
 
 @dataclass
@@ -16,6 +44,9 @@ class ScriptSecurityVerdict:
     safe: bool
     issues: list[str] = field(default_factory=list)
     summary: str = ""
+    # True = 校验服务本身不可用（限流/超时），并非判定脚本不安全；
+    # 调用方应提示用户稍后重传，而不是把脚本当危险脚本处理。
+    unavailable: bool = False
 
 
 _SECURITY_PROMPT_TEMPLATE = """你是一名 Python 安全审计专家。请审计下面这个将被注册到知识图谱构建平台、用于实体/关系数据抽取的 Python 脚本的安全性。
@@ -39,21 +70,74 @@ _SECURITY_PROMPT_TEMPLATE = """你是一名 Python 安全审计专家。请审�
 
 判定标准：脚本应只做"接收一行数据 → 返回结构化结果"的纯计算变换。任何可能影响宿主环境安全的行为都判为不安全。
 
+**证据要求（重要）**：你报出的每一个问题都必须给出 evidence——从上面脚本源码中**逐字复制**的一小段连续代码（不超过 120 字符），能直接证明该问题存在。在源码里找不到可逐字引用片段的，一律不要报——宁可漏报也不要编造。数据字段名出现在返回值/溯源字典中属于正常数据流转，不算"日志泄露"。
+
 请严格只返回如下 JSON（不要任何额外文字、不要 markdown 代码栅栏）：
-{{"safe": true或false, "issues": ["问题1", "问题2"], "summary": "一句话总结"}}
+{{"safe": true或false, "issues": [{{"problem": "问题中文短句", "evidence": "源码逐字片段"}}], "summary": "一句话总结"}}
 
 若脚本安全，issues 为空数组，summary 给出简短肯定评价。
-若不安全，issues 列出每个具体问题（中文短句），summary 概括整体风险。"""
+若不安全，issues 列出每个具体问题及其源码证据，summary 概括整体风险。"""
 
 
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
+_EVIDENCE_MAX_LEN = 160
 
 
 def _build_prompt(filename: str, source: str) -> str:
     return _SECURITY_PROMPT_TEMPLATE.format(filename=filename, source=source)
 
 
-def _parse_verdict(raw: str) -> ScriptSecurityVerdict:
+def _squash_whitespace(text: str) -> str:
+    return re.sub(r"\s+", " ", text)
+
+
+def _evidence_in_source(evidence: str, source: str) -> bool:
+    """evidence 必须在源码中逐字命中；仅容忍空白差异（模型常改缩进/换行）。"""
+    snippet = evidence.strip()[:_EVIDENCE_MAX_LEN]
+    if not snippet:
+        return False
+    if snippet in source:
+        return True
+    return _squash_whitespace(snippet) in _squash_whitespace(source)
+
+
+def _normalize_issues(raw_issues: object, source: str) -> tuple[list[str], int, int]:
+    """归一化 issues 并按证据过滤。
+
+    返回 (保留的 problem 列表, 无证据被丢弃数, 证据不命中被丢弃数)。
+    兼容旧格式（纯字符串列表，视为无证据）与对象格式
+    （{"problem": ..., "evidence": ...}）。
+    """
+    if not isinstance(raw_issues, list):
+        return [], 0, 0
+    kept: list[str] = []
+    dropped_no_evidence = 0
+    dropped_unverified = 0
+    for item in raw_issues:
+        if isinstance(item, str):
+            problem, evidence = item, None
+        elif isinstance(item, dict):
+            problem = item.get("problem") or item.get("issue") or ""
+            evidence = item.get("evidence")
+            if evidence is not None and not isinstance(evidence, str):
+                evidence = None
+        else:
+            dropped_no_evidence += 1
+            continue
+        if not isinstance(problem, str) or not problem.strip():
+            dropped_no_evidence += 1
+            continue
+        if evidence is None:
+            dropped_no_evidence += 1
+            continue
+        if not _evidence_in_source(evidence, source):
+            dropped_unverified += 1
+            continue
+        kept.append(problem.strip())
+    return kept, dropped_no_evidence, dropped_unverified
+
+
+def _parse_verdict(raw: str, source: str) -> ScriptSecurityVerdict:
     match = _JSON_OBJECT_RE.search(raw)
     if not match:
         return ScriptSecurityVerdict(
@@ -76,7 +160,6 @@ def _parse_verdict(raw: str) -> ScriptSecurityVerdict:
             summary=LLM_RESPONSE_FORMAT_ERROR,
         )
     safe = data.get("safe")
-    issues = data.get("issues", [])
     summary = data.get("summary", "")
     if not isinstance(safe, bool):
         return ScriptSecurityVerdict(
@@ -84,20 +167,62 @@ def _parse_verdict(raw: str) -> ScriptSecurityVerdict:
             issues=["LLM 返回格式异常：safe 字段缺失或非布尔"],
             summary=LLM_RESPONSE_FORMAT_ERROR,
         )
-    if not isinstance(issues, list) or not all(isinstance(i, str) for i in issues):
-        issues = []
     if not isinstance(summary, str):
         summary = ""
-    return ScriptSecurityVerdict(safe=safe, issues=issues, summary=summary)
+
+    issues, no_evidence, unverified = _normalize_issues(data.get("issues", []), source)
+    # 模型常把同一问题换个措辞重复报：按 problem 原文去重、保序。
+    issues = list(dict.fromkeys(issues))
+    if safe:
+        return ScriptSecurityVerdict(safe=True, issues=issues, summary=summary)
+    if not issues:
+        # 幻觉防护：模型判不安全，但没有任何一条理由能在源码中逐字定位——
+        # 按无实证放行（语法/入口静态检查仍在），summary 保留原判供审计。
+        note = (
+            f"模型判为不安全，但 {no_evidence + unverified} 条理由均未在源码中"
+            "找到可逐字对应的代码片段，按无实证放行"
+        )
+        merged_summary = f"{note}。模型原判：{summary}" if summary else note
+        return ScriptSecurityVerdict(safe=True, issues=[], summary=merged_summary)
+
+    # 静态高危回退：证据都真实，但源码一条高危调用都没有——模型把无害代码
+    # 解释成了危险行为（实测 hashlib 构造 JSON 摘要被说成网络访问风险），
+    # 按误报放行；源码真出现高危调用时维持拦截。
+    if _HIGH_RISK_RE.search(source):
+        return ScriptSecurityVerdict(safe=False, issues=issues, summary=summary)
+    note = (
+        "模型判为不安全，但源码未命中任何静态高危调用（eval/exec/网络/进程/敏感文件等），按误报放行"
+    )
+    merged_summary = f"{note}。模型原判：{summary}" if summary else note
+    return ScriptSecurityVerdict(safe=True, issues=[], summary=merged_summary)
+
+
+def _unavailable(message: str) -> ScriptSecurityVerdict:
+    return ScriptSecurityVerdict(
+        safe=False,
+        unavailable=True,
+        issues=[message],
+        summary=LLM_UNAVAILABLE,
+    )
 
 
 def review_script_security(client: LLMClient, filename: str, source: str) -> ScriptSecurityVerdict:
     prompt = _build_prompt(filename, source)
     raw = client.synthesize(prompt, max_tokens=1024)
     if raw is None:
-        return ScriptSecurityVerdict(
-            safe=False,
-            issues=["LLM 调用失败，未返回结果"],
-            summary="LLM 调用失败",
-        )
-    return _parse_verdict(raw)
+        # 限流/超时重试一次（glm flash 429 高发），仍失败则明确区分
+        # "校验服务不可用"与"脚本不安全"，不把网络问题伪装成安全结论。
+        raw = client.synthesize(prompt, max_tokens=1024)
+    if raw is None:
+        return _unavailable("LLM 安全校验暂不可用（限流或超时），请稍后重传")
+    verdict = _parse_verdict(raw, source)
+    if verdict.summary != LLM_RESPONSE_FORMAT_ERROR:
+        return verdict
+    # 模型输出损坏（非约定 JSON）与限流同待遇：重试一次，仍坏按校验不可用
+    # 处理——"裁判输出抽风"同样不该伪装成"脚本不安全"（实测 46 脚本 4 例）。
+    retry = client.synthesize(prompt, max_tokens=1024)
+    if retry is not None:
+        verdict = _parse_verdict(retry, source)
+    if retry is None or verdict.summary == LLM_RESPONSE_FORMAT_ERROR:
+        return _unavailable("LLM 安全校验暂不可用（模型返回格式异常），请稍后重传")
+    return verdict

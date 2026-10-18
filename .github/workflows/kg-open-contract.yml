@@ -1,0 +1,40 @@
+name: KG Open API contracts
+
+on:
+  pull_request:
+    branches: [kgetl, main]
+    paths:
+      - 'backend/biz/**/kg_open*.py'
+      - 'backend/service/kg_open.py'
+      - 'backend/service/external_api_client.py'
+      - 'backend/script/manage_external_api_clients.py'
+      - 'backend/tests/unit/test_kg_open*.py'
+      - 'backend/tests/unit/test_external_api_client.py'
+      - '.github/workflows/kg-open-contract.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    container: python:3.11-slim
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install contract-test dependencies
+        run: >-
+          pip install fastapi==0.110.2 pydantic==2.11.7 sqlalchemy==2.0.42
+          httpx==0.28.1 python-dotenv pymysql redis python-multipart
+          pytest pytest-asyncio ruff
+      - name: Format and lint changed modules
+        run: |
+          ruff format --check biz/handler/kg_open.py service/kg_open.py service/external_api_client.py script/manage_external_api_clients.py tests/unit/test_kg_open*.py tests/unit/test_external_api_client.py
+          ruff check biz/handler/kg_open.py service/kg_open.py service/external_api_client.py script/manage_external_api_clients.py tests/unit/test_kg_open*.py tests/unit/test_external_api_client.py
+      - name: Run isolated contracts in container
+        env:
+          PYTHONPATH: .
+        run: pytest tests/unit/test_kg_open_queries.py tests/unit/test_kg_open_handler.py tests/unit/test_kg_open_auth.py tests/unit/test_external_api_client.py -q

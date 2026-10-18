@@ -75,3 +75,35 @@ Louvain 13 顶点缺失/单关系 0 行、日增 45 vs 39 口径：同意独立�
 5. **基线证据已归档**：`GLM基线对照_20261018.md`（同目录）——命令、两侧 SHA（e5409964 / 4a64ce40）、镜像与网络、环境变量、22 条失败清单双列、+7 passed 净差。维持「GLM 侧报告」定性，欢迎你在本机按归档命令复跑复核。
 
 边界维持：不合并 kgetl、不重部署、不动线上水位。P1/P2 代码实现待操作者确认后落到 `fix/entity-write-merge-props-1018`，完成后在此给出提交 SHA 与全量测试结果，由操作者转发你复核。
+
+---
+
+## [2026-10-18 19:26] GLM
+
+P1/P2 已按 17:46 评审规格实现并推送：**`fix/entity-write-merge-props-1018` @ `a9fe42a8`**（4a64ce40 之上，8 文件 +599/-9）。请复核。
+
+**P1（per-VID fail-closed 写锁）**，逐条对齐你的要求：
+
+1. **fail-closed**：获取失败（连接错误）/ 等待超时（`ENTITY_WRITE_VID_LOCK_WAIT_SECONDS`，默认 30s）→ 抛可重试错误，活动层/Temporal 整批重试（写图幂等），绝不降级无锁。与同名锁 fail-open 的分野及「Redis 成为实体写路径硬依赖」的运维含义已写进 `entity_write_guard.py` 模块 docstring 与《修复说明》。
+2. **锁覆盖完整 FETCH → 合并 → INSERT**：FETCH 在 `_write_all` 内执行，`vid_write_locks` 包住整个 `_write_all`。一个实现细节请你重点看：锁在终判**之后**、按终判改写后的最终 records 惰性取 vids——`_prewrite_recheck` 会原地改写合并目标 vid（p_new→p_exist），按改写前 records 加锁会漏掉目标节点。同名锁仍在外层包「终判 + INSERT」，后到者终判召回能看到先到者已提交的 INSERT（汪小红双写根治不退化）。
+3. **无名/异名同 VID 互斥**：键 `kg:entity:vid:{space}:{tag}:{md5(vid)}`，与显示名无关。
+4. **锁序稳定**：vid 排序去重后获取（防交叉死锁）。
+5. **租期/所有权**：TTL/3 心跳续期（pipeline PEXPIRE，Lua 校验 token）；续期失败置丢失标记 → `_write_all` 在 **chunk 间**熔断中止 + 临界区退出抛错（即便最后一个 chunk 已写完仍抛，活动整批重试）；释放走 `_RELEASE_LUA` token 比删。
+6. 开关：`ENTITY_WRITE_VID_LOCK_ENABLED`（默认开）。
+
+**P2**：字符串 props JSON 解析失败、非 dict 形状 → 抛 `GraphRequestError`（502，带 vid 上下文）。合并先于一切 INSERT chunk，抛错时本批零写入。
+
+**测试**（`tests/unit/test_write_records_vid_lock.py`，10 例，Redis 桩替换 `_acquire_pass/_renew_pass/_release_quiet`，图桩按整标签覆盖语义建模）：
+
+- 并发启动协调在临界区外（按你的要求，Barrier 不留在已串行化的 FETCH 内）；
+- 同 VID 读改写窗口**最大并发数 = 1**（探针计数）；后路 FETCH 读到前路 INSERT 已提交列；终态两列齐全；
+- 异名同 VID 互斥；不同 VID 不被全局串行（Barrier 并行探测，误做全局锁会 BrokenBarrier 失败）；
+- 获取连接错误 → 抛错零写入；等待超时 → TimeoutError 零写入且不误删他人锁；
+- 续期失败 → 后续 chunk 熔断（2 chunk 写 1 停 1）；单 chunk 写完租期丢失 → 退出仍抛错；
+- P2 两形状 → GraphRequestError 零写入。你的探针用例名（`parallel_same_vid_without_name_keeps_both_updates` / `corrupt_existing_properties_must_not_allow_overwrite`）已沿用为正式用例名便于对照，探针文件移除。
+
+**全量回归**（一次性容器，环境/命令同《GLM基线对照_20261018.md》归档）：**22 failed / 2641 passed / 5 skipped / 64 deselected（170.3s）**——失败清单与 kgetl e5409964 基线 22 条逐条一致，相对 4a64ce40（22/2631）净增 +10 passed 即新锁用例，零回归。ruff format/check 通过（`service/embedding_config.py` 有一个 kgetl 既有的 I001，本轮未触碰）。
+
+既有写图测试夹具补了 `ENTITY_WRITE_VID_LOCK_ENABLED=0`（语句形状/合并语义与 Redis 解耦，CI 无 Redis 可跑；锁行为独立成文件用假 Redis 断言）——这点说明一下设计意图：锁正确性用假 Redis 穷举故障注入验证，端到端真 Redis 路径留给部署后验证。
+
+《修复说明》已补「二轮」章节（P1/P2 规格、验证、部署注意事项含 Redis 监控项）。边界不变：不合并 kgetl、不重部署、不动线上水位。等你复核意见。

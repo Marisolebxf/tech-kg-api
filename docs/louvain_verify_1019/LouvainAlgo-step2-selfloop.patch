@@ -1,0 +1,28 @@
+diff --git a/nebula-algorithm/src/main/scala/com/vesoft/nebula/algorithm/lib/LouvainAlgo.scala b/nebula-algorithm/src/main/scala/com/vesoft/nebula/algorithm/lib/LouvainAlgo.scala
+index 2b5c0fa..6b8cbce 100644
+--- a/nebula-algorithm/src/main/scala/com/vesoft/nebula/algorithm/lib/LouvainAlgo.scala
++++ b/nebula-algorithm/src/main/scala/com/vesoft/nebula/algorithm/lib/LouvainAlgo.scala
+@@ -187,8 +187,21 @@ object LouvainAlgo {
+         (vertices, kIn)
+       })
+ 
+-    // reconstruct graph based on new edge info
+-    val initG        = Graph.fromEdges(edges, None)
++    // reconstruct graph based on new edge info.
++    // [TRS PATCH 2026-10-19] Graph.fromEdges only materializes vertices that touch
++    // an inter-community edge. A community fully internalized in step1 has no such
++    // edge, so it vanished from the compressed graph and its vertices were silently
++    // dropped from the final Louvain result (isolated small connected components
++    // output 0 rows). Emit every community as a 0-weight self-loop so all super
++    // vertices exist in the compressed graph:
++    //   - 0-weight keeps degree/modularity bookkeeping unchanged: the self-loop adds
++    //     0.0 to the super vertex degree in createLouvainGraph, contributes 0.0 to
++    //     k_i,n in getNeighCommInfo, and next round's step2 filters it into v2vKin
++    //     with weight*2 = 0 (no double counting with k_i,n);
++    //   - it also guarantees every vertex has a triplet, keeping the inner join in
++    //     getChangeInfo complete for isolated super vertices.
++    val selfLoops   = superVertexInfo.map(x => Edge(x._1, x._1, 0.0))
++    val initG        = Graph.fromEdges(edges.union(selfLoops), None)
+     var louvainGraph = LouvainGraphUtil.createLouvainGraph(initG)
+     // get new louvain graph
+     louvainGraph = louvainGraph.outerJoinVertices(superVertexInfo)((vid, data, opt) => {

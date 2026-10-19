@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import logging
 import threading
 import time
 from datetime import UTC, datetime
@@ -11,9 +12,16 @@ from typing import Any
 from httpx import AsyncClient
 
 from infra.graph_db import TRSGraphClient
-from infra.graph_db.config import TRSGraphSettings
+from infra.graph_db.config import TRSGraphSettings, business_plane_settings
 from service.expert_colleague_relation import ExpertColleagueRelationService
-from service.graph_space_context import get_current_space, request_can_write
+from service.graph_space_context import (
+    business_data_plane,
+    effective_graph_space,
+    get_current_space,
+    request_can_write,
+)
+
+logger = logging.getLogger(__name__)
 
 # 60s 进程内读结果缓存：service.query 的图查询读结果可复用；写图副作用 _persist_relations
 # 不缓存，每次照常执行（COLLEAGUE 边仍更新，persistence 计数每次现算）。
@@ -192,12 +200,18 @@ class ExpertColleagueRelationApplication:
 
     @staticmethod
     def _persist_relations(data: dict[str, Any]) -> dict[str, Any]:
+        # 落盘连接跟随业务面（TRS_GRAPH_BUSINESS_*，与读取同库同空间）；非业务面
+        # 请求保持平台连接 + 请求空间，行为与读取一致。
         settings = TRSGraphSettings.from_env()
-        settings.space = get_current_space()
+        if business_data_plane.get():
+            business = business_plane_settings(get_current_space())
+            if business is not None:
+                settings = business
+        settings.space = effective_graph_space()
         graph = TRSGraphClient(settings)
-        graph.connect()
         created = updated = 0
         try:
+            graph.connect()
             graph.execute_write(
                 "CREATE EDGE IF NOT EXISTS COLLEAGUE("
                 "organization string, department string, effective_period string, "
@@ -251,6 +265,8 @@ class ExpertColleagueRelationApplication:
                 else:
                     graph.update_edge(edge.id, properties, edge_type="COLLEAGUE")
                     updated += 1
+        except Exception:  # noqa: BLE001 — 落盘失败不阻断查询响应,下次查询重试 upsert
+            logger.exception("同事关系落盘 COLLEAGUE 边失败")
         finally:
             graph.close()
         return {

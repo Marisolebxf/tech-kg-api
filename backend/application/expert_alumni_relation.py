@@ -8,9 +8,14 @@ from datetime import UTC, datetime
 from typing import Any
 
 from infra.graph_db import TRSGraphClient
-from infra.graph_db.config import TRSGraphSettings
+from infra.graph_db.config import TRSGraphSettings, business_plane_settings
 from service.expert_alumni_relation import ExpertAlumniRelationService
-from service.graph_space_context import get_current_space, request_can_write
+from service.graph_space_context import (
+    business_data_plane,
+    effective_graph_space,
+    get_current_space,
+    request_can_write,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,12 +61,18 @@ class ExpertAlumniRelationApplication:
 
     @staticmethod
     def _persist_relations(data: dict[str, Any]) -> dict[str, Any]:
+        # 落盘连接跟随业务面（TRS_GRAPH_BUSINESS_*，与读取同库同空间）；非业务面
+        # 请求保持平台连接 + 请求空间，行为与读取一致。
         settings = TRSGraphSettings.from_env()
-        settings.space = get_current_space()
+        if business_data_plane.get():
+            business = business_plane_settings(get_current_space())
+            if business is not None:
+                settings = business
+        settings.space = effective_graph_space()
         graph = TRSGraphClient(settings)
-        graph.connect()
         created = updated = 0
         try:
+            graph.connect()
             graph.execute_write(
                 "CREATE EDGE IF NOT EXISTS ALUMNI("
                 "shared_institutions string, dimensions_json string, "

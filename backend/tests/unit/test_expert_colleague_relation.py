@@ -628,3 +628,119 @@ def writable_graph_request():
         yield
     finally:
         request_can_write.reset(token)
+
+
+def _persist_payload() -> dict[str, Any]:
+    return {
+        "expert": {"id": "person_a"},
+        "colleagues": [
+            {
+                "colleague": {"id": "person_z"},
+                "commonOrganization": "某某大学",
+                "commonDepartment": "计算机学院",
+                "effectivePeriod": "2018-01 ~ 2024-06",
+                "overlapMonths": 77,
+                "confidence": 0.8,
+                "commonTeamOrProject": ["某某实验室"],
+                "workContent": ["联合研发"],
+                "collaborationScenes": ["项目合作"],
+                "achievements": [{"id": "paper_1"}],
+                "evidence": ["任职重叠"],
+            }
+        ],
+    }
+
+
+def test_persist_relations_creates_edge_in_vid_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "tenant_graph")
+    monkeypatch.delenv("TRS_GRAPH_BUSINESS_BASE_URL", raising=False)
+    graph = MagicMock()
+    graph.get_node_edges.return_value = []
+    with patch(
+        "application.expert_colleague_relation.TRSGraphClient", return_value=graph
+    ) as client:
+        result = ExpertColleagueRelationApplication._persist_relations(_persist_payload())
+
+    assert client.call_args.args[0].space == "tenant_graph"
+    graph.create_edge.assert_called_once()
+    assert graph.create_edge.call_args.args[:3] == ("person_a", "person_z", "COLLEAGUE")
+    props = graph.create_edge.call_args.args[3]
+    assert props["organization"] == "某某大学"
+    assert props["overlap_months"] == 77
+    assert props["source"] == "expert_colleague_relation_service"
+    assert result == {
+        "space": "tenant_graph",
+        "edgeType": "COLLEAGUE",
+        "created": 1,
+        "updated": 0,
+        "total": 1,
+    }
+    graph.close.assert_called_once()
+
+
+def test_persist_relations_failure_does_not_block_query(monkeypatch: pytest.MonkeyPatch) -> None:
+    """落盘被图库拒绝（如 schema 冲突）时只记日志，不能拖垮已算好的查询结果。"""
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "dev2")
+    monkeypatch.delenv("TRS_GRAPH_BUSINESS_BASE_URL", raising=False)
+    graph = MagicMock()
+    graph.get_node_edges.return_value = []
+    graph.create_edge.side_effect = RuntimeError("Unknown column `organization' in schema")
+    with patch("application.expert_colleague_relation.TRSGraphClient", return_value=graph):
+        result = ExpertColleagueRelationApplication._persist_relations(_persist_payload())
+
+    assert result == {
+        "space": "dev2",
+        "edgeType": "COLLEAGUE",
+        "created": 0,
+        "updated": 0,
+        "total": 0,
+    }
+    graph.close.assert_called_once()
+
+
+def test_persist_relations_follows_business_plane(monkeypatch: pytest.MonkeyPatch) -> None:
+    """业务面请求落盘跟随 TRS_GRAPH_BUSINESS_*：读写同库同空间。"""
+    from service.graph_space_context import business_data_plane, selected_graph_space
+
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "tenant_graph")
+    monkeypatch.setenv("TRS_GRAPH_BUSINESS_BASE_URL", "http://bridge:8190")
+    monkeypatch.setenv("TRS_GRAPH_BUSINESS_SPACE", "dev")
+    graph = MagicMock()
+    graph.get_node_edges.return_value = []
+    space_token = selected_graph_space.set("dev2")
+    plane_token = business_data_plane.set(True)
+    try:
+        with patch(
+            "application.expert_colleague_relation.TRSGraphClient", return_value=graph
+        ) as client:
+            result = ExpertColleagueRelationApplication._persist_relations(_persist_payload())
+    finally:
+        business_data_plane.reset(plane_token)
+        selected_graph_space.reset(space_token)
+
+    settings = client.call_args.args[0]
+    assert settings.base_url == "http://bridge:8190"
+    assert settings.space == "dev"
+    graph.create_edge.assert_called_once()
+    assert result["space"] == "dev"
+
+
+def test_persist_relations_ignores_business_env_off_business_plane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """非业务面调用（业务面未置位）即便容器里有业务 env，也保持平台连接。"""
+    monkeypatch.setenv("TRS_GRAPH_BASE_URL", "http://platform:8090")
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "tenant_graph")
+    monkeypatch.setenv("TRS_GRAPH_BUSINESS_BASE_URL", "http://bridge:8190")
+    monkeypatch.setenv("TRS_GRAPH_BUSINESS_SPACE", "dev")
+    graph = MagicMock()
+    graph.get_node_edges.return_value = []
+    with patch(
+        "application.expert_colleague_relation.TRSGraphClient", return_value=graph
+    ) as client:
+        result = ExpertColleagueRelationApplication._persist_relations(_persist_payload())
+
+    settings = client.call_args.args[0]
+    assert settings.base_url == "http://platform:8090"
+    assert settings.space == "tenant_graph"
+    assert result["space"] == "tenant_graph"

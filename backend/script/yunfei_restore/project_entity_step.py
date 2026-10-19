@@ -5,93 +5,27 @@
 改动请落到原模块后重新生成。
 """
 
-from __future__ import annotations
 
-import hashlib
+from __future__ import annotations
 import json
-import logging
 import math
-from collections.abc import Callable, Iterable, Mapping
+import re
+import unicodedata
+import argparse
+import hashlib
+import logging
+import os
+from typing import Any
+from collections.abc import Mapping, Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
-from decimal import Decimal
-from typing import Any
-
+from decimal import Decimal, InvalidOperation
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
 from kg_sdk import step
 
+
 logger = logging.getLogger("project")
-
-
-EntityBuilder = Callable[[str, Mapping[str, Any], str], Iterable[Any]]
-
-
-def _record_id(row: Mapping[str, Any], pk_column: str | None) -> str:
-    if pk_column and row.get(pk_column) is not None:
-        return str(row[pk_column])
-    digest = hashlib.sha256(
-        json.dumps(row, ensure_ascii=False, default=str, sort_keys=True).encode()
-    ).hexdigest()
-    return f"row:{digest[:16]}"
-
-
-def _split_source(payload: Mapping[str, Any]) -> tuple[str, str, str]:
-    source = payload.get("source") or {}
-    source_table = str(payload.get("source_table") or source.get("tableName") or "")
-    table = source_table.rsplit(".", 1)[-1]
-    pk_column = str(source.get("pkColumn") or "id")
-    batch = f"se-{str(source.get('id') or 'x')[:8]}"
-    return table, pk_column, batch
-
-
-def _run(
-    payload: Mapping[str, Any],
-    *,
-    builder: EntityBuilder | None,
-    mapper_by_table: dict[str, EntityBuilder] | None,
-    to_json: Callable[[Any], dict[str, Any]],
-    key: str,
-) -> dict[str, Any]:
-    table, pk_column, batch = _split_source(payload)
-    if builder is None and mapper_by_table:
-        builder = mapper_by_table.get(table)
-    if builder is None:
-        raise RuntimeError(f"来源表 {table} 没有对应的转换 mapper")
-    rows = payload.get("rows") or []
-    records: list[dict[str, Any]] = []
-    failures: list[dict[str, Any]] = []
-    for row in rows:
-        record_id = _record_id(row, pk_column)
-        try:
-            mapped = list(builder(table, row, batch) or [])
-            records.extend(to_json(r) for r in mapped)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("行转换失败 table=%s record=%s: %s", table, record_id, exc)
-            failures.append({"recordId": record_id, "error": f"{type(exc).__name__}: {exc}"[:1000]})
-    output: dict[str, Any] = {key: records, "failures": failures}
-    if table:
-        output["stats"] = {
-            "table": table,
-            "rows": len(rows),
-            key: len(records),
-            "failed": len(failures),
-        }
-    return output
-
-
-def entity_transform(
-    payload: Mapping[str, Any],
-    *,
-    builder: EntityBuilder | None = None,
-    mapper_by_table: dict[str, EntityBuilder] | None = None,
-) -> dict[str, Any]:
-    """实体转换：行 → ``{"id": vid, "props": properties}``。"""
-
-    def to_json(record: Any) -> dict[str, Any]:
-        return {"id": record.vid, "props": record.properties}
-
-    return _run(
-        payload, builder=builder, mapper_by_table=mapper_by_table, to_json=to_json, key="entities"
-    )
 
 
 @dataclass(frozen=True)
@@ -133,6 +67,22 @@ def json_safe(value: Any) -> Any:
 def extra_json(row: Mapping[str, Any]) -> str:
     """新架构：完整源行进 extra_json。"""
     return json.dumps(json_safe(dict(row)), ensure_ascii=False, sort_keys=True)
+
+
+def parse_json(value: Any) -> Any:
+    """专利域旧口径：字符串尝试 JSON 解析，失败原样返回。"""
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
+
+
+def json_snapshot(value: Any) -> str:
+    """专利域旧口径：JSON 字段紧凑快照，None 转 ""。"""
+    value = parse_json(value)
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":")) if value is not None else ""
 
 
 VID_MAX_BYTES = 64
@@ -242,6 +192,32 @@ def to_int_or_zero(value: Any) -> int:
         return 0
 
 
+def evaluation_from_remarks(raw: Any) -> str:
+    """operator_remarks → 项目评价文本（严格门禁）。
+
+    dwd_zh_project.operator_remarks 治理列源数据全空；仅当其本身是
+    ``{"evaluation": "…"}`` JSON（或该形状的单元素数组）时采纳，其余 ""。
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return ""
+    if isinstance(parsed, dict):
+        candidates = [parsed]
+    elif isinstance(parsed, list) and parsed and all(isinstance(i, dict) for i in parsed):
+        candidates = parsed
+    else:
+        return ""
+    for item in candidates:
+        value = item.get("evaluation")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 PROJECT_CONFIDENCE_FIELDS = (
     "title",
     "abstract",
@@ -308,6 +284,9 @@ def project_record(table: str, row: Mapping[str, Any], batch: str) -> list[Entit
         "approval_time": date_text(row.get("approval_time")),
         "research_period": text_or_empty(row.get("research_period")),
         "abstract": text_or_empty(row.get("abstract")),
+        # 关键词 JSON（dwd_zh_project.keywords，源表 100% 有值），两点合作成果
+        # 「所属领域」回退读节点 keywords 属性（项目无 HAS_KEYWORD 边，与专利同款）。
+        "keywords": json_snapshot(row.get("keywords")),
         # 旧 ORM 未给 dwd_en_project 建模 final_report_abstract，英文项目恒为空。
         "final_report_abstract": (
             "" if table == "dwd_en_project" else text_or_empty(row.get("final_report_abstract"))
@@ -326,6 +305,9 @@ def project_record(table: str, row: Mapping[str, Any], batch: str) -> list[Entit
         # 奖项明细 JSON（dwd_*_project_output.output_awards），两点合作成果「奖项/评价」读取；
         # 与旧通道 load_project_graph.stage_outputs → build_output_count_props 同一规范函数。
         "output_awards": to_output_awards_json(row.get("output_awards")),
+        # 评价（dwd_zh_project.operator_remarks 授权写入的 {"evaluation": …}，
+        # 严格门禁：治理批次戳/回填文本一律不采纳），两点合作成果「评价」读取。
+        "evaluation": evaluation_from_remarks(row.get("operator_remarks")),
         "reports_count": to_int_or_zero(row.get("reports_count")),
         "other_outputs_count": to_int_or_zero(row.get("other_outputs_count")),
         "extra_json": extra_json(row),
@@ -339,6 +321,78 @@ def project_record(table: str, row: Mapping[str, Any], batch: str) -> list[Entit
         ),
     }
     return [EntityRecord("Project", project_vid(pid), props)]
+
+
+EntityBuilder = Callable[[str, Mapping[str, Any], str], Iterable[Any]]
+
+
+def _record_id(row: Mapping[str, Any], pk_column: str | None) -> str:
+    if pk_column and row.get(pk_column) is not None:
+        return str(row[pk_column])
+    digest = hashlib.sha256(
+        json.dumps(row, ensure_ascii=False, default=str, sort_keys=True).encode()
+    ).hexdigest()
+    return f"row:{digest[:16]}"
+
+
+def _split_source(payload: Mapping[str, Any]) -> tuple[str, str, str]:
+    source = payload.get("source") or {}
+    source_table = str(payload.get("source_table") or source.get("tableName") or "")
+    table = source_table.rsplit(".", 1)[-1]
+    pk_column = str(source.get("pkColumn") or "id")
+    batch = f"se-{str(source.get('id') or 'x')[:8]}"
+    return table, pk_column, batch
+
+
+def _run(
+    payload: Mapping[str, Any],
+    *,
+    builder: EntityBuilder | None,
+    mapper_by_table: dict[str, EntityBuilder] | None,
+    to_json: Callable[[Any], dict[str, Any]],
+    key: str,
+) -> dict[str, Any]:
+    table, pk_column, batch = _split_source(payload)
+    if builder is None and mapper_by_table:
+        builder = mapper_by_table.get(table)
+    if builder is None:
+        raise RuntimeError(f"来源表 {table} 没有对应的转换 mapper")
+    rows = payload.get("rows") or []
+    records: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    for row in rows:
+        record_id = _record_id(row, pk_column)
+        try:
+            mapped = list(builder(table, row, batch) or [])
+            records.extend(to_json(r) for r in mapped)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("行转换失败 table=%s record=%s: %s", table, record_id, exc)
+            failures.append({"recordId": record_id, "error": f"{type(exc).__name__}: {exc}"[:1000]})
+    output: dict[str, Any] = {key: records, "failures": failures}
+    if table:
+        output["stats"] = {
+            "table": table,
+            "rows": len(rows),
+            key: len(records),
+            "failed": len(failures),
+        }
+    return output
+
+
+def entity_transform(
+    payload: Mapping[str, Any],
+    *,
+    builder: EntityBuilder | None = None,
+    mapper_by_table: dict[str, EntityBuilder] | None = None,
+) -> dict[str, Any]:
+    """实体转换：行 → ``{"id": vid, "props": properties}``。"""
+
+    def to_json(record: Any) -> dict[str, Any]:
+        return {"id": record.vid, "props": record.properties}
+
+    return _run(
+        payload, builder=builder, mapper_by_table=mapper_by_table, to_json=to_json, key="entities"
+    )
 
 
 def _transform(payload: dict[str, Any]) -> dict[str, Any]:

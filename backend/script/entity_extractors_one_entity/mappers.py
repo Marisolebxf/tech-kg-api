@@ -434,6 +434,59 @@ def project_confidence(row: Mapping[str, Any]) -> float:
     return round(max(0.3, ratio), 4)
 
 
+def to_output_awards_strict(raw: Any) -> str:
+    """operator_remarks → 论文奖项 JSON（严格门禁）。
+
+    dwd_scholar_papers.operator_remarks 是治理列：真实 73.8 万行是
+    ``Init_Load_Batch_…`` 批次戳、夹具行是 ``老样例回填…``，均非奖项数据。
+    仅当其本身是 JSON 数组且元素为含 title/name/award 键的字典时采纳，
+    其余一律 ""，防止治理文本被误当奖项展示。
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(parsed, list):
+        return ""
+    awards = [
+        item
+        for item in parsed
+        if isinstance(item, dict) and any(k in item for k in ("title", "name", "award"))
+    ]
+    if not awards:
+        return ""
+    return json.dumps(awards, ensure_ascii=False)
+
+
+def evaluation_from_remarks(raw: Any) -> str:
+    """operator_remarks → 项目评价文本（严格门禁）。
+
+    dwd_zh_project.operator_remarks 治理列源数据全空；仅当其本身是
+    ``{"evaluation": "…"}`` JSON（或该形状的单元素数组）时采纳，其余 ""。
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return ""
+    if isinstance(parsed, dict):
+        candidates = [parsed]
+    elif isinstance(parsed, list) and parsed and all(isinstance(i, dict) for i in parsed):
+        candidates = parsed
+    else:
+        return ""
+    for item in candidates:
+        value = item.get("evaluation")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 def project_record(table: str, row: Mapping[str, Any], batch: str) -> list[EntityRecord]:
     pid = text_or_empty(row.get("id"))
     if not pid:
@@ -452,6 +505,9 @@ def project_record(table: str, row: Mapping[str, Any], batch: str) -> list[Entit
         "approval_time": date_text(row.get("approval_time")),
         "research_period": text_or_empty(row.get("research_period")),
         "abstract": text_or_empty(row.get("abstract")),
+        # 关键词 JSON（dwd_zh_project.keywords，源表 100% 有值），两点合作成果
+        # 「所属领域」回退读节点 keywords 属性（项目无 HAS_KEYWORD 边，与专利同款）。
+        "keywords": json_snapshot(row.get("keywords")),
         # 旧 ORM 未给 dwd_en_project 建模 final_report_abstract，英文项目恒为空。
         "final_report_abstract": (
             "" if table == "dwd_en_project" else text_or_empty(row.get("final_report_abstract"))
@@ -470,6 +526,9 @@ def project_record(table: str, row: Mapping[str, Any], batch: str) -> list[Entit
         # 奖项明细 JSON（dwd_*_project_output.output_awards），两点合作成果「奖项/评价」读取；
         # 与旧通道 load_project_graph.stage_outputs → build_output_count_props 同一规范函数。
         "output_awards": to_output_awards_json(row.get("output_awards")),
+        # 评价（dwd_zh_project.operator_remarks 授权写入的 {"evaluation": …}，
+        # 严格门禁：治理批次戳/回填文本一律不采纳），两点合作成果「评价」读取。
+        "evaluation": evaluation_from_remarks(row.get("operator_remarks")),
         "reports_count": to_int_or_zero(row.get("reports_count")),
         "other_outputs_count": to_int_or_zero(row.get("other_outputs_count")),
         "extra_json": extra_json(row),
@@ -506,6 +565,9 @@ def paper_record(table: str, row: Mapping[str, Any], batch: str) -> list[EntityR
         ),
         # 旧口径：publication_name 固定写 publication_id 列的值。
         "publication_name": paper_text(row.get("publication_id")),
+        # 奖项明细 JSON（dwd_scholar_papers.operator_remarks 授权写入的奖项数组，
+        # 严格门禁：治理批次戳/回填文本一律不采纳），两点合作成果「奖项」读取。
+        "output_awards": to_output_awards_strict(row.get("operator_remarks")),
         "source": "gkx",
         "extra_json": extra_json(row),
         **provenance(

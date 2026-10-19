@@ -12,7 +12,8 @@ from script.extract_transform_common import entity_transform
 # 来源绑定元数据（script/register_platform_extraction.py 读取建 GraphSchemaSource）
 # dwd_scholar_papers 为厂商全量论文库（73.8万行，id 小整数空间与 zh/en 雪花 id 不冲突）；
 # query_sql 只取 mapper 所需列（摘要等大文本不进 payload），is_deleted=1 剔除，
-# dwd_id 为表真主键作 keyset 游标（time 留空走 pk keyset 模式）。
+# dwd_id 为表真主键作 keyset 游标（time 留空走 pk keyset 模式）；
+# operator_remarks 为奖项授权列（mapper 严格门禁，治理批次戳不会入库）。
 SOURCES = [
     {"table": "dwd_zh_paper", "pk": "id", "time": "update_time"},
     {"table": "dwd_en_paper", "pk": "id", "time": "update_time"},
@@ -23,7 +24,8 @@ SOURCES = [
         "query_sql": (
             "SELECT dwd_id, id, doi, zh_name, en_name, paper_url, "
             "publication_en_name AS publication_id, "
-            "DATE_FORMAT(cover_date_start, '%Y') AS cover_year_start, updated_time "
+            "DATE_FORMAT(cover_date_start, '%Y') AS cover_year_start, "
+            "operator_remarks, updated_time "
             "FROM dwd_scholar_papers WHERE is_deleted = 0"
         ),
     },

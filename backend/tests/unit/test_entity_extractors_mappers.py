@@ -405,6 +405,62 @@ class TestProjectRecord:
         rec = mappers.project_record("dwd_zh_project", row, "B")[0]
         assert json.loads(rec.properties["output_awards"]) == ["国家科技进步二等奖"]
 
+    def test_project_keywords_snapshot(self):
+        # dwd_zh_project.keywords（JSON 文本串）规范化写入图属性；项目无
+        # HAS_KEYWORD 边，两点合作成果「所属领域」回退读节点 keywords（专利同款）。
+        row = {"id": "PRJ8", "title": "T", "keywords": '["知识图谱", "科技情报"]'}
+        rec = mappers.project_record("dwd_zh_project", row, "B")[0]
+        assert json.loads(rec.properties["keywords"]) == ["知识图谱", "科技情报"]
+        # 缺列 / NULL → 空串，不缺属性。
+        rec2 = mappers.project_record("dwd_en_project", {"id": "PRJ9", "title": "T"}, "B")[0]
+        assert rec2.properties["keywords"] == ""
+
+    def test_project_evaluation_from_remarks_strict_gate(self):
+        # dwd_zh_project.operator_remarks 授权写入 {"evaluation": …} JSON → 评价文本；
+        # 治理批次戳/回填文本/缺列一律 ""，两点合作成果「评价」读取。
+        row = {
+            "id": "PRJ10",
+            "title": "T",
+            "operator_remarks": '{"evaluation": "结题验收优秀，已投入业务试用"}',
+        }
+        rec = mappers.project_record("dwd_zh_project", row, "B")[0]
+        assert rec.properties["evaluation"] == "结题验收优秀，已投入业务试用"
+        # 真实数据治理文本（非 JSON）与空值都不采纳。
+        for remarks in ("老样例回填20261016", "Init_Load_Batch_202608081400", "", None):
+            rec2 = mappers.project_record(
+                "dwd_zh_project", {"id": "PRJ11", "title": "T", "operator_remarks": remarks}, "B"
+            )[0]
+            assert rec2.properties["evaluation"] == ""
+        # JSON 但无 evaluation 键 → ""。
+        rec3 = mappers.project_record(
+            "dwd_zh_project",
+            {"id": "PRJ12", "title": "T", "operator_remarks": '{"note": "x"}'},
+            "B",
+        )[0]
+        assert rec3.properties["evaluation"] == ""
+
+    def test_paper_output_awards_strict_gate(self):
+        # dwd_scholar_papers.operator_remarks 授权写入奖项数组 → output_awards JSON；
+        # 真实 73.8 万行批次戳（非 JSON）与夹具回填文本一律 ""，不进图。
+        row = {
+            "id": "889900081",
+            "operator_remarks": '[{"year": 2024, "title": "中国中文信息学会优秀论文奖"}]',
+        }
+        rec = mappers.paper_record("dwd_scholar_papers", row, "B")[0]
+        assert json.loads(rec.properties["output_awards"]) == [
+            {"year": 2024, "title": "中国中文信息学会优秀论文奖"}
+        ]
+        for remarks in ("Init_Load_Batch_202608081400", "老样例回填20261016", "", None):
+            rec2 = mappers.paper_record(
+                "dwd_scholar_papers", {"id": "889900005", "operator_remarks": remarks}, "B"
+            )[0]
+            assert rec2.properties["output_awards"] == ""
+        # JSON 数组但元素无奖项键（title/name/award）→ ""。
+        rec3 = mappers.paper_record(
+            "dwd_scholar_papers", {"id": "889900006", "operator_remarks": '[{"year": 2024}]'}, "B"
+        )[0]
+        assert rec3.properties["output_awards"] == ""
+
 
 class TestMergeProtection:
     def test_preserves_existing_non_null(self):

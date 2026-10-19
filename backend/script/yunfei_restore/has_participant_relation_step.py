@@ -5,62 +5,28 @@
 改动请落到原模块后重新生成。
 """
 
-from __future__ import annotations
 
+from __future__ import annotations
 import hashlib
 import json
 import logging
+import argparse
+import os
 import re
 import time
-from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
-
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, date
+from pathlib import Path
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
+from decimal import Decimal
+from collections import Counter, defaultdict
 from kg_sdk import step
 
+
 logger = logging.getLogger("has_participant")
-
-
-def normalize_name(value: str | None) -> str:
-    if not value:
-        return ""
-    return re.sub(r"\s+", " ", value.strip())
-
-
-def parse_list(raw: Any) -> list[str]:
-    """解析 JSON 数组 / 逗号分隔 / 单字符串 → 非空字符串列表。"""
-    if raw is None:
-        return []
-    if isinstance(raw, list):
-        return [normalize_name(str(x)) for x in raw if normalize_name(str(x))]
-    text = str(raw).strip()
-    if not text:
-        return []
-    if text.startswith("["):
-        try:
-            data = json.loads(text)
-            if isinstance(data, list):
-                return [normalize_name(str(x)) for x in data if normalize_name(str(x))]
-        except json.JSONDecodeError:
-            pass
-    if "," in text:
-        return [normalize_name(p) for p in text.split(",") if normalize_name(p)]
-    # 中文分隔符（全角逗号/分号、顿号、半角分号）串起的多个值同样切分，
-    # 否则整串被当成一个名字必然 not_found（participants/机构/关键词常见此形态）。
-    if any(sep in text for sep in ("，", "；", "、", ";")):
-        return [p for p in (normalize_name(part) for part in re.split(r"[，；、;]", text)) if p]
-    return [normalize_name(text)]
-
-
-def resolve_report_dir(payload: Mapping[str, Any], batch: str) -> Path:
-    """Resolve an explicit report directory or a private runtime default."""
-    configured = payload.get("report_dir")
-    return (
-        Path(str(configured)) if configured else private_state_dir("project-ingest-reports", batch)
-    )
 
 
 EntityBuilder = Callable[[str, Mapping[str, Any], str], Iterable[Any]]
@@ -247,9 +213,10 @@ def _candidate_rows(
     label: str,
     return_properties: tuple[str, ...],
     filters: dict[str, set[str]],
+    # 单条 IN 查询字面量上限 150（平台召回/碰撞探测同款口径）：participants
+    # 列表字段使批级名池可达两万级，5000/块的巨型 MATCH 会让共享 graphd 的
+    # 执行计划内存瞬间顶穿容器限额（2026-10-13 gkx_verify_1 实锤 OOM 击杀链）
     *,
-    # 单条 IN 查询字面量上限 150（平台召回同款口径）：5000/块的巨型 MATCH 会
-    # 把共享 graphd 的执行计划内存顶穿容器限额（2026-10-13 gkx_verify_1 实锤）
     chunk_size: int = 150,
 ) -> list[dict[str, Any]]:
     rows: dict[str, dict[str, Any]] = {}
@@ -335,7 +302,9 @@ class ProjectEntityMatcher:
             self.organization_ids[str(vid)] = oid
 
     @classmethod
-    def from_graph(cls, graph: Any, candidates: dict[str, set[str]]) -> ProjectEntityMatcher:
+    def from_graph(
+        cls, graph: Any, candidates: dict[str, set[str]]
+    ) -> ProjectEntityMatcher:
         matcher = cls()
         for row in _candidate_rows(
             graph,
@@ -350,10 +319,22 @@ class ProjectEntityMatcher:
         for row in _candidate_rows(
             graph,
             "Person",
-            ("name_zh", "name_cn", "name_en"),
-            {prop: candidates["person"] for prop in ("name_zh", "name_cn", "name_en")},
+            # 参加人/负责人列既可能是姓名也可能是学者 ID（EXPERT_MODULES_E2E_V1
+            # 夹具的 participants/project_host 存 scholar_id 编码）——只按姓名列
+            # 召回时编码值全员 not_found，项目边整批丢失。补 source_record_id
+            # 通道：ID 精确命中即边成立；真数据姓名与 ID 无碰撞，互不干扰。
+            (
+                "name_zh",
+                "name_cn",
+                "name_en",
+                "source_record_id",
+            ),
+            {
+                **{prop: candidates["person"] for prop in ("name_zh", "name_cn", "name_en")},
+                "source_record_id": candidates["person"],
+            },
         ):
-            for prop in ("name_zh", "name_cn", "name_en"):
+            for prop in ("name_zh", "name_cn", "name_en", "source_record_id"):
                 matcher.person.add(row.get(prop), row["vid"])
         for row in _candidate_rows(
             graph,
@@ -603,6 +584,37 @@ def match_audit_props(method: str, evidence: str = "") -> dict[str, Any]:
     }
 
 
+def normalize_name(value: str | None) -> str:
+    if not value:
+        return ""
+    return re.sub(r"\s+", " ", value.strip())
+
+
+def parse_list(raw: Any) -> list[str]:
+    """解析 JSON 数组 / 逗号分隔 / 单字符串 → 非空字符串列表。"""
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [normalize_name(str(x)) for x in raw if normalize_name(str(x))]
+    text = str(raw).strip()
+    if not text:
+        return []
+    if text.startswith("["):
+        try:
+            data = json.loads(text)
+            if isinstance(data, list):
+                return [normalize_name(str(x)) for x in data if normalize_name(str(x))]
+        except json.JSONDecodeError:
+            pass
+    if "," in text:
+        return [normalize_name(p) for p in text.split(",") if normalize_name(p)]
+    # 中文分隔符（全角逗号/分号、顿号、半角分号）串起的多个值同样切分，
+    # 否则整串被当成一个名字必然 not_found（participants/机构/关键词常见此形态）。
+    if any(sep in text for sep in ("，", "；", "、", ";")):
+        return [p for p in (normalize_name(part) for part in re.split(r"[，；、;]", text)) if p]
+    return [normalize_name(text)]
+
+
 class ProjectIngestReport:
     FILES = {
         "organization_not_found": "unmatched_organizations.jsonl",
@@ -737,6 +749,14 @@ def make_has_participant_mapper(
         return records
 
     return has_participant
+
+
+def resolve_report_dir(payload: Mapping[str, Any], batch: str) -> Path:
+    """Resolve an explicit report directory or a private runtime default."""
+    configured = payload.get("report_dir")
+    return (
+        Path(str(configured)) if configured else private_state_dir("project-ingest-reports", batch)
+    )
 
 
 def _transform(payload: dict[str, Any]) -> dict[str, Any]:

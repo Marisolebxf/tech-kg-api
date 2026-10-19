@@ -140,10 +140,22 @@ class ProjectEntityMatcher:
         for row in _candidate_rows(
             graph,
             "Person",
-            ("name_zh", "name_cn", "name_en"),
-            {prop: candidates["person"] for prop in ("name_zh", "name_cn", "name_en")},
+            # 参加人/负责人列既可能是姓名也可能是学者 ID（EXPERT_MODULES_E2E_V1
+            # 夹具的 participants/project_host 存 scholar_id 编码）——只按姓名列
+            # 召回时编码值全员 not_found，项目边整批丢失。补 source_record_id
+            # 通道：ID 精确命中即边成立；真数据姓名与 ID 无碰撞，互不干扰。
+            (
+                "name_zh",
+                "name_cn",
+                "name_en",
+                "source_record_id",
+            ),
+            {
+                **{prop: candidates["person"] for prop in ("name_zh", "name_cn", "name_en")},
+                "source_record_id": candidates["person"],
+            },
         ):
-            for prop in ("name_zh", "name_cn", "name_en"):
+            for prop in ("name_zh", "name_cn", "name_en", "source_record_id"):
                 matcher.person.add(row.get(prop), row["vid"])
         for row in _candidate_rows(
             graph,

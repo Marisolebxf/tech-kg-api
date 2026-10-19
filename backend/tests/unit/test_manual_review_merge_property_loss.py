@@ -24,6 +24,19 @@ docstring「空值列不写＝不覆盖目标已有值」与真实语义相反�
 （``ensure_lease``），续租失败/租约丢失抛 ``VidWriteLeaseLostError``
 禁止新的 INSERT。
 
+第三轮（同日 Codex 复核，协作文档 f1b8c709）——**在途写保护**：派发前
+校验挡不住「INSERT 已派发、服务端慢」的在途窗口（其探针
+``test_review_mrp_inflight_lease.py``：TTL=5s，服务端提交前假钟跳到 t=6、
+期间零续租，B 获锁落 paper_nums=999 后 A 旧快照 210 覆盖落盘）。修复对
+齐异步版：临界区内起**心跳线程**（daemon，TTL/3 间隔，共用 ``_RENEW_LUA``）
+在写线程阻塞于在途图请求期间持续续租——Redis 健康只是请求慢时第二写者
+结构性拿不到锁；心跳失败置共享 lost 标记并自停，INSERT 返回后
+``raise_if_lost`` 熔断后续写（图写可能已落地、不可取消——如实披露，submit
+回滚+重提重新 FETCH 合并收敛）。探针自身的同步假钟瞬跳结构给不了心跳线
+程真实调度机会（Codex 自己警告的「瞬间跳钟陷阱」），处置见
+``test_inflight_insert_across_renewals_second_writer_blocked`` 的真实线程
+事件协调证明。
+
 驱动方式：真实 ``TRSGraphClient`` + ``httpx.MockTransport`` 伪 trs-graph
 REST（DESCRIBE/FETCH/INSERT 按整标签覆盖语义维护内存 vid→props 状态）；
 锁不连真 Redis——注入假同步 Redis 客户端（dict 后备 + 可拨动时钟的 TTL
@@ -34,6 +47,7 @@ REST（DESCRIBE/FETCH/INSERT 按整标签覆盖语义维护内存 vid→props �
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 import time
@@ -51,6 +65,7 @@ from infra.graph_db.client import TRSGraphClient
 from infra.graph_db.config import TRSGraphSettings
 from infra.graph_db.exceptions import GraphRequestError
 from service import entity_write_guard as guard
+from service import manual_review_production as mrp
 from service.manual_review_domain import ReviewIdentity
 from service.manual_review_production import ManualReviewService
 
@@ -82,6 +97,17 @@ def _stub_entity_search_sync(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _stub_resolve_job_ids(monkeypatch):
+    """展示用的 EXEC→jobId 解析连控制面库（temporal-mysql）。
+
+    控制面不可达的环境里一次连接尝试可拖数秒，曾把后台线程测试的
+    thread.join(5) 拖到超时（Codex 复核环境实测，f1b8c709）。该解析纯为
+    「来源记录」跳转展示（快照有 jobId 的 case 不依赖它），本文件只测
+    合并/锁语义——stub 成空映射即可，业务路径不动。"""
+    monkeypatch.setattr(mrp, "resolve_job_ids", lambda execution_ids: {})
+
+
 # ---------------------------------------------------------------------------
 # 假同步 Redis 客户端（dict 后备 + 可拨动时钟的 TTL 语义）
 # ---------------------------------------------------------------------------
@@ -109,6 +135,10 @@ class FakeSyncRedis:
     原样执行，顺带证明同步续租与异步版共用同一脚本。预占 ``held``（不带
     expires）= 模拟工作流路径持锁；``acquire_error``/``renew_error`` 注入
     Redis 故障。
+
+    **线程安全**（第三轮起心跳线程 / 写线程 / 第二写者真线程并发操作）：
+    全部操作持锁——裸 dict 的复合读改写（先 purge 再判 held）并发下会
+    ``RuntimeError: dictionary changed size during iteration``。
     """
 
     def __init__(self, clock: FakeClock):
@@ -119,6 +149,8 @@ class FakeSyncRedis:
         self.eval_calls: list[tuple[str, tuple]] = []
         self.acquire_error: Exception | None = None
         self.renew_error: Exception | None = None
+        self.renew_attempts = 0  # 每次 _RENEW_LUA 调用都计（含注错抛出的——心跳活性可观测）
+        self._lock = threading.RLock()
 
     def _purge_expired(self) -> None:
         now = self.clock()
@@ -127,41 +159,54 @@ class FakeSyncRedis:
             self.expires.pop(key, None)
 
     def set(self, key, value, nx=False, px=None):
-        if self.acquire_error is not None:
-            raise self.acquire_error
-        self._purge_expired()
-        self.attempts.append(key)
-        if nx and key in self.held:
-            return None
-        self.held[key] = value
-        if px:
-            self.expires[key] = self.clock() + px / 1000
-        return True
+        with self._lock:
+            if self.acquire_error is not None:
+                raise self.acquire_error
+            self._purge_expired()
+            self.attempts.append(key)
+            if nx and key in self.held:
+                return None
+            self.held[key] = value
+            if px:
+                self.expires[key] = self.clock() + px / 1000
+            return True
 
     def eval(self, script, numkeys, *args):
-        if self.renew_error is not None and script == guard._RENEW_LUA:
-            raise self.renew_error
-        self._purge_expired()
-        self.eval_calls.append((script, args))
-        key, token = args[0], args[1]
-        if self.held.get(key) != token:
-            return 0
-        if script == guard._RENEW_LUA:
-            self.expires[key] = self.clock() + int(args[2]) / 1000
-            return 1
-        if script == guard._RELEASE_LUA:
-            del self.held[key]
-            self.expires.pop(key, None)
-            return 1
-        raise AssertionError(f"未知 Lua 脚本: {script[:40]}")
+        with self._lock:
+            if script == guard._RENEW_LUA:
+                self.renew_attempts += 1
+                if self.renew_error is not None:
+                    raise self.renew_error
+            self._purge_expired()
+            self.eval_calls.append((script, args))
+            key, token = args[0], args[1]
+            if self.held.get(key) != token:
+                return 0
+            if script == guard._RENEW_LUA:
+                self.expires[key] = self.clock() + int(args[2]) / 1000
+                return 1
+            if script == guard._RELEASE_LUA:
+                del self.held[key]
+                self.expires.pop(key, None)
+                return 1
+            raise AssertionError(f"未知 Lua 脚本: {script[:40]}")
 
     def renew_count(self, token: str | None = None) -> int:
-        """已发生的续租 eval 次数（可按 token 过滤）。"""
-        return sum(
-            1
-            for script, args in self.eval_calls
-            if script == guard._RENEW_LUA and (token is None or args[1] == token)
-        )
+        """已成功执行的续租 eval 次数（可按 token 过滤；注错抛出的不算）。"""
+        with self._lock:
+            return sum(
+                1
+                for script, args in self.eval_calls
+                if script == guard._RENEW_LUA and (token is None or args[1] == token)
+            )
+
+    def ttl_remaining(self, key: str) -> float:
+        """该键按假时钟的剩余 TTL（键不存在/已过期返回 -inf）——「心跳把
+        TTL 持续拉满」的可观测探针。"""
+        with self._lock:
+            self._purge_expired()
+            exp = self.expires.get(key)
+            return exp - self.clock() if exp is not None else float("-inf")
 
 
 @pytest.fixture
@@ -275,7 +320,9 @@ class FakeTRSREST:
     「保留目标既有列」。``fetch_error`` 注入 FETCH 读失败；``fetch_raw_props``
     注入损坏旧属性形状（P2 熔断）。``fetch_gate`` 置位后 FETCH 进入即停住等
     待放行（``fetch_entered`` 同步通知测试线程）——配合拨动时钟复现「临界
-    区停滞跨过租约 TTL」。
+    区停滞跨过租约 TTL」。``insert_gate`` 同款作用于写路径：INSERT **已派
+    发**（服务端已收到语句）但提交前停住（``insert_entered`` 通知）——真实
+    等待而非瞬间跳钟，给心跳线程真实调度机会，复现「在途写跨多个续租周期」。
     """
 
     def __init__(
@@ -297,6 +344,8 @@ class FakeTRSREST:
         self.fetch_raw_props: Any = _UNSET
         self.fetch_gate: threading.Event | None = None
         self.fetch_entered = threading.Event()
+        self.insert_gate: threading.Event | None = None
+        self.insert_entered = threading.Event()
 
     def _ok(self, records: list[dict[str, Any]] | None = None) -> httpx.Response:
         return httpx.Response(200, json={"records": records or [], "summary": {}})
@@ -368,6 +417,11 @@ class FakeTRSREST:
                 query = query.split(";", 1)[1].strip()
             if path == "/api/v1/query/write":
                 self.write_stmts.append(query)
+                if self.insert_gate is not None:
+                    # INSERT 已派发（服务端已收到）、提交前停滞：真实等待，
+                    # 在途窗口内心跳线程获得真实调度机会
+                    self.insert_entered.set()
+                    self.insert_gate.wait()
                 self._apply_insert(query)
                 return self._ok([])
             if query.startswith("DESCRIBE"):
@@ -722,8 +776,14 @@ def _run_submit_in_thread(service: Any, case_id: str, version: int):
 def test_lease_expired_takeover_second_writer_no_insert(service, monkeypatch, lock_store):
     """a) 临界区超过原 TTL：租约过期被第二写者接管后，原写者续租失败抛错
     零 INSERT，接管者落下的列完好（Codex 探针场景——修复前按旧快照整标签
-    INSERT 清掉 writer_B_column 且全程不抛错）。"""
+    INSERT 清掉 writer_B_column 且全程不抛错）。
+
+    本用例专测**派发前边界校验**路径：心跳间隔调大到 30s 使其在本用例的
+    短临界区内确定性不参与（心跳机制自有第三轮用例覆盖）——否则「拨钟
+    6s」与心跳的下一个 1.67s 到期点存在微秒级交错窗口，会在续租成功方向
+    上引入偶发抖动。"""
     monkeypatch.setenv("ENTITY_DISAMBIGUATION_NAME_LOCK_TTL_SECONDS", "5")
+    monkeypatch.setenv("ENTITY_WRITE_VID_LOCK_HEARTBEAT_SECONDS", "30")
     handler = FakeTRSREST(existing={TARGET_VID: dict(TARGET_PROPS)})
     handler.fetch_gate = threading.Event()
     _install_graph(service, monkeypatch, handler)
@@ -872,3 +932,237 @@ def test_slow_fetch_renew_success_insert_proceeds(service, monkeypatch, lock_sto
     )
     assert not lock_store.held
     assert _db_state(service, case_id)[0] == "RESOLVED"
+
+
+# ---------------------------------------------------------------------------
+# 第三轮（Codex 复核 f1b8c709）：在途写心跳保护——真实线程 + 事件协调
+#
+# Codex 探针（test_review_mrp_inflight_lease.py）用同步假钟瞬跳 6s 制造
+# 在途窗口：假钟跳变是**瞬时**的，真实时间几乎不走——按真实时间睡眠的
+# 心跳线程得不到任何调度机会（Codex 自己警告的「瞬间跳钟陷阱」），故该
+# 探针在心跳版修复下仍会 fail（见回信说明，不造假让它过）。本组用例以
+# **真实线程等待 + 事件协调**给出可证形式：insert_gate 让 A 的 INSERT 停在
+# 「已派发、提交前」真实阻塞数个续租周期，第二写者真线程反复获锁、心跳
+# 真线程真实续租；假钟只用来把 TTL 预算一次性烧进临界区（advance(4.5) 后
+# 剩余预算 <0.5s，无心跳则锁必在在途窗口内过期——旧实现上本组必失败）。
+# ---------------------------------------------------------------------------
+
+
+def test_inflight_insert_across_renewals_second_writer_blocked(service, monkeypatch, lock_store):
+    """a) 在途 INSERT 跨 ≥2 个续租周期：心跳线程独立续租，第二写者全程
+    受阻（事件协调证明其 acquire 反复失败），写完成释放后第二写者才获锁
+    成功——「Redis 健康、请求慢时保持互斥」的可证形式。"""
+    monkeypatch.setenv("ENTITY_DISAMBIGUATION_NAME_LOCK_TTL_SECONDS", "5")
+    monkeypatch.setenv("ENTITY_WRITE_VID_LOCK_HEARTBEAT_SECONDS", "0.1")
+    handler = FakeTRSREST(existing={TARGET_VID: dict(TARGET_PROPS)})
+    handler.insert_gate = threading.Event()
+    _install_graph(service, monkeypatch, handler)
+    case_id, version = _open(service)
+
+    thread, outcome = _run_submit_in_thread(service, case_id, version)
+    assert handler.insert_entered.wait(5)  # A 已持锁、INSERT 已派发、在途停滞中
+    key = guard.vid_lock_keys("dev2", "Person", [TARGET_VID])[0]
+    renews_at_dispatch = lock_store.renew_count()
+
+    b_report: dict[str, Any] = {"failed": 0, "acquired_at": None}
+
+    def writer_b() -> None:
+        # B（另一真实线程）反复尝试获锁：A 在途期间必须全部失败（每次为
+        # 一个完整的 acquire→等待超时周期，ENTITY_WRITE_VID_LOCK_WAIT_SECONDS=0.2）
+        while b_report["acquired_at"] is None:
+            try:
+                with guard.vid_write_lock_sync("dev2", "Person", TARGET_VID) as lease:
+                    lease.ensure_lease()
+                    b_report["acquired_at"] = time.monotonic()
+                    # B 的后写（与 Codex 探针同款语义：合并当前状态后改
+                    # paper_nums=999）——只有拿到锁才有资格写
+                    props = {**handler.state[TARGET_VID], "paper_nums": 999}
+                    cols = ", ".join(f"`{col}`" for col in props)
+                    vals = ", ".join(json.dumps(v, ensure_ascii=False) for v in props.values())
+                    handler._apply_insert(
+                        f"INSERT VERTEX `Person`({cols}) VALUES {json.dumps(TARGET_VID)}:({vals})"
+                    )
+            except TimeoutError:
+                b_report["failed"] += 1
+
+    b_thread = threading.Thread(target=writer_b, name="mrp-writer-b")
+    b_thread.start()
+    # 原始 TTL 预算一次性烧进临界区：剩余 <0.5s，无心跳则锁将在在途窗口
+    # （0.6s 真实等待 ≥5 个续租周期）内过期、B 必得手——这正是旧实现的
+    # 丢列形状；有心跳则 TTL 持续被拉满
+    lock_store.clock.advance(4.5)
+    time.sleep(0.6)
+    assert b_report["failed"] >= 2  # B 全程受阻（获锁尝试反复超时失败）
+    assert b_report["acquired_at"] is None  # 直到此刻 B 从未拿到锁
+    assert lock_store.renew_count() - renews_at_dispatch >= 2  # 心跳真实续租
+    assert lock_store.held.get(key)  # 租约仍被 A 持有（未过期被接管）
+
+    handler.insert_gate.set()  # 写完成：A 落地、退出临界区并释放
+    thread.join(5)
+    assert not thread.is_alive()
+    assert "exc" not in outcome, outcome.get("exc")
+    assert outcome["result"]["status"] == "RESOLVED"
+    b_thread.join(5)
+    assert not b_thread.is_alive()
+    assert b_report["acquired_at"] is not None  # 释放后 B 才获锁成功
+    # 串行化终态：后写者 B 的 999 生效，且 A 先落地的合并列被 B 的合并保留
+    # （修复前的丢列形状恰相反：A 的旧快照 210 后落、清掉 B 的 999）
+    final = handler.state[TARGET_VID]
+    assert final["paper_nums"] == 999
+    assert final["h_index"] == 31
+    assert len(handler.write_stmts) == 1  # A 的 INSERT 一次；B 的写走 fake 状态
+    assert not lock_store.held
+    assert _db_state(service, case_id)[0] == "RESOLVED"
+
+
+def test_heartbeat_renew_success_slow_write_lease_stays_valid(service, monkeypatch, lock_store):
+    """b) 心跳续租成功路径：写慢（在途跨多个续租周期、原始 TTL 预算被假钟
+    烧掉）但 Redis 健康 → 租约全程有效（剩余 TTL 持续 ≥4s 被拉满），无丢租
+    误报，submit 正常完成且续租真实发生 ≥2 次。"""
+    monkeypatch.setenv("ENTITY_DISAMBIGUATION_NAME_LOCK_TTL_SECONDS", "5")
+    monkeypatch.setenv("ENTITY_WRITE_VID_LOCK_HEARTBEAT_SECONDS", "0.1")
+    handler = FakeTRSREST(existing={TARGET_VID: dict(TARGET_PROPS)})
+    handler.insert_gate = threading.Event()
+    _install_graph(service, monkeypatch, handler)
+    case_id, version = _open(service)
+
+    thread, outcome = _run_submit_in_thread(service, case_id, version)
+    assert handler.insert_entered.wait(5)
+    key = guard.vid_lock_keys("dev2", "Person", [TARGET_VID])[0]
+    token_a = lock_store.held.get(key)
+    renews_at_dispatch = lock_store.renew_count()
+
+    lock_store.clock.advance(4.5)  # 剩余预算 <0.5s：全靠心跳拉满
+    for _ in range(3):  # 在途停滞 0.6s（≥5 个续租周期）
+        time.sleep(0.2)
+        assert lock_store.held.get(key) == token_a  # 租约未被接管
+        assert lock_store.ttl_remaining(key) > 4.0  # 心跳持续把 TTL 拉满
+    assert lock_store.renew_count() - renews_at_dispatch >= 2
+
+    handler.insert_gate.set()
+    thread.join(5)
+    assert not thread.is_alive()
+    assert "exc" not in outcome, outcome.get("exc")
+    assert outcome["result"]["status"] == "RESOLVED"  # 无丢租误报
+    assert len(handler.write_stmts) == 1
+    assert handler.state[TARGET_VID]["h_index"] == 31
+    assert not lock_store.held
+    assert _db_state(service, case_id)[0] == "RESOLVED"
+
+
+def test_heartbeat_lost_during_inflight_write_rolls_back_resubmittable(
+    service, monkeypatch, lock_store
+):
+    """c) 续租故障（Redis 中途坏）：在途期间心跳判丢 → INSERT 返回后抛
+    VidWriteLeaseLostError、零后续写（暂存边不派发）、submit 四维回滚（状态
+    /版本/决议/审计），恢复后案件可重提、重提重新 FETCH 合并收敛。
+
+    诚实边界：已派发的 INSERT 不可取消——本用例同时断言图写**确实已落地**
+    （write_stmts==1），抛错只熔断后续写并回滚事务，不假装能回滚图库。"""
+    monkeypatch.setenv("ENTITY_DISAMBIGUATION_NAME_LOCK_TTL_SECONDS", "5")
+    monkeypatch.setenv("ENTITY_WRITE_VID_LOCK_HEARTBEAT_SECONDS", "0.1")
+    handler = FakeTRSREST(existing={TARGET_VID: dict(TARGET_PROPS)})
+    handler.insert_gate = threading.Event()
+    _install_graph(service, monkeypatch, handler)
+    case_id, version = _open(
+        service,
+        candidate={
+            **_link_kwargs()["candidate"],
+            "_pendingRelations": [
+                {
+                    "edgeType": "EMPLOYED_BY",
+                    "fromId": RESERVED_VID,
+                    "toId": "person_77",
+                    "props": {"role": "engineer"},
+                }
+            ],
+        },
+    )
+
+    thread, outcome = _run_submit_in_thread(service, case_id, version)
+    assert handler.insert_entered.wait(5)
+    # 先让心跳健康续租 ≥1 次（「中途」坏：先证明活过）
+    deadline = time.monotonic() + 5
+    while lock_store.renew_count() < 1 and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert lock_store.renew_count() >= 1
+
+    lock_store.renew_error = RuntimeError("redis renew down mid-flight")  # 续租通道故障
+    # 观测心跳的失败续租尝试（首次失败即置 lost 并自停）
+    deadline = time.monotonic() + 5
+    attempts_before = lock_store.renew_attempts
+    while lock_store.renew_attempts <= attempts_before and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert lock_store.renew_attempts > attempts_before  # 心跳真实尝试过（且失败）
+    time.sleep(0.1)  # 失败沿 _renew_sync→lost 标记传播（同线程内即刻，留裕量）
+
+    handler.insert_gate.set()  # 放行在途 INSERT：语句落地后 raise_if_lost 熔断
+    thread.join(5)
+    assert not thread.is_alive()
+
+    assert isinstance(outcome.get("exc"), guard.VidWriteLeaseLostError)
+    assert len(handler.write_stmts) == 1  # 在途 INSERT 已落地（不可取消，如实断言）
+    assert handler.edge_writes == []  # 零后续写：暂存边未派发
+    # submit 四维回滚：状态/版本不前移、决议零落、审计仅建案 1 条
+    assert _db_state(service, case_id) == ("OPEN", version, 0, 1)
+    assert not lock_store.held  # 释放通道（RELEASE lua）不受续租故障影响
+
+    # 案件可重提：恢复续租通道后同 version 重提成功，重新 FETCH 合并收敛
+    lock_store.renew_error = None
+    out = _merge_submit(service, case_id, version)
+    assert out["status"] == "RESOLVED"
+    assert len(handler.write_stmts) == 2  # 重提重新派发 INSERT（幂等收敛）
+    assert len(handler.edge_writes) == 1  # 暂存边这次补写
+    final = handler.state[TARGET_VID]
+    assert final["h_index"] == 31
+    assert final["person_kind"] == "legal_representative"
+
+
+def test_heartbeat_thread_stops_and_joins_on_normal_exit(lock_store, monkeypatch):
+    """d) 心跳收尾（正常路径）：with 退出即 stop+join，不留悬挂线程；期间
+    心跳真实跑过（≥2 次续租），锁已释放。"""
+    monkeypatch.setenv("ENTITY_WRITE_VID_LOCK_HEARTBEAT_SECONDS", "0.05")
+    baseline = threading.active_count()
+    with guard.vid_write_lock_sync("dev2", "Person", TARGET_VID) as lease:
+        assert lease.key is not None
+        time.sleep(0.2)  # 真实调度：≥3 个续租周期
+    assert threading.active_count() == baseline  # 心跳线程已 join 收尾
+    assert lock_store.renew_count() >= 2
+    assert not lock_store.held
+
+
+def test_heartbeat_stuck_renew_join_timeout_never_hangs_request(lock_store, monkeypatch, caplog):
+    """d) 心跳收尾（病态路径）：续租调用本身卡死时，join 超时告警后**放弃
+    等待**——请求线程照常退出临界区（绝不因心跳挂起），锁照常 token 比删
+    释放；迟到的续租 token 失配自然 no-op、不误删他人锁。"""
+    monkeypatch.setenv("ENTITY_WRITE_VID_LOCK_HEARTBEAT_SECONDS", "0.05")
+    monkeypatch.setattr(guard, "_SYNC_HEARTBEAT_JOIN_SECONDS", 0.3)
+    renew_entered = threading.Event()
+    renew_release = threading.Event()
+    raw_eval = lock_store.eval
+
+    def hanging_eval(script, numkeys, *args):
+        # 只有续租通道挂起（模拟 Redis 调用卡死）；获取/释放通道照常
+        if script == guard._RENEW_LUA:
+            renew_entered.set()
+            renew_release.wait(10)
+        return raw_eval(script, numkeys, *args)
+
+    lock_store.eval = hanging_eval  # 实例属性遮蔽，仅本用例生效
+    baseline = threading.active_count()
+
+    with caplog.at_level(logging.WARNING, logger="service.entity_write_guard"):
+        started = time.monotonic()
+        with guard.vid_write_lock_sync("dev2", "Person", TARGET_VID):
+            assert renew_entered.wait(5)  # 心跳已进入卡住的续租调用
+        elapsed = time.monotonic() - started
+    assert elapsed < 2.0  # join 超时（0.3s）+告警后照常退出，请求线程不挂起
+    assert any("未收尾" in r.getMessage() for r in caplog.records)
+    assert not lock_store.held  # 释放通道未受阻
+
+    # 放行卡住的续租：锁已释放 → token 失配 no-op → 心跳判丢自退，不留线程
+    renew_release.set()
+    deadline = time.monotonic() + 5
+    while threading.active_count() > baseline and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert threading.active_count() == baseline

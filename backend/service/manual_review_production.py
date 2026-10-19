@@ -1658,17 +1658,22 @@ class ManualReviewService:
         （``entity_write_guard.vid_write_lock_sync``，键
         ``kg:entity:vid:{space}:{label}:{md5(vid)}``，SET NX PX + token 比删），
         锁内完成 FETCH→合并→INSERT 整个读改写窗口——工作流正写同 VID 时本
-        路径等待/超时拒绝，绝不并发覆盖。锁无心跳线程、走**边界续租**：
-        FETCH 返回后若耗时超过 TTL/3 先续租拉长写窗口，**INSERT 派发前必须
-        续租并校验持有权**——临界区跨过 TTL（慢图请求、两次 FETCH、线程暂
-        停、网络阻塞、短 TTL 配置）时租约已过期、另一写者可获同键锁写入，
-        按旧快照继续整标签 INSERT 会静默清掉对方列，故续租失败抛
-        ``VidWriteLeaseLostError`` 禁止新的 INSERT。拿不到锁 / FETCH 失败 /
-        图上旧属性无法解析 / 租约丢失 → 抛错（fail-closed 零新增写，submit
-        事务回滚、案件状态不前移，审核员重新提交即重试；合并后 INSERT 幂等
-        安全）。**在途边界**：派发后的 INSERT 无法取消、事后抛错不能回滚图
-        库——「续租通过 → 派发后才失效」的残余窗口与 #526 异步版派发跨过期
-        窗口同级（续租刚把 TTL 拉满），此处不假装能回滚。
+        路径等待/超时拒绝，绝不并发覆盖。锁的租约生命周期与异步版对齐：
+        临界区内**心跳线程**按 TTL/3 持续续租（在途 INSERT 阻塞写线程期间
+        租约持续有效，Redis 健康只是请求慢时第二写者结构性拿不到锁），叠加
+        边界校验——FETCH 返回后若耗时超过 TTL/3 先续租拉长写窗口、**INSERT
+        派发前必须续租并校验持有权**、**INSERT 返回后校验在途期间是否丢租**。
+        临界区跨过 TTL（慢图请求、两次 FETCH、线程暂停、网络阻塞、短 TTL
+        配置）且续租失败时租约已被他人接管，按旧快照继续整标签 INSERT 会静
+        默清掉对方列，故丢失抛 ``VidWriteLeaseLostError`` 禁止新的/后续的
+        写。拿不到锁 / FETCH 失败 / 图上旧属性无法解析 / 租约丢失 → 抛错
+        （fail-closed 零新增写，submit 事务回滚、案件状态不前移，审核员重
+        新提交即重试；合并后 INSERT 幂等安全）。**在途边界（诚实声明）**：
+        派发后的 INSERT 无法取消、事后抛错不能回滚图库——INSERT 返回后发现
+        丢租（心跳在 Redis 故障窗口内判丢）时图写可能已落地，处置是抛错让
+        submit 回滚（案件不前移、后续暂存边零写），重提重新 FETCH 合并即可
+        收敛（合并保留接管者落下的列）；残余窗口与 #526 异步版心跳间故障的
+        在途窗口同级，此处不假装能回滚。
         """
         import json as _json
         from datetime import datetime as _dt
@@ -1734,6 +1739,10 @@ class ManualReviewService:
             client.execute_write(
                 f"INSERT VERTEX `{node_label}`({cols}) VALUES {quoted_vid}:({values})"
             )
+            # INSERT 返回后校验：在途期间心跳续租失败（Redis 故障窗口）则租
+            # 约已丢失——图写可能已落地且不可取消，抛错熔断后续写（暂存边
+            # 等），submit 回滚、案件不前移；重提重新 FETCH 合并收敛
+            lease.raise_if_lost()
 
         with _guard.vid_write_lock_sync(graph_space, node_label, vid) as lease:
             _locked_write(lease)

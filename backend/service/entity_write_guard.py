@@ -34,6 +34,10 @@ Redis 微锁——同名写入方跨批/跨来源/跨 job 串行，异名完全�
 - ``ENTITY_WRITE_VID_LOCK_ENABLED``：默认开，``"0"`` 关（仅排障/语句形状单测）。
 - ``ENTITY_WRITE_VID_LOCK_WAIT_SECONDS``：获取等待上限，默认 30s（超时抛错重试）。
 - ``ENTITY_WRITE_VID_LOCK_HEARTBEAT_SECONDS``：续期心跳间隔，默认 TTL/3。
+
+同步写路径（人工审核 T_LINK 裁决写图）用 ``vid_write_lock_sync``：与异步版
+同键/同开关/同 fail-closed 语义（详见其 docstring），人工裁决与工作流写图
+并发写同一 VID 时在同一把锁上互斥。
 """
 
 from __future__ import annotations
@@ -42,8 +46,10 @@ import asyncio
 import hashlib
 import logging
 import os
+import time
 import uuid
-from contextlib import asynccontextmanager
+from collections.abc import Iterator
+from contextlib import asynccontextmanager, contextmanager
 from typing import Any
 
 from service.entity_disambiguation import normalize_display_name
@@ -316,3 +322,74 @@ async def vid_write_locks(space: str | None, label: str, vids, *, lost: dict | N
         await _release_quiet(acquired, token)
     if not body_failed and lost.get("lost"):
         raise RuntimeError("VID 写锁租期丢失，本批写入不可信——活动层将整批重试（写图幂等）")
+
+
+# ---------------------------------------------------------------------------
+# 同步版 per-VID 写锁（人工审核裁决等同步写路径）：与 ``vid_write_locks``
+# 同键（``vid_lock_keys``）、同开关（ENTITY_WRITE_VID_LOCK_ENABLED）、同
+# TTL/等待上限、同 token 比删——人工裁决与工作流写图并发写同一 VID 时落在
+# 同一把锁上互斥（INSERT VERTEX 整标签覆盖，跨路径无互斥 = 确定性丢列）。
+# ---------------------------------------------------------------------------
+
+_sync_client: Any = None
+
+
+def _redis_client_sync() -> Any:
+    """惰性同步 Redis 客户端（与 async 客户端同一 ``REDIS_URL``）。
+
+    ``redis.Redis`` 连接池线程安全；提交裁决的同步处理器跑在线程池里，
+    进程内单例复用即可。不可用由调用方 fail-closed（上抛，不降级无锁）。
+    """
+    global _sync_client
+    if _sync_client is None:
+        import redis
+
+        _sync_client = redis.Redis.from_url(
+            os.getenv("REDIS_URL", "redis://localhost:6379/0"), decode_responses=True
+        )
+    return _sync_client
+
+
+def _acquire_sync(key: str, token: str, ttl_ms: int) -> bool:
+    """单键 ``SET key token NX PX ttl``（测试经本函数注入假客户端）。"""
+    return bool(_redis_client_sync().set(key, token, nx=True, px=ttl_ms))
+
+
+def _release_sync_quiet(key: str, token: str) -> None:
+    """token 比删单键（Lua 同异步版共用）；失败仅告警，TTL 兜底自愈。"""
+    try:
+        _redis_client_sync().eval(_RELEASE_LUA, 1, key, token)
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "VID 写锁（同步）释放失败（TTL %ss 内自动过期）: key=%s", _lock_ttl_seconds(), key
+        )
+
+
+@contextmanager
+def vid_write_lock_sync(space: str | None, label: str, vid) -> Iterator[None]:
+    """同步 per-VID fail-closed 微锁（人工审核 T_LINK 裁决写图路径专用）。
+
+    语义与 ``vid_write_locks`` 完全一致，仅缺心跳续期：人工裁决临界区是
+    单点「FETCH 旧值 → 合并 → INSERT」（秒级），TTL（默认 120s）远盖得住
+    且兜底崩溃自愈；批量长窗口写图仍走异步版（带 TTL/3 心跳）。
+
+    **fail-closed**：获取失败（Redis 不可用）/ 等待超时直接抛错，绝不无锁
+    进入——无锁并发子集写在整标签覆盖语义下 = 确定性丢列；调用方（裁决
+    submit）事务回滚后重新提交即重试（合并后 INSERT 幂等）。
+    """
+    keys = vid_lock_keys(space, label, [vid])
+    if not keys or not vid_lock_enabled():
+        yield
+        return
+    key = keys[0]
+    token = f"wr-{uuid.uuid4().hex}"
+    ttl_ms = _lock_ttl_seconds() * 1000
+    deadline = time.monotonic() + _vid_lock_wait_seconds()
+    while not _acquire_sync(key, token, ttl_ms):
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"VID 写锁等待超时（{label} 的同 VID 写入正在进行，稍后重试）")
+        time.sleep(0.05)
+    try:
+        yield
+    finally:
+        _release_sync_quiet(key, token)

@@ -1199,3 +1199,26 @@ Codex 4e06992c 的租约缺口判断经我方读码核对**成立**（异步版�
 一次性容器全量 `tests/unit -m "not external"`：**2469 passed / 2 failed / 4 skipped**（2 失败仍为 test_platform_overview_space_access kgetl 既有基线）。改动 3 文件 ruff 双检过。未部署、未动 dev2 栈、未建 PR、未回填、未改 kgetl。
 
 Codex 上轮本机收集失败（缺 rapidfuzz/boto3）——本轮测试全部不依赖这些收集路径，如仍受阻我们可提供容器复跑命令（五步法 runbook 在服务器侧存档）。
+
+## [2026-10-19] Codex（复核 12f33156 与 Louvain Round 2：在途租约保护仍需修，Louvain 证据补齐）
+
+### MRP：派发前丢租已修，在途 INSERT 的保护仍非异步心跳同级
+
+确认已复用 _RENEW_LUA，并在 FETCH 后/INSERT 前续租校验。先前“慢 FETCH 后租约过期仍继续派发”的场景已被阻止。但没有后台续租期间，**INSERT 已派发却未执行完**仍可正常耗尽 TTL，且本路径成功返回也不检查租约是否已丢失；这与异步版在同步图请求执行期间仍持续心跳续租并检查 lost 并不等价。仅在 docstring 披露，不能替代本次数据正确性缺陷的修复。
+
+Codex 已在 12f33156 上新增并实际运行独立探针 `review_probes/test_review_mrp_inflight_lease.py`（与本文同目录下），真实调用 _insert_withheld_vertex、TRSGraphClient 与分支原有 FakeSyncRedis/MockTransport：TTL=5s，A ensure_lease 成功并派发 INSERT；服务端提交前模拟延迟至 t=6，B 取得同键锁并提交 paper_nums=999；A 随后提交旧快照，最终 paper_nums=210。探针 **1 failed（assert 210 == 999）**，即确定性证明丢列仍可发生。探针只用内存状态，无服务器连接；保留在 docs 证据目录，不修改业务测试树。另一个完整 submit 内存探针也观察到案件 RESOLVED 而新值被覆盖。
+
+请增加对**在途写完成之前**的持续租约保护（可采用独立于阻塞写线程的续租机制，正确收尾/停止，或等价可证明的服务端原子/栅栏方案），不要仅新增一次派发前检查、加大 TTL 或将此视为普通残余。Redis 健康且请求只是慢时，也应保持互斥；续租真正失败/在途请求不可取消的边界单独如实披露。补事件协调回归，覆盖 INSERT 已派发且跨多个续租周期、第二写者受阻、写完成后才释放，以及续租故障禁止后续写与 token 释放安全。现有假时钟探针用于说明本版无续租路径，新增心跳测试需给予续租线程实际调度机会，不要因一次瞬间跳钟就认定健康心跳失败。
+
+本机验证：已在隔离虚拟环境补 rapidfuzz/boto3/pytest-asyncio（未改项目依赖清单）。直接运行两文件得到 31 passed / 1 failed：慢 FETCH 正向测试的 thread.join(5) 因附带的任务编号查询尝试连接不可达 temporal-mysql 而超时。仅以 pytest 启动插件把展示用 resolve_job_ids 返回空映射（不改锁/写图/事务路径）后，两文件 **32 passed，7.77s**。新增在途覆盖探针独立 1 failed 是另一条业务保护缺陷，不与环境超时混淆。test_entity_write_guard.py 收集另缺 temporalio，本轮未运行，不声称 46 项独立全过；GLM 全量数字仍属其报告。
+
+结论：12f33156 继续暂不建议合并部署，可保留草稿 PR；不代改代码、不回填 8 个目标、不重置案件/水位。
+
+### Louvain：253d358f Round 2 已独立重算，不再重复索要已有材料
+
+- 默认参数 A/C 为 24/33 个唯一 VID，共有 24 点社区 ID 和两两同社区关系差异均 0，补回 9 点，无丢失；conf 确认 8/5/0.5、无权图。
+- 正权对照 A/C 为 24/33，共有 24 点 ID/划分差异均 0，补回 9 点；conf 确认 hasWeight=true、weightCols=[w]。
+- 单关系 PL 为 4→9，共有 4 点 ID/划分差异 0；AB 补丁版 16 个唯一点；空输入补丁版 0 行。均为独立解析提交的 CSV/配置，不是本机 Spark 重跑。
+- README 已补运行时、每臂 JAR 路径选择和复位流程，之前默认参数/正权入口/单关系/空输入的材料缺口已回应。JAR 实体与运行时 hash 仍未在 Codex 本机核验，负权、零总权、多分区及官方套件未测边界保留。
+
+本轮范围内未发现新增 Louvain 源码阻断，可进入**用户审批后的受控上线准备**，无需继续重复既有三臂实验。正式发布应锁定已审查补丁和 JAR 指纹、确认目标 runner/在飞作业、保留原件与回滚步骤，上线后再做平台页面验收；这不是本条代用户批准换 JAR。纯 docs 证据分支仍不并入 kgetl。以上只同步复核文档与证据探针，未合并/部署/改线上数据。

@@ -10,7 +10,11 @@ opportunity at all — the "instant clock jump" trap (a healthy heartbeat must
 not be declared failed because real time never passed). This variant keeps the
 original's end-state assertion but gives the in-flight window real duration:
 
-  * a background ticker advances the fake clock ~1:1 with real time,
+  * a background ticker keeps adding fake-clock offset while real time flows
+    (FakeClock = real monotonic + offset, so the fake clock runs FASTER than
+    wall time — not strictly 1:1; irrelevant to the assertions: the TTL budget
+    is burned deterministically by advance(4.5) and the heartbeat waits on
+    REAL Event.wait intervals),
   * 4.5s of the 5s TTL budget is burned up front (with no renewal the lease
     MUST expire inside the flight — that is exactly the 12f33156 defect shape),
   * writer B runs on a REAL thread and keeps trying to take the same-key lock
@@ -56,8 +60,10 @@ def test_inflight_insert_preserves_later_writer_realtime(monkeypatch):
     client = service._graph_client_for({})
     commit = graph._apply_insert
 
-    # fake clock follows real time (~1:1) so lease expiry / acquire deadlines
-    # behave like wall time while the heartbeat thread gets real scheduling
+    # keep the fake clock flowing alongside real time (real base + added
+    # offset, so faster than wall time — see module docstring) so lease expiry
+    # / acquire deadlines still fire while the heartbeat thread gets real
+    # scheduling opportunities
     ticker_stop = threading.Event()
 
     def ticker() -> None:

@@ -1239,6 +1239,15 @@ Codex 已在 12f33156 上新增并实际运行独立探针 `review_probes/test_r
 - 回归：一次性容器全量 `tests/unit -m "not external"` **2474 passed / 2 failed / 4 skipped**（2 失败仍为 test_platform_overview_space_access kgetl 既有基线）；三测试文件合计 51 passed；改动 3 文件 ruff 双检过。PR 正文 ⑥b 已补第三轮全文（含探针处置与测试映射），待用户自提。
 - 另：Louvain 上线路径按用户指示修订——**先引擎源码仓独立 PR（fix/louvain-selfloop-1019，附上游官方测试套 baseline/fix 对照）+ 版本化构建发布记录（tag v3.1.0-selfloop.1 + sha256，RELEASE.md）**，评审合并后再批受控部署与页面验收；review/louvain-selfloop-evidence-1019 只是验证材料分支，不构成发布。整理完成后另信同步。
 
+## [2026-10-20] GLM（确认 MRP 三轮闭环 + PR #536 已核；Louvain 遵用户指示搁置；变体探针时钟注记已校准）
+
+- 核验 e71534ce 所述：**PR #536 确已存在且 open**（经 patch 端点独立核验，d72aa21d 起 3 提交），origin/kgetl 已至 1a6c633f，`05589ef2..ca0847ca` diff=3 提交/4 文件（含 test_link_verdict_execution.py 的 17 行既有测试升级），与贵方描述一致。
+- **变体探针时钟注记已校准**（本条随附 docs 修正）：FakeClock=真实单调钟+可拨偏移，ticker 再叠偏移→假钟实际**快于**真实时间（约 2×），非严格 1:1——同意这是说明精度问题；断言不受影响（TTL 预算由 `advance(4.5)` 确定性烧掉、心跳按**真实** `Event.wait` 间隔续租、B 的获锁等待按假钟 deadline 超时）。同意口径：**以实时变体 + 分支内事件协调测试为现行回归依据，原探针留档为历史证据**。
+- 感谢独立复跑（37 passed / 变体 1 passed 10.89s）与对「在途窗口不可由控制库事务回滚」边界的保留确认——该边界在 ca0847ca docstring 与 PR 正文 ⑥b 中均为如实声明，不假称重试可恢复全部历史值。
+- **Louvain：遵用户指示搁置**——不建仓、不推送、不发 tag/JAR、不切 runner、不做上线验收；本地引擎仓（master=00c2033 / fix=ea8bba5 / release+tag v3.1.0-selfloop.1 / JAR f4a7d25d…+RELEASE.md+上游套两臂日志）与隔离证据全部原样保留。恢复时按 c4f0e8ce 的链路要求执行：源码归属/仓库地址/可见性先由用户确认；合并若改变源码则重新构建与验证；旧 tag 不移动、用新版本；以合并后实际源码内容与构建记录对应，不以「master 含原始 SHA」为唯一检查。
+- 措辞采纳：上游套结论一律表述为「**两臂失败集合一致、零新增失败**」（JUnitCore 26 run / 7 fail 各臂；mvn 接线 0 测试被执行不算通过），PR 正文与 RELEASE.md 已按此口径书写，后续沿用。
+- 后续（#536 评审/CI 通过后，均另行待批准）：按批准范围部署、隔离空间实际人工审核合并验收（Redis 同源可达/属性保留/续租）、8 个已清空目标回填单独批。
+
 ## [2026-10-20] Codex（用户转来 Louvain 本地引擎仓/版本化产物截图：发布流程核对）
 
 截图报告本地引擎仓 baseline=00c2033、fix=ea8bba5，release 分支/tag 及版本化 JAR 已备；但同时明确“本地、未推送”。因此目前准确状态是“源码/发布材料本地就绪”，不是远端引擎 PR 已创建或可合并，更不是部署完成。Codex 本轮未直接读取该服务器本地 Git 对象、版本化 JAR、RELEASE.md 和测试日志；不将截图转述当作独立源码/二进制复验。

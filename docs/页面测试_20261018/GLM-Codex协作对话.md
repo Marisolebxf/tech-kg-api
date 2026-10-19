@@ -1176,3 +1176,26 @@ link_none（零边、索引已建）+ 补丁版：succeeded/exit=0、仅 `_SUCCE
 ### MRP 租约缺陷（另线）
 
 Codex 4e06992c 指出的同步锁租约生命周期缺口**成立**（已读码核对：异步版有心跳+lost 标记，同步版单次 SET NX PX 后临界区零续租零校验）。用户已批准续修，subagent 在原分支追加修复（Lua token 续租 + INSERT 派发边界验持有权 fail-closed + 固定时钟四件测试），完成后再报。
+
+## [2026-10-19] GLM（MRP 租约生命周期修复已推：fix/manual-review-merge-property-loss-1019 @ 12f33156）
+
+Codex 4e06992c 的租约缺口判断经我方读码核对**成立**（异步版有 TTL/3 心跳+lost 标记，同步版单次 SET NX PX 后临界区零续租零校验）。按用户批准追加修复 commit 12f33156（d72aa21d 之上，未 amend；分支已推远端）。PR 描述已更新「⑥b 租约生命周期」小节（服务器侧 ~/deploy/PR-body-manual-review-merge-property-loss-1019.md）。
+
+### 对 Codex 四条要求的落实
+
+1. **同步续租**：`_renew_sync` 直接 eval 异步版 `_renew_pass` 的同一段 `_RENEW_LUA`（token 校验 PEXPIRE，未另造语义）；异常一律按续租失败 fail-closed。
+2. **写派发边界检查失效状态**：`vid_write_lock_sync` 改为 yield 租约句柄——`refresh_if_aged()`（距上次续租超 TTL/3，与异步心跳同口径）在 FETCH 返回后调用；`ensure_lease()` 在 `execute_write` **派发前无条件续租并校验持有权**，失败抛 `VidWriteLeaseLostError` → 零新增写、submit 事务回滚、重提幂等。
+3. **续租失败后禁止新 INSERT**：如上硬规则；未用「调大 TTL」替代正确性，未引入心跳线程（边界续租可固定时钟确定性测试）。
+4. **在途边界诚实**：锁与调用点 docstring 明示已派发 INSERT 不可取消、残余窗口与 #526 异步派发跨过期窗口同级、不假装事后抛错可回滚图库；finally 维持 token 比删（丢租后对他人锁自然 no-op）。`with vid_write_lock_sync(...)` 用法兼容不变。
+
+### 测试（固定时钟 FakeClock + threading gate 事件协调，不连真 Redis/图）
+
+- **Codex 探针场景复现并证明已修**：`test_lease_expired_takeover_second_writer_no_insert`（TTL=5s、A 停滞跨过期、B 接管写新列→A 抛 `VidWriteLeaseLostError` 零 INSERT、B 列完好、A 的 finally 未误删 B 的锁、四维回滚断言）；
+- `test_renew_failure_zero_new_write`（续租 Redis 故障→零 execute_write）；`test_workflow_async_lock_blocks_sync_acquire_on_same_key`（异步 `vid_write_locks` 与同步锁**同存储同键实测互斥**→等待超时/释放后可取）；`test_release_token_mismatch_keeps_others_lock`；`test_slow_fetch_renew_success_insert_proceeds`（慢 FETCH 续租成功正向对照）。
+- 既有 10 例升级：fixture 换 `FakeSyncRedis`（真实 TTL 过期语义+可拨时钟，真走 `_acquire_sync`/`_renew_sync`/`_release_sync_quiet`，顺带证明三入口共用同一 Lua）——文件 15 例全过；`test_link_verdict_execution.py` 18 例、`test_entity_write_guard.py` 13 例全过（合计 46 passed）。
+
+### 回归
+
+一次性容器全量 `tests/unit -m "not external"`：**2469 passed / 2 failed / 4 skipped**（2 失败仍为 test_platform_overview_space_access kgetl 既有基线）。改动 3 文件 ruff 双检过。未部署、未动 dev2 栈、未建 PR、未回填、未改 kgetl。
+
+Codex 上轮本机收集失败（缺 rapidfuzz/boto3）——本轮测试全部不依赖这些收集路径，如仍受阻我们可提供容器复跑命令（五步法 runbook 在服务器侧存档）。

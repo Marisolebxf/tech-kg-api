@@ -31,6 +31,7 @@
 
 | 版本 | 文档发布日期 | 修订内容 |
 | ------ | ------------ | --------- |
+| v0.0.9 | 2026/10/19 | §七 02-configmap 新增九大业务固定图空间配置（可选）：`TRS_GRAPH_BUSINESS_BASE_URL` / `TRS_GRAPH_BUSINESS_SPACE`（BASE_URL 留空=关闭，九大业务跟随前端空间下拉，与原行为一致；填写后九大业务固定用该连接与空间，平台管理面与 worker 不受影响）；backend 镜像 v0.0.3→v0.0.4（内置业务面代码：kgetl PR #528 + 回环取数修复，v0.0.3 及更早镜像这组变量不生效）、web 维持 v0.0.2 |
 | v0.0.8 | 2026/10/16 | 新增实体关键词搜索 ES 通道物料（可选）：§六.6 elasticsearch 8.14.3（单节点）+ 全量同步 Job + `elasticsearch-data` PVC，§一清单表 / §五.3 转推 / §六.1 PVC 同步登记；§七 02-configmap 新增 `ENTITY_SEARCH_ES_URL` / `ENTITY_SEARCH_ES_TIMEOUT`（URL 留空=通道关闭，走图直查）；backend 镜像 v0.0.2→v0.0.3（内置 ES 通道代码与同步脚本）、web v0.0.1→v0.0.2 |
 | v0.0.7 | 2026/9/10 | §九 新增「临时改用 IP 直连登录」清单：5 个环境变量（APP_BASE / AUTH_COOKIE_PATH / AUTH_COOKIE_SECURE / AUTH_FRONTEND_URL / USER_CENTER_REDIRECT_URI）+ 用户中心回调登记 + `set env` 快速切换/回退命令与安全注意事项 |
 | v0.0.6 | 2026/9/10 | 图谱服务连接配置标注来源：§七 02-configmap 的 `TRS_GRAPH_*` 四项与 03-secret 的 `TRS_GRAPH_API_KEY`、§四 依赖表、`docs/k8s-deployment.md` ConfigMap 示例、后端 `infra/graph_db/config.py`，均注明取值对应《图数据库平台（TRS Graph）K8s 部署文档》的 §五.8 Service（trs-graph-service:8090）/ §五.3 Secret（api-key-hash 明文 ysukeg）/ §六 图空间（须与 TRS_GRAPH_SPACE 同名、replica_factor=1） |
@@ -67,7 +68,7 @@
 | temporal | 1.29.2（auto-setup） | 工作流引擎 |
 | temporal-ui | 2.39.0 | 工作流控制台（运维观察用） |
 | elasticsearch | 8.14.3（可选） | 实体关键词搜索 ngram 索引（§六.6；未部署时图直查兜底，仅慢） |
-| backend | v0.0.3（Python 3.11） | 后端业务镜像 ×3（api / temporal-worker / m3e-embedding），已内置 m3e-small 模型；v0.0.3 起含实体搜索 ES 通道 |
+| backend | v0.0.4（Python 3.11） | 后端业务镜像 ×3（api / temporal-worker / m3e-embedding），已内置 m3e-small 模型；v0.0.3 起含实体搜索 ES 通道，v0.0.4 起含九大业务固定图空间（TRS_GRAPH_BUSINESS_*） |
 | web | v0.0.2（nginx 1.27） | 前端业务镜像 |
 
 **集群外依赖**（需提前准备，yaml 中只填连接地址）：
@@ -102,7 +103,7 @@ docker login 10.50.62.9:30303
 ```bash
 # 后端（api / temporal-worker / m3e-embedding 三个 Deployment 共用同一镜像；
 # 构建期把 m3e-small 模型下载进镜像，m3e 服务启动即用、无需联网）
-docker build -t 10.50.62.9:30303/bkg/backend:v0.0.3 \
+docker build -t 10.50.62.9:30303/bkg/backend:v0.0.4 \
   --build-arg PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
   --build-arg HF_ENDPOINT=https://hf-mirror.com \
   ./backend
@@ -112,7 +113,7 @@ docker build -t 10.50.62.9:30303/bkg/web:v0.0.2 \
   --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
   ./frontend
 
-docker push 10.50.62.9:30303/bkg/backend:v0.0.3
+docker push 10.50.62.9:30303/bkg/backend:v0.0.4
 docker push 10.50.62.9:30303/bkg/web:v0.0.2
 ```
 
@@ -958,7 +959,7 @@ spec:
         - name: bkg-image-pull-secret-0
       containers:
         - name: sync
-          image: 10.50.62.9:30303/bkg/backend:v0.0.3
+          image: 10.50.62.9:30303/bkg/backend:v0.0.4
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:
@@ -1014,7 +1015,7 @@ spec:
             - name: bkg-image-pull-secret-0
           containers:
             - name: sync
-              image: 10.50.62.9:30303/bkg/backend:v0.0.3
+              image: 10.50.62.9:30303/bkg/backend:v0.0.4
               imagePullPolicy: IfNotPresent
               envFrom:
                 - configMapRef:
@@ -1086,6 +1087,25 @@ data:
   # TRS Graph 单副本 storaged，建图空间必须 replica_factor=1（默认 3 会 Host not enough）
   GRAPH_SPACE_REPLICA_FACTOR: "1"
   TRS_GRAPH_TIMEOUT: "30"
+
+  # ---- 九大业务固定图空间（TRS_GRAPH_BUSINESS_*，可选）----
+  # 留空/不配置 = 九大业务与平台管理面共用上面的 TRS_GRAPH_*（跟随前端空间下拉）。
+  # 配置后九大业务模块（产业链全景/专家直接·间接关系/论文合作/校友·同事关系/
+  # 重点科技企业关系/产业链节点TOP-N 事件等）的图查询固定使用这里的连接与空间，
+  # 不再跟随前端空间下拉；平台管理面（Schema 管理/来源绑定等）与 temporal-worker
+  # 仍走 TRS_GRAPH_* 并跟随请求空间。
+  #   TRS_GRAPH_BUSINESS_BASE_URL ← 承载九大业务数据的 trs-graph-service 地址：
+  #     与平台同一服务同一空间 → 填与 TRS_GRAPH_BASE_URL 相同的值（仅固定空间语义）；
+  #     独立图库（如外部同步来的另一套 TRS Graph）→ 填其 Service 地址。
+  #   TRS_GRAPH_BUSINESS_SPACE ← 九大业务实际取数的图空间名（该空间须已在对应
+  #     图库创建并灌好数据；与 TRS_GRAPH_SPACE 不同名时即为「远端空间名映射」）。
+  #   API_KEY / TIMEOUT 可省略：逐项回退 03-secret 的 TRS_GRAPH_API_KEY 与上面的
+  #     TRS_GRAPH_TIMEOUT；仅当业务面指向另一套图库且密钥不同时，才需在 03-secret
+  #     增加 TRS_GRAPH_BUSINESS_API_KEY。
+  # 改动需重启 api 生效（envFrom 不热更新；worker 不消费这组变量，可不重启）。
+  # ★ 需 backend ≥ v0.0.4：v0.0.3 及更早镜像不含业务面代码，这组变量不生效。
+  TRS_GRAPH_BUSINESS_BASE_URL: ""
+  TRS_GRAPH_BUSINESS_SPACE: "dev"
 
   # ---- 实体搜索 ES 通道（可选，组件见 §六.6）----
   # 留空 = ES 通道关闭，实体列表关键词搜索走图直查（逐标签全扫 17~36s，功能完整仅慢）。
@@ -1228,7 +1248,7 @@ stringData:
 
 ### 后端
 
-后端三个 Deployment 共用镜像 `10.50.62.9:30303/bkg/backend:v0.0.3`，仅启动命令不同。
+后端三个 Deployment 共用镜像 `10.50.62.9:30303/bkg/backend:v0.0.4`，仅启动命令不同。
 
 **1、m3e-embedding（专利向量化服务）**
 
@@ -1255,7 +1275,7 @@ spec:
         - name: bkg-image-pull-secret-0
       containers:
         - name: m3e-embedding
-          image: 10.50.62.9:30303/bkg/backend:v0.0.3
+          image: 10.50.62.9:30303/bkg/backend:v0.0.4
           imagePullPolicy: IfNotPresent
           command:
             [
@@ -1346,7 +1366,7 @@ spec:
         - name: bkg-image-pull-secret-0
       containers:
         - name: temporal-worker
-          image: 10.50.62.9:30303/bkg/backend:v0.0.3
+          image: 10.50.62.9:30303/bkg/backend:v0.0.4
           imagePullPolicy: IfNotPresent
           command: [".venv/bin/python", "-m", "script.run_temporal_worker"]
           envFrom:
@@ -1397,7 +1417,7 @@ spec:
         - name: bkg-image-pull-secret-0
       containers:
         - name: api
-          image: 10.50.62.9:30303/bkg/backend:v0.0.3
+          image: 10.50.62.9:30303/bkg/backend:v0.0.4
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:

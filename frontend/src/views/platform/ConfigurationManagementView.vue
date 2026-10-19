@@ -66,6 +66,7 @@ type ConfigItem = {
   canSetDefault?: boolean
   defaultSource?: 'business' | 'public'
   defaultReferenced?: boolean
+  defaultReferencedBy?: string[]
   kind: ConfigKind
   category: string
   name: string
@@ -350,7 +351,7 @@ function toConfigItem(kind: ConfigKind, cfg: LlmConfig | MysqlDatasource | Embed
   }
   if (kind === 'llm') {
     const c = cfg as LlmConfig
-    return { ...common, visibility: c.visibility, businessName: c.businessName, canManage: c.canManage, canSetDefault: c.canSetDefault, defaultSource: c.defaultSource, defaultReferenced: c.defaultReferenced, category: '语言模型', type: 'LLM API', endpoint: c.baseUrl, baseUrl: c.baseUrl, model: c.model, hasApiKey: c.hasApiKey, apiKeyMasked: c.apiKeyMasked }
+    return { ...common, visibility: c.visibility, businessName: c.businessName, canManage: c.canManage, canSetDefault: c.canSetDefault, defaultSource: c.defaultSource, defaultReferenced: c.defaultReferenced, defaultReferencedBy: c.defaultReferencedBy, category: '语言模型', type: 'LLM API', endpoint: c.baseUrl, baseUrl: c.baseUrl, model: c.model, hasApiKey: c.hasApiKey, apiKeyMasked: c.apiKeyMasked }
   }
   if (kind === 'embedding') {
     const c = cfg as EmbeddingConfig
@@ -654,8 +655,16 @@ async function testConnection(item: ConfigItem) {
 function defaultLabel(item: ConfigItem) {
   return item.kind === 'llm' && !isAdmin.value && item.defaultSource === 'public' ? '跟随公共默认' : '默认'
 }
+/** 管理员视角：公共模型被业务设为默认（但不是公共默认本体）——不再硬拦，点击走确认弹窗解绑后删除/停用 */
+function businessReferenced(item: ConfigItem) {
+  return item.kind === 'llm' && isAdmin.value && item.visibility === 'public' && item.defaultReferenced === true && !item.isDefault
+}
 function defaultProtected(item: ConfigItem) {
-  return item.kind === 'llm' ? item.defaultReferenced === true || item.isDefault : item.kind === 'embedding' && item.isDefault
+  if (item.kind === 'llm') {
+    if (businessReferenced(item)) return false
+    return item.defaultReferenced === true || item.isDefault
+  }
+  return item.kind === 'embedding' && item.isDefault
 }
 // 归属小字：业务配置显示业务（图空间）名，公共配置按类型显示公共语言模型/公共数据库
 function ownershipLabel(item: ConfigItem) {
@@ -663,6 +672,10 @@ function ownershipLabel(item: ConfigItem) {
 }
 async function toggleItem(item: ConfigItem) {
   if (!canManageConfig(item)) return
+  if (item.status !== '停用' && businessReferenced(item)) {
+    openForceConfirm(item, '停用')
+    return
+  }
   if (item.status !== '停用' && defaultProtected(item)) return
   const nextStatus: ConfigStatus = item.status === '停用' ? '正常' : '停用'
   try {
@@ -732,6 +745,10 @@ const deleteSubmitting = ref(false)
 const deleteError = ref('')
 function removeConfig(item: ConfigItem) {
   if (!canManageConfig(item)) return
+  if (businessReferenced(item)) {
+    openForceConfirm(item, '删除')
+    return
+  }
   if (defaultProtected(item)) {
     showToast('默认配置不能删除：请先将其他配置设为默认。', 'info')
     return
@@ -762,6 +779,48 @@ async function confirmDeleteConfig() {
     deleteError.value = `删除失败：${(err as Error).message}`
   } finally {
     deleteSubmitting.value = false
+  }
+}
+
+/** 被业务设为默认的公共模型：管理员确认后解绑业务默认并强制删除/停用（业务回退公共默认）。 */
+const forceTarget = ref<ConfigItem>()
+const forceAction = ref<'删除' | '停用'>('停用')
+const forceVisible = ref(false)
+const forceSubmitting = ref(false)
+const forceError = ref('')
+function openForceConfirm(item: ConfigItem, action: '删除' | '停用') {
+  forceTarget.value = item
+  forceAction.value = action
+  forceError.value = ''
+  forceVisible.value = true
+}
+function referencedBusinessLabel(item: ConfigItem) {
+  return (item.defaultReferencedBy?.length ? item.defaultReferencedBy : ['其他业务']).join('、')
+}
+function publicDefaultLabel() {
+  return items.value.find(i => i.kind === 'llm' && i.visibility === 'public' && i.defaultSource === 'public' && i.isDefault)?.name || '公共默认模型'
+}
+async function confirmForceAction() {
+  const item = forceTarget.value
+  if (!item || forceSubmitting.value) return
+  forceSubmitting.value = true
+  forceError.value = ''
+  const businesses = referencedBusinessLabel(item)
+  const action = forceAction.value
+  try {
+    if (action === '删除') {
+      await deleteLlmConfig(item.id, currentUserId(), true)
+      selected.value = null
+    } else {
+      Object.assign(item, toConfigItem('llm', await updateLlmConfig(item.id, { status: '停用' }, currentUserId(), true)))
+    }
+    forceVisible.value = false
+    showToast(`“${item.name}”已${action}，业务「${businesses}」回退使用公共默认。`, 'info')
+    await loadByCategory(activeCategory.value)
+  } catch (err) {
+    forceError.value = `${action}失败：${(err as Error).message}`
+  } finally {
+    forceSubmitting.value = false
   }
 }
 
@@ -855,8 +914,8 @@ onUnmounted(() => {
                 <td class="config-action-col">
                   <div class="row-actions">
                     <button class="link" type="button" @click.stop="openDetail(item)">{{ canManageConfig(item) ? '管理' : '查看' }}</button>
-                    <button class="link" type="button" :disabled="!canManageConfig(item) || defaultProtected(item) && item.status !== '停用'" :title="defaultProtected(item) && item.status !== '停用' ? '默认配置不能停用' : ''" @click.stop="toggleItem(item)">{{ item.status === '停用' ? '启用' : '停用' }}</button>
-                    <button class="link danger" type="button" :disabled="!canManageConfig(item) || defaultProtected(item)" :title="defaultProtected(item) ? '默认配置不能删除，请先将其他配置设为默认' : ''" @click.stop="removeConfig(item)">删除</button>
+                    <button class="link" type="button" :disabled="!canManageConfig(item) || defaultProtected(item) && item.status !== '停用'" :title="businessReferenced(item) && item.status !== '停用' ? '该模型被业务设为默认，点击确认后停用并让业务回退公共默认' : defaultProtected(item) && item.status !== '停用' ? '默认配置不能停用，请先将其他配置设为默认' : ''" @click.stop="toggleItem(item)">{{ item.status === '停用' ? '启用' : '停用' }}</button>
+                    <button class="link danger" type="button" :disabled="!canManageConfig(item) || defaultProtected(item)" :title="businessReferenced(item) ? '该模型被业务设为默认，点击确认后删除并让业务回退公共默认' : defaultProtected(item) ? '默认配置不能删除，请先将其他配置设为默认' : ''" @click.stop="removeConfig(item)">删除</button>
                   </div>
                 </td>
               </tr>
@@ -973,6 +1032,7 @@ onUnmounted(() => {
       </aside>
     </Teleport>
     <DeleteConfirmDialog v-model:visible="deleteVisible" title="删除配置" :name="deleteTarget?.name || ''" :identifier="deleteTarget?.id" identifier-label="配置 ID" description="继续操作将永久删除该配置。请确认相关任务不再依赖此配置。" :loading="deleteSubmitting" :error="deleteError" @confirm="confirmDeleteConfig" />
+    <DeleteConfirmDialog v-model:visible="forceVisible" :title="forceAction === '删除' ? '强制删除被业务设为默认的模型' : '强制停用被业务设为默认的模型'" :name="forceTarget?.name || ''" :identifier="forceTarget?.id" identifier-label="配置 ID" :verb="forceAction" :warning="forceAction === '删除' ? '删除后无法恢复，并将解除全部业务默认绑定。' : '停用期间该模型不可用，业务默认绑定将被解除。'" :description="`该模型是业务「${forceTarget ? referencedBusinessLabel(forceTarget) : ''}」的默认模型。${forceAction === '删除' ? '删除' : '停用'}后，上述业务将回退使用公共默认模型（${publicDefaultLabel()}）。`" :loading="forceSubmitting" :error="forceError" @confirm="confirmForceAction" />
   </div>
 </template>
 

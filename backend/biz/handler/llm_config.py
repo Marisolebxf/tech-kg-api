@@ -24,7 +24,11 @@ from service.config_ownership import (
     guard_default_change,
     visible_configurations,
 )
-from service.llm_defaults import decorate_defaults, set_default_for_actor
+from service.llm_defaults import (
+    decorate_defaults,
+    release_business_default_references,
+    set_default_for_actor,
+)
 
 LLM_CONFIG_NOT_FOUND = "LLM 配置不存在"
 
@@ -145,10 +149,14 @@ def update_llm_config(
     payload: LlmConfigUpdate,
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
+    force: bool = False,
 ) -> ApiResponse:
     _readable_config(_application(session), actor, config_id, session, manage=True)
     data = payload.model_dump(exclude_unset=True)
     guard_default_change(actor, data)
+    # 停用被业务设为默认的公共模型：force=管理员确认后先解绑（业务回退公共默认）再停用，同一事务
+    if data.get("status") == "停用":
+        release_business_default_references(session, actor, config_id, force=force)
     if not actor.is_admin:
         data.pop("is_default", None)
     # Keep historical ownership metadata; it no longer grants configuration access.
@@ -171,11 +179,12 @@ def delete_llm_config(
     config_id: str,
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
+    force: bool = False,
 ) -> ApiResponse:
-    config = _readable_config(_application(session), actor, config_id, session, manage=True)
-    # 默认必须恒有一条：删掉当前默认会让"全都不是默认"，LLM 只能回退 env——先转移默认再删
-    if config.get("defaultReferenced"):
-        raise HTTPException(status_code=409, detail="默认配置不能删除：请先将其他配置设为默认")
+    _readable_config(_application(session), actor, config_id, session, manage=True)
+    # 公共默认必须恒有一条（先转移默认再删）；被业务设为默认的公共模型，
+    # 管理员 force 确认后解绑（业务回退公共默认）再删，未 force 时 409 报真实占用方
+    release_business_default_references(session, actor, config_id, force=force)
     policy = session.get(ConfigOwnership, ("llm", config_id))
     if policy is not None:
         session.delete(policy)

@@ -11,6 +11,8 @@ export interface LlmConfig {
   canSetDefault?: boolean
   defaultSource?: 'business' | 'public'
   defaultReferenced?: boolean
+  /** 把该模型设为默认的业务名（仅管理员可见；强制删除/停用确认弹窗用） */
+  defaultReferencedBy?: string[]
   name: string
   description: string
   baseUrl: string
@@ -90,18 +92,26 @@ export async function updateLlmConfig(
   id: string,
   payload: LlmConfigUpdateInput,
   userId: string,
+  /** 停用被业务设为默认的公共模型时，true=管理员已确认，后端解绑后停用 */
+  force = false,
 ): Promise<LlmConfig> {
   return unwrap(
     await asApiPromise<LlmConfig>(
-      http.put(`${PREFIX}/llm-configs/${id}`, payload, { headers: headers(userId) }),
+      http.put(`${PREFIX}/llm-configs/${id}`, payload, {
+        headers: headers(userId),
+        params: force ? { force: true } : undefined,
+      }),
     ),
   )
 }
 
-export async function deleteLlmConfig(id: string, userId: string): Promise<void> {
+export async function deleteLlmConfig(id: string, userId: string, /** true=管理员已确认解绑业务默认 */ force = false): Promise<void> {
   unwrap(
     await asApiPromise<{ deleted: boolean }>(
-      http.delete(`${PREFIX}/llm-configs/${id}`, { headers: headers(userId) }),
+      http.delete(`${PREFIX}/llm-configs/${id}`, {
+        headers: headers(userId),
+        params: force ? { force: true } : undefined,
+      }),
     ),
   )
 }

@@ -137,6 +137,63 @@ def set_default_for_actor(session: Session, actor, config_id: str) -> None:
     session.commit()
 
 
+def referencing_business_names(session: Session, config_ids: list[str]) -> dict[str, list[str]]:
+    """各配置被哪些业务设为默认（业务名，缺失业务行时回退 client_id），供占用提示使用。"""
+    if not config_ids:
+        return {}
+    rows = session.execute(
+        select(BusinessLlmDefault.config_id, BusinessClient.name, BusinessLlmDefault.business_id)
+        .outerjoin(BusinessClient, BusinessClient.client_id == BusinessLlmDefault.business_id)
+        .where(BusinessLlmDefault.config_id.in_(config_ids))
+    ).all()
+    names: dict[str, list[str]] = {}
+    for config_id, name, business_id in rows:
+        names.setdefault(config_id, []).append(name or business_id)
+    return names
+
+
+def release_business_default_references(
+    session: Session, actor, config_id: str, *, force: bool = False
+) -> None:
+    """删除/停用公共模型前处理业务默认绑定。
+
+    业务把某公共模型设为默认后，该模型对管理员既不可删也不可停（旧口径），提示还失真。
+    新口径：管理员 force 确认后解除全部业务绑定（业务回退公共默认），随后删除/停用与解绑同一事务提交；
+    未 force 时 409 报真实占用方。公共默认本体仍不可删/停（默认必须恒有一条）；
+    业务自有模型不走管理员强制通道，仍由业务自行切换默认。
+    """
+    row = session.scalar(
+        select(LlmConfig)
+        .where(LlmConfig.id == config_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if row is None:
+        raise HTTPException(404, "LLM 配置不存在")
+    if row.is_default:
+        raise HTTPException(409, "公共默认模型不能删除或停用：请先将其他模型设为默认")
+    preferences = list(
+        session.scalars(
+            select(BusinessLlmDefault)
+            .where(BusinessLlmDefault.config_id == config_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    )
+    if not preferences:
+        return
+    if config_business(session, config_id) is not None:
+        raise HTTPException(409, "业务自有模型请由该业务先切换默认模型")
+    names = referencing_business_names(session, [config_id]).get(config_id, [])
+    if not (force and actor.is_admin and not actor.business_only):
+        raise HTTPException(
+            409,
+            f"该模型是业务「{'、'.join(names)}」的默认模型，请先让对应业务切换默认模型",
+        )
+    for preference in preferences:
+        session.delete(preference)
+
+
 def decorate_defaults(session: Session, actor, configs: list[dict]) -> list[dict]:
     ids = actor.developer_business_ids
     business_id = ids[0] if not actor.is_admin and len(ids) == 1 else None
@@ -148,6 +205,12 @@ def decorate_defaults(session: Session, actor, configs: list[dict]) -> list[dict
     public = public_default(session)
     effective_id = preference.config_id if preference else public.id if public else None
     references = set(session.scalars(select(BusinessLlmDefault.config_id)))
+    # 占用方业务名只给管理员（前端强制删除/停用的确认弹窗要用）；业务侧无需知道别家占用
+    referenced_by = (
+        referencing_business_names(session, [item["id"] for item in configs])
+        if actor.is_admin
+        else {}
+    )
     source = "business" if preference else "public"
     return [
         {
@@ -157,6 +220,7 @@ def decorate_defaults(session: Session, actor, configs: list[dict]) -> list[dict
             "defaultReferenced": bool(
                 item["id"] in references or (public and public.id == item["id"])
             ),
+            "defaultReferencedBy": referenced_by.get(item["id"], []),
             "canSetDefault": bool(
                 item.get("status") != "停用"
                 and item.get("hasApiKey")

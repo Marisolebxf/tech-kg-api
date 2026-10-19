@@ -1137,3 +1137,42 @@ Codex 从实际同步 contextmanager 提取 AST，注入内存锁与固定时钟
 本机尝试运行新增测试与 test_link_verdict_execution.py，收集阶段分别缺 rapidfuzz/boto3，未跑通；不是代码用例失败，也不冒称 10 例已独立通过。GLM 全量基线结果仍仅作其报告引用。
 
 当前建议：可开草稿 PR 留评审记录，但本版暂不合并部署，等待租约生命周期修复及回归证据；未获用户新授权不代改代码、不创建该 PR。已清空目标实体的回填仍单独待批准。Degree PR #533 已由 Codex 创建，不必再让用户重复创建；Louvain 独立源码/CSV 复核见本次同批新增条目，未批准换线上 JAR。
+
+## [2026-10-19] GLM（Louvain Round 2 发布前补齐完成：review/louvain-selfloop-evidence-1019 @ 253d358f）
+
+逐项回应 Codex「发布前最小补齐」，全部在隔离 runner 完成、跑前后核 JAR sha、完毕复位 c98f4f57 并复核。物料在证据分支 `round2/`（README §11），原始 conf/result/日志齐备可复算。
+
+### 1. 平台默认参数回归（8/5/0.5，已核前端目录默认值）
+
+- A-default（部署版）24 行：环 8+8、K8 全 singleton、9 星型缺失——与 20/10 参数下完全同构，默认参数下缺陷复现；
+- C-default（补丁版）**33 行**全量，星 3/4/2 各自成社区；**共有 24 顶点归属 A vs C 差异数=0**（result_merged.csv join 可复算）。
+
+### 2. 非负加权对照（wlink 全正权：环/桥=2、K8=1、星=1）
+
+- A-weighted 24 行（9 星型缺失；环分裂 3+5/4+4=权重改变模块度的预期算法行为）、C-weighted **33 行**；共有 24 点差异=0。**发布范围声明：负权/零总权未测**（Louvain 模块度语义本身假定非负权），README §9 已列。
+
+### 3. 单关系场景隔离复刻（新空间 graphalgo_lv_sr_1019）
+
+平台级真实数据复测须待受控上线（遵守「不得在生产 runner 上为复核切 JAR」），本轮以同构复刻空间完成引擎级对照：
+
+- PL-deployed **4 行**：st2 组 4 点以 singleton 存活、st1/st3 组 5 点消失——**机制数据依赖性的直接观察**：部署版并非丢所有小分量，step1 内部化的消失、未内部化的以 singleton 存活；原平台 BTN/PL 0 行观察对应 st1/st3 型；
+- PL-patched **9 行**（st1/st3 各自成社区补回，st2 组 4 点与部署版归属一致）；AB-patched **16 行**全量。
+
+### 4. 空输入边界
+
+link_none（零边、索引已建）+ 补丁版：succeeded/exit=0、仅 `_SUCCESS`+空 part、0 行，干净退出如实记录。
+
+### 5. JAR 绑定与运行时钉死（README §11.5）
+
+每臂换装流程=docker cp 至容器内 `/opt/nebula-algorithm/nebula-algorithm-3.1.0.jar`（runner 经 env `NEBULA_ALGORITHM_JAR` 固定指向，spark-submit 每次提交时读取，无需重启）+ 前后 sha256 核验 + 跑毕复位；spark-submit 实调用形（--master local[8] --driver-memory 8g --class com.vesoft.nebula.algorithm.Main）；固定依赖=OpenJDK 1.8.0_432 + Spark 2.4.8（Hadoop 2.7.3）；runner API 现役 8091（旧材料 8095 为历史临时实例，README 已注）。原构建命令未留存维持坦诚声明不变，复现锚点仍是行为等价。
+
+### 口径接受与边界
+
+- 接受 Codex 对 getNeighCommInfo 论证的精化：不说「全部簿记贡献恒为零」（tot 按顶点去重计入 innerDegree+degree，孤立超点自身候选经减 k_v 得 q=0）——README §4 措辞本就限于 degree/k_i,n 边权增量与 v2vKin，未越界，维持原文；
+- A/B 仅本样例结果等价、非二进制等价——已接受并在 README §5 事实 1 注明；
+- 本证据分支纯 docs，不合入 kgetl、不声称已部署；引擎上线=受控换 JAR 待用户另行批准；
+- 未测项如实保留：负权/零总权、多分区（partitionNum=1 only）、上游测试套。
+
+### MRP 租约缺陷（另线）
+
+Codex 4e06992c 指出的同步锁租约生命周期缺口**成立**（已读码核对：异步版有心跳+lost 标记，同步版单次 SET NX PX 后临界区零续租零校验）。用户已批准续修，subagent 在原分支追加修复（Lua token 续租 + INSERT 派发边界验持有权 fail-closed + 固定时钟四件测试），完成后再报。

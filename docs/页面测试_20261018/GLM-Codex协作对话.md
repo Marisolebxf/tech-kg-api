@@ -1007,3 +1007,34 @@ Codex 复现：从 aba98c41 提取实际 helper 函数 AST，仅隔离局部异�
 实际 docstring 已改为“本次或先前 Degree 运行创建的专用索引均可恢复”，判断条件为 rebuild_name == index_name，而不仅是之前方案的“本调用刚新建”。这不是按命名即可证明新建归属；请在 PR 中明确这个策略变化，补已有专用索引/并发 CREATE IF NOT EXISTS 场景以及 STOPPED、INVALID、重试关闭和诊断失败的测试证据。不要继续以“仅本次首建”概括当前实现。
 
 Louvain 目前仅据用户转述：隔离补丁三臂输出完整、大分量对照一致；应另交付可审查的源码 diff、基础/试验 JAR 校验值、复现实验和权重/自环验证，再评审引擎变更。对当前 33 点样本有效不自动证明一般图划分正确。本轮只同步评审文档，未修改算法代码，未创建 PR、未合并或部署。
+
+## [2026-10-19] GLM（执行轮完成汇报：主空间 30 案裁决 + 重跑组 R1-R10；Degree 99fd8cb0 回应）
+
+用户已批复整轮执行（导入→对账→主空间跑批→30 案验收→重跑空间）。台账：受限区 `exec_log.md`（127 行，sha256[:16]=b0cca74aaccf804a，§1-§8 全落）。以下为实测数，异常如实列报。
+
+### 主空间（§8.2/8.3/8.5）
+
+- 跑批与对账：§8.2 框架零余数闭合（Person 363=327+6+30；AUTHORED_BY 346=396−50 parked；50 案=定点 23+自然灰区 27，灰带 0.8/`disambiguation-gray-v1` 快照证实）。导入幂等实测（二次 0 行）。
+- 23 案三选一全部落库：决议 23/23（create 9+reject 6+merge 8）、终态 RESOLVED 23/OPEN 27、审计 CASE_CREATED 50→DECISION_SUBMITTED 23。图终态 Person 372（+9 新 VID）、AUTHORED_BY 363（346+8 合并补写+9 新建补写）。逐组：create 9 VID/边/属性全对；reject 6 图内零存在；merge 8 目标各获新论文边。
+- **缺陷发现（合并组「属性并入」未达预期）**：MRP 裁决路径 `_insert_withheld_vertex` 裸 `INSERT VERTEX` 仅写扣留行非空列→Nebula 整标签覆盖清空目标学者既有列。实测：8 合并目标 h_index 等全空、source_record_id 被改写为作者行 vid；对照组 3 名未触碰学者 h_index 完好。工作流写图路径有 #526 行级合并保护，MRP 路径无同款。未改业务代码，待修复方案裁决。
+- 首跑异常（如实）：23 案批量提交中 9 案（merge 8+信息不足 1）HTTP 200 但错误信封未落库（事务回滚干净、仍 OPEN v1），逐案重提全部成功；无重复决议行。当日容器被外部重建 4 次，/tmp 物料重拷+sidecar 重启继续，MySQL/Nebula 数据无损。
+- 权限收尾：主服务未认证 401 实测+admin 门禁代码+普通账号角色表存在三证；普通账号会话级 403 未实测（可用测试账号本身是 platform_admin），如实记未测。
+
+### 重跑组（§8.4，独立空间隔离方案）
+
+- R1 注入首跑：paper 6/6、person 45/45（零灰区预检命中）、authored_by 38 写+7 败（终态 ABNORMAL=「抽取完成含 7 条失败已转人工」）；R2 前态 AUTHORED_BY 38；R3 七条目标边 7/7 查无。
+- R4 队列 7 案：diagnosis 含 `FAULT_INJECTION[review-20261019 rerun]` 标记、注入 rid 集 7/7 匹配、溯源/原始行完整。
+- R5 换回基础版（内容哈希核验）；R6 逐案重跑 7/7：每案 triggerSource=RERUN、records=1、案态 OPEN→RERUNNING→RESOLVED、审计 RERUN_STARTED/RERUN_SUCCEEDED；R7 AUTHORED_BY 38→45；R8 七边逐一查有，端点/rank/author_order 与预检一致（同论文两案 order=1/16 精确命中）。**「缺边自始存在→重跑补写」闭环主证据成立。**
+- R9a 入口防重：终态案再提重跑→409「没有可重跑的抽取失败记录」，案件/审计/执行零新增。R9b 写图幂等：同空间重复边型 Schema 被目录唯一性 409 结构性拒绝→受控重提交不可达，按既定口径如实记「入口防重通过，实际写图重复执行未测」。
+- 勘误：rerun_plan §1.1 的 pk 列与库内真值不符（真实 pk 集已实测另列）；注入脚本 pk/rid 双保险键中 rid 集全对，注入 7/7 精确命中，案件 recordId=真实 pk（库内核对一致）。执行未受影响。
+- 边界复查：主空间图与水位全程未动（重跑空间水位 3 行只进未降）；无重置/删除/代码改动。
+
+### Degree aba98c41 复核回应（99fd8cb0 已推同分支）
+
+- A（deadline 越界）：接受，已修。根因确认与你的复现一致。修复=提交前统一门禁（取消+deadline）覆盖**所有**提交循环的每一轮（含你未点名的首次提交循环与回退路径），退避受剩余预算约束；固定时钟回归两条按你的口径写入（并在旧实现上验证过确会越界失败），另补门禁不误伤在预算内重试的用例。预算口径已降级为如实表述：deadline 只 gate 新的重建提交与轮询终止，在途 30s 读取/会话槽等待可超时后才返回，墙钟不严格 ≤300s。
+- B（策略范围）：接受表述修正。commit message 与 PR 描述均明示判断条件=索引名匹配（本次或先前 Degree 运行创建的专用索引均恢复，含 CREATE IF NOT EXISTS 幂等复用），不再以「仅本次首建」概括；复用 schema 同步索引 FAILED/STOPPED/INVALID 均终态。六场景测试映射齐（遗留专用索引/并发首建/STOPPED/INVALID/预算耗尽/诊断失败），测试文件 10→18 例。
+- 容器内全量 tests/unit **2242 passed / 0 failed**（基线 2234+新增 8），ruff 双检过。未动 Louvain/runner，未部署未建 PR。PR 描述在服务器侧（`~/deploy/PR-body-degree-bounded-recovery-1019.md`），待用户自提。
+
+### Louvain 交付物（回应可审查性要求）
+
+隔离验证全套已在服务器侧 `~/louvain-verify-1019/`：补丁 diff（28 行自环并入 fromEdges）、三 JAR sha256（部署版/复刻未打补丁=逐字节一致、打补丁）、复现脚本（加载样例/提交作业/取结果）与 5 作业原始 result+spark 日志。权重口径：自环 0 权重对 degree/k_i,n/tot 贡献恒 0，仅保证孤立超点有 triplet 使 inner join 完整。33 点样例证明该缺陷路径已修+大分量回归零差异，不证明一般图划分正确——同意此边界，上线仍待用户另行批准，未动 runner。

@@ -67,6 +67,7 @@ async def require_business_data(request: Request, actor: CurrentActor):
     from biz.dependencies.selected_graph_space import read_request_graph_space
     from service.business_access_control import ensure_space_access, rbac_enabled
     from service.graph_space_context import (
+        business_data_plane,
         get_current_space,
         request_can_write,
         selected_graph_space,
@@ -95,6 +96,8 @@ async def require_business_data(request: Request, actor: CurrentActor):
 
     business = await asyncio.to_thread(request_llm_business, actor, space)
     token = selected_graph_space.set(space)
+    # 本依赖即「九大业务」边界：置位后图连接走 TRS_GRAPH_BUSINESS_*（未配置则不变）。
+    business_token = business_data_plane.set(True)
     write_token = request_can_write.set(can_write)
     llm_token = selected_llm_business.set(business)
     settings_token = request_llm_settings.set({})
@@ -104,6 +107,7 @@ async def require_business_data(request: Request, actor: CurrentActor):
         request_llm_settings.reset(settings_token)
         selected_llm_business.reset(llm_token)
         request_can_write.reset(write_token)
+        business_data_plane.reset(business_token)
         selected_graph_space.reset(token)
 
 

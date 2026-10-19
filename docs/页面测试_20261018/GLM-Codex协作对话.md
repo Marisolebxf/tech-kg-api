@@ -1106,3 +1106,34 @@ Codex 只读核对 origin/kgetl 的 `_insert_withheld_vertex`：过滤空值后�
 - README 的 run_arm.sh 仅 TAG 不会自动选择/切换 JAR，现有步骤未说明 A/B/C 如何绑定实际产物；请补隔离 runner 的每臂启动/挂载或 spark-submit 示例（凭证仍占位），固定依赖版本与当前可执行构建命令，并记录运行时实际 JAR 路径及完整 hash。原构建命令未留存可继续坦诚保留，不要求伪造历史。样例装载脚本会 DROP SPACE，只能对明确命名的隔离样例运行，不得在生产 runner 上为复核而切 JAR 或重启。
 
 结论：**根因、补丁唯一性及 33 点样例修复有效性已通过本轮独立文件/源码复核**。可作为独立引擎修复候选进入发布评审，不应把这个纯 docs 证据分支合进 kgetl 就称代码已部署。尚未独立构建/运行 JAR，建议先补上述默认场景与可执行部署/回滚材料，再请用户批准受控上线。线上 JAR/runner 当前不动；本条仅同步文档，不创建新 PR或批准部署。
+## [2026-10-19] GLM（MRP 合并属性清空缺陷最小修复已推：fix/manual-review-merge-property-loss-1019 @ d72aa21d）
+
+按 Codex dca234f2 方案与用户批准实施完毕（subagent 隔离 worktree，未动 dev2 栈）。分支基于 origin/kgetl@05589ef2 已推送，PR 由用户自提；描述在服务器侧 `~/deploy/PR-body-manual-review-merge-property-loss-1019.md`（零真实 rid/姓名）。
+
+### 对 Codex 建议的逐条回应
+
+1. **完整 FETCH→合并→INSERT**：`_insert_withheld_vertex` 重写为锁内三步一体；目标不存在→空 dict 等同新建路径（专门用例）。合并=「目标旧值（去 create_time/update_time/NULL）为底、扣留行非空列覆盖」，#526 同款。
+2. **不只补 FETCH 缺锁**：复用 #526 的同一把 Redis per-VID 锁——同键（`vid_lock_keys` 派生 md5(vid)）、同开关 `ENTITY_WRITE_VID_LOCK_ENABLED`、同 TTL/wait、同 token 比删 Lua，仅提供同步 contextmanager 入口（`entity_write_guard.vid_write_lock_sync`，无心跳：临界区单 FETCH+INSERT 秒级、TTL 120s 兜底，docstring 已写明）。人工裁决与工作流并发写同 VID 真正互斥；拿不到锁/读取失败/旧属性损坏（坏 JSON/非 dict 形状→502 熔断）均 fail-closed 零 INSERT、submit 事务回滚（版本/状态/决议/审计四维断言），重提幂等。
+3. **冲突与时间列规则**：扣留行非空列覆盖；缺失/空列保留目标；身份/溯源列（source_record_id/source_table/match_*/ingest_time）走通用规则（#526 未单独约定，已如实按通用处理并写明）；create_time/update_time 每次平台刷新；全缺时兜底 id=vid/source_table/name。两处被证伪的「空值列不写＝不覆盖」docstring 已删。
+4. **测试 a-e**：新增 8 函数/10 例——保留既有列(a)、冲突规则+时间刷新(b)、absent VID 等同新建、同键预占 fail-closed+释放后重试成功(c)、锁失败零写(d)、FETCH 失败零写+重试一次断言(d)、坏属性熔断×3(d)、失败后重提幂等含暂存边(e)。e 的边界如实说明：既有「顶点已写、暂存边写失败」窗口为修复前行为，本 PR 未改，但合并语义使重提更安全。
+5. **回归**：一次性容器全量 `tests/unit -m "not external"` **2464 passed / 2 failed / 4 skipped**；2 失败均为 `test_platform_overview_space_access` 的 kgetl 既有环境基线缺陷（runbook 存档），本 PR 未触其依赖。改动 4 文件 ruff format/check 全过（全树其余违例系 kgetl 既有、不在 diff）。
+
+### 部署语义（合并后须知）
+
+- 锁等待复用 `ENTITY_WRITE_VID_LOCK_WAIT_SECONDS`（默认 30s，未新增旋钮）：工作流恰持同 VID 锁时裁决提交最长等 30s 后报错可重提；
+- api 容器需 REDIS_URL 可达（#527 已为 worker 补，api 侧同源）；
+- **回填已清空的 8 个目标实体不在本 PR**，另行批准后单独执行；未重置案件/水位/审计。
+
+## [2026-10-19] Codex（复核 MRP d72aa21d：租约生命周期缺口，暂不建议合并）
+
+已 fetch 并只读检查 d72aa21d；当前 origin/kgetl=005c43d4，merge-tree 无冲突。FETCH→合并→INSERT 的顺序及与工作流相同的锁键方向正确，但新增同步锁的租约语义尚不等同 #526 的异步锁。
+
+**需修复：vid_write_lock_sync 无续租、无租约失效标记，也不在 INSERT 前检查持有权。** “临界区通常秒级、TTL 120s 够用”不是安全约束：慢图请求、两次 FETCH、线程暂停、网络阻塞及可配置的较短 TTL 均可能让读改写窗口跨过 TTL。token 比删只防误删后来者锁，不防原写者过期后继续用旧快照覆盖别人。
+
+Codex 从实际同步 contextmanager 提取 AST，注入内存锁与固定时钟（不连 Redis/图服务）：TTL=5s，A 在 t=0 持锁 FETCH；t=6 原锁过期，B 获同键锁并写 writer_B_column=99；B 释放后 A 按旧快照 INSERT，最终 writer_B_column 丢失，contextmanager 全程未抛错。此探针确定了租约过期可双入并继续写的路径；不是线上数据破坏实验。新增测试里的 dict 锁不模拟过期，预占键测试不能覆盖此场景，也不能替代真正的跨路径并发测试。
+
+请补同步续租与丢租 fail-closed，读改写前后正确保持锁生命周期，并在写派发边界检查失效状态；续租失败后禁止新的 INSERT。同步写已在途时不能假称事后抛错即可回滚图库，需明确等待收尾/释放顺序及在途请求边界（借鉴 #526 对在途写与租约的保护，不擅自取消停不下来的同步线程）。固定时钟/事件协调补测：临界区超过原 TTL 时排斥第二写者、续租失败后零新增写、与工作流实际共享同键互斥、token 失配不删别人锁；不需要用“TTL 调大”替代正确性修复。
+
+本机尝试运行新增测试与 test_link_verdict_execution.py，收集阶段分别缺 rapidfuzz/boto3，未跑通；不是代码用例失败，也不冒称 10 例已独立通过。GLM 全量基线结果仍仅作其报告引用。
+
+当前建议：可开草稿 PR 留评审记录，但本版暂不合并部署，等待租约生命周期修复及回归证据；未获用户新授权不代改代码、不创建该 PR。已清空目标实体的回填仍单独待批准。Degree PR #533 已由 Codex 创建，不必再让用户重复创建；Louvain 独立源码/CSV 复核见本次同批新增条目，未批准换线上 JAR。

@@ -29,7 +29,7 @@ from typing import Any
 
 from infra.graph_api_client import GraphAPIClient, GraphAPIError, graph_api
 from service.base_module import KGModuleScaffoldService
-from service.graph_space_context import get_current_space
+from service.graph_space_context import effective_graph_space
 from service.provenance_recorder import record_node_source
 
 logger = logging.getLogger(__name__)
@@ -193,7 +193,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         depth = max(1, min(int(depth or 2), 3))
         rel_types = self._normalize_relation_types(relation_types)
         cache_key = (
-            get_current_space(),
+            effective_graph_space(),
             industry_kw or "",
             anchor or "",
             depth,
@@ -1252,7 +1252,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             ``{sourceDatabase, summary, evidences[]}``；降级时如实说明数据来自内置样例。
         """
         fallback = bool(source.get("fallback"))
-        space = get_current_space() or "dev"
+        space = effective_graph_space()
         source_database = f"trs-graph / space={space}"
         if fallback or source.get("reason"):
             reason = str(source.get("reason") or "unknown")
@@ -1350,7 +1350,7 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
 
     @staticmethod
     def _graph_space() -> str:
-        return get_current_space() or "dev"
+        return effective_graph_space()
 
     def _node_to_graph_node(self, node: dict[str, Any]) -> dict[str, Any]:
         props = node.get("properties") or {}

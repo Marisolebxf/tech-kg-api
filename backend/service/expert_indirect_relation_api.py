@@ -14,7 +14,7 @@ import httpx
 from biz.schema.expert_indirect_relation import ExpertIndirectRelationRequest
 from service.base_module import KGModuleScaffoldService
 from service.business_access import business_graph_app
-from service.graph_space_context import get_current_space
+from service.graph_space_context import effective_graph_space, get_current_space
 from service.provenance_recorder import record_node_source
 
 MAX_GRAPH_ITEMS = 200
@@ -166,7 +166,7 @@ class ExpertIndirectRelationApiService(KGModuleScaffoldService):
         app: Any = None,
     ) -> dict[str, Any]:
         core_id = _person_vid(body.core_node_id)
-        cache_key = f"{get_current_space()}|{core_id}|{tuple(body.relation_types)}|{body.path_depth}|{body.min_strength}"
+        cache_key = f"{effective_graph_space()}|{core_id}|{tuple(body.relation_types)}|{body.path_depth}|{body.min_strength}"
         with _result_cache_lock:
             entry = _result_cache.get(cache_key)
         if entry and entry[0] > time.monotonic():
@@ -357,7 +357,7 @@ def _node_source(node: dict[str, Any]) -> tuple[str, str]:
     recorded = record_node_source(
         node.get("properties") or {},
         node.get("labels") or [],
-        space=get_current_space(),
+        space=effective_graph_space(),
     )
     return recorded["sourceTable"], recorded["sourceField"]
 
@@ -391,7 +391,7 @@ def _build_provenance(result: dict[str, Any]) -> dict[str, Any]:
 
     relation_types = "、".join(result.get("relationTypeCount", {}).keys()) or "无"
     return {
-        "sourceDatabase": f"trs-graph / space={get_current_space()}",
+        "sourceDatabase": f"trs-graph / space={effective_graph_space()}",
         "summary": (
             f"命中 {result.get('pathCount', 0)} 条间接路径；"
             f"路径深度={result.get('pathDepth', 0)}；关系类型={relation_types}。"

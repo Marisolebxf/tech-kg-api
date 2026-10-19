@@ -420,3 +420,85 @@ def test_readonly_and_writable_http_cached_results_are_separate():
         request_can_write.reset(write_token)
         selected_graph_space.reset(token)
         clear()
+
+
+@pytest.mark.parametrize(
+    "flag,business_env,selected,expected",
+    [
+        # 业务面置位 + 配置了 TRS_GRAPH_BUSINESS_*：实际取数空间是业务面空间，
+        # 不随请求空间（前端下拉）变化
+        (True, True, "test1012", "dev"),
+        # 未置位（平台管理面）：跟随请求空间
+        (False, True, "test1012", "test1012"),
+        # 置位但未配置业务面变量（其他栈默认）：沿用请求空间，行为不变
+        (True, False, "test1012", "test1012"),
+        # 未选中空间时回退 .env 默认空间
+        (False, False, None, "dev"),
+    ],
+)
+def test_effective_graph_space_follows_business_plane(
+    monkeypatch, flag, business_env, selected, expected
+):
+    from service.graph_space_context import effective_graph_space
+
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "dev")
+    monkeypatch.delenv("TRS_GRAPH_BUSINESS_BASE_URL", raising=False)
+    monkeypatch.delenv("TRS_GRAPH_BUSINESS_SPACE", raising=False)
+    if business_env:
+        monkeypatch.setenv("TRS_GRAPH_BUSINESS_BASE_URL", "http://biz:8090")
+        monkeypatch.setenv("TRS_GRAPH_BUSINESS_SPACE", "dev")
+    from service.graph_space_context import business_data_plane
+
+    space_token = selected_graph_space.set(selected) if selected is not None else None
+    biz_token = business_data_plane.set(True) if flag else None
+    try:
+        assert effective_graph_space() == expected
+    finally:
+        if biz_token is not None:
+            business_data_plane.reset(biz_token)
+        if space_token is not None:
+            selected_graph_space.reset(space_token)
+
+
+@pytest.mark.parametrize("flag", [False, True])
+def test_graph_search_get_client_prefers_business_plane_on_loopback(monkeypatch, flag):
+    """九大业务进程内回环带显式 space 参数时，取数连接仍须走业务面。
+
+    回环（graph_api / GraphSearchApiClient）总是携带 space=<请求空间> 查询参数，
+    修复前 _get_client(space) 直接 get_space_client(space)，绕过 business_data_plane
+    判断，导致产业链全景等回环型模块跟着前端空间下拉取数。
+    """
+    from biz.handler import graph_search
+    from service.graph_space_context import business_data_plane
+
+    monkeypatch.setenv("TRS_GRAPH_BUSINESS_BASE_URL", "http://biz:8090")
+    monkeypatch.setenv("TRS_GRAPH_BUSINESS_SPACE", "dev")
+    calls = []
+    monkeypatch.setattr(
+        graph_search,
+        "get_business_space_client",
+        lambda request_space: (
+            calls.append(("business", request_space)) or ("business-client", "dev")
+        ),
+    )
+    platform_calls = []
+    monkeypatch.setattr(
+        graph_search,
+        "get_space_client",
+        lambda space: platform_calls.append(space) or ("platform-client", space),
+    )
+    token = selected_graph_space.set("test1012")
+    biz_token = business_data_plane.set(flag)
+    try:
+        client = graph_search._get_client("test1012")
+        if flag:
+            assert client == ("business-client", "dev")
+            assert calls == [("business", "test1012")]
+            assert platform_calls == []
+        else:
+            assert client == ("platform-client", "test1012")
+            assert calls == []
+            assert platform_calls == ["test1012"]
+    finally:
+        business_data_plane.reset(biz_token)
+        selected_graph_space.reset(token)

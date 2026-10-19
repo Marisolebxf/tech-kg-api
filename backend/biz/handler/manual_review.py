@@ -278,11 +278,12 @@ async def production_detail(case_id: str, identity: ReviewIdentityDep) -> Respon
     if cached is not None:
         return Response(cached, media_type="application/json")
     try:
+        # get_case 的 T_LINK 富化含同步图/ES 查询（秒级），挪线程池避免占住事件循环
         payload = json.dumps(
             {
                 "code": 200,
                 "success": True,
-                "data": production_service.get_case(case_id, identity),
+                "data": await asyncio.to_thread(production_service.get_case, case_id, identity),
                 "msg": "success",
             },
             ensure_ascii=False,
@@ -347,9 +348,16 @@ async def save_case_draft(case_id: str, body: DraftRequest, identity: ReviewIden
 async def submit_case(case_id: str, body: SubmitRequest, identity: ReviewIdentityDep):
     _queue_cache_clear()
     try:
+        # T_LINK 裁决含同步图写入，挪线程池避免占住事件循环
         return ApiResponse(
-            data=production_service.submit(
-                case_id, body.version, body.actionId, body.result, body.note, identity
+            data=await asyncio.to_thread(
+                production_service.submit,
+                case_id,
+                body.version,
+                body.actionId,
+                body.result,
+                body.note,
+                identity,
             )
         )
     except Exception as exc:
@@ -361,9 +369,16 @@ async def direct_decide_case(case_id: str, body: DirectDecideRequest, identity: 
     """kg.custom.steps T_DIRECT 案例两步决策：accept 直接写图，reject 丢弃。"""
     _queue_cache_clear()
     try:
+        # accept 直写图（同步图写入），挪线程池避免占住事件循环
         return ApiResponse(
-            data=production_service.direct_decide(
-                case_id, body.version, body.accepted, body.note, identity, body.candidate
+            data=await asyncio.to_thread(
+                production_service.direct_decide,
+                case_id,
+                body.version,
+                body.accepted,
+                body.note,
+                identity,
+                body.candidate,
             )
         )
     except Exception as exc:

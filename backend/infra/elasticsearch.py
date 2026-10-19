@@ -139,6 +139,10 @@ class EntityKeywordES:
 
     # ------------------------------------------------------------- 索引管理
 
+    # 消歧同名召回的四个显示名列（与 service.entity_disambiguation.name_columns_in
+    # 的优先列一致；service 层文档构造见 _es_keyword_doc）
+    NAME_COLUMNS = ("name", "name_zh", "name_cn", "name_en")
+
     INDEX_SETTINGS: dict[str, Any] = {
         "settings": {
             "number_of_shards": 1,
@@ -175,6 +179,9 @@ class EntityKeywordES:
                     "norms": False,
                     "index_options": "docs",
                 },
+                # 消歧同名召回专用：四个显示名列 keyword 全串等值（recall_same_name
+                # 图上是四列 OR 全扫，实测秒级；ES terms 等值毫秒级）
+                **{col: {"type": "keyword"} for col in NAME_COLUMNS},
                 # 回放专用：与图直查一致的列表项，只存 _source 不索引
                 "item": {"type": "object", "enabled": False},
             }
@@ -182,16 +189,29 @@ class EntityKeywordES:
     }
 
     def ensure_index(self, space: str) -> None:
-        """索引不存在则按模板创建（已存在则不动，幂等）。"""
+        """索引不存在则按模板创建；已存在则补名字列映射（幂等合并）。"""
         name = self.index_name(space)
         response = self._request("HEAD", f"/{name}")
         if response.status_code == 200:
+            self._upgrade_name_mapping(name)
             return
         if response.status_code != 404:
             raise ElasticsearchError(
                 f"Elasticsearch HEAD /{name} → {response.status_code}: {response.text[:200]}"
             )
         self._request_json("PUT", f"/{name}", body=self.INDEX_SETTINGS)
+
+    def _upgrade_name_mapping(self, name: str) -> None:
+        """向既有索引补 4 个显示名列（ES 允许只增列的 mapping 合并）。
+
+        老索引建表时没有名字列；升级 mapping 后新写入的文档带值、老文档为
+        null（``names_indexed`` 探测为 False，调用方回退图召回），重跑全量
+        同步即完成回填。失败只告警：查询侧本就有图回退，不阻断写入。"""
+        properties = {col: {"type": "keyword"} for col in self.NAME_COLUMNS}
+        try:
+            self._request_json("PUT", f"/{name}/_mapping", body={"properties": properties})
+        except ElasticsearchError:
+            logger.warning("ES 索引 %s 补名字列映射失败（同名召回回退图查询）", name, exc_info=True)
 
     def drop_index(self, space: str) -> bool:
         name = self.index_name(space)
@@ -356,6 +376,61 @@ class EntityKeywordES:
         items = [hit["_source"]["item"] for hit in hits.get("hits", []) if hit.get("_source")]
         total = int(hits.get("total", {}).get("value") or 0)
         return items, total
+
+    # ------------------------------------------------- 消歧同名召回（精确等值）
+
+    def search_by_names(
+        self,
+        space: str,
+        names: list[str],
+        *,
+        entity_type: str | None = None,
+        size: int = 200,
+    ) -> list[dict[str, Any]]:
+        """精确同名召回：四个显示名列 keyword 等值（terms）命中即返回。
+
+        语义对齐图召回 ``recall_same_name`` 的 ``WHERE col IN (...)`` 多列 OR；
+        返回 ``_source``（含 vid/名字列/item 回放体），未映射的老索引查这些
+        列不会报错、只是 0 命中——调用方须先用 ``names_indexed`` 探测回填情况。"""
+        values = sorted({str(n) for n in names if str(n).strip()})
+        if not values:
+            return []
+        should = [{"terms": {col: values}} for col in self.NAME_COLUMNS]
+        query: dict[str, Any] = {"bool": {"should": should, "minimum_should_match": 1}}
+        if entity_type:
+            query["bool"]["filter"] = [{"term": {"entity_type": str(entity_type)}}]
+        data = self._request_json(
+            "POST",
+            f"/{self.index_name(space)}/_search",
+            body={
+                "size": min(max(int(size), 1), 1000),
+                "track_total_hits": False,
+                "query": query,
+                "_source": ["vid", "entity_type", "item", *self.NAME_COLUMNS],
+            },
+        )
+        return [hit.get("_source") or {} for hit in data.get("hits", {}).get("hits", [])]
+
+    def names_indexed(self, space: str) -> bool:
+        """名字列是否已有文档回填（老索引未重建 → False，调用方回退图召回）。
+
+        ``terminate_after=1`` 让探测在首个命中即停，大索引上也是毫秒级。"""
+        data = self._request_json(
+            "POST",
+            f"/{self.index_name(space)}/_search",
+            body={
+                "size": 0,
+                "terminate_after": 1,
+                "track_total_hits": True,
+                "query": {
+                    "bool": {
+                        "should": [{"exists": {"field": col}} for col in self.NAME_COLUMNS],
+                        "minimum_should_match": 1,
+                    }
+                },
+            },
+        )
+        return int(data.get("hits", {}).get("total", {}).get("value") or 0) > 0
 
 
 def get_entity_keyword_es() -> EntityKeywordES | None:

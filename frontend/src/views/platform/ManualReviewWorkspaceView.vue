@@ -406,6 +406,8 @@ const stockCard = computed(() => {
 const primaryActionLabel = computed(() => preferredProductionAction.value?.label || '无可用动作')
 
 const isPrimaryDisabled = computed(() => {
+  // 提交中全程锁按钮：写图+回写要 5s+，期间可再次点击会触发版本冲突甚至双写
+  if (submitting.value) return true
   // T_DIRECT 主按钮由裁决单选驱动（不依赖模板目录回传动作），可编辑即可点
   if (templateId.value === 'T_DIRECT') return !isEditable.value
   return !isEditable.value || !preferredProductionAction.value
@@ -413,7 +415,8 @@ const isPrimaryDisabled = computed(() => {
 
 const handleAction = async (action: ReviewAction | { id: string; label: string; kind: string; rerun?: boolean }) => {
   const reviewRecord = record.value
-  if (!reviewRecord || !isEditable.value) return
+  // 提交中兜底拒入（主按钮已 disabled，防键盘/双击等旁路触发）
+  if (!reviewRecord || !isEditable.value || submitting.value) return
   // T_EXTRACT_FAIL 重跑动作走抽取失败重跑通道（新执行 triggerSource=RERUN），不走 submit
   if (templateId.value === 'T_EXTRACT_FAIL' && action.id === 'rerun-record') {
     await rerunThisRecord()
@@ -466,6 +469,8 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
     handleCategory: handleCategory.value,
   }
   if (entityVerdict.value === 'merge' && selectedTarget.value) result.targetEntityId = selectedTarget.value
+  // 与 T_DIRECT 分支同款提交锁：写图耗时数秒，期间禁点主按钮/裁决单选，防重复提交
+  submitting.value = true
   try {
     if (productionCase.value) {
       productionCase.value = await submitProductionReview(reviewRecord.id, { version: productionCase.value.version, actionId, note: note.value, result })
@@ -475,6 +480,8 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
     notify('success', `裁决已回写「${consequence.value?.writeTarget ?? '处理结果'}」。`)
   } catch (error) {
     notify('error', error instanceof Error ? error.message : '人工处理提交失败')
+  } finally {
+    submitting.value = false
   }
 }
 
@@ -626,7 +633,7 @@ const runPrimary = () => {
                   type="radio"
                   name="link-target"
                   :value="cand.vid"
-                  :disabled="!isEditable || entityVerdict !== 'merge'"
+                  :disabled="!isEditable || submitting || entityVerdict !== 'merge'"
                 />
                 <strong>{{ cand.name }}</strong>
                 <small><code>{{ cand.vid }}</code></small>
@@ -697,15 +704,15 @@ const runPrimary = () => {
         <!-- 裁决单选：T_LINK 三选（merge/create/reject）；T_DIRECT 通过或驳回 -->
         <a-form-item v-if="templateId === 'T_LINK'" field="entityVerdict" hide-label>
         <a-radio-group v-model="entityVerdict" class="verdict" aria-label="实体对齐裁决">
-          <a-radio value="merge" :disabled="!isEditable || linkMergeDisabled">合并到所选候选（写入图）</a-radio>
-          <a-radio value="create" :disabled="!isEditable">确认为新实体（写入图）</a-radio>
-          <a-radio value="reject" :disabled="!isEditable">均不匹配，驳回候选（丢弃该记录）</a-radio>
+          <a-radio value="merge" :disabled="!isEditable || submitting || linkMergeDisabled">合并到所选候选（写入图）</a-radio>
+          <a-radio value="create" :disabled="!isEditable || submitting">确认为新实体（写入图）</a-radio>
+          <a-radio value="reject" :disabled="!isEditable || submitting">均不匹配，驳回候选（丢弃该记录）</a-radio>
         </a-radio-group>
         </a-form-item>
         <a-form-item v-else field="directVerdict" hide-label>
         <a-radio-group v-model="directVerdict" class="verdict" aria-label="入库决策">
-          <a-radio value="accept" :disabled="!isEditable">通过·入库（{{ directKind === 'relation' ? `创建${labelZh(directEdgeType) || '?'}边` : `创建${labelZh(directNodeLabel) || '?'}节点` }}，直接写图）</a-radio>
-          <a-radio value="reject" :disabled="!isEditable">驳回·丢弃（候选不写图）</a-radio>
+          <a-radio value="accept" :disabled="!isEditable || submitting">通过·入库（{{ directKind === 'relation' ? `创建${labelZh(directEdgeType) || '?'}边` : `创建${labelZh(directNodeLabel) || '?'}节点` }}，直接写图）</a-radio>
+          <a-radio value="reject" :disabled="!isEditable || submitting">驳回·丢弃（候选不写图）</a-radio>
         </a-radio-group>
         </a-form-item>
 
@@ -767,7 +774,7 @@ const runPrimary = () => {
           当前图空间仅可查看，无法提交审核操作。
         </AppAlert>
         <div class="rw-foot__actions">
-          <button class="primary" type="button" :disabled="isPrimaryDisabled" @click="runPrimary">{{ templateId === 'T_EXTRACT_FAIL' ? primaryActionLabel : '确认' }}</button>
+          <button class="primary" type="button" :disabled="isPrimaryDisabled" @click="runPrimary">{{ submitting ? '提交中…' : templateId === 'T_EXTRACT_FAIL' ? primaryActionLabel : '确认' }}</button>
         </div>
       </footer>
     </main>

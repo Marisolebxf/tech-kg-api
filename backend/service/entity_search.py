@@ -32,7 +32,7 @@ from contextlib import contextmanager
 from itertools import islice
 from typing import Any
 
-from sqlalchemy import inspect, select, text
+from sqlalchemy import inspect, select, text, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -407,13 +407,26 @@ def _es_keyword_doc(node: Any, label: str) -> dict[str, Any]:
     语义：多 TAG 同 vid 各占一篇）。全量同步与随环增量共用，保证增量行与
     全量重建的文档逐字段一致。"""
     vid = str(node.id)
-    return {
+    props = dict(node.properties or {})
+    doc: dict[str, Any] = {
         "_id": f"{label}::{vid}",
         "vid": vid,
         "entity_type": label,
-        "search_text": _es_keyword_search_text(vid, dict(node.properties or {})),
+        "search_text": _es_keyword_search_text(vid, props),
         "item": _serialize_browse_item(node, label),
     }
+    # 消歧同名召回的精确等值列（infra.EntityKeywordES.NAME_COLUMNS 的镜像）：
+    # 只收字符串非空值，列不在 tag schema 上时该文档自然无这些键
+    for col in _ES_NAME_COLUMNS:
+        value = props.get(col)
+        if isinstance(value, str) and value.strip():
+            doc[col] = value
+    return doc
+
+
+# 消歧同名召回的显示名列（与 infra.elasticsearch.EntityKeywordES.NAME_COLUMNS 一致；
+# 分开声明避免 service→infra 反向取常量的循环依赖）
+_ES_NAME_COLUMNS = ("name", "name_zh", "name_cn", "name_en")
 
 
 def _es_incremental_upsert(store: EntityKeywordES, space: str, docs: list[dict[str, Any]]) -> int:
@@ -584,6 +597,67 @@ def _load_bm25_from_state(session: Session, space: str) -> BM25SparseEncoder | N
         return None
 
 
+# BM25 编码器进程内缓存：词表/文档频率是 25MB+17MB 大 JSON，每次增量入索引
+# 都整行拉取+重解析（实测拉取 0.7s + 解析 2.7s）是裁决/抽取联动的主要耗时。
+# 编码器只由词表统计决定——增量 upsert 不改词表，只有全量重建（_save_state）
+# 才会变；指纹只取小列（不触大字段），重建落库时显式失效兜底。
+_bm25_encoder_cache: dict[str, tuple[tuple, BM25SparseEncoder]] = {}
+_bm25_encoder_lock = threading.Lock()
+
+
+def _state_fingerprint(session: Session, space: str) -> tuple | None:
+    """状态行轻量指纹（document_count/avg_len/k1/b + entity_count，不触大列）。"""
+    from db_model.entity_search import EntitySearchState
+
+    row = session.execute(
+        select(
+            EntitySearchState.document_count,
+            EntitySearchState.entity_count,
+            EntitySearchState.average_document_length,
+            EntitySearchState.k1,
+            EntitySearchState.b,
+        ).where(EntitySearchState.graph_space == space)
+    ).first()
+    return tuple(row) if row else None
+
+
+def _load_bm25_cached(session: Session, space: str) -> BM25SparseEncoder | None:
+    """带进程内缓存的编码器加载：指纹命中免拉 42MB 状态，未命中全量重建并缓存。
+
+    未建索引口径与 ``_load_bm25_from_state`` 一致（无状态行 / 词表空 /
+    entity_count=0 → None）。entity_count 不进指纹：create 计数 +1 不改词表，
+    不该把缓存打 miss。"""
+    fingerprint_full = _state_fingerprint(session, space)
+    if fingerprint_full is None:
+        return None
+    document_count, entity_count, average_document_length, k1, b = fingerprint_full
+    if not document_count or not entity_count:
+        return None
+    fingerprint = (document_count, average_document_length, k1, b)
+    with _bm25_encoder_lock:
+        hit = _bm25_encoder_cache.get(space)
+    if hit is not None and hit[0] == fingerprint:
+        return hit[1]
+    encoder = _load_bm25_from_state(session, space)
+    if encoder is None:
+        return None
+    with _bm25_encoder_lock:
+        _bm25_encoder_cache[space] = (fingerprint, encoder)
+    return encoder
+
+
+def _state_entity_count(session: Session, space: str) -> int:
+    """状态行 entity_count 的轻量读取（不触大列）。"""
+    from db_model.entity_search import EntitySearchState
+
+    return int(
+        session.execute(
+            select(EntitySearchState.entity_count).where(EntitySearchState.graph_space == space)
+        ).scalar()
+        or 0
+    )
+
+
 def _save_state(
     session: Session,
     *,
@@ -614,6 +688,9 @@ def _save_state(
     row.embedding_model = embedding_model
     row.updated_at = datetime.now(UTC)
     session.commit()
+    # 词表已换代：进程内编码器缓存必须失效（指纹通常也会变，这里是显式兜底）
+    with _bm25_encoder_lock:
+        _bm25_encoder_cache.pop(space, None)
 
 
 def _milvus_space_has_rows(milvus: Any, space: str) -> bool:
@@ -1234,9 +1311,9 @@ class EntitySearchService:
         """
         if _database_reindex_running(self._session):
             return {"upserted": False, "reason": "reindex in progress"}
-        state_row = _load_state(self._session, space)
-        encoder = _load_bm25_from_state(self._session, space)
-        if state_row is None or encoder is None or not (state_row.entity_count or 0):
+        # 进程内缓存版：命中免拉 42MB 状态行（首次裁决 3.4s → 常态 ~0）
+        encoder = _load_bm25_cached(self._session, space)
+        if encoder is None:
             return {"upserted": False, "reason": "space index not built"}
         graph = get_space_client(space)
         node = graph.get_node(vid)
@@ -1289,7 +1366,15 @@ class EntitySearchService:
             logger.warning("单实体入索引失败 vid=%s space=%s", vid, space)
             return {"upserted": False, "reason": f"milvus error: {exc}"}
         if is_new:
-            self._bump_state_counts(state_row, node_label)
+            self._bump_state_counts(space, node_label)
+        es_store = get_entity_keyword_es()
+        if es_store is not None:
+            # ES 关键词索引增量（与随环批量同口径，fail-open）：否则裁决新建/并入
+            # 的实体要等夜间全量对账才能被关键词搜索与同名召回命中
+            try:
+                es_store.upsert(space, [_es_keyword_doc(node, node_label)])
+            except Exception:  # noqa: BLE001 - 索引联动失败不影响裁决
+                logger.warning("单实体 ES 关键词写入失败 vid=%s space=%s", vid, space, exc_info=True)
         return {"upserted": True, "vid": vid, "entityType": node_label}
 
     def upsert_entities_batch(
@@ -1309,9 +1394,8 @@ class EntitySearchService:
             return {"upserted": 0, "skipped": 0, "reason": None}
         if _database_reindex_running(self._session):
             return {"upserted": 0, "skipped": len(entities), "reason": "reindex in progress"}
-        state_row = _load_state(self._session, space)
-        encoder = _load_bm25_from_state(self._session, space)
-        if state_row is None or encoder is None or not (state_row.entity_count or 0):
+        encoder = _load_bm25_cached(self._session, space)
+        if encoder is None:
             return {"upserted": 0, "skipped": len(entities), "reason": "space index not built"}
         # 同 vid 多条（跨列集组）合并属性、后者覆盖——与图内列级 upsert 终值一致
         merged: dict[str, dict[str, Any]] = {}
@@ -1385,21 +1469,43 @@ class EntitySearchService:
             logger.warning("批量实体入索引失败 space=%s label=%s", space, node_label)
             return {"upserted": written, "skipped": skipped, "reason": f"milvus error: {exc}"}
 
-    def _bump_state_counts(self, state_row: Any, node_label: str) -> None:
-        """create 场景计数快照 +1：浏览分页窗口/总览与图保持一致（merge 不变）。"""
+    def _bump_state_counts(self, space: str, node_label: str) -> None:
+        """create 场景计数快照 +1：浏览分页窗口/总览与图保持一致（merge 不变）。
+
+        走轻量读 + Core UPDATE 原子自增：不再整行加载状态（vocabulary 是
+        25MB 大列），也避免与并发增量互相覆盖计数。"""
         from datetime import UTC, datetime
 
+        from db_model.entity_search import EntitySearchState
+
         try:
-            counts = json.loads(state_row.type_counts or "{}")
-        except Exception:  # noqa: BLE001 - 计数快照损坏按空处理
-            counts = {}
-        if not isinstance(counts, dict):
-            counts = {}
-        counts[node_label] = int(counts.get(node_label) or 0) + 1
-        state_row.type_counts = json.dumps(counts, ensure_ascii=False)
-        state_row.entity_count = int(state_row.entity_count or 0) + 1
-        state_row.updated_at = datetime.now(UTC)
-        self._session.commit()
+            current = self._session.execute(
+                select(EntitySearchState.type_counts).where(
+                    EntitySearchState.graph_space == space
+                )
+            ).scalar()
+            try:
+                counts = json.loads(current or "{}")
+            except Exception:  # noqa: BLE001 - 计数快照损坏按空处理
+                counts = {}
+            if not isinstance(counts, dict):
+                counts = {}
+            label = str(node_label or "")
+            if label:
+                counts[label] = int(counts.get(label) or 0) + 1
+            self._session.execute(
+                update(EntitySearchState)
+                .where(EntitySearchState.graph_space == space)
+                .values(
+                    entity_count=EntitySearchState.entity_count + 1,
+                    type_counts=json.dumps(counts, ensure_ascii=False),
+                    updated_at=datetime.now(UTC),
+                )
+            )
+            self._session.commit()
+        except Exception:  # noqa: BLE001 - 计数失败不影响裁决/增量主流程
+            logger.warning("实体索引计数快照 +1 失败 space=%s", space, exc_info=True)
+            self._session.rollback()
 
     def upsert_entities(self, *, space: str, items: list[dict[str, Any]]) -> dict[str, Any]:
         """随环抽取后的批级增量入索引（冻结 BM25 词表，方案②a）。
@@ -1427,15 +1533,13 @@ class EntitySearchService:
         # 时 es_store 为 None，本方法行为与本改动前完全一致。
         es_store = get_entity_keyword_es()
         milvus_skip_reason: str | None = None
-        state_row: Any = None
         encoder: BM25SparseEncoder | None = None
         if _database_reindex_running(self._session):
             # 全量重建会重读整个图空间，本批行天然被覆盖：计划内跳过，不算失败
             milvus_skip_reason = "reindex in progress"
         else:
-            state_row = _load_state(self._session, space)
-            encoder = _load_bm25_from_state(self._session, space)
-            if state_row is None or encoder is None or not (state_row.entity_count or 0):
+            encoder = _load_bm25_cached(self._session, space)
+            if encoder is None:
                 # 未建索引的空间不随环全量首建（大空间会撞 activity 超时自锁缺陷），
                 # 首建走管理端点 POST /entity-search/reindex 低峰执行
                 milvus_skip_reason = "space index not built"
@@ -1498,7 +1602,7 @@ class EntitySearchService:
                 "esUpserted": es_written,
                 "graphSpace": space,
             }
-        assert state_row is not None and encoder is not None  # Milvus 未跳过则必已加载
+        assert encoder is not None  # Milvus 未跳过则必已加载
 
         # 先做 BM25 编码（纯 CPU，冻结词表，OOV token 静默丢弃）再 embed：
         # 全 OOV 的行不浪费 embedding 配额
@@ -1519,7 +1623,7 @@ class EntitySearchService:
                 "skippedMissing": skipped_missing,
                 "skippedEmptyText": skipped_empty_text,
                 "skippedEmptySparse": skipped_empty_sparse,
-                "entityCount": int(state_row.entity_count or 0),
+                "entityCount": _state_entity_count(self._session, space),
                 "graphSpace": space,
                 "esUpserted": es_written,
             }
@@ -1588,18 +1692,36 @@ class EntitySearchService:
         if new_labels:
             from datetime import UTC, datetime
 
+            from db_model.entity_search import EntitySearchState
+
             try:
-                counts = json.loads(state_row.type_counts or "{}")
-            except Exception:  # noqa: BLE001 - 计数快照损坏按空处理
-                counts = {}
-            if not isinstance(counts, dict):
-                counts = {}
-            for label in new_labels:
-                counts[label] = int(counts.get(label) or 0) + 1
-            state_row.type_counts = json.dumps(counts, ensure_ascii=False)
-            state_row.entity_count = int(state_row.entity_count or 0) + len(new_labels)
-            state_row.updated_at = datetime.now(UTC)
-            self._session.commit()
+                current = self._session.execute(
+                    select(EntitySearchState.type_counts).where(
+                        EntitySearchState.graph_space == space
+                    )
+                ).scalar()
+                try:
+                    counts = json.loads(current or "{}")
+                except Exception:  # noqa: BLE001 - 计数快照损坏按空处理
+                    counts = {}
+                if not isinstance(counts, dict):
+                    counts = {}
+                for label in new_labels:
+                    counts[label] = int(counts.get(label) or 0) + 1
+                # 轻量读 + Core UPDATE 原子自增：不整行加载状态（vocabulary 25MB 大列）
+                self._session.execute(
+                    update(EntitySearchState)
+                    .where(EntitySearchState.graph_space == space)
+                    .values(
+                        entity_count=EntitySearchState.entity_count + len(new_labels),
+                        type_counts=json.dumps(counts, ensure_ascii=False),
+                        updated_at=datetime.now(UTC),
+                    )
+                )
+                self._session.commit()
+            except Exception:  # noqa: BLE001 - 计数失败不影响增量主流程
+                logger.warning("实体索引计数快照推进失败 space=%s", space, exc_info=True)
+                self._session.rollback()
 
         return {
             "mode": "incremental",
@@ -1608,7 +1730,7 @@ class EntitySearchService:
             "skippedMissing": skipped_missing,
             "skippedEmptyText": skipped_empty_text,
             "skippedEmptySparse": skipped_empty_sparse,
-            "entityCount": int(state_row.entity_count or 0),
+            "entityCount": _state_entity_count(self._session, space),
             "graphSpace": space,
             "esUpserted": es_written,
         }

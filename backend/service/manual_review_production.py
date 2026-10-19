@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import os
+import threading
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -624,10 +625,25 @@ class ManualReviewService:
             if c.status in ("CLAIMED", "IN_REVIEW") and c.assignee_id != a.user_id:
                 if not a.has_any("review_admin"):
                     raise ReviewForbiddenError("任务未由当前用户领取")
-            if c.version != v or c.status not in SUBMITTABLE_STATUSES:
+            if c.status not in SUBMITTABLE_STATUSES:
                 raise ReviewConflictError(STATE_OR_VERSION_CONFLICT)
-            validate_action(c.template_id, action, result)
+            # 原子占位（version CAS）：T_LINK 裁决写图耗时秒级，旧「读时校验」
+            # 窗口内双击/并发提交会双双通过（图写两遍、决议双落库）。先原子占住
+            # version 再执行写图；后续异常回滚事务即自动释放占位。
             t = now()
+            reserved = s.execute(
+                update(ReviewCase)
+                .where(
+                    ReviewCase.id == i,
+                    ReviewCase.version == v,
+                    ReviewCase.status.in_(SUBMITTABLE_STATUSES),
+                )
+                .values(version=ReviewCase.version + 1, updated_at=t)
+            )
+            if reserved.rowcount != 1:
+                raise ReviewConflictError(STATE_OR_VERSION_CONFLICT)
+            s.expire(c, ["version", "updated_at"])
+            validate_action(c.template_id, action, result)
             d = ReviewDecision(
                 case_id=i,
                 action_id=action,
@@ -652,7 +668,6 @@ class ManualReviewService:
                 apply_detail = self._apply_link_verdict(c, result)
             c.status = "RESOLVED"
             c.completed_at = t
-            c.version += 1
             c.updated_at = t
             self.audit(
                 s,
@@ -664,9 +679,16 @@ class ManualReviewService:
                 {"actionId": action, **(apply_detail or {})},
             )
             s.commit()
-            # 事务落库后再联动实体检索（索引增量 + 缓存失效），best-effort 不影响裁决结果
+            # 事务落库后再联动实体检索（索引增量 + 缓存失效），best-effort 不影响
+            # 裁决结果。挪后台线程执行：embedding + 索引写入秒级耗时不拖裁决响应
+            # （图已写、决议已落库，联动失败本就由下次全量重建兜底）。
             if apply_detail:
-                self._sync_entity_search_after_write(apply_detail)
+                threading.Thread(
+                    target=self._sync_entity_search_after_write,
+                    args=(apply_detail,),
+                    daemon=True,
+                    name=f"review-index-sync-{c.id}",
+                ).start()
             return self.detail(s, c)
 
     def create_direct_case(
@@ -1236,19 +1258,27 @@ class ManualReviewService:
                 # 同名召回一次拿全：总数 + 各候选属性（tag 无显示名列时为空，逐点降级）；
                 # tag 取快照 _nodeLabel（与 _apply_link_verdict 同源，ReviewCase 无此列）
                 node_label = str(snapshot.get("_nodeLabel") or "")
-                recalled: dict[str, list[dict[str, Any]]] = {}
+                by_vid: dict[str, dict[str, Any]] = {}
                 if display and node_label:
-                    recalled = recall_same_name(client, node_label, [display]) or {}
-                    # 矛盾防御：快照有候选而召回为空（trs-graph 会话池紧张时 DESCRIBE
-                    # 偶发 500 → 降级裸 name 列 → 空结果），重试一次再采信
-                    if not any(recalled.values()) and snapshot.get("existingCandidates"):
-                        recalled = recall_same_name(client, node_label, [display]) or {}
-                by_vid = {
-                    str(cand.get("vid")): cand
-                    for cands in recalled.values()
-                    for cand in cands
-                    if cand.get("vid")
-                }
+                    space = str(snapshot.get("_graphSpace") or "")
+                    es_by_vid = self._es_same_name_by_vid(space, node_label, display)
+                    if es_by_vid is not None:
+                        by_vid = es_by_vid
+                    else:
+                        # ES 不可用/名字列未回填 → 图召回（四列 OR 全扫，实测秒级）
+                        recalled: dict[str, list[dict[str, Any]]] = (
+                            recall_same_name(client, node_label, [display]) or {}
+                        )
+                        # 矛盾防御：快照有候选而召回为空（trs-graph 会话池紧张时 DESCRIBE
+                        # 偶发 500 → 降级裸 name 列 → 空结果），重试一次再采信
+                        if not any(recalled.values()) and snapshot.get("existingCandidates"):
+                            recalled = recall_same_name(client, node_label, [display]) or {}
+                        by_vid = {
+                            str(cand.get("vid")): cand
+                            for cands in recalled.values()
+                            for cand in cands
+                            if cand.get("vid")
+                        }
                 by_vid.pop(incoming_vid, None)
 
                 def _props_of(vid: str) -> dict[str, Any]:
@@ -1299,13 +1329,52 @@ class ManualReviewService:
                     "sameNameTotal": len(by_vid),
                 }
             finally:
-                try:
-                    client.close()
-                except Exception:  # noqa: BLE001
-                    pass
+                pass  # 客户端已换 infra 按空间共享缓存，不可 close
         except Exception as exc:  # noqa: BLE001
             logger.warning("T_LINK 详情证据富化失败 case=%s，按原快照展示: %s", c.id, exc)
         return snapshot
+
+    def _es_same_name_by_vid(
+        self, space: str, node_label: str, display: str
+    ) -> dict[str, dict[str, Any]] | None:
+        """ES 精确同名召回（T_LINK 详情富化快路）：四个显示名列 keyword 等值。
+
+        ES 未配置 / 空间未同步 / 名字列未回填 / 查询异常一律返回 None，
+        调用方回退图同名召回（图召回是四列 OR 全扫，实测秒级——ES 命中后
+        详情富化从 ~1.8s 降到 ~0.4s）。只用于评审证据展示，不进消歧判定。"""
+        from infra.elasticsearch import get_entity_keyword_es
+
+        if not space or not display:
+            return None
+        store = get_entity_keyword_es()
+        if store is None:
+            return None
+        try:
+            if not store.ready(space) or not store.names_indexed(space):
+                return None
+            docs = store.search_by_names(space, [display], entity_type=node_label, size=200)
+        except Exception:  # noqa: BLE001 - 展示富化 fail-open
+            logger.warning(
+                "T_LINK 详情 ES 同名召回失败，回退图查询 name=%s: ", display, exc_info=True
+            )
+            return None
+        by_vid: dict[str, dict[str, Any]] = {}
+        for doc in docs:
+            vid = str(doc.get("vid") or "")
+            if not vid:
+                continue
+            item = doc.get("item") if isinstance(doc.get("item"), dict) else {}
+            name = ""
+            for col in ("name", "name_zh", "name_cn", "name_en"):
+                if doc.get(col):
+                    name = str(doc[col])
+                    break
+            by_vid[vid] = {
+                "vid": vid,
+                "name": name or str(item.get("name") or ""),
+                "props": dict(item.get("properties") or {}),
+            }
+        return by_vid
 
     @staticmethod
     def _fix_mojibake(value: Any) -> Any:
@@ -1339,17 +1408,16 @@ class ManualReviewService:
         return value
 
     def _graph_client_for(self, snapshot: dict[str, Any]) -> Any:
-        """按快照记载的图空间建客户端（缺省走环境默认空间）并完成连接。"""
-        from infra.graph_db.client import TRSGraphClient
+        """按快照记载的图空间取共享客户端（缺省走环境默认空间）。
+
+        直连客户端每开一次详情/每裁一次决都要新建会话 + connect（实测
+        ~390ms），换 infra 的按空间缓存客户端后连接复用；共享客户端
+        调用方不得 close。"""
+        from infra.graph_db import get_space_client
         from infra.graph_db.config import TRSGraphSettings
 
-        settings = TRSGraphSettings.from_env()
-        space = snapshot.get("_graphSpace")
-        if space:
-            settings.space = space
-        client = TRSGraphClient(settings)
-        client.connect()
-        return client
+        space = str(snapshot.get("_graphSpace") or TRSGraphSettings.from_env().space)
+        return get_space_client(space)
 
     def _apply_link_verdict(self, c: ReviewCase, result: dict[str, Any]) -> dict[str, Any]:
         """T_LINK 裁决执行：merge→扣留记录并入所选候选；create→按预留 vid 新建。
@@ -1421,10 +1489,7 @@ class ManualReviewService:
                 client.create_edge(frm, to, edge_type, props)
                 written_edges += 1
         finally:
-            try:
-                client.close()
-            except Exception:  # noqa: BLE001
-                logger.exception("关闭图客户端失败")
+            pass  # 客户端已换 infra 按空间共享缓存，不可 close
         return {
             "applied": True,
             "verdict": verdict,
@@ -1583,8 +1648,22 @@ class ManualReviewService:
             self.require_case_access(identity, c)
             if c.template_id != "T_DIRECT":
                 raise ReviewValidationError("仅 T_DIRECT 案例支持 direct_decide")
-            if c.version != version or c.status != "OPEN":
+            if c.status != "OPEN":
                 raise ReviewConflictError("状态或版本冲突")
+            # 原子占位（version CAS，与 submit 同口径）：accept 写图耗时秒级，
+            # 防「读时校验」窗口内双击/并发双写图
+            reserved = s.execute(
+                update(ReviewCase)
+                .where(
+                    ReviewCase.id == case_id,
+                    ReviewCase.version == version,
+                    ReviewCase.status == "OPEN",
+                )
+                .values(version=ReviewCase.version + 1, updated_at=now())
+            )
+            if reserved.rowcount != 1:
+                raise ReviewConflictError("状态或版本冲突")
+            s.expire(c, ["version", "updated_at"])
             old = c.status
             audit_detail: dict[str, Any] = {"note": note}
             if stripped is not None:
@@ -1609,7 +1688,6 @@ class ManualReviewService:
             else:
                 c.status = "REJECTED"
             c.completed_at = now()
-            c.version += 1
             c.updated_at = now()
             # 与 submit 通道同口径落一条决议：详情接口靠它回显最终裁决，
             # 否则 T_DIRECT case 刷新后裁决单选回落默认值

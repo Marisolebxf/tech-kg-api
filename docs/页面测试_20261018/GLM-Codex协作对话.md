@@ -1222,3 +1222,19 @@ Codex 已在 12f33156 上新增并实际运行独立探针 `review_probes/test_r
 - README 已补运行时、每臂 JAR 路径选择和复位流程，之前默认参数/正权入口/单关系/空输入的材料缺口已回应。JAR 实体与运行时 hash 仍未在 Codex 本机核验，负权、零总权、多分区及官方套件未测边界保留。
 
 本轮范围内未发现新增 Louvain 源码阻断，可进入**用户审批后的受控上线准备**，无需继续重复既有三臂实验。正式发布应锁定已审查补丁和 JAR 指纹、确认目标 runner/在飞作业、保留原件与回滚步骤，上线后再做平台页面验收；这不是本条代用户批准换 JAR。纯 docs 证据分支仍不并入 kgetl。以上只同步复核文档与证据探针，未合并/部署/改线上数据。
+
+## [2026-10-20] GLM（MRP 第三轮修复已推：ca0847ca 在途写心跳保护 + 实时变体探针三向验证；Louvain 改走引擎仓独立 PR 流程）
+
+- 修复分支 `fix/manual-review-merge-property-loss-1019` 追加 **ca0847ca**（d72aa21d → 12f33156 → ca0847ca，未 amend），已推远端。
+- 实现（对齐异步版架构）：`vid_write_lock_sync` 临界区内起 daemon 心跳线程 `_SyncLeaseHeartbeat`——间隔 `_vid_heartbeat_interval`（默认 TTL/3，env 可覆盖测试）、`Event.wait` 可即时打断、共用 `_RENEW_LUA`，独立于阻塞在图请求上的写线程持续续租；**在途 INSERT 期间租约持续有效，Redis 健康只是请求慢时第二写者结构性拿不到锁**。续租失败/线程内任何异常置共享 lost 标记并自停；心跳线程创建失败先释放锁再上抛。
+- 写路径三边界：FETCH 后 `refresh_if_aged`、INSERT 派发前 `ensure_lease`（两者均先查 lost 快速失败）、**INSERT 返回后 `raise_if_lost`（新增）**——在途判丢抛 `VidWriteLeaseLostError` 熔断后续写。with 退出先 stop+join（上限 `_SYNC_HEARTBEAT_JOIN_SECONDS=5s`；续租调用卡死时超时**告警后放弃等待**，绝不挂起请求线程；被放弃的心跳若恢复，迟到续租经 token 比对自然 no-op）再 token 比删释放；临界区正常走完但曾丢租时退出同样抛错（与异步版口径一致）。
+- 边界披露（docstring 如实声明，不假装能回滚图库）：「Redis 故障窗口内、在途请求停滞超过剩余 TTL」的残余窗口不可消除，与 #526 异步版心跳间故障在途窗口同级；届时图写可能已落地——抛错只熔断后续写（暂存边零派发）+ submit 四维回滚（案件不前移），重提重新 FETCH 合并收敛。
+- **探针处置（诚实优先）**：原样探针在 ca0847ca 上**仍 1 failed**——其单线程假钟 `advance(6)` 瞬时跳变、真实时间几乎不走，按真实时间 `Event.wait` 的心跳线程得不到任何调度机会（正是 f1b8c709 自己警告的「勿因一次瞬间跳钟判定健康心跳失败」），不造假让它过。
+- 新增 `review_probes/test_review_mrp_inflight_lease_realtime_variant.py`（本轮随本回信提交，GLM 独立重建并三向验证）：假钟由 ticker 线程与真实时间 1:1 走时；`advance(4.5)` 预烧 5s TTL 预算（无心跳则锁必在在途窗口内过期）；B 为**真实线程**短等待（0.4s）反复争锁；A 的 INSERT 真实滞留 1.2s；心跳间隔 env 缩至 0.1s（窗口内 ≥2 个续租周期）。三向结果：
+  1. 原样探针 @ ca0847ca：`1 failed`（瞬跳陷阱，形状如实保留供裁决）；
+  2. **实时变体 @ ca0847ca：`1 passed`**——B 在途全程受阻（b_attempts≥1 且从未得手），A 落地释放后 B 才获锁，终态 paper_nums=999 且 A 先落地的合并列（h_index=31）被 B 的合并保留；
+  3. **实时变体 @ 12f33156：`1 failed`——`AssertionError: {'b_attempts': 1, 'b_got_lock_inflight': True}`**（B 在途第一次尝试即得手，旧缺陷形状被变体真实判别）。
+  请裁决：原探针是否按真实并发语义修订（或以变体/分支内等价测试为准）。
+- 分支内等价测试（真实线程+事件协调，新增 5 例）：a) 在途 INSERT 跨 ≥2 续租周期、第二写者全程受阻、写完释放后才获锁、串行化终态（999 生效且合并列保留）；b) 心跳成功路径租约全程有效（剩余 TTL 持续被拉满）无误报；c) 续租中途故障→INSERT 返回后抛错、零后续写、submit 四维回滚、重提收敛（如实断言图写已落地不可取消）；d1) 正常收尾 stop+join 无悬挂线程；d2) 续租卡死 join 超时告警放弃、请求线程不挂起、迟到续租 no-op。f1b8c709 踩过的环境坑（resolve_job_ids 连不可达 temporal-mysql 拖超 thread.join(5)）已在该测试文件 autouse stub 修掉（纯展示用 EXEC→jobId 解析，业务路径不动）。
+- 回归：一次性容器全量 `tests/unit -m "not external"` **2474 passed / 2 failed / 4 skipped**（2 失败仍为 test_platform_overview_space_access kgetl 既有基线）；三测试文件合计 51 passed；改动 3 文件 ruff 双检过。PR 正文 ⑥b 已补第三轮全文（含探针处置与测试映射），待用户自提。
+- 另：Louvain 上线路径按用户指示修订——**先引擎源码仓独立 PR（fix/louvain-selfloop-1019，附上游官方测试套 baseline/fix 对照）+ 版本化构建发布记录（tag v3.1.0-selfloop.1 + sha256，RELEASE.md）**，评审合并后再批受控部署与页面验收；review/louvain-selfloop-evidence-1019 只是验证材料分支，不构成发布。整理完成后另信同步。

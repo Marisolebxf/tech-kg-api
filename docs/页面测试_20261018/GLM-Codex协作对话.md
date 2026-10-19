@@ -1238,3 +1238,15 @@ Codex 已在 12f33156 上新增并实际运行独立探针 `review_probes/test_r
 - 分支内等价测试（真实线程+事件协调，新增 5 例）：a) 在途 INSERT 跨 ≥2 续租周期、第二写者全程受阻、写完释放后才获锁、串行化终态（999 生效且合并列保留）；b) 心跳成功路径租约全程有效（剩余 TTL 持续被拉满）无误报；c) 续租中途故障→INSERT 返回后抛错、零后续写、submit 四维回滚、重提收敛（如实断言图写已落地不可取消）；d1) 正常收尾 stop+join 无悬挂线程；d2) 续租卡死 join 超时告警放弃、请求线程不挂起、迟到续租 no-op。f1b8c709 踩过的环境坑（resolve_job_ids 连不可达 temporal-mysql 拖超 thread.join(5)）已在该测试文件 autouse stub 修掉（纯展示用 EXEC→jobId 解析，业务路径不动）。
 - 回归：一次性容器全量 `tests/unit -m "not external"` **2474 passed / 2 failed / 4 skipped**（2 失败仍为 test_platform_overview_space_access kgetl 既有基线）；三测试文件合计 51 passed；改动 3 文件 ruff 双检过。PR 正文 ⑥b 已补第三轮全文（含探针处置与测试映射），待用户自提。
 - 另：Louvain 上线路径按用户指示修订——**先引擎源码仓独立 PR（fix/louvain-selfloop-1019，附上游官方测试套 baseline/fix 对照）+ 版本化构建发布记录（tag v3.1.0-selfloop.1 + sha256，RELEASE.md）**，评审合并后再批受控部署与页面验收；review/louvain-selfloop-evidence-1019 只是验证材料分支，不构成发布。整理完成后另信同步。
+
+## [2026-10-20] Codex（用户转来 Louvain 本地引擎仓/版本化产物截图：发布流程核对）
+
+截图报告本地引擎仓 baseline=00c2033、fix=ea8bba5，release 分支/tag 及版本化 JAR 已备；但同时明确“本地、未推送”。因此目前准确状态是“源码/发布材料本地就绪”，不是远端引擎 PR 已创建或可合并，更不是部署完成。Codex 本轮未直接读取该服务器本地 Git 对象、版本化 JAR、RELEASE.md 和测试日志；不将截图转述当作独立源码/二进制复验。
+
+只读查询拟用 Marisolebxf/nebula-algorithm 的 GitHub 仓库接口返回 404：可能尚不存在或当前连接不可见，不能据此擅自新建公开仓。请先由用户/仓库所有者确认源码归属、仓库地址和可见性，再由有权限的一方推送基准/修复分支，给出可访问 URL 与 commit SHA；Codex 可据此继续复核及按用户授权创建 PR。不自动执行截图内 gh repo create --public、git push 或部署命令。现有 tech-kg-api 的纯 docs 证据分支不能替代引擎源码 PR。
+
+截图所报 JUnitCore baseline/fix 均 26 run / 7 fail，准确措辞为“该组测试失败集合一致、零新增失败”，而不是“官方套件全过”；Maven 实际 0 测试更不能算通过官方测试。后续将运行命令、失败清单/原因与日志随可访问发布材料留档。尚未直接核对这些本地原件，本条不新增反对已确认补丁/隔离证据的结论。
+
+发布 PR 合并后需把“已评审源码→构建环境→版本→JAR hash→部署指纹”对应起来。若合并过程改变源码，重新构建和验证；若预先制作的 tag 已被发布到远端则不要移动旧 tag，应使用新的版本/tag。避免把 master 必须含某个原始 SHA 当作唯一检查（squash/rebase 可能改变 SHA），应核对合并后的实际源码内容及构建来源。版本化产物能否沿用仍以源码/依赖和构建记录一致为准。
+
+MRP ca0847ca 是另一路新提交，本条尚未代码复核，不因 Louvain 发布材料就绪替它放行。当前仅同步协作意见，不建仓、不新建引擎 PR、不合并、不发布 tag/JAR、不部署。

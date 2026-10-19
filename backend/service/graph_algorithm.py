@@ -670,6 +670,32 @@ def _degree_rebuild_backoff_seconds(retries_used: int) -> float:
     )
 
 
+def _assert_degree_index_deadline(label: str, index_name: str, deadline: float) -> None:
+    """每次 REBUILD 提交前的统一门禁：先查任务取消，再查总 deadline。
+
+    预算口径（如实声明，勿夸大）：deadline 只 gate **新的重建提交**——含首次
+    提交、瞬态重试的每一轮、FAILED 恢复重提交，到期后绝不再发出 REBUILD。
+    在途请求不受 deadline 截断：SHOW EDGE INDEX STATUS / SHOW JOBS / LOOKUP
+    校验带 30s 固定超时，REBUILD 写与会话槽等待另有独立时限，它们可能超过
+    deadline 才返回或失败——因此整个恢复流程的墙钟时长不严格 ≤ 超时秒数，
+    保证的只是「到期后零新增提交」。
+    """
+    _check_degree_cancelled()
+    if time.monotonic() >= deadline:
+        raise GraphAlgorithmError(
+            f"关系类型 {label} 的索引 {index_name} 重建超过 "
+            f"{int(_DEGREE_INDEX_BUILD_TIMEOUT_SECONDS)} 秒，请稍后重试",
+            status_code=504,
+        )
+
+
+def _degree_index_backoff(seconds: float, deadline: float) -> None:
+    """退避时长受剩余预算约束：至多睡到 deadline，绝不越过。"""
+    remaining = deadline - time.monotonic()
+    if remaining > 0:
+        _degree_pause(min(seconds, remaining))
+
+
 def _foreign_admin_job_records(records: Iterable[Any], own_job_id: int | None) -> list[dict]:
     """SHOW JOBS 记录里排除自身重建作业后的其余管理作业（仅诊断用）。"""
     others: list[dict] = []
@@ -733,11 +759,15 @@ def _submit_degree_index_rebuild(
 
     与首次提交不同，此处不再回退 existing_name：索引已可见过（首次 REBUILD 已被
     接受过一次），not found 属于不应复现的异常路径，按非瞬态错误上抛。
+
+    每一轮提交前（含瞬态重试的每一轮）都过取消+deadline 门禁，退避受剩余预算
+    约束：deadline 之后绝不再发出新的 REBUILD 提交——包括「上一次提交失败、
+    退避跨过 deadline、下一次提交本可成功」的路径，也按超时报错。
     """
     from infra.graph_db.exceptions import GraphRequestError
 
     while True:
-        _check_degree_cancelled()
+        _assert_degree_index_deadline(label, rebuild_name, deadline)
         try:
             return _nebula_job_id_from_result(
                 client.execute_write(f"REBUILD EDGE INDEX `{rebuild_name}`")
@@ -750,12 +780,7 @@ def _submit_degree_index_rebuild(
                 raise GraphAlgorithmError(
                     f"关系类型 {label} 的索引 {rebuild_name} 重建失败: {exc}", status_code=502
                 ) from exc
-            if time.monotonic() >= deadline:
-                raise GraphAlgorithmError(
-                    f"关系类型 {label} 的索引 {rebuild_name} 在创建后未及时可见，请稍后重试",
-                    status_code=504,
-                ) from exc
-            _degree_pause(_DEGREE_INDEX_POLL_SECONDS)
+            _degree_index_backoff(_DEGREE_INDEX_POLL_SECONDS, deadline)
 
 
 def _ensure_degree_edge_index(client: Any, label: str) -> None:
@@ -770,14 +795,24 @@ def _ensure_degree_edge_index(client: Any, label: str) -> None:
     不再回退全空间 MATCH，从根源上避免共享图库 90 秒扫描超时。
 
     2026-10-19 有界恢复（政策变化，显式接受）：REBUILD 后状态 FAILED 且索引是
-    本函数命名的 Degree 专用索引（本次或先前 Degree 运行 CREATE，不含复用的
-    schema 同步索引）时，在**单一** deadline 内有界重试：≤2 次重提交、退避
-    2/4/8s 封顶 15s、每次退避中持续响应任务取消、重提交前复查 deadline。
-    FAILED 的原因无法区分「共享管理作业队列挤兑（重试可自愈）」与「永久错误
-    （schema 损坏/磁盘满等）」，因此**永久错误也会耗尽重试预算**——多花约
-    6 秒退避与 2 次重建提交后才以 502 暴露，不做错误原因分类。STOPPED/INVALID
-    仍视为终态直接上抛。FAILED 时附带 SHOW JOBS 诊断日志（排除自身 job id，
-    仅本空间可见，见 _log_degree_rebuild_diagnostics）。
+    本函数命名的 Degree 专用索引时，在**单一** deadline 内有界重试：≤2 次重
+    提交、退避 2/4/8s 封顶 15s、每次退避中持续响应任务取消。**恢复范围按命名
+    匹配（rebuild_name == index_name）判定，无法也无需证明索引由本次运行首建**：
+    先前 Degree 运行遗留的同名专用索引（本次 CREATE IF NOT EXISTS 幂等复用）
+    同样在恢复范围内；复用的 schema 同步索引（``{label}_idx`` 等）FAILED 仍为
+    终态。每一轮提交前（首次提交、瞬态重试、FAILED 恢复重提交）都过取消+
+    deadline 门禁，退避受剩余预算约束（见 _assert_degree_index_deadline）——
+    到期后不再发起任何新的重建提交。FAILED 的原因无法区分「共享管理作业队列
+    挤兑（重试可自愈）」与「永久错误（schema 损坏/磁盘满等）」，因此**永久
+    错误也会耗尽重试预算**——多花约 6 秒退避与 2 次重建提交后才以 502 暴露，
+    不做错误原因分类。STOPPED/INVALID 仍视为终态直接上抛。FAILED 时附带
+    SHOW JOBS 诊断日志（排除自身 job id，仅本空间可见，见
+    _log_degree_rebuild_diagnostics）。
+
+    预算口径（如实声明）：deadline 贯穿首次提交、瞬态重试、FAILED 恢复、状态
+    轮询与结果校验，gate 的是**新的重建提交**与轮询终止；在途请求（30s 固定
+    超时的 SHOW/LOOKUP 读取、REBUILD 写、图服务会话槽等待）不被 deadline
+    截断，可能超过 deadline 才返回——故整个调用的墙钟时长不严格 ≤ 超时秒数。
     """
     from infra.graph_db.exceptions import GraphConnectionError, GraphRequestError
 
@@ -805,7 +840,7 @@ def _ensure_degree_edge_index(client: Any, label: str) -> None:
     rebuild_submissions = 0
     rebuild_job_id: int | None = None
     while True:
-        _check_degree_cancelled()
+        _assert_degree_index_deadline(label, rebuild_name, deadline)
         try:
             rebuild_job_id = _nebula_job_id_from_result(
                 client.execute_write(f"REBUILD EDGE INDEX `{rebuild_name}`")
@@ -831,12 +866,7 @@ def _ensure_degree_edge_index(client: Any, label: str) -> None:
                 )
                 rebuild_name = existing_name
                 continue
-            if time.monotonic() >= deadline:
-                raise GraphAlgorithmError(
-                    f"关系类型 {label} 的索引 {rebuild_name} 在创建后未及时可见，请稍后重试",
-                    status_code=504,
-                ) from exc
-            _degree_pause(_DEGREE_INDEX_POLL_SECONDS)
+            _degree_index_backoff(_DEGREE_INDEX_POLL_SECONDS, deadline)
 
     rebuild_retries = 0  # FAILED 后的有界恢复重提交次数（不含首次提交）
     while True:
@@ -867,14 +897,10 @@ def _ensure_degree_edge_index(client: Any, label: str) -> None:
                 and rebuild_retries < _DEGREE_INDEX_REBUILD_RETRY_LIMIT
                 and time.monotonic() < deadline
             ):
-                _degree_pause(_degree_rebuild_backoff_seconds(rebuild_retries))
-                # 退避中已持续响应取消；醒来后先复查 deadline 再重提交。
-                if time.monotonic() >= deadline:
-                    raise GraphAlgorithmError(
-                        f"关系类型 {label} 的索引 {rebuild_name} 重建超过 "
-                        f"{int(_DEGREE_INDEX_BUILD_TIMEOUT_SECONDS)} 秒，请稍后重试",
-                        status_code=504,
-                    )
+                # 退避中持续响应取消，且至多睡到 deadline；醒来后过提交门禁，
+                # 到期后不再发起任何新的重建提交。
+                _degree_index_backoff(_degree_rebuild_backoff_seconds(rebuild_retries), deadline)
+                _assert_degree_index_deadline(label, rebuild_name, deadline)
                 rebuild_retries += 1
                 rebuild_job_id = _submit_degree_index_rebuild(
                     client, label, rebuild_name, deadline=deadline

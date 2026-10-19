@@ -2,17 +2,22 @@
 
 背景：定制版 Nebula 的管理作业（stats/索引重建）全局串行，共享图库多空间作业
 互相挤兑时，刚 CREATE 出来的专用索引 REBUILD 会很快 FAILED，队列空闲后重跑
-即自愈。修复后 FAILED 不再一律当终态：仅对本次运行自己的专用索引做 ≤2 次
-有界重试（单一 deadline、退避 2/4/8s 封顶 15s、退避中响应任务取消），
-SHOW JOBS 只落诊断日志且排除自身 job id。
+即自愈。修复后 FAILED 不再一律当终态：对 Degree 专用索引（按命名匹配，本次
+或先前运行 CREATE 的同名索引均在范围内）做 ≤2 次有界重试（单一 deadline、
+退避 2/4/8s 封顶 15s、退避中响应任务取消），每一轮提交前都复查取消与
+deadline，到期后不再发起任何新的重建提交；SHOW JOBS 只落诊断日志且排除
+自身 job id，诊断失败不影响控制流。
 
 测试用 httpx.MockTransport 伪造 trs-graph REST（风格同 test_trs_graph_client.py），
-驱动真实的 TRSGraphClient 走 /api/v1/query/read|write。
+驱动真实的 TRSGraphClient 走 /api/v1/query/read|write；提交时刻口径的回归
+用固定时钟（FakeClockTime 替换 graph_algorithm.time）+ 假客户端直接驱动
+_submit_degree_index_rebuild。
 """
 
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -20,6 +25,7 @@ import pytest
 
 from infra.graph_db.client import TRSGraphClient
 from infra.graph_db.config import TRSGraphSettings
+from infra.graph_db.exceptions import GraphRequestError
 from service import graph_algorithm
 
 SPACE = "degree_recovery_space"
@@ -39,6 +45,7 @@ class DegreeIndexRestStub:
         status_blips: int = 0,
         status_hard_error: bool = False,
         flip_cancel_on_show_jobs: bool = False,
+        show_jobs_error: bool = False,
     ) -> None:
         self.statuses = list(statuses or [])
         self.show_jobs_records = show_jobs_records or []
@@ -47,6 +54,7 @@ class DegreeIndexRestStub:
         self.status_blips = status_blips
         self.status_hard_error = status_hard_error
         self.flip_cancel_on_show_jobs = flip_cancel_on_show_jobs
+        self.show_jobs_error = show_jobs_error
         self.cancel_requested = False
         self.writes: list[str] = []
         self.reads: list[tuple[str, dict[str, str]]] = []
@@ -107,6 +115,8 @@ class DegreeIndexRestStub:
             if "SHOW JOBS" in query:
                 if self.flip_cancel_on_show_jobs:
                     self.cancel_requested = True
+                if self.show_jobs_error:
+                    return self._ngql_error("InternalError: job manager not ready")
                 return self._ok(list(self.show_jobs_records))
             if query.startswith("LOOKUP"):
                 return self._ok([{"s": "vertex-1"}])
@@ -305,3 +315,186 @@ def test_failed_on_reused_schema_index_is_terminal(fast_retries) -> None:
     # 两次 REBUILD：专用索引尝试（报 not found）+ 回退已有索引；FAILED 后不再重试
     assert len(stub.rebuild_writes) == 2
     client.close()
+
+
+# ---------------------------------------------------------------------------
+# Codex 复核 A：固定时钟回归——瞬态提交失败的退避跨过 deadline 后，
+# 不得再发出任何新的 REBUILD 提交（提交时刻序列必须全部 ≤ deadline）。
+# ---------------------------------------------------------------------------
+
+
+class FakeClockTime:
+    """替换 graph_algorithm.time 的固定时钟：sleep 只推进时钟，不真等。"""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+    def time(self) -> float:
+        return self.now
+
+
+class FakeRebuildClient:
+    """记录每次 REBUILD 提交时刻的假客户端；errors 队列依次抛瞬态错误后成功。"""
+
+    def __init__(self, clock: FakeClockTime, errors: list[str]) -> None:
+        self.clock = clock
+        self.errors = list(errors)
+        self.submit_times: list[float] = []
+        self.queries: list[str] = []
+
+    def execute_write(self, query: str) -> Any:
+        self.submit_times.append(self.clock.monotonic())
+        self.queries.append(query)
+        if self.errors:
+            raise GraphRequestError(self.errors.pop(0), status_code=500)
+        return SimpleNamespace(records=[{"New Job Id": 777}])
+
+
+def test_resubmit_backoff_crossing_deadline_times_out(monkeypatch) -> None:
+    """Codex 复现口径：deadline=1.0，首提交 t=0 瞬态失败，退避 2s 跨过 deadline。
+
+    修复前：t=2.0 仍会再提交一次且成功返回 job id（越界提交）。修复后：不再有
+    第二次 execute_write，按 504 超时上抛，提交时刻序列全部 ≤ deadline。
+    """
+    clock = FakeClockTime()
+    monkeypatch.setattr(graph_algorithm, "time", clock)
+    monkeypatch.setattr(graph_algorithm, "_DEGREE_INDEX_POLL_SECONDS", 2.0)
+    client = FakeRebuildClient(clock, errors=["Index degree_x_idx not ready"])
+    deadline = 1.0
+    with pytest.raises(graph_algorithm.GraphAlgorithmError) as error:
+        graph_algorithm._submit_degree_index_rebuild(
+            client, LABEL, "degree_x_idx", deadline=deadline
+        )
+    assert error.value.status_code == 504
+    assert "重建超过" in str(error.value)
+    assert client.submit_times == [0.0]  # 只有首提交，无越界重提交
+    assert all(t <= deadline for t in client.submit_times)
+    assert client.queries == ["REBUILD EDGE INDEX `degree_x_idx`"]
+
+
+def test_resubmit_transient_retry_within_budget_succeeds(monkeypatch) -> None:
+    """预算充足时瞬态重试照常工作：门禁不误伤合法恢复，提交时刻均 ≤ deadline。"""
+    clock = FakeClockTime()
+    monkeypatch.setattr(graph_algorithm, "time", clock)
+    monkeypatch.setattr(graph_algorithm, "_DEGREE_INDEX_POLL_SECONDS", 1.0)
+    client = FakeRebuildClient(clock, errors=["Index degree_x_idx not ready"])
+    deadline = 10.0
+    job_id = graph_algorithm._submit_degree_index_rebuild(
+        client, LABEL, "degree_x_idx", deadline=deadline
+    )
+    assert job_id == 777
+    assert client.submit_times == [0.0, 1.0]
+    assert all(t <= deadline for t in client.submit_times)
+
+
+def test_first_submit_backoff_crossing_deadline_times_out(monkeypatch) -> None:
+    """首次提交循环同口径：瞬态失败退避跨过 deadline → 504，无第二次 REBUILD。"""
+    clock = FakeClockTime()
+    monkeypatch.setattr(graph_algorithm, "time", clock)
+    monkeypatch.setattr(graph_algorithm, "_DEGREE_INDEX_POLL_SECONDS", 2.0)
+    monkeypatch.setattr(graph_algorithm, "_DEGREE_INDEX_REBUILD_BACKOFF_BASE_SECONDS", 0.0)
+    monkeypatch.setattr(graph_algorithm, "_DEGREE_INDEX_BUILD_TIMEOUT_SECONDS", 1.0)
+    stub = DegreeIndexRestStub(
+        statuses=["FINISHED"],
+        rebuild_errors=["Index degree_x_idx not ready"],
+        show_jobs_records=OTHER_SPACE_JOBS,
+    )
+    client = _make_client(stub)
+    try:
+        with pytest.raises(graph_algorithm.GraphAlgorithmError) as error:
+            graph_algorithm._ensure_degree_edge_index(client, LABEL)
+    finally:
+        client.close()
+    assert error.value.status_code == 504
+    assert "重建超过" in str(error.value)
+    assert len(stub.create_writes) == 1
+    assert len(stub.rebuild_writes) == 1  # 退避受剩余预算约束，到期后未再提交
+
+
+# ---------------------------------------------------------------------------
+# Codex 复核 B：恢复策略范围（命名匹配=本次或先前 Degree 运行的专用索引）
+# 与终态/诊断场景的逐一证据。
+# ---------------------------------------------------------------------------
+
+
+def test_failed_on_prior_run_dedicated_index_recovers(fast_retries) -> None:
+    """先前 Degree 运行遗留的专用索引（本次 CREATE IF NOT EXISTS 幂等复用）
+    FAILED 同样按命名匹配恢复——策略范围不能以「仅本次首建」概括。"""
+    dedicated = graph_algorithm._degree_index_name(LABEL)
+    existing = [{"Index Name": dedicated, "By Edge": LABEL, "Columns": []}]
+    stub = DegreeIndexRestStub(
+        statuses=["FAILED", "FINISHED"],
+        existing_indexes=existing,
+        show_jobs_records=OTHER_SPACE_JOBS,
+    )
+    client = _make_client(stub)
+    graph_algorithm._ensure_degree_edge_index(client, LABEL)
+    assert len(stub.create_writes) == 1  # CREATE IF NOT EXISTS 幂等提交一次
+    assert len(stub.rebuild_writes) == 2  # FAILED → 命名匹配 → 重提交恢复
+    assert all(f"`{dedicated}`" in q for q in stub.rebuild_writes)
+    client.close()
+
+
+def test_concurrent_first_create_with_peer_rebuild_still_recovers(fast_retries) -> None:
+    """并发首建：双方 CREATE IF NOT EXISTS 幂等；本方 REBUILD 先撞上对方在建
+    （转入等待、不重复提交），随后 FAILED（队列挤兑），仍按命名匹配恢复。"""
+    dedicated = graph_algorithm._degree_index_name(LABEL)
+    existing = [{"Index Name": dedicated, "By Edge": LABEL, "Columns": []}]
+    stub = DegreeIndexRestStub(
+        statuses=["FAILED", "FINISHED"],
+        existing_indexes=existing,
+        rebuild_errors=["Job is running: rebuild in progress"],
+        show_jobs_records=OTHER_SPACE_JOBS,
+    )
+    client = _make_client(stub)
+    graph_algorithm._ensure_degree_edge_index(client, LABEL)
+    assert len(stub.create_writes) == 1
+    assert len(stub.rebuild_writes) == 2  # 撞在建被拒一次 + 恢复重提交一次
+    client.close()
+
+
+def test_stopped_status_is_terminal_without_retry(fast_retries) -> None:
+    """STOPPED 是终态：不触发恢复重试，直接 502，重建提交只有一次。"""
+    stub = DegreeIndexRestStub(statuses=["STOPPED"] * 3, show_jobs_records=OTHER_SPACE_JOBS)
+    client = _make_client(stub)
+    with pytest.raises(graph_algorithm.GraphAlgorithmError) as error:
+        graph_algorithm._ensure_degree_edge_index(client, LABEL)
+    assert error.value.status_code == 502
+    assert "重建状态为 STOPPED" in str(error.value)
+    assert len(stub.rebuild_writes) == 1
+    client.close()
+
+
+def test_invalid_status_is_terminal_without_retry(fast_retries) -> None:
+    """INVALID 是终态：不触发恢复重试，直接 502，重建提交只有一次。"""
+    stub = DegreeIndexRestStub(statuses=["INVALID"] * 3, show_jobs_records=OTHER_SPACE_JOBS)
+    client = _make_client(stub)
+    with pytest.raises(graph_algorithm.GraphAlgorithmError) as error:
+        graph_algorithm._ensure_degree_edge_index(client, LABEL)
+    assert error.value.status_code == 502
+    assert "重建状态为 INVALID" in str(error.value)
+    assert len(stub.rebuild_writes) == 1
+    client.close()
+
+
+def test_show_jobs_diagnostics_failure_does_not_block_recovery(fast_retries, caplog) -> None:
+    """诊断（SHOW JOBS）读取失败只落告警日志，不影响恢复控制流。"""
+    with caplog.at_level("WARNING", logger="service.graph_algorithm"):
+        stub = DegreeIndexRestStub(
+            statuses=["FAILED", "FINISHED"],
+            show_jobs_records=OTHER_SPACE_JOBS,
+            show_jobs_error=True,
+        )
+        client = _make_client(stub)
+        try:
+            graph_algorithm._ensure_degree_edge_index(client, LABEL)
+        finally:
+            client.close()
+    assert len(stub.rebuild_writes) == 2  # 诊断失败后恢复照常发生
+    assert any("SHOW JOBS 诊断读取失败" in r.getMessage() for r in caplog.records)

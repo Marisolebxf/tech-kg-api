@@ -1658,9 +1658,17 @@ class ManualReviewService:
         （``entity_write_guard.vid_write_lock_sync``，键
         ``kg:entity:vid:{space}:{label}:{md5(vid)}``，SET NX PX + token 比删），
         锁内完成 FETCH→合并→INSERT 整个读改写窗口——工作流正写同 VID 时本
-        路径等待/超时拒绝，绝不并发覆盖。拿不到锁 / FETCH 失败 / 图上旧属性
-        无法解析 → 抛错（fail-closed 零写入，submit 事务回滚、案件状态不前
-        移，审核员重新提交即重试；合并后 INSERT 幂等安全）。
+        路径等待/超时拒绝，绝不并发覆盖。锁无心跳线程、走**边界续租**：
+        FETCH 返回后若耗时超过 TTL/3 先续租拉长写窗口，**INSERT 派发前必须
+        续租并校验持有权**——临界区跨过 TTL（慢图请求、两次 FETCH、线程暂
+        停、网络阻塞、短 TTL 配置）时租约已过期、另一写者可获同键锁写入，
+        按旧快照继续整标签 INSERT 会静默清掉对方列，故续租失败抛
+        ``VidWriteLeaseLostError`` 禁止新的 INSERT。拿不到锁 / FETCH 失败 /
+        图上旧属性无法解析 / 租约丢失 → 抛错（fail-closed 零新增写，submit
+        事务回滚、案件状态不前移，审核员重新提交即重试；合并后 INSERT 幂等
+        安全）。**在途边界**：派发后的 INSERT 无法取消、事后抛错不能回滚图
+        库——「续租通过 → 派发后才失效」的残余窗口与 #526 异步版派发跨过期
+        窗口同级（续租刚把 TTL 拉满），此处不假装能回滚。
         """
         import json as _json
         from datetime import datetime as _dt
@@ -1686,8 +1694,11 @@ class ManualReviewService:
         # not null field doesn't have a default value）——按快照记载的展示名补
         display_name = str(snapshot.get("name") or c.object_name or "").strip()
 
-        def _locked_write() -> None:
+        def _locked_write(lease: _guard._SyncVidLease) -> None:
             old = self._fetch_existing_props(client, node_label, vid)
+            # FETCH 耗时超过阈值（默认 TTL/3）→ 先续租拉长后续写窗口（慢图
+            # 请求下临界区可能逼近 TTL）
+            lease.refresh_if_aged()
             # 列级合并：目标既有列保留（create_time/update_time 除外，仍由
             # 平台每次刷新），扣留行非空列覆盖
             merged = {
@@ -1716,12 +1727,16 @@ class ManualReviewService:
             cols = ", ".join(f"`{key}`" for key in merged)
             values = ", ".join(_ngql_value(merged[key]) for key in merged)
             quoted_vid = _json.dumps(vid, ensure_ascii=False)
+            # INSERT 派发前必须续租并校验持有权：临界区跨过 TTL 时租约已被
+            # 他人接管，按过期快照整标签 INSERT 会清掉对方列且不抛错——续
+            # 租失败即熔断（零新增写，submit 回滚、重提重试）
+            lease.ensure_lease()
             client.execute_write(
                 f"INSERT VERTEX `{node_label}`({cols}) VALUES {quoted_vid}:({values})"
             )
 
-        with _guard.vid_write_lock_sync(graph_space, node_label, vid):
-            _locked_write()
+        with _guard.vid_write_lock_sync(graph_space, node_label, vid) as lease:
+            _locked_write(lease)
 
     def direct_decide(
         self,

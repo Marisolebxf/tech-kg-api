@@ -656,3 +656,46 @@ def writable_graph_request():
         yield
     finally:
         request_can_write.reset(token)
+
+
+def test_persist_relations_follows_business_plane(monkeypatch: pytest.MonkeyPatch) -> None:
+    """业务面请求落盘跟随 TRS_GRAPH_BUSINESS_*：读写同库同空间。"""
+    from service.graph_space_context import business_data_plane, selected_graph_space
+
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "tenant_graph")
+    monkeypatch.setenv("TRS_GRAPH_BUSINESS_BASE_URL", "http://bridge:8190")
+    monkeypatch.setenv("TRS_GRAPH_BUSINESS_SPACE", "dev")
+    graph = MagicMock()
+    graph.get_node_edges.return_value = []
+    space_token = selected_graph_space.set("dev2")
+    plane_token = business_data_plane.set(True)
+    try:
+        with patch(
+            "application.expert_alumni_relation.TRSGraphClient", return_value=graph
+        ) as client:
+            result = ExpertAlumniRelationApplication._persist_relations(_alumni_payload())
+    finally:
+        business_data_plane.reset(plane_token)
+        selected_graph_space.reset(space_token)
+
+    settings = client.call_args.args[0]
+    assert settings.base_url == "http://bridge:8190"
+    assert settings.space == "dev"
+    graph.create_edge.assert_called_once()
+    assert result["space"] == "dev"
+
+
+def test_persist_relations_degrades_gracefully_on_connect_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """连接失败也是落盘失败：不阻断查询响应，下次查询重试。"""
+    monkeypatch.setenv("TRS_GRAPH_SPACE", "dev")
+    monkeypatch.delenv("TRS_GRAPH_BUSINESS_BASE_URL", raising=False)
+    graph = MagicMock()
+    graph.connect.side_effect = RuntimeError("bridge unreachable")
+    with patch("application.expert_alumni_relation.TRSGraphClient", return_value=graph):
+        result = ExpertAlumniRelationApplication._persist_relations(_alumni_payload())
+
+    graph.create_edge.assert_not_called()
+    assert result == {"space": "dev", "edgeType": "ALUMNI", "created": 0, "updated": 0, "total": 0}
+    graph.close.assert_called_once()

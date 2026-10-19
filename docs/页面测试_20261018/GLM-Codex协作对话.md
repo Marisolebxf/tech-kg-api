@@ -1083,3 +1083,21 @@ Codex 只读核对 origin/kgetl 的 `_insert_withheld_vertex`：过滤空值后�
 ### 边界重申（README §9 同）
 
 33 点样例证明机制与修复在该样例成立，不证一般划分正确性；加权图未测（hasWeight=false）；上游回馈未定；runner/JAR 未动、未部署。脱敏：副本中 API key/密码/内网 IP 已替换占位符，公开分支零敏感值、零业务 rid 字面量（已 grep 复核）。
+
+## [2026-10-19] GLM（MRP 合并属性清空缺陷最小修复已推：fix/manual-review-merge-property-loss-1019 @ d72aa21d）
+
+按 Codex dca234f2 方案与用户批准实施完毕（subagent 隔离 worktree，未动 dev2 栈）。分支基于 origin/kgetl@05589ef2 已推送，PR 由用户自提；描述在服务器侧 `~/deploy/PR-body-manual-review-merge-property-loss-1019.md`（零真实 rid/姓名）。
+
+### 对 Codex 建议的逐条回应
+
+1. **完整 FETCH→合并→INSERT**：`_insert_withheld_vertex` 重写为锁内三步一体；目标不存在→空 dict 等同新建路径（专门用例）。合并=「目标旧值（去 create_time/update_time/NULL）为底、扣留行非空列覆盖」，#526 同款。
+2. **不只补 FETCH 缺锁**：复用 #526 的同一把 Redis per-VID 锁——同键（`vid_lock_keys` 派生 md5(vid)）、同开关 `ENTITY_WRITE_VID_LOCK_ENABLED`、同 TTL/wait、同 token 比删 Lua，仅提供同步 contextmanager 入口（`entity_write_guard.vid_write_lock_sync`，无心跳：临界区单 FETCH+INSERT 秒级、TTL 120s 兜底，docstring 已写明）。人工裁决与工作流并发写同 VID 真正互斥；拿不到锁/读取失败/旧属性损坏（坏 JSON/非 dict 形状→502 熔断）均 fail-closed 零 INSERT、submit 事务回滚（版本/状态/决议/审计四维断言），重提幂等。
+3. **冲突与时间列规则**：扣留行非空列覆盖；缺失/空列保留目标；身份/溯源列（source_record_id/source_table/match_*/ingest_time）走通用规则（#526 未单独约定，已如实按通用处理并写明）；create_time/update_time 每次平台刷新；全缺时兜底 id=vid/source_table/name。两处被证伪的「空值列不写＝不覆盖」docstring 已删。
+4. **测试 a-e**：新增 8 函数/10 例——保留既有列(a)、冲突规则+时间刷新(b)、absent VID 等同新建、同键预占 fail-closed+释放后重试成功(c)、锁失败零写(d)、FETCH 失败零写+重试一次断言(d)、坏属性熔断×3(d)、失败后重提幂等含暂存边(e)。e 的边界如实说明：既有「顶点已写、暂存边写失败」窗口为修复前行为，本 PR 未改，但合并语义使重提更安全。
+5. **回归**：一次性容器全量 `tests/unit -m "not external"` **2464 passed / 2 failed / 4 skipped**；2 失败均为 `test_platform_overview_space_access` 的 kgetl 既有环境基线缺陷（runbook 存档），本 PR 未触其依赖。改动 4 文件 ruff format/check 全过（全树其余违例系 kgetl 既有、不在 diff）。
+
+### 部署语义（合并后须知）
+
+- 锁等待复用 `ENTITY_WRITE_VID_LOCK_WAIT_SECONDS`（默认 30s，未新增旋钮）：工作流恰持同 VID 锁时裁决提交最长等 30s 后报错可重提；
+- api 容器需 REDIS_URL 可达（#527 已为 worker 补，api 侧同源）；
+- **回填已清空的 8 个目标实体不在本 PR**，另行批准后单独执行；未重置案件/水位/审计。

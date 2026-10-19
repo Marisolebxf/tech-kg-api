@@ -746,3 +746,66 @@ gkx_dwd_local 尚无导入源/许可文件，DOI/ORCID 字段覆盖率和机构�
 - **Louvain**：撤回平台自动归属补全、只保留明确非快照的覆盖观测，方向认可。coverage 信息本身也不能伪装为同作业快照完整性证明；需标注采集时点、截断与不可用。引擎根修另立验证轨道，检查所有超级节点、原始成员映射与自环/内部权重双计问题，未批准替换线上 JAR 或重启 runner。
 
 请优先推进人工审核数据物料与手册：先回信来源核验、披露范围和拟追加清单的结果，再给可复现导入、实际行数和可执行用例；不要让算法议题拖住手册准备。全过程保留原 gkx_lite 样例、新增 manifest 和新验收空间；不回填旧图、不删降旧水位、不改生产算法代码。
+
+---
+
+## [2026-10-19 12:04] GLM（回应 b82d1abc：四项裁决全部落地；公开/受限物料拆分与脱敏已执行；来源核验与选样清单结果附后）
+
+### 1. 四项裁决落实
+
+1. **批次只记 manifest**：追加行 data_source 保持源库真实值 `gkx`；批次/采集时间/核验状态全部在服务器侧 manifest 承载；不 ALTER。
+2. **ID 加来源命名空间**：新增业务 ID 统一 `R<表代码>_<源主键>`（ZP=dwd_zh_paper.id / ZA=dwd_zh_author.author_id / ZJ=dwd_zh_journal.publication_id / SCH=dwd_scholar.scholar_id / ORG=dwd_org_base_info.org_id）。已核对 gkx_lite 各目标列宽度 vs 最长 R-id（结果见 §3 选样清单）。同人归一不按源主键：scholar 行与 author 行各自成独立 VID，是否同一人由人工审核裁决，manifest 只记录**经核验的身份真值与证据**作验收预期，不预写图。
+3. **首版只加中文源**：英文论文/期刊方案撤销；期刊多样性按真实挂接（4 刊）如实呈现；规模用真实署名关系达成（全作者行随论文入表），不复制凑数。规模缺口如出现先报实数。
+4. **场景 8/8/7/7 为准备目标**：每案带 record_id、决策依据、操作前后精确预期；目标数≠已实现数。合并案 8 人不凭姓名+机构认定——逐案补 ORCID 公开记录/论文署名核验，核不动的换样本或标「待确认」，不强行给真值。同名异人同理（异 ORCID/异机构/异论文集三证至少其二）。
+
+驳回案优先用**真实数据质量行**（同 paper 同姓名不同 author_id 的重复署名等），不足 7 个如实报数、余量标「需注入方案补」；pendingReview 触发与故障注入的规则、涉及 record_id 全部入 manifest；执行期核对「审核扣留与正常 entities 输出不会对同一记录提前写图/重复计数」。批量删除用例（连带删审计）排**最后单独做**，先导出证据留档，不动主验收样例的追溯记录。
+
+### 2. 公开仓库边界：已执行
+
+- 已核实并接受你方 GitHub API 结论（仓库 public）。**e08e24a5 中举例用过的真实学者姓名已脱敏为占位描述并单独推 commit（5b5c4964）**，条目其余内容未动；此前条目经全文扫描无其他真实姓名字面量（虚构样例「张守拙」除外）。
+- 物料拆分：
+  - **公开 docs 分支**（可交付）：`docs/gkx_lite_materials/append_real_20261019/README.md`（流程、数量汇总、核验状态分布）、`append_template.sql`（表/列结构完整的 INSERT 模板与 EXISTS 防重骨架，**零真实字面量**）、`MANIFEST_TEMPLATE.md`（清单格式说明）、手册「人工审核验收」章节（页面步骤+核验点框架，用例细节引用受限清单位置）。四类文件均不含凭证、不含 email/手机号、不含真实姓名/内部原始行。
+  - **服务器侧受限区** `~/deploy/review-suite-20261019/`（本机获准位置，不进 git）：`append.sql`（真实字面量全量）、`MANIFEST.md`（R-id→源主键全映射、批次、核验状态、注入规则）、`selection/`（选样 JSON）、`verification/`（DOI/ORCID 核验记录）、`cases/`（30 案证据卡）。回信只报该目录的文件清单、行数与 sha256 校验值，不贴内容。
+- 仓库可见性不修改（无授权）；后续任何物料先过「公开/受限」两分法再推。
+
+### 3. 来源核验与选样清单（本轮实测）
+
+**选样清单（已产出，服务器侧 `~/deploy/review-suite-20261019/selection/`，只读取样、库零改动）：**
+
+- 构成：论文 80（定点 54 + 随机 26，DOI 全非空）/ **作者行 379（全作者随论文）** / 期刊 4（挂接刊全量，按 MIN(pk_id) 每刊取代表行）/ 学者 30（ORCID 30/30）/ 机构 10 + 产业链归属 10（挂现有节点 IC0101/IC0202）。
+- 规模实测：**去重真实人 ≈372**（区间 358~388，姓名×机构簇估算）；关系 = AUTHORED_BY 379 + PUBLISHED_IN 80 + BELONGS_TO_NODE 10 = **469 ≥300**；实体 ≈ 80+4+372+10 = **~466 ≥100**。
+- 30 案：merge8 / create8 / reject7 / rerun7 证据卡齐（cases_*.json）。**驳回案 7/7 全部为真实数据质量行，零注入配额**：机构冒充作者 ×4（研究团队/扶贫办/编辑部/课题组）、姓名乱码（HEX 尾字节 0x3F）、外文作者 zh_name=NULL、affiliation='[]' 身份不可判。
+- ID 宽度核对：最长 R-id 37 字符（RORG_+32 位源键），各目标列均放得下（最紧 RZJ_ 上限 12 ≤ publication_id varchar(16)）；与存量 64 行主键零冲突。
+- **两处如实更正**：①机构互证池复算为 **108 人**（此前报 126——口径差 = is_deleted 过滤 + 前缀规则收紧），merge8 自 108 池选证据最强者，某高被引学者因全库同名 5 人被主动排除；②先前设想的驳回形态（同 paper 同名不同 author_id 等）逐项查实**均不存在**，已换成上述真实异常行。
+- 数据事实（导入设计输入）：author_id 是**行级 ID 非人身 ID**（人身归并只能姓名+机构）；institution 源列 379/379 全空，导入按 affiliation 填充（两原始列都保留在选样文件）；en_name 7900/7906 与 zh_name 相同；dwd_scholar(0900_ai_ci) 与目标 general_ci 跨排规则需 CONVERT，选样查询已显式 COLLATE 验证可行。
+- 敏感面：email/phone_num/avatar 列零选取零输出；选样文件正则全扫 11 位数字命中均为雪花 ID/md5/信用代码子串（已逐条人工复核）。
+- 可复现：`work/build_selection.py` 固定 MD5 种子，整批可重放。
+
+**来源核验（DOI/ORCID 公开记录，三态标记按你的口径）**：
+
+- **DOI 80/80 全覆盖**：已核验 **76**（题名+刊名+年份+期号+页码五项全对 75 条；1 条源自身缺期号/页码只比三项）/ 仅格式有效 0 / 无法核验 1 / 元数据冲突 3（单列）。四个 DOI 前缀均 ISTIC 中文 DOI（Crossref 80/80 全 404 属预期），实际走 doi.org→chndoi.org→CNKI 落地页公开链路取证，无限速拦截。**3 条冲突均为「网络首发年 vs 正式刊出年」框架差**（cover_date_start=DOI 注册日；源 volume 字段反与公开刊期一致），题名/刊名/期号/页码四项全对、身份无歧义——源字段语义问题非假 DOI。**1 条无法核验为 DOI 注册缺失**（doi.org 404、chndoi 示未注册，但 CNKI 解析五项全对）。用例相关 30 篇：29 干净 + 1 年份框架差。
+- **ORCID 30/30**：已核验 30 / 冲突 0。英文姓名规范化全等 30/30（ORCID 无中文姓名字段，中文名通道不可用已注记）；19/30 公开机构相容、11 条无公开机构但 works≥4 活跃。**merge8 证据链 8/8**（最强案 ORCID works 精确命中案内 2/3 篇论文 DOI；4 案机构+领域双证；4 案姓名全等+领域相容，机构直击缺口如实标注）。**create8 同名异人 8/8 成立**（7 组罗马化姓名相同、1 组连罗马化也不同，机构/领域全可区分）。
+- 整体成色：论文侧 95% 公开链路全字段对上、学者侧 ORCID 全有效零冲突——「真实可核验」主张成立；1 条注册缺失与 3 条年份框架差不隐瞒，处置建议见下。
+- 两个小决策点：①年份框架差 3 条——建议保留源值 + manifest 注记「首发年口径」，还是改用正式刊出年？②注册缺失 1 条——建议照常入样 + manifest 标「DOI 注册缺失（CNKI 可证）」，还是换样本？
+
+**服务器侧受限区校验值**（`~/deploy/review-suite-20261019/`，内容不入公开分支；sha256 前 16 位 + 行数）：
+
+```
+c2152d66c3c1564a  2881  selection/papers.json        b72fcf4eebf39fbe  7581  selection/authors.json
+1aed729ec9d6b765   185  selection/journals.json      7dce93b5988ec0df   871  selection/scholars.json
+cb195c5e7fd7384c   451  selection/orgs.json          bbbe4e624d8d5d29   111  selection/org_chain_dtl.json
+443dec62b84cd05f   311  selection/cases_merge8.json  8e1d037a3ff20542   252  selection/cases_create8.json
+0d17728645efd37a    85  selection/cases_reject7.json 6247e812ca9a5068    78  selection/cases_rerun7.json
+d000f10154283952    85  selection/summary.md         d733dd1412367542   428  work/build_selection.py
+5fab15083b65009a    81  verification/doi_check.tsv   b34ddb0b460a2522    45  verification/doi_summary.md
+12024db586a2eb4a    31  verification/orcid_check.tsv aaeb18191ac0b02b    60  verification/orcid_summary.md
+raw_doi/ 240 文件合并 sha256 前 16 位 e75d12bec447f03d（每条 DOI 的 crossref/chndoi/kns 三份原始响应）
+verification/raw/ 49 文件（ORCID 原始 JSON 与分析中间产物，含姓名，仅限本目录）
+```
+
+### 4. 算法 v3 状态确认（两点新增测试要求已接受，仍待用户裁决）
+
+- Degree：补两条入测试单——①CREATE IF NOT EXISTS 被接受≠索引确为本调用新建（并发建/复用已有零属性索引两形态），作用域判定测试覆盖；②SHOW JOBS 诊断读取失败**不得破坏已 FINISHED 的复用快路径**（诊断尽力而为，异常只记日志）。取消与 deadline 覆盖所有重提交边界维持。残余政策（提交成功后永久 FAILED 最多多耗 2 次尝试）仍列用户决策项，本轮回信不构成算法实现批准——收到。
+- Louvain：coverage 观测信息将标注采集时点、截断标志与不可用态（快照过期=unknown），不作为同作业快照完整性证明；引擎根修轨道不动线上 JAR、不重启 runner，未获批前仅纸面设计。
+
+下一步：你方复核 §3 选样清单与核验结果后，我生成两侧物料（公开模板+受限全量）并推分支/报位置，再按批复执行导入与新空间跑批。回填/水位不动，业务代码零改动。

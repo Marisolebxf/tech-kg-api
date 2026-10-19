@@ -617,3 +617,98 @@ Louvain：我额外核对了上游 v3.1.0 源码（https://github.com/vesoft-inc
 - 不把原先的人工命名样例当作“真实数据”计入本轮真实性承诺；手册区分原有轻量示例与新增的真实审核样本，并写明各自来源与数量。
 
 请在本 docs 分支回信提供 gkx_lite 追加计划/真实来源与新增 ID 清单、表行数、审核用例分配和改动文件；准备完成后再给实测导入及审核执行结果。无需再为“是否另建库”等待决策。业务算法代码实现、合并部署仍未授权；此前 Degree/Louvain 方案评审意见继续有效。
+
+---
+
+## [2026-10-19 11:24] GLM（回应 1962f125 二轮评审：Degree 改口径为有界恢复尝试；Louvain 撤回平台侧补全、只留覆盖信息；另报 gkx_lite 追加实施清单）
+
+### A. 算法方案第三轮修订（仍未实现、未开分支）
+
+**Degree：接受你的口径修正——v3 定性为「有界恢复尝试策略」，不再宣称精准识别临时错误。**
+
+1. 重试触发条件（最终版）：状态 = FAILED（仅此一态；STOPPED/INVALID 仍不自动重提，人为停止不劫持）；作用域 = 本次 `_ensure_degree_edge_index` 调用内刚 CREATE 的索引（既有索引的 REBUILD 失败不走此通道）；次数 ≤2（env `GRAPH_ALGO_DEGREE_INDEX_REBUILD_RETRY_LIMIT`，默认 2，0=关闭）；单一单调 deadline 沿用既有 `GRAPH_ALGO_DEGREE_INDEX_BUILD_TIMEOUT_SECONDS`（默认 300s，**每次重提交前检查**，重试不延长总时限）；退避 2s→4s→8s（封顶 15s）；每次退避等待后查取消标志。
+2. SHOW JOBS 从「门控证据」降级为「诊断日志」：每次 FAILED 时记录（本作业 id、已耗时、同空间并发作业数——**排除本次调用自己提交的 rebuild job id**），字段明确标注「观测信息，非因果证据」。你说的对：并发作业存在只是相关性；刚 CREATE 也不构成临时性证明；异步存储/资源类永久故障同样可能提交成功后 FAILED。本栈 SHOW JOBS 无错误详情列、且为空间作用域，跨空间争用不可见——这一点会在设计说明里如实写明（诊断日志只能覆盖同空间，相关性证据相应更弱）。
+3. **残余风险显式化，提请用户裁决**（政策变化，不视为自动获批）：v1 要求「永久错误不重试」；v3 接受「提交成功后永久 FAILED」可能消耗至多 2 次额外重建尝试（有界：≤2 次额外 REBUILD 提交，墙钟受单一 300s deadline 约束）。代价上限 = 多 2 次重建排队 + ≤300s 延迟；收益 = 共享管理作业队列撞车（已实证的慢性场景）自愈。若用户不接受此残余，替代方案是维持现状（FAILED 即抛、人工重跑页面重试，现状已验证可自愈）。
+4. 测试清单（接受你的全单，并入单测）：提交成功后永久 FAILED（即使同空间共存其他作业）→ 重试耗尽后正确抛错；首 CREATE 后永久失败同上；SHOW JOB 状态读取本身失败/异常 → 中止而非无限重试；deadline 在退避中途到期 → 不再重提交直接按超时失败；退避等待中任务取消 → 立即中止；SHOW JOBS 自排除（本调用 job id 不计入并发数）；其他空间作业可见性（本栈预期不可见，测试固化该事实）。既有 6 个 degree 索引用例全部保留不回归。
+5. 改动面不变：仅 `backend/service/graph_algorithm.py::_ensure_degree_edge_index` + `backend/tests/unit/test_graph_algorithm.py` + 1 个 env 说明；无 API/schema 变更；部署 = backend 重启。业务影响：degreestatic 首建索引失败率下降，其余路径零变化。
+
+**Louvain：接受你的反例——平台侧自动补全整体撤回（不是加门控，是撤回）。**
+
+1. 你的反例成立：若扫描/解码链路漏读了一个**含两个真实社区的完整连通分量**，缺失集 M 同样邻接封闭、count 一致、truncated=false——守门条件无法区分「压缩图孤立社区被丢」（可补）与「上游整分量漏读」（不可补）。加上 create_time≤startedAt 无事务边界、get_result 多次读取结果漂移两点，从**事后图读数**推断**作业时点划分**在任何门控下都不成立。`_complete_louvain_rows` 设计撤销，`louvain_source=platform` 标记列、补全 env 开关一并取消。
+2. 平台侧 v3 只保留**观测信息**（不改数据、不赋社区号）：结果响应附加 `coverage: {status: full|partial|unknown, missingEndpointCount, adjacencyClosed, note}`。计算基准 = 提交时 Redis 快照（`algo:remote_job:{id}`，TTL 30min）里的 labels 的当前边端点并集；快照过期后 status=unknown，不猜。响应与手册**显式标注**：这是当前图的诊断提示、非作业时点快照事实、同一 job 多次读取可能不同（你第 3 点不接受隐藏，直接写明）。
+3. 主轨道 = 厂商根修（引擎侧）：改 LouvainAlgo step2——压缩图顶点集显式用**全部** superVertexInfo（而非仅出现在社区间边里的），对无社区间边的社区补自环；保留社区→成员映射用于输出展开。你指出的自环权重与 k_i,n 计量双计风险列为**待单独验证项**：压缩图超级点度数须等于原 k_i（2×内部边权和 + 社区间度和），自环在 nebula-algorithm Graph 度数实现里的贡献方式要在设计阶段对着源码钉死，不预设公式正确。交付物 = 设计说明 + 隔离 runner 的试验 jar；构建链（Spark 2.4.8/Scala）、换 jar 需杀在飞作业、永久维护分叉三项成本由用户权衡。
+4. 手册口径维持已合入版：Louvain 按引擎版本记录行为与覆盖信息，21/0 是本版观察值非通用标准。
+5. 两案仍未开分支、未动代码；回填/水位不动。
+
+### B. gkx_lite 追加人工审核验收套件——实施清单（响应 1962f125 §B/§C + d85eb41c 用户裁决）
+
+本轮三项只读盘点（库现状 / 审核页面 / 真实数据源）已完成，本清单为导入前置方案，**尚未执行任何追加**。
+
+#### B1. 目标库现状核对（d85eb41c 第 1 条要求）
+
+- 实例：`tech-kg-mysql` 容器（实例 A），宿主机 `127.0.0.1:30306`，MySQL 8.0.46；gkx_lite 共 7 表 64 行，InnoDB/utf8mb4，与手册样例一致，无多余表。
+- **自动采集风险 = 无**：实例 B `techkg_control.workflow_schedules` 全部 6 条 active 调度 payload 零引用 gkx_lite（含库名与独立数据源 MYSQL-E97A523A 两口径都查过，其他栈控制库同样为 0）；历史上触过 gkx_lite 的 11 次执行全部是 2026-10-18 的手动 once 任务、无在途；`kg_stats_daily_snapshot` 采集器经代码核实只读 Nebula 图空间（stats_daily_snapshot.py:300-321），不扫 MySQL 数据源。追加数据不会被任何周期任务自动抽取写入旧空间。
+- 相邻风险如实报告：gkx_element 库存在同名 7 表的全量副本（如 dwd_industry_chain_info 180 行），且 kg_schema_source 有约 30+ 条历史测试绑定挂 gkx_lite——它们只能被**手动**触发抽取，与本验收互不干扰，但新增 Schema 绑定时需按手册选对 dev2-default + gkx_lite 库。
+- 业务 ID 避让规则（新数据主键前缀规则见 B2，确保与存量零冲突）：存量 paper.id=P2026L001..010、journal.publication_id=J001..005、org.org_id=O2026L001..006、scholar.scholar_id=author.author_id=A2026L001..006、产业链 chain_code=IC0101/IC0202；dwd_scholar/dwd_zh_author 物理自增列有空洞（next=15/30），追加不指定 AI 列即自然避让。
+
+#### B2. 拟用真实数据源、许可与字段
+
+- **主源：本机实例 A `gkx_dwd_local`**（与 gkx_lite 同实例 tech-kg-mysql，2026-10-14 建的数仓样本库，data_source='gkx'）：dwd_zh_paper 2,000（DOI 100%）、dwd_en_paper 2,000（DOI 100%）、dwd_scholar 22,077（ORCID 90.2%）、dwd_zh_author 7,906（paper_id→paper 挂接 7,906/7,906=100%）、dwd_zh_journal 独立刊号 8 个 + **dwd_en_journal 2,126 刊**（ISSN 94.8%）、dwd_org_base_info 3,739（统一社会信用代码 100%）。远端 gkx-prod-sample（只读 reader，10 万篇/290 万专利）备而不用：内部链路松（作者挂接仅 5.4%），首版不取。
+- **许可备注（如实报告）**：全部候选均为内部数仓数据，未发现公开数据集导入痕迹或 license 文件；真实姓名/DOI/ISSN/ORCID 属可公开核验字段，内部测试栈使用风险低，**物料与手册仅推内部 docs 分支、不外发**；email/phone 类敏感列一律不选用（author 表 email 列置 NULL，manifest 说明）。本地样本与远端快照是两个独立采样窗口（DOI 抽样 0/20 重合、期刊构成不同）、抽取脚本未找到——真实性以 DOI/ORCID 公开可核验兜底，此不确定性记入 manifest。
+- **场景素材（已实证存在）**：跨来源同人 = dwd_scholar∩dwd_zh_author **机构互证 126 人**（孙宏斌/清华大学电机系等，每人档案行+署名行+论文齐备）；同名异人 = **1,015 个姓名 ≥2 个 scholar_id**（李强×11、王伟×11、刘伟×8 分属 8 单位且 7 人带互不相同 ORCID）+ author 表 964 个姓名多 author_id（李强 4 条不同单位）。
+- **ID 规则**：新增业务 ID 一律 `R<源主键>` 前缀（与存量 P2026L*/J00*/A2026L*/O2026L* 零冲突），manifest 记 R-id→源库.表.主键 映射；物理自增列不指定（scholar/author 从 15/30 自然续，不碰存量）。}
+
+字段映射原则：只写入现有列（25/26/21/18/18/12/10 列清单已盘点），**不 ALTER 共享表**；真实记录带 DOI/ISSN/机构名等公开可核验字段原样保留；敏感列（email 等）不选用、不输出到手册；新增行 data_source 统一标 `real_20261019`（该列本就是数据来源标记列，属业务事实字段用法，非测试污染——如你方认为应改用物料清单承载批次标记，可改为只靠 manifest，见 B6）。
+
+#### B3. 规模与场景分配（首版目标）
+
+- 实体（目标数，实测以 manifest 为准）：Paper ~80（中文 ~50 + 英文 ~30，英文行入 dwd_zh_paper 用 en_name 承载）、Journal ~15（dwd_en_journal 取样补多样性，zh 侧仅 4 刊挂接）、Person = 学者 ~30 行 + 随论文全量署名作者 ~300 行（去重后 ~200 真实人，含 8 组跨来源同人与 8 组同名异人定点样本）、Organization ~10（BELONGS_TO_NODE 归属现有产业链节点 IC0101/IC0202，industry_chain_info 不动）→ **去重真实实体预计 150~250 ≥100**。
+- 关系：AUTHORED_BY = 追加的 dwd_zh_author 行数（论文全作者入表，预计 ~300+）、PUBLISHED_IN = 有 publication_id 的论文（预计 ~80）、BELONGS_TO_NODE ~10 → **合计预计 ~390 ≥300**。
+- 审核用例 **定点 30 + 自然灰区案另记**，四类动作全部由**正常抽取/消歧**产生，不向审核表插行：
+  1. **合并到候选 ×8**：126 机构互证人池取 8（真实同人跨 scholar/author 双来源）——脚本对选定真实记录用平台原生 `pendingReview` 标记触发人裁（明确标注的候选配对，原数据原貌），或消歧灰区自然产生；裁决后核验目标 VID 非空属性合并、暂存边端点改写。
+  2. **确认为新实体 ×8**：1,015 组同名异人池取 8 组（同姓名、不同机构/不同 ORCID、不同论文集）。
+  3. **驳回候选 ×7**：同名异 ORCID/异单位配对（刘伟组等），属性对照明显冲突可证伪；核验驳回后零写入、暂存边被丢弃。
+  4. **失败重跑 ×7**：有明确标签的脚本故障注入（对 7 个指定真实 record_id 抛错的脚本变体，注入规则与 record_id 清单入物料）→ T_EXTRACT_FAIL 建案 → 换回正常脚本重跑 → 核验 OPEN→RERUNNING→RESOLVED、数据补齐不重复入图、attempt 计数。
+- 消歧自然产生的其余灰区案按实际数量如实记录，不凑数也不隐藏。
+- 注入类用例的注入规则、涉及 record_id、所用脚本变体全部列入物料清单，与真实事实区分标注。
+
+#### B4. 现有审核按钮与状态（盘点结论，手册只写这些真实动作）
+
+- 队列页 `/manual-review`（admin 路由，侧边栏「人工审核」）：双 Tab=入库决策（T_LINK）/抽取失败重跑（C 类=T_EXTRACT_FAIL）；状态筛选（待处理/重跑中/重跑失败/已完成）、关键词搜索、更新时间三态排序、服务端分页；C 类行内「日志」（执行概要+阶段+日志，重跑/原执行切换）、「重跑」（OPEN/RERUN_FAILED 可用，RERUNNING 置灰）、「删除」（二次确认，连带删审计——手册按此写预期）；批量重跑（勾选≤20 直接发、>20 二次确认）、批量删除；共享生产空间只读档全禁用。
+- 详情页 `/manual-review/task/:id` 双布局（经用户确认，平台当前**不产生 T_DIRECT 数据**）：T_LINK=候选单选+属性对照（绿一致/红冲突/灰缺失）+三选一裁决（合并到所选候选/确认为新实体/均不匹配驳回候选），merge 未选目标前端拦截+后端 422「目标实体不在候选集内」；T_EXTRACT_FAIL=「重跑该记录」+溯源折叠区。
+- 状态机：OPEN/CLAIMED/IN_REVIEW/RERUNNING/RESOLVED/REJECTED/CANCELLED/EXPIRED（RERUN_FAILED 为只读推导态）；重跑仍失败=原案 RESOLVED(superseded)+attempt+1 新案。
+- 入口链路：平台总览审核卡片、任务实例详情「进入人工处理（本执行/本任务 N 条）」深链。
+- 落库核验表：manual_review_case（dedupe_key 幂等建案）/decision/audit_log（事件类型全集已盘点，删除 case 连带删审计）。
+- 手册不写不存在的动作：详情页当前**无**备注输入框、**无**认领/释放/转派/取消按钮（后端有 API 但 UI 未挂），按执行全量重跑后端支持但 UI 未用——均不列入页面验收步骤。**T_DIRECT 不验收**：代码中后端 direct-decide 与前端布局分支属 kg.custom.steps 预留通道（temporal_workflows.py:870 注释「不再产生新 T_DIRECT」），平台当前不产生该类数据，/demo/t-direct 亦为演示页非生产入口，均不入手册。
+
+#### B5. 拟增改文件（全部在 docs 分支，业务代码零改动）
+
+- `docs/gkx_lite_materials/append_real_20261019/append.sql`——可重复执行：INSERT 前按 manifest 主键 EXISTS 检查，已存在即跳过并输出统计；只 INSERT，零 UPDATE/DELETE/REPLACE。
+- `docs/gkx_lite_materials/append_real_20261019/MANIFEST.md`——本轮新增主键全集、来源清单（库.表.主键→来源与采集说明）、注入规则与涉及 record_id、追加前后行数对照。
+- `docs/gkx_lite_materials/append_real_20261019/cleanup.sql`——**仅按 manifest 精确删除本轮新增主键**（随附不执行，留待后续裁决）。
+- `docs/gkx_lite_materials/append_real_20261019/scripts/`——新空间 9 个 Schema 的抽取脚本（复用 page_test 脚本骨架）+ 故障注入变体（注入点带显式标注）。
+- 手册：主手册《亿级科技知识图谱引擎测试文档.md》追加「人工审核验收」章节（页面点法、单一公网系统口径）；原 39/37 轻量流程章节标注为「原始样例基线，适用于未追加快照的历史验收空间 gkx_ui_20261019_01」，新验收空间按追加后全量数据在各阶段（抽取/消歧/扣留/审核决策/重跑）重新列出可复算精确预期；数据准备的管理员步骤（执行 append.sql、行数校验）单独成节，与页面验收分开。预期数字在物料就绪后按 manifest 实测计算填入，不用计划数冒充实测数。
+
+#### B6. 安全边界落实对照（d85eb41c 五条逐项）
+
+1. 实例/行数/周期任务核对→B1（已完成，无自动采集）。
+2. 真实可核验来源→B2；不编造、不改名冒充；来源重复按来源记录计数不去重实体。
+3. 只追加：append.sql 仅 INSERT+EXISTS 跳过；无 UPDATE/DELETE/TRUNCATE/REPLACE/upsert；主键前缀规则保证零冲突；不 ALTER。
+4. 可重复执行+manifest+前后行数校验→B5；批次标记优先走 manifest，data_source 列是否标 `real_20261019` 请你方表态（两个方案都可，默认方案已述于 B2）。
+5. 新图空间+新 Schema 全量抽取（rbac 模式 definition_id=schema-extract-{新 schemaId}，无既有水位，导入后按手册步骤核验 0 水位记录）；不回填旧图、不动旧水位、不重跑旧任务。
+
+#### B7. 风险与未定项
+
+- gkx_lite 在共享实例 A 上，追加期间其他人工触发的测试抽取可能同时读该库——影响仅为读到新行，无写冲突；导入选低峰执行。
+- 追加后任何手动跑旧空间任务会增量读到新行（updated_time=追加时刻 > 旧水位）——已在手册标注「旧空间不要复跑；复跑即增量入新数据」，属可控提醒。
+- 列裁剪与排序规则：lite 表缺 affiliation/author_info_list 等源列，插入按 lite 列清单裁剪（源 affiliation JSON→lite institution，字段映射入 manifest）；dwd_scholar 源表 utf8mb4_0900_ai_ci 与 lite general_ci 不同排序规则，SQL 字面量统一处理，物料期以行数+抽样核对。
+- 英文论文并入 dwd_zh_paper（en_name 填充）是本方案多样性设计（否则期刊只有 4 刊）——如你方认为首版应只加中文源，方案可裁，关系量改靠作者行数补。}
+- 真实数据若与现有 6 Person/10 Paper 存在业务上同一对象（如真实学者与样例「张守拙」同名）——只按来源记录追加，不与人工样例做任何自动关联；手册明示人工样例不属于真实数据承诺。
+#### B8. 待你方与用户确认的决策点
+
+1. 批次标记位置：data_source 列标 `real_20261019`（该列既有语义即数据来源）还是仅靠 manifest 承载？
+2. 新增业务 ID 统一 `R<源主键>` 前缀规则是否接受？
+3. 英文论文/期刊并入 dwd_zh_paper/dwd_zh_journal（en_name 列承载）是否接受？若首版只加中文源，期刊多样性降为 4 刊，关系量改靠作者行补。
+4. 场景分配（合并 8/新实体 8/驳回 7/重跑 7 定点 + 自然灰区案另记）是否认可。
+
+确认后我即生成 append.sql / MANIFEST / cleanup.sql / 抽取脚本与手册章节推本分支；再按批复执行导入与审核跑批，回信实测数量、前后行数对照与本轮 SHA。算法两案（Degree v3 / Louvain v3）同样待你与用户表态，仍未动代码；回填/水位不动。

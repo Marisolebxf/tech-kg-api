@@ -31,7 +31,7 @@ from infra.graph_api_client import GraphAPIError, graph_api
 from infra.graph_exec_budget import loop_scoped_semaphore
 from service.base_module import KGModuleScaffoldService
 from service.confidence_scoring import edge_confidence
-from service.graph_space_context import get_current_space
+from service.graph_space_context import effective_graph_space, get_current_space
 from service.provenance_recorder import record_node_source
 
 # 60s 进程内结果缓存：同参数请求复用，避免高并发打爆 graph-search/trs-graph。
@@ -102,7 +102,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         a_keyword = (expert_a_id or "").strip()
         b_keyword = (expert_b_id or "").strip()
         cache_key = (
-            f"{get_current_space()}|"
+            f"{effective_graph_space()}|"
             f"all|{a_keyword}|{b_keyword}|{(institution or '').strip()}|"
             f"{(start_time or '').strip()}|{(end_time or '').strip()}|{normalized_limit}"
         )
@@ -374,7 +374,10 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         """经 /paths/search 搜两位专家的共同论文，返回 ≤3 条 {id, title}。"""
         # techkg: Scholar -[AUTHORED]-> Paper（out）；dev: Paper -[AUTHORED_BY]-> Person，
         # 从人找论文要走 in，第二跳反方向。
-        space_is_techkg = space == "techkg"
+        # 边型/方向按实际取数空间选择（九大业务数据面可能固定为
+        # TRS_GRAPH_BUSINESS_SPACE）；space 参数仅作回环请求的传输空间，
+        # 须与请求头一致，否则 graph-search 一致性校验 400。
+        space_is_techkg = effective_graph_space() == "techkg"
         person_to_paper = "out" if space_is_techkg else "in"
         paper_to_person = "in" if space_is_techkg else "out"
         request = {
@@ -697,7 +700,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         Returns:
             ``{sourceDatabase, summary, evidences[]}``。
         """
-        space = get_current_space() or "dev"
+        space = effective_graph_space()
         source_database = f"trs-graph / space={space}"
         if rows:
             summary_text = f"图库 COAUTHOR_WITH 边命中 {len(rows)} 条直接关系。"
@@ -893,7 +896,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
 
     def _build_anchor_only_provenance(self, anchor: dict[str, Any]) -> dict[str, Any]:
         """仅专家A分支的溯源：只含专家A的实体入库元数据。"""
-        space = get_current_space() or "dev"
+        space = effective_graph_space()
         src = self._person_source(anchor)
         name = self._person_name(anchor) or str(anchor.get("id") or "—")
         system = str(src.get("source_system") or "")

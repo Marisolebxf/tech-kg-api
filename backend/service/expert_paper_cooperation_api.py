@@ -20,7 +20,7 @@ from service.confidence_scoring import (
     expert_entity_confidence,
 )
 from service.entity_confidence import fill_entity_confidence
-from service.graph_space_context import get_current_space
+from service.graph_space_context import effective_graph_space, get_current_space
 from service.provenance_recorder import record_node_source
 
 MAX_SHARED_PAPERS = 1000
@@ -181,7 +181,7 @@ class ExpertPaperCooperationApiService(KGModuleScaffoldService):
         auth_headers: Mapping[str, str] | None = None,
         app: Any = None,
     ) -> dict[str, Any]:
-        cache_key = f"{get_current_space()}|{body.expertAId}|{body.expertBId}|{body.startTime or ''}|{body.endTime or ''}"
+        cache_key = f"{effective_graph_space()}|{body.expertAId}|{body.expertBId}|{body.startTime or ''}|{body.endTime or ''}"
         with _result_cache_lock:
             entry = _result_cache.get(cache_key)
         if entry and entry[0] > time.monotonic():
@@ -206,8 +206,8 @@ class ExpertPaperCooperationApiService(KGModuleScaffoldService):
 
 def _person_vid(expert_id: str) -> str:
     # techkg 空间 Scholar 节点 ID 不带 person_ 前缀（如 4P566No1），
-    # dev 空间则带 person_ 前缀；根据图空间自动选择。
-    space = get_current_space()
+    # dev 空间则带 person_ 前缀；按实际取数空间选择（九大业务可能固定业务面空间）。
+    space = effective_graph_space()
     if space == "techkg":
         return expert_id.removeprefix("person_")
     return expert_id if expert_id.startswith("person_") else f"person_{expert_id}"
@@ -215,21 +215,21 @@ def _person_vid(expert_id: str) -> str:
 
 # techkg 空间用 AUTHORED/Scholar/Paper；dev 空间用 AUTHORED_BY/Person/Paper。
 def _authored_edge():
-    return "AUTHORED" if get_current_space() == "techkg" else "AUTHORED_BY"
+    return "AUTHORED" if effective_graph_space() == "techkg" else "AUTHORED_BY"
 
 
 def _scholar_label():
-    return "Scholar" if get_current_space() == "techkg" else "Person"
+    return "Scholar" if effective_graph_space() == "techkg" else "Person"
 
 
 # techkg: Scholar -[AUTHORED]-> Paper
 # dev:    Paper -[AUTHORED_BY]-> Person
 def _person_to_paper_direction():
-    return "out" if get_current_space() == "techkg" else "in"
+    return "out" if effective_graph_space() == "techkg" else "in"
 
 
 def _paper_to_person_direction():
-    return "in" if get_current_space() == "techkg" else "out"
+    return "in" if effective_graph_space() == "techkg" else "out"
 
 
 def _display_name(node: dict[str, Any], fallback: str) -> str:
@@ -695,7 +695,7 @@ def _node_source(node: dict[str, Any]) -> tuple[str, str]:
     recorded = record_node_source(
         node.get("properties") or {},
         node.get("labels") or [],
-        space=get_current_space(),
+        space=effective_graph_space(),
     )
     return recorded["sourceTable"], recorded["sourceField"]
 
@@ -731,7 +731,7 @@ def _build_provenance(
             or node_id
         )
         recorded = record_node_source(
-            properties, node.get("labels") or [], space=get_current_space()
+            properties, node.get("labels") or [], space=effective_graph_space()
         )
         if recorded["sourceKind"] == "mysql":
             source_note = f"入库批次：{recorded['ingestBatch']}；入库时间：{recorded['ingestTime']}"
@@ -766,7 +766,7 @@ def _build_provenance(
 
     evidence_scope = "专家、论文及逐篇上下文实体" if contexts else "专家实体"
     return {
-        "sourceDatabase": f"trs-graph / space={get_current_space()}",
+        "sourceDatabase": f"trs-graph / space={effective_graph_space()}",
         "summary": f"两位专家命中 {paper_count} 篇合作论文；证据来自{evidence_scope}。",
         "evidences": evidences,
     }

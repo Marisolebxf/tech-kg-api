@@ -31,7 +31,7 @@ from biz.schemas.industry_node_top_events_business import (
 from biz.schemas.tech_enterprise_relation_business import EntityProvenance
 from infra.graph_db import TRSGraphClient
 from service.entity_confidence import fill_entity_confidence
-from service.graph_space_context import get_current_space, request_can_write
+from service.graph_space_context import effective_graph_space, request_can_write
 from service.provenance_recorder import record_node_source
 
 logger = logging.getLogger(__name__)
@@ -57,10 +57,15 @@ _result_cache_lock = threading.Lock()
 
 
 def _get_dev_client() -> TRSGraphClient:
-    """按已鉴权请求空间获取客户端，不缓存跨空间的服务实例。"""
-    from infra.graph_db import get_space_client
+    """按已鉴权请求空间获取客户端，不缓存跨空间的服务实例。
 
-    return get_space_client(get_current_space())
+    get_trs_graph_client 在九大业务（business_data_plane 置位）时优先返回
+    TRS_GRAPH_BUSINESS_* 业务面连接；未配置业务面变量时同样按请求空间取
+    客户端，行为与原 get_space_client(get_current_space()) 一致。
+    """
+    from infra.graph_db import get_trs_graph_client
+
+    return get_trs_graph_client()
 
 
 def _result_cache_get(key: str) -> IndustryNodeTopEventsResponse | None:
@@ -412,7 +417,7 @@ def _entity_provenance(
 
     置信度逻辑不变：图上已有值 → 证据规则计算并尽力写回 → 默认 0.80。
     """
-    recorded = record_node_source(properties, labels, space=get_current_space())
+    recorded = record_node_source(properties, labels, space=effective_graph_space())
     confidence = fill_entity_confidence(properties, labels, vid=vid, client=client)
     return EntityProvenance(
         sourceTable=recorded["sourceTable"],
@@ -431,7 +436,7 @@ class IndustryNodeTopEventsService:
         self.timeout = timeout
 
     async def run(self, req: IndustryNodeTopEventsRequest) -> IndustryNodeTopEventsResponse:
-        cache_key = f"{get_current_space()}|{request_can_write.get()}|{req.chain_node_id}|{req.top_n}|{req.event_type}|{req.time_range_start}|{req.time_range_end}|{req.max_orgs}"
+        cache_key = f"{effective_graph_space()}|{request_can_write.get()}|{req.chain_node_id}|{req.top_n}|{req.event_type}|{req.time_range_start}|{req.time_range_end}|{req.max_orgs}"
         cached = _result_cache_get(cache_key)
         if cached is not None:
             return cached

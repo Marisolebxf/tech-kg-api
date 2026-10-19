@@ -18,6 +18,24 @@ def get_current_space() -> str:
     return selected_graph_space.get() or TRSGraphSettings.from_env().space
 
 
+def effective_graph_space() -> str:
+    """本次请求实际取数的图空间。
+
+    九大业务（business_data_plane 置位）配置 TRS_GRAPH_BUSINESS_* 时返回业务面
+    空间（TRS_GRAPH_BUSINESS_SPACE，未配置时按请求空间名映射），数据连接已被
+    业务面接管；其余情况与 get_current_space() 一致。溯源标注（"trs-graph /
+    space=..."）与按空间分型的查询参数（techkg 的边型/VID 前缀/方向）应以此
+    为准，避免「数据取自 dev、口径按请求空间 test1012」的错位。
+    """
+    from infra.graph_db.config import business_plane_settings
+
+    if business_data_plane.get():
+        settings = business_plane_settings(selected_graph_space.get())
+        if settings is not None:
+            return settings.space
+    return get_current_space()
+
+
 def has_graph_entity(
     entity_id: str, labels: tuple[str, ...], prefixes: tuple[str, ...] = ()
 ) -> bool:

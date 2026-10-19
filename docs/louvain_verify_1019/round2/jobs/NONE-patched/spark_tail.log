@@ -1,0 +1,60 @@
+26/10/19 09:17:14 INFO SparkHadoopMapRedUtil: No need to commit output of task because needsTaskCommit=false: attempt_20261019091714_0055_m_000196_3201
+26/10/19 09:17:14 INFO TaskSetManager: Finished task 189.0 in stage 55.0 (TID 3194) in 20 ms on localhost (executor driver) (192/200)
+26/10/19 09:17:14 INFO ShuffleBlockFetcherIterator: Getting 0 non-empty blocks including 0 local blocks and 0 remote blocks
+26/10/19 09:17:14 INFO ShuffleBlockFetcherIterator: Started 0 remote fetches in 0 ms
+26/10/19 09:17:14 INFO TaskSetManager: Finished task 190.0 in stage 55.0 (TID 3195) in 20 ms on localhost (executor driver) (193/200)
+26/10/19 09:17:14 INFO ShuffleBlockFetcherIterator: Getting 0 non-empty blocks including 0 local blocks and 0 remote blocks
+26/10/19 09:17:14 INFO ShuffleBlockFetcherIterator: Started 0 remote fetches in 0 ms
+26/10/19 09:17:14 INFO Executor: Finished task 183.0 in stage 55.0 (TID 3188). 5427 bytes result sent to driver
+26/10/19 09:17:14 INFO Executor: Finished task 196.0 in stage 55.0 (TID 3201). 5427 bytes result sent to driver
+26/10/19 09:17:14 INFO TaskSetManager: Finished task 183.0 in stage 55.0 (TID 3188) in 25 ms on localhost (executor driver) (194/200)
+26/10/19 09:17:14 INFO Executor: Finished task 199.0 in stage 55.0 (TID 3204). 5427 bytes result sent to driver
+26/10/19 09:17:14 INFO ShuffleBlockFetcherIterator: Getting 0 non-empty blocks including 0 local blocks and 0 remote blocks
+26/10/19 09:17:14 INFO ShuffleBlockFetcherIterator: Started 0 remote fetches in 0 ms
+26/10/19 09:17:14 INFO TaskSetManager: Finished task 196.0 in stage 55.0 (TID 3201) in 18 ms on localhost (executor driver) (195/200)
+26/10/19 09:17:14 INFO TaskSetManager: Finished task 199.0 in stage 55.0 (TID 3204) in 12 ms on localhost (executor driver) (196/200)
+26/10/19 09:17:14 INFO ShuffleBlockFetcherIterator: Getting 0 non-empty blocks including 0 local blocks and 0 remote blocks
+26/10/19 09:17:14 INFO ShuffleBlockFetcherIterator: Started 0 remote fetches in 0 ms
+26/10/19 09:17:14 INFO ShuffleBlockFetcherIterator: Getting 0 non-empty blocks including 0 local blocks and 0 remote blocks
+26/10/19 09:17:14 INFO ShuffleBlockFetcherIterator: Started 0 remote fetches in 0 ms
+26/10/19 09:17:14 INFO ShuffleBlockFetcherIterator: Getting 0 non-empty blocks including 0 local blocks and 0 remote blocks
+26/10/19 09:17:14 INFO ShuffleBlockFetcherIterator: Started 0 remote fetches in 0 ms
+26/10/19 09:17:14 INFO FileOutputCommitter: File Output Committer Algorithm version is 1
+26/10/19 09:17:14 INFO ShuffleBlockFetcherIterator: Getting 0 non-empty blocks including 0 local blocks and 0 remote blocks
+26/10/19 09:17:14 INFO ShuffleBlockFetcherIterator: Started 0 remote fetches in 0 ms
+26/10/19 09:17:14 INFO SQLHadoopMapReduceCommitProtocol: Using output committer class org.apache.hadoop.mapreduce.lib.output.FileOutputCommitter
+26/10/19 09:17:14 INFO FileOutputCommitter: File Output Committer Algorithm version is 1
+26/10/19 09:17:14 INFO SQLHadoopMapReduceCommitProtocol: Using output committer class org.apache.hadoop.mapreduce.lib.output.FileOutputCommitter
+26/10/19 09:17:14 INFO SparkHadoopMapRedUtil: No need to commit output of task because needsTaskCommit=false: attempt_20261019091714_0055_m_000185_3190
+26/10/19 09:17:14 INFO SparkHadoopMapRedUtil: No need to commit output of task because needsTaskCommit=false: attempt_20261019091714_0055_m_000193_3198
+26/10/19 09:17:14 INFO ShuffleBlockFetcherIterator: Getting 0 non-empty blocks including 0 local blocks and 0 remote blocks
+26/10/19 09:17:14 INFO ShuffleBlockFetcherIterator: Started 0 remote fetches in 0 ms
+26/10/19 09:17:14 INFO FileOutputCommitter: File Output Committer Algorithm version is 1
+26/10/19 09:17:14 INFO Executor: Finished task 185.0 in stage 55.0 (TID 3190). 5427 bytes result sent to driver
+26/10/19 09:17:14 INFO SQLHadoopMapReduceCommitProtocol: Using output committer class org.apache.hadoop.mapreduce.lib.output.FileOutputCommitter
+26/10/19 09:17:14 INFO SparkHadoopMapRedUtil: No need to commit output of task because needsTaskCommit=false: attempt_20261019091714_0055_m_000197_3202
+26/10/19 09:17:14 INFO TaskSetManager: Finished task 185.0 in stage 55.0 (TID 3190) in 24 ms on localhost (executor driver) (197/200)
+26/10/19 09:17:14 INFO Executor: Finished task 193.0 in stage 55.0 (TID 3198). 5427 bytes result sent to driver
+26/10/19 09:17:14 INFO FileOutputCommitter: File Output Committer Algorithm version is 1
+26/10/19 09:17:14 INFO SQLHadoopMapReduceCommitProtocol: Using output committer class org.apache.hadoop.mapreduce.lib.output.FileOutputCommitter
+26/10/19 09:17:14 INFO TaskSetManager: Finished task 193.0 in stage 55.0 (TID 3198) in 21 ms on localhost (executor driver) (198/200)
+26/10/19 09:17:14 INFO Executor: Finished task 197.0 in stage 55.0 (TID 3202). 5427 bytes result sent to driver
+26/10/19 09:17:14 INFO SparkHadoopMapRedUtil: No need to commit output of task because needsTaskCommit=false: attempt_20261019091714_0055_m_000194_3199
+26/10/19 09:17:14 INFO TaskSetManager: Finished task 197.0 in stage 55.0 (TID 3202) in 18 ms on localhost (executor driver) (199/200)
+26/10/19 09:17:14 INFO Executor: Finished task 194.0 in stage 55.0 (TID 3199). 5427 bytes result sent to driver
+26/10/19 09:17:14 INFO TaskSetManager: Finished task 194.0 in stage 55.0 (TID 3199) in 21 ms on localhost (executor driver) (200/200)
+26/10/19 09:17:14 INFO TaskSchedulerImpl: Removed TaskSet 55.0, whose tasks have all completed, from pool 
+26/10/19 09:17:14 INFO DAGScheduler: ResultStage 55 (csv at AlgoWriter.scala:53) finished in 0.319 s
+26/10/19 09:17:14 INFO DAGScheduler: Job 12 finished: csv at AlgoWriter.scala:53, took 0.503001 s
+26/10/19 09:17:14 INFO FileFormatWriter: Write Job b5f7c66d-954f-445b-9209-b7497c553909 committed.
+26/10/19 09:17:14 INFO FileFormatWriter: Finished processing stats for write job b5f7c66d-954f-445b-9209-b7497c553909.
+26/10/19 09:17:14 INFO MapOutputTrackerMasterEndpoint: MapOutputTrackerMasterEndpoint stopped!
+26/10/19 09:17:14 INFO MemoryStore: MemoryStore cleared
+26/10/19 09:17:14 INFO BlockManager: BlockManager stopped
+26/10/19 09:17:14 INFO BlockManagerMaster: BlockManagerMaster stopped
+26/10/19 09:17:14 INFO OutputCommitCoordinator$OutputCommitCoordinatorEndpoint: OutputCommitCoordinator stopped!
+26/10/19 09:17:14 INFO SparkContext: Successfully stopped SparkContext
+26/10/19 09:17:14 INFO Main$: read data source cost: 1.2090 s, algo cost: 9.8440 s, write algo result cost: 0.6780 s
+26/10/19 09:17:14 INFO ShutdownHookManager: Shutdown hook called
+26/10/19 09:17:14 INFO ShutdownHookManager: Deleting directory /tmp/spark-06e510fd-00a2-4228-b4ed-b19e0bf585a8
+26/10/19 09:17:14 INFO ShutdownHookManager: Deleting directory /tmp/spark-7c5ff77b-83a8-4e35-8d87-c8d752f4fd87

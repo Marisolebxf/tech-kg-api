@@ -10,7 +10,7 @@
 | 根因 | 上游 nebula-algorithm **v3.1.0** `LouvainAlgo.scala` step2 用 `Graph.fromEdges(edges, None)` 重建压缩图，只物化「仍有社区间边」的顶点；step1 即完全内部化的社区没有任何社区间边 → 其超级点不进压缩图 → 全部成员从最终结果消失。与 Louvain 阈值/迭代参数无关 |
 | 修复 | 给每个超级点补一条 **0 权自环** 并入 fromEdges（28 行补丁，见 `LouvainAlgo-step2-selfloop.patch`） |
 | 验证 | 三臂对照：部署 JAR 与未打补丁重建 JAR 结果**逐字节一致**且恰好缺失 9 个星型顶点；打补丁 JAR 输出全量 33 点，24 个共有顶点社区划分与部署版**零差异**，三颗星各自成社区 |
-| 状态 | 补丁未上线（替换 runner JAR + 重启属生产动作，待另行批准）；上游是否接受此补丁方向待定 |
+| 状态 | 三臂对照 + Round 2 发布前补齐（默认参数/非负加权/单关系复刻/空输入，见 §11）均完成；补丁未上线（替换 runner JAR 属生产动作，待另行批准）；上游是否接受此补丁方向待定 |
 
 ## 2. 触发条件
 
@@ -86,6 +86,7 @@ jobs/<arm>/application.conf        各臂作业完整参数（runner 生成）
 jobs/<arm>/result_merged.csv       各臂结果（result/part-*.csv 合并，单一表头）
 jobs/<arm>/spark_tail.log          各臂 spark 日志尾部 120 行
 jobs/rows-*.csv                    runner 行转储摘要（按 jobId）
+round2/                            发布前补齐（§11）：默认参数/加权/单关系/空输入 8 作业 + 驱动与装载脚本
 ```
 
 jobId ↔ 臂映射：
@@ -112,10 +113,83 @@ jobId ↔ 臂映射：
 
 - 33 点样例证明机制与本修复在该样例成立，**不构成 Louvain 一般正确性证明**；
 - 未执行上游官方测试套（构建产出含 tests.jar，未跑）；
-- 加权图未测：样例 `hasWeight=false`；0 权自环论证按代码路径推演，未在加权样例实测；
+- 加权图：**非负权重已实测**（Round 2，§11.3——wlink 全正权，补丁版全量输出且共有顶点划分与部署版零差异）；**负权/零总权未测**（Louvain 模块度语义本身假定非负权）；
+- 多分区（partitionNum>1）未测：全部作业 partitionNum=1；Spark 多分区下的数据交换路径未覆盖；
+- 平台真实数据单关系场景（gkx_lite BTN/PL/AB）的引擎级复测在 Round 2 以隔离复刻空间完成（§11.4）；平台页面级复测须待受控上线后在真实 runner 上进行，本轮未动线上 JAR；
 - 补丁未与上游社区对齐（是否/如何回馈上游待定）；
 - 上线动作（替换 runner JAR + 重启）待另行批准，本分支纯验证物料，不含部署变更。
 
 ## 10. 脱敏声明
 
 本目录所有脚本与配置副本中，API key、数据库密码、内网 IP 已分别替换为 `<REDACTED-API-KEY>` / `<REDACTED>` / `<RUNNER-HOST>`，不影响语义复现（替换处均为环境相关值，非算法参数）。三个 JAR 本体过大不入库，仅附 sha256 清单。
+
+## 11. Round 2：发布前补齐（2026-10-19，回应复核意见）
+
+隔离 runner 上补测四类场景。**每臂 JAR 绑定方式与运行时环境见 §11.5**；全部作业 `partitionNum=1`、`encodeId=true`，参数除注明外均为平台前端目录默认值 `maxIter=8, internalIter=5, tol=0.5`（graph-algorithm-catalog.ts）。
+
+### 11.1 平台默认参数回归（样例 v2，无权 link）
+
+| 臂 | JAR | 行数 | 结果 |
+|---|---|---|---|
+| A-default | 部署版 c98f4f57 | 24 | 环 8+8（a5/b6）、K8 全 singleton、**9 星型缺失**（与 20/10 参数下的 A 完全同构） |
+| C-default | 补丁版 4b45ba6f | **33** | 全量；三颗星 3/4/2 各自成社区 |
+
+**共有 24 顶点社区归属 A vs C 差异数 = 0**（`round2/jobs/*/result_merged.csv` 可 join 复算）→ 平台默认参数下修复有效、大分量回归零差异。
+
+### 11.2 非负加权对照（wlink，全正权：环/桥=2、K8=1、星=1）
+
+| 臂 | 行数 | 结果 |
+|---|---|---|
+| A-weighted | 24 | 9 星型缺失；环分裂为 3+5/4+4（权重改变模块度，属预期算法行为） |
+| C-weighted | **33** | 全量；星 3/4/2 各自成社区 |
+
+共有 24 顶点归属差异数 = 0 → **非负权入口下补丁同样有效且零扰动**；负权/零总权未测（§9）。
+
+### 11.3 单关系场景隔离复刻（graphalgo_lv_sr_1019）
+
+平台「单关系选择」验收的隔离复刻：`link_ab`=双环+桥（16 点 17 边大分量）、`link_pl`=三颗星（9 点 6 边小分量）、`link_none`=零边。
+
+| 臂 | 输出 | 说明 |
+|---|---|---|
+| PL-deployed | **4 行** | st2 组 4 点以 singleton 输出；st1(3)/st3(2) 组 5 点被丢 |
+| PL-patched | **9 行** | st1/st3 各自成社区输出，st2 组 4 点仍 singleton（与部署版归属一致） |
+| AB-patched | **16 行** | 大分量全量（环分裂 3+5/4+4，SR 空间边数少、增益尺度不同，属预期） |
+
+**机制数据依赖性的直接观察**：部署版并非丢所有小分量——step1 内部化的（st1/st3）整组消失，未内部化的（st2）以 singleton 存活。补丁版两类都输出，共有 4 点（st2*）归属两版一致。原平台观察（BTN/PL 小分量 0 行）对应 st1/st3 型分量。
+
+### 11.4 空输入边界
+
+`link_none`（零边型，索引已建）+ 补丁版：作业 `succeeded` exit=0、结果仅 `_SUCCESS`+空 part 文件、0 行。空输入不报错、不产出顶点，如实记录。
+
+### 11.5 每臂 JAR 绑定与运行时（复核要求补齐）
+
+**JAR 换装流程**（runner 经 env `NEBULA_ALGORITHM_JAR` 固定指向容器内 `/opt/nebula-algorithm/nebula-algorithm-3.1.0.jar`，spark-submit 每次提交时读该路径，无需重启）：
+
+```bash
+# 换装（跑某臂前）
+docker cp nebula-algorithm-3.1.0-<arm>.jar trsgraph-algorithm-runner:/opt/nebula-algorithm/nebula-algorithm-3.1.0.jar
+docker exec trsgraph-algorithm-runner sha256sum /opt/nebula-algorithm/nebula-algorithm-3.1.0.jar
+# 期望：A=c98f4f57…（完整值见 jars_sha256.txt）/ B=20c554b9… / C=4b45ba6f…
+# 跑臂（round2/run_job.py：submit→poll→result）
+python3 round2/run_job.py <tag> <space> <labels> 8 5 0.5 [--weighted w]
+# 复位（每轮跑完必做）
+docker cp nebula-algorithm-3.1.0-deployed.jar trsgraph-algorithm-runner:/opt/nebula-algorithm/nebula-algorithm-3.1.0.jar
+docker exec trsgraph-algorithm-runner sha256sum /opt/nebula-algorithm/nebula-algorithm-3.1.0.jar  # 必须回到 c98f4f57…
+```
+
+**运行时事实**（runner 容器实测）：OpenJDK `1.8.0_432`（JDK8u432-b06）、Spark **2.4.8**（Hadoop 2.7.3，`local[8]`、driver-memory 8g、spark.ui 关闭）；spark-submit 调用形如 `spark-submit --master local[8] --driver-memory 8g --class com.vesoft.nebula.algorithm.Main $JAR <application.conf 路径>`；runner API 监听 `8091`（容器共享 trsgraph 网络命名空间，经其网内地址访问；旧材料中的 8095 为历史临时实例端口，现役 8091）。
+
+**Round 2 jobId ↔ 臂映射**：
+
+| jobId | 臂 |
+|---|---|
+| `ac0dc61ef1204e29a154d69941217856` | A-default（部署版·默认参数） |
+| `3e8ad3b3b1fb47eca09ddd32a1e3b806` | A-weighted（部署版·加权） |
+| `84f336a1fc434f6a99a5aef716c42efe` | PL-deployed（部署版·单关系小分量） |
+| `cb59b581160e4a6c80695c7c1166b68a` | C-default（补丁版·默认参数） |
+| `d60bfed6e44e40e0be211ccb5ce02e13` | C-weighted（补丁版·加权） |
+| `677f53deca504199b0fe63db03f0d5f5` | PL-patched（补丁版·单关系小分量） |
+| `0fd091ffe466457694b9d6a06792deae` | AB-patched（补丁版·单关系大分量） |
+| `52301f3b3ece4da483013990c5131828` | NONE-patched（补丁版·空输入） |
+
+Round 2 物料在 `round2/`：`run_job.py`（作业驱动）、`add_weighted_edges.py`（wlink 装载）、`load_sr_fixture.py`（SR 空间装载）、`jobs/<臂>/{application.conf, result_merged.csv, spark_tail.log, result_files.txt}`（conf 已脱敏，凭证占位）。

@@ -1,0 +1,60 @@
+26/10/19 09:08:51 INFO SQLHadoopMapReduceCommitProtocol: Using output committer class org.apache.hadoop.mapreduce.lib.output.FileOutputCommitter
+26/10/19 09:08:51 INFO SparkHadoopMapRedUtil: No need to commit output of task because needsTaskCommit=false: attempt_20261019090850_0657_m_000187_18842
+26/10/19 09:08:51 INFO BlockManager: Found block rdd_497_197 locally
+26/10/19 09:08:51 INFO Executor: 1 block locks were not released by TID = 18842:
+[rdd_497_187]
+26/10/19 09:08:51 INFO FileOutputCommitter: File Output Committer Algorithm version is 1
+26/10/19 09:08:51 INFO Executor: Finished task 187.0 in stage 657.0 (TID 18842). 1516 bytes result sent to driver
+26/10/19 09:08:51 INFO FileOutputCommitter: File Output Committer Algorithm version is 1
+26/10/19 09:08:51 INFO SQLHadoopMapReduceCommitProtocol: Using output committer class org.apache.hadoop.mapreduce.lib.output.FileOutputCommitter
+26/10/19 09:08:51 INFO SQLHadoopMapReduceCommitProtocol: Using output committer class org.apache.hadoop.mapreduce.lib.output.FileOutputCommitter
+26/10/19 09:08:51 INFO BlockManager: Found block rdd_497_186 locally
+26/10/19 09:08:51 INFO TaskSetManager: Finished task 187.0 in stage 657.0 (TID 18842) in 44 ms on localhost (executor driver) (195/200)
+26/10/19 09:08:51 INFO SparkHadoopMapRedUtil: No need to commit output of task because needsTaskCommit=false: attempt_20261019090850_0657_m_000188_18843
+26/10/19 09:08:51 INFO SparkHadoopMapRedUtil: No need to commit output of task because needsTaskCommit=false: attempt_20261019090850_0657_m_000197_18852
+26/10/19 09:08:51 INFO Executor: 1 block locks were not released by TID = 18843:
+[rdd_497_188]
+26/10/19 09:08:51 INFO Executor: 1 block locks were not released by TID = 18852:
+[rdd_497_197]
+26/10/19 09:08:51 INFO Executor: Finished task 197.0 in stage 657.0 (TID 18852). 1559 bytes result sent to driver
+26/10/19 09:08:51 INFO Executor: Finished task 188.0 in stage 657.0 (TID 18843). 1559 bytes result sent to driver
+26/10/19 09:08:51 INFO TaskSetManager: Finished task 197.0 in stage 657.0 (TID 18852) in 35 ms on localhost (executor driver) (196/200)
+26/10/19 09:08:51 INFO BlockManager: Found block rdd_497_199 locally
+26/10/19 09:08:51 INFO TaskSetManager: Finished task 188.0 in stage 657.0 (TID 18843) in 42 ms on localhost (executor driver) (197/200)
+26/10/19 09:08:51 INFO FileOutputCommitter: File Output Committer Algorithm version is 1
+26/10/19 09:08:51 INFO SQLHadoopMapReduceCommitProtocol: Using output committer class org.apache.hadoop.mapreduce.lib.output.FileOutputCommitter
+26/10/19 09:08:51 INFO SparkHadoopMapRedUtil: No need to commit output of task because needsTaskCommit=false: attempt_20261019090850_0657_m_000186_18841
+26/10/19 09:08:51 INFO Executor: 1 block locks were not released by TID = 18841:
+[rdd_497_186]
+26/10/19 09:08:51 INFO FileOutputCommitter: File Output Committer Algorithm version is 1
+26/10/19 09:08:51 INFO SQLHadoopMapReduceCommitProtocol: Using output committer class org.apache.hadoop.mapreduce.lib.output.FileOutputCommitter
+26/10/19 09:08:51 INFO Executor: Finished task 186.0 in stage 657.0 (TID 18841). 1559 bytes result sent to driver
+26/10/19 09:08:51 INFO SparkHadoopMapRedUtil: No need to commit output of task because needsTaskCommit=false: attempt_20261019090850_0657_m_000199_18854
+26/10/19 09:08:51 INFO Executor: 1 block locks were not released by TID = 18854:
+[rdd_497_199]
+26/10/19 09:08:51 INFO TaskSetManager: Finished task 186.0 in stage 657.0 (TID 18841) in 45 ms on localhost (executor driver) (198/200)
+26/10/19 09:08:51 INFO BlockManager: Found block rdd_497_196 locally
+26/10/19 09:08:51 INFO Executor: Finished task 199.0 in stage 657.0 (TID 18854). 1559 bytes result sent to driver
+26/10/19 09:08:51 INFO TaskSetManager: Finished task 199.0 in stage 657.0 (TID 18854) in 30 ms on localhost (executor driver) (199/200)
+26/10/19 09:08:51 INFO FileOutputCommitter: File Output Committer Algorithm version is 1
+26/10/19 09:08:51 INFO SQLHadoopMapReduceCommitProtocol: Using output committer class org.apache.hadoop.mapreduce.lib.output.FileOutputCommitter
+26/10/19 09:08:51 INFO SparkHadoopMapRedUtil: No need to commit output of task because needsTaskCommit=false: attempt_20261019090850_0657_m_000196_18851
+26/10/19 09:08:51 INFO Executor: 1 block locks were not released by TID = 18851:
+[rdd_497_196]
+26/10/19 09:08:51 INFO Executor: Finished task 196.0 in stage 657.0 (TID 18851). 1602 bytes result sent to driver
+26/10/19 09:08:51 INFO TaskSetManager: Finished task 196.0 in stage 657.0 (TID 18851) in 39 ms on localhost (executor driver) (200/200)
+26/10/19 09:08:51 INFO TaskSchedulerImpl: Removed TaskSet 657.0, whose tasks have all completed, from pool 
+26/10/19 09:08:51 INFO DAGScheduler: ResultStage 657 (csv at AlgoWriter.scala:53) finished in 0.625 s
+26/10/19 09:08:51 INFO DAGScheduler: Job 29 finished: csv at AlgoWriter.scala:53, took 0.630949 s
+26/10/19 09:08:51 INFO FileFormatWriter: Write Job 0c720a4a-d2b6-4941-9d1a-960c8dcbebab committed.
+26/10/19 09:08:51 INFO FileFormatWriter: Finished processing stats for write job 0c720a4a-d2b6-4941-9d1a-960c8dcbebab.
+26/10/19 09:08:51 INFO MapOutputTrackerMasterEndpoint: MapOutputTrackerMasterEndpoint stopped!
+26/10/19 09:08:52 INFO MemoryStore: MemoryStore cleared
+26/10/19 09:08:52 INFO BlockManager: BlockManager stopped
+26/10/19 09:08:52 INFO BlockManagerMaster: BlockManagerMaster stopped
+26/10/19 09:08:52 INFO OutputCommitCoordinator$OutputCommitCoordinatorEndpoint: OutputCommitCoordinator stopped!
+26/10/19 09:08:52 INFO SparkContext: Successfully stopped SparkContext
+26/10/19 09:08:52 INFO Main$: read data source cost: 1.3150 s, algo cost: 106.3770 s, write algo result cost: 0.8020 s
+26/10/19 09:08:52 INFO ShutdownHookManager: Shutdown hook called
+26/10/19 09:08:52 INFO ShutdownHookManager: Deleting directory /tmp/spark-516bd4f9-9f22-4421-ac58-3a1a8d005699
+26/10/19 09:08:52 INFO ShutdownHookManager: Deleting directory /tmp/spark-3770d0f2-4659-46a9-8c8f-07c81a81723c

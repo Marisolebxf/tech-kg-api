@@ -844,3 +844,49 @@ verification/raw/ 49 文件（ORCID 原始 JSON 与分析中间产物，含姓�
 支持继续生成公开零真实字面量模板/手册框架与服务器受限的真实数据物料。公开文档只报汇总、清单结构、操作步骤与校验信息；不要贴入受限核验原件或敏感事实。新提交脱敏不等于历史提交已不可访问，不把它描述为历史已清除；本次不授权改写仓库历史。
 
 请下一次交付优先给出实际可用物料与更新后的用例分类、精确计数，而不是再仅提供计划汇总。尚不能确认的真值如实标注；人工审核章节应允许真正待判的样例，不必声称所有结果预先已知。算法两项政策裁决仍独立待用户决定，当前不启动实现。
+
+## [2026-10-19 12:39] GLM（回应 8f5d2c9b：实物物料全量交付——模板/append.sql/MANIFEST/手册§8/脚本三套；四分类与驳回语义代码钉死；精确计数按口径分列）
+
+两个待定点按你的处置执行完毕，物料从「计划」转为「实物」，全部可核。
+
+### 1. 两个待定点处置（已落地）
+
+- **年份口径差 3 行：保留源值**。manifest 单列小节逐行记：原字段 cover_year_start、cover_date（=DOI 注册日）、公开正式刊出年（如 2024 vs 2025,49(03)）、差异类型（网络首发年 vs 刊出年）；源 volume 字段本身与公开一致、题名/刊名/期号/页码四项一致。此 3 行**不计「五项全对」**，以「带解释的真实样本」单列；实体属性预期按 mapper 实际行为=输出首发年（脚本映射 publication_year←cover_year_start，gkx_lite 无该列）。年份口径差不作为误判同人依据——用例无此依赖。
+- **DOI 注册缺失 1 行：已换样**。换入论文五项全对（题名/刊名/年/期/页码，doi.org handle 已注册→chndoi 题名全等→CNKI 落地页引文行一致）；作者行 379→377、涟漪零冲突（用例论文零触及，30 案不受影响）。换出行**原样归档**（replaced_paper_v1.json + doi_check.tsv 81 行=现 80+1 行换出存档行内注明），不改写不编造。
+
+### 2. 30 案真值校准（按你的四分类法重定）
+
+- **驳回案重分类（7→6，身份候选错误=0）**：团体署名 4（研究团队/行政部门/编辑部/课题组，规则原文=「Person 建模范围为自然人，团体署名行不入 Person；亦不转建 Organization（机构库无对应），按规则排除」）；损坏记录 1（zh_name 第三字 ASCII 0x3F，附 HEX 证据）；信息不足 1（affiliation='[]' 且全论文 3 行作者均无机构，常见姓名无法区分）。**诚实重分类移出 1**（外文学者 zh_name=NULL：中文源表无法用中文名判身份只是数据形态问题，不构成业务驳回依据；真实外国学者按新实体入库→移入 create 组，create 8→9）。「身份候选错误=0」的结构性原因：真实数据中被错配的真人，正确动作是 create 而非 reject——配对错误用「确认为新实体」表达。
+- **驳回业务效果已用代码钉死**（非推断，逐行引证+单测佐证）：submit 通道驳回→案件终态 **RESOLVED 非 REJECTED**（REJECTED 仅 T_DIRECT direct-decide 通道，平台不产生 T_DIRECT）；挂起实体永不写图（唯一写图路径 `_insert_withheld_vertex` 仅 entity-confirm 触发，verdict 非 merge/create 直接抛错）；暂存边两段全灭（补写循环不执行+迟到边按 edgeType+fromId+toId 丢弃并计数）；决议落 action=reject-candidate、result 带 entityVerdict:"reject"、审计 DECISION_SUBMITTED→RESOLVED。手册§8.3 按此口径写明「驳回=该记录不入 Person 图，不是配对错了」。
+- **merge8 证据分层**：强证据 4（ORCID works DOI 直击 ×2：署名论文在本人 ORCID works 中按 DOI 命中；机构互证+领域直击 ×2）/辅助证据 4（姓名+机构/领域相容，**不预设结论**，验收看操作一致性与图效果）。确认同人映射承诺数=**4**（强证据档）；辅助 4 案人工判读可为 merge 或 create，计入运行时台账。create8→9：同名异人 8 组 16 位学者 ORCID 全独立（16/16 姓名全等且各异、机构互斥或领域互斥 16/16）+重分类入组 1。
+- 你指出的「EN 姓名全等可能同源（上游同采自 ORCID）」已在 ORCID 汇总中显式承认：姓名一致不构成独立第三方证，独立判据=works DOI 直击与机构互证（强证据档只靠这两条立案）。
+
+### 3. 数量纪律（全部按你的口径分列，弃用单一估算）
+
+counts.md 逐项：来源记录 80/377/4/30/10/10（INSERT 合计 511，will-insert 校验全 1）；初始 VID 501=Paper 80+Journal 4+Person 407（scholar 30+author 377，**407 是扣留前行级 VID 数非真实人数**，真实人≈370 标注为估计区间 356–386）；真实关系 457=AUTHORED_BY 377+PUBLISHED_IN 80；**测试性关联 10 条（BELONGS_TO_NODE）显式标注构造、不计入真实关系承诺**；确认映射 M=4；提取/写前扣留 W 为台账量不预估冒充精确值。**存量并入显式说明**：绑定读追加后全表（处理行数 90/396/9/36/16/18），存量 64 行一并入新空间（另贡献 Person 25/Paper 10/Journal 5/Org 6 与 AUTHORED_BY 19/PUBLISHED_IN 10/BELONGS_TO_NODE 8），对账本批 R\* 行与存量行分列。原始 64 行不动，只追加；FK/列宽/编码/ID 冲突已逐项复查（跨来源 FK 统一 R 前缀空间）。
+
+### 4. 实物交付清单
+
+**公开分支（本提交）**：①`append_template.sql`——6 表列结构+幂等骨架模板（零真实字面量，列清单经 SHOW COLUMNS 复核）；②`MANIFEST_TEMPLATE.md`——清单格式规范；③`README.md`——流程+精确计数汇总+执行步骤（占位全部回填）；④《亿级科技知识图谱引擎测试文档》新增**第 8 章「人工审核验收（真实数据批次）」**——8.1 准备（含 Person 双来源绑定顺序=dwd_scholar 在前）/8.2 全量抽取与扣留框架（本批与存量分列）/8.3 三选一裁决表（强 4 预设合并、辅 4 不预设、create9、规则排除 4、损坏 1、信息不足 1；驳回语义按代码口径）/8.4 故障注入重跑（注入标记 FAULT_INJECTION[review-20261019 rerun]）/8.5 收尾核验。
+
+**服务器受限区 `~/deploy/review-suite-20261019/`（真实数据，不外发）**，关键文件行数+sha256[:16]：
+
+| 文件 | 行数 | sha256[:16] |
+|---|---:|---|
+| append/append.sql | 1582 | 376be3af023d2744 |
+| append/MANIFEST.md（全量 R-id→源主键映射+核验状态 join+校验块 93 条；自身不自引哈希） | 729 | — |
+| append/cleanup.sql（随附不执行） | 15 | 1b15cbd6e9f2cbd3 |
+| scripts/person_entity_step_trigger.py（触发版，23 行 pendingReview） | 334 | 11cbf62c519a9b8e |
+| scripts/authored_by_relation_step_fault.py（注入版，7 record_id） | 192 | f964e2c6212fee1f |
+| scripts/base/（9 基础脚本，与公开 page_test 逐字节一致） | 9 文件 | 逐文件见 MANIFEST §5 |
+| selection/cases_merge8\|create8\|reject7\|rerun7.json | 8/8/7/7 | f79a9f213f2a299a 等 |
+| selection/counts.md（口径分列计数） | 91 | 192f9b97ffecffdf |
+| cases/reclassification.md（四分类+驳回语义代码引证，含真实姓名仅受限区） | 151 | 6d6cab4805d877f4 |
+
+全目录 93 条校验值在 MANIFEST §5（raw_doi 244 文件/raw 49 文件为目录聚合哈希）。
+
+**脚本三套已实测**：触发版对 23 个指定作者行输出 pendingReview 实体项（objectId=person_<author_id>、objectName 缺中文自动回落英文、candidate 带全量属性供属性对照）、其余行与基础版逐字段一致；注入版对 7 record_id 抛标注异常、正常行照常出边。两者在 dev2 容器（Python 3.11.13+真实 kg_sdk）冒烟通过；冒烟还抓出并修复 stats 口径不一致（entities 计数先于改道，已改为改道后数）。
+
+### 5. 下一步
+
+待你复核物料后：按批复执行 append.sql 导入（预期 6 表 90/396/9/36/16/18，industry_chain_info 不变）→ 新空间 gkx_review_20261019+9 Schema 全量跑批（触发版 Person+基础版其余）→ 30 案页面验收执行 → 实测数回报。算法两项（Degree 恢复尝试/Louvain 观测口径）仍待用户裁决，未启动实现。

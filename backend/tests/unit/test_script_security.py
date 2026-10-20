@@ -51,6 +51,35 @@ class _ScriptedLLM:
         return self._responses[idx]
 
 
+class _MetaLLM:
+    """按次序返回 (响应, finish_reason) 并回填 result_meta，模拟真实 SDK。
+
+    响应为 None 时模拟 llm.synthesize 的空回答行为（error_class=empty_response）。
+    """
+
+    def __init__(self, script: list[tuple[str | None, str | None]]) -> None:
+        self._script = list(script)
+        self.calls = 0
+
+    def synthesize(
+        self,
+        prompt: str,
+        max_tokens: int = 2048,
+        *,
+        timeout: float | None = None,
+        result_meta: dict | None = None,
+        abort_reg: list | None = None,
+    ) -> str | None:
+        idx = min(self.calls, len(self._script) - 1)
+        self.calls += 1
+        response, finish = self._script[idx]
+        if result_meta is not None:
+            result_meta["finish_reason"] = finish
+            if response is None:
+                result_meta["error_class"] = "empty_response"
+        return response
+
+
 CLEAN_SOURCE = "from kg_sdk import step\n\n\n@step\ndef clean_row(payload):\n    return payload\n"
 
 
@@ -311,6 +340,133 @@ def test_review_truncated_unsafe_body_never_released() -> None:
     assert verdict.safe is False
     assert verdict.unavailable is True
     assert any("格式异常" in i for i in verdict.issues)
+
+
+# ---- 2026-10-21 复核追加（Codex de454db1 四项）----
+
+
+def test_review_contradictory_safe_with_real_evidence_not_released() -> None:
+    """SEC-JSON：safe=true 附带证据齐全的危险 issues 不得放行——
+    在证据清洗前按"结论自相矛盾"处理，重试仍矛盾归不可用。"""
+    client = _FakeLLM(
+        '{"safe": true, "issues": [{"problem": "command execution",'
+        ' "evidence": "os.system(\\"id\\")"}], "summary": "risk"}'
+    )
+    verdict = review_script_security(client, "evil.py", 'import os\nos.system("id")\n')
+    assert verdict.safe is False
+    assert verdict.unavailable is True
+    assert any("自相矛盾" in i for i in verdict.issues)
+    assert len(client.calls) == 2
+
+
+def test_review_contradictory_safe_with_hallucinated_evidence_still_format_error() -> None:
+    """矛盾检查先于证据清洗：evidence 为幻觉不影响"自相矛盾"定性，
+    不允许清洗后空数组掩盖矛盾。"""
+    client = _FakeLLM(
+        '{"safe": true, "issues": [{"problem": "读取密钥",'
+        ' "evidence": "os.environ[\'KEY\']"}], "summary": "risk"}'
+    )
+    verdict = review_script_security(client, "transform.py", "x = 1\n")
+    assert verdict.unavailable is True
+    assert any("自相矛盾" in i for i in verdict.issues)
+
+
+def test_review_finish_reason_length_with_valid_json_not_released() -> None:
+    """SEC-META：finish_reason=length 且 JSON 恰好完整（首尾恰好停在合法位置）
+    不得产生 passed——按结束原因异常重试，仍截断归不可用。"""
+    client = _MetaLLM([('{"safe": true, "issues": [], "summary": "ok"}', "length")] * 2)
+    verdict = review_script_security(client, "transform.py", "x = 1\n")
+    assert verdict.safe is False
+    assert verdict.unavailable is True
+    assert any("截断" in i for i in verdict.issues)
+    assert verdict.category == "unavailable_format"
+    assert client.calls == 2
+
+
+def test_review_finish_reason_content_filter_not_released() -> None:
+    client = _MetaLLM([('{"safe": true, "issues": [], "summary": "ok"}', "content_filter")] * 2)
+    verdict = review_script_security(client, "transform.py", "x = 1\n")
+    assert verdict.unavailable is True
+    assert any("格式异常" in i for i in verdict.issues)
+    assert verdict.category == "unavailable_format"
+
+
+def test_review_finish_reason_length_then_stop_recovers() -> None:
+    """截断重试拿到正常 stop 的完整输出即放行；也验证上一轮的 length
+    元数据不污染后一轮判定（每次尝试清空元数据）。"""
+    client = _MetaLLM(
+        [
+            ('{"safe": true, "issues": [], "summary": "ok"}', "length"),
+            ('{"safe": true, "issues": [], "summary": "ok"}', "stop"),
+        ]
+    )
+    verdict = review_script_security(client, "transform.py", "x = 1\n")
+    assert verdict.safe is True
+    assert verdict.category == "passed"
+    assert client.calls == 2
+
+
+def test_review_finish_reason_stop_passes_unchanged() -> None:
+    client = _MetaLLM([('{"safe": true, "issues": [], "summary": "ok"}', "stop")])
+    verdict = review_script_security(client, "transform.py", "x = 1\n")
+    assert verdict.safe is True
+
+
+def test_review_empty_response_classified_not_unknown() -> None:
+    """SEC-META：空回答（length 烧光预算时常见）归类 empty_response，
+    不再落 unknown/服务异常。"""
+    client = _MetaLLM([(None, "length"), (None, "length")])
+    verdict = review_script_security(client, "transform.py", "x = 1\n")
+    assert verdict.unavailable is True
+    assert verdict.category == "unavailable_empty_response"
+    assert any("模型返回空内容" in i for i in verdict.issues)
+
+
+def test_review_capacity_recovers_after_timeouts(monkeypatch) -> None:
+    """SEC-LIFETIME：4 路超时占满槽位后，工作线程收尾释放槽位，
+    后续校验容量恢复正常（不以提前释放伪造恢复，也不永久泄漏）。"""
+    import concurrent.futures as cf
+    import time as _time
+
+    import service.script_security as mod
+
+    monkeypatch.setattr(mod, "REVIEW_STAGE_SECONDS", 1.0)
+    monkeypatch.setattr(mod, "_RETRY_FLOOR_SECONDS", 0.5)
+
+    class _SlowLLM:
+        def synthesize(
+            self,
+            prompt: str,
+            max_tokens: int = 2048,
+            *,
+            timeout: float | None = None,
+            result_meta: dict | None = None,
+            abort_reg: object | None = None,
+        ) -> str | None:
+            _time.sleep(1.5)
+            return '{"safe": true, "issues": [], "summary": "ok"}'
+
+    slow_results: list[mod.ScriptSecurityVerdict] = []
+    with cf.ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [
+            pool.submit(mod.review_script_security, _SlowLLM(), "t.py", "x = 1\n") for _ in range(4)
+        ]
+        for f in cf.as_completed(futures):
+            slow_results.append(f.result())
+    assert len(slow_results) == 4
+    assert all(v.unavailable for v in slow_results)
+
+    # 工作线程 sleep 结束、future 终态释放槽位后，新校验正常放行。
+    deadline = _time.monotonic() + 10.0
+    verdict = None
+    while _time.monotonic() < deadline:
+        verdict = mod.review_script_security(
+            _FakeLLM('{"safe": true, "issues": [], "summary": "ok"}'), "t.py", "x = 1\n"
+        )
+        if verdict.safe:
+            break
+        _time.sleep(0.2)
+    assert verdict is not None and verdict.safe
 
 
 def test_prompt_scope_contract() -> None:

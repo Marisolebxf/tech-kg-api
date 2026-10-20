@@ -45,6 +45,20 @@ D. 提示词分诊化（上一 commit a3bc564f，同属范围收缩，此处留�
    人设 → 快速分诊器；八类信号清单/证据要求/JSON 契约不变，删去"（不限于）"
    与开放式判定标准，新增防指令注入条款。glm-5.2@coding 7KB 脚本实测思考
    ~2700tok/48s → ~200tok/7s。
+
+【2026-10-21 复核追加（Codex 复核 de454db1 四项，代码分支第四个 commit）】
+E1 结论一致性（SEC-JSON）：safe=true 且原始 issues 非空 = 自相矛盾输出，
+   在证据清洗**前**按格式异常处理（重试→不可用），不因清洗后空数组掩盖。
+E2 结束原因约束（SEC-META）：finish_reason 非 stop/None（length 截断、
+   content_filter 等）时即使 JSON 恰好完整也不得产生结论——截断输出只是
+   "恰好停在合法位置"；空 content 在 synthesize 侧归类 empty_response，
+   不再落 unknown。每次尝试清空上一轮元数据，防前一轮污染后一轮。
+E3 迟登记竞态与慢清理（SEC-LIFETIME）：LLMAbortHandle 以锁+取消标志使
+   取消与迟登记互斥——取消后登记的传输立即关闭且不再发起请求；清理
+   （close）移入守护线程，不拖住调用方返回。槽位仍以工作线程真正收尾
+   为准释放，不伪造容量恢复。调用方墙钟仍是权威总上界。
+E4 前端终态（SEC-SSE）：前端 verifyAndSaveScript 增加终态标志——无终态
+   EOF 按错误收尾（不再让页面停在校验中）；错误回调接通 code/category。
 """
 
 from __future__ import annotations
@@ -58,7 +72,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from infra.llm import LLMClient
+from infra.llm import LLMAbortHandle, LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +97,10 @@ _REVIEW_POOL = concurrent.futures.ThreadPoolExecutor(
     max_workers=_REVIEW_CONCURRENCY, thread_name_prefix="script-sec-review"
 )
 _REVIEW_SLOTS = threading.BoundedSemaphore(_REVIEW_CONCURRENCY)
+# 正常结束原因白名单：stop 之外的 finish_reason（length 截断、content_filter
+# 等）不得产生放行/拦截结论（复核 SEC-META）。None = 无元数据，不约束——
+# 兼容测试假客户端与缺字段的 SDK 响应，该兼容策略在此显式声明。
+_NORMAL_FINISH_REASONS = frozenset({None, "stop"})
 
 # 静态高危 pattern：与提示词的风险类别对齐。re.compile 等模块前缀调用不算
 # （lookbehind 排除），避免把正则预编译误当代码执行。
@@ -243,6 +261,11 @@ def _parse_verdict(raw: str, source: str) -> ScriptSecurityVerdict:
             return _format_error("issue 缺少非空 problem")
         if not isinstance(evidence, str) or not evidence.strip():
             return _format_error("issue 缺少非空 evidence")
+    # 结论一致性（2026-10-21 复核 SEC-JSON）：契约是"安全 → issues 为空数组"。
+    # safe=true 且原始 issues 非空属自相矛盾输出，在证据清洗**前**判格式异常
+    # ——不允许清洗后空数组/证据全假掩盖矛盾（那是把裁判的自相矛盾当放行依据）。
+    if safe and raw_issues:
+        return _format_error("判安全但 issues 非空（结论自相矛盾）")
     if not safe and not raw_issues:
         return _format_error("判不安全但 issues 为空（缺少理由）")
 
@@ -281,7 +304,7 @@ def _unavailable(message: str, *, error_class: str = "unknown") -> ScriptSecurit
 
 
 # 错误分类 → 用户可读原因（classify_llm_error 的分类 + 门内生的 busy/
-# stage_deadline/shutdown/format）。
+# stage_deadline/shutdown/format/empty_response）。
 _UNAVAILABLE_CAUSES = {
     "rate_limit": "限流",
     "timeout": "超时",
@@ -292,6 +315,7 @@ _UNAVAILABLE_CAUSES = {
     "forbidden": "模型访问被拒",
     "shutdown": "服务关闭中",
     "format": "模型返回格式异常",
+    "empty_response": "模型返回空内容",
 }
 
 
@@ -309,6 +333,9 @@ def review_script_security(client: LLMClient, filename: str, source: str) -> Scr
     last_meta: dict[str, Any] = {}
 
     def call() -> str | None:
+        # 每次尝试清空上一轮元数据（复核 SEC-META：不让前一次的 finish_reason
+        # /error_class 污染后一轮判定）。
+        last_meta.clear()
         # 每次调用只拿"剩余墙钟时间"当超时，阶段总时长（含重试）封顶不越
         # REVIEW_STAGE_SECONDS；剩余不足 _RETRY_FLOOR_SECONDS 时直接返回 None，
         # 不再发起注定超时的调用。
@@ -323,7 +350,7 @@ def review_script_security(client: LLMClient, filename: str, source: str) -> Scr
             last_meta["error_class"] = "busy"
             return None
         meta: dict[str, Any] = {}
-        aborts: list[Any] = []
+        aborts = LLMAbortHandle()
         try:
             future = _REVIEW_POOL.submit(
                 client.synthesize,
@@ -339,19 +366,19 @@ def review_script_security(client: LLMClient, filename: str, source: str) -> Scr
             last_meta["error_class"] = "shutdown"
             return None
         # 槽位随 future 终态释放：正常完成、异常、被取消都会走到这里。
+        # 刻意不在放弃等待时提前释放——容量恢复以工作线程真正收尾为准
+        # （复核 SEC-LIFETIME：不以提前释放槽位伪造容量恢复）。
         future.add_done_callback(lambda _f: _REVIEW_SLOTS.release())
         try:
             raw = future.result(timeout=left)
         except concurrent.futures.TimeoutError:
             # 排队未启动的直接取消（done-callback 会释放槽位）；运行中的
-            # HTTP 请求改为关闭专属传输**尽力**中断（评审修订 C：同步线程
-            # 阻塞在 recv 上无法强杀，非硬保证；权威总上界是本次墙钟等待）。
+            # HTTP 请求靠 handle.cancel() 尽力中断：置取消标志（此后迟登记的
+            # 传输会被立即关闭、不再发请求）+ close 已登记传输（阻塞读随
+            # 连接复位出错，滴流实验实证，非硬保证；权威总上界是本次墙钟等待）。
+            # 清理放守护线程：close 慢/挂不拖住返回（复核 SEC-LIFETIME）。
             future.cancel()
-            for transport in aborts:
-                try:
-                    transport.close()
-                except Exception:
-                    logger.exception("放弃等待后关闭在飞请求传输失败")
+            threading.Thread(target=aborts.cancel, daemon=True, name="llm-review-abort").start()
             last_meta["error_class"] = "timeout"
             logger.warning("LLM 安全校验调用超过阶段预算 %.0fs，放弃等待并尽力关闭在飞连接", left)
             return None
@@ -370,6 +397,20 @@ def review_script_security(client: LLMClient, filename: str, source: str) -> Scr
             )
         return raw
 
+    def assess(raw: str) -> ScriptSecurityVerdict:
+        """解析并施加结束原因约束（复核 SEC-META）。
+
+        finish_reason 非 stop/None（length 截断、content_filter 等）时，即使
+        JSON 恰好完整也不得产生 passed/rejected 结论——截断输出只是"恰好停在
+        合法位置"，模型可能还有未输出的内容。无元数据（None）不约束：兼容
+        测试假客户端与缺字段的 SDK 响应。
+        """
+        verdict = _parse_verdict(raw, source)
+        finish = last_meta.get("finish_reason")
+        if verdict.category != "format_error" and finish not in _NORMAL_FINISH_REASONS:
+            return _format_error(f"结束原因异常 finish_reason={finish}")
+        return verdict
+
     raw = call()
     if raw is None:
         # 限流/超时重试一次（glm flash 429 高发），仍失败则明确区分
@@ -381,17 +422,24 @@ def review_script_security(client: LLMClient, filename: str, source: str) -> Scr
             f"LLM 安全校验暂不可用（{_unavailable_cause(error_class)}），请稍后重传",
             error_class=error_class,
         )
-    verdict = _parse_verdict(raw, source)
+    verdict = assess(raw)
     if verdict.summary != LLM_RESPONSE_FORMAT_ERROR:
         return verdict
-    # 模型输出损坏/结构不全（评审修订 B）与限流同待遇：重试一次，仍坏按
-    # 校验不可用处理——"裁判输出抽风"不该伪装成"脚本不安全"。
+    # 模型输出损坏/结构不全/结束原因异常（评审修订 B）与限流同待遇：重试一次，
+    # 仍坏按校验不可用处理——"裁判输出抽风"不该伪装成"脚本不安全"。
     retry = call()
     if retry is not None:
-        verdict = _parse_verdict(retry, source)
+        verdict = assess(retry)
     if verdict.summary == LLM_RESPONSE_FORMAT_ERROR:
+        # 具体原因（结构缺字段/自相矛盾/结束原因异常…）透出到用户可见文案，
+        # 便于对照重试；截断场景补一句成因（复核 SEC-JSON/SEC-META）。
+        reason = ""
+        if verdict.issues:
+            reason = verdict.issues[0].replace("LLM 返回格式异常：", "")
         note = "LLM 安全校验暂不可用（模型返回格式异常"
-        if last_meta.get("finish_reason") == "length":
+        if reason:
+            note += f"：{reason}"
+        if last_meta.get("finish_reason") == "length" and "截断" not in note:
             note += "，输出被 max_tokens 截断"
         note += "），请稍后重传"
         error_class = "format" if retry is not None else (last_meta.get("error_class") or "format")

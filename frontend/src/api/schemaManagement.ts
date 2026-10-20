@@ -479,15 +479,37 @@ export interface VerifyScriptInfo {
   uploadedAt: string | null
 }
 
+export interface VerifyScriptErrorDetail {
+  /** 机器可读错误码：后端 LLM 终态为 llm_unavailable / llm_rejected；
+   *  连接层为 stream_eof（无终态事件连接即关闭）/ stream_timeout（总截止）。 */
+  code?: string
+  /** 后端 verdict.category（passed/rejected/format_error/unavailable_*）。 */
+  category?: string
+}
+
 export interface VerifyScriptHandlers {
   onProgress?: (stage: string, message: string) => void
   onSuccess?: (script: VerifyScriptInfo) => void
-  onError?: (message: string, issues: string[], stage: string) => void
+  onError?: (
+    message: string,
+    issues: string[],
+    stage: string,
+    detail?: VerifyScriptErrorDetail,
+  ) => void
 }
+
+/** SSE 流总截止：后端 LLM 阶段墙钟 50s + 传输/保存余量；正常流远早于此结束。
+ *  超时按错误收尾并中断连接——不能让页面无限停在"校验中"（代理层若先掐
+ *  连接，会走无终态 EOF 分支，同样是错误收尾）。 */
+const VERIFY_STREAM_DEADLINE_MS = 75_000
 
 /**
  * 上传脚本 → LLM 安全校验 → 保存，以 SSE 流式回传进度。
  * 走 fetchEventSource（支持 POST + 自定义头 + 流式），不能用 axios（其响应拦截器会解包且不支持流）。
+ *
+ * 终态语义（2026-10-21 复核 SEC-SSE）：success/error 事件、无终态 EOF、总截止
+ * 三者都算终态，只触发一次 onError/onSuccess——流在只有 progress 的情况下正常
+ * 关闭不再让调用方悬空；error 事件的 code/category 经第 4 参数透出。
  */
 export async function verifyAndSaveScript(
   schemaId: string,
@@ -499,56 +521,93 @@ export async function verifyAndSaveScript(
   const url = `${baseUrl}${PREFIX}/schemas/${schemaId}/script/verify`
   const body = new FormData()
   body.append('script', file)
-  await fetchEventSource(url, {
-    method: 'POST',
-    headers: { 'X-User-Id': userId },
-    body,
-    openWhenHidden: true,
-    async onopen(response: Response): Promise<void> {
-      if (response.ok) return
-      let detail = `校验请求失败：${response.status}`
-      try {
-        const data = (await response.json()) as { detail?: unknown }
-        if (typeof data.detail === 'string') detail = data.detail
-        else if (Array.isArray(data.detail)) {
-          detail = data.detail
-            .map((item) => (item as { msg?: string }).msg)
-            .filter(Boolean)
-            .join('；')
+  let finished = false
+  const finishWithError = (
+    message: string,
+    issues: string[],
+    stage: string,
+    detail?: VerifyScriptErrorDetail,
+  ) => {
+    if (finished) return
+    finished = true
+    handlers.onError?.(message, issues, stage, detail)
+  }
+  const controller = new AbortController()
+  const watchdog = setTimeout(() => {
+    finishWithError('校验超时：服务端长时间未返回结果，请稍后重试', [], 'stream', {
+      code: 'stream_timeout',
+    })
+    controller.abort()
+  }, VERIFY_STREAM_DEADLINE_MS)
+  try {
+    await fetchEventSource(url, {
+      method: 'POST',
+      headers: { 'X-User-Id': userId },
+      body,
+      signal: controller.signal,
+      openWhenHidden: true,
+      async onopen(response: Response): Promise<void> {
+        if (response.ok) return
+        let detail = `校验请求失败：${response.status}`
+        try {
+          const data = (await response.json()) as { detail?: unknown }
+          if (typeof data.detail === 'string') detail = data.detail
+          else if (Array.isArray(data.detail)) {
+            detail = data.detail
+              .map((item) => (item as { msg?: string }).msg)
+              .filter(Boolean)
+              .join('；')
+          }
+        } catch {
+          // ignore JSON parse error
         }
-      } catch {
-        // ignore JSON parse error
-      }
-      throw new Error(detail)
-    },
-    onmessage(ev) {
-      if (!ev.data) return
-      let payload: {
-        type: string
-        stage?: string
-        message?: string
-        issues?: string[]
-        script?: VerifyScriptInfo
-      }
-      try {
-        payload = JSON.parse(ev.data)
-      } catch {
-        return
-      }
-      if (payload.type === 'progress') {
-        handlers.onProgress?.(payload.stage || '', payload.message || '')
-      } else if (payload.type === 'success') {
-        handlers.onSuccess?.(payload.script as VerifyScriptInfo)
-      } else if (payload.type === 'error') {
-        handlers.onError?.(
-          payload.message || '校验失败',
-          payload.issues || [],
-          payload.stage || '',
-        )
-      }
-    },
-    onerror(err) {
-      throw err
-    },
-  })
+        throw new Error(detail)
+      },
+      onmessage(ev) {
+        if (!ev.data) return
+        let payload: {
+          type: string
+          stage?: string
+          message?: string
+          issues?: string[]
+          code?: string
+          category?: string
+          script?: VerifyScriptInfo
+        }
+        try {
+          payload = JSON.parse(ev.data)
+        } catch {
+          return
+        }
+        if (payload.type === 'progress') {
+          handlers.onProgress?.(payload.stage || '', payload.message || '')
+        } else if (payload.type === 'success') {
+          if (finished) return
+          finished = true
+          handlers.onSuccess?.(payload.script as VerifyScriptInfo)
+        } else if (payload.type === 'error') {
+          finishWithError(
+            payload.message || '校验失败',
+            payload.issues || [],
+            payload.stage || '',
+            { code: payload.code, category: payload.category },
+          )
+        }
+      },
+      onerror(err) {
+        throw err
+      },
+    })
+    // 流正常结束但没见到终态事件（progress 后连接被掐）：按错误收尾，
+    // 不能让页面停在"校验中"假装还在跑。
+    finishWithError('连接中断，校验结果未知，请重试', [], 'stream', { code: 'stream_eof' })
+  } catch (error) {
+    // 已有终态（onSuccess/onError 已触发）后的连接收尾异常（含看门狗主动
+    // abort）不是新错误；未收尾的异常（如非 200 打开失败）沿用既有契约交
+    // 调用方 catch 处理。
+    if (finished) return
+    throw error
+  } finally {
+    clearTimeout(watchdog)
+  }
 }

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 import types
 
 import httpx
@@ -146,3 +148,59 @@ def test_synthesize_aborted_before_request_never_calls_sdk() -> None:
     assert out is None
     assert meta["error_class"] == "aborted"
     assert stub.calls == 0
+
+
+def test_cancel_during_sdk_construction_closes_transport_no_dispatch(monkeypatch) -> None:
+    """验收项 D（复核 c1be5c4a 后续交错）：register 已成功、SDK 构造未完成时取消。
+
+    交错：worker 登记成功（置旗前）→ OpenAI 构造被闸暂停 → 调用方
+    mark_cancelled + close_transports（关掉已登记传输）→ 放行构造。
+    已关闭的专属传输发不出任何请求（httpx 在发送前报 client closed），
+    dispatch 保持 0；worker 侧按异常分类降级返回 None，不会误放行。
+    """
+    import infra.llm as llm_mod
+
+    init_gate = threading.Event()
+    state: dict = {"dispatch": 0, "http": None, "out": "UNSET"}
+
+    class _GatedOpenAI:
+        def __init__(self, **kwargs) -> None:
+            state["http"] = kwargs.get("http_client")
+            init_gate.wait(10.0)  # 取消落在这个窗口（SDK 构造期）
+
+        @property
+        def chat(self):  # noqa: ANN201
+            return types.SimpleNamespace(completions=self)
+
+        def create(self, **kwargs):  # noqa: ANN003
+            # 真实 SDK 语义：请求经专属传输发出；关闭的 httpx 客户端发送前即报错。
+            state["http"].post("http://127.0.0.1:9/x", json=kwargs)  # type: ignore[union-attr]
+            state["dispatch"] += 1
+            return _resp("ok", "stop")
+
+    monkeypatch.setattr(llm_mod, "OpenAI", _GatedOpenAI)
+
+    client = LLMClient(api_key="test-key")
+    handle = LLMAbortHandle()
+    meta: dict = {}
+
+    def run() -> None:
+        state["out"] = client.synthesize("p", timeout=5.0, result_meta=meta, abort_reg=handle)
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    # 等 worker 登记成功（传输进表 = register 返回 True）。
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and not handle._transports:  # noqa: SLF001
+        time.sleep(0.01)
+    assert handle._transports, "worker 未在窗口内完成登记"
+    # 调用方放弃：同步置旗 + 关闭已登记传输（前台执行=守护线程等价时序）。
+    pending = handle.mark_cancelled()
+    handle.close_transports(pending)
+    init_gate.set()  # 放行 SDK 构造
+    worker.join(10.0)
+
+    assert state["out"] is None
+    assert state["dispatch"] == 0, "已关闭的传输上不得发出请求"
+    assert meta["error_class"] == "other"  # 发送前报错 → 异常分类降级，不误放行
+    assert state["http"] is not None and state["http"].is_closed

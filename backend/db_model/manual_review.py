@@ -69,6 +69,69 @@ class ReviewCase(Base):
     input_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
     candidate_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
     diagnosis: Mapped[str] = mapped_column(Text, nullable=False)
+    # 来源账本计数（gray-gate-v2）：不同来源总数 / 未存 evidence 的截断来源数。
+    # 逻辑计数由 manual_review_case_source 行数维护（追加事务内 UPDATE），
+    # 不进快照不进 dedupe 哈希（快照哈希稳定性契约）。
+    source_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    source_truncated_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class ReviewCaseSource(Base):
+    """T_LINK 案来源行（gray-gate-v2）：一笔源事件对一案的幂等追加账本。
+
+    唯一键 ``(case_id, execution_id, source_record_id)``——同一执行的同一源
+    记录重放（activity 重试/失败重跑）命中唯一键冲突整体回滚、不加计；
+    ``execution_id`` 只作来源行审计字段，不进逻辑 ingress identity 键。
+    ``evidence`` 只存字段名与布尔（≤2KB，零业务值）；前 32 个来源带 evidence，
+    之后的行仍插入（truncated=true 语义靠 evidence 为空 + 计数表达），明细行
+    如实无界（rows_per_case p99 监控 + 1024 行 advisory 告警转人工）。
+    """
+
+    __tablename__ = "manual_review_case_source"
+    __table_args__ = (
+        UniqueConstraint(
+            "case_id", "execution_id", "source_record_id", name="uk_review_case_source"
+        ),
+        Index("ix_review_case_source_case", "case_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    case_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # '' 代替 NULL（唯一键含 NULL 不去重）；无执行上下文（单测直调）也是 ''
+    execution_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    source_binding_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    source_record_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_event_version: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    evidence: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    reason: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class ReviewVerdictApplication(Base):
+    """T_LINK 裁决应用标记（gray-gate-v2）：priorVerdict.applyStatus 的耐久落点。
+
+    四态：``NOT_REQUIRED``（reject 等无需图写，可安全重放）/ ``APPLIED``
+    （图写确认，可幂等重放）/ ``FAILED``（图写失败，失败关闭人工重应用）/
+    ``UNKNOWN``（两段提交的意图标记初值——崩溃窗口收敛态；存量旧案缺整行
+    也按 UNKNOWN 对待，不得从 RESOLVED/APPROVED 猜测）。两段提交边界：
+    Tx1 决议+意图标记（reject 直接 NOT_REQUIRED）→ 图写 → Tx2 改 APPLIED/FAILED。
+    ``canonical_vid``=merge 目标；``reserved_vid``=create 预留 vid——重放
+    rewrite_to_canonical 只读本表（查无抛 MERGE_CANONICAL_MISSING）。
+    """
+
+    __tablename__ = "manual_review_verdict_application"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    case_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    decision_id: Mapped[int | None] = mapped_column(Integer)
+    verdict: Mapped[str] = mapped_column(String(32), nullable=False)
+    apply_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    canonical_vid: Mapped[str | None] = mapped_column(String(256))
+    reserved_vid: Mapped[str | None] = mapped_column(String(256))
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 

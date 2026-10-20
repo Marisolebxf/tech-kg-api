@@ -47,6 +47,9 @@ _NAME_KEYS = ("name", "name_zh", "name_cn", "name_en")
 # （总分 ~0.74），真实业务特征（机构/领域/学历）的分歧被稀释，灰区 case 虚高
 # （2026-10-16 王祎/王翊 样本实测）。业务列不同来源命名不一，无法穷举，这里
 # 只收平台与摄取管线自身的元数据列。
+# extra_json（gray-gate-v2 追加）：厂商把 ETL 证据整包塞进该列，同名实体间
+# 「都有这列」恒命中，一致率被系统性抬高——与身份无关的打包载荷，整列排除
+# （生产影响面=Organization/Person 主受影响，启用随 v2 部署审批）。
 _META_PROP_KEYS = {
     "id",
     "vid",
@@ -65,6 +68,7 @@ _META_PROP_KEYS = {
     "match_method",
     "scholar_status",
     "confidence",
+    "extra_json",
 }
 
 
@@ -104,13 +108,16 @@ def score_candidate(
 ) -> tuple[float, dict[str, Any]]:
     """单候选加权评分：``NAME_WEIGHT``*名称相似 + ``PROPS_WEIGHT``*属性一致率。
 
-    只比较双方都非空的业务属性（平台列/身份列/``_`` 元字段排除）；无可比属性时
-    属性分记 0.5（未知中性——同名但无从比对，既不推向自动合并也不推向新建）。
+    只比较双方都非空的业务属性（平台列/身份列/``_`` 元字段/extra_json 打包
+    载荷排除）；无可比属性时属性分记 0.5（未知中性——同名但无从比对，既不
+    推向自动合并也不推向新建）。证据 v2：``comparedProps`` 每字段
+    ``{key, match, side}`` 布尔化（不含业务值），据此可精确重算一致率
+    （``propMatched/propCompared``）。
     """
     name_sim = (
         fuzz.ratio(normalize_display_name(incoming_name), normalize_display_name(cand_name)) / 100.0
     )
-    common: list[str] = []
+    compared: list[dict[str, Any]] = []
     agree = 0
     for key, value in (incoming_props or {}).items():
         if key in _META_PROP_KEYS or str(key).startswith("_"):
@@ -119,15 +126,55 @@ def score_candidate(
         right = _comparable((cand_props or {}).get(key))
         if left is None or right is None:
             continue
-        common.append(key)
-        if left == right:
+        matched = left == right
+        compared.append({"key": key, "match": matched, "side": "both"})
+        if matched:
             agree += 1
-    props_agree = agree / len(common) if common else 0.5
+    props_agree = agree / len(compared) if compared else 0.5
     score = NAME_WEIGHT * name_sim + PROPS_WEIGHT * props_agree
     return score, {
         "nameSim": round(name_sim, 3),
         "propsAgree": round(props_agree, 3),
-        "comparedProps": common,
+        "propCompared": len(compared),
+        "propMatched": agree,
+        "comparedProps": compared,
+    }
+
+
+def eligible_candidates(
+    incoming_name: str,
+    incoming_vid: str | None,
+    candidates: list[dict[str, Any]] | None,
+    *,
+    graph_space: str | None = None,
+    node_label: str | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """eligibility 前置过滤（gray-gate-v2 统一口径，显式上下文）。
+
+    只做两件事：``vid == 自身`` 的候选剔除；归一显示名与来向名**不同**的候选
+    剔除（同名路天然满足；Milvus 近邻路/批内路必须再过滤——「名称相近但
+    不同名」的候选只作召回诊断，不进 decide，不再抬高灰区命中）。
+    返回 ``(eligible, filter_info)``；filter_info 只含计数与上下文（诊断入
+    召回信封，不含候选本体与业务值）。
+    """
+    norm = normalize_display_name(incoming_name)
+    eligible: list[dict[str, Any]] = []
+    skipped_self = 0
+    skipped_non_same_name = 0
+    for cand in candidates or []:
+        vid = str(cand.get("vid") or "")
+        if incoming_vid and vid == str(incoming_vid):
+            skipped_self += 1
+            continue
+        if not norm or normalize_display_name(cand.get("name")) != norm:
+            skipped_non_same_name += 1
+            continue
+        eligible.append(cand)
+    return eligible, {
+        "skippedSelfVid": skipped_self,
+        "skippedNonSameName": skipped_non_same_name,
+        "graphSpace": graph_space,
+        "nodeLabel": node_label,
     }
 
 
@@ -167,16 +214,31 @@ def decide(scored: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# 召回状态信封（gray-gate-v2）：RouteStatus 五态如实上桌，不再吞异常成「真空」
+# ---------------------------------------------------------------------------
+
+ROUTE_OK = "ok"
+# 查询真实跑过且零命中（区别于「没查成」）
+ROUTE_TRUE_ZERO = "true_zero"
+# 仅限 DESCRIBE 成功且无名列车：tag 真没有显示名列
+ROUTE_NO_NAME_COLUMN = "no_name_column"
+# 可用性降级（DESCRIBE 失败按 name 兜底 / properties() 失败仅名称比对 / 近邻路未启用）
+ROUTE_DEGRADED = "degraded"
+# 检索服务报错（近邻路异常吞掉后如实标注，不再伪装成空召回）
+ROUTE_SERVICE_ERROR = "service_error"
+
 # 同名召回的名字分块：单条 MATCH 的 IN 列表与名单长度成比例地撑大 graphd
 # 查询内存（抽取批次 2000 时每批两条 2000 名巨查 ×4 并发，实测把共享图库
 # 推过内存高水位，缺陷㉘）。分块后单查询形状有界，结果按块合并；每块各自
-# LIMIT 200，召回总量相对旧的全批一条 LIMIT 200 只多不少（旧实现本就是任意
-# 截断，分块反而更完整）。
+# LIMIT 200，召回总量相对旧的全批一条 LIMIT 200 只多不少。
 _RECALL_NAME_CHUNK = 150
 
 
-def recall_same_name(client: Any, tag: str, names: list[str]) -> dict[str, list[dict[str, Any]]]:
-    """图库同名召回：``{显示名: [{"vid", "name", "props"}...]}``。
+def recall_same_name(
+    client: Any, tag: str, names: list[str]
+) -> tuple[dict[str, list[dict[str, Any]]], str]:
+    """图库同名召回：``({显示名: [{"vid", "name", "props"}...]}, routeStatus)``。
 
     ``resolve_entity_batch`` 与 pendingReview 挂实体改道共用的召回口径：
     DESCRIBE 探测 tag 实际存在的显示名列（不同来源主名列不一，引用不存在的列
@@ -186,13 +248,20 @@ def recall_same_name(client: Any, tag: str, names: list[str]) -> dict[str, list[
     处理）。只依赖传入 client，同步函数，异常语义由调用方决定。
     名单按 ``_RECALL_NAME_CHUNK`` 分块查询后合并（见其注释）。
 
+    routeStatus（gray-gate-v2 召回状态信封，如实上桌）：DESCRIBE 失败按 name
+    兜底=``degraded``（不再伪装正常）；DESCRIBE 成功无名列车=``no_name_column``
+    （仅此一种情形准用该态）；properties() 降级=``degraded``；跑过且零命中=
+    ``true_zero``；正常=``ok``。查询本身抛错仍按原语义上抛（技术失败交调用方
+    重试，不吞成「真空」）。
+
     名称列一律 tag 限定（``v.`{tag}`.`{col}```）：ETL 混入共享 tag（如
     organization_base）的顶点是多 tag 顶点，非限定属性访问会被引擎按另一 tag
     解析成 NULL——WHERE 静默不命中，同名召回凭空变空。MATCH 已按 tag 锚定，
     限定引用恒安全（单 tag 顶点同样正确）。
     """
     if not names:
-        return {}
+        return {}, ROUTE_TRUE_ZERO
+    describe_failed = False
     try:
         described = client.execute_query(f"DESCRIBE TAG `{tag}`")
         fields = {
@@ -202,10 +271,12 @@ def recall_same_name(client: Any, tag: str, names: list[str]) -> dict[str, list[
     except Exception:  # noqa: BLE001
         logger.warning("DESCRIBE TAG %s 失败，同名召回按 name 列兜底", tag)
         name_cols = ["name"]
+        describe_failed = True
     if not name_cols:
         logger.info("tag %s 无显示名列（name/name_zh/name_cn/name_en），跳过同名召回", tag)
-        return {}
+        return {}, ROUTE_NO_NAME_COLUMN
     existing: dict[str, list[dict[str, Any]]] = {}
+    props_degraded = False
     for start in range(0, len(names), _RECALL_NAME_CHUNK):
         chunk = names[start : start + _RECALL_NAME_CHUNK]
         name_list = ",".join(json.dumps(n, ensure_ascii=False) for n in chunk)
@@ -221,6 +292,7 @@ def recall_same_name(client: Any, tag: str, names: list[str]) -> dict[str, list[
             logger.warning("同名召回 properties() 失败，降级为仅名称比对")
             result = client.execute_read(f"{base_match} LIMIT 200")
             name_only = True
+            props_degraded = True
         for rec in result.records or []:
             vid = str(rec.get("vid") or "")
             props = {} if name_only else (rec.get("props") or {})
@@ -239,7 +311,12 @@ def recall_same_name(client: Any, tag: str, names: list[str]) -> dict[str, list[
                 existing.setdefault(display, []).append(
                     {"vid": vid, "name": display, "props": props}
                 )
-    return existing
+    status = ROUTE_OK
+    if describe_failed or props_degraded:
+        status = ROUTE_DEGRADED
+    elif not existing:
+        status = ROUTE_TRUE_ZERO
+    return existing, status
 
 
 # ---------------------------------------------------------------------------
@@ -278,8 +355,8 @@ def _milvus_fuzzy_recall(
     *,
     milvus: Any | None = None,
     embedder: Any | None = None,
-) -> dict[str, list[dict[str, Any]]]:
-    """Milvus 稠密近邻召回（fail-open）：``{显示名: [{"vid","name","props","similarity"}...]}``。
+) -> tuple[dict[str, list[dict[str, Any]]], str]:
+    """Milvus 稠密近邻召回（fail-open）：``({显示名: [...候选...]}, routeStatus)``。
 
     复用实体检索的 ``kg_entity`` 集合（抽取链路末尾 reindex 全量同步 + T_LINK
     裁决落图后增量 upsert 维护），按 ``graph_space`` + ``entity_type`` 过滤取
@@ -287,13 +364,17 @@ def _milvus_fuzzy_recall(
     JSON 快照），不回图逐点取——索引滞后最多损失一点属性一致率（偏保守，落
     灰区转人工），换取消歧主通道零额外图查询。
 
-    任何一步不可用（开关关闭 / embedding 未配置 / 集合不存在 / 空间未建索引 /
-    检索异常）都返回空 dict，调用方退化为仅同名精确召回，不阻塞写图。
+    任何一步不可用（开关关闭 / embedding 未配置 / 集合不存在 / 空间未建索引）
+    都返回空 dict（fail-open，不阻塞写图），但 routeStatus 如实区分：
+    可用性降级=``degraded``（未启用/未配置/未建索引）；检索异常=``service_error``
+    （吞掉的是异常，不再伪装成真空）；真跑过且零命中=``true_zero``；有命中=
+    ``ok``。近邻候选只作召回诊断——eligibility 前置过滤会把归一异名候选全部
+    剔除，不进 decide。
     """
     if not names:
-        return {}
+        return {}, ROUTE_TRUE_ZERO
     if os.getenv("ENTITY_DISAMBIGUATION_MILVUS_RECALL", "1") == "0":
-        return {}
+        return {}, ROUTE_DEGRADED
     try:
         if embedder is None:
             from service.entity_search import _embedding_client
@@ -301,7 +382,7 @@ def _milvus_fuzzy_recall(
             embedder = _embedding_client()
         if embedder is None:
             logger.info("消歧 Milvus 召回：embedding 未配置，退化为仅同名精确召回")
-            return {}
+            return {}, ROUTE_DEGRADED
         if milvus is None:
             from infra.milvus import get_milvus_client
 
@@ -315,18 +396,18 @@ def _milvus_fuzzy_recall(
         assert milvus is not None  # 上一分支已赋值；仅为收窄类型
         if not milvus.has_collection(COLLECTION_NAME):
             logger.info("消歧 Milvus 召回：kg_entity 集合不存在，退化为仅同名精确召回")
-            return {}
+            return {}, ROUTE_DEGRADED
         if not space:
             from infra.graph_db.config import TRSGraphSettings
 
             space = TRSGraphSettings.from_env().space
         if not _milvus_space_has_rows(milvus, space):
             logger.info("消歧 Milvus 召回：图空间 %s 未建实体索引，退化为仅同名精确召回", space)
-            return {}
+            return {}, ROUTE_DEGRADED
         vectors = embedder.embed(names)
         if not vectors or len(vectors) != len(names):
             logger.info("消歧 Milvus 召回：名称 embedding 失败，退化为仅同名精确召回")
-            return {}
+            return {}, ROUTE_DEGRADED
         top_k = _milvus_recall_top_k()
         min_sim = _milvus_recall_min_sim()
         expr = (
@@ -374,33 +455,50 @@ def _milvus_fuzzy_recall(
                             "similarity": round(similarity, 4),
                         }
                     )
-        return {names[idx]: cands for idx, cands in hits_by_idx.items() if 0 <= idx < len(names)}
+        merged = {names[idx]: cands for idx, cands in hits_by_idx.items() if 0 <= idx < len(names)}
+        return merged, (ROUTE_OK if merged else ROUTE_TRUE_ZERO)
     except Exception:  # noqa: BLE001 - 近邻路失败绝不阻塞写前消歧
         logger.warning("消歧 Milvus 召回失败，退化为仅同名精确召回", exc_info=True)
-        return {}
+        return {}, ROUTE_SERVICE_ERROR
+
+
+def recall_candidates_envelope(
+    client: Any, tag: str, names: list[str], *, space: str | None = None
+) -> dict[str, Any]:
+    """消歧多路召回 + 状态信封（gray-gate-v2 统一入口）。
+
+    返回 ``{space, tag, routes: {exact, near}, nearCandidateCount,
+    candidates: {显示名: [候选...]}}``：candidates 与 ``recall_same_name`` 的
+    载荷形状一致（两路并集按 vid 去重、同名路在前，近邻候选附 ``similarity``）；
+    ``routes`` 两路各自的 RouteStatus（ok/true_zero/no_name_column/
+    degraded/service_error）——写入案件快照的召回观测（进 input_snapshot，
+    不进 dedupe 哈希）。近邻路 fail-open 语义不变。
+    """
+    exact, exact_status = recall_same_name(client, tag, names)
+    fuzzy, near_status = _milvus_fuzzy_recall(tag, names, space)
+    if not fuzzy:
+        merged = exact
+    else:
+        merged = {}
+        for name in names:
+            cands = list(exact.get(name) or [])
+            seen = {str(c.get("vid")) for c in cands}
+            for cand in fuzzy.get(name) or []:
+                if str(cand.get("vid")) not in seen:
+                    cands.append(cand)
+            if cands:
+                merged[name] = cands
+    return {
+        "space": space,
+        "tag": tag,
+        "routes": {"exact": exact_status, "near": near_status},
+        "nearCandidateCount": sum(len(v) for v in fuzzy.values()),
+        "candidates": merged,
+    }
 
 
 def recall_candidates(
     client: Any, tag: str, names: list[str], *, space: str | None = None
 ) -> dict[str, list[dict[str, Any]]]:
-    """消歧多路召回（写前判定与挂实体改道的统一入口）：
-
-    图库同名精确（``recall_same_name``）∪ Milvus 稠密近邻（``_milvus_fuzzy_recall``），
-    两路并集按 vid 去重、同名路在前（保序稳定）。近邻路 fail-open——不可用即
-    退化为仅同名精确召回，行为与旧版完全一致。返回形状与 ``recall_same_name``
-    一致，近邻路候选额外附 ``similarity``（稠密相似度，供排查）。
-    """
-    exact = recall_same_name(client, tag, names)
-    fuzzy = _milvus_fuzzy_recall(tag, names, space)
-    if not fuzzy:
-        return exact
-    merged: dict[str, list[dict[str, Any]]] = {}
-    for name in names:
-        cands = list(exact.get(name) or [])
-        seen = {str(c.get("vid")) for c in cands}
-        for cand in fuzzy.get(name) or []:
-            if str(cand.get("vid")) not in seen:
-                cands.append(cand)
-        if cands:
-            merged[name] = cands
-    return merged
+    """兼容包装：只要候选载荷（v1 调用方），状态信封走 recall_candidates_envelope。"""
+    return recall_candidates_envelope(client, tag, names, space=space)["candidates"]

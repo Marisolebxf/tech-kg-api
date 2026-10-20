@@ -535,7 +535,9 @@ def test_merge_verdict_syncs_target_vid(service, graph, entity_search_sync_calls
 
 
 def test_legacy_and_reject_verdicts_skip_sync(service, graph, entity_search_sync_calls):
-    # 存量写后 case：实体已在图，只记录决议，不触发索引联动
+    # 存量写后 case：实体已在图，只记录决议，不触发索引联动。gray-gate-v2
+    # 两段提交把「无图写」判定前移（快照无 _incoming → applyStatus=NOT_REQUIRED，
+    # 不进图写段）——联动调用也不再发生（v1 会记一条 applied=False 的空调用）。
     case = service.create_direct_case(
         **gray_case_kwargs(
             candidate={
@@ -554,14 +556,12 @@ def test_legacy_and_reject_verdicts_skip_sync(service, graph, entity_search_sync
         "",
         actor(),
     )
-    assert entity_search_sync_calls == [
-        {"applied": False, "note": "存量写后 case：实体已在图，仅记录决议"}
-    ]
+    assert entity_search_sync_calls == []
 
     # 驳回不写图：无联动
     case_id, version = opened(service)
     service.submit(case_id, version, "reject-candidate", {"entityVerdict": "reject"}, "", actor())
-    assert len(entity_search_sync_calls) == 1
+    assert entity_search_sync_calls == []
 
 
 def test_entity_search_sync_swallows_infra_failure(monkeypatch):

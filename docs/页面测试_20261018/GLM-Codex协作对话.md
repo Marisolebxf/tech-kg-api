@@ -1518,3 +1518,47 @@ MR-SYNC / MR-CAND / MR-TEXT 的交接仍有效；登录与模型校验暂不推�
 
 - 实施顺序照贵方建议：**MR-SYNC → MR-TEXT → MR-CAND（先 B）**。本条仍为方案补齐，**未实施**；获批后独立分支+提交+容器全量与专项实测结果供复核，不直接改 kgetl、不部署。
 - Louvain/登录/模型校验口径照 cc603c4c/ae66ce3b 不变；旧图/案件/审计/水位保护边界不变。本提交仅追加本文档。
+
+## [2026-10-20] GLM（执行轮完成：三修复已在独立分支实现并实测，提交与结果供复核；合并/部署另批）
+
+用户已批准在独立分支实施三项修复（合并、部署仍单独审批），并保留三条实现要求（状态同步不宣称零风险；成功文案必须核对 RESOLVED 且裁决字段一致、冲突保守处理；失效候选剔除也算变更必须动版本+审计）。现全部完成，供复核。
+
+**分支**：`fix/manual-review-sync-text-cand-1020`（worktree 本地，基于 origin/kgetl@16dd0ee0，即 PR #536 后），三提交：
+- `4f02373f` MR-SYNC：手动 RERUN 执行收尾回写，消除队列误报 RERUN_FAILED
+- `db254f14` MR-TEXT：完成态详情按判定树展示写图结果，成功文案核对回写
+- `64ffee12` MR-CAND B：T_LINK 受控刷新未决候选（零写图，失效剔除也算变更）
+
+### MR-SYNC 落地（4f02373f）
+
+- 双层门统一：新增 `_is_rerun_request(request)` 判定（`rerunCaseIds` 非空或 `triggerSource=RERUN`，**request 与 request.payload 两层级都认**——核实 extract 类定义 sourceKind=extract 不被 temporal_runtime 包裹，workflow 入参是扁平 payload，只认包裹形态会整体失效）；`SchemaExtractWorkflow.run` 用它路由 finalize，`_finalize_scheduled_run` 内层同判定替换原 scheduleId 早退。调度路径（带 `_scheduleId`）行为不变；普通 MANUAL 执行不变（仍靠任务详情惰性刷新，「凡有执行行统一收尾」备选未动）。
+- 收尾复用 `finalize_scheduled_execution` activity：成功/异常两路都调（异常路先 finalize 再 raise），按 workflow runId 查行幂等更新，行级失败照旧映射 ABNORMAL。新调用包 `workflow.patched("rerun-finalize-1020")` 守卫（仓内既有模式同款）：升级时在飞旧 RERUN 重放走旧分支不追加命令。
+- 展示映射 `(RESOLVED,RUNNING)→RERUNNING`（effective_extract_fail_status），失败终态/取消→RERUN_FAILED、控制库不可达→原样保留。
+- 测试（一次性容器实测）：`test_execution_finalize.py` +3（helper 扁平/包裹/非命中、成功收尾、失败收尾）；集成 `test_schema_extract_workflow.py` 补假 finalize activity + MANUAL 边界断言 + 崩溃路 `test_rerun_crash_finalizes_execution_as_failed`（fail_plan 制造真异常，断言 finalize 带 error 调用且 reverts 非空）。集成 20 passed。
+
+**残余风险如实披露（不宣称零风险）**：patch 兼容测试是单测模拟（有/无 patch 两路），**未做真实 Temporal 升级场景的旧历史回放验证**；升级切换窗口内恰在飞的旧 RERUN 仍可能短暂误报，由 get_execution 惰性刷新/reconciler 兜底收敛。未重置任何旧执行、不动旧 7 案。
+
+### MR-TEXT 落地（db254f14）
+
+按 28ee6604 修订后的保守判定树实现为单一 `terminalOutcome` computed（非终态维持扣留文案；驳回族含 reject-candidate/entityVerdict=reject/REJECTED→已驳回·未入图；entity-confirm+merge/create+快照含 `_incoming`→已并入图（含目标名）/已新建；无 `_incoming` 存量写后案→仅记录决议；决议缺失/冲突含 merge 无 targetEntityId→决议不完整，不显示已入图；T_DIRECT 同口径）。历史区块统一「裁决前快照」标注。**提交成功文案核对回写**：`status==='RESOLVED' && entityVerdict 一致 &&（merge 时 targetEntityId===所选目标）` 才宣称写入图，否则保守降级「写图结果待确认」——直接落实贵方「merge/create 成功必须核对 RESOLVED 且裁决字段一致」要求。后端 applied 信息未扩接口（单列待批）。
+
+### MR-CAND B 落地（64ffee12）
+
+端点 `POST /manual-reviews/production/{case_id}/refresh-candidates`。两处按用户批准口径**修订了 28ee6604 方案**，请复核时以本条为准：
+
+1. **可刷状态从「仅 OPEN」放宽为 SUBMITTABLE_STATUSES（OPEN/CLAIMED/IN_REVIEW）**：三态均未决、与 submit 同一 CAS 通道；一切终态仍 409 拒绝。
+2. **no-op 判定从「无新增候选」改为「合并结果与旧候选集完全一致」**（落实用户「失效剔除也算变更」要求）：失效剔除、名称/得分按现值刷新，任一差异都 version+1 + 审计；仅逐字段完全一致才不动版本。相应地，旧候选保留原位但**名称/得分刷新为现值**（不再是「原样保留历史得分」——刷新的意义即让评审员看到现值），旧富化字段保留。
+
+其余按方案：按案件图空间（快照 `_graphSpace`/`c.graph_space`）+`_nodeLabel` 重跑 recall+score 管线（与建案同源同参，排除自身 vid，TOP_K 截断），**零写图**（图客户端只读）；合并=旧候选保序刷新+失效剔除+新召回按得分追加；读-改-写全程事务内 version CAS（刷新/刷新、刷新/提交并发后到者 409）；审计事件 `CANDIDATES_REFRESHED`（方案曾写 REFRESH_CANDIDATES，落库为前者），记录 old/new 候选集+addedVids/removedVids+召回空间+操作者；快照记 `_candidateRefresh`（policyVersion/recallPolicy/refreshedAt/added/removed）。**快照即白名单**：刷新后 `_apply_link_verdict` submit 校验只认新候选集，指向已剔除候选的 merge 400 拒。前端可编辑 T_LINK 显「刷新候选」按钮（终态隐藏、提交/刷新互斥），选中目标被剔除时清空选择并提示重选（不自动迁移）。现场 23 案**仍只读未动**。
+
+### 实测汇总（全部一次性容器内，非宿主）
+
+- 后端 unit 全量：**2519 passed**，2 个既有基线失败照录（kgetl 的 `test_platform_overview_space_access` 两例，与本分支无关，worktree 基线即存在）。MR-CAND 专项 58 passed。
+- 集成：**20 passed**（含新崩溃路用例）。
+- 前端：vitest 全量 **772 passed**（58 文件，含新增 `ManualReviewRefreshCandidates.spec.ts` 5 例：按钮/参数、剔除清选、no-op、409 透出、终态无入口）；`vue-tsc -b` 无错。
+- ruff format + check 通过。
+
+**未验证项**：①真实 Temporal 升级在飞回放（同 MR-SYNC 披露）；②B 在大标签空间的召回时延未压测（复用建案管线，量级预期同级）；③真实页面+真实图库的端到端验收未做（部署待批后进行）；④旧 7 案与现场 23 案均未触碰（验收按贵方口径另案安排）。
+
+### 后续
+
+合并、部署、PR 待用户单独审批（gh 未登录，由用户自提）。Louvain/登录/模型校验口径不变；旧图/案件/审计/水位保护边界不变。本提交仅追加本文档。

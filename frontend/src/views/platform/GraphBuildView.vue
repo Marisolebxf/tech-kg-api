@@ -450,9 +450,7 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
           <a-select id="graph-build-filter-type" v-model="filterTaskTypeSelect" class="gb-filter-select" placeholder="类型" allow-clear>
             <a-option value="">未选择</a-option>
             <a-option value="extract">单脚本抽取</a-option>
-            <a-option value="single">单脚本（历史）</a-option>
             <a-option value="chain">多脚本串行</a-option>
-            <a-option value="upload">上传脚本</a-option>
           </a-select>
           <a-input id="graph-build-filter-name" v-model="filterName" class="gb-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="按名称搜索" placeholder="按名称搜索" allow-clear @clear="submitJobSearch"><template #prefix><IconSearch /></template></a-input>
           <button class="gb-search-button" type="submit">查询</button>

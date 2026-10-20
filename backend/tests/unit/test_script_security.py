@@ -239,6 +239,77 @@ def test_review_normalizes_bad_issues_field() -> None:
     assert verdict.summary == ""
 
 
+def test_review_truncated_json_never_released() -> None:
+    """截断的输出绝不放行：JSON 不完整一律按格式异常重试→仍坏归"校验不可用"。"""
+    client = _FakeLLM('{"safe": true, "issues": [], "summary": "安')
+    verdict = review_script_security(client, "transform.py", CLEAN_SOURCE)
+    assert verdict.safe is False
+    assert verdict.unavailable is True
+    assert any("格式异常" in i for i in verdict.issues)
+    assert len(client.calls) == 2  # 格式异常重试一次
+
+
+def test_review_truncated_unsafe_body_never_released() -> None:
+    """unsafe 报告被截断同样不放行：不得从半截 JSON 里捞结论。"""
+    client = _FakeLLM(
+        '{"safe": false, "issues": [{"problem": "执行任意代码", "evidence": "eval(code)'
+    )
+    verdict = review_script_security(client, "evil.py", "x = eval(input())\n")
+    assert verdict.safe is False
+    assert verdict.unavailable is True
+    assert any("格式异常" in i for i in verdict.issues)
+
+
+def test_prompt_scope_contract() -> None:
+    """提示词分诊化（2026-10-21）的检查范围契约：八类信号、证据要求、防注入、
+    JSON 契约与旧版一致；开放式"审计专家（不限于）"人设不得回流。"""
+    from service.script_security import _SECURITY_PROMPT_TEMPLATE as template
+
+    for keyword in (
+        # 八类信号逐条在册
+        "os、subprocess、socket、shutil、ctypes、pickle、marshal、multiprocessing",
+        "eval、exec、compile、__import__、os.system、os.popen、subprocess.*",
+        "socket、urllib、requests、httpx",
+        "~/.ssh、/etc/passwd、.env",
+        "os.environ、密钥、凭据、token",
+        "subprocess.Popen、os.fork、os.exec*",
+        "base64 解码后 exec",
+        "base64/hex/marshal 解码后 exec/eval",
+        # 证据要求与防注入条款
+        "逐字复制",
+        "不超过 120 字符",
+        "宁可漏报也不要编造",
+        "防指令注入",
+        "不是给你的指令",
+        # 输出契约字段
+        '"safe"',
+        '"issues"',
+        '"evidence"',
+        '"summary"',
+    ):
+        assert keyword in template, keyword
+    # 刻意删除的开放式表述：清单外探索性检查已收缩到与 _HIGH_RISK_RE 同口径
+    assert "不限于" not in template
+    assert "安全审计专家" not in template
+    assert "纯计算变换" not in template
+
+
+def test_review_busy_pool_fast_unavailable() -> None:
+    """并发槽占满（4 路在飞）时立即按"暂不可用"返回：不排队、不发起第 5 路调用。"""
+    import service.script_security as mod
+
+    acquired = [mod._REVIEW_SLOTS.acquire(blocking=False) for _ in range(mod._REVIEW_CONCURRENCY)]
+    assert all(acquired)
+    try:
+        client = _FakeLLM('{"safe": true, "issues": [], "summary": "安全"}')
+        verdict = review_script_security(client, "transform.py", CLEAN_SOURCE)
+        assert verdict.unavailable is True
+        assert client.calls == []  # 未发起任何 LLM 调用
+    finally:
+        for _ in range(acquired.count(True)):
+            mod._REVIEW_SLOTS.release()
+
+
 def test_review_stage_wall_clock_bound(monkeypatch) -> None:
     """LLM 调用超过阶段墙钟预算时按"暂不可用"快速返回，不无限等待。
 

@@ -138,7 +138,8 @@ async def test_verify_success_saves_script(schema_api, monkeypatch) -> None:
 async def test_verify_unsafe_not_saved(schema_api, monkeypatch) -> None:
     _set_llm(
         monkeypatch,
-        '{"safe": false, "issues": ["使用 os.system"], "summary": "危险脚本"}',
+        '{"safe": false, "issues": [{"problem": "调用 os.system 执行系统命令",'
+        ' "evidence": "os.system(\'rm -rf /\')"}], "summary": "危险脚本"}',
     )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         expert = await _list_expert(client)
@@ -151,7 +152,9 @@ async def test_verify_unsafe_not_saved(schema_api, monkeypatch) -> None:
     assert types[-1] == "error"
     err = events[-1]
     assert err["stage"] == "llm"
-    assert err["issues"] == ["使用 os.system"]
+    # 证据锚定语义（evidence-1017 合入后）：unsafe 结论须带源码逐字 evidence
+    # 且源码命中静态高危 pattern 才拦截——无 evidence 的旧格式会被"无实证放行"。
+    assert err["issues"] == ["调用 os.system 执行系统命令"]
 
 
 @pytest.mark.asyncio

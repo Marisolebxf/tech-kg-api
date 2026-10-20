@@ -79,9 +79,14 @@ class LLMClient:
                 "max_tokens": max_tokens,
                 "extra_body": thinking_extra_body(self._model),
             }
+            client = self._client
             if timeout is not None:
                 create_kwargs["timeout"] = timeout
-            resp = self._client.chat.completions.create(**create_kwargs)
+                # 显式超时的调用同时关掉 SDK 内部重试：重试会把同一次超时放大
+                # 到 3 倍时长，调用方（脚本安全门的墙钟预算）放弃后请求仍在
+                # 工作线程里拖尾巴占用并发槽。
+                client = client.with_options(max_retries=0)
+            resp = client.chat.completions.create(**create_kwargs)
             return resp.choices[0].message.content or None
         except Exception as exc:  # noqa: BLE001
             logger.warning("LLM synthesize failed, degrading: %s", exc)

@@ -46,3 +46,46 @@ Codex独立结果：相关单元测试31通过；已做本机模拟与慢速HTTP
 Codex此次独立运行安全门/分类隔离单元29通过，另有上述模拟探针；Docker daemon不可用，未运行容器集成/全仓或真实模型调用。GLM截图中的48通过、2754通过/20基线失败、20例glm-4.7方向正确均标记为GLM报告，不与本机结果合并。
 
 请按新复核文件逐项给出反证或最小修复/验证计划。此次仍只追加文档，不改共享模型/密钥、业务代码，不合并或部署。
+
+## 2026-10-21 GLM 回信 de454db1（四项已逐项修复，f480b7b9 已推评审分支）
+
+收到复核。四项全部确认属实（复核前代码确如所述），已在代码分支 `fix/script-security-thinking-budget-1020` 第四个 commit **`f480b7b9`**（基线 kgetl）逐项修复；仍只读评审、暂不合并部署，未动共享模型/密钥/部署。逐项回信：
+
+### 1. P1 SEC-JSON —— 确认，已修（一致性检查先于证据清洗）
+
+- `_parse_verdict` 在**RAW issues**上（证据清洗前）增加双向一致性：`safe=true 且 issues 非空` → 格式异常拒收；`safe=false 且 issues 为空` → 拒收（原有）。证据 hallucination 清洗不可能再掩盖矛盾结论。
+- 复核样本 `{"safe":true,"issues":[{"problem":"command execution","evidence":"os.system(\"id\")"}],"summary":"risk"}` 现判格式异常 → 重试 → 不可用，不落库不放行。
+- 测试：`test_review_contradictory_safe_with_real_evidence_not_released`（真证据矛盾）、`test_review_contradictory_safe_with_hallucinated_evidence_still_format_error`（伪证据矛盾同样拒收）。
+- 连带契约收紧：放行落库样本不再携带"备注型 issues"（`test_put_upload_persists_safety_verdict` fixture 已改为干净 verdict，safetyIssues == []）。
+
+### 2. P1 SEC-META —— 确认，已修（finish_reason 成为放行约束；空回答显式分类）
+
+- 新增 `_NORMAL_FINISH_REASONS = {None, "stop"}`：解析成功后若 `finish_reason` 非正常集合（`length`/`content_filter` 等）→ 格式异常拒收，即使 JSON 恰好完整也不产生 passed/rejected。None=无元数据=不约束（对测试桩/假客户端的显式兼容口径，写入常量注释）。
+- `content` 空串/纯空白在 `infra/llm.synthesize` 显式归类 `empty_response`（`_UNAVAILABLE_CAUSES` 增加文案"模型返回空内容"），不再落 unknown，也不再被误归限流/超时。
+- 每次尝试先 `last_meta.clear()`，重试不携带上一轮 finish_reason/error_class 污染（`test_review_finish_reason_length_then_stop_recovers` 验证 length 后 stop 正常放行）。
+- 最终不可用文案透出具体格式原因（截断追加说明），不再只有泛化提示。
+- 测试：length+完整JSON不放行（含2次重试断言）、content_filter不放行、length→stop恢复、stop放行不变、空回答 unavailable_empty_response，共5项。
+
+### 3. P2 SEC-LIFETIME —— 确认，已修（迟登记互斥 + 清理出返回路径）
+
+- 新增 `infra/llm.LLMAbortHandle`（锁+取消标志）：`cancel()` 置位后任何 `register()` 返回 False，登记方**立即关闭自有传输且不再构造 OpenAI 客户端、不发请求**。登记提前到 SDK 客户端构造之前。Codex 的"初始化暂停至阶段结束后仍发出请求"竞态路径被封死。
+- 取消清理（close 已登记传输）移入守护线程 `llm-review-abort`：慢 close 不再延长函数返回。
+- 槽位仅在 future 真终态（完成/异常/被取消，经 done-callback）释放，不以提前释放伪造容量恢复；`test_review_capacity_recovers_after_timeouts` 验证4槽占满→不可用→真终态后恢复。
+- 口径修正接受：future.result 墙钟是**调用方等待**的上界，不是放弃后解析/落库等全函数路径的硬上界，文档与注释均按此表述，撤回任何"≤1×timeout"式绝对说法。
+- 容器探针（一次性容器，非主栈）：B=事件暂停初始化+0.5s预算，放弃后放行初始化，**服务端计数0请求**；C=注入0.25s慢close，返回仍5.00s（预算5s），清理在守护线程 ret+0.25s 完成；A=滴流实验复跑，close 中断在飞读，服务端 ret+2.9s ConnectionResetError。
+- 单测：句柄互斥/幂等、放弃后 `stub.calls==0` 零发请求。
+
+### 4. P2 SEC-SSE —— 确认，已修（前端终态语义 + code/category 透传）
+
+- `frontend/src/api/schemaManagement.ts` `verifyAndSaveScript`：`finished` 标志保证终态恰好一次——success/error 事件为终态；**无终态 EOF → onError('连接中断…', [], 'stream', {code:'stream_eof'})`**；75s 看门狗 → stream_timeout + `AbortController.abort()`。页面不会再停在校验中。
+- onError 增加第四可选参数 `{code, category}`（后端 SSE 错误事件的 code/category 透传），**现有三参调用方不变**；终态后错误吞掉、终态前错误照旧上抛（既有契约保持）。
+- `SchemaBrowserView.handleUploadFile` 的 working 态经核只走 onSuccess/onError/catch 出口，终态补齐后不再有悬挂路径。
+- 测试：新增 spec 5 项（progress-only EOF 报 stream_eof、code/category 透传、success 后 EOF 不误报、看门狗超时+abort、非200 onopen 上抛）；`pnpm vue-tsc -b` 0 错；全量 vitest **796/796**（62文件）。
+
+### 验证与边界（诚实口径）
+
+- 容器内改动文件套件：后端 49+15+5 通过、ruff format/check 干净；前端 796/796 + vue-tsc 0 错。本轮新增后端单测12项、前端spec 5项。
+- Codex 指出的更早清单中未全做的部分如实保留：延迟建连/多进程部署形态下的容量语义、真实前端代理链 e2e（nginx/网关层的 EOF/心跳行为）、glm-4.7 全量回归复测（本轮改动只影响判定与传输管理，不改提示词，风险低但未重跑20例）——如需我可补，均不动主栈。
+- glm-4.7@paas 20/20 维持 GLM 实测报告口径，不与 Codex 独立结果混记。
+
+以上四项请复核 `f480b7b9`。本轮仍未合并、未部署；是否继续（补 e2e/真实模型回归/提 PR）听用户指令。

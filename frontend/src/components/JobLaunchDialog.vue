@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import ClearableInput from './ClearableInput.vue'
+import { vDialogFocus } from '../directives/dialog-focus'
 import { useSpacePermissions } from "../composables/use-space-permissions"
 const { canWrite } = useSpacePermissions()
 
@@ -110,8 +112,12 @@ const executionTime = ref('02:00')
 const weekday = ref(1)
 
 /** 预览与提交共用同一生成函数，所见即所得 */
-const schedulePreview = computed(() =>
-  describeCron(buildScheduleCron(frequency.value, executionTime.value, weekday.value)),
+const scheduleComplete = computed(() => Boolean(
+  frequency.value && executionTime.value && (frequency.value !== '每周' || weekday.value != null),
+))
+const schedulePreview = computed(() => scheduleComplete.value
+  ? describeCron(buildScheduleCron(frequency.value, executionTime.value, weekday.value))
+  : '请补全频率、星期和首次执行时间',
 )
 
 const submitting = ref(false)
@@ -125,7 +131,8 @@ const sinceError = computed(() =>
 const batchSizeError = computed(() => validateNumericField(extractBatchSize.value, { label: '批大小', min: 1, max: 5000 }))
 
 const canSubmit = computed(() => {
-  if (schemasLoading.value || !name.value.trim()) return false
+  if (schemasLoading.value || !name.value.trim() || !taskType.value) return false
+  if (executeMode.value === 'recurring' && !scheduleComplete.value) return false
   if (nameError.value || sinceError.value || batchSizeError.value) return false
   if (taskType.value === 'chain') {
     return chainSteps.value.length >= 2 && chainSteps.value.length <= CHAIN_SCHEMA_LIMIT
@@ -276,7 +283,7 @@ async function submit() {
 <template>
   <Teleport to="body">
     <button v-if="open" class="job-launch-mask" type="button" aria-label="关闭" @click="emit('close')" />
-    <aside v-if="open" class="job-launch-dialog">
+    <aside v-if="open" v-dialog-focus="{ close: () => emit('close'), busy: submitting }" class="job-launch-dialog">
       <header>
         <h2>新建任务</h2>
         <button type="button" aria-label="关闭弹窗" title="关闭" @click="emit('close')">×</button>
@@ -285,7 +292,7 @@ async function submit() {
         <div class="job-basics">
           <label class="job-field">
             <span><i class="job-required" aria-hidden="true">*</i>任务名称</span>
-            <input aria-label="如：论文-专家抽取" aria-required="true" v-model="name" :maxlength="JOB_NAME_RULE.max" placeholder="如：论文-专家抽取" />
+            <ClearableInput aria-label="如：论文-专家抽取" aria-required="true" v-model="name" :maxlength="JOB_NAME_RULE.max" placeholder="如：论文-专家抽取" />
             <small v-if="nameError" class="field-error">{{ nameError }}</small>
           </label>
           <div class="job-field">
@@ -298,7 +305,7 @@ async function submit() {
               >暂无可抽取 Schema——请先在 Schema 管理页上传抽取脚本并绑定来源表；若已配置过，请检查 Schema 所在图空间与当前「{{ graphSpace || '默认空间' }}」是否一致（平台总览的图空间选择器可切换）</small>
             </div>
             <!-- label 会把点击转发给 a-select 内部 input 造成"开→关"双切换，包 a-select 的字段一律用 div -->
-            <a-select v-model="taskType" class="job-select" aria-label="任务类型">
+            <a-select allow-clear v-model="taskType" class="job-select" aria-label="任务类型">
               <a-option value="extract">单脚本抽取</a-option>
               <a-option value="chain">多脚本串行</a-option>
             </a-select>
@@ -317,7 +324,7 @@ async function submit() {
           </div>
           <label class="job-field">
             <span>批大小（默认 500）</span>
-            <input aria-label="500" :value="extractBatchSize" type="number" min="1" max="5000" placeholder="500" @input="extractBatchSize = ($event.target as HTMLInputElement).value" />
+            <ClearableInput aria-label="500" :value="extractBatchSize" type="number" min="1" max="5000" placeholder="500" @input="extractBatchSize = ($event.target as HTMLInputElement).value" />
             <small v-if="batchSizeError" class="field-error">{{ batchSizeError }}</small>
           </label>
         </div>
@@ -346,7 +353,7 @@ async function submit() {
           <div class="job-row">
             <label class="job-field">
               <span>批大小（默认 500，对每个 Schema 生效）</span>
-              <input aria-label="500" :value="extractBatchSize" type="number" min="1" max="5000" placeholder="500" @input="extractBatchSize = ($event.target as HTMLInputElement).value" />
+              <ClearableInput aria-label="500" :value="extractBatchSize" type="number" min="1" max="5000" placeholder="500" @input="extractBatchSize = ($event.target as HTMLInputElement).value" />
               <small v-if="batchSizeError" class="field-error">{{ batchSizeError }}</small>
             </label>
           </div>
@@ -361,7 +368,7 @@ async function submit() {
           </div>
           <div class="job-field">
             <span>数据库</span>
-            <a-select v-model="mysqlDatabase" class="job-select" aria-label="数据库" :loading="false" :disabled="!mysqlDatasourceId" placeholder="选择数据库">
+            <a-select allow-clear v-model="mysqlDatabase" class="job-select" aria-label="数据库" :loading="false" :disabled="!mysqlDatasourceId" placeholder="选择数据库">
               <a-option v-for="db in mysqlDatabases" :key="db" :value="db" :title="db">{{ db }}</a-option>
             </a-select>
           </div>
@@ -375,7 +382,7 @@ async function submit() {
               <span class="field-help" tabindex="0" role="note" aria-label="增量游标说明">?</span>
             </a-tooltip>
           </div>
-          <input aria-label="如 2026-08-01 00:00:00" v-model="since" :maxlength="SINCE_RULE.max" placeholder="如 2026-08-01 00:00:00" />
+          <ClearableInput aria-label="如 2026-08-01 00:00:00" v-model="since" :maxlength="SINCE_RULE.max" placeholder="如 2026-08-01 00:00:00" />
           <small v-if="sinceError" class="field-error">{{ sinceError }}</small>
         </label>
 
@@ -392,11 +399,11 @@ async function submit() {
           <div v-if="executeMode === 'recurring'" class="job-row">
             <div class="job-field">
               <span>频率</span>
-              <a-select v-model="frequency" class="job-select" aria-label="频率" :options="['每天', '每12小时', '每6小时', '每周']" />
+              <a-select allow-clear v-model="frequency" class="job-select" aria-label="频率" :options="['每天', '每12小时', '每6小时', '每周']" />
             </div>
             <div v-if="frequency === '每周'" class="job-field">
               <span>星期</span>
-              <a-select v-model="weekday" class="job-select" aria-label="星期">
+              <a-select allow-clear v-model="weekday" class="job-select" aria-label="星期">
                 <a-option :value="1">周一</a-option>
                 <a-option :value="2">周二</a-option>
                 <a-option :value="3">周三</a-option>
@@ -408,7 +415,7 @@ async function submit() {
             </div>
             <label class="job-field">
               <span>首次执行时间</span>
-              <input aria-label="executionTime" v-model="executionTime" type="time" />
+              <ClearableInput aria-label="executionTime" v-model="executionTime" type="time" />
             </label>
           </div>
           <div v-else class="job-field checkbox-field job-mode-option">
@@ -429,7 +436,7 @@ async function submit() {
 
 <style scoped>
 .job-launch-mask{position:fixed;inset:0;z-index:49;border:0;background:rgba(16,38,76,0.42);backdrop-filter:blur(2px);cursor:pointer}
-.job-launch-dialog{position:fixed;z-index:50;top:50%;left:50%;width:min(720px,calc(100vw - 48px));max-height:calc(100vh - 48px);display:flex;flex-direction:column;overflow:hidden;border-radius:8px;background:#fff;box-shadow:0 24px 70px rgba(28,58,107,0.3);font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0;transform:translate(-50%,-50%)}
+.job-launch-dialog{position:fixed;z-index:50;top:50%;left:50%;width:min(640px,calc(100vw - 48px));max-height:calc(100vh - 48px);display:flex;flex-direction:column;overflow:hidden;border-radius:8px;background:#fff;box-shadow:0 24px 70px rgba(28,58,107,0.3);font-family:"PingFang SC","PingFang HK","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0;transform:translate(-50%,-50%)}
 .job-launch-dialog :deep(*){font-family:inherit;letter-spacing:0}
 .job-launch-dialog>header{display:flex;box-sizing:border-box;flex:0 0 56px;height:56px;align-items:center;justify-content:space-between;padding:0 24px;border-bottom:1px solid #e5e6eb;background:#fff}
 .job-launch-dialog h2{margin:0;color:#1d2129;font-size:16px;line-height:24px;font-weight:600}
@@ -442,12 +449,12 @@ async function submit() {
 .job-field>span{color:#4e5969;font-size:14px;line-height:22px}
 .job-field .job-required{margin-right:4px;color:#b42318;font-style:normal}
 .job-field__label-row{display:flex;min-width:0;align-items:center;gap:8px;flex-wrap:wrap}.job-field__label-row>span{flex:0 0 auto;color:#4e5969;font-size:14px;line-height:22px}.job-field__label-row>.muted-warn{color:#ff7d00!important}
-.job-field>input:not([type="file"]){box-sizing:border-box;width:100%;height:32px;padding:0 12px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#1d2129;font-size:14px;line-height:14px;outline:0;box-shadow:none}
+.job-field>input:not([type="file"]){box-sizing:border-box;width:100%;height:32px;padding:0 12px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#1d2129;font-size:14px;line-height:22px;outline:0;box-shadow:none}
 .job-field>input:not([type="file"]):hover{border-color:#4080ff}
-.job-field>input:not([type="file"]):focus,.job-field>input:not([type="file"]):focus-visible{border-color:#004ecc;outline:0;box-shadow:0 0 0 2px rgba(0,78,204,.1)}
+.job-field>input:not([type="file"]):focus,.job-field>input:not([type="file"]):focus-visible{border-color:#165dff;outline:0;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
 :deep(.job-select.arco-select-view){display:inline-flex;box-sizing:border-box;width:100%;min-width:0;height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;align-items:center}
 :deep(.job-select.arco-select-view:hover){border-color:#4080ff!important;background:#fff!important}
-:deep(.job-select.arco-select-view:focus-within),:deep(.job-select.arco-select-view-focus){border-color:#004ecc;background:#fff!important;box-shadow:0 0 0 2px rgba(0,78,204,.1)!important}
+:deep(.job-select.arco-select-view:focus-within),:deep(.job-select.arco-select-view-focus){border-color:#165dff;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
 :deep(.job-select.arco-select-view .arco-select-view-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
 :deep(.job-select.arco-select-view .arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important;pointer-events:none!important}
 :deep(.job-select.arco-select-view .arco-select-view-value),:deep(.job-select.arco-select-view .arco-select-view-placeholder){min-width:0;overflow:hidden;background:transparent!important;font-size:14px;line-height:22px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
@@ -455,14 +462,14 @@ async function submit() {
 .job-field-group{display:flex;min-width:0;gap:16px;flex-direction:column}
 .job-mode-row{grid-template-columns:minmax(0,1fr)}
 .job-field.checkbox-field.job-mode-option{justify-content:flex-start}
-.job-launch-dialog>footer{display:flex;box-sizing:border-box;flex:0 0 64px;height:64px;align-items:center;justify-content:flex-end;gap:16px;padding:16px 24px;border-top:1px solid #e3ebf6;background:#fff}
-.job-launch-dialog footer button{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:14px;font-weight:400;cursor:pointer}
-.job-launch-dialog footer .primary{border-color:#004ecc;background:#004ecc;color:#fff}
+.job-launch-dialog>footer{display:flex;box-sizing:border-box;flex:0 0 64px;height:64px;align-items:center;justify-content:flex-end;gap:16px;padding:16px 24px;border-top:1px solid #e5e6eb;background:#fff}
+.job-launch-dialog footer button{height:32px;padding:0 16px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:14px;line-height:22px;font-weight:400;cursor:pointer}
+.job-launch-dialog footer .primary{border-color:#165dff;background:#165dff;color:#fff}
 .job-launch-dialog footer button:disabled{opacity:.5;cursor:not-allowed}
 .chain-steps{display:flex;flex-direction:column;gap:6px;margin:6px 0 0;padding:0;list-style:none}
 .chain-steps li{display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid #d5e4f7;border-radius:5px;background:#f8fbff}
-.chain-steps em{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:#e9f2ff;color:#004ecc;font-size:12px;line-height:20px;font-style:normal;font-weight:400}
-.chain-steps code{flex:1;padding:1px 5px;border-radius:3px;background:#edf4ff;color:#004ecc;font-family:inherit;font-size:12px;line-height:20px;font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chain-steps em{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:#e9f2ff;color:#165dff;font-size:12px;line-height:20px;font-style:normal;font-weight:400}
+.chain-steps code{flex:1;padding:1px 5px;border-radius:3px;background:#edf4ff;color:#165dff;font-family:inherit;font-size:12px;line-height:20px;font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chain-steps button{width:24px;height:24px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:12px;line-height:20px;font-weight:400;cursor:pointer}
 .chain-steps button:disabled{opacity:.35;cursor:not-allowed}
 .chain-steps button.danger{border-color:#f6b9b4;color:#b42318}
@@ -470,11 +477,11 @@ async function submit() {
 /* 目标 Schema 的空间作用域标签：弹窗无空间选择器、静默跟随全局选择器，标签把它显式化 */
 .space-scope-chip{flex:0 0 auto;padding:0 8px;border:1px solid #94bfff;border-radius:10px;background:#e8f3ff;color:#165dff;font-size:12px;line-height:20px;font-weight:400;white-space:nowrap;cursor:help}
 .schedule-preview{margin:0;color:#4e5969;font-size:12px;line-height:20px}
-.field-error{color:#e4322d;font-size:12px;line-height:18px}
-.job-launch-dialog .field-help{display:grid;flex:0 0 auto;width:16px;height:16px;place-items:center;border:1px solid #c9cdd4;border-radius:50%;background:#fff;color:#86909c;cursor:help;font-size:11px;line-height:14px}
+.field-error{color:#e4322d;font-size:12px;line-height:20px}
+.job-launch-dialog .field-help{display:grid;flex:0 0 auto;width:16px;height:16px;place-items:center;border:1px solid #c9cdd4;border-radius:50%;background:#fff;color:#86909c;cursor:help;font-size:12px;line-height:14px}
 .job-launch-dialog .field-help:hover,.job-launch-dialog .field-help:focus-visible{border-color:#4080ff;color:#165dff;outline:0}
 .resource-hint{margin:0;color:#86909c;font-size:12px;line-height:20px}
-.schedule-preview strong{color:#004ecc;font-weight:600}
+.schedule-preview strong{color:#165dff;font-weight:600}
 .schedule-preview .cron-hint{color:#86909c}
 @media(max-width:600px){
   .job-row,.job-row:has(> :nth-child(3)){grid-template-columns:minmax(0,1fr)}

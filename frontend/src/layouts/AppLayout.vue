@@ -168,23 +168,8 @@ function navIconStyle(icon: string) {
 }
 
 function refreshSubNavOverflow() {
-  const wraps = document.querySelectorAll<HTMLElement>(".app-nav__marquee");
-  wraps.forEach((wrap) => {
-    const label = wrap.querySelector<HTMLElement>(".app-nav__marquee-label");
-    if (!label) return;
-    const overflow = Math.ceil(label.scrollWidth - wrap.clientWidth);
-    if (overflow > 1) {
-      const pixelsPerSecond = 24;
-      const movingPart = 0.8;
-      const duration = overflow / (pixelsPerSecond * movingPart);
-      wrap.classList.add("is-overflowing");
-      wrap.style.setProperty("--sub-scroll-distance", `-${overflow + 1}px`);
-      wrap.style.setProperty("--marquee-duration", `${duration.toFixed(2)}s`);
-    } else {
-      wrap.classList.remove("is-overflowing");
-      wrap.style.removeProperty("--sub-scroll-distance");
-      wrap.style.removeProperty("--marquee-duration");
-    }
+  document.querySelectorAll<HTMLElement>('.app-nav__marquee').forEach((wrap) => {
+    wrap.title = wrap.textContent?.trim() ?? '';
   });
 }
 
@@ -251,7 +236,7 @@ function placeAssistantAtDefault() {
 }
 
 function handleViewportResize() {
-  const mobile = window.matchMedia("(max-width: 767px)").matches;
+  const mobile = window.matchMedia("(max-width: 1023px)").matches;
   if (!mobile) mobileNavOpen.value = false;
   isMobile.value = mobile;
   assistantViewport.value = {
@@ -292,7 +277,7 @@ watch(
 );
 
 onMounted(() => {
-  isMobile.value = window.matchMedia("(max-width: 767px)").matches;
+  isMobile.value = window.matchMedia("(max-width: 1023px)").matches;
   assistantViewport.value = {
     width: window.innerWidth,
     height: window.innerHeight,
@@ -913,7 +898,7 @@ onBeforeUnmount(() => {
 
 .app-nav__group em {
   color: #91a5c0;
-  font-size: 10px;
+  font-size: 12px;
   font-style: normal;
   font-weight: 400;
   letter-spacing: 0.02em;
@@ -1033,13 +1018,15 @@ onBeforeUnmount(() => {
 }
 
 .app-nav__sub-label {
-  display: inline-flex;
-  flex: 0 0 auto;
+  display: block;
+  flex: 1 1 auto;
   align-items: center;
-  height: 100%;
+  height: auto;
   line-height: 22px;
   white-space: nowrap;
-  will-change: transform;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .app-nav__service-title {
@@ -1051,29 +1038,14 @@ onBeforeUnmount(() => {
 }
 
 .app-nav__service-title-label {
-  display: inline-flex;
-  flex: 0 0 auto;
+  display: block;
+  flex: 1 1 auto;
   align-items: center;
-  height: 100%;
+  height: auto;
   white-space: nowrap;
-  will-change: transform;
-}
-
-.app-nav__marquee.is-overflowing:hover .app-nav__marquee-label,
-.app-nav__item:focus-visible .app-nav__marquee.is-overflowing .app-nav__marquee-label {
-  animation: app-nav-marquee var(--marquee-duration, 5s) linear infinite alternate;
-}
-
-@keyframes app-nav-marquee {
-  0%, 10% { transform: translateX(0); }
-  90%, 100% { transform: translateX(var(--sub-scroll-distance, 0)); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .app-nav__marquee.is-overflowing:hover .app-nav__marquee-label,
-  .app-nav__item:focus-visible .app-nav__marquee.is-overflowing .app-nav__marquee-label {
-    animation: none;
-  }
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .app-nav__service-group {
@@ -1439,7 +1411,7 @@ onBeforeUnmount(() => {
   stroke-linejoin: round;
 }
 .knowledge-assistant-entry span {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
 }
 .knowledge-assistant-entry.dragging {
@@ -1479,7 +1451,7 @@ onBeforeUnmount(() => {
   border-radius: 9px;
   background: #004ecc;
   color: #fff;
-  font-size: 10px;
+  font-size: 12px;
   font-style: normal;
   font-weight: 700;
 }
@@ -1488,11 +1460,11 @@ onBeforeUnmount(() => {
   gap: 2px;
 }
 .knowledge-assistant > header strong {
-  font-size: 13px;
+  font-size: 12px;
 }
 .knowledge-assistant > header em {
   color: #72819a;
-  font-size: 9px;
+  font-size: 12px;
   font-style: normal;
 }
 .knowledge-assistant > header button {
@@ -1531,8 +1503,8 @@ onBeforeUnmount(() => {
 }
 .knowledge-assistant__messages p {
   margin: 0;
-  font-size: 11px;
-  line-height: 18px;
+  font-size: 12px;
+  line-height: 20px;
 }
 .knowledge-assistant__messages article > div {
   display: flex;
@@ -1546,14 +1518,14 @@ onBeforeUnmount(() => {
 .knowledge-assistant__messages article > div span {
   width: 100%;
   color: #8491a5;
-  font-size: 8px;
+  font-size: 12px;
 }
 .knowledge-assistant__messages article > div b {
   padding: 2px 6px;
   border-radius: 99px;
   background: #eaf2ff;
   color: #004ecc;
-  font-size: 8px;
+  font-size: 12px;
   font-weight: 500;
 }
 .knowledge-assistant__full {
@@ -1561,7 +1533,7 @@ onBeforeUnmount(() => {
   border-top: 1px solid #e2eaf5;
   background: #fff;
   color: #004ecc;
-  font-size: 9px;
+  font-size: 12px;
   text-decoration: none;
 }
 .knowledge-assistant > form {
@@ -1579,7 +1551,7 @@ onBeforeUnmount(() => {
   border: 1px solid #bdd0ea;
   border-radius: 6px;
   color: #344761;
-  font: 10px/16px inherit;
+  font: 12px/16px inherit;
   resize: none;
 }
 .knowledge-assistant form button {
@@ -1587,7 +1559,7 @@ onBeforeUnmount(() => {
   border-radius: 6px;
   background: #004ecc;
   color: #fff;
-  font-size: 10px;
+  font-size: 12px;
   cursor: pointer;
 }
 .knowledge-assistant form button:disabled {
@@ -1606,10 +1578,10 @@ onBeforeUnmount(() => {
   display: grid;
   margin-right: var(--space-16);
   /* 首行随面包屑内容自适应：平台总览页右侧挂图空间选择器时撑到 32px，其余页 22px */
-  grid-template-rows: minmax(22px, auto) minmax(0, 1fr);
+  grid-template-rows: minmax(20px, auto) minmax(0, 1fr);
   gap: 16px;
   height: calc(100% - var(--header-height));
-  padding: 16px 15px 16px 16px;
+  padding: 16px;
   border: 1px solid #fff;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.48);
@@ -1650,8 +1622,8 @@ onBeforeUnmount(() => {
   min-height: 0;
   padding: 16px;
   overflow: auto;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.8);
+  border-radius: 6px;
+  background: #fff;
   scrollbar-width: none;
 }
 
@@ -1712,7 +1684,7 @@ onBeforeUnmount(() => {
   }
 }
 
-@media (max-width: 767px) {
+@media (max-width: 1023px) {
   .app-shell,
   .app-shell.is-collapsed {
     display: block;
@@ -1802,7 +1774,7 @@ onBeforeUnmount(() => {
   }
 
   .app-workspace {
-    padding: 10px;
+    padding: 16px;
     border-radius: 6px;
   }
 

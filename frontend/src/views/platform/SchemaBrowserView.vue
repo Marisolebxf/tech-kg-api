@@ -1,10 +1,12 @@
 <script setup lang="ts">
+import ClearableTextarea from '../../components/ClearableTextarea.vue'
+import ClearableInput from '../../components/ClearableInput.vue'
+import { vDialogFocus } from '../../directives/dialog-focus'
 import AppAlert from '../../components/AppAlert.vue'
 import { useSpacePermissions } from "../../composables/use-space-permissions"
 const { canWrite, spaces } = useSpacePermissions()
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { IconSearch } from '@arco-design/web-vue/es/icon'
 import hljs from 'highlight.js/lib/core'
 import python from 'highlight.js/lib/languages/python'
 import 'highlight.js/styles/github-dark.css'
@@ -210,6 +212,12 @@ function validatePropName(value: string, callback: (error?: string) => void) {
 }
 const creating = ref(false)
 const confirming = ref(false)
+// 创建中的弹窗封闭管理：期间掩码/Esc/表单全部不可交互，只有「取消」和右上角 ×
+// 能终止创建（× 多一步确认）。HTTP 中断不会回滚服务端已提交的创建，终止时
+// 凭快照按名轮询补偿删除。
+const createAbort = ref<AbortController | null>(null)
+const createSnapshot = ref<{ kind: 'entity' | 'relation'; name: string; graphSpace: string } | null>(null)
+const createCancelConfirmOpen = ref(false)
 const scriptByRow = ref<Record<string, SchemaScript>>({})
 
 // Schema 拓扑总览（实体 -关系-> 实体 元图谱）
@@ -361,6 +369,8 @@ async function saveSources(): Promise<boolean> {
     await replaceSchemaSources(target.id, payloads, currentUserId)
     showToast('来源表绑定已保存', 'success')
     await loadSchemas()
+    // 保存成功即关闭：同文件上传/属性弹窗的既有口径，弹窗文案本就引导保存后离开
+    sourcesModalOpen.value = false
     return true
   } catch (error) {
     showToast(schemaErrorMessage(error), 'error')
@@ -407,6 +417,10 @@ async function submitAddProperty() {
   const propNameError = validateText('属性名', name, PROP_NAME_RULE)
   if (propNameError) {
     showToast(propNameError, 'warning')
+    return
+  }
+  if (!propertyForm.value.dataType) {
+    showToast('请选择属性类型', 'warning')
     return
   }
   if (propertyForm.value.dataType === 'fixed_string') {
@@ -863,6 +877,10 @@ async function saveItem() {
     showToast('至少添加一个属性', 'warning')
     return
   }
+  if (props.some((p) => !p.dataType)) {
+    showToast('请选择每个属性的类型', 'warning')
+    return
+  }
   const lengthError = firstFixedLengthError(props)
   if (lengthError) {
     showToast(lengthError, 'warning')
@@ -894,6 +912,13 @@ async function saveItem() {
   }))
 
   creating.value = true
+  const abort = new AbortController()
+  createAbort.value = abort
+  createSnapshot.value = {
+    kind: relation ? 'relation' : 'entity',
+    name: f.name.trim(),
+    graphSpace: activeSpace.value || '',
+  }
   try {
     if (relation) {
       const source = entityOptions.value.find((e) => e.id === f.sourceEntityId)
@@ -912,7 +937,9 @@ async function saveItem() {
         llmConfigId: null,
         graphSpace: activeSpace.value,
       }
-      const result = await createRelationSchema(payload, currentUserId)
+      const result = await createRelationSchema(payload, currentUserId, abort.signal)
+      // 用户已点终止：后续绑定/刷新全部交给 cancelCreate 的回滚，不再继续成功链路
+      if (abort.signal.aborted) return
       toastCreateResult(result)
       await bindSourcesAfterCreate(result.id, f.sources)
     } else {
@@ -927,18 +954,89 @@ async function saveItem() {
         llmConfigId: null,
         graphSpace: activeSpace.value,
       }
-      const result = await createEntitySchema(payload, currentUserId)
+      const result = await createEntitySchema(payload, currentUserId, abort.signal)
+      if (abort.signal.aborted) return
       toastCreateResult(result)
       await bindSourcesAfterCreate(result.id, f.sources)
     }
+    // 绑定来源表期间也可能点了终止：成功链路（关弹窗/刷新）同样交给回滚
+    if (abort.signal.aborted) return
     modalOpen.value = false
     // 展开状态下同步刷拓扑，让新建实体/关系立即出现在浏览图（收起态展开时会重拉）
     await Promise.all([loadSchemas(), ...(topologyExpanded.value ? [loadTopology()] : [])])
     void loadEntityOptions()
   } catch (error) {
-    showToast(schemaErrorMessage(error), 'error')
+    // 中止引发的取消异常不报错：弹窗与回滚已由 cancelCreate 接管
+    if (!abort.signal.aborted) showToast(schemaErrorMessage(error), 'error')
   } finally {
     creating.value = false
+    createAbort.value = null
+    createSnapshot.value = null
+  }
+}
+
+/** 掩码/Esc 关闭：创建中不允许（否则「弹窗关了、Schema 还在建」），只能「取消」或 × 终止。 */
+function closeCreateModal() {
+  if (!creating.value) modalOpen.value = false
+}
+
+/** 右上角 ×：非创建中直接关闭；创建中需二次确认是否终止创建。 */
+function requestCloseCreate() {
+  if (!creating.value) {
+    modalOpen.value = false
+    return
+  }
+  createCancelConfirmOpen.value = true
+}
+
+/** 「取消」：非创建中直接关闭；创建中中止请求、关闭弹窗并回滚已提交的创建。 */
+function cancelCreate() {
+  if (!creating.value) {
+    modalOpen.value = false
+    return
+  }
+  // 先取局部引用再 abort：abort 后 saveItem 的 finally 会清空 refs
+  const abort = createAbort.value
+  const snapshot = createSnapshot.value
+  confirming.value = false
+  createCancelConfirmOpen.value = false
+  modalOpen.value = false
+  creating.value = false
+  if (!abort || !snapshot) return
+  abort.abort()
+  showToast('已终止创建，正在回滚...', 'warning')
+  void rollbackCreate(snapshot)
+}
+
+/** 中止只断了 HTTP，服务端可能仍把创建走完：轮询同名 Schema（~8s），出现即补偿删除。 */
+async function rollbackCreate(snapshot: {
+  kind: 'entity' | 'relation'
+  name: string
+  graphSpace: string
+}) {
+  const deadline = Date.now() + 8000
+  try {
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+      const page = await listSchemasPaged(currentUserId, {
+        kind: snapshot.kind,
+        keyword: snapshot.name,
+        page: 1,
+        pageSize: 100,
+        graphSpace: snapshot.graphSpace || undefined,
+      })
+      // keyword 同时模糊匹配 name/label/schemaKey，这里按英文名精确认领，避免误删同名者
+      const created = page.items.find((item) => item.name === snapshot.name)
+      if (created) {
+        await deleteSchema(created.id, currentUserId)
+        showToast(`已终止创建并删除「${snapshot.name}」`, 'success')
+        await loadSchemas()
+        return
+      }
+    }
+    showToast('已终止创建；若列表出现残留 Schema 请手动删除', 'warning')
+  } catch {
+    showToast('已终止创建，但自动回滚失败；若列表出现残留 Schema 请手动删除', 'error')
   }
 }
 
@@ -1015,7 +1113,9 @@ async function handleUploadFile(file: File) {
       onError: (message, issues) => {
         uploadState.value = 'error'
         uploadMessage.value = message
-        uploadIssues.value = issues
+        // 后端错误事件的 issues 与 message 同文时（限流/语法/权限等单句错误），
+        // 明细列表再渲染一遍就是重复——滤掉与结论行逐字相同的条目
+        uploadIssues.value = issues.filter((issue) => issue !== message)
       },
     })
     if (succeeded) {
@@ -1080,24 +1180,22 @@ onMounted(async () => {
 })
 
 
-// 名称列截断展示（实体 Schema 名称 / 关系中文名 / 关系英文名）：
-// 超过 10 字符截断加省略号，悬停经 tooltip 卡片查看全称
-const SCHEMA_NAME_LIMIT = 10
+// 普通表格文本超过 16 字符省略，悬停或键盘 Focus 可查看全文。
+const SCHEMA_NAME_LIMIT = 16
 
 function schemaNameCell(name: string): string {
   return name.length > SCHEMA_NAME_LIMIT ? `${name.slice(0, SCHEMA_NAME_LIMIT)}…` : name
 }
 
-// 关系表起点/终点列截断展示：默认只显示 5 个字符，悬停经 tooltip 查看全称
-const ENDPOINT_NAME_LIMIT = 5
+// 起点/终点遵循同一普通文本阈值。
+const ENDPOINT_NAME_LIMIT = 16
 
 function endpointNameCell(name: string): string {
   return name.length > ENDPOINT_NAME_LIMIT ? `${name.slice(0, ENDPOINT_NAME_LIMIT)}…` : name
 }
 
-// 说明列截断：超过 40 字符截断显示，悬停经 tooltip 查看全文（实体/关系两个子页面共用）。
-// 验收反馈 20 仍偏紧：现有目录 91% 的说明 ≤40 字，放宽到 40 后九成行不再折叠。
-const DESC_CELL_LIMIT = 40
+// 说明列与其他普通文本采用相同阈值。
+const DESC_CELL_LIMIT = 16
 
 function descCell(text: string): string {
   return text.length > DESC_CELL_LIMIT ? `${text.slice(0, DESC_CELL_LIMIT)}…` : text
@@ -1145,23 +1243,23 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
         <div class="schema-tabs__items">
           <button v-for="tab in tabs" :key="tab" type="button" :class="{ active: activeTab === tab }" @click="switchTab(tab)">{{ tab }}</button>
         </div>
+      </nav>
+      <div class="schema-list-toolbar">
+        <button class="primary schema-tabs__create" type="button" :disabled="!canWrite" @click="openCreate">＋ 增加</button>
         <form class="schema-toolbar__actions" role="search" @submit.prevent="submitKeyword">
-          <button class="primary" type="button" :disabled="!canWrite" @click="openCreate">＋ 增加</button>
           <span class="limit-field">
-            <a-input v-model="keyword" class="schema-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" :aria-label="`搜索${activeTab}`" :placeholder="`搜索${activeTab}`">
-              <template #prefix><IconSearch /></template>
-            </a-input>
+            <a-input allow-clear v-model="keyword" class="schema-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" :aria-label="`搜索${activeTab}`" :placeholder="`搜索${activeTab}`" />
             <span v-if="atLimit(keyword, SEARCH_KEYWORD_MAX_LENGTH)" class="limit-field__hint">已达 {{ SEARCH_KEYWORD_MAX_LENGTH }} 字上限，无法继续输入</span>
           </span>
           <button class="primary" type="submit" :disabled="listLoading">查询</button>
         </form>
-      </nav>
+      </div>
       <AppAlert v-if="publicSpaceReadOnly" type="warning" class="space-readonly-bar">当前图空间为共享生产空间：Schema 管理仅可查看，操作需管理员执行。</AppAlert>
       <div class="schema-shell schema-table-shell">
 
-      <div v-if="activeTab === '标准实体'" ref="tableWrapRef" class="schema-table-wrap" :class="{ 'has-scroll-right': tableHasMoreToScroll }" @scroll.passive="handleScroll"><table class="schema-entity-table"><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>说明</th><th>属性</th><th>脚本状态</th><th>操作</th></tr></thead><tbody><template v-for="row in entities" :key="row.id"><tr><td><b>{{ row.label }}</b></td><td><a-tooltip v-if="row.name.length > 10" :content="row.name" position="top"><code>{{ schemaNameCell(row.name) }}</code></a-tooltip><code v-else>{{ row.name }}</code></td><td class="schema-desc-cell"><a-tooltip v-if="(row.description || '').length > DESC_CELL_LIMIT" :content="row.description" position="top"><span class="schema-desc-text">{{ descCell(row.description || '') }}</span></a-tooltip><template v-else>{{ row.description }}</template></td><td class="schema-props-cell"><SchemaPropertyCell :schema="row.schema" /></td><td class="schema-script-status"><div class="schema-script-status__items"><span v-if="!scriptByRow[row.name]" class="schema-script-status__empty">未上传</span><span v-else-if="!scriptByRow[row.name].stale && !scriptByRow[row.name].needsRun && scriptByRow[row.name].lastRunStatus !== 'failed'" class="schema-script-status__ready">已上传</span><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本（更新后还需重跑）`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name] && !scriptByRow[row.name].stale && scriptByRow[row.name].needsRun" class="script-badge script-badge--rerun" :title="scriptByRow[row.name].lastRunAt ? '脚本更新后尚未重新运行：最新脚本尚未应用到图数据，请到「图谱构建」新建抽取任务（重跑完成前持续提示）' : '脚本上传后尚未运行过抽取：请到「图谱构建」新建抽取任务，将脚本应用到图数据'">{{ scriptByRow[row.name].lastRunAt ? '待重跑' : '未运行' }}</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span></div></td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :disabled="!canWrite || !row.schema.canManageProperties" :title="row.schema.canManageProperties ? (scriptByRow[row.name] ? '更换脚本' : '上传脚本') : '无权维护脚本'" @click="openUploadModal(row.id, row.name)">更换脚本</button><button type="button" class="schema-action-link" :disabled="!scriptByRow[row.name]" :title="scriptByRow[row.name] ? '查看脚本' : '尚未上传脚本'" @click="openViewModal(row.id, row.name)">查看脚本</button><!-- 操作 >3 个：第三个起收进「···」（来源表/属性管理/删除） --><a-dropdown trigger="click" position="bl"><button type="button" class="schema-action-link schema-action-more" :aria-label="`${row.label}更多操作`" title="更多操作">···</button><template #content><a-doption class="schema-action-menu-item" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</a-doption><a-doption class="schema-action-menu-item" @click="openPropertyModal(row.schema)">属性管理</a-doption><a-doption class="schema-action-menu-item schema-action-menu-item--danger" :disabled="!canWrite || !row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</a-doption></template></a-dropdown></div></td></tr></template></tbody></table></div>
+      <div v-if="activeTab === '标准实体'" ref="tableWrapRef" class="schema-table-wrap" :class="{ 'has-scroll-right': tableHasMoreToScroll }" @scroll.passive="handleScroll"><table class="schema-entity-table"><thead><tr><th>实体中文名</th><th>Schema 名称</th><th>说明</th><th>属性</th><th>脚本状态</th><th>操作</th></tr></thead><tbody><template v-for="row in entities" :key="row.id"><tr><td><b>{{ row.label }}</b></td><td><a-tooltip :trigger="['hover', 'focus']" v-if="row.name.length > SCHEMA_NAME_LIMIT" :content="row.name" position="top"><code>{{ schemaNameCell(row.name) }}</code></a-tooltip><code v-else>{{ row.name }}</code></td><td class="schema-desc-cell"><a-tooltip :trigger="['hover', 'focus']" v-if="(row.description || '').length > DESC_CELL_LIMIT" :content="row.description" position="top"><span class="schema-desc-text">{{ descCell(row.description || '') }}</span></a-tooltip><template v-else>{{ row.description }}</template></td><td class="schema-props-cell"><SchemaPropertyCell :schema="row.schema" /></td><td class="schema-script-status"><div class="schema-script-status__items"><span v-if="!scriptByRow[row.name]" class="schema-script-status__empty">未上传</span><span v-else-if="!scriptByRow[row.name].stale && !scriptByRow[row.name].needsRun && scriptByRow[row.name].lastRunStatus !== 'failed'" class="schema-script-status__ready">已上传</span><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本（更新后还需重跑）`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name] && !scriptByRow[row.name].stale && scriptByRow[row.name].needsRun" class="script-badge script-badge--rerun" :title="scriptByRow[row.name].lastRunAt ? '脚本更新后尚未重新运行：最新脚本尚未应用到图数据，请到「图谱构建」新建抽取任务（重跑完成前持续提示）' : '脚本上传后尚未运行过抽取：请到「图谱构建」新建抽取任务，将脚本应用到图数据'">{{ scriptByRow[row.name].lastRunAt ? '待重跑' : '未运行' }}</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span></div></td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :disabled="!canWrite || !row.schema.canManageProperties" :title="row.schema.canManageProperties ? (scriptByRow[row.name] ? '更换脚本' : '上传脚本') : '无权维护脚本'" @click="openUploadModal(row.id, row.name)">更换脚本</button><button type="button" class="schema-action-link" :disabled="!scriptByRow[row.name]" :title="scriptByRow[row.name] ? '查看脚本' : '尚未上传脚本'" @click="openViewModal(row.id, row.name)">查看脚本</button><!-- 操作 >3 个：第三个起收进「···」（来源表/属性管理/删除） --><a-dropdown trigger="click" position="bl"><button type="button" class="schema-action-link schema-action-more" :aria-label="`${row.label}更多操作`" title="更多操作">···</button><template #content><a-doption class="schema-action-menu-item" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</a-doption><a-doption class="schema-action-menu-item" @click="openPropertyModal(row.schema)">属性管理</a-doption><a-doption class="schema-action-menu-item schema-action-menu-item--danger" :disabled="!canWrite || !row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</a-doption></template></a-dropdown></div></td></tr></template></tbody></table></div>
 
-      <div v-else ref="tableWrapRef" class="schema-table-wrap" :class="{ 'has-scroll-right': tableHasMoreToScroll }" @scroll.passive="handleScroll"><table class="schema-relation-table"><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>说明</th><th>属性</th><th>脚本状态</th><th>操作</th></tr></thead><tbody><template v-for="row in relations" :key="row.id"><tr><td><a-tooltip v-if="row.label.length > 10" :content="row.label" position="top"><b>{{ schemaNameCell(row.label) }}</b></a-tooltip><b v-else>{{ row.label }}</b></td><td><a-tooltip v-if="row.name.length > 10" :content="row.name" position="top"><code>{{ schemaNameCell(row.name) }}</code></a-tooltip><code v-else>{{ row.name }}</code></td><td><a-tooltip v-if="row.source.length > 5" :content="row.source" position="top"><span>{{ endpointNameCell(row.source) }}</span></a-tooltip><template v-else>{{ row.source }}</template></td><td><a-tooltip v-if="row.target.length > 5" :content="row.target" position="top"><span>{{ endpointNameCell(row.target) }}</span></a-tooltip><template v-else>{{ row.target }}</template></td><td class="schema-desc-cell"><a-tooltip v-if="(row.basis || '').length > DESC_CELL_LIMIT" :content="row.basis" position="top"><span class="schema-desc-text">{{ descCell(row.basis || '') }}</span></a-tooltip><template v-else>{{ row.basis }}</template></td><td class="schema-props-cell"><SchemaPropertyCell :schema="row.schema" /></td><td class="schema-script-status"><div class="schema-script-status__items"><span v-if="!scriptByRow[row.name]" class="schema-script-status__empty">未上传</span><span v-else-if="!scriptByRow[row.name].stale && !scriptByRow[row.name].needsRun && scriptByRow[row.name].lastRunStatus !== 'failed'" class="schema-script-status__ready">已上传</span><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本（更新后还需重跑）`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name] && !scriptByRow[row.name].stale && scriptByRow[row.name].needsRun" class="script-badge script-badge--rerun" :title="scriptByRow[row.name].lastRunAt ? '脚本更新后尚未重新运行：最新脚本尚未应用到图数据，请到「图谱构建」新建抽取任务（重跑完成前持续提示）' : '脚本上传后尚未运行过抽取：请到「图谱构建」新建抽取任务，将脚本应用到图数据'">{{ scriptByRow[row.name].lastRunAt ? '待重跑' : '未运行' }}</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span></div></td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :disabled="!canWrite || !row.schema.canManageProperties" :title="row.schema.canManageProperties ? (scriptByRow[row.name] ? '更换脚本' : '上传脚本') : '无权维护脚本'" @click="openUploadModal(row.id, row.name)">更换脚本</button><button type="button" class="schema-action-link" :disabled="!scriptByRow[row.name]" :title="scriptByRow[row.name] ? '查看脚本' : '尚未上传脚本'" @click="openViewModal(row.id, row.name)">查看脚本</button><!-- 操作 >3 个：第三个起收进「···」（来源表/属性管理/删除） --><a-dropdown trigger="click" position="bl"><button type="button" class="schema-action-link schema-action-more" :aria-label="`${row.label}更多操作`" title="更多操作">···</button><template #content><a-doption class="schema-action-menu-item" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</a-doption><a-doption class="schema-action-menu-item" @click="openPropertyModal(row.schema)">属性管理</a-doption><a-doption class="schema-action-menu-item schema-action-menu-item--danger" :disabled="!canWrite || !row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</a-doption></template></a-dropdown></div></td></tr></template></tbody></table></div>
+      <div v-else ref="tableWrapRef" class="schema-table-wrap" :class="{ 'has-scroll-right': tableHasMoreToScroll }" @scroll.passive="handleScroll"><table class="schema-relation-table"><thead><tr><th>关系中文名</th><th>关系英文名</th><th>起点</th><th>终点</th><th>说明</th><th>属性</th><th>脚本状态</th><th>操作</th></tr></thead><tbody><template v-for="row in relations" :key="row.id"><tr><td><a-tooltip :trigger="['hover', 'focus']" v-if="row.label.length > SCHEMA_NAME_LIMIT" :content="row.label" position="top"><b>{{ schemaNameCell(row.label) }}</b></a-tooltip><b v-else>{{ row.label }}</b></td><td><a-tooltip :trigger="['hover', 'focus']" v-if="row.name.length > SCHEMA_NAME_LIMIT" :content="row.name" position="top"><code>{{ schemaNameCell(row.name) }}</code></a-tooltip><code v-else>{{ row.name }}</code></td><td><a-tooltip :trigger="['hover', 'focus']" v-if="row.source.length > ENDPOINT_NAME_LIMIT" :content="row.source" position="top"><span>{{ endpointNameCell(row.source) }}</span></a-tooltip><template v-else>{{ row.source }}</template></td><td><a-tooltip :trigger="['hover', 'focus']" v-if="row.target.length > ENDPOINT_NAME_LIMIT" :content="row.target" position="top"><span>{{ endpointNameCell(row.target) }}</span></a-tooltip><template v-else>{{ row.target }}</template></td><td class="schema-desc-cell"><a-tooltip :trigger="['hover', 'focus']" v-if="(row.basis || '').length > DESC_CELL_LIMIT" :content="row.basis" position="top"><span class="schema-desc-text">{{ descCell(row.basis || '') }}</span></a-tooltip><template v-else>{{ row.basis }}</template></td><td class="schema-props-cell"><SchemaPropertyCell :schema="row.schema" /></td><td class="schema-script-status"><div class="schema-script-status__items"><span v-if="!scriptByRow[row.name]" class="schema-script-status__empty">未上传</span><span v-else-if="!scriptByRow[row.name].stale && !scriptByRow[row.name].needsRun && scriptByRow[row.name].lastRunStatus !== 'failed'" class="schema-script-status__ready">已上传</span><span v-if="scriptByRow[row.name]?.stale" class="script-badge" :title="`脚本落后于 Schema ${scriptByRow[row.name].staleBehind} 版：新增/删除的属性不会生效，请更新脚本（更新后还需重跑）`">落后 {{ scriptByRow[row.name].staleBehind }} 版</span><span v-if="scriptByRow[row.name] && !scriptByRow[row.name].stale && scriptByRow[row.name].needsRun" class="script-badge script-badge--rerun" :title="scriptByRow[row.name].lastRunAt ? '脚本更新后尚未重新运行：最新脚本尚未应用到图数据，请到「图谱构建」新建抽取任务（重跑完成前持续提示）' : '脚本上传后尚未运行过抽取：请到「图谱构建」新建抽取任务，将脚本应用到图数据'">{{ scriptByRow[row.name].lastRunAt ? '待重跑' : '未运行' }}</span><span v-if="scriptByRow[row.name]?.lastRunStatus === 'failed'" class="script-badge script-badge--failed" :title="`上次运行失败：${scriptByRow[row.name].lastRunError || '未知错误'}`">上次失败</span></div></td><td class="schema-actions"><div class="schema-actions__inner"><button type="button" class="schema-action-link" :disabled="!canWrite || !row.schema.canManageProperties" :title="row.schema.canManageProperties ? (scriptByRow[row.name] ? '更换脚本' : '上传脚本') : '无权维护脚本'" @click="openUploadModal(row.id, row.name)">更换脚本</button><button type="button" class="schema-action-link" :disabled="!scriptByRow[row.name]" :title="scriptByRow[row.name] ? '查看脚本' : '尚未上传脚本'" @click="openViewModal(row.id, row.name)">查看脚本</button><!-- 操作 >3 个：第三个起收进「···」（来源表/属性管理/删除） --><a-dropdown trigger="click" position="bl"><button type="button" class="schema-action-link schema-action-more" :aria-label="`${row.label}更多操作`" title="更多操作">···</button><template #content><a-doption class="schema-action-menu-item" :title="row.schema.canManageProperties ? '维护来源表绑定（平台喂数抽取的读取源）' : (row.schema.isSystem ? '系统 Schema 仅管理员可维护来源表' : '只有创建者或管理员可维护来源表')" @click="openSourcesModal(row.schema)">来源表</a-doption><a-doption class="schema-action-menu-item" @click="openPropertyModal(row.schema)">属性管理</a-doption><a-doption class="schema-action-menu-item schema-action-menu-item--danger" :disabled="!canWrite || !row.schema.canDelete" @click="openDeleteModal(row.schema)">删除</a-doption></template></a-dropdown></div></td></tr></template></tbody></table></div>
 
       <!-- 列表分页（服务端分页，两个页签共用每页条数、各自记住页码）。 -->
       <ListPagination
@@ -1186,30 +1284,30 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 
     <Teleport to="body">
       <div v-if="modalOpen" class="schema-modal schema-create-modal">
-        <button class="schema-modal__mask" type="button" @click="modalOpen = false"></button>
-        <aside class="schema-modal__panel schema-create-panel">
-          <header><h2>新增{{ activeTab }}</h2><button type="button" @click="modalOpen = false">×</button></header>
-          <a-form ref="createFormRef" :model="createForm" :rules="createFormRules" class="schema-modal__body schema-create-body" layout="vertical">
+        <button class="schema-modal__mask" type="button" tabindex="-1" aria-label="关闭弹窗" @click="closeCreateModal"></button>
+        <aside v-dialog-focus="{ close: closeCreateModal, busy: creating }" class="schema-modal__panel schema-create-panel">
+          <header><h2>新增{{ activeTab }}</h2><button type="button" @click="requestCloseCreate">×</button></header>
+          <a-form ref="createFormRef" :model="createForm" :rules="createFormRules" class="schema-modal__body schema-create-body" layout="vertical" :inert="creating">
             <div class="create-row">
               <a-form-item class="create-field create-field--limit-note" field="name" :label="isRelationTab() ? '关系英文名' : '实体名'" required>
-                <input aria-label="name" v-model="createForm.name" class="create-text-input" :class="{ 'is-at-limit': atLimit(createForm.name, nameRuleMax) }" :maxlength="nameRuleMax" :placeholder="isRelationTab() ? 'USES_TECHNOLOGY' : 'Gadget'" />
+                <ClearableInput aria-label="name" v-model="createForm.name" class="create-text-input" :class="{ 'is-at-limit': atLimit(createForm.name, nameRuleMax) }" :maxlength="nameRuleMax" :placeholder="isRelationTab() ? 'USES_TECHNOLOGY' : 'Gadget'" />
                 <p v-if="atLimit(createForm.name, nameRuleMax)" class="limit-field-note">已达 {{ nameRuleMax }} 字上限，无法继续输入</p>
               </a-form-item>
               <a-form-item class="create-field create-field--limit-note" field="label" label="中文名" required>
-                <input aria-label="如：技术" v-model="createForm.label" class="create-text-input" :class="{ 'is-at-limit': atLimit(createForm.label, SCHEMA_LABEL_RULE.max) }" :maxlength="SCHEMA_LABEL_RULE.max" placeholder="如：技术" />
+                <ClearableInput aria-label="如：技术" v-model="createForm.label" class="create-text-input" :class="{ 'is-at-limit': atLimit(createForm.label, SCHEMA_LABEL_RULE.max) }" :maxlength="SCHEMA_LABEL_RULE.max" placeholder="如：技术" />
                 <p v-if="atLimit(createForm.label, SCHEMA_LABEL_RULE.max)" class="limit-field-note">已达 {{ SCHEMA_LABEL_RULE.max }} 字上限，无法继续输入</p>
               </a-form-item>
             </div>
 
             <div v-if="isRelationTab()" class="create-row">
               <a-form-item class="create-field" field="sourceEntityId" label="起点实体" label-component="div" required>
-                <a-select v-model="createForm.sourceEntityId" class="schema-select" placeholder="请选择" popup-container=".schema-create-modal" :scrollbar="false">
+                <a-select allow-clear v-model="createForm.sourceEntityId" class="schema-select" placeholder="请选择" popup-container=".schema-create-modal" :scrollbar="false">
                   <a-option v-for="e in entityOptions" :key="e.id" :value="e.id">{{ e.name }}（{{ e.label }}）</a-option>
                   <template #empty>当前图空间暂无实体 Schema，请先新增实体</template>
                 </a-select>
               </a-form-item>
               <a-form-item class="create-field" field="targetEntityId" label="终点实体" label-component="div" required>
-                <a-select v-model="createForm.targetEntityId" class="schema-select" placeholder="请选择" popup-container=".schema-create-modal" :scrollbar="false">
+                <a-select allow-clear v-model="createForm.targetEntityId" class="schema-select" placeholder="请选择" popup-container=".schema-create-modal" :scrollbar="false">
                   <a-option v-for="e in entityOptions" :key="e.id" :value="e.id">{{ e.name }}（{{ e.label }}）</a-option>
                   <template #empty>当前图空间暂无实体 Schema，请先新增实体</template>
                 </a-select>
@@ -1217,7 +1315,7 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
             </div>
 
             <a-form-item class="create-field create-field--full create-field--limit-note" field="description" label="说明">
-              <a-textarea v-model="createForm.description" class="schema-description-textarea" :max-length="SCHEMA_DESC_RULE.max" show-word-limit :auto-size="{ minRows: 3, maxRows: 5 }" />
+              <ClearableTextarea v-model="createForm.description" class="schema-description-textarea" :max-length="SCHEMA_DESC_RULE.max" show-word-limit :auto-size="{ minRows: 3, maxRows: 5 }" />
               <p v-if="atLimit(createForm.description, SCHEMA_DESC_RULE.max)" class="limit-field-note">已达 {{ SCHEMA_DESC_RULE.max }} 字上限，无法继续输入</p>
             </a-form-item>
             <a-form-item class="create-props" field="properties" required label-component="div">
@@ -1233,7 +1331,7 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
                 :class="{ 'create-prop-row--has-length': p.dataType === 'fixed_string', 'create-prop-row--locked': p.locked }"
               >
                 <a-form-item class="prop-name-field" :field="`properties.${i}.name`" :rules="[{ required: true, message: '请输入属性名称' }, { validator: validatePropName }]" hide-label>
-                  <input aria-label="属性名" v-model="p.name" :maxlength="PROP_NAME_RULE.max" placeholder="属性名" class="prop-name" :class="{ 'is-at-limit': !p.locked && atLimit(p.name, PROP_NAME_RULE.max) }" :disabled="!canWrite || p.locked" :title="p.locked ? '公共必选属性，不可修改' : undefined" />
+                  <ClearableInput aria-label="属性名" v-model="p.name" :maxlength="PROP_NAME_RULE.max" placeholder="属性名" class="prop-name" :class="{ 'is-at-limit': !p.locked && atLimit(p.name, PROP_NAME_RULE.max) }" :disabled="!canWrite || p.locked" :title="p.locked ? '公共必选属性，不可修改' : undefined" />
                 </a-form-item>
                 <template v-if="p.locked">
                   <span class="prop-locked-type">string</span>
@@ -1243,10 +1341,10 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
                   </span>
                 </template>
                 <template v-else>
-                  <a-select v-model="p.dataType" class="schema-select prop-type" popup-container=".schema-create-modal" :scrollbar="false">
+                  <a-select allow-clear v-model="p.dataType" class="schema-select prop-type" popup-container=".schema-create-modal" :scrollbar="false">
                     <a-option v-for="t in PROPERTY_TYPES" :key="t" :value="t">{{ t }}</a-option>
                   </a-select>
-                  <input aria-label="1~1024" v-if="p.dataType === 'fixed_string'" :value="p.length" type="text" inputmode="numeric" :maxlength="FIXED_STRING_MAX_INPUT_CHARS" class="prop-len" :class="{ 'prop-len--invalid': fixedLengthInvalid(p) }" :title="validateFixedLength(p.length) || undefined" placeholder="1~1024" @input="onLengthInput(p, $event)" />
+                  <ClearableInput aria-label="1~1024" v-if="p.dataType === 'fixed_string'" :value="p.length" type="text" inputmode="numeric" :maxlength="FIXED_STRING_MAX_INPUT_CHARS" class="prop-len" :class="{ 'prop-len--invalid': fixedLengthInvalid(p) }" :title="validateFixedLength(p.length) || undefined" placeholder="1~1024" @input="onLengthInput(p, $event)" />
                   <a-checkbox v-model="p.required" class="prop-required">必填</a-checkbox>
                   <button type="button" class="prop-remove" @click="removeProperty(i)" title="删除">×</button>
                 </template>
@@ -1280,8 +1378,8 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
             </div>
           </a-form>
           <footer>
-            <button type="button" @click="modalOpen = false">取消</button>
-            <button v-if="confirming" type="button" @click="confirming = false">返回修改</button>
+            <button type="button" @click="cancelCreate">{{ creating ? '取消并终止创建' : '取消' }}</button>
+            <button v-if="confirming && !creating" type="button" @click="confirming = false">返回修改</button>
             <button type="button" class="primary" :disabled="!canWrite || creating" @click="saveItem">{{ creating ? '创建中...' : confirming ? '确认创建' : '预览并创建' }}</button>
           </footer>
         </aside>
@@ -1289,9 +1387,33 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
     </Teleport>
 
     <Teleport to="body">
+      <div v-if="createCancelConfirmOpen" class="schema-modal schema-delete-modal">
+        <button class="schema-modal__mask" type="button" tabindex="-1" aria-label="关闭弹窗" @click="createCancelConfirmOpen = false"></button>
+        <aside v-dialog-focus="{ close: () => { createCancelConfirmOpen = false } }" class="schema-modal__panel schema-delete-panel">
+          <header><h2>终止创建</h2><button type="button" @click="createCancelConfirmOpen = false">×</button></header>
+          <div class="schema-modal__body">
+            <div class="schema-delete-summary">
+              <span class="schema-delete-summary__icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M12 3 2.8 19a1.4 1.4 0 0 0 1.2 2h16a1.4 1.4 0 0 0 1.2-2L12 3Zm0 6v5m0 3.5v.1" /></svg>
+              </span>
+              <div>
+                <h3>是否终止 Schema 的创建？</h3>
+                <p>将中止「{{ createSnapshot?.name }}」的创建请求，并删除可能已提交的 Schema 定义。</p>
+              </div>
+            </div>
+          </div>
+          <footer>
+            <button type="button" @click="createCancelConfirmOpen = false">继续创建</button>
+            <button type="button" class="danger" @click="cancelCreate">终止创建</button>
+          </footer>
+        </aside>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
       <div v-if="deleteModalOpen" class="schema-modal schema-delete-modal">
-        <button class="schema-modal__mask" type="button" @click="deleteModalOpen = false"></button>
-        <aside class="schema-modal__panel schema-delete-panel">
+        <button class="schema-modal__mask" type="button" tabindex="-1" aria-label="关闭弹窗" @click="deleteModalOpen = false"></button>
+        <aside v-dialog-focus="{ close: () => { deleteModalOpen = false } }" class="schema-modal__panel schema-delete-panel">
           <header><h2>删除 Schema</h2><button type="button" @click="deleteModalOpen = false">×</button></header>
           <div class="schema-modal__body">
             <div class="schema-delete-summary">
@@ -1338,8 +1460,8 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 
     <Teleport to="body">
       <div v-if="propertyModalOpen" class="schema-modal property-modal">
-        <button class="schema-modal__mask" type="button" @click="closePropertyModal"></button>
-        <aside class="schema-modal__panel property-panel">
+        <button class="schema-modal__mask" type="button" tabindex="-1" aria-label="关闭弹窗" @click="closePropertyModal"></button>
+        <aside v-dialog-focus="{ close: () => { closePropertyModal() } }" class="schema-modal__panel property-panel">
           <header><h2>属性管理 · {{ propertyTarget?.label || propertyTarget?.name }}</h2><button type="button" @click="closePropertyModal">×</button></header>
           <div class="schema-modal__body property-body">
             <div class="property-section">
@@ -1350,7 +1472,10 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
                 </div>
                 <div v-for="p in propertyTarget?.properties || []" :key="p.name" class="property-table__row" :class="{ 'property-table__row--locked': p.locked }">
                   <span class="property-table__name">
-                    <code>{{ p.name }}</code>
+                    <!-- 挂到不裁切内容的弹窗外层，避免 body 上的默认浮层被 z-index:9999 的遮罩盖住。 -->
+                    <a-tooltip :trigger="['hover', 'focus']" :content="p.name" position="top" popup-container=".property-modal" :content-style="{ maxWidth: '480px', overflowWrap: 'anywhere' }">
+                      <code tabindex="0">{{ schemaNameCell(p.name) }}</code>
+                    </a-tooltip>
                     <svg v-if="p.locked" class="property-table__lock" viewBox="0 0 24 24" aria-label="锁定" role="img" title="公共必选属性，不可删除">
                       <path d="M7 10V7a5 5 0 0 1 10 0v3M6 10h12a2 2 0 0 1 2 2v8H4v-8a2 2 0 0 1 2-2Zm6 4v3" />
                     </svg>
@@ -1365,11 +1490,11 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
             <div class="property-section">
               <div class="property-section__head"><strong>新增属性</strong><span>新增后在图库执行 ALTER ADD（可空列）</span></div>
               <div class="property-add-form">
-                <a-input :disabled="!canWrite || !propertyTarget?.canManageProperties" v-model="propertyForm.name" :max-length="PROP_NAME_RULE.max" aria-label="属性名（字母/数字/下划线）" placeholder="属性名（字母/数字/下划线）" class="property-add-form__name" :class="{ 'is-at-limit': atLimit(propertyForm.name, PROP_NAME_RULE.max) }" />
-                <a-select :disabled="!canWrite || !propertyTarget?.canManageProperties" v-model="propertyForm.dataType" class="property-add-form__type" popup-container=".property-modal" :scrollbar="false">
+                <a-input allow-clear :disabled="!canWrite || !propertyTarget?.canManageProperties" v-model="propertyForm.name" :max-length="PROP_NAME_RULE.max" aria-label="属性名（字母/数字/下划线）" placeholder="属性名（字母/数字/下划线）" class="property-add-form__name" :class="{ 'is-at-limit': atLimit(propertyForm.name, PROP_NAME_RULE.max) }" />
+                <a-select allow-clear :disabled="!canWrite || !propertyTarget?.canManageProperties" v-model="propertyForm.dataType" class="property-add-form__type" popup-container=".property-modal" :scrollbar="false">
                   <a-option v-for="t in PROPERTY_TYPES" :key="t" :value="t">{{ t }}</a-option>
                 </a-select>
-                <input :disabled="!canWrite || !propertyTarget?.canManageProperties" aria-label="1~1024" v-if="propertyForm.dataType === 'fixed_string'" :value="propertyForm.length" type="text" inputmode="numeric" :maxlength="FIXED_STRING_MAX_INPUT_CHARS" class="property-add-form__len" :class="{ 'property-add-form__len--invalid': propertyLengthInvalid }" :title="propertyLengthError || undefined" placeholder="1~1024" @input="onPropertyLengthInput" />
+                <ClearableInput :disabled="!canWrite || !propertyTarget?.canManageProperties" aria-label="1~1024" v-if="propertyForm.dataType === 'fixed_string'" :value="propertyForm.length" type="text" inputmode="numeric" :maxlength="FIXED_STRING_MAX_INPUT_CHARS" class="property-add-form__len" :class="{ 'property-add-form__len--invalid': propertyLengthInvalid }" :title="propertyLengthError || undefined" placeholder="1~1024" @input="onPropertyLengthInput" />
                 <a-checkbox :disabled="!canWrite || !propertyTarget?.canManageProperties" v-model="propertyForm.required" class="property-add-form__required">必填</a-checkbox>
                 <button type="button" class="primary" :disabled="!canWrite || !propertyTarget?.canManageProperties || propertySaving" @click="submitAddProperty">{{ propertySaving ? '新增中...' : '确认新增' }}</button>
               </div>
@@ -1386,8 +1511,8 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 
     <Teleport to="body">
       <div v-if="propertyDeleteConfirmOpen && propertyDeleteTarget" class="schema-modal property-delete-modal">
-        <button class="schema-modal__mask" type="button" @click="propertyDeleteConfirmOpen = false"></button>
-        <aside class="schema-modal__panel schema-delete-panel">
+        <button class="schema-modal__mask" type="button" tabindex="-1" aria-label="关闭弹窗" @click="propertyDeleteConfirmOpen = false"></button>
+        <aside v-dialog-focus="{ close: () => { propertyDeleteConfirmOpen = false } }" class="schema-modal__panel schema-delete-panel">
           <header><h2>删除属性</h2><button type="button" @click="propertyDeleteConfirmOpen = false">×</button></header>
           <div class="schema-modal__body">
             <p class="schema-delete-text">确认删除属性 <b><code>{{ propertyDeleteTarget.name }}</code></b>？<b class="danger-text">此操作不可逆。</b></p>
@@ -1403,8 +1528,8 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 
     <Teleport to="body">
       <div v-if="sourcesModalOpen" class="schema-modal sources-modal">
-        <button class="schema-modal__mask" type="button" @click="sourcesModalOpen = false"></button>
-        <aside class="schema-modal__panel sources-panel">
+        <button class="schema-modal__mask" type="button" tabindex="-1" aria-label="关闭弹窗" @click="sourcesModalOpen = false"></button>
+        <aside v-dialog-focus="{ close: () => { sourcesModalOpen = false } }" class="schema-modal__panel sources-panel">
           <header><h2>来源表 · {{ sourcesTarget?.label || sourcesTarget?.name }}</h2><button type="button" @click="sourcesModalOpen = false">×</button></header>
           <div class="schema-modal__body">
             <p class="sources-note">绑定来源表并保存后，到「图谱构建」页新建抽取任务即可让平台按各表独立的时间列水位分批读取行数据交给脚本转换并写入图谱（保存绑定不会自动触发抽取）；每张表可独立并行推进。</p>
@@ -1420,8 +1545,8 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 
     <Teleport to="body">
       <div v-if="propertyScriptGuideOpen" class="schema-modal property-extract-modal">
-        <button class="schema-modal__mask" type="button" @click="propertyScriptGuideOpen = false"></button>
-        <aside class="schema-modal__panel schema-delete-panel">
+        <button class="schema-modal__mask" type="button" tabindex="-1" aria-label="关闭弹窗" @click="propertyScriptGuideOpen = false"></button>
+        <aside v-dialog-focus="{ close: () => { propertyScriptGuideOpen = false } }" class="schema-modal__panel schema-delete-panel">
           <header><h2>请更新脚本后重跑</h2><button type="button" @click="propertyScriptGuideOpen = false">×</button></header>
           <div class="schema-modal__body">
             <p class="schema-delete-text">
@@ -1443,8 +1568,8 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 
     <input aria-label="file-input" ref="uploadFileInput" type="file" accept=".py" hidden @change="onUploadFileChosen" />    <Teleport to="body">
       <div v-if="uploadModalOpen" class="schema-modal script-upload-modal">
-        <button class="schema-modal__mask" type="button" @click="closeUploadModal"></button>
-        <aside class="schema-modal__panel">
+        <button class="schema-modal__mask" type="button" tabindex="-1" aria-label="关闭弹窗" @click="closeUploadModal"></button>
+        <aside v-dialog-focus="{ close: () => { closeUploadModal() } }" class="schema-modal__panel">
           <header><h2>上传脚本 · {{ uploadTargetName }}</h2><button type="button" @click="closeUploadModal">×</button></header>
           <div class="schema-modal__body">
             <div v-if="uploadState === 'idle'" class="upload-idle">
@@ -1494,8 +1619,8 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 
     <Teleport to="body">
       <div v-if="viewModalOpen" class="schema-modal script-view-modal">
-        <button class="schema-modal__mask" type="button" @click="viewModalOpen = false"></button>
-        <aside class="schema-modal__panel script-view-panel">
+        <button class="schema-modal__mask" type="button" tabindex="-1" aria-label="关闭弹窗" @click="viewModalOpen = false"></button>
+        <aside v-dialog-focus="{ close: () => { viewModalOpen = false } }" class="schema-modal__panel script-view-panel">
           <header><h2>查看脚本 · {{ viewFilename }}</h2><button type="button" @click="viewModalOpen = false">×</button></header>
           <div class="schema-modal__body script-view-body">
             <div v-if="viewState === 'loading'" class="view-loading">加载中...</div>
@@ -1514,8 +1639,8 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 <style scoped>
 .space-readonly-bar{flex:0 0 auto;margin:0}
 
-.schema-page{display:flex;height:100%;min-height:0;overflow:hidden;padding-bottom:2px;color:#142443;flex-direction:column}.schema-flow{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));margin-bottom:12px;padding:12px;border:1px solid #c5d9f6;border-radius:8px;background:#fff}.schema-flow>div{position:relative;display:flex;align-items:center;gap:7px;min-width:0;padding:4px 15px 4px 5px}.schema-flow i{display:grid;flex:0 0 auto;place-items:center;width:23px;height:23px;border-radius:50%;background:#eaf2ff;color:#165dff;font-size:10px;font-style:normal}.schema-flow span{color:#40536f;font-size:10px;line-height:15px}.schema-flow b{position:absolute;right:2px;color:#9bb5d9}.schema-shell{display:flex;flex:1;min-height:0;overflow:hidden;border:1px solid #bcd4f7;border-radius:9px;background:#fff;box-shadow:0 10px 24px rgba(48,105,194,.08);flex-direction:column}.schema-tabs{display:flex;flex:0 0 auto;overflow:auto;padding:0 12px;border-bottom:1px solid #dce8f8}.schema-tabs button{padding:12px 15px;border:0;border-bottom:2px solid transparent;background:transparent;color:#566985;white-space:nowrap;cursor:pointer}.schema-tabs button.active{border-color:#165dff;color:#165dff;font-weight:600}.schema-toolbar{display:flex;flex:0 0 auto;align-items:center;justify-content:space-between;gap:14px;padding:10px 13px;border-bottom:1px solid #e3ebf6;background:#f8fbff}.schema-toolbar>div{display:flex;align-items:center;gap:10px}.schema-toolbar strong{font-size:13px}.schema-toolbar>div span{color:#7b8ba3;font-size:10px}.schema-toolbar label{display:flex;align-items:center;gap:6px;width:270px;padding:0 9px;border:1px solid #c7d8ef;border-radius:5px;background:#fff}.schema-toolbar input{width:100%;height:30px;border:0;outline:0;font-size:11px}.schema-table-wrap{flex:1;min-height:0;max-height:none;overflow:auto}
-.schema-table-wrap table,.trace-layout table{width:100%;border-collapse:collapse;font-size:11px}
+.schema-page{display:flex;height:100%;min-height:0;overflow:hidden;padding-bottom:2px;color:#142443;flex-direction:column}.schema-flow{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));margin-bottom:12px;padding:12px;border:1px solid #c5d9f6;border-radius:8px;background:#fff}.schema-flow>div{position:relative;display:flex;align-items:center;gap:7px;min-width:0;padding:4px 15px 4px 5px}.schema-flow i{display:grid;flex:0 0 auto;place-items:center;width:23px;height:23px;border-radius:50%;background:#eaf2ff;color:#165dff;font-size:12px;font-style:normal}.schema-flow span{color:#40536f;font-size:12px;line-height:15px}.schema-flow b{position:absolute;right:2px;color:#9bb5d9}.schema-shell{display:flex;flex:1;min-height:0;overflow:hidden;border:1px solid #bcd4f7;border-radius:9px;background:#fff;box-shadow:0 10px 24px rgba(48,105,194,.08);flex-direction:column}.schema-tabs{display:flex;flex:0 0 auto;overflow:auto;padding:0 12px;border-bottom:1px solid #dce8f8}.schema-tabs button{padding:12px 15px;border:0;border-bottom:2px solid transparent;background:transparent;color:#566985;white-space:nowrap;cursor:pointer}.schema-tabs button.active{border-color:#165dff;color:#165dff;font-weight:600}.schema-toolbar{display:flex;flex:0 0 auto;align-items:center;justify-content:space-between;gap:14px;padding:10px 13px;border-bottom:1px solid #e3ebf6;background:#f8fbff}.schema-toolbar>div{display:flex;align-items:center;gap:10px}.schema-toolbar strong{font-size:12px}.schema-toolbar>div span{color:#7b8ba3;font-size:12px}.schema-toolbar label{display:flex;align-items:center;gap:6px;width:270px;padding:0 9px;border:1px solid #c7d8ef;border-radius:5px;background:#fff}.schema-toolbar input{width:100%;height:30px;border:0;outline:0;font-size:12px}.schema-table-wrap{flex:1;min-height:0;max-height:none;overflow:auto}
+.schema-table-wrap table,.trace-layout table{width:100%;border-collapse:collapse;font-size:12px}
 .schema-table-wrap table{table-layout:fixed}
 /* 按字段内容分配列宽，预留完整操作区；属性列的两列预览可在单元格内截断。 */
 .schema-entity-table th:nth-child(1){width:calc((100% - 200px) * 0.11627907)}
@@ -1533,11 +1658,11 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 .schema-relation-table th:nth-child(7){width:calc((100% - 200px) * 0.07954545)}
 .schema-relation-table th:nth-child(8){width:200px}
 .schema-desc-cell{word-break:break-word}
-.schema-table-wrap td code{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom}.schema-table-wrap th,.schema-table-wrap td,.trace-layout td{padding:11px 13px;border-bottom:1px solid #e5edf8;text-align:left;line-height:17px;vertical-align:top}.schema-table-wrap th{position:sticky;z-index:2;top:0;background:#f1f6fc;color:#5e6f88;white-space:nowrap}.schema-table-wrap td{color:#344763}.schema-table-wrap code,.trace-layout code{padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;white-space:nowrap}.core,.support,.evidence,.auto,.review{display:inline-flex;padding:2px 7px;border-radius:999px;background:#e9f8ef;color:#067647;font-size:9px;white-space:nowrap}.support{background:#f0f2f5;color:#5e6b7e}.evidence{background:#f0edff;color:#6941c6}.auto{white-space:normal}.review{background:#fff3df;color:#b54708;white-space:normal}.arrow{margin:0 5px;color:#8ba2c2}.candidate-layout{display:grid;flex:1;min-height:0;grid-template-columns:minmax(0,1fr) 245px}.candidate-layout>.schema-table-wrap{grid-column:1}.candidate-note{grid-column:1/-1;padding:10px 13px;border-bottom:1px solid #dce8f8;background:#f3f8ff}.candidate-note strong{font-size:12px}.candidate-note p{margin:3px 0 0;color:#657690;font-size:10px}.mention-fields{grid-column:2;grid-row:2;padding:13px;border-left:1px solid #e0e9f5;background:#fafcff}.mention-fields strong{display:block;margin-bottom:10px;font-size:12px}.mention-fields span{display:inline-flex;margin:0 5px 6px 0;padding:3px 6px;border-radius:4px;background:#edf4ff;color:#315b95;font:9px ui-monospace,SFMono-Regular,Menlo,monospace}.trace-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:12px;background:#f8fbff}.trace-layout section{overflow:hidden;border:1px solid #d5e3f5;border-radius:7px;background:#fff}.trace-layout header{display:flex;align-items:flex-start;justify-content:space-between;padding:13px;border-bottom:1px solid #e3ebf6}.trace-layout h2{margin:0;font-size:13px}.trace-layout p{margin:3px 0 0;color:#7b899e;font-size:10px}.trace-layout header>span{color:#165dff;font-size:10px}.trace-layout table{display:block;max-height:390px;overflow:auto}.trace-layout tbody,.trace-layout tr{display:table;width:100%;table-layout:fixed}.trace-layout td:first-child{width:160px}@media(max-width:1250px){.schema-flow{grid-template-columns:repeat(4,1fr)}.schema-flow b{display:none}}@media(max-width:900px){.trace-layout{grid-template-columns:1fr}.candidate-layout{display:block}.mention-fields{border-top:1px solid #e0e9f5;border-left:0}}
+.schema-table-wrap td code{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom}.schema-table-wrap th,.schema-table-wrap td,.trace-layout td{padding:11px 13px;border-bottom:1px solid #e5edf8;text-align:left;line-height:17px;vertical-align:top}.schema-table-wrap th{position:sticky;z-index:2;top:0;background:#f1f6fc;color:#5e6f88;white-space:nowrap}.schema-table-wrap td{color:#344763}.schema-table-wrap code,.trace-layout code{padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;white-space:nowrap}.core,.support,.evidence,.auto,.review{display:inline-flex;padding:2px 7px;border-radius:999px;background:#e9f8ef;color:#067647;font-size:12px;white-space:nowrap}.support{background:#f0f2f5;color:#5e6b7e}.evidence{background:#f0edff;color:#6941c6}.auto{white-space:normal}.review{background:#fff3df;color:#b54708;white-space:normal}.arrow{margin:0 5px;color:#8ba2c2}.candidate-layout{display:grid;flex:1;min-height:0;grid-template-columns:minmax(0,1fr) 245px}.candidate-layout>.schema-table-wrap{grid-column:1}.candidate-note{grid-column:1/-1;padding:10px 13px;border-bottom:1px solid #dce8f8;background:#f3f8ff}.candidate-note strong{font-size:12px}.candidate-note p{margin:3px 0 0;color:#657690;font-size:12px}.mention-fields{grid-column:2;grid-row:2;padding:13px;border-left:1px solid #e0e9f5;background:#fafcff}.mention-fields strong{display:block;margin-bottom:10px;font-size:12px}.mention-fields span{display:inline-flex;margin:0 5px 6px 0;padding:3px 6px;border-radius:4px;background:#edf4ff;color:#315b95;font:12px ui-monospace,SFMono-Regular,Menlo,monospace}.trace-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:12px;background:#f8fbff}.trace-layout section{overflow:hidden;border:1px solid #d5e3f5;border-radius:7px;background:#fff}.trace-layout header{display:flex;align-items:flex-start;justify-content:space-between;padding:13px;border-bottom:1px solid #e3ebf6}.trace-layout h2{margin:0;font-size:12px}.trace-layout p{margin:3px 0 0;color:#7b899e;font-size:12px}.trace-layout header>span{color:#165dff;font-size:12px}.trace-layout table{display:block;max-height:390px;overflow:auto}.trace-layout tbody,.trace-layout tr{display:table;width:100%;table-layout:fixed}.trace-layout td:first-child{width:160px}@media(max-width:1250px){.schema-flow{grid-template-columns:repeat(4,1fr)}.schema-flow b{display:none}}@media(max-width:900px){.trace-layout{grid-template-columns:1fr}.candidate-layout{display:block}.mention-fields{border-top:1px solid #e0e9f5;border-left:0}}
 
 /* 拓扑图例（替代原顶部统计卡片） */
 .schema-topology-legend{display:flex;align-items:center;gap:16px}
-.legend-item{display:inline-flex;align-items:center;gap:6px;color:#344763;font-size:11px;white-space:nowrap}
+.legend-item{display:inline-flex;align-items:center;gap:6px;color:#344763;font-size:12px;white-space:nowrap}
 .legend-node{width:10px;height:10px;border-radius:50%;background:#165dff}
 .legend-edge{position:relative;width:22px;height:0;border-top:2px solid #12b76a}
 
@@ -1546,53 +1671,54 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 
 .schema-flow{display:block;margin-bottom:14px;padding:0;border-color:#bcd4f7;background:linear-gradient(180deg,#fff,#f6faff)}
 .schema-flow>header{display:flex;align-items:center;gap:12px;padding:10px 15px;border-bottom:1px solid #dce8f8}
-.schema-flow>header strong{color:#243b5d;font-size:13px}
-.schema-flow>header span{color:#7a8aa3;font-size:11px}
+.schema-flow>header strong{color:#243b5d;font-size:12px}
+.schema-flow>header span{color:#7a8aa3;font-size:12px}
 .schema-flow ol{display:flex;align-items:stretch;margin:0;padding:12px 14px;list-style:none}
 .schema-flow li{position:relative;flex:1;display:flex;align-items:center;gap:9px;min-width:0;padding:8px 26px 8px 10px;border:1px solid #d5e4f7;border-right:0;background:#fff}
 .schema-flow li:first-child{border-radius:6px 0 0 6px}
 .schema-flow li:last-child{border-right:1px solid #d5e4f7;border-radius:0 6px 6px 0}
 .schema-flow li:not(:last-child)::after{position:absolute;z-index:2;right:-8px;width:15px;height:15px;border-top:1px solid #d5e4f7;border-right:1px solid #d5e4f7;background:#fff;content:"";transform:rotate(45deg)}
-.schema-flow li i{position:relative;z-index:3;display:grid;flex:0 0 auto;place-items:center;width:25px;height:25px;border-radius:50%;background:#e9f2ff;color:#165dff;font-size:11px;font-style:normal;font-weight:700}
+.schema-flow li i{position:relative;z-index:3;display:grid;flex:0 0 auto;place-items:center;width:25px;height:25px;border-radius:50%;background:#e9f2ff;color:#165dff;font-size:12px;font-style:normal;font-weight:700}
 .schema-flow li:nth-child(4) i,.schema-flow li:nth-child(5) i{background:#e9f8ef;color:#067647}
 .schema-flow li:nth-child(6) i,.schema-flow li:nth-child(7) i{background:#f1edff;color:#6941c6}
-.schema-flow li span{position:relative;z-index:3;color:#40536f;font-size:11px;line-height:16px}
+.schema-flow li span{position:relative;z-index:3;color:#40536f;font-size:12px;line-height:20px}
 
 .schema-shell{min-height:0}
 .schema-tabs{min-height:45px;background:#fff}
 .schema-tabs button{padding:13px 18px;font-size:12px}
 .schema-toolbar{min-height:48px;padding:9px 16px}
-.schema-toolbar strong{font-size:15px}
-.schema-toolbar>div span{font-size:11px}
+.schema-toolbar strong{font-size:14px}
+.schema-toolbar>div span{font-size:12px}
 
 .trace-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;min-height:435px;padding:16px;background:#f7faff}
 .trace-card{display:flex;min-width:0;overflow:hidden;border:1px solid #cfdef2;border-radius:9px;background:#fff;box-shadow:0 6px 16px rgba(48,105,194,.06);flex-direction:column}
 .trace-card>header{display:flex;align-items:center;justify-content:space-between;min-height:68px;padding:13px 15px;border-bottom:1px solid #e0e9f5;background:linear-gradient(90deg,#eef5ff,#fff 62%)}
 .trace-card>header>div{display:flex;align-items:center;gap:10px}
-.trace-card>header i{display:grid;place-items:center;width:31px;height:31px;border-radius:8px;background:#165dff;color:#fff;font-size:11px;font-style:normal;font-weight:700}
+.trace-card>header i{display:grid;place-items:center;width:31px;height:31px;border-radius:8px;background:#165dff;color:#fff;font-size:12px;font-style:normal;font-weight:700}
 .trace-card>header span{display:block}
 .trace-card h2{margin:0;color:#20324e;font-size:14px}
-.trace-card p{margin:3px 0 0;color:#74849b;font-size:10px}
-.trace-card>header b{padding:4px 8px;border-radius:999px;background:#eaf2ff;color:#165dff;font-size:10px;font-weight:500;white-space:nowrap}
+.trace-card p{margin:3px 0 0;color:#74849b;font-size:12px}
+.trace-card>header b{padding:4px 8px;border-radius:999px;background:#eaf2ff;color:#165dff;font-size:12px;font-weight:500;white-space:nowrap}
 .trace-card dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-content:start;margin:0;padding:10px}
 .trace-card dl>div{min-width:0;padding:10px 11px;border-right:1px solid #e8eef7;border-bottom:1px solid #e8eef7}
 .trace-card dl>div:nth-child(2n){border-right:0}
 .trace-card dt{margin-bottom:5px}
-.trace-card dd{margin:0;color:#53647d;font-size:10px;line-height:16px}
-.trace-card code{display:inline-flex;max-width:100%;padding:3px 7px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trace-card dd{margin:0;color:#53647d;font-size:12px;line-height:20px}
+.trace-card code{display:inline-flex;max-width:100%;padding:3px 7px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .trace-layout>aside{grid-column:1/-1;display:flex;align-items:center;gap:22px;min-height:48px;padding:10px 14px;border:1px solid #d4e1f2;border-radius:7px;background:#fff}
-.trace-layout>aside strong{color:#263b5a;font-size:11px;white-space:nowrap}
-.trace-layout>aside span{display:flex;align-items:flex-start;gap:7px;color:#64758d;font-size:10px;line-height:16px}
+.trace-layout>aside strong{color:#263b5a;font-size:12px;white-space:nowrap}
+.trace-layout>aside span{display:flex;align-items:flex-start;gap:7px;color:#64758d;font-size:12px;line-height:20px}
 .trace-layout>aside i{flex:0 0 auto;width:6px;height:6px;margin-top:5px;border-radius:50%;background:#165dff}
 
-@media(max-width:1500px){.schema-flow li{padding-right:18px}.schema-flow li span{font-size:10px}.trace-card dl{grid-template-columns:1fr}.trace-card dl>div{border-right:0}}
+@media(max-width:1500px){.schema-flow li{padding-right:18px}.schema-flow li span{font-size:12px}.trace-card dl{grid-template-columns:1fr}.trace-card dl>div{border-right:0}}
 @media(max-width:1100px){.schema-flow ol{display:grid;grid-template-columns:repeat(2,1fr);gap:7px}.schema-flow li,.schema-flow li:last-child{border:1px solid #d5e4f7;border-radius:6px}.schema-flow li::after{display:none}.trace-layout{grid-template-columns:1fr}.trace-layout>aside{grid-column:1;align-items:flex-start;flex-direction:column;gap:7px}.trace-card dl{grid-template-columns:repeat(2,1fr)}.trace-card dl>div{border-right:1px solid #e8eef7}.trace-card dl>div:nth-child(2n){border-right:0}}
-.schema-version-message{margin:0;padding:9px 13px;border-bottom:1px solid #b7d0f5;background:#eef5ff;color:#344f7a;font-size:11px}
-.schema-version-table{max-height:470px}.schema-version-table td:nth-child(6){min-width:280px}.schema-version-actions{display:flex;gap:6px}.schema-version-actions button{padding:3px 7px;border:1px solid #bdd0ea;border-radius:4px;background:#fff;color:#165dff;font-size:9px;white-space:nowrap;cursor:pointer}.schema-version-actions button.danger{border-color:#f6b9b4;color:#b42318}
+.schema-version-message{margin:0;padding:9px 13px;border-bottom:1px solid #b7d0f5;background:#eef5ff;color:#344f7a;font-size:12px}
+.schema-version-table{max-height:470px}.schema-version-table td:nth-child(6){min-width:280px}.schema-version-actions{display:flex;gap:6px}.schema-version-actions button{padding:3px 7px;border:1px solid #bdd0ea;border-radius:4px;background:#fff;color:#165dff;font-size:12px;white-space:nowrap;cursor:pointer}.schema-version-actions button.danger{border-color:#f6b9b4;color:#b42318}
 
 .schema-toolbar__actions{display:flex;min-width:0;flex-wrap:wrap;align-items:center;gap:10px}
 .schema-toolbar__actions>.primary{flex-shrink:0;white-space:nowrap}
-.schema-tabs>.schema-toolbar__actions{min-width:0;width:auto;justify-content:flex-end;margin-left:auto}
+.schema-list-toolbar>.schema-toolbar__actions{min-width:0;width:auto;justify-content:flex-end;margin-left:auto}
+.schema-tabs__create{flex:0 0 auto;width:auto;align-self:center;white-space:nowrap}
 .prop-len--invalid,.property-add-form__len--invalid{border-color:#e5484d!important;background:#fff3f3!important}
 /* 长度达上限：与校验失败同款红边高亮（可见文案见 .limit-field-note / .limit-field__hint） */
 .is-at-limit{border-color:#e5484d!important;background:#fff3f3!important}
@@ -1608,7 +1734,7 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 /* 表单项内容改纵向排布：输入框与达上限提示行上下排（默认 flex 会把提示挤到输入框右侧） */
 .create-field--limit-note :deep(.arco-form-item-content){display:block}
 .create-props :deep(.arco-form-item-content){display:block}
-.schema-toolbar .primary{height:32px;padding:0 14px;border:0;border-radius:6px;background:#165dff;color:#fff;font-size:13px;cursor:pointer}
+.schema-toolbar .primary{height:32px;padding:0 14px;border:0;border-radius:6px;background:#165dff;color:#fff;font-size:12px;cursor:pointer}
 .schema-toolbar .primary:hover{background:#0e4ed8}
 .schema-actions{white-space:normal}
 .schema-actions__inner{display:flex;align-items:center;gap:8px;flex-wrap:nowrap;white-space:nowrap}
@@ -1635,37 +1761,37 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 .schema-props-cell{min-width:0;padding-top:8px!important;padding-bottom:8px!important}
 .schema-modal{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;padding:24px}
 .schema-modal__mask{position:fixed;inset:0;border:0;background:rgba(16,38,76,0.42);backdrop-filter:blur(2px);cursor:pointer}
-.schema-modal__panel{position:relative;z-index:1;width:min(520px,100%);overflow:hidden;border-radius:8px;background:#fff;box-shadow:0 24px 70px rgba(28,58,107,0.3)}
+.schema-modal__panel{position:relative;z-index:1;width:min(640px,100%);max-height:calc(100dvh - 48px);display:flex;flex-direction:column;overflow:hidden;border-radius:8px;background:#fff;box-shadow:0 24px 70px rgba(28,58,107,0.3)}
 .schema-modal__panel header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid #e5e6eb}
-.schema-modal__panel header h2{margin:0;font-size:15px;font-weight:600;color:#1d2129}
+.schema-modal__panel header h2{margin:0;font-size:14px;font-weight:600;color:#1d2129}
 .schema-modal__panel header button{width:24px;height:24px;border:0;background:transparent;color:#86909c;font-size:18px;cursor:pointer}
-.schema-modal__body{padding:18px;display:flex;flex-direction:column;gap:12px;max-height:60vh;overflow:auto}
+.schema-modal__body{flex:1;min-height:0;padding:24px;display:flex;flex-direction:column;gap:16px;overflow-x:hidden;overflow-y:auto}
 .schema-modal__body label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#4e5969}
 .schema-modal__body label em{color:#f53f3f;font-style:normal;margin-left:2px}
-.schema-modal__body input,.schema-modal__body textarea{height:32px;padding:0 8px;border:1px solid #c9cdd4;border-radius:4px;font-size:13px;color:#1d2129}
+.schema-modal__body input,.schema-modal__body textarea{height:32px;padding:0 8px;border:1px solid #c9cdd4;border-radius:4px;font-size:12px;color:#1d2129}
 .schema-modal__body textarea{height:auto;padding:6px 8px;resize:vertical}
 .schema-modal__panel footer{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;border-top:1px solid #e5e6eb}
-.schema-modal__panel footer button{height:32px;padding:0 14px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:13px;cursor:pointer}
+.schema-modal__panel footer button{height:32px;padding:0 14px;border:1px solid #c9cdd4;border-radius:4px;background:#fff;color:#4e5969;font-size:12px;cursor:pointer}
 .schema-modal__panel footer .primary{background:#165dff;color:#fff;border-color:#165dff}
 .schema-modal__panel footer button.danger{background:#e5484d;color:#fff;border-color:#e5484d}
 .schema-modal__panel footer button:disabled{opacity:.6;cursor:not-allowed}
 
 /* 删除确认弹窗 */
-.schema-delete-panel{max-width:480px}
+.schema-delete-panel{width:min(560px,100%);max-width:560px}
 .schema-delete-summary{display:flex;align-items:flex-start;gap:12px}
 .schema-delete-summary__icon{display:grid;flex:0 0 auto;place-items:center;width:40px;height:40px;border-radius:50%;background:#fff1f0;color:#e5484d}
 .schema-delete-summary__icon svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .schema-delete-summary h3{margin:0;color:#1d2129;font-size:16px;line-height:24px;font-weight:600}
-.schema-delete-summary p{margin:4px 0 0;color:#86909c;font-size:13px;line-height:20px}
+.schema-delete-summary p{margin:4px 0 0;color:#86909c;font-size:12px;line-height:20px}
 .schema-delete-summary code{padding:1px 5px;border-radius:3px;background:#f2f3f5;color:#4e5969}
 .schema-delete-checking{display:flex;align-items:center;gap:8px;margin-left:52px;color:#86909c;font-size:12px;line-height:20px}
 .schema-delete-checking .spinner{width:16px;height:16px;border-width:2px}
-.schema-delete-impact{margin-left:52px;padding:12px 14px;border:1px solid;border-radius:6px}
-.schema-delete-impact strong{display:block;margin-bottom:4px;font-size:13px;line-height:20px;font-weight:500}
+.schema-delete-impact{margin:0;padding:0;border:0}
+.schema-delete-impact strong{display:block;margin-bottom:4px;font-size:12px;line-height:20px;font-weight:500}
 .schema-delete-impact p{margin:0;font-size:12px;line-height:20px}
-.schema-delete-impact--danger{border:0;background:#fff2f0;color:#b42318}
+.schema-delete-impact--danger{border:0;background:transparent;color:#4e5969}
 .schema-delete-impact--blocked{border-color:#ffe4ba;background:#fff7e8;color:#b54708}
-.schema-delete-note{margin:0;font-size:11px;line-height:18px;color:#86909c}
+.schema-delete-note{margin:0;font-size:12px;line-height:20px;color:#86909c}
 .schema-delete-rel-list{margin:8px 0 0;padding:6px 10px;max-height:160px;overflow:auto;border:1px solid rgba(181,71,8,.16);border-radius:4px;background:rgba(255,255,255,.72);list-style:none}
 .schema-delete-rel-list li{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px;line-height:20px;color:#4e5969}
 .schema-delete-rel-list li+li{border-top:1px dashed #f5e5d3}
@@ -1677,26 +1803,26 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 .script-badge--failed{color:var(--status-danger)}
 .script-badge--rerun{color:var(--status-neutral)}
 
-/* 属性管理弹窗 */
-.property-panel{width:min(640px,100%)}
+/* 属性管理适当加宽，保留共享弹窗的视口上限和 Body 内滚动。 */
+.schema-modal__panel.property-panel{width:min(640px,100%)}
 .property-body{gap:18px}
 .property-section{display:flex;flex-direction:column;gap:8px}
 .property-section__head{display:flex;align-items:baseline;justify-content:space-between}
-.property-section__head strong{font-size:13px;color:#1d2129}
-.property-section__head span{font-size:11px;color:#86909c}
+.property-section__head strong{font-size:12px;color:#1d2129}
+.property-section__head span{font-size:12px;color:#86909c}
 .property-table{display:flex;flex-direction:column;border:1px solid #e5e6eb;border-radius:6px;overflow:hidden}
 .property-table__row{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(90px,1fr) 52px 82px 64px;gap:8px;align-items:center;padding:7px 12px;border-bottom:1px solid #f2f3f5;font-size:12px;color:#4e5969}
 .property-table__row:last-child{border-bottom:0}
-.property-table__row--head{background:#f7f8fa;font-size:11px;color:#86909c}
+.property-table__row--head{background:#f7f8fa;font-size:12px;color:#86909c}
 .property-table__row--locked{background:#fff}
 .property-table__name{display:flex;align-items:center;gap:6px;min-width:0}
-.property-table__name code{overflow:hidden;padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:11px;text-overflow:ellipsis;white-space:nowrap}
+.property-table__name code{min-width:0;max-width:100%;overflow:hidden;padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:12px;text-overflow:ellipsis;white-space:nowrap}
 .property-table__lock{flex:0 0 auto;width:16px;height:16px;fill:none;stroke:#4e5969;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
-.property-table__type{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;color:#86909c}
+.property-table__type{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;color:#86909c}
 .property-table__category{color:#86909c;white-space:nowrap}
 .property-table__category--common{color:#4e5969}
 .property-add-form{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(110px,1fr) auto auto;gap:8px;align-items:center}
-.property-add-form__len{height:32px;padding:0 10px;border:1px solid #c9cdd4;border-radius:4px;font-size:13px;color:#1d2129;background:#fff}
+.property-add-form__len{height:32px;padding:0 10px;border:1px solid #c9cdd4;border-radius:4px;font-size:12px;color:#1d2129;background:#fff}
 /* 属性名输入框（a-input）：套用全局 Arco 输入合同——wrapper 显式 padding、内层
    input 高度 auto + 22px 行高居中。此前内层 input 被钉死 height/line-height 30px、
    wrapper 未重置 padding，与弹窗内通用 input 规则（.schema-modal__body input 的
@@ -1709,51 +1835,51 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 .property-add-form__name :deep(.arco-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;outline:0!important;line-height:22px!important;font-size:14px!important}
 .property-add-form__len{width:72px;grid-column:3}
 .property-add-form__type{min-width:0}
-.property-add-form__type :deep(.arco-select-view){box-sizing:border-box;width:100%;height:32px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;font-size:13px;line-height:22px}
+.property-add-form__type :deep(.arco-select-view){box-sizing:border-box;width:100%;height:32px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;font-size:12px;line-height:22px}
 .schema-modal__body .property-add-form__required{display:inline-flex;box-sizing:border-box;flex-direction:row;align-items:center;justify-content:center;gap:0;height:32px;padding:0 10px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#4e5969;font-size:12px;white-space:nowrap;cursor:pointer}
 .schema-modal__body .property-add-form__required:hover{border-color:#c9cdd4;background:#f7f8fa}
 .property-add-form__required :deep(.arco-checkbox-icon){width:16px;height:16px;border-radius:3px}
 .property-add-form__required :deep(.arco-checkbox-label){margin-left:6px;line-height:22px}
-.property-add-form .primary{height:32px;padding:0 14px;border:0;border-radius:4px;background:#165dff;color:#fff;font-size:13px;cursor:pointer;white-space:nowrap}
+.property-add-form .primary{height:32px;padding:0 14px;border:0;border-radius:4px;background:#165dff;color:#fff;font-size:12px;cursor:pointer;white-space:nowrap}
 .property-add-form .primary:hover{background:#0e4ed8}
 .property-add-form .primary:disabled{opacity:.6;cursor:not-allowed}
 
 /* 上传脚本弹窗 */
 .script-upload-modal .schema-modal__body{min-height:140px}
 .upload-idle{display:flex;flex-direction:column;gap:12px;align-items:stretch;padding:2px 0;text-align:center}
-.upload-idle p{margin:0;color:#4e5969;font-size:13px;line-height:20px}
+.upload-idle p{margin:0;color:#4e5969;font-size:12px;line-height:20px}
 .upload-dropzone{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;min-height:190px;padding:24px;border:1px dashed #a9b4c6;border-radius:8px;background:#fafcff;cursor:pointer;transition:border-color .15s ease,background .15s ease}
 .upload-dropzone:hover,.upload-dropzone:focus-visible{border-color:#165dff;background:#f2f7ff;outline:0}
 .upload-dropzone__icon{display:grid;place-items:center;width:36px;height:36px;border-radius:50%;background:#e8f3ff;color:#165dff;font-size:24px;line-height:1}
 .upload-dropzone strong{color:#1d2129;font-size:14px;line-height:22px;font-weight:500}
-.upload-dropzone>span:not(.upload-dropzone__icon){color:#4e5969;font-size:13px;line-height:20px}
+.upload-dropzone>span:not(.upload-dropzone__icon){color:#4e5969;font-size:12px;line-height:20px}
 .upload-dropzone small{color:#86909c;font-size:12px;line-height:20px}
 .upload-idle__hint{padding:0 8px;color:#86909c!important;font-size:12px!important;line-height:20px!important;text-align:left}
-.upload-idle .primary{height:34px;padding:0 18px;border:0;border-radius:6px;background:#165dff;color:#fff;font-size:13px;cursor:pointer}
+.upload-idle .primary{height:34px;padding:0 18px;border:0;border-radius:6px;background:#165dff;color:#fff;font-size:12px;cursor:pointer}
 .upload-working{display:flex;align-items:center;gap:16px;padding:10px 4px}
 .spinner{flex:0 0 auto;width:28px;height:28px;border:3px solid #e3ebf6;border-top-color:#165dff;border-radius:50%;animation:spin 0.9s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 .upload-working__text{display:flex;flex-direction:column;gap:4px;min-width:0}
-.upload-working__text strong{font-size:13px;color:#1d2129;word-break:break-all}
-.upload-stage{color:#165dff;font-size:11px}
-.upload-message{color:#74849b;font-size:11px}
+.upload-working__text strong{font-size:12px;color:#1d2129;word-break:break-all}
+.upload-stage{color:#165dff;font-size:12px}
+.upload-message{color:#74849b;font-size:12px}
 .upload-result{display:flex;flex-direction:column;gap:8px;align-items:center;padding:18px 0;text-align:center}
 .upload-result__icon{display:grid;place-items:center;width:42px;height:42px;border-radius:50%;font-size:22px;color:#fff}
 .upload-result__icon.ok{background:#15a05a}
 .upload-result__icon.err{background:#e54848}
 .upload-result strong{font-size:14px;color:#1d2129}
 .upload-result span{color:#74849b;font-size:12px}
-.upload-result__msg{margin:0;color:#e54848;font-size:12px;line-height:18px;max-width:420px;word-break:break-all}
-.upload-result__hint{margin:0;color:#74849b;font-size:12px;line-height:18px;max-width:420px}
+.upload-result__msg{margin:0;color:#e54848;font-size:12px;line-height:20px;max-width:420px;word-break:break-all}
+.upload-result__hint{margin:0;color:#74849b;font-size:12px;line-height:20px;max-width:420px}
 .upload-result__issues{margin:6px 0 0;padding:10px 14px;list-style:none;border-radius:6px;background:#fff3f3;color:#b42318;font-size:12px;line-height:20px;text-align:left;max-width:440px;max-height:200px;overflow:auto}
 .upload-result__issues li{padding:2px 0}
 
 /* 查看脚本弹窗 */
-.script-view-panel{width:min(820px,100%)}
+.script-view-panel{width:min(960px,100%)}
 .script-view-body{max-height:72vh;padding:0}
 .script-pre{margin:0;max-height:72vh;overflow:auto;background:#0d1117;border-radius:0}
 .script-pre code{display:block;padding:16px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:20px;background:transparent;color:#c9d1d9;white-space:pre}
-.view-loading,.view-error{padding:30px;text-align:center;color:#74849b;font-size:13px}
+.view-loading,.view-error{padding:30px;text-align:center;color:#74849b;font-size:12px}
 .view-error{color:#e54848}
 
 /* 创建 Schema 弹窗 */
@@ -1762,7 +1888,7 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 .create-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .create-field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#4e5969}
 .create-field--full{grid-column:1/-1}
-.create-text-input,.create-field textarea,.create-field select{height:32px;padding:0 8px;border:1px solid #c9cdd4;border-radius:4px;font-size:13px;color:#1d2129;background:#fff}
+.create-text-input,.create-field textarea,.create-field select{height:32px;padding:0 8px;border:1px solid #c9cdd4;border-radius:4px;font-size:12px;color:#1d2129;background:#fff}
 .create-field textarea{height:auto;padding:6px 8px;resize:vertical}
 .create-field select{appearance:auto}
 .create-props{display:flex;flex-direction:column;gap:8px}
@@ -1772,24 +1898,21 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 .create-prop-row{display:grid;grid-template-columns:1.4fr 1.2fr 0.6fr auto auto;gap:8px;align-items:center}
 .prop-name,.prop-type,.prop-len{height:30px;padding:0 8px;border:1px solid #c9cdd4;border-radius:4px;font-size:12px;color:#1d2129;background:#fff}
 .prop-type{appearance:auto}
-.prop-required{display:flex;align-items:center;gap:4px;font-size:11px;color:#4e5969;white-space:nowrap}
+.prop-required{display:flex;align-items:center;gap:4px;font-size:12px;color:#4e5969;white-space:nowrap}
 .prop-required input{margin:0}
 .prop-remove{width:24px;height:24px;border:0;border-radius:4px;background:transparent;color:#e54848;font-size:16px;cursor:pointer}
 .prop-remove:hover{background:#fff3f3}
 .create-ddl{display:flex;flex-direction:column;gap:8px;margin-top:0}
-.create-ddl__label{font-size:11px;color:#74849b}
-.create-ddl__pre{margin:0;padding:10px 12px;max-height:140px;overflow:auto;background:#0d1117;border-radius:6px;color:#c9d1d9;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;line-height:18px;white-space:pre-wrap;word-break:break-all}
-.create-ddl__confirm{margin:6px 0 0;color:#b54708;font-size:11px;line-height:16px}
+.create-ddl__label{font-size:12px;color:#74849b}
+.create-ddl__pre{margin:0;padding:10px 12px;max-height:140px;overflow:auto;background:#0d1117;border-radius:6px;color:#c9d1d9;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:20px;white-space:pre-wrap;word-break:break-all}
+.create-ddl__confirm{margin:6px 0 0;color:#b54708;font-size:12px;line-height:20px}
 .create-sources{display:flex;flex-direction:column;gap:8px}
 .create-sources__head{display:grid;align-items:center;grid-template-columns:minmax(0,1fr) auto;column-gap:8px;row-gap:8px;font-size:12px;color:#4e5969}
 .create-sources__head>span:first-child,.create-ddl__label{color:#4e5969;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
 .create-sources__hint{grid-column:1/-1;color:#86909c;font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
-/* 来源表弹窗加宽：绑定行五列有 720px 像素下限，760px 宽时整块横向拖动；
-   880px 刚好完整展示行内选项且无多余留白，内容区加高到 72vh 多看几行绑定。
-   双类名提高优先级：压过后方可读性规范化块的 .schema-modal__panel{min(560px)} 统一宽度。
-   footer 纵向居中由规范化块的通用 .schema-modal__panel footer{align-items:center} 提供 */
-.schema-modal__panel.sources-panel{width:min(880px,96vw)}
-.sources-panel .schema-modal__body{max-height:72vh}
+/* 来源表由 1280px 微调为 1200px，仍为绑定行保留完整编辑空间。 */
+.schema-modal__panel.sources-panel{width:min(1200px,100%)}
+.sources-panel .schema-modal__body{min-height:0}
 .sources-note{margin:0;font-size:12px;line-height:20px;color:#86909c}
 .schema-create-body>.create-field,.schema-create-body>.create-props,.create-row>.create-field{margin-bottom:0;gap:0}.schema-create-body>.create-props{gap:0}.create-ddl{margin-top:0;gap:8px}.create-ddl__confirm{margin:0}
 
@@ -1810,7 +1933,7 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
     flex-wrap: wrap;
   }
 
-  .schema-tabs > .schema-toolbar__actions {
+  .schema-list-toolbar > .schema-toolbar__actions {
     width: 100%;
     margin-left: 0;
   }
@@ -1827,14 +1950,14 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 .schema-toolbar{min-height:48px;gap:16px;padding:8px 16px;background:#fff}.schema-toolbar>div,.schema-toolbar__actions{gap:16px}
 .schema-toolbar strong{font-size:16px;line-height:24px;font-weight:600}.schema-toolbar>div span{font-size:12px;line-height:20px}
 .schema-toolbar label{gap:8px;width:280px;height:32px;padding:0 12px;border-color:#e5e6eb;border-radius:4px}.schema-toolbar input{height:30px;padding:0!important;font-size:14px;line-height:22px}
-.schema-toolbar .primary,.schema-tabs .primary{height:32px;padding:0 16px;border:0;border-radius:4px;background:#165dff;color:#fff;font-size:14px;line-height:22px;white-space:nowrap;cursor:pointer}.schema-tabs .primary:hover{background:#4080ff}.schema-tabs .primary:active{background:#0e42d2}
+.schema-toolbar .primary,.schema-list-toolbar .primary{height:32px;padding:0 16px;border:0;border-radius:4px;background:#165dff;color:#fff;font-size:14px;line-height:22px;white-space:nowrap;cursor:pointer}.schema-list-toolbar .primary:hover{background:#4080ff}.schema-list-toolbar .primary:active{background:#0e42d2}
 .schema-table-wrap table,.trace-layout table{font-size:14px;line-height:22px}.schema-table-wrap th,.schema-table-wrap td,.trace-layout td{height:40px;padding:0 16px;line-height:22px;vertical-align:middle}
 .schema-table-wrap th{background:#f7f8fa;color:#1d2129;font-weight:500}.schema-action-link{font-size:14px;line-height:22px}
 .core,.support,.evidence,.auto,.review{gap:6px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}
 .core::before,.support::before,.evidence::before,.auto::before,.review::before{display:block;flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
 .trace-layout{gap:16px;padding:16px;background:#f7f8fa}.trace-card,.trace-layout section{border-color:#e5e6eb;border-radius:6px;box-shadow:none}
 .trace-card>header{min-height:56px;padding:8px 16px;background:#f7f8fa}.trace-card h2{font-size:16px;line-height:24px;font-weight:600}.trace-card p,.trace-card dd,.trace-layout>aside span{font-size:12px;line-height:20px}
-.schema-modal__panel{width:min(560px,100%)}.schema-create-panel{display:grid;box-sizing:border-box;width:min(640px,calc(100vw - 48px));height:auto;max-height:calc(100vh - 48px);overflow:hidden;grid-template-rows:56px minmax(0,1fr) 64px}.schema-modal__panel header{height:56px;box-sizing:border-box;padding:0 24px}.schema-modal__panel header h2{font-size:16px;line-height:24px}.schema-modal__panel header button{width:32px;height:32px}
+.schema-modal__panel{flex-shrink:0}.schema-create-panel{display:grid;box-sizing:border-box;width:min(640px,calc(100vw - 48px));height:auto;max-height:calc(100vh - 48px);overflow:hidden;grid-template-rows:56px minmax(0,1fr) 64px}.schema-modal__panel header{flex:0 0 56px;height:56px;box-sizing:border-box;padding:0 24px}.schema-modal__panel header h2{font-size:16px;line-height:24px}.schema-modal__panel header button{width:32px;height:32px}
 .schema-modal__body{gap:16px;padding:24px}.schema-create-body{min-height:0;max-height:none;overflow-x:hidden;overflow-y:auto}.schema-modal__body label,.create-field{gap:8px;font-size:14px;line-height:22px}.create-row{gap:16px}
 .create-row>.create-field{min-width:0}.create-row>.create-field :deep(.arco-form-item-wrapper-col),.create-row>.create-field :deep(.arco-form-item-content-wrapper),.create-row>.create-field :deep(.arco-form-item-content){box-sizing:border-box;width:100%;min-width:0}.create-text-input,.create-field textarea,.create-field select{box-sizing:border-box;width:100%;height:32px;padding:0 12px;font-size:14px;line-height:22px;appearance:none}
 .create-field :deep(.arco-textarea-wrapper){box-sizing:border-box;width:100%;min-height:80px;border:1px solid #e5e6eb;border-radius:4px;background:#fff!important}.create-field :deep(.arco-textarea){box-sizing:border-box;width:100%;min-height:78px;padding:8px 12px 28px;background:#fff!important;color:#1d2129;font-size:14px;line-height:22px}.create-field :deep(.arco-textarea-word-limit){right:12px;bottom:6px;color:#86909c;font-size:12px;line-height:20px}.create-field :deep(.arco-textarea-wrapper:hover){border-color:#4080ff}.create-field :deep(.arco-textarea-wrapper.arco-textarea-focus){border-color:#165dff;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
@@ -1869,7 +1992,7 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 .prop-locked-type{grid-column:2;align-self:center;color:#86909c;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 .prop-locked-required{display:inline-flex;box-sizing:border-box;grid-column:3;align-items:center;justify-self:start;height:28px;padding:0 8px;border-radius:4px;background:#f2f3f5;color:#4e5969;font-size:14px;line-height:22px;white-space:nowrap}
 .prop-locked-required__state{display:inline-flex;align-items:center;margin-left:8px;padding-left:8px;border-left:1px solid #c9cdd4;color:#86909c;font-size:12px;line-height:20px}
-.schema-modal__panel footer{height:64px;box-sizing:border-box;gap:16px;padding:0 24px;align-items:center}.schema-create-panel footer{padding:16px 24px}.schema-modal__panel footer button{height:32px;padding:0 16px;font-size:14px;line-height:22px}
+.schema-modal__panel footer{flex:0 0 64px;height:64px;box-sizing:border-box;gap:16px;padding:0 24px;align-items:center}.schema-create-panel footer{padding:16px 24px}.schema-modal__panel footer button{height:32px;padding:0 16px;font-size:14px;line-height:22px}
 :is(.schema-llm-select){box-sizing:border-box;width:100%;min-width:0}
 :is(.schema-llm-select) :deep(.arco-select-view){box-sizing:border-box;width:100%;height:32px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;font-size:14px;line-height:22px}
 :is(.schema-llm-select) :deep(.arco-select-view-input){height:100%!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important}
@@ -1881,8 +2004,6 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 .schema-search-input.arco-input-wrapper{box-sizing:border-box;flex:1 1 180px;min-width:0;max-width:280px;width:280px;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important}
 .schema-search-input.arco-input-wrapper:hover{border-color:#4080ff!important;background:#fff!important}
 .schema-search-input.arco-input-wrapper:focus-within,.schema-search-input.arco-input-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
-.schema-search-input.arco-input-wrapper :deep(.arco-input-prefix){padding-right:8px;color:#4e5969}.schema-search-input.arco-input-focus :deep(.arco-input-prefix){color:#165dff}
-.schema-search-input.arco-input-wrapper :deep(.arco-input-prefix svg){width:16px;height:16px;font-size:16px}
 .schema-search-input.arco-input-wrapper :deep(.arco-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px;box-shadow:none!important;outline:none!important}
 :is(.create-text-input,.prop-name,.prop-len){box-sizing:border-box;height:32px;border:1px solid #e5e6eb;border-radius:4px;background:#fff;color:#1d2129;font-size:14px;line-height:22px;outline:none;box-shadow:none;transition:border-color .1s ease,box-shadow .1s ease}
 :is(.create-text-input,.prop-name,.prop-len):hover{border-color:#4080ff}
@@ -1903,14 +2024,15 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 .schema-create-panel .create-ddl__label{color:#4e5969;font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}.schema-create-panel .create-ddl__confirm{font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
 .schema-create-panel .create-ddl__pre{font-size:12px;line-height:20px;font-weight:400;letter-spacing:0}
 .schema-create-panel footer button{font-size:14px;line-height:22px;font-weight:400;letter-spacing:0}
-@media(max-width:900px){.schema-tabs{align-items:stretch;flex-direction:column}.schema-tabs__items{min-height:36px}.schema-tabs>.schema-toolbar__actions{width:100%;margin-left:0;justify-content:flex-end}.create-row{grid-template-columns:1fr}.create-field--full{grid-column:auto}}
+@media(max-width:900px){.schema-tabs{align-items:stretch;flex-direction:column}.schema-tabs__items{min-height:36px}.schema-tabs__create{align-self:center}.schema-list-toolbar>.schema-toolbar__actions{width:100%;margin-left:0;justify-content:flex-end}.create-row{grid-template-columns:1fr}.create-field--full{grid-column:auto}}
 .schema-create-body>.create-field,.create-row>.create-field{margin-bottom:0;gap:0}.schema-create-body>.create-props{margin-bottom:0}.create-ddl{margin-top:0;gap:8px}.create-ddl__confirm{margin:0}
+.schema-list-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex:0 0 auto;flex-wrap:wrap}
 /* Schema 拓扑总览 */
 .schema-topology-shell{margin-bottom:16px;padding-bottom:0}
 .schema-topology-shell--collapsed{flex:0 0 auto}
-.schema-topology-toggle{display:flex;flex:0 0 auto;align-items:center;gap:4px;height:26px;padding:0 10px;border:1px solid #c7d8ef;border-radius:5px;background:#fff;color:#40536f;font-size:11px;line-height:1;cursor:pointer}
+.schema-topology-toggle{display:flex;flex:0 0 auto;align-items:center;gap:4px;height:26px;padding:0 10px;border:1px solid #c7d8ef;border-radius:5px;background:#fff;color:#40536f;font-size:12px;line-height:1;cursor:pointer}
 .schema-topology-toggle:hover{border-color:#4080ff;color:#165dff}
-.schema-topology-toggle i{font-style:normal;font-size:10px}
+.schema-topology-toggle i{font-style:normal;font-size:12px}
 .schema-topology-canvas{height:260px;overflow:hidden;border-top:1px solid #e5e6eb;background: #fff;}
 .schema-topology-canvas__empty{display:grid;place-items:center;height:100%;color:#86909c;font-size:12px}
 
@@ -1944,7 +2066,7 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 .schema-page,.schema-modal{font-size:14px;line-height:22px;font-weight:400}
 .schema-page :is(button,input,textarea,select),.schema-modal :is(button,input,textarea,select){font-family:inherit;letter-spacing:0}
 .schema-toolbar strong,.trace-card h2,.trace-layout h2,.property-section__head strong,.schema-modal__panel header h2{font-size:16px;line-height:24px;font-weight:600}
-.schema-tabs button,.schema-toolbar .primary,.schema-tabs .primary,.schema-action-link{font-size:14px;line-height:22px;font-weight:400}
+.schema-tabs button,.schema-toolbar .primary,.schema-list-toolbar .primary,.schema-action-link{font-size:14px;line-height:22px;font-weight:400}
 .schema-tabs button.active{font-weight:500}
 .schema-search-input :deep(.arco-input),.schema-llm-select :deep(.arco-select-view-input),.schema-llm-select :deep(.arco-select-view-value){font-size:14px!important;line-height:22px!important;font-weight:400;letter-spacing:0}
 .schema-table-wrap table,.trace-layout table,.schema-table-wrap td,.trace-layout td{font-size:14px;line-height:22px;font-weight:400}
@@ -1964,8 +2086,8 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 /* Schema 类型切换沿用科技专家同事关系页的摘要/实体分段按钮，并置于表格边框之外。 */
 .schema-catalog{display:flex;flex-direction:column;gap:12px}
 .schema-tabs{min-height:40px;padding:0;border-bottom:0;background:transparent;overflow:visible;flex-direction:column;align-items:stretch}
-.schema-tabs>.schema-toolbar__actions{align-self:flex-end;margin-left:0;flex-wrap:nowrap;gap:16px}
-.schema-tabs>.schema-toolbar__actions .limit-field{flex:0 1 280px;width:280px}
+.schema-list-toolbar>.schema-toolbar__actions{align-self:flex-end;margin-left:0;flex-wrap:nowrap;gap:16px}
+.schema-list-toolbar>.schema-toolbar__actions .limit-field{flex:0 1 280px;width:280px}
 .schema-tabs__items{box-sizing:border-box;height:40px;padding:4px;border-radius:4px;background:#f2f3f5;align-self:flex-start;overflow:visible}
 .schema-tabs__items button{display:inline-flex;box-sizing:border-box;align-items:center;justify-content:center;width:88px;height:32px;padding:5px 16px;border:0;border-radius:4px;background:transparent;color:#4e5969;text-align:center}
 .schema-tabs__items button+button{border-left:1px solid #c9cdd4}
@@ -1981,7 +2103,7 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 /* Arco teleports the popover to body, outside this component's scoped styles. */
 .schema-property-popover{box-sizing:border-box;width:440px;max-width:calc(100vw - 48px);padding:12px 16px!important}
 .schema-property-popover__content{max-height:240px;overflow:auto}
-.schema-property-popover__title{margin:0 0 8px;color:#1d2129;font-size:13px;line-height:20px;font-weight:500}
+.schema-property-popover__title{margin:0 0 8px;color:#1d2129;font-size:12px;line-height:20px;font-weight:500}
 .schema-property-popover__grid{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .schema-property-popover__item{display:inline-flex;box-sizing:border-box;flex:0 1 auto;align-items:center;max-width:100%;min-width:0;gap:4px;padding:4px 8px;border:0;border-radius:4px;background:#f2f3f5;color:#1d2129;font-size:12px;line-height:20px;white-space:nowrap}
 .schema-property-popover__item b{flex:0 1 auto;min-width:0;overflow:hidden;color:#4e5969;font-weight:500;text-overflow:ellipsis}

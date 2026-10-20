@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Popover as APopover } from '@arco-design/web-vue'
-import { IconSearch } from '@arco-design/web-vue/es/icon'
 
 import {
   browseEntities,
@@ -50,6 +49,10 @@ const SYSTEM_PROPERTY_KEYS = new Set([
 const keyword = ref('')
 const appliedKeyword = ref('')
 const entityType = ref('')
+const entityTypeSelect = computed({
+  get: () => entityType.value || undefined,
+  set: (value: string | undefined) => { entityType.value = value ?? '' },
+})
 // 图空间跟随平台总览页的全局选择器（本页不再有空间筛选控件）
 const space = computed(() => currentGraphSpace())
 const graphSpaceStore = useGraphSpaceStore()
@@ -229,16 +232,15 @@ watch(
   <main class="entity-page">
     <section class="entity-toolbar-shell" aria-label="实体检索">
       <div class="entity-toolbar">
-        <div class="entity-toolbar__left">
+        <div class="entity-toolbar__right">
           <a-select
             id="entity-filter-type"
-            v-model="entityType"
+            v-model="entityTypeSelect"
             class="entity-filter-select"
-            placeholder="全部"
+            placeholder="类型"
             aria-label="实体类型"
             allow-clear
             :scrollbar="false"
-            :trigger-props="{ contentStyle: { width: '240px' } }"
             @change="onEntityTypeChange"
           >
             <a-option v-for="t in types" :key="t.name" :value="t.name" :label="t.label || t.name">
@@ -248,8 +250,6 @@ watch(
               </span>
             </a-option>
           </a-select>
-        </div>
-        <div class="entity-toolbar__right">
           <a-input
             id="entity-filter-name"
             v-model="keyword"
@@ -260,9 +260,7 @@ watch(
             placeholder="输入实体名称 / ID / 属性关键词"
             @keyup.enter="resetPagingAndSearch"
             @clear="resetPagingAndSearch"
-          >
-            <template #prefix><IconSearch /></template>
-          </a-input>
+          />
           <button class="kg-button" type="button" :disabled="loading" @click="resetPagingAndSearch">
             {{ loading ? '查询中...' : '查询' }}
           </button>
@@ -386,11 +384,10 @@ watch(
 .entity-toolbar-shell{flex:0 0 auto}
 .entity-result-shell{margin-top:16px}
 .entity-toolbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px 16px}
-.entity-toolbar__left,.entity-toolbar__right{display:flex;min-width:0;align-items:center;gap:8px}
-.entity-toolbar__left{flex-wrap:wrap}
+.entity-toolbar__right{display:flex;min-width:0;align-items:center;gap:8px}
 .entity-toolbar button{flex-shrink:0;white-space:nowrap}
-.entity-toolbar__right{min-width:0;flex:1 1 320px;justify-content:flex-end}
-.entity-empty{flex:1;display:grid;place-items:center;padding:40px 16px;color:#86909c;font-size:13px;line-height:22px;text-align:center}
+.entity-toolbar__right{min-width:0;flex:1 1 auto;justify-content:flex-end;flex-wrap:wrap;gap:16px}
+.entity-empty{flex:1;display:grid;place-items:center;padding:40px 16px;color:#86909c;font-size:12px;line-height:22px;text-align:center}
 .entity-table-wrap{flex:1;min-height:0;overflow:auto;scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:transparent transparent}
 .entity-loading{position:sticky;top:0;z-index:2;padding:6px 16px;background:#edf4ff;color:#165dff;font-size:12px;line-height:20px}
 .entity-table-wrap:hover,.entity-table-wrap.entity-scroll--active{scrollbar-color:rgba(78,89,105,.55) transparent}
@@ -414,7 +411,7 @@ watch(
 .entity-table-wrap td code{color:inherit;font-family:inherit;font-size:14px;line-height:22px;font-weight:400;word-break:normal;overflow-wrap:anywhere}
 .entity-table-wrap td:first-child{min-width:160px}
 .entity-table-wrap td:nth-child(2){min-width:240px}
-.entity-type-chip{display:inline-flex;padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:12px;line-height:18px;white-space:nowrap}
+.entity-type-chip{display:inline-flex;padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:12px;line-height:20px;white-space:nowrap}
 .entity-props-cell{width:440px;min-width:360px;max-width:480px}
 .entity-props{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;--entity-property-fill:#f2f3f5}
 .entity-props__chip{display:flex;align-items:center;gap:4px;min-width:0;box-sizing:border-box;height:28px;padding:4px 8px;border:0;border-radius:4px;background:var(--entity-property-fill);font-size:12px;line-height:20px;white-space:nowrap}
@@ -433,9 +430,6 @@ watch(
 .app-workspace .entity-toolbar-shell #entity-filter-name.entity-search-input.arco-input-wrapper{box-sizing:border-box;width:280px;min-width:0;max-width:280px;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:1 1 180px}
 .app-workspace .entity-toolbar-shell #entity-filter-name.entity-search-input.arco-input-wrapper:hover{border-color:#4080ff!important;background:#fff!important}
 .app-workspace .entity-toolbar-shell #entity-filter-name.entity-search-input.arco-input-wrapper:focus-within,.app-workspace .entity-toolbar-shell #entity-filter-name.entity-search-input.arco-input-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
-.app-workspace .entity-toolbar-shell #entity-filter-name .arco-input-prefix{padding-right:8px;color:#4e5969}
-.app-workspace .entity-toolbar-shell #entity-filter-name.arco-input-focus .arco-input-prefix{color:#165dff}
-.app-workspace .entity-toolbar-shell #entity-filter-name .arco-input-prefix svg{width:16px;height:16px;font-size:16px}
 .app-workspace .entity-toolbar-shell #entity-filter-name input.arco-input{box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
 .app-workspace .entity-toolbar-shell #entity-filter-type.entity-filter-select.arco-select-view{display:inline-flex;box-sizing:border-box;align-items:center;width:160px;min-width:160px;max-width:160px;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:0 0 160px}
 .app-workspace .entity-toolbar-shell #entity-filter-type.entity-filter-select.arco-select-view:hover{border-color:#4080ff!important;background:#fff!important}
@@ -444,9 +438,10 @@ watch(
 .app-workspace .entity-toolbar-shell #entity-filter-type .arco-select-view-input-hidden{position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;box-shadow:none!important;outline:0!important}
 .app-workspace .entity-toolbar-shell #entity-filter-type .arco-select-view-value{min-width:0;overflow:hidden;font-size:14px;line-height:22px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
 .app-workspace .entity-toolbar-shell #entity-filter-type :is(.arco-select-view-input,.arco-select-view-value){background:transparent!important}
+.app-workspace .entity-toolbar-shell #entity-filter-type .arco-select-view-suffix svg{width:14px;height:14px;font-size:14px;color:#4e5969}
 .entity-property-popover{box-sizing:border-box;width:440px;max-width:calc(100vw - 48px);padding:12px 16px!important}
 .entity-property-popover__content{max-height:240px;overflow:auto}
-.entity-property-popover__title{margin:0 0 8px;color:#1d2129;font-size:13px;line-height:20px;font-weight:500}
+.entity-property-popover__title{margin:0 0 8px;color:#1d2129;font-size:12px;line-height:20px;font-weight:500}
 .entity-property-popover__grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .entity-property-popover__item{display:flex;box-sizing:border-box;align-items:center;min-width:0;gap:4px;padding:4px 8px;border:1px solid #e5e6eb;border-radius:4px;background:#f7f8fa;color:#1d2129;font-size:12px;line-height:20px;white-space:nowrap}
 .entity-property-popover__item b{flex:0 1 auto;min-width:0;overflow:hidden;color:#4e5969;font-weight:500;text-overflow:ellipsis}
@@ -455,5 +450,5 @@ watch(
 /* 中文名优先占满所需宽度（不因英文让位）；英文填充剩余空间、空间不足时先被压缩省略 */
 .entity-type-option{display:flex;align-items:center;gap:6px;min-width:0;max-width:100%;overflow:hidden}
 .entity-type-option__text{flex:0 0 auto;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.entity-type-option__en{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#86909c;font-size:12px;line-height:18px}
+.entity-type-option__en{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#86909c;font-size:12px;line-height:20px}
 </style>

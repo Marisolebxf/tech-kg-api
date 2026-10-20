@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import OperationsCenterView from '../OperationsCenterView.vue'
 import ListPagination from '../../../components/list-pagination.vue'
+import DeleteConfirmDialog from '../../../components/DeleteConfirmDialog.vue'
 
 const mocks = vi.hoisted(() => ({
   getProductionReviews: vi.fn(),
@@ -11,12 +12,14 @@ const mocks = vi.hoisted(() => ({
   getProductionReview: vi.fn(),
   deleteProductionReview: vi.fn(),
   batchDeleteProductionReviews: vi.fn(),
+  showToast: vi.fn(),
   getExecution: vi.fn(),
   getTask: vi.fn(),
   TRIGGER_SOURCE_LABEL: { MANUAL: '手动触发', SCHEDULE: '定期触发', RERUN: '重新执行' },
   executionStatusLabel: (status?: string | null) => status || '—',
 }))
 vi.mock('../../../api/workflowOperations', () => ({ ...mocks }))
+vi.mock('../../../composables/use-toast', () => ({ useToast: () => ({ showToast: mocks.showToast }) }))
 // 路由 query 可按用例覆写（?category=C 深链直达抽取失败重跑子页）
 const routeState = vi.hoisted(() => ({ query: {} as Record<string, string> }))
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: routeState.query }), useRouter: () => ({ replace: vi.fn() }) }))
@@ -96,6 +99,7 @@ beforeEach(() => {
   mocks.rerunExtractFailures.mockReset().mockResolvedValue({ executions: [], cases: 2 })
   mocks.getProductionReview.mockReset()
   mocks.deleteProductionReview.mockReset()
+  mocks.showToast.mockReset()
   mocks.batchDeleteProductionReviews.mockReset().mockResolvedValue({ requested: 0, deleted: 0, skipped: [] })
   mocks.getExecution.mockReset()
   mocks.getTask.mockReset()
@@ -138,16 +142,18 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     )
   })
 
-  it('状态下拉与表格徽标 1:1：A 类 全部/待处理/已完成；C 类追加 重跑中/重跑失败', async () => {
+  it('下拉仅提供具体筛选值，C 类状态追加重跑中/重跑失败', async () => {
     const wrapper = renderReview()
     await flushPromises()
     // 状态下拉是筛选行第一个 a-select（已驳回/已撤销现网无案，不设幽灵选项）
     expect(wrapper.findAllComponents({ name: 'ASelect' })[0].props('options'))
-      .toEqual(['全部', '待处理', '已完成'])
+      .toEqual(['待处理', '已完成'])
+    expect(wrapper.findAllComponents({ name: 'ASelect' })[1].props('options')).toEqual(['实体', '关系'])
+    expect(wrapper.findAllComponents({ name: 'ASelect' })[2].props('options')).toEqual(['近1小时', '近24小时', '近7天', '近30天'])
 
     await switchToCategoryC(wrapper)
     expect(wrapper.findAllComponents({ name: 'ASelect' })[0].props('options'))
-      .toEqual(['全部', '待处理', '重跑中', '重跑失败', '已完成'])
+      .toEqual(['待处理', '重跑中', '重跑失败', '已完成'])
   })
 
   it('状态筛选下发精确 status 参数（与徽标 1:1），重跑失败下发只读推导态 RERUN_FAILED', async () => {
@@ -494,17 +500,19 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     expect(buttons[1].text()).toBe('批量删除（2）')
     expect(buttons[1].classes()).toContain('is-danger')
 
-    // 点击批量删除只弹二次确认，不直接调 API；确认（弹窗 ok）才下发
+    // 点击批量删除只弹二次确认，不直接调 API；共享删除弹窗确认后才下发
     await buttons[1].trigger('click')
     expect(mocks.batchDeleteProductionReviews).not.toHaveBeenCalled()
-    // 模板里第 2 个 a-modal 是批量删除确认框（1=批量重跑确认、3=日志弹窗）
-    wrapper.findAllComponents({ name: 'AModal' })[1].vm.$emit('ok')
+    const dialog = wrapper.findAllComponents(DeleteConfirmDialog).find(dialog => dialog.props('title') === '确认批量删除')!
+    expect(dialog.props('visible')).toBe(true)
+    expect(dialog.props('name')).toBe('已勾选的 2 条失败记录')
+    expect(dialog.props('description')).toContain('已处理或不存在的会自动跳过')
+    dialog.vm.$emit('confirm')
     await flushPromises()
 
     expect(mocks.batchDeleteProductionReviews).toHaveBeenCalledWith({ caseIds: ['MR-1', 'MR-2'] })
-    const bar = wrapper.get('.rerun-feedback')
-    expect(bar.classes()).toContain('app-alert--success')
-    expect(bar.text()).toContain('已删除失败记录 2 条')
+    expect(mocks.showToast).toHaveBeenCalledWith('已删除失败记录 2 条', 'success')
+    expect(wrapper.find('.rerun-feedback').exists()).toBe(false)
     // 删除完成：清空勾选并刷新列表
     expect(rowCheckboxes(wrapper).every((input) => !(input.element as HTMLInputElement).checked)).toBe(true)
     expect(mocks.getProductionReviews).toHaveBeenLastCalledWith(expect.objectContaining({ category: 'C' }))
@@ -525,7 +533,7 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     await header.trigger('change')
 
     await wrapper.findAll('.rerun-batch-action')[1].trigger('click')
-    wrapper.findAllComponents({ name: 'AModal' })[1].vm.$emit('ok')
+    wrapper.findAllComponents(DeleteConfirmDialog).find(dialog => dialog.props('title') === '确认批量删除')!.vm.$emit('confirm')
     await flushPromises()
 
     const bar = wrapper.get('.rerun-feedback')
@@ -533,6 +541,33 @@ describe('审核队列 C 类（抽取失败重跑）', () => {
     expect(bar.text()).toContain('已删除失败记录 1 条')
     expect(bar.text()).toContain('跳过 1 条')
     expect(bar.text()).toContain('已处理的记录不可删除×1')
+    expect(mocks.showToast).toHaveBeenCalledWith('已删除失败记录 1 条；跳过 1 条（已处理的记录不可删除×1）', 'warning')
+  })
+
+  it('批量删除失败时保留确认框与勾选，展示错误并允许重试', async () => {
+    mocks.batchDeleteProductionReviews.mockRejectedValueOnce(new Error('服务暂不可用'))
+    const wrapper = renderReview()
+    await flushPromises()
+    await switchToCategoryC(wrapper)
+    const header = headerCheckbox(wrapper)
+    ;(header.element as HTMLInputElement).checked = true
+    await header.trigger('change')
+    await wrapper.findAll('.rerun-batch-action')[1].trigger('click')
+    const dialog = wrapper.findAllComponents(DeleteConfirmDialog).find(dialog => dialog.props('title') === '确认批量删除')!
+
+    dialog.vm.$emit('confirm')
+    await flushPromises()
+    expect(dialog.props('visible')).toBe(true)
+    expect(dialog.props('error')).toBe('服务暂不可用')
+    expect(dialog.props('loading')).toBe(false)
+    expect(wrapper.findAll('.rerun-batch-action')[1].text()).toBe('批量删除（2）')
+
+    mocks.batchDeleteProductionReviews.mockResolvedValueOnce({ requested: 2, deleted: 2, skipped: [] })
+    dialog.vm.$emit('confirm')
+    await flushPromises()
+    expect(mocks.batchDeleteProductionReviews).toHaveBeenLastCalledWith({ caseIds: ['MR-1', 'MR-2'] })
+    expect(dialog.props('visible')).toBe(false)
+    expect(dialog.props('error')).toBe('')
   })
 
   it('更新时间表头三态排序：默认 → 新→旧 → 旧→新 → 默认，请求带对应 sort 参数', async () => {
@@ -774,7 +809,7 @@ describe('查看档只读（开发维护 × 共享生产空间）', () => {
     for (const button of wrapper.findAll('.rerun-batch-action')) {
       expect(button.attributes()).toHaveProperty('disabled')
     }
-    wrapper.findAllComponents({ name: 'AModal' })[1].vm.$emit('ok')
+    wrapper.findAllComponents(DeleteConfirmDialog).find(dialog => dialog.props('title') === '确认批量删除')!.vm.$emit('confirm')
     await flushPromises()
     expect(mocks.batchDeleteProductionReviews).not.toHaveBeenCalled()
   })

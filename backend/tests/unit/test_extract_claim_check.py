@@ -455,6 +455,9 @@ def fake_graph(monkeypatch: pytest.MonkeyPatch) -> list[FakeGraphClient]:
     # 写前守卫关掉：本文件只测载荷流转形状，终判/锁行为见 test_entity_write_guard
     monkeypatch.setenv("ENTITY_DISAMBIGUATION_PREWRITE_RECHECK", "0")
     monkeypatch.setenv("ENTITY_DISAMBIGUATION_NAME_LOCK", "0")
+    # per-VID 写锁关掉（锁行为见 test_write_records_vid_lock）：VID 锁
+    # fail-closed，CI 无 Redis 时会让本文件的写图用例直接失败
+    monkeypatch.setenv("ENTITY_WRITE_VID_LOCK_ENABLED", "0")
     return clients
 
 

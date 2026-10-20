@@ -91,6 +91,10 @@ class PlatformOverviewData(CamelCaseModel):
     # 与逐对象明细同源：完整读取时，徽标、合计和实际记录数一致。
     asset_change_totals: dict[AssetOverviewKey, int] = Field(default_factory=dict)
     asset_change_errors: dict[AssetOverviewKey, str] = Field(default_factory=dict)
+    # 净新增（相邻两日图统计快照差分，与总量同口径、可直接对账）；快照缺失时
+    # 值为 null，note 给原因（当日未采集 / 上线前无法回补 / 读取失败）
+    asset_net_added: dict[AssetOverviewKey, int | None] = Field(default_factory=dict)
+    asset_net_added_note: str = ""
     entity_structure: list[StructureItem]
     relation_structure: list[StructureItem]
     data_mode: Literal["partial", "mock"] = "mock"

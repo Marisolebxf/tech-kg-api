@@ -6,7 +6,7 @@ const { canWrite, spaces } = useSpacePermissions()
 import DeleteConfirmDialog from '../../components/DeleteConfirmDialog.vue'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { IconInfoCircle, IconRefresh, IconSearch } from '@arco-design/web-vue/es/icon'
+import { IconInfoCircle, IconRefresh } from '@arco-design/web-vue/es/icon'
 import { Popover as APopover } from '@arco-design/web-vue'
 import {
   countJobUnifiedStatuses,
@@ -49,8 +49,7 @@ const submittedName = ref('')
 const filterStatus = ref('')
 const filterTaskType = ref('')
 
-/** 状态/类型筛选带「未选择」伪选项（用例 00843/00847）：value 为空串，选中即清空筛选。
- *  空串映射回 undefined 让框体恢复 placeholder 空态；× 号清空（undefined）同样归一为空串。 */
+/** 下拉仅展示真实筛选值；× 号清空后恢复占位词，并归一为空串查询条件。 */
 const filterStatusSelect = computed({
   get: () => filterStatus.value || undefined,
   set: (value: string | undefined) => {
@@ -439,7 +438,6 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
         <strong class="gb-section-title">任务列表</strong>
         <form class="gb-filters" role="search" @submit.prevent="submitJobSearch">
           <a-select id="graph-build-filter-status" v-model="filterStatusSelect" class="gb-filter-select" placeholder="状态" allow-clear>
-            <a-option value="">未选择</a-option>
             <a-option value="未运行">未运行</a-option>
             <a-option value="运行中">运行中</a-option>
             <a-option value="已暂停">已暂停</a-option>
@@ -448,11 +446,10 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
             <a-option value="运行失败">运行失败</a-option>
           </a-select>
           <a-select id="graph-build-filter-type" v-model="filterTaskTypeSelect" class="gb-filter-select" placeholder="类型" allow-clear>
-            <a-option value="">未选择</a-option>
             <a-option value="extract">单脚本抽取</a-option>
             <a-option value="chain">多脚本串行</a-option>
           </a-select>
-          <a-input id="graph-build-filter-name" v-model="filterName" class="gb-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="按名称搜索" placeholder="按名称搜索" allow-clear @clear="submitJobSearch"><template #prefix><IconSearch /></template></a-input>
+          <a-input id="graph-build-filter-name" v-model="filterName" class="gb-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="按名称搜索" placeholder="按名称搜索" allow-clear @clear="submitJobSearch" />
           <button class="gb-search-button" type="submit">查询</button>
         </form>
       </header>
@@ -582,14 +579,15 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
 .gb-summary strong{color:#1d2129;font-size:20px;line-height:28px;font-weight:600;letter-spacing:0}
 .gb-summary__label,.gb-summary__task-stats{display:flex;align-items:center;min-width:0}.gb-summary__label{gap:8px}.gb-summary__hint{display:inline-flex;align-items:center;justify-content:center;flex:0 0 24px;width:24px;height:24px;padding:0;border:0;border-radius:4px;background:transparent;color:#86909c;cursor:help}.gb-summary__hint:hover,.gb-summary__hint:focus-visible{background:#f2f3f5;color:#165dff}.gb-summary__hint svg{width:16px;height:16px}
 .gb-jobs-section{display:flex;flex:1;min-height:0;flex-direction:column;gap:16px}
-.gb-jobs-toolbar{display:flex;flex-direction:column;flex:0 0 auto;align-items:stretch;gap:12px;box-sizing:border-box;color:#1d2129}
-.gb-section-title{position:relative;padding-left:11px;font-size:16px;line-height:24px;font-weight:600}
+.gb-jobs-toolbar{display:flex;flex-direction:row;flex:0 0 auto;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:16px;box-sizing:border-box;color:#1d2129}
+.gb-section-title{position:relative;flex:0 0 auto;white-space:nowrap;padding-left:11px;font-size:16px;line-height:24px;font-weight:600}
 .gb-section-title::before{position:absolute;top:5px;left:0;width:3px;height:14px;border-radius:1px;background:#165dff;content:""}
 .gb-jobs-panel{display:flex;flex:1;min-height:0;overflow:hidden;border:1px solid #e5e6eb;border-radius:6px;background:#fff;box-shadow:none;flex-direction:column}
 .gb-jobs-panel :deep(.list-pagination){justify-content:flex-end}
 .gb-jobs-panel :deep(.list-pagination__summary){margin-left:auto}
-/* 筛选控件向右排列，窄屏时可换行。 */
-.gb-filters{display:flex;flex:0 0 auto;min-width:0;margin-left:auto;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:16px;font-weight:400}
+/* 标题与筛选在同一行，空间不足时换行，手机上纵向排列。 */
+.gb-filters{display:flex;flex:0 1 auto;min-width:0;max-width:100%;margin-left:auto;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:16px;font-weight:400}
+@media(max-width:767px){.gb-jobs-toolbar{flex-direction:column;align-items:stretch}.gb-filters{width:100%;margin-left:0;justify-content:flex-start}}
 .gb-search-button{box-sizing:border-box;height:32px;padding:0 16px;border:1px solid #165dff;border-radius:4px;background:#165dff;color:#fff;font-size:14px;line-height:22px;cursor:pointer}
 .gb-search-button:hover{border-color:#4080ff;background:#4080ff}
 .gb-search-button:focus-visible{outline:2px solid rgba(22,93,255,.3);outline-offset:2px}
@@ -648,7 +646,6 @@ span.run{color:var(--status-info)}
 .app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-wrapper{box-sizing:border-box;width:280px;min-width:0;max-width:100%;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:0 1 280px}
 .app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-wrapper:hover{border-color:#4080ff!important;background:#fff!important}
 .app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-wrapper:focus-within,.app-workspace .gb-filters #graph-build-filter-name.gb-search-input.arco-input-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
-.app-workspace .gb-filters #graph-build-filter-name .arco-input-prefix{padding-right:8px;color:#4e5969}.app-workspace .gb-filters #graph-build-filter-name.arco-input-focus .arco-input-prefix{color:#165dff}.app-workspace .gb-filters #graph-build-filter-name .arco-input-prefix svg{width:16px;height:16px;font-size:16px}
 /* 名称搜索清空图标：与下拉箭头同口径放大着色（Arco 默认 12px 偏淡几乎看不见） */
 .app-workspace .gb-filters #graph-build-filter-name .arco-input-clear-btn svg{width:14px;height:14px;font-size:14px;color:#4e5969}
 .app-workspace .gb-filters #graph-build-filter-name input.arco-input{box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:0!important}
@@ -670,9 +667,9 @@ span.run{color:var(--status-info)}
 .gb-actions .primary:disabled{background:#f2f3f5;border-color:#e5e6eb;color:#a9aeb8;cursor:not-allowed}
 /* 脚本列悬停浮层（teleport 到 body，需全局控制；样式对齐实体列表「公共属性」浮层） */
 .gb-script-popover{box-sizing:border-box;width:320px;max-width:calc(100vw - 48px);padding:12px 16px!important}
-.gb-script-popover__title{margin:0 0 8px;color:#1d2129;font-size:13px;line-height:20px;font-weight:500}
+.gb-script-popover__title{margin:0 0 8px;color:#1d2129;font-size:12px;line-height:20px;font-weight:500}
 .gb-script-popover__list{display:grid;gap:6px;max-height:280px;margin:0;padding:0;overflow:auto;list-style:none}
 .gb-script-popover__list li{display:flex;align-items:center;min-width:0;gap:8px;padding:4px 8px;border:1px solid #e5e6eb;border-radius:4px;background:#f7f8fa;font-size:12px;line-height:20px}
-.gb-script-popover__idx{flex:0 0 auto;min-width:18px;height:18px;border-radius:9px;background:#e8f3ff;color:#165dff;font-size:11px;line-height:18px;text-align:center}
+.gb-script-popover__idx{flex:0 0 auto;min-width:20px;height:20px;border-radius:10px;background:#e8f3ff;color:#165dff;font-size:12px;line-height:20px;text-align:center}
 .gb-script-popover__name{flex:1;min-width:0;overflow:hidden;color:#1d2129;text-overflow:ellipsis;white-space:nowrap}
 </style>

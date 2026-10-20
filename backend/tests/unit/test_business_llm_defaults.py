@@ -13,7 +13,12 @@ from db_model.llm_config import LlmConfig
 from db_model.llm_default import BusinessLlmDefault
 from script.migrate_business_llm_defaults import check_defaults
 from service.llm_config import LlmConfigService, resolve_llm_settings
-from service.llm_defaults import decorate_defaults, resolve_default_config, set_default_for_actor
+from service.llm_defaults import (
+    decorate_defaults,
+    release_business_default_references,
+    resolve_default_config,
+    set_default_for_actor,
+)
 from service.platform_access import PlatformActor
 
 
@@ -115,8 +120,14 @@ def test_abnormal_model_cannot_become_default(factory):
         # 新建时直发「异常 + 默认」同样被拦（带 Key 才会走到状态守卫）
         with pytest.raises(HTTPException) as error:
             service.create_config(
-                {"name": "x", "base_url": "http://test", "model": "x", "api_key": "k",
-                 "is_default": True, "status": "异常"}
+                {
+                    "name": "x",
+                    "base_url": "http://test",
+                    "model": "x",
+                    "api_key": "k",
+                    "is_default": True,
+                    "status": "异常",
+                }
             )
         assert error.value.status_code == 409
         s.rollback()
@@ -262,3 +273,74 @@ def test_migration_rejects_invalid_existing_business_default(factory, invalid):
         report = check_defaults(s)
         assert len(report["conflicts"]) == 1
         assert report["conflicts"][0]["businessId"] == "a"
+
+
+def test_decorate_defaults_exposes_referencing_business_names_to_admin(factory):
+    """占用方名单只给管理员：确认弹窗要报「是谁在用」；业务侧不需要知道别家占用。"""
+    with factory() as s:
+        set_default_for_actor(s, actor("a"), "public2")
+        by_admin = {
+            item["id"]: item
+            for item in decorate_defaults(s, actor(), [{"id": "public1"}, {"id": "public2"}])
+        }
+        assert by_admin["public2"]["defaultReferenced"] is True
+        assert by_admin["public2"]["defaultReferencedBy"] == ["A"]
+        # 公共默认本体无业务引用：占用为真但名单为空
+        assert by_admin["public1"]["defaultReferencedBy"] == []
+        by_business = decorate_defaults(s, actor("a"), [{"id": "public2"}])[0]
+        assert by_business["defaultReferencedBy"] == []
+
+
+def test_release_requires_force_and_reports_real_occupants(factory):
+    with factory() as s:
+        set_default_for_actor(s, actor("a"), "public2")
+        set_default_for_actor(s, replace(actor("b"), user_id="b-dev"), "public2")
+        # 未 force：管理员、业务方都被 409 拦下，且报出真实占用业务名（不再失真）
+        for who in (actor(), actor("a")):
+            with pytest.raises(HTTPException) as error:
+                release_business_default_references(s, who, "public2")
+            assert error.value.status_code == 409
+            assert "A" in error.value.detail and "B" in error.value.detail
+            s.rollback()
+        # 业务方带 force 也不行：强制通道只属于管理员
+        with pytest.raises(HTTPException) as error:
+            release_business_default_references(s, actor("a"), "public2", force=True)
+        assert error.value.status_code == 409
+        s.rollback()
+
+
+def test_release_protected_targets_stay_locked(factory):
+    with factory() as s:
+        # 公共默认本体：即使管理员 force 也不可删/停（默认必须恒有一条）
+        with pytest.raises(HTTPException) as error:
+            release_business_default_references(s, actor(), "public1", force=True)
+        assert error.value.status_code == 409
+        s.rollback()
+        # 业务自有模型不走管理员强制通道，由业务自行切换默认
+        set_default_for_actor(s, actor("a"), "a1")
+        with pytest.raises(HTTPException) as error:
+            release_business_default_references(s, actor(), "a1", force=True)
+        assert error.value.status_code == 409
+        s.rollback()
+
+
+def test_admin_force_disable_frees_business_fallback(factory):
+    """管理员强制停用公共模型 = 解绑 + 停用：业务回退公共默认，而不是卡死在已停用绑定上。"""
+    with factory() as s:
+        set_default_for_actor(s, actor("a"), "public2")
+        release_business_default_references(s, actor(), "public2", force=True)
+        LlmConfigService(s).update_config("public2", {"status": "停用"})
+    with factory() as s:
+        assert s.get(LlmConfig, "public2").status == "停用"
+        assert resolve_default_config(s, "a").id == "public1"
+        assert s.get(BusinessLlmDefault, "a") is None
+
+
+def test_admin_force_delete_removes_bindings_in_same_flow(factory):
+    with factory() as s:
+        set_default_for_actor(s, actor("a"), "public2")
+        release_business_default_references(s, actor(), "public2", force=True)
+        assert LlmConfigService(s).delete_config("public2") is True
+    with factory() as s:
+        assert s.get(LlmConfig, "public2") is None
+        assert resolve_default_config(s, "a").id == "public1"

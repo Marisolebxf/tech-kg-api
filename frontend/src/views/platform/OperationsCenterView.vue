@@ -6,7 +6,7 @@ import DeleteConfirmDialog from '../../components/DeleteConfirmDialog.vue'
 import AppAlert from '../../components/AppAlert.vue'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { IconRefresh, IconSearch } from '@arco-design/web-vue/es/icon'
+import { IconRefresh } from '@arco-design/web-vue/es/icon'
 import { Tooltip as ATooltip } from '@arco-design/web-vue'
 
 import { batchDeleteProductionReviews, deleteProductionReview, getExecution, getProductionReview, getProductionReviews, getTask, rerunExtractFailures, TRIGGER_SOURCE_LABEL, type ProcessingInstance, type ProcessStep, type ProductionReviewCase, type WorkflowExecution } from '../../api/workflowOperations'
@@ -15,6 +15,7 @@ import { useGraphSpaceStore } from '../../stores/graphSpace'
 import { clampSearchKeyword, SEARCH_KEYWORD_MAX_LENGTH } from '../../utils/searchInput'
 import ListPagination from '../../components/list-pagination.vue'
 import { PAGE_SIZE_OPTIONS } from '../../composables/use-client-pagination'
+import { useToast } from '../../composables/use-toast'
 import {
   extractCaseStatusBadge,
   type ReviewRecord,
@@ -23,6 +24,7 @@ import {
 type CenterMode = 'review'
 
 const props = defineProps<{ mode: CenterMode }>()
+const { showToast } = useToast()
 const route = useRoute()
 const graphSpaceStore = useGraphSpaceStore()
 
@@ -80,6 +82,19 @@ const reviewKindFilter = ref<'全部' | '实体' | '关系' | undefined>(pickSna
 /** 时间过滤（按更新时间）：全部/近1小时/近24小时/近7天/近30天 → updatedWithin 查询参数。 */
 const reviewTimeFilter = ref<'全部' | '近1小时' | '近24小时' | '近7天' | '近30天' | undefined>(pickSnapshotOption(queueSnapshot?.time, ['全部', '近1小时', '近24小时', '近7天', '近30天'] as const, '全部'))
 const reviewTimeOptions = ['全部', '近1小时', '近24小时', '近7天', '近30天']
+// 保留队列快照的「全部」值；Select 空态与图谱构建一致，只显示字段占位词。
+const reviewStatusSelect = computed({
+  get: () => reviewStatusFilter.value === '全部' ? undefined : reviewStatusFilter.value,
+  set: (value: ReviewStatusFilter | undefined) => { reviewStatusFilter.value = value ?? '全部' },
+})
+const reviewKindSelect = computed({
+  get: () => reviewKindFilter.value === '全部' ? undefined : reviewKindFilter.value,
+  set: (value: typeof reviewKindFilter.value) => { reviewKindFilter.value = value ?? '全部' },
+})
+const reviewTimeSelect = computed({
+  get: () => reviewTimeFilter.value === '全部' ? undefined : reviewTimeFilter.value,
+  set: (value: typeof reviewTimeFilter.value) => { reviewTimeFilter.value = value ?? '全部' },
+})
 const REVIEW_TIME_PARAMS: Record<string, string | undefined> = { '全部': undefined, '近1小时': '1h', '近24小时': '24h', '近7天': '7d', '近30天': '30d' }
 /** 更新时间排序：default=风险+创建时间（默认）；desc=新→旧；asc=旧→新。 */
 const reviewTimeSort = ref<'default' | 'desc' | 'asc'>(pickSnapshotOption(queueSnapshot?.sort, ['default', 'desc', 'asc'] as const, 'default'))
@@ -541,7 +556,7 @@ async function confirmDelete() {
     await deleteProductionReview(target.id)
     deleteVisible.value = false
     rerunSelection.value.delete(target.id)
-    showRerunFeedback('success', `已删除失败记录 ${target.id}`, [])
+    showToast(`已删除失败记录 ${target.id}`, 'success')
     clearReviewPageCache()
     void loadReviews()
   } catch (error) {
@@ -556,6 +571,7 @@ async function confirmDelete() {
 /** 批量删除确认弹窗与提交态（>N 条与重跑同栏展示，勾选集即删除集）。 */
 const batchDeleteVisible = ref(false)
 const batchDeleteSubmitting = ref(false)
+const batchDeleteError = ref('')
 
 /** 跳过原因摘要：按原因聚合计数，至多列 3 类防刷屏。 */
 function summarizeBatchSkipReasons(skipped: Array<{ id: string; reason: string }>): string {
@@ -567,30 +583,30 @@ function summarizeBatchSkipReasons(skipped: Array<{ id: string; reason: string }
 
 function askBatchDelete() {
   if (!canReview.value || !rerunSelection.value.size || batchDeleteSubmitting.value) return
+  batchDeleteError.value = ''
   batchDeleteVisible.value = true
 }
 
-/** 确认批量删除：已处理的/不存在的按条跳过不中断整批，结果经反馈条展示（有跳过转警告态）。 */
+/** 删除成功与图谱构建共用顶部提示；有跳过时额外保留页内明细，便于核对。 */
 async function confirmBatchDelete() {
   if (!canReview.value) return
   const ids = [...rerunSelection.value]
   if (!ids.length || batchDeleteSubmitting.value) return
+  batchDeleteError.value = ''
   batchDeleteSubmitting.value = true
   try {
     const result = await batchDeleteProductionReviews({ caseIds: ids })
     const skipped = result.skipped ?? []
     const skippedText = skipped.length ? `；跳过 ${skipped.length} 条（${summarizeBatchSkipReasons(skipped)}）` : ''
-    showRerunFeedback(
-      skipped.length ? 'warning' : 'success',
-      `已删除失败记录 ${result.deleted} 条${skippedText}`,
-      [],
-    )
+    const message = `已删除失败记录 ${result.deleted} 条${skippedText}`
+    showToast(message, skipped.length ? 'warning' : 'success')
+    if (skipped.length) showRerunFeedback('warning', message, [])
     batchDeleteVisible.value = false
     rerunSelection.value = new Set()
     clearReviewPageCache()
     void loadReviews()
   } catch (error) {
-    showRerunFeedback('error', error instanceof Error ? error.message : '批量删除失败', [])
+    batchDeleteError.value = error instanceof Error ? error.message : '批量删除失败'
   } finally {
     batchDeleteSubmitting.value = false
   }
@@ -732,19 +748,13 @@ onMounted(() => {
       </nav>
       <div class="review-toolbar-actions">
         <form class="ops-filter is-review review-filter-row" role="search" @submit.prevent="submitReviewSearch">
-          <div class="review-filter-field">
-            <span class="review-filter-label">状态</span>
-            <a-select v-model="reviewStatusFilter" class="review-filter-select" :options="reviewStatusOptions" />
-          </div>
-          <div class="review-filter-field">
-            <span class="review-filter-label">类型</span>
-            <a-select v-model="reviewKindFilter" class="review-filter-select" :options="['全部', '实体', '关系']" />
-          </div>
-          <div class="review-filter-field">
-            <span class="review-filter-label">时间</span>
-            <a-select v-model="reviewTimeFilter" class="review-filter-select" :options="reviewTimeOptions" />
-          </div>
-          <a-input v-model="keyword" class="review-search-input review-filter-search" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索处理实例 ID、对象或来源记录" placeholder="搜索处理实例 ID、对象或来源记录" allow-clear @clear="clearReviewSearch"><template #prefix><IconSearch /></template></a-input>
+          <a-select v-model="reviewStatusSelect" class="review-filter-select" aria-label="状态" placeholder="状态" allow-clear :options="reviewStatusOptions.filter(value => value !== '全部')">
+          </a-select>
+          <a-select v-model="reviewKindSelect" class="review-filter-select" aria-label="类型" placeholder="类型" allow-clear :options="['实体', '关系']">
+          </a-select>
+          <a-select v-model="reviewTimeSelect" class="review-filter-select" aria-label="时间" placeholder="时间" allow-clear :options="reviewTimeOptions.filter(value => value !== '全部')">
+          </a-select>
+          <a-input v-model="keyword" class="review-search-input review-filter-search" :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索处理实例 ID、对象或来源记录" placeholder="搜索处理实例 ID、对象或来源记录" allow-clear @clear="clearReviewSearch" />
           <button class="review-search-button" type="submit">查询</button>
         </form>
       </div>
@@ -917,18 +927,15 @@ onMounted(() => {
       <AppAlert type="warning" class="rerun-confirm-text">即将对已勾选的 {{ rerunSelection.size }} 条失败记录下发重跑，按 schema 合并为新执行（类别=重新执行）。重跑成功的记录自动关闭，仍失败的会重新进入失败列表。</AppAlert>
     </a-modal>
 
-    <a-modal
+    <DeleteConfirmDialog
       v-model:visible="batchDeleteVisible"
-      modal-class="rerun-confirm-modal"
       title="确认批量删除"
-      :width="560"
-      ok-text="删除"
-      cancel-text="取消"
-      :ok-loading="batchDeleteSubmitting"
-      @ok="confirmBatchDelete"
-    >
-      <AppAlert type="warning" class="rerun-confirm-text">即将物理删除已勾选的 {{ rerunSelection.size }} 条失败记录，连同草稿、决议、附件与审计记录一并清除，不可恢复。仅未处理记录可删除，已处理或不存在的会自动跳过。</AppAlert>
-    </a-modal>
+      :name="`已勾选的 ${rerunSelection.size} 条失败记录`"
+      description="继续操作将物理删除已勾选的失败记录，连同草稿、决议、附件与审计记录一并清除，不可恢复。仅未处理记录可删除，已处理或不存在的会自动跳过。"
+      :loading="batchDeleteSubmitting"
+      :error="batchDeleteError"
+      @confirm="confirmBatchDelete"
+    />
 
     <a-modal
       v-model:visible="logVisible"
@@ -993,17 +1000,17 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.ops-page{height:100%;overflow:auto;padding-bottom:2px;color:#16233b}.ops-panel{overflow:hidden;border:1px solid #bdd7ff;border-radius:9px;background:rgba(255,255,255,.94);box-shadow:0 12px 28px rgba(48,105,194,.1)}.ops-filter{display:grid;grid-template-columns:minmax(260px,1fr) repeat(3,160px) auto;gap:10px;padding:14px;border-bottom:1px solid #dce9ff;background:#f7fbff}.ops-filter input,.ops-filter select{height:34px;padding:0 10px;border:1px solid #bdd7ff;border-radius:6px;background:#fff;color:#273957}table{width:100%;border-collapse:collapse;font-size:13px}th,td{height:52px;padding:10px 14px;border-bottom:1px solid #e5edf8;text-align:left;white-space:nowrap}th{position:sticky;z-index:2;top:0;background:#f4f8fd;color:#5a6c88;font-weight:600}td{color:#273957}td small{display:block;margin-top:4px;color:#7b89a1}.alert-actions{display:grid;gap:5px}.alert-tabs{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 14px;border-bottom:1px solid #dce9ff}.alert-tabs nav{display:flex;overflow:auto}.alert-tabs button{padding:13px 14px;border:0;border-bottom:2px solid transparent;background:transparent;color:#52647f;white-space:nowrap;cursor:pointer}.alert-tabs button.active{border-color:#165dff;color:#165dff;font-weight:600}.alert-tabs label{color:#5f6f88;font-size:12px;white-space:nowrap}.alert-tabs input{margin-right:6px}td a,.link{border:0;background:transparent;color:#165dff;cursor:pointer;text-decoration:none}@media(max-width:1100px){.ops-filter{grid-template-columns:1fr 1fr}.ops-panel{overflow:hidden}}
-.review-context{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:12px;padding:12px 14px;border:1px solid #b2ccff;border-radius:7px;background:#f0f5ff}.review-context div{display:grid;gap:3px}.review-context strong{font-size:13px}.review-context span{color:#65738b;font-size:11px}.review-context a{color:#165dff;font-size:12px;text-decoration:none;white-space:nowrap}
+.ops-page{height:100%;overflow:auto;padding-bottom:2px;color:#16233b}.ops-panel{overflow:hidden;border:1px solid #bdd7ff;border-radius:9px;background:rgba(255,255,255,.94);box-shadow:0 12px 28px rgba(48,105,194,.1)}.ops-filter{display:grid;grid-template-columns:minmax(260px,1fr) repeat(3,160px) auto;gap:10px;padding:14px;border-bottom:1px solid #dce9ff;background:#f7fbff}.ops-filter input,.ops-filter select{height:34px;padding:0 10px;border:1px solid #bdd7ff;border-radius:6px;background:#fff;color:#273957}table{width:100%;border-collapse:collapse;font-size:12px}th,td{height:52px;padding:10px 14px;border-bottom:1px solid #e5edf8;text-align:left;white-space:nowrap}th{position:sticky;z-index:2;top:0;background:#f4f8fd;color:#5a6c88;font-weight:600}td{color:#273957}td small{display:block;margin-top:4px;color:#7b89a1}.alert-actions{display:grid;gap:5px}.alert-tabs{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 14px;border-bottom:1px solid #dce9ff}.alert-tabs nav{display:flex;overflow:auto}.alert-tabs button{padding:13px 14px;border:0;border-bottom:2px solid transparent;background:transparent;color:#52647f;white-space:nowrap;cursor:pointer}.alert-tabs button.active{border-color:#165dff;color:#165dff;font-weight:600}.alert-tabs label{color:#5f6f88;font-size:12px;white-space:nowrap}.alert-tabs input{margin-right:6px}td a,.link{border:0;background:transparent;color:#165dff;cursor:pointer;text-decoration:none}@media(max-width:1100px){.ops-filter{grid-template-columns:1fr 1fr}.ops-panel{overflow:hidden}}
+.review-context{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:12px;padding:12px 14px;border:1px solid #b2ccff;border-radius:7px;background:#f0f5ff}.review-context div{display:grid;gap:3px}.review-context strong{font-size:12px}.review-context span{color:#65738b;font-size:12px}.review-context a{color:#165dff;font-size:12px;text-decoration:none;white-space:nowrap}
 .review-evidence{min-width:260px;max-width:360px;white-space:normal;line-height:19px}.review-status{display:inline-flex;padding:3px 8px;border-radius:10px;background:#edf2f7;color:#52647f}.review-status.is-待处理{background:#fff0e8;color:var(--status-warning)}.review-status.is-已完成{background:#e9f8ef;color:var(--status-success)}
 .link-disabled{color:#98a2b3;font-size:12px;cursor:default}
 .pick-col{width:36px;text-align:center}.pick-col input{cursor:pointer}
-.review-severity{min-width:230px;max-width:300px;white-space:normal}.review-severity small{margin:0 0 6px}.review-severity span{display:block;color:#65738b;font-size:11px;line-height:17px}
-.review-mask{position:fixed;z-index:49;inset:0;border:0;background:rgba(16,36,76,.24)}.review-drawer{position:fixed;z-index:50;top:0;right:0;display:grid;grid-template-rows:auto minmax(0,1fr) auto;width:620px;height:100vh;background:#f8fbff;box-shadow:-18px 0 42px rgba(34,74,132,.22)}.review-drawer>header{display:flex;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.review-drawer header span{color:#165dff;font-size:11px}.review-drawer h2{margin:6px 0 3px;font-size:19px}.review-drawer header p{margin:0;color:#70809a;font-size:12px}.review-drawer header>button{width:30px;height:30px;border:0;border-radius:5px;background:#f0f4fa;font-size:20px;cursor:pointer}.review-body{overflow:auto;padding:16px}.review-body section,.review-compare article{padding:14px;border:1px solid #dce8f8;border-radius:7px;background:#fff}.review-body h3{margin:0 0 8px;font-size:14px}.review-body p,.review-body li{color:#61708a;font-size:12px;line-height:20px}.review-compare{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}.review-compare span{display:block;margin-bottom:9px;color:#70809a;font-size:11px}.review-compare strong{font-size:13px}.review-compare em{color:#d92d20;font-size:11px;font-style:normal}.review-compare input,.review-compare textarea{width:100%;padding:8px;border:1px solid #bdd0ea;border-radius:5px;font:inherit}.review-compare textarea{min-height:90px;margin-top:8px;resize:vertical}.review-success{padding:10px 12px;border:1px solid #a6f4c5;border-radius:6px;background:#ecfdf3!important;color:#067647!important}.review-drawer>footer{display:flex;justify-content:flex-end;gap:8px;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.review-drawer>footer button{height:34px;padding:0 13px;border:1px solid #bdd0ea;border-radius:6px;background:#fff;color:#40516d;cursor:pointer}.review-drawer>footer .primary{border-color:#165dff;background:#165dff;color:#fff}@media(max-width:720px){.review-drawer{width:94vw}.review-compare{grid-template-columns:1fr}}
+.review-severity{min-width:230px;max-width:300px;white-space:normal}.review-severity small{margin:0 0 6px}.review-severity span{display:block;color:#65738b;font-size:12px;line-height:20px}
+.review-mask{position:fixed;z-index:49;inset:0;border:0;background:rgba(16,36,76,.24)}.review-drawer{position:fixed;z-index:50;top:0;right:0;display:grid;grid-template-rows:auto minmax(0,1fr) auto;width:620px;height:100vh;background:#f8fbff;box-shadow:-18px 0 42px rgba(34,74,132,.22)}.review-drawer>header{display:flex;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.review-drawer header span{color:#165dff;font-size:12px}.review-drawer h2{margin:6px 0 3px;font-size:19px}.review-drawer header p{margin:0;color:#70809a;font-size:12px}.review-drawer header>button{width:30px;height:30px;border:0;border-radius:5px;background:#f0f4fa;font-size:20px;cursor:pointer}.review-body{overflow:auto;padding:16px}.review-body section,.review-compare article{padding:14px;border:1px solid #dce8f8;border-radius:7px;background:#fff}.review-body h3{margin:0 0 8px;font-size:14px}.review-body p,.review-body li{color:#61708a;font-size:12px;line-height:20px}.review-compare{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}.review-compare span{display:block;margin-bottom:9px;color:#70809a;font-size:12px}.review-compare strong{font-size:12px}.review-compare em{color:#d92d20;font-size:12px;font-style:normal}.review-compare input,.review-compare textarea{width:100%;padding:8px;border:1px solid #bdd0ea;border-radius:5px;font:inherit}.review-compare textarea{min-height:90px;margin-top:8px;resize:vertical}.review-success{padding:10px 12px;border:1px solid #a6f4c5;border-radius:6px;background:#ecfdf3!important;color:#067647!important}.review-drawer>footer{display:flex;justify-content:flex-end;gap:8px;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.review-drawer>footer button{height:34px;padding:0 13px;border:1px solid #bdd0ea;border-radius:6px;background:#fff;color:#40516d;cursor:pointer}.review-drawer>footer .primary{border-color:#165dff;background:#165dff;color:#fff}@media(max-width:720px){.review-drawer{width:94vw}.review-compare{grid-template-columns:1fr}}
 .ops-page{display:flex;box-sizing:border-box;min-height:0;overflow:hidden;padding-bottom:2px;flex-direction:column}.review-context{flex:0 0 auto}.ops-panel{display:flex;flex:1;min-height:0;flex-direction:column}.alert-tabs,.ops-filter,.review-pagination{flex:0 0 auto}.ops-review-table-scroll{flex:1;min-height:0;max-height:none;overflow:auto}.ops-filter.is-review{grid-template-columns:minmax(280px,1fr) 170px 170px auto}.ops-review-table-scroll table{min-width:1900px}.review-empty{height:100px!important;color:#8290a7;text-align:center!important}.ops-review-table-scroll td code{color:#175cd3;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-.review-type-cell{min-width:170px}.review-type-cell>span{display:inline-flex;padding:3px 9px;border-radius:99px;background:#eaf2ff;color:#175cd3;font-size:11px}.review-type-cell>span.is-low-confidence{background:#fff3d8;color:#b54708}.review-type-cell>span.is-extraction{background:#fef3f2;color:#b42318}.review-type-cell>span.is-schema{background:#edf0ff;color:#444ce7}.review-type-cell>span.is-normalization{background:#ecfdf3;color:#067647}.review-type-cell>span.is-other{background:#f2f4f7;color:#475467}
-.ops-review-table-scroll table{min-width:1900px}.review-risk-explain{display:grid;flex:0 0 auto;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px}.review-risk-explain>div{display:grid;gap:3px;padding:11px 14px;border:1px solid #b9d2f4;border-radius:7px;background:#f7fbff}.review-risk-explain strong{color:#344861;font-size:11px}.review-risk-explain span{color:#6d7c93;font-size:9px;line-height:16px}.review-confidence-cell{min-width:190px;white-space:normal}.review-confidence-cell>b{display:inline-block;margin-right:7px;font-size:13px}.review-confidence-cell>small{display:inline;color:#718098}.review-confidence-cell>span{display:block;margin-top:4px;color:#78869b;font-size:9px;line-height:15px}@media(max-width:900px){.review-risk-explain{grid-template-columns:1fr}}
-.review-risk-explain{grid-template-columns:repeat(2,minmax(0,1fr))}.review-risk-explain>div:first-child{border-color:#f5b8b3;background:#fff5f4}.review-risk-explain>div:first-child strong{color:#d92d20}.review-risk-explain>div:nth-child(2){border-color:#f3d08a;background:#fffaf0}.review-risk-explain>div:nth-child(2) strong{color:#b54708}.review-type{min-width:150px}.review-confidence-cell{min-width:130px}.review-confidence-cell>em{display:block;width:max-content;margin-top:5px;padding:2px 7px;border-radius:9px;background:#fff3d8;color:#b54708;font-size:9px;font-style:normal}
+.review-type-cell{min-width:170px}.review-type-cell>span{display:inline-flex;padding:3px 9px;border-radius:99px;background:#eaf2ff;color:#175cd3;font-size:12px}.review-type-cell>span.is-low-confidence{background:#fff3d8;color:#b54708}.review-type-cell>span.is-extraction{background:#fef3f2;color:#b42318}.review-type-cell>span.is-schema{background:#edf0ff;color:#444ce7}.review-type-cell>span.is-normalization{background:#ecfdf3;color:#067647}.review-type-cell>span.is-other{background:#f2f4f7;color:#475467}
+.ops-review-table-scroll table{min-width:1900px}.review-risk-explain{display:grid;flex:0 0 auto;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px}.review-risk-explain>div{display:grid;gap:3px;padding:11px 14px;border:1px solid #b9d2f4;border-radius:7px;background:#f7fbff}.review-risk-explain strong{color:#344861;font-size:12px}.review-risk-explain span{color:#6d7c93;font-size:12px;line-height:20px}.review-confidence-cell{min-width:190px;white-space:normal}.review-confidence-cell>b{display:inline-block;margin-right:7px;font-size:12px}.review-confidence-cell>small{display:inline;color:#718098}.review-confidence-cell>span{display:block;margin-top:4px;color:#78869b;font-size:12px;line-height:20px}@media(max-width:900px){.review-risk-explain{grid-template-columns:1fr}}
+.review-risk-explain{grid-template-columns:repeat(2,minmax(0,1fr))}.review-risk-explain>div:first-child{border-color:#f5b8b3;background:#fff5f4}.review-risk-explain>div:first-child strong{color:#d92d20}.review-risk-explain>div:nth-child(2){border-color:#f3d08a;background:#fffaf0}.review-risk-explain>div:nth-child(2) strong{color:#b54708}.review-type{min-width:150px}.review-confidence-cell{min-width:130px}.review-confidence-cell>em{display:block;width:max-content;margin-top:5px;padding:2px 7px;border-radius:9px;background:#fff3d8;color:#b54708;font-size:12px;font-style:normal}
 .ops-review-table-scroll table{min-width:1288px}
 .review-id-cell{min-width:150px;white-space:nowrap}
 .review-id-cell .link{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
@@ -1013,9 +1020,9 @@ onMounted(() => {
 .ops-filter.is-review{grid-template-columns:minmax(240px,1fr) 160px 160px auto}
 .review-type-cell>span.is-align{background:#f0ebff;color:#6938ef}
 .review-type-cell>span.is-relation{background:#fff3d8;color:#b54708}
-.review-subtype{display:block!important;margin-top:5px!important;color:#7b89a1;font-size:10px;white-space:nowrap}
+.review-subtype{display:block!important;margin-top:5px!important;color:#7b89a1;font-size:12px;white-space:nowrap}
 .review-question-cell{min-width:220px;max-width:320px;white-space:normal}
-.review-question-cell strong{display:block;font-size:12px;font-weight:600;line-height:18px}
+.review-question-cell strong{display:block;font-size:12px;font-weight:600;line-height:20px}
 .review-question-cell small{margin-top:4px;color:#165dff}
 .scope-batch{color:#b42318!important}
 .scope-task{color:#175cd3!important}
@@ -1029,6 +1036,8 @@ onMounted(() => {
 .ops-filter,.ops-filter.is-review{box-sizing:border-box;width:100%;grid-template-columns:minmax(280px,1fr) minmax(160px,200px) minmax(160px,200px) auto;column-gap:16px!important;row-gap:16px!important;padding:16px!important;background:#fff}
 .alert-tabs nav button{height:36px;padding:0 16px;font-size:14px;line-height:22px}.alert-tabs nav button.active{font-weight:500}
 .ops-filter input,.ops-filter select,.ops-filter button{height:32px;padding:0 12px;border-color:#e5e6eb;border-radius:4px;font-size:14px;line-height:22px}.ops-filter button{padding:0 16px}
+/* 原生筛选输入/下拉的 focus 态与 Arco 搜索框同口径（品牌蓝边 + 克制焦点环） */
+.ops-filter input:focus,.ops-filter select:focus{border-color:#165dff;outline:0;box-shadow:0 0 0 2px rgba(22,93,255,.1)}
 .ops-review-table-scroll table{min-width:1288px;font-size:14px;line-height:22px}.ops-review-table-scroll th,.ops-review-table-scroll td{height:40px;padding:0 16px}.ops-review-table-scroll th{background:#f7f8fa;color:#1d2129;font-weight:500}
 .ops-review-table-scroll td small,.review-source-cell strong,.review-question-cell strong,.review-confidence-cell>b{font-size:12px;line-height:20px}
 .review-status{display:inline-flex;align-items:center;gap:6px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.review-status::before{display:block;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
@@ -1044,8 +1053,6 @@ onMounted(() => {
 .review-search-input.arco-input-wrapper{box-sizing:border-box;width:100%;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important}
 .review-search-input.arco-input-wrapper:hover{border-color:#4080ff!important;background:#fff!important}
 .review-search-input.arco-input-wrapper:focus-within,.review-search-input.arco-input-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
-.review-search-input.arco-input-wrapper :deep(.arco-input-prefix){padding-right:8px;color:#4e5969}.review-search-input.arco-input-focus :deep(.arco-input-prefix){color:#165dff}
-.review-search-input.arco-input-wrapper :deep(.arco-input-prefix svg){width:16px;height:16px;font-size:16px}
 .review-search-input.arco-input-wrapper :deep(.arco-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:none!important}
 .ops-filter :deep(.arco-select-view){box-sizing:border-box;width:100%;height:32px;border:1px solid #e5e6eb;border-radius:4px;background:#fff}
 .ops-filter :deep(.arco-select-view-input){height:100%!important;min-height:0!important;padding:0!important;border:0!important;background:transparent!important;box-shadow:none!important}
@@ -1065,14 +1072,15 @@ onMounted(() => {
 .review-search-button{box-sizing:border-box;height:32px;padding:0 16px;border:1px solid #165dff!important;border-radius:4px;background:#165dff!important;color:#fff!important;font-size:14px;line-height:22px;cursor:pointer}
 .review-search-button:hover{border-color:#4080ff!important;background:#4080ff!important}
 .review-search-button:focus-visible{outline:2px solid rgba(22,93,255,.3);outline-offset:2px}
-.review-filter-row :deep(.review-filter-select.arco-select-view){flex:0 0 160px;width:160px}
+.review-filter-row :deep(.review-filter-select.arco-select-view){display:inline-flex;align-items:center;flex:0 0 160px;width:160px;min-height:32px;padding:0 12px!important}
+.review-filter-row :deep(.arco-select-view-suffix svg){width:14px;height:14px;font-size:14px;color:#4e5969}
 .review-filter-row :deep(.review-filter-search.arco-input-wrapper){flex:0 0 280px;width:280px}
 .review-tabs .ops-filter.is-review :deep(.arco-select-view-value){font-size:14px;line-height:22px;font-weight:400}
 .ops-review-table-scroll td{color:#344763;font-size:14px;line-height:22px;font-weight:400;vertical-align:middle}
 .ops-review-table-scroll td>b,.ops-review-table-scroll td>strong{font-weight:400}
 /* 抽取失败重跑：批量重跑按钮 / 重跑反馈条 / 状态徽标扩展 */
 /* 批量重跑沿用日志的文字链接样式。 */
-.rerun-confirm-bar{display:inline-flex;align-items:center;gap:8px;flex:0 0 auto;color:#4e5969;font-size:13px;line-height:22px;white-space:nowrap}
+.rerun-confirm-bar{display:inline-flex;align-items:center;gap:8px;flex:0 0 auto;color:#4e5969;font-size:12px;line-height:22px;white-space:nowrap}
 .review-pagination .review-page-summary{margin-left:auto;white-space:nowrap}
 /* 批量重跑反馈：四态底色/提示符/关闭按钮由 AppAlert（Arco Alert 规范）提供 */
 .rerun-feedback{flex:0 0 auto;margin:0 0 10px}
@@ -1147,9 +1155,7 @@ onMounted(() => {
 .ops-review-table-scroll::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background-color:transparent;background-clip:padding-box}
 .ops-review-table-scroll:hover::-webkit-scrollbar-thumb,.ops-review-table-scroll.review-scroll--active::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
 .ops-review-table-scroll::-webkit-scrollbar-thumb:hover{background-color:rgba(78,89,105,.8)}
-/* 筛选字段标签 / 类型徽标 / 勾选禁用态 / 删除按钮 */
-.review-filter-field{display:flex;flex:0 0 auto;align-items:center;gap:8px}
-.review-filter-label{color:#4e5969;font-size:14px;line-height:22px;white-space:nowrap}
+/* 类型徽标 / 勾选禁用态 / 删除按钮 */
 /* 处理实例 ID 纯文本：中性色，区别于可点击的链接蓝 */
 .review-id-cell .review-id-plain{color:#4e5969}
 .review-kind-badge{display:inline-flex;white-space:nowrap;padding:0 8px;border-radius:4px;background:#f2f3f5;color:#4e5969;font-size:12px;line-height:20px}
@@ -1171,7 +1177,7 @@ onMounted(() => {
 .case-log-dl{display:grid;gap:6px 0;margin:0}
 .case-log-dl>div{display:grid;grid-template-columns:88px 1fr;column-gap:12px}
 .case-log-dl dt{color:#86909c;font-size:12px;line-height:20px}
-.case-log-dl dd{margin:0;color:#1d2129;font-size:13px;line-height:20px;overflow-wrap:anywhere}
+.case-log-dl dd{margin:0;color:#1d2129;font-size:12px;line-height:20px;overflow-wrap:anywhere}
 .case-log-error-block{margin:0}
 .case-log-error-text{margin:0;font:12px/19px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-all}
 .case-log-loading{margin:0;padding:24px;color:#86909c;text-align:center}

@@ -27,14 +27,16 @@ import tempfile
 import threading
 import time
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from itertools import islice
 from typing import Any
 
-from sqlalchemy import inspect, select, text
+from sqlalchemy import inspect, select, text, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from infra.elasticsearch import EntityKeywordES, get_entity_keyword_es
 from infra.entity_response_cache import EntityResponseCache
 from infra.graph_db import TRSGraphClient, get_space_client
 from infra.llm import EmbeddingClient
@@ -92,6 +94,35 @@ _types_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _reindex_lock = threading.Lock()
 _reindex_running = False
 _node_count_cache: dict[tuple[str, str], tuple[float, int]] = {}
+
+# 实体列表关键词检索逐标签全扫（CONTAINS 无索引可用，必须扫描过滤）。真实空间
+# 标签数几十个（dev2 空间 56 个），串行计数 17~36s，前端 axios 20s 直接超时，
+# 搜索栏承诺的「属性关键词」实际不可用。按标签有界并行后总耗时≈最慢单标签；
+# 4 并发对图服务只占兜底执行预算（TRS_EXEC_CONCURRENCY=32）的一小部分，
+# 不重蹈图查询风暴； executor 全局共享，多请求同时搜索时天然排队背压。
+_KEYWORD_SCAN_WORKERS = max(1, int(os.getenv("ENTITY_KEYWORD_SCAN_CONCURRENCY", "4")))
+_keyword_scan_executor = ThreadPoolExecutor(
+    max_workers=_KEYWORD_SCAN_WORKERS, thread_name_prefix="entity-keyword-scan"
+)
+
+# ES 通道（可选）：索引 ngram(2..3)，1 字符关键词无 gram 可用，仍走图直查
+_KEYWORD_ES_MIN_LENGTH = 2
+
+
+def _es_keyword_store(space: str, keyword: str) -> EntityKeywordES | None:
+    """返回可用的 ES 通道；未配置 / 关键词太短 / 空间未同步 → None（走图直查）。
+
+    空间未同步时必须回退：ES 空索引会把未同步空间错误地答成 0 命中。
+    """
+    store = get_entity_keyword_es()
+    if store is None or len(keyword) < _KEYWORD_ES_MIN_LENGTH:
+        return None
+    try:
+        return store if store.ready(space) else None
+    except Exception:  # noqa: BLE001 - 探测失败只降级，不影响请求
+        logger.warning("ES 就绪探测异常，回退图直查(space=%s)", space, exc_info=True)
+        return None
+
 
 # 搜索/浏览响应缓存（L1 进程 + L2 Redis，实例从 handler 下沉到 service，
 # 供 reindex 完成与人工审核写图联动统一失效——FUNC-00813 队列与图库联动）。
@@ -348,6 +379,74 @@ def _serialize_browse_item(node: Any, entity_type: str) -> dict[str, Any]:
     }
 
 
+def _es_keyword_search_text(vid: str, props: dict[str, Any]) -> str:
+    """关键词检索语料 = VID + 全量属性值（不截断、不挑 key）。
+
+    与图谓词 ``id(v) CONTAINS kw OR any(values(properties(v)) CONTAINS kw)``
+    保持同一口径：属性 key 不参与匹配（图上本来也不匹配 key）。全量同步
+    脚本与随环增量共用本函数，保证两条写入路径语料逐字一致。
+    """
+    parts = [str(vid)]
+    for value in props.values():
+        if value is None:
+            continue
+        if isinstance(value, (dict, list, tuple, set)):
+            try:
+                parts.append(
+                    json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))
+                )
+            except (TypeError, ValueError):
+                continue
+        else:
+            parts.append(str(value))
+    return "\n".join(parts)
+
+
+def _es_keyword_doc(node: Any, label: str) -> dict[str, Any]:
+    """图节点 → ES 关键词索引文档（``_id = 标签::vid``，镜像图「按标签枚举」
+    语义：多 TAG 同 vid 各占一篇）。全量同步与随环增量共用，保证增量行与
+    全量重建的文档逐字段一致。"""
+    vid = str(node.id)
+    props = dict(node.properties or {})
+    doc: dict[str, Any] = {
+        "_id": f"{label}::{vid}",
+        "vid": vid,
+        "entity_type": label,
+        "search_text": _es_keyword_search_text(vid, props),
+        "item": _serialize_browse_item(node, label),
+    }
+    # 消歧同名召回的精确等值列（infra.EntityKeywordES.NAME_COLUMNS 的镜像）：
+    # 只收字符串非空值，列不在 tag schema 上时该文档自然无这些键
+    for col in _ES_NAME_COLUMNS:
+        value = props.get(col)
+        if isinstance(value, str) and value.strip():
+            doc[col] = value
+    return doc
+
+
+# 消歧同名召回的显示名列（与 infra.elasticsearch.EntityKeywordES.NAME_COLUMNS 一致；
+# 分开声明避免 service→infra 反向取常量的循环依赖）
+_ES_NAME_COLUMNS = ("name", "name_zh", "name_cn", "name_en")
+
+
+def _es_incremental_upsert(store: EntityKeywordES, space: str, docs: list[dict[str, Any]]) -> int:
+    """随环 ES 关键词增量写入：失败降级告警不抛。
+
+    与 Milvus 增量的链内严格口径相反——关键词通道有图直查兜底，漏写的
+    批次由夜间全量对账（``--drop`` 重建）修复，ES 抖动不该把构建链拖
+    FAILED。"""
+    try:
+        return store.upsert(space, docs)
+    except Exception:  # noqa: BLE001 - 降级口径：构建链不被 ES 故障中断
+        logger.warning(
+            "ES 关键词增量写入失败(space=%s, %s 条，待夜间对账修复)",
+            space,
+            len(docs),
+            exc_info=True,
+        )
+        return 0
+
+
 def _node_count_cached(graph: TRSGraphClient, space: str, label: str) -> int:
     """带 TTL 缓存的标签节点数。label_count 优先 SHOW STATS（毫秒级），
     统计缺失或不可用（空间未跑 stats job）时回退 nGQL 标签 count（亚秒级）。"""
@@ -498,6 +597,67 @@ def _load_bm25_from_state(session: Session, space: str) -> BM25SparseEncoder | N
         return None
 
 
+# BM25 编码器进程内缓存：词表/文档频率是 25MB+17MB 大 JSON，每次增量入索引
+# 都整行拉取+重解析（实测拉取 0.7s + 解析 2.7s）是裁决/抽取联动的主要耗时。
+# 编码器只由词表统计决定——增量 upsert 不改词表，只有全量重建（_save_state）
+# 才会变；指纹只取小列（不触大字段），重建落库时显式失效兜底。
+_bm25_encoder_cache: dict[str, tuple[tuple, BM25SparseEncoder]] = {}
+_bm25_encoder_lock = threading.Lock()
+
+
+def _state_fingerprint(session: Session, space: str) -> tuple | None:
+    """状态行轻量指纹（document_count/avg_len/k1/b + entity_count，不触大列）。"""
+    from db_model.entity_search import EntitySearchState
+
+    row = session.execute(
+        select(
+            EntitySearchState.document_count,
+            EntitySearchState.entity_count,
+            EntitySearchState.average_document_length,
+            EntitySearchState.k1,
+            EntitySearchState.b,
+        ).where(EntitySearchState.graph_space == space)
+    ).first()
+    return tuple(row) if row else None
+
+
+def _load_bm25_cached(session: Session, space: str) -> BM25SparseEncoder | None:
+    """带进程内缓存的编码器加载：指纹命中免拉 42MB 状态，未命中全量重建并缓存。
+
+    未建索引口径与 ``_load_bm25_from_state`` 一致（无状态行 / 词表空 /
+    entity_count=0 → None）。entity_count 不进指纹：create 计数 +1 不改词表，
+    不该把缓存打 miss。"""
+    fingerprint_full = _state_fingerprint(session, space)
+    if fingerprint_full is None:
+        return None
+    document_count, entity_count, average_document_length, k1, b = fingerprint_full
+    if not document_count or not entity_count:
+        return None
+    fingerprint = (document_count, average_document_length, k1, b)
+    with _bm25_encoder_lock:
+        hit = _bm25_encoder_cache.get(space)
+    if hit is not None and hit[0] == fingerprint:
+        return hit[1]
+    encoder = _load_bm25_from_state(session, space)
+    if encoder is None:
+        return None
+    with _bm25_encoder_lock:
+        _bm25_encoder_cache[space] = (fingerprint, encoder)
+    return encoder
+
+
+def _state_entity_count(session: Session, space: str) -> int:
+    """状态行 entity_count 的轻量读取（不触大列）。"""
+    from db_model.entity_search import EntitySearchState
+
+    return int(
+        session.execute(
+            select(EntitySearchState.entity_count).where(EntitySearchState.graph_space == space)
+        ).scalar()
+        or 0
+    )
+
+
 def _save_state(
     session: Session,
     *,
@@ -528,6 +688,9 @@ def _save_state(
     row.embedding_model = embedding_model
     row.updated_at = datetime.now(UTC)
     session.commit()
+    # 词表已换代：进程内编码器缓存必须失效（指纹通常也会变，这里是显式兜底）
+    with _bm25_encoder_lock:
+        _bm25_encoder_cache.pop(space, None)
 
 
 def _milvus_space_has_rows(milvus: Any, space: str) -> bool:
@@ -646,20 +809,62 @@ class EntitySearchService:
         space: str | None = None,
         entity_type: str | None = None,
     ) -> dict[str, int]:
-        """实体列表文字搜索的全量匹配计数，不依赖 Milvus/embedding 状态。"""
-        graph = get_space_client(space or _default_space())
+        """实体列表文字搜索的全量匹配计数，不依赖 Milvus/embedding 状态。
+
+        优先走 ES 通道（terms 聚合一次出全量计数）；ES 未配置/未同步/出错
+        回退图直查。图路径逐标签计数并行执行（全扫是大头，见
+        ``_keyword_scan_executor`` 注释）；任一标签失败仍按「暂不可用」整体
+        报错，绝不把失败伪装成 0 命中。
+        """
+        keyword = keyword.strip()
+        resolved_space = space or _default_space()
+        graph = get_space_client(resolved_space)
+        labels = self._validated_labels(graph, entity_type)
+        es = _es_keyword_store(resolved_space, keyword)
+        if es is not None:
+            try:
+                return es.counts(resolved_space, keyword, entity_type=entity_type)
+            except Exception:  # noqa: BLE001 - ES 通道任何异常都降级图直查
+                logger.warning(
+                    "ES 关键词计数失败，回退图直查(space=%s keyword=%s)",
+                    resolved_space,
+                    keyword,
+                    exc_info=True,
+                )
+        return self._graph_keyword_counts(graph=graph, labels=labels, keyword=keyword)
+
+    @staticmethod
+    def _validated_labels(graph: TRSGraphClient, entity_type: str | None) -> list[str]:
+        """未知实体类型必须报错，不能答成 0 命中（对图和 ES 通道都成立）。"""
         labels = sorted(graph.labels())
         if entity_type:
             if entity_type not in labels:
                 raise EntitySearchError(f"图空间中不存在实体类型: {entity_type}")
             labels = [entity_type]
-        try:
-            return {
-                label: graph.keyword_nodes_by_label(label, keyword.strip(), count_only=True).total
-                for label in labels
-            }
-        except Exception as exc:
-            raise EntitySearchError("实体文字检索暂不可用，请稍后重试") from exc
+        return labels
+
+    @staticmethod
+    def _graph_keyword_counts(
+        *, graph: TRSGraphClient, labels: list[str], keyword: str
+    ) -> dict[str, int]:
+        """图直查全量计数：逐标签并行 count_only（引擎口径 = 图，勿在此混 ES）。"""
+        futures = {
+            label: _keyword_scan_executor.submit(
+                graph.keyword_nodes_by_label, label, keyword, count_only=True
+            )
+            for label in labels
+        }
+        counts: dict[str, int] = {}
+        first_error: BaseException | None = None
+        for label in labels:
+            try:
+                counts[label] = futures[label].result().total
+            except Exception as exc:  # noqa: BLE001 - 汇总后统一转领域错误
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise EntitySearchError("实体文字检索暂不可用，请稍后重试") from first_error
+        return counts
 
     def keyword_search(
         self,
@@ -671,29 +876,73 @@ class EntitySearchService:
         offset: int = 0,
         counts: dict[str, int] | None = None,
     ) -> dict[str, Any]:
-        """按类型/VID 稳定分页，只返回文字实际匹配的实体，不补语义相似项。"""
+        """按类型/VID 稳定分页，只返回文字实际匹配的实体，不补语义相似项。
+
+        ES 通道直接按 (entity_type, vid) 排序取页，顺序与图路径逐字节一致。
+        """
         keyword = keyword.strip()
         if not keyword:
             raise EntitySearchError("关键词不能为空")
         resolved_space = space or _default_space()
-        if counts is None:
-            counts = self.keyword_counts(
-                keyword=keyword, space=resolved_space, entity_type=entity_type
-            )
+        es = _es_keyword_store(resolved_space, keyword)
+        if es is not None:
+            try:
+                items, total = es.page(
+                    resolved_space,
+                    keyword,
+                    entity_type=entity_type,
+                    limit=limit,
+                    offset=offset,
+                )
+                return {
+                    "items": items,
+                    "total": total,
+                    "returned": len(items),
+                    "keyword": keyword,
+                    "entityType": entity_type,
+                    "graphSpace": resolved_space,
+                    "limit": limit,
+                    "offset": offset,
+                    "mode": "keyword",
+                }
+            except Exception:  # noqa: BLE001 - ES 通道任何异常都降级图直查
+                logger.warning(
+                    "ES 关键词取页失败，回退图直查(space=%s keyword=%s)",
+                    resolved_space,
+                    keyword,
+                    exc_info=True,
+                )
+                # ES 口径的计数不能喂给图回退分页；回退后计数也必须走图口径
+                # （keyword_counts 是 ES 优先，重试 ES 会再次混引擎）
+                counts = None
         graph = get_space_client(resolved_space)
-        items = []
+        if counts is None:
+            counts = self._graph_keyword_counts(
+                graph=graph,
+                labels=self._validated_labels(graph, entity_type),
+                keyword=keyword,
+            )
+        # 先按计数把请求页窗口切成各标签的分页区间，再并行取页；结果严格按
+        # 标签字典序拼接，与串行实现逐字节一致（跨类型翻页稳定）。
+        page_jobs: list[tuple[str, int, int]] = []
         cursor = 0
+        for label, count in sorted(counts.items()):
+            start, end = max(offset - cursor, 0), min(offset + limit - cursor, count)
+            cursor += count
+            if start < end:
+                page_jobs.append((label, start, end))
+            if cursor >= offset + limit:
+                break
         try:
-            for label, count in sorted(counts.items()):
-                start, end = max(offset - cursor, 0), min(offset + limit - cursor, count)
-                cursor += count
-                if start < end:
-                    rows = graph.keyword_nodes_by_label(
-                        label, keyword, limit=end - start, offset=start
-                    )
-                    items.extend(_serialize_browse_item(node, label) for node in rows.items)
-                if cursor >= offset + limit:
-                    break
+            page_futures = [
+                _keyword_scan_executor.submit(
+                    graph.keyword_nodes_by_label, label, keyword, limit=end - start, offset=start
+                )
+                for label, start, end in page_jobs
+            ]
+            items = []
+            for (label, _start, _end), future in zip(page_jobs, page_futures, strict=True):
+                items.extend(_serialize_browse_item(node, label) for node in future.result().items)
         except Exception as exc:
             raise EntitySearchError("实体文字检索暂不可用，请稍后重试") from exc
         return {
@@ -1062,9 +1311,9 @@ class EntitySearchService:
         """
         if _database_reindex_running(self._session):
             return {"upserted": False, "reason": "reindex in progress"}
-        state_row = _load_state(self._session, space)
-        encoder = _load_bm25_from_state(self._session, space)
-        if state_row is None or encoder is None or not (state_row.entity_count or 0):
+        # 进程内缓存版：命中免拉 42MB 状态行（首次裁决 3.4s → 常态 ~0）
+        encoder = _load_bm25_cached(self._session, space)
+        if encoder is None:
             return {"upserted": False, "reason": "space index not built"}
         graph = get_space_client(space)
         node = graph.get_node(vid)
@@ -1117,7 +1366,15 @@ class EntitySearchService:
             logger.warning("单实体入索引失败 vid=%s space=%s", vid, space)
             return {"upserted": False, "reason": f"milvus error: {exc}"}
         if is_new:
-            self._bump_state_counts(state_row, node_label)
+            self._bump_state_counts(space, node_label)
+        es_store = get_entity_keyword_es()
+        if es_store is not None:
+            # ES 关键词索引增量（与随环批量同口径，fail-open）：否则裁决新建/并入
+            # 的实体要等夜间全量对账才能被关键词搜索与同名召回命中
+            try:
+                es_store.upsert(space, [_es_keyword_doc(node, node_label)])
+            except Exception:  # noqa: BLE001 - 索引联动失败不影响裁决
+                logger.warning("单实体 ES 关键词写入失败 vid=%s space=%s", vid, space, exc_info=True)
         return {"upserted": True, "vid": vid, "entityType": node_label}
 
     def upsert_entities_batch(
@@ -1137,9 +1394,8 @@ class EntitySearchService:
             return {"upserted": 0, "skipped": 0, "reason": None}
         if _database_reindex_running(self._session):
             return {"upserted": 0, "skipped": len(entities), "reason": "reindex in progress"}
-        state_row = _load_state(self._session, space)
-        encoder = _load_bm25_from_state(self._session, space)
-        if state_row is None or encoder is None or not (state_row.entity_count or 0):
+        encoder = _load_bm25_cached(self._session, space)
+        if encoder is None:
             return {"upserted": 0, "skipped": len(entities), "reason": "space index not built"}
         # 同 vid 多条（跨列集组）合并属性、后者覆盖——与图内列级 upsert 终值一致
         merged: dict[str, dict[str, Any]] = {}
@@ -1213,21 +1469,43 @@ class EntitySearchService:
             logger.warning("批量实体入索引失败 space=%s label=%s", space, node_label)
             return {"upserted": written, "skipped": skipped, "reason": f"milvus error: {exc}"}
 
-    def _bump_state_counts(self, state_row: Any, node_label: str) -> None:
-        """create 场景计数快照 +1：浏览分页窗口/总览与图保持一致（merge 不变）。"""
+    def _bump_state_counts(self, space: str, node_label: str) -> None:
+        """create 场景计数快照 +1：浏览分页窗口/总览与图保持一致（merge 不变）。
+
+        走轻量读 + Core UPDATE 原子自增：不再整行加载状态（vocabulary 是
+        25MB 大列），也避免与并发增量互相覆盖计数。"""
         from datetime import UTC, datetime
 
+        from db_model.entity_search import EntitySearchState
+
         try:
-            counts = json.loads(state_row.type_counts or "{}")
-        except Exception:  # noqa: BLE001 - 计数快照损坏按空处理
-            counts = {}
-        if not isinstance(counts, dict):
-            counts = {}
-        counts[node_label] = int(counts.get(node_label) or 0) + 1
-        state_row.type_counts = json.dumps(counts, ensure_ascii=False)
-        state_row.entity_count = int(state_row.entity_count or 0) + 1
-        state_row.updated_at = datetime.now(UTC)
-        self._session.commit()
+            current = self._session.execute(
+                select(EntitySearchState.type_counts).where(
+                    EntitySearchState.graph_space == space
+                )
+            ).scalar()
+            try:
+                counts = json.loads(current or "{}")
+            except Exception:  # noqa: BLE001 - 计数快照损坏按空处理
+                counts = {}
+            if not isinstance(counts, dict):
+                counts = {}
+            label = str(node_label or "")
+            if label:
+                counts[label] = int(counts.get(label) or 0) + 1
+            self._session.execute(
+                update(EntitySearchState)
+                .where(EntitySearchState.graph_space == space)
+                .values(
+                    entity_count=EntitySearchState.entity_count + 1,
+                    type_counts=json.dumps(counts, ensure_ascii=False),
+                    updated_at=datetime.now(UTC),
+                )
+            )
+            self._session.commit()
+        except Exception:  # noqa: BLE001 - 计数失败不影响裁决/增量主流程
+            logger.warning("实体索引计数快照 +1 失败 space=%s", space, exc_info=True)
+            self._session.rollback()
 
     def upsert_entities(self, *, space: str, items: list[dict[str, Any]]) -> dict[str, Any]:
         """随环抽取后的批级增量入索引（冻结 BM25 词表，方案②a）。
@@ -1239,19 +1517,35 @@ class EntitySearchService:
         FAILED（2026-09-29 口径）。冻结词表产出的稀疏向量维度由词表决定、与
         既有行天然兼容（SPARSE_FLOAT_VECTOR 无固定维度），增量行无需重刷全空间。
 
+        同一班次捎带 ES 关键词索引增量：读回的节点顺手构造 ES 文档（与全量
+        同构，``_es_keyword_doc``）bulk 写入，**不遵循 Milvus 守卫**（新空间
+        首批写入即自动建索引）、**失败降级不抛**（``esUpserted`` 计数、夜间
+        对账修复）——ES 是查询优化层，不该把构建链拖 FAILED。
+
         ``items``：``[{"vid": ..., "label": 写图的 TAG 名}]``——label 用写图侧
         的事实（FETCH 批量读回的 vertex 不保证 labels 字段），props/文本与全量
         重建同源同构。计数快照只对 Milvus 里尚无行的 vid +n（merge 重写不变）。
         """
+        # ES 关键词索引增量不受下方 Milvus 守卫约束：ES 建索引只是一次 PUT，
+        # 无词表冻结/embedding/全扫，不存在 Milvus 的首建自锁问题——新空间
+        # 首批写入即自动建索引（infra upsert 惰性 ensure_index），这就是
+        # 「新空间→构建→自动带 ES 索引」的入口。未配置 ENTITY_SEARCH_ES_URL
+        # 时 es_store 为 None，本方法行为与本改动前完全一致。
+        es_store = get_entity_keyword_es()
+        milvus_skip_reason: str | None = None
+        encoder: BM25SparseEncoder | None = None
         if _database_reindex_running(self._session):
             # 全量重建会重读整个图空间，本批行天然被覆盖：计划内跳过，不算失败
-            return {"mode": "skip", "upserted": 0, "reason": "reindex in progress"}
-        state_row = _load_state(self._session, space)
-        encoder = _load_bm25_from_state(self._session, space)
-        if state_row is None or encoder is None or not (state_row.entity_count or 0):
-            # 未建索引的空间不随环全量首建（大空间会撞 activity 超时自锁缺陷），
-            # 首建走管理端点 POST /entity-search/reindex 低峰执行
-            return {"mode": "skip", "upserted": 0, "reason": "space index not built"}
+            milvus_skip_reason = "reindex in progress"
+        else:
+            encoder = _load_bm25_cached(self._session, space)
+            if encoder is None:
+                # 未建索引的空间不随环全量首建（大空间会撞 activity 超时自锁缺陷），
+                # 首建走管理端点 POST /entity-search/reindex 低峰执行
+                milvus_skip_reason = "space index not built"
+        if milvus_skip_reason is not None and es_store is None:
+            # ES 未配置：守卫短路，行为与旧版一致（零额外图读）
+            return {"mode": "skip", "upserted": 0, "reason": milvus_skip_reason}
 
         label_by_vid: dict[str, str] = {}
         for item in items or []:
@@ -1262,6 +1556,8 @@ class EntitySearchService:
 
         graph = get_space_client(space)
         records: list[tuple[str, str, dict[str, Any]]] = []
+        es_docs: list[dict[str, Any]] = []
+        es_written = 0
         skipped_missing = 0
         skipped_empty_text = 0
         try:
@@ -1269,8 +1565,14 @@ class EntitySearchService:
                 found = graph.get_nodes_bulk(vids[start : start + _BULK_FETCH_VID_CHUNK])
                 for vid in vids[start : start + _BULK_FETCH_VID_CHUNK]:
                     node = found.get(vid)
+                    if node is None:
+                        skipped_missing += 1
+                        continue
+                    if es_store is not None:
+                        # ES 无 128B VID 限制：全部节点入关键词索引（与全量同步同口径）
+                        es_docs.append(_es_keyword_doc(node, label_by_vid[vid]))
                     # 超 128B 的 VID 入不了 Milvus 主键字段（与全量重建同规则）
-                    if node is None or len(vid.encode("utf-8")) > 128:
+                    if len(vid.encode("utf-8")) > 128:
                         skipped_missing += 1
                         continue
                     record = _index_record(
@@ -1284,8 +1586,23 @@ class EntitySearchService:
                         skipped_empty_text += 1
                         continue
                     records.append((vid, label_by_vid[vid], record))
+                if es_docs:
+                    es_written += _es_incremental_upsert(es_store, space, es_docs)
+                    es_docs = []
         except Exception as exc:  # noqa: BLE001 - 链内真实故障：统一口径上抛
             raise EntitySearchError(f"增量入索引批量读图失败（{len(vids)} 个 vid）: {exc}") from exc
+
+        if milvus_skip_reason is not None:
+            # Milvus 侧计划内跳过；ES 已落数时 mode 仍标 incremental——环末
+            # activity 据此失效检索缓存，让关键词搜索立刻看到本批实体
+            return {
+                "mode": "incremental" if es_written else "skip",
+                "upserted": 0,
+                "reason": milvus_skip_reason,
+                "esUpserted": es_written,
+                "graphSpace": space,
+            }
+        assert encoder is not None  # Milvus 未跳过则必已加载
 
         # 先做 BM25 编码（纯 CPU，冻结词表，OOV token 静默丢弃）再 embed：
         # 全 OOV 的行不浪费 embedding 配额
@@ -1306,8 +1623,9 @@ class EntitySearchService:
                 "skippedMissing": skipped_missing,
                 "skippedEmptyText": skipped_empty_text,
                 "skippedEmptySparse": skipped_empty_sparse,
-                "entityCount": int(state_row.entity_count or 0),
+                "entityCount": _state_entity_count(self._session, space),
                 "graphSpace": space,
+                "esUpserted": es_written,
             }
 
         embedding_config = _resolve_embedding_config()
@@ -1374,18 +1692,36 @@ class EntitySearchService:
         if new_labels:
             from datetime import UTC, datetime
 
+            from db_model.entity_search import EntitySearchState
+
             try:
-                counts = json.loads(state_row.type_counts or "{}")
-            except Exception:  # noqa: BLE001 - 计数快照损坏按空处理
-                counts = {}
-            if not isinstance(counts, dict):
-                counts = {}
-            for label in new_labels:
-                counts[label] = int(counts.get(label) or 0) + 1
-            state_row.type_counts = json.dumps(counts, ensure_ascii=False)
-            state_row.entity_count = int(state_row.entity_count or 0) + len(new_labels)
-            state_row.updated_at = datetime.now(UTC)
-            self._session.commit()
+                current = self._session.execute(
+                    select(EntitySearchState.type_counts).where(
+                        EntitySearchState.graph_space == space
+                    )
+                ).scalar()
+                try:
+                    counts = json.loads(current or "{}")
+                except Exception:  # noqa: BLE001 - 计数快照损坏按空处理
+                    counts = {}
+                if not isinstance(counts, dict):
+                    counts = {}
+                for label in new_labels:
+                    counts[label] = int(counts.get(label) or 0) + 1
+                # 轻量读 + Core UPDATE 原子自增：不整行加载状态（vocabulary 25MB 大列）
+                self._session.execute(
+                    update(EntitySearchState)
+                    .where(EntitySearchState.graph_space == space)
+                    .values(
+                        entity_count=EntitySearchState.entity_count + len(new_labels),
+                        type_counts=json.dumps(counts, ensure_ascii=False),
+                        updated_at=datetime.now(UTC),
+                    )
+                )
+                self._session.commit()
+            except Exception:  # noqa: BLE001 - 计数失败不影响增量主流程
+                logger.warning("实体索引计数快照推进失败 space=%s", space, exc_info=True)
+                self._session.rollback()
 
         return {
             "mode": "incremental",
@@ -1394,8 +1730,9 @@ class EntitySearchService:
             "skippedMissing": skipped_missing,
             "skippedEmptyText": skipped_empty_text,
             "skippedEmptySparse": skipped_empty_sparse,
-            "entityCount": int(state_row.entity_count or 0),
+            "entityCount": _state_entity_count(self._session, space),
             "graphSpace": space,
+            "esUpserted": es_written,
         }
 
     def _existing_document_ids(self, milvus: Any, doc_ids: list[str]) -> set[str]:

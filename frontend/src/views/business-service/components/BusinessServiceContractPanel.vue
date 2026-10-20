@@ -1,17 +1,25 @@
 <script setup lang="ts">
+import IconClose from "@arco-design/web-vue/es/icon/icon-close";
+import { ref, watch } from "vue";
 import type { ServiceModule } from "../service-modules";
 import ElSelect, { ElOption } from "element-plus/es/components/select/index";
 import "element-plus/es/components/select/style/css";
 
-defineProps<{
+const props = defineProps<{
   moduleInfo: ServiceModule;
   modules: ServiceModule[];
   curlSample: string;
 }>();
 
-defineEmits<{
+const emit = defineEmits<{
   selectModule: [key: string];
 }>();
+const selectedModule = ref(props.moduleInfo.key);
+watch(() => props.moduleInfo.key, (key) => { selectedModule.value = key; });
+function selectModule(value: string) {
+  selectedModule.value = value;
+  if (value) emit('selectModule', value);
+}
 </script>
 
 <template>
@@ -20,12 +28,15 @@ defineEmits<{
       <label>
         <span>子功能名称：</span>
         <ElSelect
+          :clear-icon="IconClose"
           aria-label="子功能名称"
           class="developer-module-select"
           popper-class="developer-module-options"
-          :model-value="moduleInfo.key"
+          :model-value="selectedModule"
+          clearable
+          placeholder="请选择子功能"
           :fit-input-width="true"
-          @update:model-value="$emit('selectModule', $event)"
+          @update:model-value="selectModule"
         >
           <ElOption
             v-for="item in modules"
@@ -279,7 +290,7 @@ defineEmits<{
   color: var(--text-secondary);
   text-align: left;
   font-size: 14px;
-  line-height: 20px;
+  line-height: 22px;
   vertical-align: top;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -308,7 +319,7 @@ defineEmits<{
   color: #2f3442;
   background: #f7f9fc;
   font-family: Consolas, Monaco, monospace;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.65;
   white-space: pre-wrap;
   overflow: auto;

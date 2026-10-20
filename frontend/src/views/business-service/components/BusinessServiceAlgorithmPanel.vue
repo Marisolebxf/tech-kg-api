@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import IconClose from "@arco-design/web-vue/es/icon/icon-close";
+import ClearableInput from '../../../components/ClearableInput.vue'
 import { useSpacePermissions } from "../../../composables/use-space-permissions"
 const { canWrite, spaces } = useSpacePermissions()
 
@@ -4609,8 +4611,17 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
   }
 }
 
-function handleParameterInput(fieldName: string, event: Event | string) {
-  const value = typeof event === "string" ? event : (event.target as HTMLInputElement).value;
+function handleParameterInput(
+  fieldName: string,
+  input: Event | string | number | boolean | null | undefined,
+) {
+  // Select clears may emit undefined/null; native inputs emit an Event.
+  // Keep parameter values as strings for the existing validation/payload code.
+  const value = input == null
+    ? ""
+    : typeof input === "object"
+      ? String((input.target as HTMLInputElement | null)?.value ?? "")
+      : String(input);
   const nextValues = {
     ...parameterValues.value,
     [fieldName]: value,
@@ -4640,13 +4651,6 @@ function handleParameterInput(fieldName: string, event: Event | string) {
     return;
   }
 
-  clearParameterError(fieldName);
-}
-function clearOptionalParameter(fieldName: string) {
-  parameterValues.value = {
-    ...parameterValues.value,
-    [fieldName]: "",
-  };
   clearParameterError(fieldName);
 }
 
@@ -4750,22 +4754,25 @@ function clearGraphSelection() {
           >{{ field.label ?? field.name }}</span
         >
         <ElSelect
+          :clear-icon="IconClose"
+          clearable
           v-if="field.type === 'select' || field.type === 'boolean'"
           :key="`${field.name}-${paramResetToken}`"
           class="service-console__select"
           popper-class="business-parameter-options"
           :fit-input-width="true"
-          :model-value="parameterValues[field.name] ?? ''"
+          :model-value="parameterValues[field.name] || undefined"
+          value-on-clear=""
           :aria-label="field.label ?? field.name"
           :aria-invalid="Boolean(parameterErrors[field.name])"
           placeholder="请选择"
           :title="field.description"
           @update:model-value="handleParameterInput(field.name, $event)"
         >
-          <ElOption value="" label="请选择" :disabled="field.required === '是'" />
           <ElOption v-for="option in field.options" :key="option" :value="option" :label="option" />
         </ElSelect>
         <ElSelect
+          :clear-icon="IconClose"
           v-else-if="field.name === 'achievementTypes'"
           v-model="achievementTypeSelection"
           class="cooperation-type-select"
@@ -4789,6 +4796,7 @@ function clearGraphSelection() {
           />
         </ElSelect>
         <ElSelect
+          :clear-icon="IconClose"
           v-else-if="field.name === 'relationTypes'"
           v-model="panoramaRelationSelection"
           class="cooperation-type-select"
@@ -4812,6 +4820,7 @@ function clearGraphSelection() {
           />
         </ElSelect>
         <ElSelect
+          :clear-icon="IconClose"
           v-else-if="field.name === 'educationStage' && isLiveAlumni"
           v-model="educationStageSelection"
           class="alumni-stage-select"
@@ -4859,7 +4868,7 @@ function clearGraphSelection() {
           @update:model-value="handleMonthParameterInput(field.name, $event)"
         />
         <div v-else class="service-console__input-wrap">
-          <input
+          <ClearableInput
             :aria-label="field.label ?? field.name"
             type="text"
             :key="`${field.name}-${paramResetToken}`"
@@ -4874,16 +4883,6 @@ function clearGraphSelection() {
             "
             @input="handleParameterInput(field.name, $event)"
           />
-          <button
-            v-if="field.required !== '是' && parameterValues[field.name]"
-            class="service-console__input-clear"
-            type="button"
-            :aria-label="`清空${field.label ?? field.name}`"
-            :title="`清空${field.label ?? field.name}`"
-            @click="clearOptionalParameter(field.name)"
-          >
-            ×
-          </button>
         </div>
         <small
           v-if="parameterErrors[field.name]"
@@ -5198,7 +5197,7 @@ function clearGraphSelection() {
             <div v-for="(row, index) in liveRelationRows" :key="`rel-${row.label}-${index}`">
               <dt>{{ row.label }}</dt>
               <dd v-if="row.edgeKey" class="result-panel__annotation">
-                <input
+                <ClearableInput
                   v-model="relationAnnotationDrafts[row.edgeKey]"
                   class="result-panel__annotation-input"
                   type="text"
@@ -5495,7 +5494,7 @@ function clearGraphSelection() {
 .service-console__params span {
   color: var(--text-secondary);
   font-size: 14px;
-  line-height: 20px;
+  line-height: 22px;
 }
 
 .service-console__params i {
@@ -5509,69 +5508,6 @@ function clearGraphSelection() {
   min-width: 0;
 }
 
-.service-console__input-wrap > input {
-  box-sizing: border-box;
-  width: 100%;
-  height: 32px;
-  min-width: 0;
-  padding: 0 32px 0 11px;
-  border: 1px solid #d9d9d9;
-  border-radius: 6px;
-  outline: 0;
-  background: #fff;
-  color: #1f1f1f;
-  font-size: 14px;
-  line-height: 30px;
-  transition:
-    border-color 0.2s,
-    box-shadow 0.2s;
-}
-
-.service-console__input-wrap > input:hover {
-  border-color: #4096ff;
-}
-
-.service-console__input-wrap > input:focus {
-  border-color: #1677ff;
-  box-shadow: 0 0 0 2px rgba(5, 145, 255, 0.1);
-}
-
-.service-console__input-wrap > input::placeholder {
-  color: #bfbfbf;
-  opacity: 1;
-}
-
-.service-console__input-clear {
-  position: absolute;
-  z-index: 2;
-  top: 50%;
-  right: 7px;
-  display: grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: #8c8c8c;
-  font-size: 17px;
-  line-height: 18px;
-  cursor: pointer;
-  transform: translateY(-50%);
-}
-
-.service-console__input-clear:hover,
-.service-console__input-clear:focus-visible {
-  background: #f0f0f0;
-  color: #434343;
-  outline: none;
-}
-
-.service-console__params label.has-error .service-console__input-wrap > input {
-  border-color: var(--danger);
-}
-
 .service-console__params > label > input,
 .service-console__params > label > select {
   width: 100%;
@@ -5582,7 +5518,7 @@ function clearGraphSelection() {
   border-radius: var(--radius-sm);
   background: #fff;
   color: var(--text-primary);
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .service-console__params > label > input::placeholder {
@@ -5850,7 +5786,7 @@ function clearGraphSelection() {
   color: var(--danger);
   font-size: 12px;
   font-weight: 400;
-  line-height: 18px;
+  line-height: 20px;
   white-space: nowrap;
 }
 
@@ -5989,7 +5925,7 @@ function clearGraphSelection() {
   border-radius: var(--radius-sm);
   background: #fff;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .graph-panel__filters button {
@@ -6288,7 +6224,7 @@ function clearGraphSelection() {
   background: #fff;
   margin: 0;
   padding: 10px 14px;
-  font-size: 15px;
+  font-size: 14px;
   line-height: 24px;
   word-break: break-word;
   overflow-wrap: anywhere;
@@ -6361,20 +6297,20 @@ function clearGraphSelection() {
 .result-provenance__target strong {
   color: #16355f;
   font-size: 14px;
-  line-height: 20px;
+  line-height: 22px;
 }
 
 .result-provenance__target span {
   color: var(--text-secondary);
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .result-provenance h3 {
   margin: 0;
   color: #536987;
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
   font-weight: 600;
 }
 
@@ -6411,7 +6347,7 @@ function clearGraphSelection() {
   background: #f3f7fd;
   color: var(--text-secondary);
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .result-provenance__evidence-list {
@@ -6435,7 +6371,7 @@ function clearGraphSelection() {
 .colleague-provenance-section h4 {
   margin: 0;
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .colleague-provenance-section p span {
@@ -6466,13 +6402,13 @@ function clearGraphSelection() {
 .result-provenance__evidence-list article p b {
   color: #243b62;
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .result-provenance__evidence-list article > span {
   color: var(--text-secondary);
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .result-provenance__task-meta {
@@ -6487,7 +6423,7 @@ function clearGraphSelection() {
 .result-provenance__task-meta span {
   color: var(--text-secondary);
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .result-provenance__task-meta a {
@@ -6511,7 +6447,7 @@ function clearGraphSelection() {
   color: #2f3442;
   background: #f7f9fc;
   font-family: Consolas, Monaco, monospace;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.65;
   white-space: pre-wrap;
 }
@@ -6546,7 +6482,7 @@ function clearGraphSelection() {
 
 .result-panel__rules strong {
   color: var(--primary);
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .result-panel__rules header span {
@@ -6556,7 +6492,7 @@ function clearGraphSelection() {
   background: var(--primary-subtle);
   color: var(--primary);
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .result-panel__rules dl {
@@ -6900,7 +6836,7 @@ function clearGraphSelection() {
   padding: 6px 12px;
   background: #e8f3ff;
   border-radius: 4px;
-  font-size: 13px;
+  font-size: 12px;
   color: #165dff;
 }
 

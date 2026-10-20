@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import ClearableTextarea from '../../components/ClearableTextarea.vue'
+import ClearableInput from '../../components/ClearableInput.vue'
+import { vDialogFocus } from '../../directives/dialog-focus'
 import DeleteConfirmDialog from '../../components/DeleteConfirmDialog.vue'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { IconSearch } from '@arco-design/web-vue/es/icon'
 import ListPagination from '../../components/list-pagination.vue'
 import { useClientPagination } from '../../composables/use-client-pagination'
 import {
@@ -66,6 +68,7 @@ type ConfigItem = {
   canSetDefault?: boolean
   defaultSource?: 'business' | 'public'
   defaultReferenced?: boolean
+  defaultReferencedBy?: string[]
   kind: ConfigKind
   category: string
   name: string
@@ -126,7 +129,11 @@ const items = ref<ConfigItem[]>([])
 const activeCategory = ref('语言模型')
 const keyword = ref('')
 const submittedKeyword = ref('')
-const statusFilter = ref<string | undefined>('全部状态')
+const statusFilter = ref<string | undefined>()
+const statusFilterSelect = computed({
+  get: () => statusFilter.value || undefined,
+  set: (value: string | undefined) => { statusFilter.value = value || undefined },
+})
 const selected = ref<ConfigItem | null>(null)
 const dialogOpen = ref(false)
 const testingId = ref('')
@@ -252,7 +259,7 @@ const visibleItems = computed(() => items.value.filter((item) => {
   const query = submittedKeyword.value.toLowerCase()
   const endpointOrUrl = item.baseUrl || (item.host ? `${item.host}:${item.port}` : '') || item.endpoint
   const matchKeyword = !query || `${item.name}${item.id}${item.type}${endpointOrUrl}${item.model || ''}`.toLowerCase().includes(query)
-  const matchStatus = !statusFilter.value || statusFilter.value === '全部状态' || item.status === statusFilter.value
+  const matchStatus = !statusFilter.value || item.status === statusFilter.value
   return matchCategory && matchKeyword && matchStatus
 }).sort((a, b) => Number(b.isDefault) - Number(a.isDefault)))
 
@@ -346,7 +353,7 @@ function toConfigItem(kind: ConfigKind, cfg: LlmConfig | MysqlDatasource | Embed
   }
   if (kind === 'llm') {
     const c = cfg as LlmConfig
-    return { ...common, visibility: c.visibility, businessName: c.businessName, canManage: c.canManage, canSetDefault: c.canSetDefault, defaultSource: c.defaultSource, defaultReferenced: c.defaultReferenced, category: '语言模型', type: 'LLM API', endpoint: c.baseUrl, baseUrl: c.baseUrl, model: c.model, hasApiKey: c.hasApiKey, apiKeyMasked: c.apiKeyMasked }
+    return { ...common, visibility: c.visibility, businessName: c.businessName, canManage: c.canManage, canSetDefault: c.canSetDefault, defaultSource: c.defaultSource, defaultReferenced: c.defaultReferenced, defaultReferencedBy: c.defaultReferencedBy, category: '语言模型', type: 'LLM API', endpoint: c.baseUrl, baseUrl: c.baseUrl, model: c.model, hasApiKey: c.hasApiKey, apiKeyMasked: c.apiKeyMasked }
   }
   if (kind === 'embedding') {
     const c = cfg as EmbeddingConfig
@@ -650,8 +657,16 @@ async function testConnection(item: ConfigItem) {
 function defaultLabel(item: ConfigItem) {
   return item.kind === 'llm' && !isAdmin.value && item.defaultSource === 'public' ? '跟随公共默认' : '默认'
 }
+/** 管理员视角：公共模型被业务设为默认（但不是公共默认本体）——不再硬拦，点击走确认弹窗解绑后删除/停用 */
+function businessReferenced(item: ConfigItem) {
+  return item.kind === 'llm' && isAdmin.value && item.visibility === 'public' && item.defaultReferenced === true && !item.isDefault
+}
 function defaultProtected(item: ConfigItem) {
-  return item.kind === 'llm' ? item.defaultReferenced === true || item.isDefault : item.kind === 'embedding' && item.isDefault
+  if (item.kind === 'llm') {
+    if (businessReferenced(item)) return false
+    return item.defaultReferenced === true || item.isDefault
+  }
+  return item.kind === 'embedding' && item.isDefault
 }
 // 归属小字：业务配置显示业务（图空间）名，公共配置按类型显示公共语言模型/公共数据库
 function ownershipLabel(item: ConfigItem) {
@@ -659,6 +674,10 @@ function ownershipLabel(item: ConfigItem) {
 }
 async function toggleItem(item: ConfigItem) {
   if (!canManageConfig(item)) return
+  if (item.status !== '停用' && businessReferenced(item)) {
+    openForceConfirm(item, '停用')
+    return
+  }
   if (item.status !== '停用' && defaultProtected(item)) return
   const nextStatus: ConfigStatus = item.status === '停用' ? '正常' : '停用'
   try {
@@ -728,6 +747,10 @@ const deleteSubmitting = ref(false)
 const deleteError = ref('')
 function removeConfig(item: ConfigItem) {
   if (!canManageConfig(item)) return
+  if (businessReferenced(item)) {
+    openForceConfirm(item, '删除')
+    return
+  }
   if (defaultProtected(item)) {
     showToast('默认配置不能删除：请先将其他配置设为默认。', 'info')
     return
@@ -758,6 +781,48 @@ async function confirmDeleteConfig() {
     deleteError.value = `删除失败：${(err as Error).message}`
   } finally {
     deleteSubmitting.value = false
+  }
+}
+
+/** 被业务设为默认的公共模型：管理员确认后解绑业务默认并强制删除/停用（业务回退公共默认）。 */
+const forceTarget = ref<ConfigItem>()
+const forceAction = ref<'删除' | '停用'>('停用')
+const forceVisible = ref(false)
+const forceSubmitting = ref(false)
+const forceError = ref('')
+function openForceConfirm(item: ConfigItem, action: '删除' | '停用') {
+  forceTarget.value = item
+  forceAction.value = action
+  forceError.value = ''
+  forceVisible.value = true
+}
+function referencedBusinessLabel(item: ConfigItem) {
+  return (item.defaultReferencedBy?.length ? item.defaultReferencedBy : ['其他业务']).join('、')
+}
+function publicDefaultLabel() {
+  return items.value.find(i => i.kind === 'llm' && i.visibility === 'public' && i.defaultSource === 'public' && i.isDefault)?.name || '公共默认模型'
+}
+async function confirmForceAction() {
+  const item = forceTarget.value
+  if (!item || forceSubmitting.value) return
+  forceSubmitting.value = true
+  forceError.value = ''
+  const businesses = referencedBusinessLabel(item)
+  const action = forceAction.value
+  try {
+    if (action === '删除') {
+      await deleteLlmConfig(item.id, currentUserId(), true)
+      selected.value = null
+    } else {
+      Object.assign(item, toConfigItem('llm', await updateLlmConfig(item.id, { status: '停用' }, currentUserId(), true)))
+    }
+    forceVisible.value = false
+    showToast(`“${item.name}”已${action}，业务「${businesses}」回退使用公共默认。`, 'info')
+    await loadByCategory(activeCategory.value)
+  } catch (err) {
+    forceError.value = `${action}失败：${(err as Error).message}`
+  } finally {
+    forceSubmitting.value = false
   }
 }
 
@@ -800,7 +865,7 @@ onUnmounted(() => {
       </aside>
 
       <main class="config-list">
-        <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" :disabled="!canCreateConfig" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilter" allow-clear placeholder="全部状态"><a-option value="全部状态">全部状态</a-option><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><form class="config-search-form" role="search" @submit.prevent="submitConfigSearch"><a-input v-model="keyword" class="config-search-input" allow-clear :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识、类型或地址" placeholder="搜索名称、标识、类型或地址"><template #prefix><IconSearch /></template></a-input><button class="primary config-search-button" type="submit">查询</button></form></nav><nav v-else class="config-list-actions"><button class="primary create-entry" type="button" :disabled="!canManageSpaces" @click="spaceDialogOpen = true">＋ 新建图数据空间</button><form class="config-search-form" role="search" @submit.prevent="submitSpaceSearch"><a-input v-model="spaceKeyword" class="config-search-input" allow-clear :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索图空间名称" placeholder="搜索图空间名称"><template #prefix><IconSearch /></template></a-input><button class="primary config-search-button" type="submit">查询</button></form></nav></header>
+        <header><nav v-if="!isGraphSpaceCategory" class="config-list-actions"><button class="primary create-entry" type="button" :disabled="!canCreateConfig" @click="openCreate">＋ 新建配置</button><a-select v-model="statusFilterSelect" class="config-status-select" allow-clear placeholder="状态" aria-label="状态"><a-option value="正常">正常</a-option><a-option value="异常">异常</a-option><a-option value="停用">停用</a-option></a-select><form class="config-search-form" role="search" @submit.prevent="submitConfigSearch"><a-input v-model="keyword" class="config-search-input" allow-clear :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索名称、标识、类型或地址" placeholder="搜索名称、标识、类型或地址" /><button class="primary config-search-button" type="submit">查询</button></form></nav><nav v-else class="config-list-actions"><button class="primary create-entry" type="button" :disabled="!canManageSpaces" @click="spaceDialogOpen = true">＋ 新建图数据空间</button><form class="config-search-form" role="search" @submit.prevent="submitSpaceSearch"><a-input v-model="spaceKeyword" class="config-search-input" allow-clear :max-length="SEARCH_KEYWORD_MAX_LENGTH" aria-label="搜索图空间名称" placeholder="搜索图空间名称" /><button class="primary config-search-button" type="submit">查询</button></form></nav></header>
         <div v-if="isGraphSpaceCategory" class="table-wrap space-table">
           <table>
             <thead><tr><th>图空间名称 / 说明</th><th>标识</th><th class="config-status-col">绑定状态</th><th class="config-action-col">操作</th></tr></thead>
@@ -851,8 +916,8 @@ onUnmounted(() => {
                 <td class="config-action-col">
                   <div class="row-actions">
                     <button class="link" type="button" @click.stop="openDetail(item)">{{ canManageConfig(item) ? '管理' : '查看' }}</button>
-                    <button class="link" type="button" :disabled="!canManageConfig(item) || defaultProtected(item) && item.status !== '停用'" :title="defaultProtected(item) && item.status !== '停用' ? '默认配置不能停用' : ''" @click.stop="toggleItem(item)">{{ item.status === '停用' ? '启用' : '停用' }}</button>
-                    <button class="link danger" type="button" :disabled="!canManageConfig(item) || defaultProtected(item)" :title="defaultProtected(item) ? '默认配置不能删除，请先将其他配置设为默认' : ''" @click.stop="removeConfig(item)">删除</button>
+                    <button class="link" type="button" :disabled="!canManageConfig(item) || defaultProtected(item) && item.status !== '停用'" :title="businessReferenced(item) && item.status !== '停用' ? '该模型被业务设为默认，点击确认后停用并让业务回退公共默认' : defaultProtected(item) && item.status !== '停用' ? '默认配置不能停用，请先将其他配置设为默认' : ''" @click.stop="toggleItem(item)">{{ item.status === '停用' ? '启用' : '停用' }}</button>
+                    <button class="link danger" type="button" :disabled="!canManageConfig(item) || defaultProtected(item)" :title="businessReferenced(item) ? '该模型被业务设为默认，点击确认后删除并让业务回退公共默认' : defaultProtected(item) ? '默认配置不能删除，请先将其他配置设为默认' : ''" @click.stop="removeConfig(item)">删除</button>
                   </div>
                 </td>
               </tr>
@@ -885,30 +950,30 @@ onUnmounted(() => {
 
     <Teleport to="body">
       <button v-if="selected" class="mask" type="button" aria-label="关闭" @click="selected=null" />
-      <aside v-if="selected" class="detail-drawer">
+      <aside v-if="selected" class="detail-drawer" v-dialog-focus="{ close: () => { selected = null }, busy: saving }">
       <header><div><h2>{{ selected.name }}<b v-if="selected.isDefault" class="default-tag">{{ defaultLabel(selected) }}</b></h2><span class="config-id">{{ selected.id }}</span></div><button type="button" @click="selected=null">×</button></header>
       <div class="detail-drawer-body">
         <section class="health-card"><i :class="`is-${selected.status}`" /><div><strong>{{ selected.status === '正常' ? '配置可用' : selected.status === '异常' ? '连接存在异常' : '配置已停用' }}</strong><span>{{ selected.status === '停用' ? '停用期间不进行连接测试，启用后可测' : '后端真实探活' }}</span></div><button type="button" :disabled="!canManageConfig(selected) || testingId === selected.id || selected.status === '停用'" :title="selected.status === '停用' ? '停用状态下不可测试连接，请先启用' : ''" @click="testConnection(selected)">{{ testingId === selected.id ? '测试中…' : '测试连接' }}</button></section>
         <a-form :model="selected" class="detail-form" layout="vertical">
-          <a-form-item field="name" label="配置名称" required><input :disabled="!canManageConfig(selected)" aria-label="name" v-model="selected.name" :aria-invalid="Boolean(detailFieldErrors.name)" /><small v-if="detailFieldErrors.name" class="field-error">{{ detailFieldErrors.name }}</small></a-form-item>
+          <a-form-item field="name" label="配置名称" required><ClearableInput :disabled="!canManageConfig(selected)" aria-label="name" v-model="selected.name" :aria-invalid="Boolean(detailFieldErrors.name)" /><small v-if="detailFieldErrors.name" class="field-error">{{ detailFieldErrors.name }}</small></a-form-item>
           <a-form-item label="服务类型"><input :disabled="!canManageConfig(selected)" aria-label="input-field" :value="selected.type" readonly /></a-form-item>
           <a-form-item v-if="selected.kind !== 'embedding'" label="归属"><input :disabled="!canManageConfig(selected)" aria-label="input-field" :value="ownershipLabel(selected)" readonly /></a-form-item>
           <template v-if="selected.kind === 'llm' || selected.kind === 'embedding'">
-            <a-form-item class="wide" field="baseUrl" label="Base URL" required><input :disabled="!canManageConfig(selected)" aria-label="baseUrl" v-model="selected.baseUrl" :aria-invalid="Boolean(detailFieldErrors.baseUrl)" /><small v-if="detailFieldErrors.baseUrl" class="field-error">{{ detailFieldErrors.baseUrl }}</small></a-form-item>
-            <a-form-item field="model" label="模型" required><input :disabled="!canManageConfig(selected)" aria-label="model" v-model="selected.model" :aria-invalid="Boolean(detailFieldErrors.model)" /><small v-if="detailFieldErrors.model" class="field-error">{{ detailFieldErrors.model }}</small></a-form-item>
-            <a-form-item v-if="selected.kind === 'embedding'" label="维度"><input :disabled="!canManageConfig(selected)" aria-label="number-input" :value="selected.dimensions ?? ''" type="number" :aria-invalid="Boolean(detailFieldErrors.dimensions)" @input="selected.dimensions = ($event.target as HTMLInputElement).value" /><small v-if="detailFieldErrors.dimensions" class="field-error">{{ detailFieldErrors.dimensions }}</small></a-form-item>
+            <a-form-item class="wide" field="baseUrl" label="Base URL" required><ClearableInput :disabled="!canManageConfig(selected)" aria-label="baseUrl" v-model="selected.baseUrl" :aria-invalid="Boolean(detailFieldErrors.baseUrl)" /><small v-if="detailFieldErrors.baseUrl" class="field-error">{{ detailFieldErrors.baseUrl }}</small></a-form-item>
+            <a-form-item field="model" label="模型" required><ClearableInput :disabled="!canManageConfig(selected)" aria-label="model" v-model="selected.model" :aria-invalid="Boolean(detailFieldErrors.model)" /><small v-if="detailFieldErrors.model" class="field-error">{{ detailFieldErrors.model }}</small></a-form-item>
+            <a-form-item v-if="selected.kind === 'embedding'" label="维度"><ClearableInput :disabled="!canManageConfig(selected)" aria-label="number-input" :value="selected.dimensions ?? ''" type="number" :aria-invalid="Boolean(detailFieldErrors.dimensions)" @input="selected.dimensions = ($event.target as HTMLInputElement).value" /><small v-if="detailFieldErrors.dimensions" class="field-error">{{ detailFieldErrors.dimensions }}</small></a-form-item>
             <a-form-item label="访问凭据"><input :disabled="!canManageConfig(selected)" aria-label="input-field" :value="selected.apiKeyMasked || (selected.hasApiKey ? '••••••••' : '未设置')" readonly /></a-form-item>
-            <a-form-item class="wide" label="更新 API Key（留空保留原值）"><input :disabled="!canManageConfig(selected)" aria-label="输入新 Key 覆盖原值" v-model="selected.apiKey" type="password" placeholder="输入新 Key 覆盖原值" :aria-invalid="Boolean(detailFieldErrors.apiKey)" /><small v-if="detailFieldErrors.apiKey" class="field-error">{{ detailFieldErrors.apiKey }}</small></a-form-item>
+            <a-form-item class="wide" label="更新 API Key（留空保留原值）"><ClearableInput :disabled="!canManageConfig(selected)" aria-label="输入新 Key 覆盖原值" v-model="selected.apiKey" type="password" placeholder="输入新 Key 覆盖原值" :aria-invalid="Boolean(detailFieldErrors.apiKey)" /><small v-if="detailFieldErrors.apiKey" class="field-error">{{ detailFieldErrors.apiKey }}</small></a-form-item>
           </template>
           <template v-else>
-            <a-form-item field="host" label="主机" required><input :disabled="!canManageConfig(selected)" aria-label="host" v-model="selected.host" :aria-invalid="Boolean(detailFieldErrors.host)" /><small v-if="detailFieldErrors.host" class="field-error">{{ detailFieldErrors.host }}</small></a-form-item>
-            <a-form-item label="端口"><input :disabled="!canManageConfig(selected)" aria-label="number-input" :value="selected.port ?? ''" type="number" :aria-invalid="Boolean(detailFieldErrors.port)" @input="selected.port = ($event.target as HTMLInputElement).value" /><small v-if="detailFieldErrors.port" class="field-error">{{ detailFieldErrors.port }}</small></a-form-item>
-            <a-form-item label="默认库"><input :disabled="!canManageConfig(selected)" aria-label="defaultDatabase" v-model="selected.defaultDatabase" :aria-invalid="Boolean(detailFieldErrors.defaultDatabase)" /><small v-if="detailFieldErrors.defaultDatabase" class="field-error">{{ detailFieldErrors.defaultDatabase }}</small></a-form-item>
-            <a-form-item field="username" label="用户名" required><input :disabled="!canManageConfig(selected)" aria-label="username" v-model="selected.username" :aria-invalid="Boolean(detailFieldErrors.username)" /><small v-if="detailFieldErrors.username" class="field-error">{{ detailFieldErrors.username }}</small></a-form-item>
+            <a-form-item field="host" label="主机" required><ClearableInput :disabled="!canManageConfig(selected)" aria-label="host" v-model="selected.host" :aria-invalid="Boolean(detailFieldErrors.host)" /><small v-if="detailFieldErrors.host" class="field-error">{{ detailFieldErrors.host }}</small></a-form-item>
+            <a-form-item label="端口"><ClearableInput :disabled="!canManageConfig(selected)" aria-label="number-input" :value="selected.port ?? ''" type="number" :aria-invalid="Boolean(detailFieldErrors.port)" @input="selected.port = ($event.target as HTMLInputElement).value" /><small v-if="detailFieldErrors.port" class="field-error">{{ detailFieldErrors.port }}</small></a-form-item>
+            <a-form-item label="默认库"><ClearableInput :disabled="!canManageConfig(selected)" aria-label="defaultDatabase" v-model="selected.defaultDatabase" :aria-invalid="Boolean(detailFieldErrors.defaultDatabase)" /><small v-if="detailFieldErrors.defaultDatabase" class="field-error">{{ detailFieldErrors.defaultDatabase }}</small></a-form-item>
+            <a-form-item field="username" label="用户名" required><ClearableInput :disabled="!canManageConfig(selected)" aria-label="username" v-model="selected.username" :aria-invalid="Boolean(detailFieldErrors.username)" /><small v-if="detailFieldErrors.username" class="field-error">{{ detailFieldErrors.username }}</small></a-form-item>
             <a-form-item label="访问凭据"><input :disabled="!canManageConfig(selected)" aria-label="input-field" :value="selected.passwordMasked || (selected.hasPassword ? '••••••••' : '未设置')" readonly /></a-form-item>
-            <a-form-item class="wide" label="更新密码（留空保留原值）"><input :disabled="!canManageConfig(selected)" aria-label="输入新密码覆盖原值" v-model="selected.password" type="password" placeholder="输入新密码覆盖原值" :aria-invalid="Boolean(detailFieldErrors.password)" /><small v-if="detailFieldErrors.password" class="field-error">{{ detailFieldErrors.password }}</small></a-form-item>
+            <a-form-item class="wide" label="更新密码（留空保留原值）"><ClearableInput :disabled="!canManageConfig(selected)" aria-label="输入新密码覆盖原值" v-model="selected.password" type="password" placeholder="输入新密码覆盖原值" :aria-invalid="Boolean(detailFieldErrors.password)" /><small v-if="detailFieldErrors.password" class="field-error">{{ detailFieldErrors.password }}</small></a-form-item>
           </template>
-          <a-form-item class="wide" label="配置说明"><a-textarea :disabled="!canManageConfig(selected)" v-model="selected.description" class="config-description-textarea" :max-length="configDescriptionMaxLength(selected.kind, 'detail')" show-word-limit :auto-size="{ minRows: 3, maxRows: 5 }" /><small v-if="detailFieldErrors.description" class="field-error">{{ detailFieldErrors.description }}</small></a-form-item>
+          <a-form-item class="wide" label="配置说明"><ClearableTextarea :disabled="!canManageConfig(selected)" v-model="selected.description" class="config-description-textarea" :max-length="configDescriptionMaxLength(selected.kind, 'detail')" show-word-limit :auto-size="{ minRows: 3, maxRows: 5 }" /><small v-if="detailFieldErrors.description" class="field-error">{{ detailFieldErrors.description }}</small></a-form-item>
         </a-form>
         <section class="reference-card"><header><strong>引用关系</strong><span>{{ selected.usage }}</span></header><p>配置变更将在下次脚本调用时生效（context 按触发时所选数据源 / 图空间 / LLM / embedding 注入；向量库随图空间自动同名创建）。</p></section>
       </div>
@@ -920,42 +985,42 @@ onUnmounted(() => {
 
     <Teleport to="body">
       <button v-if="spaceDialogOpen" class="mask create-dialog-mask" type="button" aria-label="关闭新建图空间弹窗" @click="spaceDialogOpen=false" />
-      <aside v-if="spaceDialogOpen" class="create-dialog space-dialog">
+      <aside v-if="spaceDialogOpen" class="create-dialog space-dialog" v-dialog-focus="{ close: () => { spaceDialogOpen = false }, busy: spaceWorking }">
         <header><div><h2>新建图数据空间</h2></div><button type="button" @click="spaceDialogOpen=false">×</button></header>
         <a-form class="dialog-form" layout="vertical" :model="{}">
           <a-form-item class="wide" label="图数据空间名称" required>
             <div class="space-name-field">
-              <input aria-label="仅字母、数字、下划线，以字母或下划线开头" v-model="newSpaceName" placeholder="仅字母、数字、下划线，以字母或下划线开头" :aria-invalid="Boolean(spaceNameError)" :aria-describedby="spaceNameError ? 'space-name-error' : undefined" />
+              <ClearableInput aria-label="仅字母、数字、下划线，以字母或下划线开头" v-model="newSpaceName" placeholder="仅字母、数字、下划线，以字母或下划线开头" :aria-invalid="Boolean(spaceNameError)" :aria-describedby="spaceNameError ? 'space-name-error' : undefined" />
               <small v-if="spaceNameError" id="space-name-error" class="field-error" role="alert">{{ spaceNameError }}</small>
             </div>
           </a-form-item>
           <a-form-item class="wide" label="说明">
-            <a-textarea v-model="newSpaceDescription" class="config-description-textarea" :max-length="SPACE_DESCRIPTION_MAX_LENGTH" show-word-limit :auto-size="{ minRows: 3, maxRows: 5 }" placeholder="选填；展示在空间名称下方" />
+            <ClearableTextarea v-model="newSpaceDescription" class="config-description-textarea" :max-length="SPACE_DESCRIPTION_MAX_LENGTH" show-word-limit :auto-size="{ minRows: 3, maxRows: 5 }" placeholder="选填；展示在空间名称下方" />
           </a-form-item>
           <p class="space-dialog-hint">将真实执行 CREATE SPACE；空间创建后有秒级传播延迟。</p>
         </a-form>
         <footer><button type="button" @click="spaceDialogOpen=false">取消</button><button class="primary" type="button" :disabled="spaceWorking" @click="createSpace">{{ spaceWorking ? '创建中…' : '创建' }}</button></footer>
       </aside>
       <button v-if="dialogOpen" class="mask create-dialog-mask" type="button" aria-label="关闭新建配置弹窗" @click="dialogOpen=false" />
-      <aside v-if="dialogOpen" class="create-dialog config-create-dialog">
+      <aside v-if="dialogOpen" class="create-dialog config-create-dialog" v-dialog-focus="{ close: () => { dialogOpen = false }, busy: saving }">
       <header><div><span>NEW CONFIGURATION</span><h2>新建{{ categories.find(item => item.key === activeCategory)?.label }}</h2></div><button type="button" @click="dialogOpen=false">×</button></header>
       <a-form :model="form" class="dialog-form config-create-form" layout="vertical">
         <template v-if="formKind === 'llm' || formKind === 'embedding'">
-          <a-form-item class="wide" field="name" label="配置名称" required><input aria-label="例如：科技文本抽取大模型" v-model="form.name" placeholder="例如：科技文本抽取大模型" :aria-invalid="Boolean(visibleCreateErrors.name)" @input="touchCreate('name')" /><small v-if="visibleCreateErrors.name" class="field-error">{{ visibleCreateErrors.name }}</small></a-form-item>
-          <a-form-item class="wide" field="baseUrl" label="Base URL" required><input aria-label="baseUrl" v-model="form.baseUrl" :aria-invalid="Boolean(visibleCreateErrors.baseUrl)" @input="touchCreate('baseUrl')" /><small v-if="visibleCreateErrors.baseUrl" class="field-error">{{ visibleCreateErrors.baseUrl }}</small></a-form-item>
-          <a-form-item class="wide" field="model" label="模型" required><input aria-label="model" v-model="form.model" :aria-invalid="Boolean(visibleCreateErrors.model)" @input="touchCreate('model')" /><small v-if="visibleCreateErrors.model" class="field-error">{{ visibleCreateErrors.model }}</small></a-form-item>
-          <a-form-item v-if="formKind === 'embedding'" field="dimensions" label="维度"><input aria-label="number-input" :value="form.dimensions ?? ''" type="number" :aria-invalid="Boolean(visibleCreateErrors.dimensions)" @input="form.dimensions = ($event.target as HTMLInputElement).value; touchCreate('dimensions')" /><small v-if="visibleCreateErrors.dimensions" class="field-error">{{ visibleCreateErrors.dimensions }}</small></a-form-item>
-          <a-form-item class="wide" field="apiKey" label="API Key" required><input aria-label="必填；验证通过后才能保存，明文入库脱敏展示" v-model="form.apiKey" type="password" placeholder="必填；验证通过后才能保存，明文入库脱敏展示" :aria-invalid="Boolean(visibleCreateErrors.apiKey)" @input="touchCreate('apiKey')" /><small v-if="visibleCreateErrors.apiKey" class="field-error">{{ visibleCreateErrors.apiKey }}</small></a-form-item>
+          <a-form-item class="wide" field="name" label="配置名称" required><ClearableInput aria-label="例如：科技文本抽取大模型" v-model="form.name" placeholder="例如：科技文本抽取大模型" :aria-invalid="Boolean(visibleCreateErrors.name)" @input="touchCreate('name')" /><small v-if="visibleCreateErrors.name" class="field-error">{{ visibleCreateErrors.name }}</small></a-form-item>
+          <a-form-item class="wide" field="baseUrl" label="Base URL" required><ClearableInput aria-label="baseUrl" v-model="form.baseUrl" :aria-invalid="Boolean(visibleCreateErrors.baseUrl)" @input="touchCreate('baseUrl')" /><small v-if="visibleCreateErrors.baseUrl" class="field-error">{{ visibleCreateErrors.baseUrl }}</small></a-form-item>
+          <a-form-item class="wide" field="model" label="模型" required><ClearableInput aria-label="model" v-model="form.model" :aria-invalid="Boolean(visibleCreateErrors.model)" @input="touchCreate('model')" /><small v-if="visibleCreateErrors.model" class="field-error">{{ visibleCreateErrors.model }}</small></a-form-item>
+          <a-form-item v-if="formKind === 'embedding'" field="dimensions" label="维度"><ClearableInput aria-label="number-input" :value="form.dimensions ?? ''" type="number" :aria-invalid="Boolean(visibleCreateErrors.dimensions)" @input="form.dimensions = ($event.target as HTMLInputElement).value; touchCreate('dimensions')" /><small v-if="visibleCreateErrors.dimensions" class="field-error">{{ visibleCreateErrors.dimensions }}</small></a-form-item>
+          <a-form-item class="wide" field="apiKey" label="API Key" required><ClearableInput aria-label="必填；验证通过后才能保存，明文入库脱敏展示" v-model="form.apiKey" type="password" placeholder="必填；验证通过后才能保存，明文入库脱敏展示" :aria-invalid="Boolean(visibleCreateErrors.apiKey)" @input="touchCreate('apiKey')" /><small v-if="visibleCreateErrors.apiKey" class="field-error">{{ visibleCreateErrors.apiKey }}</small></a-form-item>
         </template>
         <template v-else>
-          <a-form-item class="wide" field="name" label="配置名称" required><input aria-label="name" v-model="form.name" :aria-invalid="Boolean(visibleCreateErrors.name)" @input="touchCreate('name')" /><small v-if="visibleCreateErrors.name" class="field-error">{{ visibleCreateErrors.name }}</small></a-form-item>
-          <a-form-item field="host" label="主机" required><input aria-label="host" v-model="form.host" :aria-invalid="Boolean(visibleCreateErrors.host)" @input="touchCreate('host')" /><small v-if="visibleCreateErrors.host" class="field-error">{{ visibleCreateErrors.host }}</small></a-form-item>
-          <a-form-item label="端口"><input aria-label="number-input" :value="form.port ?? ''" type="number" :aria-invalid="Boolean(visibleCreateErrors.port)" @input="form.port = ($event.target as HTMLInputElement).value; touchCreate('port')" /><small v-if="visibleCreateErrors.port" class="field-error">{{ visibleCreateErrors.port }}</small></a-form-item>
-          <a-form-item label="默认库"><input aria-label="defaultDatabase" v-model="form.defaultDatabase" :aria-invalid="Boolean(visibleCreateErrors.defaultDatabase)" @input="touchCreate('defaultDatabase')" /><small v-if="visibleCreateErrors.defaultDatabase" class="field-error">{{ visibleCreateErrors.defaultDatabase }}</small></a-form-item>
-          <a-form-item field="username" label="用户名" required><input aria-label="username" v-model="form.username" :aria-invalid="Boolean(visibleCreateErrors.username)" @input="touchCreate('username')" /><small v-if="visibleCreateErrors.username" class="field-error">{{ visibleCreateErrors.username }}</small></a-form-item>
-          <a-form-item class="wide" label="密码"><input aria-label="password" v-model="form.password" type="password" :aria-invalid="Boolean(visibleCreateErrors.password)" @input="touchCreate('password')" /><small v-if="visibleCreateErrors.password" class="field-error">{{ visibleCreateErrors.password }}</small></a-form-item>
+          <a-form-item class="wide" field="name" label="配置名称" required><ClearableInput aria-label="name" v-model="form.name" :aria-invalid="Boolean(visibleCreateErrors.name)" @input="touchCreate('name')" /><small v-if="visibleCreateErrors.name" class="field-error">{{ visibleCreateErrors.name }}</small></a-form-item>
+          <a-form-item field="host" label="主机" required><ClearableInput aria-label="host" v-model="form.host" :aria-invalid="Boolean(visibleCreateErrors.host)" @input="touchCreate('host')" /><small v-if="visibleCreateErrors.host" class="field-error">{{ visibleCreateErrors.host }}</small></a-form-item>
+          <a-form-item label="端口"><ClearableInput aria-label="number-input" :value="form.port ?? ''" type="number" :aria-invalid="Boolean(visibleCreateErrors.port)" @input="form.port = ($event.target as HTMLInputElement).value; touchCreate('port')" /><small v-if="visibleCreateErrors.port" class="field-error">{{ visibleCreateErrors.port }}</small></a-form-item>
+          <a-form-item label="默认库"><ClearableInput aria-label="defaultDatabase" v-model="form.defaultDatabase" :aria-invalid="Boolean(visibleCreateErrors.defaultDatabase)" @input="touchCreate('defaultDatabase')" /><small v-if="visibleCreateErrors.defaultDatabase" class="field-error">{{ visibleCreateErrors.defaultDatabase }}</small></a-form-item>
+          <a-form-item field="username" label="用户名" required><ClearableInput aria-label="username" v-model="form.username" :aria-invalid="Boolean(visibleCreateErrors.username)" @input="touchCreate('username')" /><small v-if="visibleCreateErrors.username" class="field-error">{{ visibleCreateErrors.username }}</small></a-form-item>
+          <a-form-item class="wide" label="密码"><ClearableInput aria-label="password" v-model="form.password" type="password" :aria-invalid="Boolean(visibleCreateErrors.password)" @input="touchCreate('password')" /><small v-if="visibleCreateErrors.password" class="field-error">{{ visibleCreateErrors.password }}</small></a-form-item>
         </template>
-        <a-form-item class="wide" label="说明"><a-textarea v-model="form.description" class="config-description-textarea" :max-length="configDescriptionMaxLength(formKind || 'llm', 'create')" show-word-limit :auto-size="{ minRows: 3, maxRows: 5 }" @input="touchCreate('description')" /><small v-if="visibleCreateErrors.description" class="field-error">{{ visibleCreateErrors.description }}</small></a-form-item>
+        <a-form-item class="wide" label="说明"><ClearableTextarea v-model="form.description" class="config-description-textarea" :max-length="configDescriptionMaxLength(formKind || 'llm', 'create')" show-word-limit :auto-size="{ minRows: 3, maxRows: 5 }" @input="touchCreate('description')" /><small v-if="visibleCreateErrors.description" class="field-error">{{ visibleCreateErrors.description }}</small></a-form-item>
         <a-form-item class="wide" field="isDefault"><a-checkbox v-model="form.isDefault" :disabled="!isAdmin || hasCategoryDefault || defaultUpdating" class="default-config-checkbox">设为默认（同一类别仅一条默认生效）</a-checkbox></a-form-item>
       </a-form>
       <footer>
@@ -969,6 +1034,7 @@ onUnmounted(() => {
       </aside>
     </Teleport>
     <DeleteConfirmDialog v-model:visible="deleteVisible" title="删除配置" :name="deleteTarget?.name || ''" :identifier="deleteTarget?.id" identifier-label="配置 ID" description="继续操作将永久删除该配置。请确认相关任务不再依赖此配置。" :loading="deleteSubmitting" :error="deleteError" @confirm="confirmDeleteConfig" />
+    <DeleteConfirmDialog v-model:visible="forceVisible" :title="forceAction === '删除' ? '强制删除被业务设为默认的模型' : '强制停用被业务设为默认的模型'" :name="forceTarget?.name || ''" :identifier="forceTarget?.id" identifier-label="配置 ID" :verb="forceAction" :warning="forceAction === '删除' ? '删除后无法恢复，并将解除全部业务默认绑定。' : '停用期间该模型不可用，业务默认绑定将被解除。'" :description="`该模型是业务「${forceTarget ? referencedBusinessLabel(forceTarget) : ''}」的默认模型。${forceAction === '删除' ? '删除' : '停用'}后，上述业务将回退使用公共默认模型（${publicDefaultLabel()}）。`" :loading="forceSubmitting" :error="forceError" @confirm="confirmForceAction" />
   </div>
 </template>
 
@@ -977,7 +1043,7 @@ onUnmounted(() => {
 .configuration-page button:disabled,.detail-drawer button:disabled{cursor:not-allowed;opacity:.5}
 .detail-form input:disabled{background:#f2f3f5;color:#86909c;cursor:not-allowed}
 
-.configuration-page{display:flex;box-sizing:border-box;height:100%;min-height:0;overflow:hidden;color:#17233b;flex-direction:column}.page-header{display:flex;flex:0 0 auto;align-items:flex-end;justify-content:space-between;margin-bottom:12px}.page-header span{color:#165dff;font-size:9px;letter-spacing:.12em}.page-header h1{margin:3px 0 0;font-size:22px}.page-header p{margin:4px 0 0;color:#66758f;font-size:11px}.primary{border-color:#165dff!important;background:#165dff!important;color:#fff!important}.config-workbench{display:grid;flex:1;min-height:0;grid-template-columns:248px minmax(0,1fr);overflow:hidden;border:1px solid #bdd7ff;border-radius:9px;background:#fff}.category-nav{display:flex;min-height:0;border-right:1px solid #dce8f8;background:#f8fbff;flex-direction:column}.category-nav>header{display:grid;gap:3px;padding:14px;border-bottom:1px solid #dce8f8}.category-nav>header strong{font-size:13px}.category-nav>header span{color:#8290a7;font-size:9px}.category-nav>button{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:9px;width:100%;padding:11px 12px;border:0;border-bottom:1px solid #edf2f8;background:transparent;color:#344766;text-align:left;cursor:pointer}.category-nav>button.active{background:#eaf2ff;box-shadow:inset 3px 0 #165dff}.category-nav>button>span{display:grid;gap:3px}.category-nav>button strong{font-size:11px}.category-nav>button small{color:#8290a7;font-size:8px}.category-nav>button em{min-width:20px;padding:2px 6px;border-radius:99px;background:#e7eef8;color:#71809a;font-size:9px;font-style:normal;text-align:center}.config-list{display:flex;min-width:0;min-height:0;flex-direction:column}.config-list>header{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid #dce8f8;background:#fff}.config-list>header>div{display:flex;align-items:baseline;gap:8px}.config-list h2{margin:0;font-size:15px}.config-list>header span{color:#8290a7;font-size:9px}.config-list nav{display:flex;flex:1;min-width:0;flex-wrap:wrap;gap:8px;align-items:center}.config-list nav button{height:31px;padding:0 12px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#40516d;font-size:10px;cursor:pointer}.config-list input,.config-list select{height:31px;padding:0 9px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#344766;font-size:10px}.config-list input{width:210px}.table-wrap{flex:1;min-height:0;overflow:auto}.table-wrap table{width:100%;border-collapse:collapse;font-size:10px}.table-wrap thead{position:sticky;z-index:2;top:0}.table-wrap th,.table-wrap td{padding:10px 11px;border-bottom:1px solid #e7eef7;text-align:left;vertical-align:middle}.table-wrap th{background:#f2f7fd;color:#60708a;font-weight:600;white-space:nowrap}.table-wrap tbody tr{cursor:pointer}.table-wrap tbody tr:hover td{background:#f7faff}.config-name{display:flex;align-items:center;gap:9px;min-width:210px}.config-name>span{display:grid;gap:3px}.config-name strong{font-size:11px}.config-name small,.updated{display:block;color:#8290a7;font-size:8px}.type-name{display:block;color:#40516d;font-size:10px}.table-wrap code{display:block;max-width:210px;margin-top:3px;overflow:hidden;color:#71809a;font-size:8px;text-overflow:ellipsis;white-space:nowrap}.status{display:inline-flex;align-items:center;gap:5px;padding:3px 7px;border-radius:99px}.status>i{width:6px;height:6px;border-radius:50%;background:currentColor}.status.is-正常{background:#dcfae6;color:var(--status-success)}.status.is-异常{background:#fee4e2;color:var(--status-danger)}.status.is-停用{background:#eef1f5;color:var(--status-neutral)}.link{border:0;background:transparent;color:#165dff;font-size:10px;cursor:pointer}.empty{height:100px;color:#8290a7;text-align:center!important}.mask{position:fixed;z-index:40;inset:0;border:0;background:rgba(16,36,76,.24)}.detail-drawer{position:fixed;z-index:41;top:0;right:0;display:flex;width:min(500px,90vw);height:100vh;background:#f8fbff;box-shadow:-18px 0 46px rgba(28,58,107,.25);flex-direction:column}.detail-drawer>header,.create-dialog>header{display:flex;align-items:flex-start;justify-content:space-between;padding:18px;border-bottom:1px solid #dce8f8;background:#fff}.detail-drawer>header span,.create-dialog>header span{color:#165dff;font-size:9px}.detail-drawer h2,.create-dialog h2{margin:4px 0;font-size:18px}.detail-drawer>header button,.create-dialog>header button{width:29px;height:29px;border:0;border-radius:5px;background:#f0f4fa;font-size:19px;cursor:pointer}.health-card{display:grid;grid-template-columns:10px minmax(0,1fr) auto;align-items:center;gap:10px;margin:14px 16px 0;padding:12px;border:1px solid #cfe4d7;border-radius:7px;background:#fff}.health-card>i{width:9px;height:9px;border-radius:50%;background:var(--status-success);box-shadow:none}.health-card>i.is-异常{background:var(--status-danger);box-shadow:none}.health-card>i.is-停用{background:var(--status-neutral);box-shadow:none}.health-card>div{display:grid;gap:3px}.health-card strong{font-size:11px}.health-card span{color:#71809a;font-size:9px}.health-card button{height:29px;padding:0 10px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#165dff;font-size:9px;cursor:pointer}.detail-form,.dialog-form{display:grid;grid-template-columns:1fr 1fr;gap:11px;padding:16px}.detail-form label,.dialog-form label{display:grid;gap:5px}.detail-form label span,.dialog-form label span{color:#60708a;font-size:9px}.detail-form input,.detail-form textarea,.dialog-form input,.dialog-form select,.dialog-form textarea{box-sizing:border-box;width:100%;height:33px;padding:0 9px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#344766;font:10px inherit}.detail-form textarea,.dialog-form textarea{height:65px;padding-top:8px;resize:none}.wide{grid-column:1/-1}.reference-card{margin:0 16px;padding:12px;border:1px solid #d6e3f4;border-radius:7px;background:#fff}.reference-card header{display:flex;justify-content:space-between}.reference-card strong{font-size:10px}.reference-card span{color:#165dff;font-size:9px}.reference-card p{margin:5px 0 0;color:#71809a;font-size:9px;line-height:16px}.detail-drawer>footer,.create-dialog>footer{display:flex;justify-content:flex-end;gap:8px;margin-top:auto;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.detail-drawer>footer button,.create-dialog>footer button{height:33px;padding:0 13px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#40516d;cursor:pointer}.create-dialog{position:fixed;z-index:42;top:50%;left:50%;width:min(650px,calc(100vw - 40px));overflow:hidden;border-radius:10px;background:#f8fbff;box-shadow:0 24px 70px rgba(28,58,107,.3);transform:translate(-50%,-50%)}.create-dialog>footer{margin-top:0}.create-dialog button:disabled{opacity:.5;cursor:not-allowed}.default-tag{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:99px;background:#fff3d8;color:#b54708;font-size:8px;font-weight:600;font-style:normal}.checkbox{display:flex;flex-direction:row;align-items:center;gap:8px}.checkbox input{width:auto;height:14px}.checkbox span{color:#344766;font-size:10px}@media(max-width:1100px){.config-workbench{grid-template-columns:210px minmax(0,1fr)}}
+.configuration-page{display:flex;box-sizing:border-box;height:100%;min-height:0;overflow:hidden;color:#17233b;flex-direction:column}.page-header{display:flex;flex:0 0 auto;align-items:flex-end;justify-content:space-between;margin-bottom:12px}.page-header span{color:#165dff;font-size:12px;letter-spacing:.12em}.page-header h1{margin:3px 0 0;font-size:22px}.page-header p{margin:4px 0 0;color:#66758f;font-size:12px}.primary{border-color:#165dff!important;background:#165dff!important;color:#fff!important}.config-workbench{display:grid;flex:1;min-height:0;grid-template-columns:248px minmax(0,1fr);overflow:hidden;border:1px solid #bdd7ff;border-radius:9px;background:#fff}.category-nav{display:flex;min-height:0;border-right:1px solid #dce8f8;background:#f8fbff;flex-direction:column}.category-nav>header{display:grid;gap:3px;padding:14px;border-bottom:1px solid #dce8f8}.category-nav>header strong{font-size:12px}.category-nav>header span{color:#8290a7;font-size:12px}.category-nav>button{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:9px;width:100%;padding:11px 12px;border:0;border-bottom:1px solid #edf2f8;background:transparent;color:#344766;text-align:left;cursor:pointer}.category-nav>button.active{background:#eaf2ff;box-shadow:inset 3px 0 #165dff}.category-nav>button>span{display:grid;gap:3px}.category-nav>button strong{font-size:12px}.category-nav>button small{color:#8290a7;font-size:12px}.category-nav>button em{min-width:20px;padding:2px 6px;border-radius:99px;background:#e7eef8;color:#71809a;font-size:12px;font-style:normal;text-align:center}.config-list{display:flex;min-width:0;min-height:0;flex-direction:column}.config-list>header{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid #dce8f8;background:#fff}.config-list>header>div{display:flex;align-items:baseline;gap:8px}.config-list h2{margin:0;font-size:14px}.config-list>header span{color:#8290a7;font-size:12px}.config-list nav{display:flex;flex:1;min-width:0;flex-wrap:wrap;gap:8px;align-items:center}.config-list nav button{height:31px;padding:0 12px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#40516d;font-size:12px;cursor:pointer}.config-list input,.config-list select{height:31px;padding:0 9px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#344766;font-size:12px}.config-list input{width:210px}.table-wrap{flex:1;min-height:0;overflow:auto}.table-wrap table{width:100%;border-collapse:collapse;font-size:12px}.table-wrap thead{position:sticky;z-index:2;top:0}.table-wrap th,.table-wrap td{padding:10px 11px;border-bottom:1px solid #e7eef7;text-align:left;vertical-align:middle}.table-wrap th{background:#f2f7fd;color:#60708a;font-weight:600;white-space:nowrap}.table-wrap tbody tr{cursor:pointer}.table-wrap tbody tr:hover td{background:#f7faff}.config-name{display:flex;align-items:center;gap:9px;min-width:210px}.config-name>span{display:grid;gap:3px}.config-name strong{font-size:12px}.config-name small,.updated{display:block;color:#8290a7;font-size:12px}.type-name{display:block;color:#40516d;font-size:12px}.table-wrap code{display:block;max-width:210px;margin-top:3px;overflow:hidden;color:#71809a;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.status{display:inline-flex;align-items:center;gap:5px;padding:3px 7px;border-radius:99px}.status>i{width:6px;height:6px;border-radius:50%;background:currentColor}.status.is-正常{background:#dcfae6;color:var(--status-success)}.status.is-异常{background:#fee4e2;color:var(--status-danger)}.status.is-停用{background:#eef1f5;color:var(--status-neutral)}.link{border:0;background:transparent;color:#165dff;font-size:12px;cursor:pointer}.empty{height:100px;color:#8290a7;text-align:center!important}.mask{position:fixed;z-index:40;inset:0;border:0;background:rgba(16,36,76,.24)}.detail-drawer{position:fixed;z-index:41;top:0;right:0;display:flex;width:min(500px,90vw);height:100vh;background:#f8fbff;box-shadow:-18px 0 46px rgba(28,58,107,.25);flex-direction:column}.detail-drawer>header,.create-dialog>header{display:flex;align-items:flex-start;justify-content:space-between;padding:18px;border-bottom:1px solid #dce8f8;background:#fff}.detail-drawer>header span,.create-dialog>header span{color:#165dff;font-size:12px}.detail-drawer h2,.create-dialog h2{margin:4px 0;font-size:18px}.detail-drawer>header button,.create-dialog>header button{width:29px;height:29px;border:0;border-radius:5px;background:#f0f4fa;font-size:19px;cursor:pointer}.health-card{display:grid;grid-template-columns:10px minmax(0,1fr) auto;align-items:center;gap:10px;margin:14px 16px 0;padding:12px;border:1px solid #cfe4d7;border-radius:7px;background:#fff}.health-card>i{width:9px;height:9px;border-radius:50%;background:var(--status-success);box-shadow:none}.health-card>i.is-异常{background:var(--status-danger);box-shadow:none}.health-card>i.is-停用{background:var(--status-neutral);box-shadow:none}.health-card>div{display:grid;gap:3px}.health-card strong{font-size:12px}.health-card span{color:#71809a;font-size:12px}.health-card button{height:29px;padding:0 10px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#165dff;font-size:12px;cursor:pointer}.detail-form,.dialog-form{display:grid;grid-template-columns:1fr 1fr;gap:11px;padding:16px}.detail-form label,.dialog-form label{display:grid;gap:5px}.detail-form label span,.dialog-form label span{color:#60708a;font-size:12px}.detail-form input,.detail-form textarea,.dialog-form input,.dialog-form select,.dialog-form textarea{box-sizing:border-box;width:100%;height:33px;padding:0 9px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#344766;font:12px inherit}.detail-form textarea,.dialog-form textarea{height:65px;padding-top:8px;resize:none}.wide{grid-column:1/-1}.reference-card{margin:0 16px;padding:12px;border:1px solid #d6e3f4;border-radius:7px;background:#fff}.reference-card header{display:flex;justify-content:space-between}.reference-card strong{font-size:12px}.reference-card span{color:#165dff;font-size:12px}.reference-card p{margin:5px 0 0;color:#71809a;font-size:12px;line-height:20px}.detail-drawer>footer,.create-dialog>footer{display:flex;justify-content:flex-end;gap:8px;margin-top:auto;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.detail-drawer>footer button,.create-dialog>footer button{height:33px;padding:0 13px;border:1px solid #bdd0ea;border-radius:5px;background:#fff;color:#40516d;cursor:pointer}.create-dialog{position:fixed;z-index:42;top:50%;left:50%;width:min(650px,calc(100vw - 40px));overflow:hidden;border-radius:10px;background:#f8fbff;box-shadow:0 24px 70px rgba(28,58,107,.3);transform:translate(-50%,-50%)}.create-dialog>footer{margin-top:0}.create-dialog button:disabled{opacity:.5;cursor:not-allowed}.default-tag{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:99px;background:#fff3d8;color:#b54708;font-size:12px;font-weight:600;font-style:normal}.checkbox{display:flex;flex-direction:row;align-items:center;gap:8px}.checkbox input{width:auto;height:14px}.checkbox span{color:#344766;font-size:12px}@media(max-width:1100px){.config-workbench{grid-template-columns:210px minmax(0,1fr)}}
 
 /* Compact fixed action column; free width belongs to data columns. */
 .config-table-wrap :is(th,td).config-action-col{width:152px;min-width:152px;max-width:152px}
@@ -1011,8 +1077,6 @@ onUnmounted(() => {
 .config-search-input.arco-input-wrapper{box-sizing:border-box;width:360px;min-width:0;max-width:100%;height:32px;min-height:32px;padding:0 12px;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important;flex:0 1 360px}
 .config-search-input.arco-input-wrapper:hover{border-color:#4080ff!important;background:#fff!important}
 .config-search-input.arco-input-wrapper:focus-within,.config-search-input.arco-input-focus{border-color:#165dff!important;background:#fff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
-.config-search-input.arco-input-wrapper :deep(.arco-input-prefix){padding-right:8px;color:#4e5969}.config-search-input.arco-input-focus :deep(.arco-input-prefix){color:#165dff}
-.config-search-input.arco-input-wrapper :deep(.arco-input-prefix svg){width:16px;height:16px;font-size:16px}
 .config-search-input.arco-input-wrapper :deep(.arco-input){box-sizing:border-box;width:100%;height:auto!important;min-height:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#1d2129;font-size:14px!important;line-height:22px!important;box-shadow:none!important;outline:none!important}
 /* Isolate the status Arco Select from native search-input styles. */
 /* 列表头操作按钮（新建配置/绑定）：与输入框同规格，禁止换行与压缩导致文字溢出 */
@@ -1020,10 +1084,13 @@ onUnmounted(() => {
 .config-list nav :deep(.arco-select){width:160px;min-width:160px;flex-shrink:0}
 /* 注意：Arco select 根节点同时挂 arco-select 与 arco-select-view，两条规则同特异性，
    这里绝不能再写 width:100%，否则会覆盖上一条的 width:160px，把新建按钮挤出视口。 */
-.config-list nav :deep(.arco-select-view){box-sizing:border-box;height:32px;border:1px solid #e5e6eb;border-radius:4px;background:#fff}
+.config-list nav :deep(.arco-select-view){display:inline-flex;box-sizing:border-box;align-items:center;height:32px;min-height:32px;padding:0 12px!important;border:1px solid #e5e6eb!important;border-radius:4px!important;background:#fff!important;box-shadow:none!important}
+.config-list nav :deep(.arco-select-view:hover){border-color:#4080ff!important}
+.config-list nav :deep(.arco-select-view-focus),.config-list nav :deep(.arco-select-view:focus-within){border-color:#165dff!important;box-shadow:0 0 0 2px rgba(22,93,255,.1)!important}
+.config-list nav :deep(.arco-select-view-suffix svg){width:14px;height:14px;font-size:14px;color:#4e5969}
 .config-list nav :deep(.arco-select-view-input){height:100%!important;min-height:0!important;padding:0!important;border:0!important;background:transparent!important;box-shadow:none!important}
 .config-list nav :deep(.arco-select-view-input-hidden){position:absolute!important;width:0!important;height:0!important;min-height:0!important;padding:0!important;border:0!important;opacity:0!important;pointer-events:none!important}
-.config-list nav :deep(.arco-select-view-value){min-width:0;line-height:30px}
+.config-list nav :deep(.arco-select-view-value){min-width:0;overflow:hidden;font-size:14px;line-height:22px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
 /* 窄侧栏（≤1024px）：图标已移除，改为只显示分类名（计数隐藏，超长省略） */
 @media(max-width:1024px){.config-workbench{grid-template-columns:84px minmax(0,1fr)}.category-nav>header span,.category-nav>button em{display:none}.category-nav>button{grid-template-columns:minmax(0,1fr);height:40px;min-height:40px;justify-content:center;padding:0 8px}.category-nav>button strong{text-align:center}}
 .dialog-form :deep(.arco-form-item){margin-bottom:0}.dialog-form :deep(.arco-form-item-layout-vertical>.arco-form-item-label-col){margin-bottom:8px}
@@ -1057,14 +1124,14 @@ onUnmounted(() => {
 .detail-form :deep(.arco-form-item-layout-vertical>.arco-form-item-label-col){margin-bottom:8px}
 .detail-drawer>footer{flex:0 0 auto;margin-top:0;align-items:center}
 /* 新建弹窗：限高 + 表单区内部滚动（原来 overflow:hidden 直接裁掉超高表单） */
-.create-dialog{display:flex;max-height:min(88vh,760px);flex-direction:column}
+.create-dialog{display:flex;max-height:calc(100dvh - 48px);flex-direction:column}
 .create-dialog .dialog-form{flex:1 1 auto;min-height:0;overflow:auto}
 .create-dialog>footer{margin-top:auto}
 .space-dialog-hint{grid-column:1/-1;margin:0;color:#86909c;font-size:12px;line-height:20px}
 .space-name-field{display:flex;width:100%;min-width:0;flex-direction:column;gap:4px}
 /* 字段级校验提示（输入即校验，超长/异常字符/范围/必填）：红字 + 输入框红边，
    口径同九大业务面板（aria-invalid 由 createFieldErrors/detailFieldErrors/spaceNameError 驱动） */
-.dialog-form .field-error,.detail-form .field-error{display:block;color:#e4322d;font-size:12px;line-height:18px}
+.dialog-form .field-error,.detail-form .field-error{display:block;color:#e4322d;font-size:12px;line-height:20px}
 .dialog-form input[aria-invalid='true'],.detail-form input[aria-invalid='true'],.space-name-field input[aria-invalid='true']{border-color:#e4322d;box-shadow:0 0 0 1px #e4322d inset}
 .dialog-form input[aria-invalid='true']:focus,.detail-form input[aria-invalid='true']:focus{border-color:#e4322d;box-shadow:0 0 0 2px rgba(228,50,45,.15)}
 
@@ -1150,8 +1217,10 @@ onUnmounted(() => {
 .config-table-wrap :is(th,td){white-space:nowrap}
 .config-table-wrap tbody tr{cursor:default}
 .config-id-col{color:#4e5969}
-/* 筛选输入框加宽（可搜名称/标识/类型/地址）；查询与新建使用同一主按钮。 */
-.config-search-form{display:flex;min-width:0;margin-left:auto;align-items:center;gap:16px}
+/* 筛选输入框加宽（可搜名称/标识/类型/地址）；查询与新建使用同一主按钮。
+ * 新建按钮吃掉左侧富余空间：状态下拉与搜索框/查询在右侧连成一组（两个输入框不再被拉开）。 */
+.config-search-form{display:flex;min-width:0;align-items:center;gap:16px}
+.config-list-actions .create-entry{margin-right:auto}
 .config-list-actions .config-search-input.arco-input-wrapper{width:360px;max-width:100%;margin-left:0;flex:0 1 360px}
 .config-search-form .config-search-button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
 .config-search-form .config-search-button:hover{border-color:#4080ff!important;background:#4080ff!important}

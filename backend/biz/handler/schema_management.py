@@ -18,8 +18,6 @@ from biz.schemas.common import ApiResponse
 from biz.schemas.schema_management import (
     EntitySchemaCreate,
     RelationSchemaCreate,
-    SchemaBackfillRequest,
-    SchemaExtractRequest,
     SchemaPropertyInput,
     SchemaSourcesReplace,
 )
@@ -358,62 +356,10 @@ def replace_schema_sources(
         _raise_domain_error(exc)
 
 
-@router.post("/schemas/{schema_id}/extract", response_model=ApiResponse, status_code=201)
-async def trigger_schema_extraction(
-    schema_id: str,
-    actor: CurrentActor,
-    session: Annotated[Session, Depends(get_workflow_session)],
-    payload: SchemaExtractRequest | None = None,
-) -> ApiResponse:
-    """触发平台喂数抽取（kg.schema.extract）：按来源表水位分批读取 → 脚本转换 → 写图。
-
-    要求已上传脚本且已绑定 ≥1 来源表，否则 409。执行记录可在任务中心查看。
-    """
-    _schema_access(actor, session, schema_id, "write", payload.graph_space if payload else None)
-    if rbac_enabled() and payload and payload.graph_space:
-        ensure_space_access(actor, payload.graph_space, "write")
-    try:
-        data = await _application(session).trigger_extraction(
-            schema_id=schema_id,
-            user_id=actor.user_id,
-            is_platform_admin=_can_manage(actor),
-            graph_space=payload.graph_space if payload else None,
-            batch_size=payload.batch_size if payload else None,
-            actor=actor,
-        )
-        return ApiResponse(data=data, msg="抽取已触发")
-    except SchemaManagementError as exc:
-        _raise_domain_error(exc)
-
-
-@router.post("/schemas/{schema_id}/backfill", response_model=ApiResponse, status_code=201)
-async def backfill_schema_history(
-    schema_id: str,
-    actor: CurrentActor,
-    session: Annotated[Session, Depends(get_workflow_session)],
-    payload: SchemaBackfillRequest | None = None,
-) -> ApiResponse:
-    """回填历史数据：清空该 Schema 全部来源水位后触发全量重跑（可反复执行）。
-
-    前置同触发抽取（已上传脚本 + ≥1 来源绑定）。脚本落后于 Schema 时回填可能
-    无效，未带 ``force`` 返回 409，前端强确认后带 force 重发。
-    """
-    _schema_access(actor, session, schema_id, "write", payload.graph_space if payload else None)
-    if rbac_enabled() and payload and payload.graph_space:
-        ensure_space_access(actor, payload.graph_space, "write")
-    try:
-        data = await _application(session).backfill(
-            schema_id=schema_id,
-            user_id=actor.user_id,
-            is_platform_admin=_can_manage(actor),
-            force=payload.force if payload else False,
-            graph_space=payload.graph_space if payload else None,
-            batch_size=payload.batch_size if payload else None,
-            actor=actor,
-        )
-        return ApiResponse(data=data, msg="历史数据回填已触发")
-    except SchemaManagementError as exc:
-        _raise_domain_error(exc)
+# 2026-10-16 入口收敛：原「执行抽取」POST /schemas/{id}/extract 与「历史回填」
+# POST /schemas/{id}/backfill 已删除。抽取触发统一走图谱构建任务
+# （POST /workflow-system/jobs，taskType=extract + runNow）；历史回填与业务
+# 口径不对齐（清全部水位全量重跑会绕过增量水位、覆盖人工修订），不再提供。
 
 
 @router.put("/schemas/{schema_id}/script", response_model=ApiResponse)

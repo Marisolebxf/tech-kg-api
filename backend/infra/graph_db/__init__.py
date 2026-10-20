@@ -46,6 +46,7 @@ __all__ = [
     "get_algorithm_client",
     "close_algorithm_client",
     "get_space_client",
+    "get_business_space_client",
     "close_space_clients",
     "get_space_algorithm_client",
     "close_space_algorithm_clients",
@@ -74,9 +75,15 @@ def get_trs_graph_client() -> TRSGraphClient:
     """Return the process-wide connected TRSGraphClient singleton (lazy, thread-safe).
 
     图空间统一读取 TRS_GRAPH_SPACE；历史上另有 get_techkg_client 双单例别名，已收敛到本函数。
+    九大业务请求（require_business_data 置位 business_data_plane）优先返回
+    TRS_GRAPH_BUSINESS_* 独立连接，未配置时回落到下面的常规路径。
     """
-    from service.graph_space_context import selected_graph_space
+    from service.graph_space_context import business_data_plane, selected_graph_space
 
+    if business_data_plane.get():
+        business = get_business_space_client(selected_graph_space.get())
+        if business is not None:
+            return business
     space = selected_graph_space.get()
     if space:
         return get_space_client(space)
@@ -148,6 +155,29 @@ def get_space_client(space: str) -> TRSGraphClient:
         client = TRSGraphClient(settings)
         client.connect()
         _space_clients[space] = client
+        return client
+
+
+def get_business_space_client(request_space: str | None) -> TRSGraphClient | None:
+    """九大业务数据面客户端；TRS_GRAPH_BUSINESS_BASE_URL 未配置时返回 None（回落平台面）。
+
+    连接参数见 infra.graph_db.config.business_plane_settings。与 get_space_client
+    共用 _space_clients 缓存（key 带 business:: 前缀），因此 close_space_clients
+    的停机清理同样覆盖业务面连接，无需在 lifespan 里单独接线。
+    """
+    from infra.graph_db.config import business_plane_settings
+
+    settings = business_plane_settings(request_space)
+    if settings is None:
+        return None
+    key = f"business::{settings.base_url}::{settings.space}"
+    with _space_clients_lock:
+        cached = _space_clients.get(key)
+        if cached is not None:
+            return cached
+        client = TRSGraphClient(settings)
+        client.connect()  # may raise; only cache on success
+        _space_clients[key] = client
         return client
 
 

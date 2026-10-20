@@ -2063,6 +2063,70 @@ def test_overview_passes_all_change_rows_without_cap() -> None:
     assert result.asset_overview_groups[0].added == "+1,500"
     assert result.stats_day == "2026-10-13"
     assert "entity" not in result.asset_change_errors
+    # 口径提示撤下（2026-10-16 晚用户要求）：warnings 不再常驻口径说明文案，
+    # 口径只留在数据载荷侧；已退役的「图反查」表述同样不得回归
+    caliber = "\n".join(result.warnings)
+    assert "写图记录计数" not in caliber
+    assert "不去重" not in caliber
+    assert "图反查" not in caliber
+
+
+def test_overview_carries_net_added_snapshot_diff(monkeypatch: pytest.MonkeyPatch) -> None:
+    """净新增（2026-10-16）：相邻两日图统计快照差分随载荷透出——与总量同口径、
+    可直接对账（总量(D) − 总量(D−1) = 净新增(D)）；读取失败不拖垮总览装配。"""
+    import service.platform_overview as overview
+    from biz.schemas.platform_overview import AssetChangeRow
+
+    snapshot = DayChangesSnapshot(
+        entity_added=1_500,
+        entity_rows=[
+            AssetChangeRow(type="论文", count=1_500, source="gkx.dwd_paper", time="10-13 02:00:00")
+        ],
+        day="2026-10-13",
+    )
+    service = PlatformOverviewService(
+        stats_provider=FakeStatsProvider(), changes_provider=FakeChangesProvider(snapshot)
+    )
+    seen: list[tuple[str | None, str]] = []
+
+    def _fake_loader(space, day):
+        seen.append((space, day))
+        return {"entity": 93_444, "relation": 11}, ""
+
+    monkeypatch.setattr(overview, "_load_net_added_safe", _fake_loader)
+
+    result = service.get_overview()
+
+    assert result.asset_net_added == {"entity": 93_444, "relation": 11}
+    assert result.asset_net_added_note == ""
+    # 统计日随快照透传给差分读取（缺省回看昨日）
+    assert seen == [(None, "2026-10-13")]
+    # 口径提示撤下（2026-10-16 晚）：净新增说明不进 warnings，只在载荷里
+    assert all("净新增" not in warning for warning in result.warnings)
+
+
+def test_overview_net_added_missing_shows_note_not_fabricated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """快照缺失（当日未采集/上线前无法回补）：值为 null + 原因，绝不编数。"""
+    import service.platform_overview as overview
+
+    service = PlatformOverviewService(
+        stats_provider=FakeStatsProvider(), changes_provider=FakeChangesProvider()
+    )
+    monkeypatch.setattr(
+        overview,
+        "_load_net_added_safe",
+        lambda space, day: (
+            {"entity": None, "relation": None},
+            "实体/关系净新增的当日快照尚未生成（日内按采集时点刷新、次日凌晨定局）",
+        ),
+    )
+
+    result = service.get_overview()
+
+    assert result.asset_net_added == {"entity": None, "relation": None}
+    assert "快照尚未生成" in result.asset_net_added_note
 
 
 def test_overview_large_write_day_shows_written_total_without_gate_text() -> None:

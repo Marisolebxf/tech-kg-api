@@ -11,6 +11,7 @@ let sessionExpiredHandler: SessionExpiredHandler | undefined
 const requestVersions = new WeakMap<object, number>()
 const requestSpaces = new WeakMap<object, string>()
 const CONTEXT_FREE_REQUEST = /\/v1\/(?:auth(?:\/|$)|graph-spaces(?:\/|$)|graph-search\/spaces|business-access(?:\/|$))/
+const ALGORITHM_JOB_REQUEST = /\/v1\/graph-algorithms\/jobs(?:\/|$)/
 
 function activeContext() {
   return getActivePinia() ? useGraphSpaceStore() : undefined
@@ -62,6 +63,18 @@ http.interceptors.request.use((config) => {
   requestVersions.set(config, currentSessionVersion())
   const spaces = activeContext()
   if (spaces && !CONTEXT_FREE_REQUEST.test(config.url || '')) {
+    if (ALGORITHM_JOB_REQUEST.test(config.url || '')) {
+      // 作业归属由提交体/查询参数显式指定。离页清理必须拿到迟到的提交 ID，
+      // 且切空间后的终止请求仍指向原空间；页面自身负责忽略旧上下文的展示结果。
+      const jobSpace = config.params?.space ?? (typeof config.data === 'object' && config.data?.space)
+      if (typeof jobSpace === 'string' && jobSpace) {
+        config.headers.set('X-Graph-Space', jobSpace)
+        const item = spaces.items.find(entry => entry.name === jobSpace)
+        const businessId = item?.groupKind === 'business' ? item.clientId : spaces.businessId
+        if (businessId) config.headers.set('X-Business-Id', businessId)
+        return config
+      }
+    }
     if (!spaces.current && (spaces.initialized || spaces.loadError)) {
       throw new CanceledError('当前没有可用图空间，请先选择图空间')
     }

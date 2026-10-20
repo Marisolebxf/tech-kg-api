@@ -20,11 +20,11 @@ def main() -> None:
         if name == "create":
             command.add_argument("--business-name", required=True)
         if name != "disable":
-            command.add_argument("--expires-days", type=int, default=90)
+            command.add_argument("--expires-days", type=int, default=365)
             command.add_argument(
                 "--scopes",
-                default="project-relations:read",
-                help="逗号分隔的授权 scope：project-relations:read / kg-open:read",
+                default=None,
+                help="逗号分隔的授权 scope；新建默认 project-relations:read，轮换不传则保留现有权限",
             )
     args = parser.parse_args()
     try:
@@ -39,7 +39,11 @@ def main() -> None:
                 args.client_id,
                 business_name=getattr(args, "business_name", None),
                 expires_days=args.expires_days,
-                scopes=[scope.strip() for scope in args.scopes.split(",") if scope.strip()],
+                scopes=(
+                    [scope.strip() for scope in args.scopes.split(",") if scope.strip()]
+                    if args.scopes is not None
+                    else None
+                ),
             )
             print("密钥仅展示本次，请通过安全渠道交付业务方；不要将输出保存到共享日志。")
             print(json.dumps({"client_id": args.client_id, "api_key": key}))

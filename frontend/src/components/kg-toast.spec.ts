@@ -1,6 +1,8 @@
 import { mount } from '@vue/test-utils'
 import { defineComponent } from 'vue'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+afterEach(() => { resetToasts(); vi.useRealTimers() })
 
 import { useToast } from '../composables/use-toast'
 import KgToast from './kg-toast.vue'
@@ -25,17 +27,35 @@ describe('全局提示（kg-toast）：四态划分与提示符', () => {
     resetToasts()
     const { showToast } = useToast()
     for (const tone of ['success', 'info', 'warning', 'error'] as const) {
+      resetToasts()
       showToast(`测试提示-${tone}`, tone)
+      const wrapper = mount(KgToast)
+      expect(wrapper.get('.kg-toast').classes()).toContain(`kg-toast--${tone}`)
+      expect(wrapper.find('.kg-toast__icon svg').exists()).toBe(true)
+      wrapper.unmount()
     }
-    const wrapper = mount(KgToast)
-    const items = wrapper.findAll('.kg-toast')
-    expect(items).toHaveLength(4)
-    expect(
-      items.map((node) => node.classes().filter((c) => c.startsWith('kg-toast--'))),
-    ).toEqual([['kg-toast--success'], ['kg-toast--info'], ['kg-toast--warning'], ['kg-toast--error']])
-    // 每条提示都带与状态同色的提示符（填充圆形图标）
-    for (const item of items) {
-      expect(item.find('.kg-toast__icon svg').exists()).toBe(true)
+  })
+
+  it('最多保留三条，移除最早提示且可手动关闭', () => {
+    resetToasts()
+    const { showToast, toasts, dismissToast } = useToast()
+    for (const message of ['一', '二', '三', '四']) showToast(message)
+    expect(toasts.value.map(item => item.message)).toEqual(['二', '三', '四'])
+    dismissToast(toasts.value[0]!.id)
+    expect(toasts.value.map(item => item.message)).toEqual(['三', '四'])
+  })
+
+  it('信息/成功停留3秒，警告/错误停留4.5秒', () => {
+    vi.useFakeTimers()
+    const { showToast, toasts } = useToast()
+    for (const tone of ['info', 'success', 'warning', 'error'] as const) {
+      resetToasts()
+      showToast('定时提示', tone)
+      const duration = tone === 'info' || tone === 'success' ? 3000 : 4500
+      vi.advanceTimersByTime(duration - 1)
+      expect(toasts.value).toHaveLength(1)
+      vi.advanceTimersByTime(1)
+      expect(toasts.value).toHaveLength(0)
     }
   })
 

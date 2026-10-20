@@ -6,11 +6,13 @@ import pytest
 
 from infra.graph_db.exceptions import GraphRequestError
 from service.schema_ddl import (
+    DDL_MAX_RETRIES,
     build_alter_add_ddl,
     build_alter_drop_ddl,
     build_create_ddl,
     build_name_index_ddls,
     describe_schema_columns,
+    execute_schema_ddl,
     is_valid_data_type,
     run_alter_add_ddl,
     run_alter_drop_ddl,
@@ -143,9 +145,10 @@ class _SequenceExecute:
         return self.results.get(key, ("succeeded", None))  # type: ignore[return-value]
 
 
-def test_run_schema_ddl_entity_builds_and_rebuilds_name_index(
+def test_run_schema_ddl_entity_creates_name_index_without_rebuild(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """新建 TAG 零数据：只建索引不 REBUILD（REBUILD 会撞 schema 传播延迟拖住创建请求）。"""
     fake = _SequenceExecute()
     monkeypatch.setattr("service.schema_ddl.execute_schema_ddl", fake)
     result = run_schema_ddl(
@@ -154,7 +157,6 @@ def test_run_schema_ddl_entity_builds_and_rebuilds_name_index(
     assert fake.calls == [
         ("CREATE TAG IF NOT EXISTS Course(name string);", False),
         ("CREATE TAG INDEX IF NOT EXISTS idx_course_name ON Course(name(64));", False),
-        ("REBUILD TAG INDEX idx_course_name;", True),
     ]
     assert result["status"] == "succeeded"
     assert result["statement"] == "\n".join(ddl for ddl, _ in fake.calls)
@@ -189,11 +191,12 @@ def test_run_schema_ddl_index_create_failure_fails_whole_ddl(
     assert fake.calls[-1] == (create_index, False)
 
 
-def test_run_schema_ddl_rebuild_failure_tolerated(monkeypatch: pytest.MonkeyPatch) -> None:
-    rebuild = "REBUILD TAG INDEX idx_course_name;"
+def test_run_alter_add_ddl_rebuild_failure_tolerated(monkeypatch: pytest.MonkeyPatch) -> None:
+    """REBUILD 只在 alter 补 name 列路径执行（存量数据要回填），失败仅告警不判失败。"""
+    rebuild = "REBUILD TAG INDEX idx_scholar_name;"
     fake = _SequenceExecute(results={rebuild: ("failed", "timeout")})
     monkeypatch.setattr("service.schema_ddl.execute_schema_ddl", fake)
-    result = run_schema_ddl("entity", "Course", [{"name": "name", "data_type": "string"}])
+    result = run_alter_add_ddl("entity", "Scholar", {"name": "name", "data_type": "string"})
     assert result["status"] == "succeeded"
     assert result["error"] is None
 
@@ -213,6 +216,54 @@ def test_run_alter_add_ddl_name_property_creates_index(
     ]
     assert result["status"] == "succeeded"
     assert result["statement"] == "\n".join(ddl for ddl, _ in fake.calls)
+
+
+class _RaisingWriteClient:
+    """execute_schema_ddl 重试策略测试桩：写通道恒抛 GraphRequestError。"""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        self.calls = 0
+
+    def execute_write(self, query: str) -> None:
+        self.calls += 1
+        raise GraphRequestError(self.message, status_code=400)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "POST /api/v1/query/write -> 400: Schema exisited before!",
+        "POST /api/v1/query/write -> 400: Tag prop not existed!",
+    ],
+)
+def test_execute_schema_ddl_deterministic_conflict_fails_fast(
+    monkeypatch: pytest.MonkeyPatch, message: str
+) -> None:
+    """确定性冲突（删过列再 ADD / DROP 不存在的列）立即失败，不进退避白烧 20s+。"""
+    client = _RaisingWriteClient(message)
+    monkeypatch.setattr("service.schema_ddl.get_trs_graph_client", lambda: client)
+    sleeps: list[float] = []
+    monkeypatch.setattr("service.schema_ddl.time.sleep", lambda sec: sleeps.append(sec))
+    status, error = execute_schema_ddl("ALTER TAG Scholar ADD (rank int64);")
+    assert status == "failed"
+    assert message in (error or "")
+    assert client.calls == 1
+    assert sleeps == []
+
+
+def test_execute_schema_ddl_transient_error_keeps_retrying(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """会话池/超时类瞬时错误仍走完整退避重试（传播延迟靠它扛）。"""
+    client = _RaisingWriteClient("POST /api/v1/query/write -> 500: no extra session available")
+    monkeypatch.setattr("service.schema_ddl.get_trs_graph_client", lambda: client)
+    sleeps: list[float] = []
+    monkeypatch.setattr("service.schema_ddl.time.sleep", lambda sec: sleeps.append(sec))
+    status, _error = execute_schema_ddl("CREATE TAG IF NOT EXISTS Scholar(id string);")
+    assert status == "failed"
+    assert client.calls == DDL_MAX_RETRIES
+    assert len(sleeps) == DDL_MAX_RETRIES - 1
 
 
 def test_build_alter_drop_tag() -> None:

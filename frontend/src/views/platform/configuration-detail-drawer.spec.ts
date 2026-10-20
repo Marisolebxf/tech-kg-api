@@ -226,18 +226,18 @@ describe('配置管理 · 管理抽屉编辑隔离', () => {
     expect(cardName()).toContain('原名称')
 
     await openDrawer(wrapper)
-    const nameInput = wrapper.find('.detail-drawer input[aria-label="name"]')
+    const nameInput = () => wrapper.find('.detail-drawer input[aria-label="name"]')
     // 断言前现查（重渲染后旧 wrapper 可能指向已分离节点，disabled 状态读到脏值）
     const saveDisabled = () => wrapper.findAll('.detail-drawer footer button')
       .find((b) => b.text().includes('保存修改'))?.attributes('disabled')
 
     // 非法输入：卡片不被污染 + 保存按钮置灰
-    await nameInput.setValue('非法<script>alert(1)</script>名称')
+    await nameInput().setValue('非法<script>alert(1)</script>名称')
     expect(cardName()).toContain('原名称')
     expect(saveDisabled()).toBeDefined()
 
     // 合法输入未保存：卡片仍保持服务端值、按钮解禁
-    await nameInput.setValue('合法新名称XYZ')
+    await nameInput().setValue('合法新名称XYZ')
     expect(cardName()).toContain('原名称')
     expect(saveDisabled()).toBeUndefined()
 
@@ -302,14 +302,14 @@ describe('配置管理 · 管理抽屉编辑隔离', () => {
     await flushPromises()
     await openDrawer(wrapper)
 
-    const portInput = wrapper.find('.detail-drawer input[aria-label="number-input"]')
+    const portInput = () => wrapper.find('.detail-drawer input[aria-label="number-input"]')
     const fieldError = () => wrapper.find('.detail-drawer .field-error').text()
 
-    await portInput.setValue('1'.repeat(63))
+    await portInput().setValue('1'.repeat(63))
     expect(fieldError()).toContain('输入超出有效范围1～65535')
     expect(fieldError()).not.toContain('需为数字')
 
-    await portInput.setValue('1'.repeat(65))
+    await portInput().setValue('1'.repeat(65))
     expect(fieldError()).toContain('数字输入长度不能超过64个字符')
     wrapper.unmount()
   })

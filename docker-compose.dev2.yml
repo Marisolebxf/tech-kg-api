@@ -150,6 +150,11 @@ services:
       USER_CENTER_REDIRECT_URI: ${USER_CENTER_REDIRECT_URI:-https://edu.itic-sci.com/bkg_zpt/api/v1/auth/callback}
       USER_CENTER_SCOPE: ${USER_CENTER_SCOPE:-}
       REDIS_URL: ${REDIS_URL:-redis://auth-redis:6379/0}
+      # ==== ES 实体关键词检索（#502 查询侧 + #506 随环增量）====
+      # 实体列表文字搜索走 ES 通道（ngram 子串索引）；未同步空间/<2 字符词/ES
+      # 异常自动回退图直查。初始同步：script/build_entity_keyword_index --space <空间>
+      ENTITY_SEARCH_ES_URL: ${ENTITY_SEARCH_ES_URL:-http://es-dev2:9200}
+      ENTITY_SEARCH_ES_TIMEOUT: ${ENTITY_SEARCH_ES_TIMEOUT:-10}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -206,6 +211,8 @@ services:
       WORKFLOW_MYSQL_DATABASE: techkg_control
       WORKFLOW_MYSQL_USERNAME: root
       WORKFLOW_MYSQL_PASSWORD: temporal
+      # 实体 VID 写锁 fail-closed：worker 与 api 使用同一 Redis，避免回退 localhost。
+      REDIS_URL: ${REDIS_URL:-redis://auth-redis:6379/0}
       # worker 也跑 build_entity_index activity：embedding 缺省会回退智谱默认端点，
       # 吃 401 重试 5 次才降级（执行拖到 3 分钟），补齐与 api 一致的 m3e 配置
       PATENT_EMBEDDING_PROVIDER: ${PATENT_EMBEDDING_PROVIDER:-openai}
@@ -224,6 +231,10 @@ services:
       SCHEMA_EXTRACT_PAYLOAD_S3_ENABLED: ${SCHEMA_EXTRACT_PAYLOAD_S3_ENABLED:-true}
       SCHEMA_EXTRACT_PAYLOAD_RETENTION_DAYS: ${SCHEMA_EXTRACT_PAYLOAD_RETENTION_DAYS:-7}
       SCHEMA_EXTRACT_PAYLOAD_CLEANUP_ENABLED: ${SCHEMA_EXTRACT_PAYLOAD_CLEANUP_ENABLED:-true}
+      # ==== ES 随环增量（#506）：抽取环尾 build_entity_index → upsert_entities
+      # 捎带 ES 关键词索引；ES 不可达时降级告警不抛（esUpserted=0），不影响写图 ====
+      ENTITY_SEARCH_ES_URL: ${ENTITY_SEARCH_ES_URL:-http://es-dev2:9200}
+      ENTITY_SEARCH_ES_TIMEOUT: ${ENTITY_SEARCH_ES_TIMEOUT:-10}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -287,6 +298,32 @@ services:
       - app
     restart: unless-stopped
 
+  # ==== ES 实体关键词索引（#502/#506）：实体列表文字搜索的 ngram 子串镜像索引 ====
+  # 每图空间一个索引 kg_entity_kw_{space}；api/worker 注入 ENTITY_SEARCH_ES_URL。
+  # 初始全量同步（一次性）：
+  #   docker compose -f docker-compose.dev2.yml run --rm api-dev2 \
+  #     .venv/bin/python -m script.build_entity_keyword_index --space dev --es-url http://es-dev2:9200
+  # 宿主机 9201 仅供 curl/_cat 观测。
+  es-dev2:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.14.3
+    container_name: tech-kg-es-dev2
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms2g -Xmx2g
+    ports:
+      - "9201:9200"
+    volumes:
+      - es-data-dev2:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks:
+      - app
+    restart: unless-stopped
+
   # Dev2 专用 Temporal 后端 MySQL（独立实例，不与业务库 tech-kg-mysql 共享）
   temporal-mysql-dev2:
     image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/mysql:8.4
@@ -332,6 +369,7 @@ volumes:
   workflow-state-dev2:
   patent-index-state-dev2:
   temporal-mysql-data-dev2:
+  es-data-dev2:
 
 networks:
   app:

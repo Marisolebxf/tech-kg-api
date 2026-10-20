@@ -6,6 +6,8 @@ import csv
 import json
 import os
 import re
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -18,6 +20,7 @@ from sqlalchemy.pool import StaticPool
 from db_model.entity_search import EntitySearchState
 from infra.graph_db.exceptions import GraphRequestError
 from service.entity_search import (
+    _KEYWORD_SCAN_WORKERS,
     COLLECTION_NAME,
     EntitySearchError,
     EntitySearchService,
@@ -2471,3 +2474,130 @@ def test_upsert_entities_collection_missing_raises(
         EntitySearchService(state_session).upsert_entities(
             space="dev2", items=[{"vid": "expert_7", "label": "Expert"}]
         )
+
+
+# ---------------------------------------------------------------------------
+# upsert_entities × ES 关键词索引增量（不随 Milvus 守卫、失败降级不拖链）
+# ---------------------------------------------------------------------------
+
+
+class _RecordingESStore:
+    """ES 关键词索引替身：记录 upsert 载荷，可编程抛错。"""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        self.upserts: list[tuple[str, list[dict[str, Any]]]] = []
+        self.fail = fail
+
+    def upsert(self, space: str, docs: list[dict[str, Any]], *, refresh: bool = False) -> int:
+        self.upserts.append((space, [dict(doc) for doc in docs]))
+        if self.fail:
+            raise RuntimeError("es down")
+        return len(docs)
+
+
+def _wire_es(monkeypatch: pytest.MonkeyPatch, store: _RecordingESStore | None) -> None:
+    monkeypatch.setattr("service.entity_search.get_entity_keyword_es", lambda: store)
+
+
+def test_upsert_entities_new_space_feeds_es_without_milvus(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """新空间（Milvus 未建索引，随环首建被守卫拦下）ES 关键词索引照常落数——
+    「新空间→构建→自动带 ES 索引」的入口路径；ES 文档与全量同步同构。"""
+    graph, milvus = _indexed_two_expert_graph()
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    monkeypatch.setattr("service.entity_search.get_milvus_client", lambda: milvus)
+    store = _RecordingESStore()
+    _wire_es(monkeypatch, store)
+
+    result = EntitySearchService(state_session).upsert_entities(
+        space="dev2", items=[{"vid": "expert_1", "label": "Expert"}]
+    )
+
+    # Milvus 计划内跳过，但 ES 落了数 → mode 仍 incremental（环末据此失效缓存）
+    assert result["mode"] == "incremental"
+    assert result["reason"] == "space index not built"
+    assert result["esUpserted"] == 1
+    assert result["upserted"] == 0
+    assert len(milvus.collections.get(COLLECTION_NAME, [])) == 0
+    es_space, docs = store.upserts[0]
+    assert es_space == "dev2"
+    doc = docs[0]
+    assert doc["_id"] == "Expert::expert_1"
+    assert doc["entity_type"] == "Expert"
+    assert "张三" in doc["search_text"] and "expert_1" in doc["search_text"]
+    assert doc["item"]["vid"] == "expert_1"
+    assert doc["item"]["entityType"] == "Expert"
+
+
+def test_upsert_entities_reindex_guard_with_es_still_feeds_es(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Milvus 全量重建在跑（守卫跳过 Milvus 增量）也不拦 ES：两套索引独立。"""
+    _indexed_expert_space(monkeypatch, state_session)
+    monkeypatch.setattr("service.entity_search._database_reindex_running", lambda session: True)
+    store = _RecordingESStore()
+    _wire_es(monkeypatch, store)
+
+    result = EntitySearchService(state_session).upsert_entities(
+        space="dev2", items=[{"vid": "expert_1", "label": "Expert"}]
+    )
+
+    assert result["mode"] == "incremental"
+    assert result["reason"] == "reindex in progress"
+    assert result["esUpserted"] == 1
+    assert result["upserted"] == 0
+
+
+def test_upsert_entities_es_failure_degrades_milvus_unaffected(
+    state_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ES 增量失败降级告警不抛（对照 Milvus 的严格口径）：构建链不被 ES 抖动
+    拖 FAILED，Milvus 行照常写入、计数照常推进。"""
+    graph, milvus = _indexed_expert_space(monkeypatch, state_session)
+    graph._nodes["Expert"].append(FakeNode("expert_8", {"id": "E-8", "name": "钱九"}))
+    _wire_es(monkeypatch, _RecordingESStore(fail=True))
+
+    result = EntitySearchService(state_session).upsert_entities(
+        space="dev2", items=[{"vid": "expert_8", "label": "Expert"}]
+    )
+
+    assert result["mode"] == "incremental"
+    assert result["upserted"] == 1  # Milvus 照常
+    assert result["esUpserted"] == 0  # ES 降级
+    assert len(milvus.collections[COLLECTION_NAME]) == 3
+
+
+def test_literal_counts_scan_labels_in_parallel_with_bounded_workers(state_session, monkeypatch):
+    """关键词计数逐标签并行：真实空间几十个标签串行 17~36s，前端 20s 超时直接把
+    搜索栏承诺的「属性关键词」检索掐掉。回归约束：确实并行（峰值并发 > 1）且
+    并发不超过执行器上限——既防退回串行，也防有人改成无界线程池打图服务会话池。
+    """
+
+    class TrackingGraph(LiteralGraph):
+        lock = threading.Lock()
+        in_flight = 0
+        peak = 0
+
+        def keyword_nodes_by_label(self, label, keyword, *, limit=100, offset=0, count_only=False):
+            with type(self).lock:
+                type(self).in_flight += 1
+                type(self).peak = max(type(self).peak, type(self).in_flight)
+            time.sleep(0.2)  # 让并行的标签扫描有时间重叠
+            try:
+                return super().keyword_nodes_by_label(
+                    label, keyword, limit=limit, offset=offset, count_only=count_only
+                )
+            finally:
+                with type(self).lock:
+                    type(self).in_flight -= 1
+
+    labels = ["A", "B", "C", "D", "E", "F"]
+    graph = TrackingGraph(
+        labels, {label: [FakeNode(f"{label}_1", {"name": "同名"})] for label in labels}
+    )
+    monkeypatch.setattr("service.entity_search.get_space_client", lambda space: graph)
+    counts = EntitySearchService(state_session).keyword_counts(keyword="同名", space="dev2")
+    assert counts == {label: 1 for label in labels}
+    assert TrackingGraph.peak > 1, "逐标签计数应并行执行，而不是串行全扫"
+    assert TrackingGraph.peak <= _KEYWORD_SCAN_WORKERS

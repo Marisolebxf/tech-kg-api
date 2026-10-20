@@ -76,8 +76,10 @@ def issue_key(
         raise ValueError("有效天数须为 1～3650")
     if business_name is not None and not 1 <= len(business_name.strip()) <= 200:
         raise ValueError("业务方名称须为 1～200 字符")
-    effective_scopes = list(scopes) if scopes is not None else [PROJECT_RELATIONS_READ]
-    if not effective_scopes or any(scope not in KNOWN_SCOPES for scope in effective_scopes):
+    effective_scopes = list(dict.fromkeys(scopes)) if scopes is not None else None
+    if effective_scopes is not None and (
+        not effective_scopes or any(scope not in KNOWN_SCOPES for scope in effective_scopes)
+    ):
         raise ValueError(f"scopes 仅支持 {', '.join(KNOWN_SCOPES)} 的非空组合")
     now = utc_now()
     key = "kg_" + secrets.token_urlsafe(32)
@@ -90,12 +92,16 @@ def issue_key(
                 client_id=client_id,
                 business_name=business_name.strip(),
                 enabled=True,
-                scopes=effective_scopes,
+                scopes=effective_scopes
+                if effective_scopes is not None
+                else [PROJECT_RELATIONS_READ],
                 created_at=now,
             )
             session.add(client)
         elif client is None:
             raise ValueError("client_id 不存在")
+        if effective_scopes is not None:
+            client.scopes = effective_scopes
         client.api_key_hash = hash_key(key)
         client.key_prefix = key[:12]
         client.expires_at = now + timedelta(days=expires_days)

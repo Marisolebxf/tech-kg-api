@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import os
+import threading
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -624,10 +625,25 @@ class ManualReviewService:
             if c.status in ("CLAIMED", "IN_REVIEW") and c.assignee_id != a.user_id:
                 if not a.has_any("review_admin"):
                     raise ReviewForbiddenError("任务未由当前用户领取")
-            if c.version != v or c.status not in SUBMITTABLE_STATUSES:
+            if c.status not in SUBMITTABLE_STATUSES:
                 raise ReviewConflictError(STATE_OR_VERSION_CONFLICT)
-            validate_action(c.template_id, action, result)
+            # 原子占位（version CAS）：T_LINK 裁决写图耗时秒级，旧「读时校验」
+            # 窗口内双击/并发提交会双双通过（图写两遍、决议双落库）。先原子占住
+            # version 再执行写图；后续异常回滚事务即自动释放占位。
             t = now()
+            reserved = s.execute(
+                update(ReviewCase)
+                .where(
+                    ReviewCase.id == i,
+                    ReviewCase.version == v,
+                    ReviewCase.status.in_(SUBMITTABLE_STATUSES),
+                )
+                .values(version=ReviewCase.version + 1, updated_at=t)
+            )
+            if reserved.rowcount != 1:
+                raise ReviewConflictError(STATE_OR_VERSION_CONFLICT)
+            s.expire(c, ["version", "updated_at"])
+            validate_action(c.template_id, action, result)
             d = ReviewDecision(
                 case_id=i,
                 action_id=action,
@@ -652,7 +668,6 @@ class ManualReviewService:
                 apply_detail = self._apply_link_verdict(c, result)
             c.status = "RESOLVED"
             c.completed_at = t
-            c.version += 1
             c.updated_at = t
             self.audit(
                 s,
@@ -664,9 +679,16 @@ class ManualReviewService:
                 {"actionId": action, **(apply_detail or {})},
             )
             s.commit()
-            # 事务落库后再联动实体检索（索引增量 + 缓存失效），best-effort 不影响裁决结果
+            # 事务落库后再联动实体检索（索引增量 + 缓存失效），best-effort 不影响
+            # 裁决结果。挪后台线程执行：embedding + 索引写入秒级耗时不拖裁决响应
+            # （图已写、决议已落库，联动失败本就由下次全量重建兜底）。
             if apply_detail:
-                self._sync_entity_search_after_write(apply_detail)
+                threading.Thread(
+                    target=self._sync_entity_search_after_write,
+                    args=(apply_detail,),
+                    daemon=True,
+                    name=f"review-index-sync-{c.id}",
+                ).start()
             return self.detail(s, c)
 
     def create_direct_case(
@@ -1236,19 +1258,27 @@ class ManualReviewService:
                 # 同名召回一次拿全：总数 + 各候选属性（tag 无显示名列时为空，逐点降级）；
                 # tag 取快照 _nodeLabel（与 _apply_link_verdict 同源，ReviewCase 无此列）
                 node_label = str(snapshot.get("_nodeLabel") or "")
-                recalled: dict[str, list[dict[str, Any]]] = {}
+                by_vid: dict[str, dict[str, Any]] = {}
                 if display and node_label:
-                    recalled = recall_same_name(client, node_label, [display]) or {}
-                    # 矛盾防御：快照有候选而召回为空（trs-graph 会话池紧张时 DESCRIBE
-                    # 偶发 500 → 降级裸 name 列 → 空结果），重试一次再采信
-                    if not any(recalled.values()) and snapshot.get("existingCandidates"):
-                        recalled = recall_same_name(client, node_label, [display]) or {}
-                by_vid = {
-                    str(cand.get("vid")): cand
-                    for cands in recalled.values()
-                    for cand in cands
-                    if cand.get("vid")
-                }
+                    space = str(snapshot.get("_graphSpace") or "")
+                    es_by_vid = self._es_same_name_by_vid(space, node_label, display)
+                    if es_by_vid is not None:
+                        by_vid = es_by_vid
+                    else:
+                        # ES 不可用/名字列未回填 → 图召回（四列 OR 全扫，实测秒级）
+                        recalled: dict[str, list[dict[str, Any]]] = (
+                            recall_same_name(client, node_label, [display]) or {}
+                        )
+                        # 矛盾防御：快照有候选而召回为空（trs-graph 会话池紧张时 DESCRIBE
+                        # 偶发 500 → 降级裸 name 列 → 空结果），重试一次再采信
+                        if not any(recalled.values()) and snapshot.get("existingCandidates"):
+                            recalled = recall_same_name(client, node_label, [display]) or {}
+                        by_vid = {
+                            str(cand.get("vid")): cand
+                            for cands in recalled.values()
+                            for cand in cands
+                            if cand.get("vid")
+                        }
                 by_vid.pop(incoming_vid, None)
 
                 def _props_of(vid: str) -> dict[str, Any]:
@@ -1299,13 +1329,52 @@ class ManualReviewService:
                     "sameNameTotal": len(by_vid),
                 }
             finally:
-                try:
-                    client.close()
-                except Exception:  # noqa: BLE001
-                    pass
+                pass  # 客户端已换 infra 按空间共享缓存，不可 close
         except Exception as exc:  # noqa: BLE001
             logger.warning("T_LINK 详情证据富化失败 case=%s，按原快照展示: %s", c.id, exc)
         return snapshot
+
+    def _es_same_name_by_vid(
+        self, space: str, node_label: str, display: str
+    ) -> dict[str, dict[str, Any]] | None:
+        """ES 精确同名召回（T_LINK 详情富化快路）：四个显示名列 keyword 等值。
+
+        ES 未配置 / 空间未同步 / 名字列未回填 / 查询异常一律返回 None，
+        调用方回退图同名召回（图召回是四列 OR 全扫，实测秒级——ES 命中后
+        详情富化从 ~1.8s 降到 ~0.4s）。只用于评审证据展示，不进消歧判定。"""
+        from infra.elasticsearch import get_entity_keyword_es
+
+        if not space or not display:
+            return None
+        store = get_entity_keyword_es()
+        if store is None:
+            return None
+        try:
+            if not store.ready(space) or not store.names_indexed(space):
+                return None
+            docs = store.search_by_names(space, [display], entity_type=node_label, size=200)
+        except Exception:  # noqa: BLE001 - 展示富化 fail-open
+            logger.warning(
+                "T_LINK 详情 ES 同名召回失败，回退图查询 name=%s: ", display, exc_info=True
+            )
+            return None
+        by_vid: dict[str, dict[str, Any]] = {}
+        for doc in docs:
+            vid = str(doc.get("vid") or "")
+            if not vid:
+                continue
+            item = doc.get("item") if isinstance(doc.get("item"), dict) else {}
+            name = ""
+            for col in ("name", "name_zh", "name_cn", "name_en"):
+                if doc.get(col):
+                    name = str(doc[col])
+                    break
+            by_vid[vid] = {
+                "vid": vid,
+                "name": name or str(item.get("name") or ""),
+                "props": dict(item.get("properties") or {}),
+            }
+        return by_vid
 
     @staticmethod
     def _fix_mojibake(value: Any) -> Any:
@@ -1339,25 +1408,27 @@ class ManualReviewService:
         return value
 
     def _graph_client_for(self, snapshot: dict[str, Any]) -> Any:
-        """按快照记载的图空间建客户端（缺省走环境默认空间）并完成连接。"""
-        from infra.graph_db.client import TRSGraphClient
+        """按快照记载的图空间取共享客户端（缺省走环境默认空间）。
+
+        直连客户端每开一次详情/每裁一次决都要新建会话 + connect（实测
+        ~390ms），换 infra 的按空间缓存客户端后连接复用；共享客户端
+        调用方不得 close。"""
+        from infra.graph_db import get_space_client
         from infra.graph_db.config import TRSGraphSettings
 
-        settings = TRSGraphSettings.from_env()
-        space = snapshot.get("_graphSpace")
-        if space:
-            settings.space = space
-        client = TRSGraphClient(settings)
-        client.connect()
-        return client
+        space = str(snapshot.get("_graphSpace") or TRSGraphSettings.from_env().space)
+        return get_space_client(space)
 
     def _apply_link_verdict(self, c: ReviewCase, result: dict[str, Any]) -> dict[str, Any]:
         """T_LINK 裁决执行：merge→扣留记录并入所选候选；create→按预留 vid 新建。
 
-        写前扣留 case（快照含 ``_incoming``）：INSERT VERTEX 幂等 upsert，merge 与
-        create 是同一条语句、仅 vid 不同；空值列不写＝不覆盖目标已有值；``_pendingRelations``
-        里的待定边在实体落图后按改写端点补写。图写失败异常上抛 → 事务回滚 → 审核
-        员重新提交即重试（幂等安全）。存量写后 case（无 ``_incoming``）只记录决议。
+        写前扣留 case（快照含 ``_incoming``）：实体落图走
+        ``_insert_withheld_vertex``（per-VID 锁 + FETCH 旧值列级合并后整列
+        INSERT——Nebula 整标签覆盖语义下裸 INSERT 会清掉目标既有列，见其
+        docstring），merge 与 create 是同一条语句、仅 vid 不同；
+        ``_pendingRelations`` 里的待定边在实体落图后按改写端点补写。图写
+        失败异常上抛 → 事务回滚 → 审核员重新提交即重试（幂等安全）。存量
+        写后 case（无 ``_incoming``）只记录决议。
         """
         snapshot = load(c.candidate_snapshot) or {}
         from service.business_access_control import rbac_enabled
@@ -1388,7 +1459,7 @@ class ManualReviewService:
             raise ReviewValidationError("retype 暂不支持：请驳回后修正脚本重跑")
         client = self._graph_client_for(snapshot)
         try:
-            self._insert_withheld_vertex(client, c, snapshot, incoming, vid)
+            self._insert_withheld_vertex(client, c, snapshot, incoming, vid, graph_space)
             old_vid = str(incoming.get("vid") or c.object_id)
             written_edges = 0
             edge_fields: dict[str, set[str] | None] = {}
@@ -1421,10 +1492,7 @@ class ManualReviewService:
                 client.create_edge(frm, to, edge_type, props)
                 written_edges += 1
         finally:
-            try:
-                client.close()
-            except Exception:  # noqa: BLE001
-                logger.exception("关闭图客户端失败")
+            pass  # 客户端已换 infra 按空间共享缓存，不可 close
         return {
             "applied": True,
             "verdict": verdict,
@@ -1500,6 +1568,60 @@ class ManualReviewService:
             logger.warning("DESCRIBE EDGE %s 失败，补边按旧兜底补审计列", edge_type)
             return None
 
+    @staticmethod
+    def _fetch_existing_props(client: Any, label: str, vid: str) -> dict[str, Any]:
+        """FETCH 图上该 vid 已有属性（裁决写前合并用，与写图路径 #526 同语义）。
+
+        读失败（单次抖动重试一次后仍失败）上抛——合并失败宁可让裁决重试，
+        绝不静默退回「覆盖清列」。图上旧属性无法解析（trs-graph 把 map 序列
+        化成 JSON 字符串但坏了）或形状异常（非 dict）同样抛错：按「无旧值」
+        继续写等于静默覆盖清列。图上 NULL（从未置过的列）不进合并。目标不
+        存在 → 空 dict（调用方等同新建路径）。
+        """
+        import json as _json
+
+        from infra.graph_db.exceptions import GraphRequestError
+
+        quoted = _json.dumps(vid, ensure_ascii=False)
+        result = None
+        last_exc: Exception | None = None
+        for _ in range(2):  # 单次抖动重试一次（与本文件 _props_of 同口径）
+            try:
+                result = client.execute_read(
+                    f"FETCH PROP ON `{label}` {quoted} "
+                    "YIELD id(vertex) AS vid, properties(vertex) AS props"
+                )
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+        if result is None:
+            assert last_exc is not None
+            raise last_exc
+        for row in getattr(result, "records", None) or []:
+            if not isinstance(row, dict) or str(row.get("vid") or "") != vid:
+                continue
+            value = row.get("props")
+            if isinstance(value, str):
+                try:
+                    value = _json.loads(value)
+                except ValueError as exc:
+                    raise GraphRequestError(
+                        f"图上旧属性无法解析（{label} vid={vid}，值形如 "
+                        f"{str(value)[:60]!r}）——中止裁决写入防覆盖清列",
+                        status_code=502,
+                    ) from exc
+            if value is None:
+                return {}
+            if not isinstance(value, dict):
+                raise GraphRequestError(
+                    f"图上旧属性形状异常（{label} vid={vid}，"
+                    f"type={type(value).__name__}）——中止裁决写入防覆盖清列",
+                    status_code=502,
+                )
+            # 图上 NULL（从未置过的列）不进合并，避免把 NULL 显式写回
+            return {k: v for k, v in value.items() if v is not None}
+        return {}
+
     def _insert_withheld_vertex(
         self,
         client: Any,
@@ -1507,10 +1629,56 @@ class ManualReviewService:
         snapshot: dict[str, Any],
         incoming: dict[str, Any],
         vid: str,
+        graph_space: str = "",
     ) -> None:
-        """扣留实体写入指定 vid（幂等 upsert；空值列不写＝不覆盖目标已有值）。"""
+        """扣留实体按「per-VID 锁 → FETCH 旧值 → 列级合并 → 整列 INSERT」落图。
+
+        Nebula 的 ``INSERT VERTEX`` 对已存在顶点是**整标签覆盖**：未列出的列
+        会被重置成默认值（2026-10-19 服务器隔离空间实测：merge 裁决后 8 个
+        合并目标学者 h_index 等既有列全被清空、source_record_id 被改写为作
+        者行 vid）。旧注释「空值列不写＝不覆盖目标已有值」与真实语义相反，
+        已删除。
+
+        合并策略与平台写图路径（temporal_workflows 的 ``_merge_entity_rows``
+        /``_fetch_existing_props``，#526）同款：
+
+        - **列冲突规则**：扣留行**非空**列覆盖目标既有值；扣留行缺失/空值列
+          保留目标既有值（图上 NULL 不进合并）；
+        - **create_time/update_time** 不从图上保留，每次写入由平台兜底刷新
+          （#526 口径，见下方 audit 注入）；
+        - **身份/溯源列**（id/source_record_id/source_table/match_method/
+          match_evidence/ingest_time 等）#526 未单独约定，走上述通用规则：
+          目标已有值保留、扣留行非空才覆盖；两边全缺时按 audit 兜底补
+          （id=vid、source_table=扣留行来源表或 schema_extract、name=快照
+          展示名）；
+        - **目标不存在**（create 裁决的预留 vid / merge 目标已被删）：FETCH
+          空 → 合并结果即扣留行列，等同新建路径。
+
+        并发保护：与工作流写图路径共用同一把 per-VID fail-closed Redis 锁
+        （``entity_write_guard.vid_write_lock_sync``，键
+        ``kg:entity:vid:{space}:{label}:{md5(vid)}``，SET NX PX + token 比删），
+        锁内完成 FETCH→合并→INSERT 整个读改写窗口——工作流正写同 VID 时本
+        路径等待/超时拒绝，绝不并发覆盖。锁的租约生命周期与异步版对齐：
+        临界区内**心跳线程**按 TTL/3 持续续租（在途 INSERT 阻塞写线程期间
+        租约持续有效，Redis 健康只是请求慢时第二写者结构性拿不到锁），叠加
+        边界校验——FETCH 返回后若耗时超过 TTL/3 先续租拉长写窗口、**INSERT
+        派发前必须续租并校验持有权**、**INSERT 返回后校验在途期间是否丢租**。
+        临界区跨过 TTL（慢图请求、两次 FETCH、线程暂停、网络阻塞、短 TTL
+        配置）且续租失败时租约已被他人接管，按旧快照继续整标签 INSERT 会静
+        默清掉对方列，故丢失抛 ``VidWriteLeaseLostError`` 禁止新的/后续的
+        写。拿不到锁 / FETCH 失败 / 图上旧属性无法解析 / 租约丢失 → 抛错
+        （fail-closed 零新增写，submit 事务回滚、案件状态不前移，审核员重
+        新提交即重试；合并后 INSERT 幂等安全）。**在途边界（诚实声明）**：
+        派发后的 INSERT 无法取消、事后抛错不能回滚图库——INSERT 返回后发现
+        丢租（心跳在 Redis 故障窗口内判丢）时图写可能已落地，处置是抛错让
+        submit 回滚（案件不前移、后续暂存边零写），重提重新 FETCH 合并即可
+        收敛（合并保留接管者落下的列）；残余窗口与 #526 异步版心跳间故障的
+        在途窗口同级，此处不假装能回滚。
+        """
         import json as _json
         from datetime import datetime as _dt
+
+        from service import entity_write_guard as _guard
 
         node_label = snapshot.get("_nodeLabel")
         if not node_label:
@@ -1530,28 +1698,54 @@ class ManualReviewService:
         # 业务列、name 留空（空值列不写）时 INSERT 缺列被 Nebula 拒（400
         # not null field doesn't have a default value）——按快照记载的展示名补
         display_name = str(snapshot.get("name") or c.object_name or "").strip()
-        audit = {
-            "id": vid,
-            "create_time": now_str,
-            "update_time": now_str,
-            "source_table": incoming.get("sourceTable") or "schema_extract",
-        }
-        if display_name:
-            audit["name"] = display_name
-        for key, value in audit.items():
-            if fields is None or key in fields:
-                props.setdefault(key, value)
 
-        def _ngql_value(value: Any) -> str:
-            if isinstance(value, bool):
-                return "true" if value else "false"
-            if isinstance(value, (int, float)):
-                return str(value)
-            return _json.dumps(str(value), ensure_ascii=False)
+        def _locked_write(lease: _guard._SyncVidLease) -> None:
+            old = self._fetch_existing_props(client, node_label, vid)
+            # FETCH 耗时超过阈值（默认 TTL/3）→ 先续租拉长后续写窗口（慢图
+            # 请求下临界区可能逼近 TTL）
+            lease.refresh_if_aged()
+            # 列级合并：目标既有列保留（create_time/update_time 除外，仍由
+            # 平台每次刷新），扣留行非空列覆盖
+            merged = {
+                **{k: v for k, v in old.items() if k not in ("create_time", "update_time")},
+                **props,
+            }
+            audit = {
+                "id": vid,
+                "create_time": now_str,
+                "update_time": now_str,
+                "source_table": incoming.get("sourceTable") or "schema_extract",
+            }
+            if display_name:
+                audit["name"] = display_name
+            for key, value in audit.items():
+                if fields is None or key in fields:
+                    merged.setdefault(key, value)
 
-        cols = ", ".join(f"`{key}`" for key in props)
-        values = ", ".join(_ngql_value(props[key]) for key in props)
-        client.execute_write(f'INSERT VERTEX `{node_label}`({cols}) VALUES "{vid}":({values})')
+            def _ngql_value(value: Any) -> str:
+                if isinstance(value, bool):
+                    return "true" if value else "false"
+                if isinstance(value, (int, float)):
+                    return str(value)
+                return _json.dumps(str(value), ensure_ascii=False)
+
+            cols = ", ".join(f"`{key}`" for key in merged)
+            values = ", ".join(_ngql_value(merged[key]) for key in merged)
+            quoted_vid = _json.dumps(vid, ensure_ascii=False)
+            # INSERT 派发前必须续租并校验持有权：临界区跨过 TTL 时租约已被
+            # 他人接管，按过期快照整标签 INSERT 会清掉对方列且不抛错——续
+            # 租失败即熔断（零新增写，submit 回滚、重提重试）
+            lease.ensure_lease()
+            client.execute_write(
+                f"INSERT VERTEX `{node_label}`({cols}) VALUES {quoted_vid}:({values})"
+            )
+            # INSERT 返回后校验：在途期间心跳续租失败（Redis 故障窗口）则租
+            # 约已丢失——图写可能已落地且不可取消，抛错熔断后续写（暂存边
+            # 等），submit 回滚、案件不前移；重提重新 FETCH 合并收敛
+            lease.raise_if_lost()
+
+        with _guard.vid_write_lock_sync(graph_space, node_label, vid) as lease:
+            _locked_write(lease)
 
     def direct_decide(
         self,
@@ -1583,8 +1777,22 @@ class ManualReviewService:
             self.require_case_access(identity, c)
             if c.template_id != "T_DIRECT":
                 raise ReviewValidationError("仅 T_DIRECT 案例支持 direct_decide")
-            if c.version != version or c.status != "OPEN":
+            if c.status != "OPEN":
                 raise ReviewConflictError("状态或版本冲突")
+            # 原子占位（version CAS，与 submit 同口径）：accept 写图耗时秒级，
+            # 防「读时校验」窗口内双击/并发双写图
+            reserved = s.execute(
+                update(ReviewCase)
+                .where(
+                    ReviewCase.id == case_id,
+                    ReviewCase.version == version,
+                    ReviewCase.status == "OPEN",
+                )
+                .values(version=ReviewCase.version + 1, updated_at=now())
+            )
+            if reserved.rowcount != 1:
+                raise ReviewConflictError("状态或版本冲突")
+            s.expire(c, ["version", "updated_at"])
             old = c.status
             audit_detail: dict[str, Any] = {"note": note}
             if stripped is not None:
@@ -1609,7 +1817,6 @@ class ManualReviewService:
             else:
                 c.status = "REJECTED"
             c.completed_at = now()
-            c.version += 1
             c.updated_at = now()
             # 与 submit 通道同口径落一条决议：详情接口靠它回显最终裁决，
             # 否则 T_DIRECT case 刷新后裁决单选回落默认值

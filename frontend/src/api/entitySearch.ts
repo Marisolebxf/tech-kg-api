@@ -157,6 +157,13 @@ export async function searchEntityList(payload: {
   limit?: number
   offset?: number
 }): Promise<EntityListResult> {
-  return unwrap(await asApiPromise<EntityListResult>(http.get(`${PREFIX}/keyword`, { params: payload })))
+  // 文字匹配对大图空间是逐标签全扫（CONTAINS 无索引可用），真实耗时可达
+  // 30s+；默认 20s 超时会把搜索栏承诺的「属性关键词」检索整个掐掉。
+  // 后端已按标签并行压缩耗时，这里再放宽到 55s——略低于 nginx 默认
+  // proxy_read_timeout 60s，让前端拿到明确的超时文案而不是 504。
+  // 查询期间按钮呈「查询中…」防重复触发；翻页与二次搜索命中块缓存。
+  return unwrap(await asApiPromise<EntityListResult>(
+    http.get(`${PREFIX}/keyword`, { params: payload, timeout: 55_000 }),
+  ))
 }
 

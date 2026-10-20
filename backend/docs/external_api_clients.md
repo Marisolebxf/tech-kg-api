@@ -1,15 +1,15 @@
 # 外部业务方凭证管理
 
-本系统为每个业务方分配 `client_id` 和 API Key，调用方通过 `X-Client-Id` 与 `X-API-Key` 两个 Header 调用 `POST /api/v1/kg-service/project-relations/query`。本功能独立于统一用户中心；原 Bearer/Cookie 认证继续兼容。
+本系统为每个业务方分配 `client_id` 和 API Key，调用方通过 `X-Client-Id` 与 `X-API-Key` 两个 Header 调用项目关系或 [kg-open 图查询](../../docs/kg-open-external-query-api.md) 接口。本功能独立于统一用户中心；原 Bearer/Cookie 认证继续兼容。
 
 本文说明代码的接入与操作方式，不代表目标环境已经部署或完成验收。
 
 ## 凭证与权限
 
 - `external_api_client` 表保存在应用业务 MySQL 中，连接沿用 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_DATABASE`、`MYSQL_USERNAME`、`MYSQL_PASSWORD` 配置。
-- 管理员按业务方分配唯一 `client_id`，不由调用方随意填写。创建时登记业务方名称并授予 `project-relations:read`，仅允许项目关系查询。
+- 管理员按业务方分配唯一 `client_id`，不由调用方随意填写。创建时登记业务方名称。`project-relations:read` 允许项目关系查询，`kg-open:read` 允许 3 个对外图查询接口；用 `--scopes` 指定，可同时授予。新建未指定时仍默认为 `project-relations:read`。
 - API Key 使用 32 字节安全随机数生成，数据库仅保存 SHA-256 哈希值，不保存可恢复的明文。原始 Key 只在创建或轮换时输出一次，遗失后需轮换。
-- 默认有效期为 90 天，可在签发或轮换时通过 `--expires-days` 指定。不要把生产 Key 放入源码、工单正文或请求日志。
+- 默认有效期为 365 天，可在签发或轮换时通过 `--expires-days` 指定。不要把生产 Key 放入源码、工单正文或请求日志。
 - 携带任意一个 API Key Header 就进入 API Key 校验；缺失配对 Header 或认证失败不会尝试 Bearer/Cookie。未携带这两个 Header 时沿用原认证流程。
 - 正式对外接入配置 `AUTH_ENABLED=true`。关闭登录是开发用途，会影响不携带 API Key Header 的请求，不能作为接口访问控制。
 
@@ -32,7 +32,7 @@ python -m script.manage_external_api_clients create \
   --expires-days 90
 ```
 
-将输出的 `client_id`、原始 API Key 和接口文档交给指定调用方，并按本次 `--expires-days` 告知有效期（从签发时起计算，默认 90 天）。调用方将凭证配置在自己的后端，并在每次请求中携带；不需要获取用户登录 Token。
+将输出的 `client_id`、原始 API Key 和接口文档交给指定调用方，并按本次 `--expires-days` 告知有效期（从签发时起计算，默认 365 天）。调用方将凭证配置在自己的后端，并在每次请求中携带；不需要获取用户登录 Token。
 
 轮换凭证：
 
@@ -41,6 +41,8 @@ python -m script.manage_external_api_clients rotate \
   --client-id partner_project_a \
   --expires-days 90
 ```
+
+轮换不传 `--scopes` 保留现有权限；显式传入则替换为给定权限列表，例如 `--scopes project-relations:read,kg-open:read`。
 
 轮换提交后旧 Key 立即失效，没有双 Key 过渡期，应与调用方协调更新时间。轮换不会自动启用已经停用的业务方。
 

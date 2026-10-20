@@ -66,10 +66,7 @@ function goBack() {
 </template>
 
 <style scoped>
-/* Arco Design Breadcrumb 规范（@arco-design/web-vue es/breadcrumb/style）：
-   inline-flex 布局、`/` 分隔（text-4 弱色）、可点项 hover 链接色 + 浅底。
-   除当前页外每级都可点击；当前页（选中项）用品牌蓝高亮。
-   可点项用 padding/margin 负抵消留出悬停底色。 */
+/* Production breadcrumb: 12/20px, muted ancestors and a noninteractive current page. */
 .app-breadcrumb {
   display: flex;
   align-items: center;
@@ -77,9 +74,9 @@ function goBack() {
   width: fit-content;
   max-width: 100%;
   min-width: 0;
-  height: 22px;
-  color: #4e5969;
-  font-size: 14px;
+  height: 20px;
+  color: #86909c;
+  font-size: 12px;
 }
 
 /* 行首「<」返回按钮：与图标入口同款命中区，悬停变蓝 */
@@ -87,12 +84,12 @@ function goBack() {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
-  padding: 0 8px;
-  margin: 0 -8px;
+  padding: 0;
+  margin: 0;
   border: 0;
   border-radius: 2px;
   background: transparent;
-  color: #4e5969;
+  color: #86909c;
   cursor: pointer;
 }
 
@@ -117,18 +114,18 @@ function goBack() {
 
 .app-breadcrumb__separator {
   flex: 0 0 auto;
-  color: #c9cdd4;
-  font-size: 14px;
-  line-height: 22px;
+  color: #86909c;
+  font-size: 12px;
+  line-height: 20px;
 }
 
 .app-breadcrumb__link {
   flex: 0 0 auto;
-  padding: 0 8px;
-  margin: 0 -8px;
+  padding: 0;
+  margin: 0;
   border-radius: 2px;
-  color: #4e5969;
-  line-height: 22px;
+  color: #86909c;
+  line-height: 20px;
   text-decoration: none;
   white-space: nowrap;
 }
@@ -140,10 +137,13 @@ function goBack() {
 }
 
 .app-breadcrumb__current {
-  flex: 0 0 auto;
-  color: #165dff;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #1d2129;
   font-weight: 500;
-  line-height: 22px;
+  line-height: 20px;
   white-space: nowrap;
 }
 </style>

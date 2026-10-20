@@ -124,7 +124,8 @@ def _job_to_data(job: Any) -> dict:
         "status": "cancelled" if job.driver_state == "KILLED" else job.status,
         "createdAt": utc_to_cst_str(job.created_at),
         # 开始/完成保留毫秒：亚秒级作业（如 nGQL 度数计算）秒精度会显示成「耗时 0 秒」
-        "startedAt": utc_to_cst_str_ms(job.started_at),
+        # 兼容旧图服务：提交时 startedAt=createdAt，但轮询曾漏掉 startedAt。
+        "startedAt": utc_to_cst_str_ms(job.started_at or job.created_at),
         "finishedAt": utc_to_cst_str_ms(job.finished_at),
         "submissionId": job.submission_id,
         "driverState": job.driver_state,
@@ -225,6 +226,20 @@ _DEGREE_INDEX_BUILD_TIMEOUT_SECONDS = float(
     os.getenv("GRAPH_ALGO_DEGREE_INDEX_BUILD_TIMEOUT_SECONDS", "300")
 )
 _DEGREE_INDEX_POLL_SECONDS = float(os.getenv("GRAPH_ALGO_DEGREE_INDEX_POLL_SECONDS", "2"))
+# —— 2026-10-19 有界恢复：定制版 Nebula 的管理作业（stats/索引重建）全局串行，
+# 共享图库多空间作业互相挤兑会让刚提交的 REBUILD 很快 FAILED（队列空闲后重跑即
+# 自愈，dev2 实测 3 秒全过）。FAILED 不再一律当终态：仅对本次运行自己 CREATE 出来
+# 的 Degree 专用索引做有界重试（见 _ensure_degree_edge_index）。
+_DEGREE_INDEX_REBUILD_RETRY_LIMIT = max(
+    0, min(int(os.getenv("GRAPH_ALGO_DEGREE_INDEX_REBUILD_RETRY_LIMIT", "2")), 5)
+)
+_DEGREE_INDEX_REBUILD_BACKOFF_BASE_SECONDS = max(
+    0.0, float(os.getenv("GRAPH_ALGO_DEGREE_INDEX_REBUILD_BACKOFF_BASE_SECONDS", "2"))
+)
+_DEGREE_INDEX_REBUILD_BACKOFF_MAX_SECONDS = max(
+    _DEGREE_INDEX_REBUILD_BACKOFF_BASE_SECONDS,
+    float(os.getenv("GRAPH_ALGO_DEGREE_INDEX_REBUILD_BACKOFF_MAX_SECONDS", "15")),
+)
 _degree_jobs: dict[str, dict[str, Any]] = {}
 _degree_jobs_lock = threading.Lock()
 _degree_context = threading.local()
@@ -630,6 +645,145 @@ def _existing_degree_edge_index(client: Any, label: str) -> str | None:
     return None
 
 
+def _nebula_job_id_from_result(result: Any) -> int | None:
+    """从 REBUILD 提交的返回里解析 Nebula 管理作业号（"Job Id" 列），失败返回 None。"""
+    for record in getattr(result, "records", None) or []:
+        if not isinstance(record, dict):
+            continue
+        normalized = {
+            str(key).strip().lower().replace("_", " "): value for key, value in record.items()
+        }
+        raw = normalized.get("new job id", normalized.get("job id"))
+        if raw is None:
+            continue
+        try:
+            return int(str(raw).strip())
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _degree_rebuild_backoff_seconds(retries_used: int) -> float:
+    """FAILED 重试的退避间隔：2/4/8s 指数退避，封顶 15s。"""
+    return min(
+        _DEGREE_INDEX_REBUILD_BACKOFF_BASE_SECONDS * (2**retries_used),
+        _DEGREE_INDEX_REBUILD_BACKOFF_MAX_SECONDS,
+    )
+
+
+def _assert_degree_index_deadline(label: str, index_name: str, deadline: float) -> None:
+    """每次 REBUILD 提交前的统一门禁：先查任务取消，再查总 deadline。
+
+    预算口径（如实声明，勿夸大）：deadline 只 gate **新的重建提交**——含首次
+    提交、瞬态重试的每一轮、FAILED 恢复重提交，到期后绝不再发出 REBUILD。
+    在途请求不受 deadline 截断：SHOW EDGE INDEX STATUS / SHOW JOBS / LOOKUP
+    校验带 30s 固定超时，REBUILD 写与会话槽等待另有独立时限，它们可能超过
+    deadline 才返回或失败——因此整个恢复流程的墙钟时长不严格 ≤ 超时秒数，
+    保证的只是「到期后零新增提交」。
+    """
+    _check_degree_cancelled()
+    if time.monotonic() >= deadline:
+        raise GraphAlgorithmError(
+            f"关系类型 {label} 的索引 {index_name} 重建超过 "
+            f"{int(_DEGREE_INDEX_BUILD_TIMEOUT_SECONDS)} 秒，请稍后重试",
+            status_code=504,
+        )
+
+
+def _degree_index_backoff(seconds: float, deadline: float) -> None:
+    """退避时长受剩余预算约束：至多睡到 deadline，绝不越过。"""
+    remaining = deadline - time.monotonic()
+    if remaining > 0:
+        _degree_pause(min(seconds, remaining))
+
+
+def _foreign_admin_job_records(records: Iterable[Any], own_job_id: int | None) -> list[dict]:
+    """SHOW JOBS 记录里排除自身重建作业后的其余管理作业（仅诊断用）。"""
+    others: list[dict] = []
+    for record in records or []:
+        if not isinstance(record, dict):
+            continue
+        normalized = {
+            str(key).strip().lower().replace("_", " "): value for key, value in record.items()
+        }
+        raw = normalized.get("job id")
+        try:
+            job_id = int(str(raw).strip()) if raw is not None else None
+        except (TypeError, ValueError):
+            job_id = None
+        if own_job_id is not None and job_id == own_job_id:
+            continue
+        others.append(record)
+    return others
+
+
+def _log_degree_rebuild_diagnostics(
+    client: Any, label: str, index_name: str, own_job_id: int | None
+) -> None:
+    """REBUILD FAILED 后的现场取证，只写诊断日志，绝不参与重试决策。
+
+    定制版 Nebula 的管理作业全局串行，但 SHOW JOBS 只能看到**当前图空间**的
+    作业队列：跨空间的挤兑者（如其他空间的 stats 快照采集）在本空间列表里
+    不可见——这正是它只配当诊断线索、不能当控制流依据的原因。排除自身
+    job id，避免把刚提交的重建自己误认为占用者。
+    """
+    try:
+        result = _execute_degree_read(
+            client,
+            "SHOW JOBS",
+            timeout=30.0,
+            context=f"诊断关系类型 {label} 的索引重建失败现场",
+        )
+    except Exception as exc:  # noqa: BLE001 — 诊断失败不影响恢复主流程
+        logger.warning(
+            "Degree 索引重建 FAILED 后 SHOW JOBS 诊断读取失败: label=%s index=%s error=%s",
+            label,
+            index_name,
+            exc,
+        )
+        return
+    others = _foreign_admin_job_records(result.records or [], own_job_id)
+    logger.warning(
+        "Degree 索引重建 FAILED，本空间其余管理作业（跨空间占用不可见）: "
+        "label=%s index=%s own_job=%s other_jobs=%s",
+        label,
+        index_name,
+        own_job_id,
+        others,
+    )
+
+
+def _submit_degree_index_rebuild(
+    client: Any, label: str, rebuild_name: str, *, deadline: float
+) -> int | None:
+    """重提交 REBUILD 并返回新的 Nebula 作业号；瞬态提交失败在 deadline 内退避重试。
+
+    与首次提交不同，此处不再回退 existing_name：索引已可见过（首次 REBUILD 已被
+    接受过一次），not found 属于不应复现的异常路径，按非瞬态错误上抛。
+
+    每一轮提交前（含瞬态重试的每一轮）都过取消+deadline 门禁，退避受剩余预算
+    约束：deadline 之后绝不再发出新的 REBUILD 提交——包括「上一次提交失败、
+    退避跨过 deadline、下一次提交本可成功」的路径，也按超时报错。
+    """
+    from infra.graph_db.exceptions import GraphRequestError
+
+    while True:
+        _assert_degree_index_deadline(label, rebuild_name, deadline)
+        try:
+            return _nebula_job_id_from_result(
+                client.execute_write(f"REBUILD EDGE INDEX `{rebuild_name}`")
+            )
+        except GraphRequestError as exc:
+            # 另一 worker 已触发相同索引的重建时，不再重复提交，直接等待可用。
+            if _is_index_building_error(exc):
+                return None
+            if not _is_transient_index_error(exc):
+                raise GraphAlgorithmError(
+                    f"关系类型 {label} 的索引 {rebuild_name} 重建失败: {exc}", status_code=502
+                ) from exc
+            _degree_index_backoff(_DEGREE_INDEX_POLL_SECONDS, deadline)
+
+
 def _ensure_degree_edge_index(client: Any, label: str) -> None:
     """确保边类型有可用的零属性边索引并重建到 FINISHED，等待到 LOOKUP 可用。
 
@@ -640,8 +794,28 @@ def _ensure_degree_edge_index(client: Any, label: str) -> None:
     只能 REBUILD 空等到超时。LOOKUP 聚合不区分索引名，任一零属性索引可用。
     Degree 在 FastAPI BackgroundTasks 中运行，索引重建期间前端保持 running；
     不再回退全空间 MATCH，从根源上避免共享图库 90 秒扫描超时。
+
+    2026-10-19 有界恢复（政策变化，显式接受）：REBUILD 后状态 FAILED 且索引是
+    本函数命名的 Degree 专用索引时，在**单一** deadline 内有界重试：≤2 次重
+    提交、退避 2/4/8s 封顶 15s、每次退避中持续响应任务取消。**恢复范围按命名
+    匹配（rebuild_name == index_name）判定，无法也无需证明索引由本次运行首建**：
+    先前 Degree 运行遗留的同名专用索引（本次 CREATE IF NOT EXISTS 幂等复用）
+    同样在恢复范围内；复用的 schema 同步索引（``{label}_idx`` 等）FAILED 仍为
+    终态。每一轮提交前（首次提交、瞬态重试、FAILED 恢复重提交）都过取消+
+    deadline 门禁，退避受剩余预算约束（见 _assert_degree_index_deadline）——
+    到期后不再发起任何新的重建提交。FAILED 的原因无法区分「共享管理作业队列
+    挤兑（重试可自愈）」与「永久错误（schema 损坏/磁盘满等）」，因此**永久
+    错误也会耗尽重试预算**——多花约 6 秒退避与 2 次重建提交后才以 502 暴露，
+    不做错误原因分类。STOPPED/INVALID 仍视为终态直接上抛。FAILED 时附带
+    SHOW JOBS 诊断日志（排除自身 job id，仅本空间可见，见
+    _log_degree_rebuild_diagnostics）。
+
+    预算口径（如实声明）：deadline 贯穿首次提交、瞬态重试、FAILED 恢复、状态
+    轮询与结果校验，gate 的是**新的重建提交**与轮询终止；在途请求（30s 固定
+    超时的 SHOW/LOOKUP 读取、REBUILD 写、图服务会话槽等待）不被 deadline
+    截断，可能超过 deadline 才返回——故整个调用的墙钟时长不严格 ≤ 超时秒数。
     """
-    from infra.graph_db.exceptions import GraphRequestError
+    from infra.graph_db.exceptions import GraphConnectionError, GraphRequestError
 
     index_name = _degree_index_name(label)
     existing_name = _existing_degree_edge_index(client, label)
@@ -664,10 +838,15 @@ def _ensure_degree_edge_index(client: Any, label: str) -> None:
 
     # CREATE DDL 需要短暂传播；并发 worker 可能发现同一索引已在重建，均转入可用性轮询。
     rebuild_name = index_name
+    rebuild_submissions = 0
+    rebuild_job_id: int | None = None
     while True:
-        _check_degree_cancelled()
+        _assert_degree_index_deadline(label, rebuild_name, deadline)
         try:
-            client.execute_write(f"REBUILD EDGE INDEX `{rebuild_name}`")
+            rebuild_job_id = _nebula_job_id_from_result(
+                client.execute_write(f"REBUILD EDGE INDEX `{rebuild_name}`")
+            )
+            rebuild_submissions += 1
             break
         except GraphRequestError as exc:
             # 另一 worker 已触发相同索引的重建时，不再重复提交，直接等待可用。
@@ -688,51 +867,93 @@ def _ensure_degree_edge_index(client: Any, label: str) -> None:
                 )
                 rebuild_name = existing_name
                 continue
-            if time.monotonic() >= deadline:
-                raise GraphAlgorithmError(
-                    f"关系类型 {label} 的索引 {rebuild_name} 在创建后未及时可见，请稍后重试",
-                    status_code=504,
-                ) from exc
-            _degree_pause(_DEGREE_INDEX_POLL_SECONDS)
+            _degree_index_backoff(_DEGREE_INDEX_POLL_SECONDS, deadline)
 
+    rebuild_retries = 0  # FAILED 后的有界恢复重提交次数（不含首次提交）
     while True:
+        # —— 读取重建状态：瞬态读取失败按「尚未完成」处理，deadline 兜底 ——
         try:
             status = _degree_edge_index_status(client, rebuild_name)
-            if status in {"FAILED", "STOPPED", "INVALID"}:
+        except GraphRequestError as exc:
+            if not _is_transient_index_error(exc):
                 raise GraphAlgorithmError(
-                    f"关系类型 {label} 的索引 {rebuild_name} 重建状态为 {status}",
-                    status_code=502,
+                    f"关系类型 {label} 的索引 {rebuild_name} 校验失败: {exc}", status_code=502
+                ) from exc
+            status = None
+        except GraphConnectionError as exc:
+            logger.warning(
+                "Degree 索引状态读取瞬断，继续轮询: label=%s index=%s error=%s",
+                label,
+                rebuild_name,
+                exc,
+            )
+            status = None
+
+        if status in {"FAILED", "STOPPED", "INVALID"}:
+            # 有界恢复：仅 FAILED 且专用索引可重试；先落诊断日志再决策。
+            _log_degree_rebuild_diagnostics(client, label, rebuild_name, rebuild_job_id)
+            if (
+                status == "FAILED"
+                and rebuild_name == index_name
+                and rebuild_retries < _DEGREE_INDEX_REBUILD_RETRY_LIMIT
+                and time.monotonic() < deadline
+            ):
+                # 退避中持续响应取消，且至多睡到 deadline；醒来后过提交门禁，
+                # 到期后不再发起任何新的重建提交。
+                _degree_index_backoff(_degree_rebuild_backoff_seconds(rebuild_retries), deadline)
+                _assert_degree_index_deadline(label, rebuild_name, deadline)
+                rebuild_retries += 1
+                rebuild_job_id = _submit_degree_index_rebuild(
+                    client, label, rebuild_name, deadline=deadline
                 )
-            if status != "FINISHED":
-                if time.monotonic() >= deadline:
-                    raise GraphAlgorithmError(
-                        f"关系类型 {label} 的索引 {rebuild_name} 重建超过 "
-                        f"{int(_DEGREE_INDEX_BUILD_TIMEOUT_SECONDS)} 秒，请稍后重试",
-                        status_code=504,
-                    )
-                _degree_pause(_DEGREE_INDEX_POLL_SECONDS)
+                rebuild_submissions += 1
                 continue
-            # FINISHED 后再确认 LOOKUP 已可用；空结果也是合法结果。
+            raise GraphAlgorithmError(
+                f"关系类型 {label} 的索引 {rebuild_name} 重建状态为 {status}"
+                f"（共提交 {rebuild_submissions} 次重建）",
+                status_code=502,
+            )
+
+        if status != "FINISHED":
+            if time.monotonic() >= deadline:
+                raise GraphAlgorithmError(
+                    f"关系类型 {label} 的索引 {rebuild_name} 重建超过 "
+                    f"{int(_DEGREE_INDEX_BUILD_TIMEOUT_SECONDS)} 秒，请稍后重试",
+                    status_code=504,
+                )
+            _degree_pause(_DEGREE_INDEX_POLL_SECONDS)
+            continue
+
+        # FINISHED 后再确认 LOOKUP 已可用；空结果也是合法结果。
+        try:
             _execute_degree_read(
                 client,
                 f"LOOKUP ON `{label}` YIELD src(edge) AS s | LIMIT 1",
                 timeout=30.0,
                 context=f"校验关系类型 {label} 的索引",
             )
-            logger.info("Degree 边索引已可用: label=%s index=%s", label, rebuild_name)
-            return
         except GraphRequestError as exc:
             if not _is_transient_index_error(exc):
                 raise GraphAlgorithmError(
                     f"关系类型 {label} 的索引 {rebuild_name} 校验失败: {exc}", status_code=502
                 ) from exc
-            if time.monotonic() >= deadline:
-                raise GraphAlgorithmError(
-                    f"关系类型 {label} 的索引 {rebuild_name} 重建超过 "
-                    f"{int(_DEGREE_INDEX_BUILD_TIMEOUT_SECONDS)} 秒，请稍后重试",
-                    status_code=504,
-                ) from exc
-            _degree_pause(_DEGREE_INDEX_POLL_SECONDS)
+        except GraphConnectionError as exc:
+            logger.warning(
+                "Degree 索引校验读取瞬断，继续轮询: label=%s index=%s error=%s",
+                label,
+                rebuild_name,
+                exc,
+            )
+        else:
+            logger.info("Degree 边索引已可用: label=%s index=%s", label, rebuild_name)
+            return
+        if time.monotonic() >= deadline:
+            raise GraphAlgorithmError(
+                f"关系类型 {label} 的索引 {rebuild_name} 重建超过 "
+                f"{int(_DEGREE_INDEX_BUILD_TIMEOUT_SECONDS)} 秒，请稍后重试",
+                status_code=504,
+            )
+        _degree_pause(_DEGREE_INDEX_POLL_SECONDS)
 
 
 def _degree_rows_via_ngql(

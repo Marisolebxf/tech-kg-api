@@ -1,0 +1,42 @@
+/* Legacy page styles target all native inputs/buttons. The outer component
+   now owns the border; keep one shell and leave room for its clear button. */
+:is(#app, body) .clearable-input > input.clearable-input__control {
+  box-sizing: border-box;
+  flex: 1 1 auto;
+  width: 100% !important;
+  min-width: 0 !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: inherit;
+  font: inherit;
+  outline: 0 !important;
+  box-shadow: none !important;
+}
+:is(#app, body) .clearable-input > button.clearable-input__clear,
+:is(#app, body) .clearable-textarea > button.clearable-input__clear {
+  display: inline-flex;
+  flex: 0 0 16px;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 16px;
+  min-width: 16px;
+  height: 16px;
+  min-height: 16px;
+  margin: 0 0 0 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #86909c;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+:is(#app, body) button.clearable-input__clear:hover { background: #e5e6eb; color: #4e5969; }
+:is(#app, body) button.clearable-input__clear:focus-visible { outline: 2px solid #165dff; outline-offset: 2px; }

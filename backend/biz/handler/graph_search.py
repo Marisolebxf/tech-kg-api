@@ -23,7 +23,12 @@ from biz.dependencies.auth import CurrentActor
 from biz.dependencies.selected_graph_space import bind_selected_graph_space, resolve_selected_space
 from biz.handler import get_cache
 from biz.schemas.common import ApiResponse
-from infra.graph_db import TRSGraphClient, get_space_client, get_trs_graph_client
+from infra.graph_db import (
+    TRSGraphClient,
+    get_business_space_client,
+    get_space_client,
+    get_trs_graph_client,
+)
 from infra.graph_db.exceptions import GraphRequestError
 from infra.graph_db.models import GraphEdge, GraphNode
 from infra.graph_exec_budget import GraphExecOverloaded, graph_exec_slot
@@ -176,7 +181,16 @@ def _get_client(space: str | None = None) -> TRSGraphClient:
 
     space=None 时用 get_trs_graph_client() 单例（.env 的 TRS_GRAPH_SPACE）。
     指定 space 时用 infra.graph_db.get_space_client（按空间名缓存）。
+    九大业务进程内回环（business_data_plane 置位）优先返回业务面连接：回环
+    请求虽携带 space 参数（须与请求头一致，否则一致性校验 400），实际取数
+    空间由 TRS_GRAPH_BUSINESS_* 决定；未配置业务面变量时行为不变。
     """
+    from service.graph_space_context import business_data_plane
+
+    if business_data_plane.get():
+        business = get_business_space_client(space)
+        if business is not None:
+            return business
     if not space:
         return get_trs_graph_client()
     return get_space_client(space)

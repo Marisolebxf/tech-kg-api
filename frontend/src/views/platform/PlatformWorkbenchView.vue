@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import ClearableTextarea from '../../components/ClearableTextarea.vue'
+import ClearableInput from '../../components/ClearableInput.vue'
+import { vDialogFocus } from '../../directives/dialog-focus'
 import {
   computed,
   onUnmounted,
@@ -6,7 +9,7 @@ import {
   ref,
   watch,
 } from 'vue'
-import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, RouterLink, useRoute, useRouter } from 'vue-router'
 import { runNgql, type GraphConsoleResult } from '../../api/graphConsole'
 import { currentGraphSpace } from '../../api/currentGraphSpace'
 import AppAlert from '../../components/AppAlert.vue'
@@ -42,10 +45,9 @@ import {
   FormItem as AFormItem,
   Input as AInput,
   Popover as APopover,
-  Textarea as ATextarea,
 } from '@arco-design/web-vue'
 import QueryResultTable from './QueryResultTable.vue'
-import { IconInfoCircle, IconRefresh, IconSearch } from '@arco-design/web-vue/es/icon'
+import { IconInfoCircle, IconRefresh } from '@arco-design/web-vue/es/icon'
 import { useAuthStore } from '../../stores/auth'
 import { useGraphSpaceStore } from '../../stores/graphSpace'
 import {
@@ -348,6 +350,12 @@ function createAlgorithmStates(): Record<string, AlgorithmState> {
   }]))
 }
 const algorithmStates = ref(createAlgorithmStates())
+// 切空间后面板状态会重置，作业所有权仍保留到后端确认终态，避免遗留后台作业。
+const ownedAlgorithmStates = new Set<AlgorithmState>()
+const pendingAlgoSubmissions = new Map<AlgorithmState, Promise<AlgorithmJobSnapshot>>()
+const algoExitTasks = new Map<AlgorithmState, Promise<void>>()
+const algoCancelRequests = new Map<string, Promise<AlgorithmJobSnapshot>>()
+const algoAutoStopping = ref(0)
 const activeAlgorithmState = computed(() => algorithmStates.value[selectedAlgorithm.value])
 const algoLabels = computed({
   get: () => activeAlgorithmState.value.labels,
@@ -491,6 +499,7 @@ const algoNowTick = ref(Date.now())
 let algoNowTimer: number | undefined
 
 function startAlgoNowTicker(): void {
+  algoNowTick.value = Date.now()
   if (algoNowTimer !== undefined) return
   algoNowTimer = window.setInterval(() => {
     algoNowTick.value = Date.now()
@@ -529,7 +538,7 @@ const algoJobElapsedText = computed(() => {
   const ms = algoJobElapsedMs.value
   if (ms === null) return ''
   // 亚秒级作业（如 nGQL 度数计算几十毫秒完成）显示毫秒，避免「耗时 0 秒」被当成计时故障
-  if (ms < 1000) return `${Math.round(ms)} 毫秒`
+  if (ms < 1000 && !isAlgoJobRunning.value) return `${Math.round(ms)} 毫秒`
   const seconds = Math.floor(ms / 1000)
   return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${String(seconds % 60).padStart(2, '0')} 秒`
 })
@@ -652,6 +661,17 @@ const assetChangeRows = ref<Record<AssetOverviewKey, AssetChangeRow[]>>({
 // 精确计数（对象数口径，与行数是两回事）；控制库不可读时显示错误占位。
 const assetChangeTotals = ref<Partial<Record<AssetOverviewKey, number>>>({})
 const assetChangeErrors = ref<Partial<Record<AssetOverviewKey, string>>>({})
+// 净新增（2026-10-16）：相邻两日图统计快照差分（与总量同一数据源），
+// 总量(当日) − 总量(前一日) = 净新增；null=快照缺失（当日未采集 / 上线前
+// 无法回补）——此时不展示任何占位文案。展示位置（用户指定）：昨日新增
+// 抽屉左下角 footer「共XX变化」右侧，卡片与抽屉正文都不出现
+const assetNetAdded = ref<Partial<Record<AssetOverviewKey, number | null>>>({})
+const activeNetAddedText = computed(() => {
+  const key = selectedAssetChange.value
+  if (!key) return ''
+  const value = assetNetAdded.value[key]
+  return value == null ? '' : `${value >= 0 ? '+' : '−'}${Math.abs(value).toLocaleString()}`
+})
 const activeAssetChangeRows = computed(() => {
   const key = selectedAssetChange.value
   return key ? assetChangeRows.value[key] ?? [] : []
@@ -691,6 +711,27 @@ const overviewReviews = ref<ProductionReviewCase[]>([])
 const overviewReviewsTotal = ref(0)
 const overviewReviewsState = ref<'loading' | 'ready' | 'empty' | 'forbidden' | 'error'>('loading')
 const overviewReviewsError = ref('')
+// 总览审核面板按「对象名 + 类别」合并展示：同一对象多条待审 case（如同名实体多次抽取失败）
+// 在队列页是不同处理实例，但总览只显示名称+类别，逐条列出看起来就是整屏重复；
+// 这里合并成一行并用 ×N 标注条数，跳转仍落在该对象第一条待审 case。
+const overviewReviewRows = computed(() => {
+  const rows: Array<{ id: string; name: string; category: string; count: number; case: ProductionReviewCase }> = []
+  const byKey = new Map<string, (typeof rows)[number]>()
+  for (const item of overviewReviews.value) {
+    const name = item.objectName || item.objectId
+    const category = reviewItemCategory(item)
+    const key = `${name}::${category}`
+    const hit = byKey.get(key)
+    if (hit) {
+      hit.count += 1
+      continue
+    }
+    const row = { id: item.id, name, category, count: 1, case: item }
+    byKey.set(key, row)
+    rows.push(row)
+  }
+  return rows
+})
 
 const visibleOverviewJobs = computed(() =>
   overviewJobs.value.filter(
@@ -1020,6 +1061,19 @@ async function handleNgqlQuery(): Promise<void> {
 
 let algoMetadataLoadedFor = ''
 
+/** 旧图服务的轮询/终止快照可能缺时间；同一作业保留已确认的时间，不能刷新后丢失。 */
+function updateAlgoJob(state: AlgorithmState, job: AlgorithmJobSnapshot): void {
+  const previous = state.job?.jobId === job.jobId ? state.job : null
+  state.job = {
+    ...job,
+    createdAt: job.createdAt ?? previous?.createdAt,
+    startedAt: job.startedAt ?? previous?.startedAt ?? job.createdAt ?? previous?.createdAt,
+    finishedAt: job.finishedAt ?? previous?.finishedAt,
+  }
+  algoNowTick.value = Date.now()
+  if (job.status !== 'running') ownedAlgorithmStates.delete(state)
+}
+
 // 关系类型选项的 Schema 目录中文名（name=图库英文边类型 → label=中文）；
 // 目录拿不到/加载失败不阻塞算法面板，选项与已选标签回退英文原名。
 const algoEdgeTypeLabels = ref(new Map<string, string>())
@@ -1100,7 +1154,7 @@ function stopAlgoPoll(): void {
 function scheduleAlgoPoll(state = activeAlgorithmState.value): void {
   if (state !== activeAlgorithmState.value) return
   stopAlgoPoll()
-  if (queryMode.value !== 'algo' || activeTab.value !== 'query') return
+  if (algoAutoStopping.value || queryMode.value !== 'algo' || activeTab.value !== 'query') return
   algoPollTimer = window.setTimeout(() => {
     void pollAlgoJob()
   }, 3000)
@@ -1118,7 +1172,7 @@ async function pollAlgoJob(): Promise<void> {
   try {
     const job = await getAlgorithmJob(state.space, jobId)
     if (context !== graphContextVersion || state.job?.jobId !== jobId || version !== state.version) return
-    state.job = job
+    updateAlgoJob(state, job)
     if (job.status !== 'running') state.cancelling = false
     state.pollFailures = 0
     if (job.status === 'succeeded') {
@@ -1163,7 +1217,7 @@ async function refreshAlgoJob(): Promise<void> {
   try {
     const job = await getAlgorithmJob(state.space, jobId)
     if (context !== graphContextVersion || state.job?.jobId !== jobId || version !== state.version) return
-    state.job = job
+    updateAlgoJob(state, job)
     if (job.status !== 'running') state.cancelling = false
     if (job.status === 'succeeded') await fetchAlgoResult(state)
     else if (job.status === 'running') scheduleAlgoPoll(state)
@@ -1182,9 +1236,9 @@ async function handleAlgoCancel(): Promise<void> {
   state.cancelling = true
   stopAlgoPoll()
   try {
-    const job = await cancelAlgorithmJob(state.space, jobId)
+    const job = await requestAlgoCancellation(state.space, jobId)
     if (context !== graphContextVersion || state.job?.jobId !== jobId || version !== state.version) return
-    state.job = job
+    updateAlgoJob(state, job)
     state.cancelling = job.status === 'running'
     if (job.status === 'running') scheduleAlgoPoll(state)
     else if (job.status === 'succeeded') await fetchAlgoResult(state)
@@ -1196,6 +1250,77 @@ async function handleAlgoCancel(): Promise<void> {
     scheduleAlgoPoll(state)
   }
 }
+
+/** 手动终止和离页清理共用同一个请求，避免重复发送 kill。 */
+function requestAlgoCancellation(space: string, jobId: string): Promise<AlgorithmJobSnapshot> {
+  const key = `${space}/${jobId}`
+  const existing = algoCancelRequests.get(key)
+  if (existing) return existing
+  const request = cancelAlgorithmJob(space, jobId).finally(() => algoCancelRequests.delete(key))
+  algoCancelRequests.set(key, request)
+  return request
+}
+
+function stopOwnedAlgorithm(state: AlgorithmState): Promise<void> {
+  const existing = algoExitTasks.get(state)
+  if (existing) return existing
+  state.version += 1 // 作废离页前已发出的轮询和手动刷新结果。
+  algoAutoStopping.value += 1
+  const submission = pendingAlgoSubmissions.get(state)
+  const task = (async () => {
+    let job = state.job
+    if (submission) {
+      try { job = await submission } catch { return } // 未提交成功，无后端作业可终止。
+    }
+    if (!job || job.status !== 'running') return
+    // 提交可能在切空间/卸载后才返回，仍使用原空间和原作业 ID 发起终止。
+    updateAlgoJob(state, job)
+    state.cancelling = true
+    let snapshot = await requestAlgoCancellation(state.space, job.jobId)
+    const deadline = Date.now() + 30_000
+    while (snapshot.status === 'running') {
+      updateAlgoJob(state, snapshot)
+      if (Date.now() >= deadline) throw new Error('算法作业终止尚未完成，请稍后重试')
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 500))
+      snapshot = await getAlgorithmJob(state.space, job.jobId)
+    }
+    updateAlgoJob(state, snapshot)
+    state.result = null
+  })().finally(() => {
+    state.cancelling = false
+    algoAutoStopping.value -= 1
+    algoExitTasks.delete(state)
+  })
+  algoExitTasks.set(state, task)
+  return task
+}
+
+async function stopAllOwnedAlgorithms(): Promise<void> {
+  stopAlgoPoll()
+  const results = await Promise.allSettled([...ownedAlgorithmStates].map(stopOwnedAlgorithm))
+  const failure = results.find((result) => result.status === 'rejected')
+  if (failure?.status === 'rejected') throw failure.reason
+}
+
+function reportAlgoExitFailure(error: unknown): void {
+  showToast(getErrorMessage(error, '自动终止算法作业失败，请在算法页面重试终止'), 'warning')
+}
+
+async function leaveAlgorithmPage(): Promise<boolean> {
+  try {
+    await stopAllOwnedAlgorithms()
+    return true
+  } catch (error) {
+    // 终止失败时留在当前页，保留可重试的作业，不能假装已释放引擎。
+    reportAlgoExitFailure(error)
+    if (algoJob.value?.status === 'running') scheduleAlgoPoll()
+    return false
+  }
+}
+
+onBeforeRouteLeave(leaveAlgorithmPage)
+// 总览与综合查询复用同一组件，路由切换不一定触发卸载。
+onBeforeRouteUpdate((to, from) => to.path !== from.path ? leaveAlgorithmPage() : true)
 
 /** 收集当前算法的参数：只带有值的键，空值交由服务端默认值兜底。 */
 function collectAlgoParams(): Record<string, number | string | boolean> {
@@ -1211,7 +1336,7 @@ function collectAlgoParams(): Record<string, number | string | boolean> {
 
 async function handleAlgoSubmit(): Promise<void> {
   const state = activeAlgorithmState.value
-  if (state.submitting || state.cancelling || state.job?.status === 'running') return
+  if (algoAutoStopping.value || state.submitting || state.cancelling || state.job?.status === 'running') return
   if (!algoSpace.value) {
     showToast('请选择图空间', 'warning')
     return
@@ -1261,11 +1386,13 @@ async function handleAlgoSubmit(): Promise<void> {
   stopAlgoPoll()
   const context = graphContextVersion
   const space = algoSpace.value
+  state.space = space
+  ownedAlgorithmStates.add(state)
   state.job = null
   state.result = null
   state.pollFailures = 0
   try {
-    const job = await submitAlgorithmJob({
+    const submission = submitAlgorithmJob({
       space,
       algorithm: def.id,
       labels: [...algoLabels.value],
@@ -1275,8 +1402,10 @@ async function handleAlgoSubmit(): Promise<void> {
       encodeId: algoEncodeId.value,
       partitionNum: algoPartitionNum.value,
     })
+    pendingAlgoSubmissions.set(state, submission)
+    const job = await submission
     if (context !== graphContextVersion) return
-    state.job = job
+    updateAlgoJob(state, job)
     // 使用发出请求时的空间；切换空间后旧请求不会再回写页面。
     state.space = space
     state.result = null
@@ -1292,7 +1421,9 @@ async function handleAlgoSubmit(): Promise<void> {
     if (context !== graphContextVersion) return
     showToast(getErrorMessage(error, '算法作业提交失败'), 'warning')
   } finally {
-    if (context === graphContextVersion) state.submitting = false
+    pendingAlgoSubmissions.delete(state)
+    state.submitting = false
+    if (!state.job && !algoExitTasks.has(state)) ownedAlgorithmStates.delete(state)
   }
 }
 
@@ -1309,16 +1440,17 @@ watch(algoLabels, (labels) => {
   if (labels.length) algoLabelsValidationError.value = false
 })
 
-// 进入图算法模式：懒加载元数据；离开：停轮询
+// 进入图算法模式懒加载元数据；离开面板时真正终止后端作业。
 watch([queryMode, activeTab], ([mode, tab]) => {
   if (mode === 'algo' && tab === 'query') {
     void loadAlgoMetadata()
     if (algoJob.value?.status === 'running') scheduleAlgoPoll()
-  } else stopAlgoPoll()
+  } else void stopAllOwnedAlgorithms().catch(reportAlgoExitFailure)
 })
 
 // 切换图空间：边类型与引擎状态按空间重新加载
 watch(algoSpace, () => {
+  void stopAllOwnedAlgorithms().catch(reportAlgoExitFailure)
   graphContextVersion += 1
   stopAlgoPoll()
   ngqlResult.value = null
@@ -1338,6 +1470,7 @@ watch(algoSpace, () => {
 }, { flush: 'sync' })
 
 onUnmounted(() => {
+  void stopAllOwnedAlgorithms().catch(reportAlgoExitFailure)
   graphContextVersion += 1
   overviewCardsRequest += 1
   stopAlgoPoll()
@@ -1362,6 +1495,7 @@ async function loadPlatformOverview(): Promise<void> {
     assetChangeRows.value = data.assetChangeRows
     assetChangeTotals.value = data.assetChangeTotals ?? {}
     assetChangeErrors.value = data.assetChangeErrors ?? {}
+    assetNetAdded.value = data.assetNetAdded ?? {}
     entityStructure.value = data.entityStructure
     relationStructure.value = data.relationStructure
   } catch (error) {
@@ -1534,11 +1668,10 @@ const pageMeta = computed(() => {
         <aside class="kg-panel platform-review-panel">
           <div class="kg-panel__header"><div><h2 class="kg-panel__title">人工审核</h2></div><RouterLink to="/manual-review">查看处理队列</RouterLink></div>
           <template v-if="overviewReviewsState === 'ready'">
-            <div class="platform-review-count">待处理 <strong>{{ overviewReviewsTotal }}</strong> 条</div>
             <div class="platform-review-list">
-              <RouterLink v-for="item in overviewReviews" :key="item.id" :to="reviewItemRoute(item)">
-                <strong :title="item.objectName || item.objectId">{{ item.objectName || item.objectId }}</strong>
-                <em :title="reviewItemCategory(item)">{{ reviewItemCategory(item) }}</em>
+              <RouterLink v-for="row in overviewReviewRows" :key="row.id" :to="reviewItemRoute(row.case)">
+                <strong :title="row.name">{{ row.name }}</strong>
+                <em :title="row.category">{{ row.category }}<span v-if="row.count > 1" class="platform-review-dup" :title="`同名对象共 ${row.count} 条待审记录`">×{{ row.count }}</span></em>
               </RouterLink>
             </div>
             <RouterLink v-if="overviewReviewsTotal > overviewReviews.length" class="platform-review-more" to="/manual-review">还有 {{ overviewReviewsTotal - overviewReviews.length }} 条待处理</RouterLink>
@@ -1780,7 +1913,7 @@ const pageMeta = computed(() => {
           </div>
         </div>
         <div v-if="queryMode === 'ngql'" class="platform-ngql-input">
-          <ATextarea
+          <ClearableTextarea
             v-model="ngqlStatement"
             :textarea-attrs="{ 'aria-label': 'nGQL 查询语句', spellcheck: false }"
             :auto-size="{ minRows: 4, maxRows: 6 }"
@@ -1859,7 +1992,7 @@ const pageMeta = computed(() => {
                 <label class="platform-form-label" :for="`algo-param-${param.key}`">
                   <i v-if="param.required" class="platform-query-algo__required">*</i>{{ param.label }}
                 </label>
-                <a-select
+                <a-select allow-clear
                   v-if="param.type === 'enum'"
                   :id="`algo-param-${param.key}`"
                   v-model="algoParamValues[selectedAlgorithm][param.key]"
@@ -1879,7 +2012,7 @@ const pageMeta = computed(() => {
                   />
                   <span>{{ param.hint ?? '启用' }}</span>
                 </label>
-                <input
+                <ClearableInput
                   v-else-if="param.type === 'int' || param.type === 'float'"
                   :id="`algo-param-${param.key}`"
                   v-model.number="algoParamValues[selectedAlgorithm][param.key]"
@@ -1890,7 +2023,7 @@ const pageMeta = computed(() => {
                   :step="param.type === 'float' ? (param.step ?? 0.01) : 1"
                   :placeholder="param.placeholder"
                 />
-                <input
+                <ClearableInput
                   v-else
                   :id="`algo-param-${param.key}`"
                   v-model="algoParamValues[selectedAlgorithm][param.key]"
@@ -1904,7 +2037,7 @@ const pageMeta = computed(() => {
             <div class="platform-query-algo__actions">
               <AButton
                 type="primary"
-                :disabled="algoSubmitLoading || isAlgoJobRunning"
+                :disabled="algoAutoStopping > 0 || algoSubmitLoading || isAlgoJobRunning"
                 @click="handleAlgoSubmit"
               >
                 提交算法作业
@@ -1927,7 +2060,7 @@ const pageMeta = computed(() => {
             <div class="platform-query-algo__job-meta">
               <span :class="['platform-status', algoJobStatus?.tone]">{{ algoJobStatus?.label }}</span>
               <span class="platform-query-algo__job-id">作业 {{ algoJob.jobId }}</span>
-              <span v-if="algoJob.startedAt">开始 {{ formatAlgoTime(algoJob.startedAt) }}</span>
+              <span v-if="algoJob.startedAt">开始时间：{{ formatAlgoTime(algoJob.startedAt) }}</span>
               <span v-if="algoJob.finishedAt">完成 {{ formatAlgoTime(algoJob.finishedAt) }}</span>
               <span v-if="algoJob.status !== 'running' && algoJobElapsedText">耗时 {{ algoJobElapsedText }}</span>
               <span v-if="algoJob.driverState">Spark Driver：{{ algoJob.driverState }}</span>
@@ -1999,9 +2132,7 @@ const pageMeta = computed(() => {
         </header>
         <div v-if="algoResult" class="platform-algo-list-toolbar">
           <form class="platform-algo-search-form" @submit.prevent="queryAlgoResults">
-            <AInput v-model="algoSearch" class="platform-algo-search platform-algo-search--entity-style" :input-attrs="{ 'aria-label': '搜索图 VID' }" allow-clear placeholder="输入图 VID 筛选结果">
-              <template #prefix><IconSearch aria-hidden="true" /></template>
-            </AInput>
+            <AInput v-model="algoSearch" class="platform-algo-search platform-algo-search--entity-style" :input-attrs="{ 'aria-label': '搜索图 VID' }" allow-clear placeholder="输入图 VID 筛选结果" />
             <AButton type="primary" html-type="submit">查询</AButton>
           </form>
           <AButton type="primary" :disabled="!algoRows.length" @click="exportAlgoCsv">导出{{ algoResult.truncated ? '预览' : '当前结果' }} CSV</AButton>
@@ -2194,7 +2325,7 @@ print(response.json())</pre>
          之下）定位的，height:100vh 的底部整段被顶出视口，表尾与 footer 永久看不见。 -->
     <Teleport to="body">
       <button v-if="selectedAssetChange" class="asset-change-mask" type="button" aria-label="关闭新增数据详情" @click="selectedAssetChange = null" />
-      <aside aria-label="辅助区域 4" v-if="selectedAssetChange && activeAssetOverview" class="asset-change-drawer">
+      <aside v-dialog-focus="{ close: () => { selectedAssetChange = null } }" v-if="selectedAssetChange && activeAssetOverview" class="asset-change-drawer">
         <header><div><span>昨日图谱数据变化</span><h2>{{ activeAssetOverview.title }}新增明细</h2><p>{{ activeAssetOverview.addedLabel }} {{ activeAssetOverview.added }} · 统计日 {{ overviewMeta.statsDay || '—' }} · 数据更新至 {{ overviewMeta.updatedAt }}</p></div><button type="button" aria-label="关闭新增数据详情" @click="selectedAssetChange = null">×</button></header>
         <section class="asset-change-summary"><article><span>当前总量</span><strong>{{ activeAssetOverview.total }}</strong></article><article><span>{{ activeAssetOverview.addedLabel }}</span><strong>{{ activeAssetOverview.added }}</strong></article></section>
         <div class="asset-change-toolbar">
@@ -2229,7 +2360,7 @@ print(response.json())</pre>
             </tbody>
           </table>
         </div>
-        <footer><span>{{ assetChangeFooterText(selectedAssetChange) }}</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看更新任务</RouterLink></footer>
+        <footer><span>{{ assetChangeFooterText(selectedAssetChange) }}<em v-if="activeNetAddedText" class="net-added">净新增 {{ activeNetAddedText }}</em></span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看更新任务</RouterLink></footer>
       </aside>
     </Teleport>
 
@@ -2302,10 +2433,10 @@ print(response.json())</pre>
   margin: 0;
   color: #4b6288;
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
-.platform-hero__flow { display:flex;align-items:center;gap:6px;margin-top:4px;color:#607493;font-size:10px; }
+.platform-hero__flow { display:flex;align-items:center;gap:6px;margin-top:4px;color:#607493;font-size:12px; }
 .platform-hero__flow span { padding:2px 7px;border:1px solid rgba(126,168,229,.65);border-radius:99px;background:rgba(255,255,255,.58); }
 .platform-hero__flow i { color:#004ecc;font-style:normal; }
 
@@ -2323,7 +2454,7 @@ print(response.json())</pre>
   padding: 0 2px 2px;
 }
 
-.platform-page-head__action { height:30px;padding:0 11px;border:1px solid #9ec2f7;border-radius:6px;background:#fff;color:#004ecc;font-size:11px;line-height:30px;text-decoration:none; }
+.platform-page-head__action { height:30px;padding:0 11px;border:1px solid #9ec2f7;border-radius:6px;background:#fff;color:#004ecc;font-size:12px;line-height:30px;text-decoration:none; }
 
 .platform-page-head h1 {
   margin: 0;
@@ -2336,7 +2467,7 @@ print(response.json())</pre>
 .platform-page-head p {
   margin: 2px 0 0;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 20px;
 }
 
@@ -2388,14 +2519,14 @@ print(response.json())</pre>
 .platform-stage-overview__groups { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px; }
 .platform-stage-group { overflow:hidden;border:1px solid #d6e5f8;border-radius:8px;background:#f8fbff; }
 .platform-stage-group>header { display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid #dce8f8;background:#fff; }
-.platform-stage-group>header strong { color:#20324e;font-size:13px; }
-.platform-stage-group>header a { color:#004ecc;font-size:11px;text-decoration:none; }
+.platform-stage-group>header strong { color:#20324e;font-size:12px; }
+.platform-stage-group>header a { color:#004ecc;font-size:12px;text-decoration:none; }
 .platform-stage-group>div { display:grid;grid-template-columns:repeat(4,minmax(0,1fr)); }
 .platform-stage-group section { display:grid;gap:4px;padding:13px 14px;border-right:1px solid #e1ebf7; }
 .platform-stage-group section:last-child { border-right:0; }
-.platform-stage-group section span { color:#475467;font-size:11px; }
+.platform-stage-group section span { color:#475467;font-size:12px; }
 .platform-stage-group section strong { color:#10264c;font-size:20px; }
-.platform-stage-group section em { overflow:hidden;color:#52627a;font-size:10px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }
+.platform-stage-group section em { overflow:hidden;color:#52627a;font-size:12px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }
 
 .platform-metric {
   position: relative;
@@ -2427,7 +2558,7 @@ print(response.json())</pre>
 .platform-metric span {
   overflow: hidden;
   color: var(--text-secondary);
-  font-size: 15px;
+  font-size: 14px;
   line-height: 22px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2449,7 +2580,7 @@ print(response.json())</pre>
   white-space: nowrap;
 }
 
-.platform-metric>b { position:absolute;right:17px;top:17px;color:#7890b5;font-size:11px;font-weight:600; }
+.platform-metric>b { position:absolute;right:17px;top:17px;color:#7890b5;font-size:12px;font-weight:600; }
 
 .platform-metric.is-blue strong { color: #004ecc; }
 .platform-metric.is-green strong { color: #00a870; }
@@ -2462,17 +2593,17 @@ print(response.json())</pre>
 .platform-summary-card { position:relative;min-width:0;overflow:hidden; }
 .platform-summary-card::after { position:absolute;right:-35px;bottom:-55px;width:130px;height:130px;border-radius:50%;background:rgba(22,93,255,.045);content:"";pointer-events:none; }
 .platform-summary-card>header { display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 15px;border-bottom:1px solid #dce8f8;background:rgba(255,255,255,.75); }
-.platform-summary-card>header>div { display:grid;gap:4px; }.platform-summary-card>header>div>strong { color:#263b5a;font-size:13px; }
-.platform-summary-card>header span { display:flex;align-items:center;gap:5px;color:#067647;font-size:9px; }.platform-summary-card>header span i { width:6px;height:6px;border-radius:50%;background:#067647;box-shadow:0 0 0 3px #dcfae6; }
+.platform-summary-card>header>div { display:grid;gap:4px; }.platform-summary-card>header>div>strong { color:#263b5a;font-size:12px; }
+.platform-summary-card>header span { display:flex;align-items:center;gap:5px;color:#067647;font-size:12px; }.platform-summary-card>header span i { width:6px;height:6px;border-radius:50%;background:#067647;box-shadow:0 0 0 3px #dcfae6; }
 .platform-summary-card>header span.warning { color:#b42318; }.platform-summary-card>header span.warning i { background:#b42318;box-shadow:0 0 0 3px #fee4e2; }
-.platform-summary-card>header a,.platform-summary-card>header button { padding:0;border:0;background:transparent;color:#004ecc;font-size:10px;text-decoration:none;white-space:nowrap;cursor:pointer; }
+.platform-summary-card>header a,.platform-summary-card>header button { padding:0;border:0;background:transparent;color:#004ecc;font-size:12px;text-decoration:none;white-space:nowrap;cursor:pointer; }
 .platform-summary-card__main { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));min-height:112px;background:#fff; }
 .platform-summary-card__main section { display:flex;justify-content:center;gap:5px;padding:20px 18px;border-right:1px solid #e3ebf6;flex-direction:column; }.platform-summary-card__main section:last-child { border-right:0; }
-.platform-summary-card__main strong { color:#004ecc;font-size:34px;line-height:40px;letter-spacing:-.5px; }.platform-summary-card.is-relation .platform-summary-card__main strong { color:#7a5af8; }.platform-summary-card.is-property .platform-summary-card__main strong { color:#f79009; }.platform-summary-card .platform-summary-card__main .is-added strong { color:#067647; }
+.platform-summary-card__main strong { color:#004ecc;font-size:34px;line-height:40px;letter-spacing:-.5px; }.platform-summary-card.is-relation .platform-summary-card__main strong { color:#7a5af8; }.platform-summary-card.is-property .platform-summary-card__main strong { color:#f79009; }.platform-summary-card .platform-summary-card__main .is-added strong { color:#f53f3f; }
 .platform-summary-card__main span { color:#475467;font-size:12px; }
 .platform-summary-card__items { position:relative;z-index:1;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:10px 8px;background:#f8fbff; }
 .platform-summary-card__items>a { display:grid;gap:3px;padding:2px 8px;border-right:1px solid #e1eaf5;color:inherit;text-decoration:none;transition:background-color .2s ease; }.platform-summary-card__items>a:last-child { border-right:0; }.platform-summary-card__items>a:hover { background:#eef5ff; }
-.platform-summary-card__items em { overflow:hidden;color:#8290a5;font-size:8px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }.platform-summary-card__items strong { overflow:hidden;color:#344861;font-size:10px;text-overflow:ellipsis;white-space:nowrap; }
+.platform-summary-card__items em { overflow:hidden;color:#8290a5;font-size:12px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }.platform-summary-card__items strong { overflow:hidden;color:#344861;font-size:12px;text-overflow:ellipsis;white-space:nowrap; }
 
 /* 末尾两卡仍等高：面板吃满所在网格行，剩余高度由列表弹性行摊平（不留底部空白）；
  * gap 统一 16px 与页头间距对齐。加载中/空态/异常时由 min-height 预留就绪高度
@@ -2486,27 +2617,30 @@ print(response.json())</pre>
 .platform-jobs-stats { display:grid;grid-template-columns:repeat(6,minmax(0,1fr));border-bottom:1px solid #e4ecf6; }
 .platform-jobs-stats article { display:grid;gap:2px;padding:12px 8px;text-align:center;border-right:1px solid #edf2f8; }
 .platform-jobs-stats article:last-child { border-right:0; }
-.platform-jobs-stats article span { font-size:18px;font-weight:600; }
-.platform-jobs-stats article span.is-run { color:var(--status-info); }.platform-jobs-stats article span.is-ok { color:var(--status-success); }.platform-jobs-stats article span.is-err { color:var(--status-danger); }.platform-jobs-stats article span.is-warn { color:var(--status-warning); }.platform-jobs-stats article span.is-idle { color:var(--status-neutral); }
+.platform-jobs-stats article span { color:#1d2129;font-size:18px;font-weight:600; }
+.platform-jobs-stats article span.is-idle { color:var(--status-neutral); }
+.platform-jobs-stats article span.is-run { color:var(--status-info); }
+.platform-jobs-stats article span.is-ok { color:var(--status-success); }
+.platform-jobs-stats article span.is-warn { color:var(--status-warning); }
+.platform-jobs-stats article span.is-err { color:var(--status-danger); }
 .platform-jobs-stats article em { color:#52627a;font-size:12px;line-height:20px;font-style:normal; }
 .platform-jobs-list { display:grid;flex:1;grid-template-rows:repeat(5,minmax(44px,1fr));overflow-y:auto; }
 .platform-jobs-list a { display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:10px;min-height:44px;padding:9px 14px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
 .platform-jobs-list a:nth-child(5):last-child { border-bottom:0; }
 .platform-jobs-list a:hover,.asset-change-table tbody tr:hover { background:#f4f8ff; }
-.platform-jobs-list strong { overflow:hidden;color:#253752;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap; }
+.platform-jobs-list strong { overflow:hidden;color:#1d2129;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap; }
 .platform-jobs-list a>span { display:inline-flex;align-items:center;gap:6px;padding:0;border-radius:0;background:transparent;color:#004ecc;font-size:14px;line-height:22px;white-space:nowrap; }
 .platform-jobs-list a>span::before { flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:currentColor;content:""; }
 .platform-jobs-list a>span.ok { color:var(--status-success);background:transparent; }.platform-jobs-list a>span.err { color:var(--status-danger);background:transparent; }.platform-jobs-list a>span.warn { color:var(--status-warning);background:transparent; }
 .platform-jobs-list em { color:#59636f;font-size:12px;line-height:20px;font-style:normal;white-space:nowrap; }
-.platform-review-count { display:flex;align-items:baseline;gap:8px;padding:11px 14px;border-bottom:1px solid #e4ecf6;color:#62728a;font-size:14px;line-height:22px; }
-.platform-review-count strong { margin:0;color:#10264c;font-size:18px; }
 /* 行紧贴左侧任务行（44px 上下限 + 弹性摊高），类别列在行内右侧而非换行堆叠——
  * 8 行与「图谱构建」卡等高，更多的走粘底「还有 N 条待处理」。 */
 .platform-review-list { display:grid;flex:1;grid-template-rows:repeat(8,minmax(44px,1fr));overflow-y:auto; }
 .platform-review-list a { display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 10px;align-items:center;padding:9px 14px;border-bottom:1px solid #e4ecf6;background:#fff;color:#344761;text-decoration:none; }
 .platform-review-list a:nth-child(8):last-child { border-bottom:0; }
 .platform-review-list a:hover { background:#f4f8ff; }
-.platform-review-list strong { min-width:0;overflow:hidden;color:#253752;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap; }
+.platform-review-list a em .platform-review-dup { margin-left:6px;padding:0 6px;border:1px solid #e5e6eb;border-radius:10px;color:#4e5969;font-size:12px;font-style:normal;font-weight:400;line-height:20px; }
+.platform-review-list strong { min-width:0;overflow:hidden;color:#1d2129;font-size:14px;line-height:22px;text-overflow:ellipsis;white-space:nowrap; }
 .platform-review-list em { min-width:0;overflow:hidden;color:#8a97aa;font-size:12px;line-height:20px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }
 .platform-review-more { flex:0 0 auto;padding:10px 14px;border-top:1px solid #e4ecf6;color:#004ecc;font-size:12px;line-height:20px;text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
 .platform-review-more:hover { background:#f4f8ff; }
@@ -2515,35 +2649,35 @@ print(response.json())</pre>
 .platform-card-empty { display:grid;gap:6px;justify-items:center;align-content:center;min-height:170px;padding:20px;text-align:center; }
 .platform-card-empty strong { color:#253752;font-size:14px;line-height:22px; }
 .platform-card-empty p { margin:0;color:#8a97aa;font-size:12px;line-height:20px; }
-.platform-card-empty a.primary { margin-top:6px;padding:7px 14px;border-radius:5px;background:#004ecc;color:#fff;font-size:11px;text-decoration:none; }
-.platform-card-empty a:not(.primary) { margin-top:6px;color:#004ecc;font-size:11px;text-decoration:none; }
+.platform-card-empty a.primary { margin-top:6px;padding:7px 14px;border-radius:5px;background:#004ecc;color:#fff;font-size:12px;text-decoration:none; }
+.platform-card-empty a:not(.primary) { margin-top:6px;color:#004ecc;font-size:12px;text-decoration:none; }
 
 .platform-management-focus { display:grid;grid-template-columns:minmax(0,1.65fr) minmax(340px,.72fr);gap:14px; }
 .platform-change-panel,.platform-risk-panel,.platform-trend-panel { min-width:0;overflow:hidden; }
 .platform-change-panel .kg-panel__header>div,.platform-risk-panel .kg-panel__header>div,.platform-trend-panel .kg-panel__header>div,.platform-recent-tasks .kg-panel__header>div { display:grid;gap:2px; }
-.platform-change-panel .kg-panel__header span,.platform-risk-panel .kg-panel__header span,.platform-trend-panel .kg-panel__header span,.platform-recent-tasks .kg-panel__header span { color:#7b8aa1;font-size:10px; }
-.platform-change-panel .kg-panel__header>a,.platform-risk-panel .kg-panel__header>a { color:#004ecc;font-size:11px;text-decoration:none; }
+.platform-change-panel .kg-panel__header span,.platform-risk-panel .kg-panel__header span,.platform-trend-panel .kg-panel__header span,.platform-recent-tasks .kg-panel__header span { color:#7b8aa1;font-size:12px; }
+.platform-change-panel .kg-panel__header>a,.platform-risk-panel .kg-panel__header>a { color:#004ecc;font-size:12px;text-decoration:none; }
 .platform-change-stats { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border-bottom:1px solid #dde8f5; }
 .platform-change-stats article { position:relative;display:grid;gap:4px;padding:13px 15px;border-right:1px solid #e2eaf5;background:#fff; }
 .platform-change-stats article:last-child { border-right:0; }
 .platform-change-stats article::before { position:absolute;top:14px;left:0;width:3px;height:30px;border-radius:0 3px 3px 0;background:#2e90fa;content:""; }
 .platform-change-stats article.is-purple::before { background:#7a5af8; }.platform-change-stats article.is-green::before { background:#067647; }.platform-change-stats article.is-orange::before { background:#f79009; }
-.platform-change-stats span { color:#66758e;font-size:10px; }.platform-change-stats strong { color:#183153;font-size:20px; }.platform-change-stats em { color:#8a97aa;font-size:9px;font-style:normal; }
+.platform-change-stats span { color:#66758e;font-size:12px; }.platform-change-stats strong { color:#183153;font-size:20px; }.platform-change-stats em { color:#8a97aa;font-size:12px;font-style:normal; }
 .platform-change-body { display:grid;grid-template-columns:minmax(0,1.25fr) minmax(270px,.75fr);min-height:210px; }
 .platform-change-body>section { padding:13px 15px; }.platform-change-body>aside { padding:13px 14px;border-left:1px solid #e1eaf5;background:#f9fbfe; }
-.platform-change-body header { display:flex;align-items:center;justify-content:space-between;margin-bottom:10px; }.platform-change-body header>strong { color:#344661;font-size:11px; }.platform-change-body header>span,.platform-change-body header>a { color:#8290a5;font-size:9px;text-decoration:none; }
+.platform-change-body header { display:flex;align-items:center;justify-content:space-between;margin-bottom:10px; }.platform-change-body header>strong { color:#344661;font-size:12px; }.platform-change-body header>span,.platform-change-body header>a { color:#8290a5;font-size:12px;text-decoration:none; }
 .platform-change-ranking { display:grid;gap:8px; }.platform-change-ranking article { display:grid;grid-template-columns:minmax(150px,.8fr) minmax(170px,1fr);align-items:center;gap:12px; }
-.platform-change-ranking article>span { display:grid;grid-template-columns:7px minmax(0,1fr);column-gap:8px; }.platform-change-ranking article>span>i { grid-row:1/3;width:7px;height:7px;margin-top:5px;border-radius:50%; }.platform-change-ranking article>span b { font-size:10px; }.platform-change-ranking article>span em { color:#8491a5;font-size:8px;font-style:normal; }
-.platform-change-ranking article>div { display:grid;grid-template-columns:minmax(70px,1fr) 62px;align-items:center;gap:8px; }.platform-change-ranking article>div>i { height:6px;overflow:hidden;border-radius:99px;background:#eaf0f8; }.platform-change-ranking article>div>i b { display:block;height:100%;border-radius:inherit; }.platform-change-ranking article>div strong { color:#40536f;font-size:10px;text-align:right; }
+.platform-change-ranking article>span { display:grid;grid-template-columns:7px minmax(0,1fr);column-gap:8px; }.platform-change-ranking article>span>i { grid-row:1/3;width:7px;height:7px;margin-top:5px;border-radius:50%; }.platform-change-ranking article>span b { font-size:12px; }.platform-change-ranking article>span em { color:#8491a5;font-size:12px;font-style:normal; }
+.platform-change-ranking article>div { display:grid;grid-template-columns:minmax(70px,1fr) 62px;align-items:center;gap:8px; }.platform-change-ranking article>div>i { height:6px;overflow:hidden;border-radius:99px;background:#eaf0f8; }.platform-change-ranking article>div>i b { display:block;height:100%;border-radius:inherit; }.platform-change-ranking article>div strong { color:#40536f;font-size:12px;text-align:right; }
 .platform-change-body>aside article { display:grid;grid-template-columns:25px minmax(0,1fr);gap:9px;padding:9px 0;border-bottom:1px solid #e6edf6; }.platform-change-body>aside article:last-child { border-bottom:0; }
-.platform-change-body>aside article>i { display:grid;place-items:center;width:23px;height:23px;border-radius:50%;background:#eaf2ff;color:#004ecc;font-size:10px;font-style:normal; }.platform-change-body>aside article>i.success { background:#dcfae6;color:#067647; }.platform-change-body>aside article>i.warning { background:#fef0c7;color:#b54708; }
-.platform-change-body>aside article>span { display:grid;gap:3px; }.platform-change-body>aside article strong { color:#344661;font-size:10px; }.platform-change-body>aside article em { color:#7b899e;font-size:9px;font-style:normal; }
+.platform-change-body>aside article>i { display:grid;place-items:center;width:23px;height:23px;border-radius:50%;background:#eaf2ff;color:#004ecc;font-size:12px;font-style:normal; }.platform-change-body>aside article>i.success { background:#dcfae6;color:#067647; }.platform-change-body>aside article>i.warning { background:#fef0c7;color:#b54708; }
+.platform-change-body>aside article>span { display:grid;gap:3px; }.platform-change-body>aside article strong { color:#344661;font-size:12px; }.platform-change-body>aside article em { color:#7b899e;font-size:12px;font-style:normal; }
 
 .platform-monitor-grid { display:grid;grid-template-columns:minmax(0,1fr) minmax(480px,1fr);gap:14px; }
 .platform-trend-legend { display:flex!important;align-items:center;gap:10px!important; }.platform-trend-legend span { display:flex;align-items:center;gap:5px; }.platform-trend-legend i { width:7px;height:7px;border-radius:2px;background:#2e90fa; }.platform-trend-legend span:last-child i { background:#7a5af8; }
 .platform-trend-chart { display:grid;grid-template-columns:repeat(7,1fr);align-items:end;height:225px;padding:20px 18px 13px;background:linear-gradient(to top,rgba(220,232,248,.7) 1px,transparent 1px);background-size:100% 25%; }
-.platform-trend-chart article { display:grid;grid-template-rows:160px auto auto;justify-items:center;gap:4px;height:100%; }.platform-trend-chart article>div { display:flex;align-items:end;justify-content:center;gap:5px;width:100%;height:100%; }.platform-trend-chart article>div i { width:14px;min-height:8px;border-radius:4px 4px 1px 1px;background:linear-gradient(180deg,#2e90fa,#84caff); }.platform-trend-chart article>div i:last-child { background:linear-gradient(180deg,#7a5af8,#bdb4fe); }.platform-trend-chart article strong { color:#4e607a;font-size:9px; }.platform-trend-chart article span { color:#8290a5;font-size:9px; }
-.platform-monitor-grid .platform-recent-tasks .platform-table th,.platform-monitor-grid .platform-recent-tasks .platform-table td { padding:9px 11px;font-size:10px; }.platform-monitor-grid .platform-recent-tasks td small { font-size:8px; }
+.platform-trend-chart article { display:grid;grid-template-rows:160px auto auto;justify-items:center;gap:4px;height:100%; }.platform-trend-chart article>div { display:flex;align-items:end;justify-content:center;gap:5px;width:100%;height:100%; }.platform-trend-chart article>div i { width:14px;min-height:8px;border-radius:4px 4px 1px 1px;background:linear-gradient(180deg,#2e90fa,#84caff); }.platform-trend-chart article>div i:last-child { background:linear-gradient(180deg,#7a5af8,#bdb4fe); }.platform-trend-chart article strong { color:#4e607a;font-size:12px; }.platform-trend-chart article span { color:#8290a5;font-size:12px; }
+.platform-monitor-grid .platform-recent-tasks .platform-table th,.platform-monitor-grid .platform-recent-tasks .platform-table td { padding:9px 11px;font-size:12px; }.platform-monitor-grid .platform-recent-tasks td small { font-size:12px; }
 
 .platform-service-graph .kg-panel__header span,
 .platform-processing-flow .kg-panel__header span,
@@ -2560,14 +2694,14 @@ print(response.json())</pre>
   border-radius: 999px;
   background: var(--primary-subtle);
   color: var(--primary);
-  font-size: 13px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
 .platform-operations-grid { display:grid;grid-template-columns:minmax(0,1.7fr) minmax(320px,.8fr);gap:14px; }
 .platform-recent-tasks,.platform-alert-overview { min-width:0;overflow:hidden; }
 .platform-recent-tasks .kg-panel__header a,.platform-alert-overview .kg-panel__header a { color:#004ecc;font-size:12px;text-decoration:none; }
-.platform-recent-tasks td small { display:block;margin-top:2px;color:#52627a;font-size:10px; }
+.platform-recent-tasks td small { display:block;margin-top:2px;color:#52627a;font-size:12px; }
 .platform-status.is-阻断 { background:#fee4e2;color:var(--status-danger); }
 .platform-status.is-成功,.platform-status.is-完成,.platform-status.is-正常 { background:#dcfae6;color:var(--status-success); }
 .platform-status.is-运行中 { background:#eaf2ff;color:var(--status-info); }
@@ -2580,40 +2714,40 @@ print(response.json())</pre>
 .platform-alert-overview>button>i { width:7px;height:7px;margin-top:5px;border-radius:50%;background:#f79009; }
 .platform-alert-overview>button>i.is-严重 { background:#b42318;box-shadow:0 0 0 4px #fee4e2; }
 .platform-alert-overview>button>span { display:grid;gap:3px;min-width:0; }
-.platform-alert-overview>button b { color:#8a97aa;font-size:10px; }
+.platform-alert-overview>button b { color:#8a97aa;font-size:12px; }
 .platform-alert-overview>button strong { overflow:hidden;color:#253752;font-size:12px;text-overflow:ellipsis;white-space:nowrap; }
-.platform-alert-overview>button em { color:#52627a;font-size:10px;font-style:normal; }
+.platform-alert-overview>button em { color:#52627a;font-size:12px;font-style:normal; }
 .platform-alert-overview>button u { align-self:center;color:#8da0ba;font-size:20px;text-decoration:none; }
 .platform-alert-overview__review { align-self:end;justify-self:center;margin:12px;color:#004ecc;font-size:12px;text-decoration:none; }
 
 .platform-structure-overview { overflow:hidden; }
-.platform-structure-overview>.kg-panel__header>span { color:#52627a;font-size:11px; }
+.platform-structure-overview>.kg-panel__header>span { color:#52627a;font-size:12px; }
 .platform-structure-grid { display:grid;grid-template-columns:repeat(2,minmax(0,1fr)); }
 .platform-structure-chart { padding:15px 18px; }
 .platform-structure-chart:first-child { border-right:1px solid #dce8f8; }
 .platform-structure-chart header { display:flex;align-items:center;justify-content:space-between;margin-bottom:8px; }
-.platform-structure-chart header>strong { color:#253752;font-size:13px; }
-.platform-structure-chart header>a { color:#004ecc;font-size:11px;text-decoration:none; }
+.platform-structure-chart header>strong { color:#253752;font-size:12px; }
+.platform-structure-chart header>a { color:#004ecc;font-size:12px;text-decoration:none; }
 .platform-pie-layout { display:grid;grid-template-columns:170px minmax(0,1fr);align-items:center;gap:20px;min-height:150px; }
 .platform-pie-wrap { position:relative;width:154px;height:154px; }
 .platform-pie { display:block;width:154px;height:154px; }
 /* 饼图悬浮放大互动：分段沿中角外移（transform 由模板按悬浮态内联绑定），白描边分隔 */
 .platform-pie-slice { transition:transform .18s ease;cursor:pointer; }
 .platform-pie-slice path { stroke:#fff;stroke-width:1.5; }
-.platform-pie-slice text { pointer-events:none;fill:#fff;font-size:11px;font-weight:600;text-anchor:middle;dominant-baseline:middle; }
+.platform-pie-slice text { pointer-events:none;fill:#fff;font-size:12px;font-weight:600;text-anchor:middle;dominant-baseline:middle; }
 /* 扇区悬浮白底浮窗（分类名 + 数量 + 占比；图上静态只标百分比） */
 /* 浮窗随 Teleport 挂 body，fixed 锚视口；z-index 对齐 Arco 弹层（同图例 a-tooltip） */
 .platform-pie-tip { position:fixed;z-index:1050;display:grid;gap:2px;padding:6px 10px;border:1px solid #e5edf8;border-radius:6px;background:#fff;box-shadow:0 4px 14px rgba(16,38,76,.14);pointer-events:none;white-space:nowrap; }
-.platform-pie-tip strong { color:#10264c;font-size:11px; }
-.platform-pie-tip span { color:#52627a;font-size:10px; }
+.platform-pie-tip strong { color:#10264c;font-size:12px; }
+.platform-pie-tip span { color:#52627a;font-size:12px; }
 .platform-pie-tip-members { display:grid;gap:1px;margin-top:4px;padding-top:4px;border-top:1px solid #e5edf8; }
-.platform-pie-tip-members div { color:#52627a;font-size:10px; }
+.platform-pie-tip-members div { color:#52627a;font-size:12px; }
 .platform-pie-tip-members .platform-pie-tip-more { color:#98a2b3; }
 .platform-structure-legend article { display:grid;grid-template-columns:minmax(0,1fr) 160px;align-items:center;gap:14px;min-height:34px;border-bottom:1px solid #edf2f8; }
 .platform-structure-legend article:last-child { border-bottom:0; }
-.platform-structure-legend article>span { display:flex;align-items:center;gap:7px;min-width:0;overflow:hidden;color:#40516c;font-size:11px;white-space:nowrap; }
+.platform-structure-legend article>span { display:flex;align-items:center;gap:7px;min-width:0;overflow:hidden;color:#40516c;font-size:12px;white-space:nowrap; }
 .platform-structure-legend article>span>i { flex:0 0 auto;width:8px;height:8px;border-radius:50%; }
-.platform-structure-legend article em { overflow:hidden;color:#59636f;font-size:9px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }
+.platform-structure-legend article em { overflow:hidden;color:#59636f;font-size:12px;font-style:normal;text-overflow:ellipsis;white-space:nowrap; }
 /* 图例右侧只展示百分比（数量在扇区悬浮浮窗里） */
 .platform-structure-legend article>strong { color:#40516c;font-size:12px;font-weight:600;text-align:right;white-space:nowrap; }
 
@@ -2630,7 +2764,7 @@ print(response.json())</pre>
   padding: 6px 10px;
   border-bottom: 1px solid var(--border);
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 20px;
   text-align: left;
   overflow-wrap: anywhere;
@@ -2665,7 +2799,7 @@ print(response.json())</pre>
   border-radius: var(--radius-sm);
   background: #fff;
   color: var(--primary);
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
 }
 
@@ -2684,7 +2818,7 @@ print(response.json())</pre>
     #fbfdff;
   color: var(--text-tertiary);
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .platform-processing {
@@ -2769,7 +2903,7 @@ print(response.json())</pre>
   max-width: 94%;
   margin: 8px 0 0;
   color: var(--text-secondary);
-  font-size: 15px;
+  font-size: 14px;
   line-height: 24px;
 }
 
@@ -2859,7 +2993,7 @@ print(response.json())</pre>
 .platform-table tr.is-clickable:focus-visible { outline: 2px solid #004ecc; outline-offset: -2px; }
 .is-clickable-card { color: inherit; font: inherit; text-align: left; cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease; }
 .is-clickable-card:hover,.is-clickable-card:focus-visible { border-color: #7aa9ee!important; box-shadow: 0 8px 20px rgba(22,93,255,.12)!important; transform: translateY(-1px); outline: none; }
-.platform-card-arrow { color: #004ecc!important; font-size: 11px!important; font-weight: 600!important; white-space: nowrap; }
+.platform-card-arrow { color: #004ecc!important; font-size: 12px!important; font-weight: 600!important; white-space: nowrap; }
 .platform-cleaning-steps .platform-card-arrow,.platform-build-pipeline__body .platform-card-arrow { grid-column: 2; justify-self: end; }
 .platform-build-stats .platform-card-arrow { justify-self: end; }
 
@@ -2877,7 +3011,7 @@ print(response.json())</pre>
   background: #fff;
   color: var(--text-primary);
 }
-.platform-task-filters a { color:#004ecc;font-size:11px;text-decoration:none;white-space:nowrap; }
+.platform-task-filters a { color:#004ecc;font-size:12px;text-decoration:none;white-space:nowrap; }
 
 /* 人工处理提醒卡：警告/信息态底色与提示符由 AppAlert 提供，这里只管网格占位与动作行 */
 .platform-review-notice {
@@ -2902,7 +3036,7 @@ print(response.json())</pre>
 .platform-processing-controls span {
   color: var(--text-secondary);
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .platform-processing-controls select,
@@ -2914,17 +3048,17 @@ print(response.json())</pre>
   border-radius: 6px;
   background: #fff;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .platform-range-fields>i { display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:6px;font-style:normal; }
-.platform-range-fields>i b { color:#52627a;font-size:10px;font-weight:400; }
+.platform-range-fields>i b { color:#52627a;font-size:12px;font-weight:400; }
 
-.platform-update-help { display:flex;flex-wrap:wrap;gap:8px 20px;padding:9px 14px;border-bottom:1px solid #dce8f8;background:#f8fbff;color:#65738b;font-size:10px;line-height:17px; }
+.platform-update-help { display:flex;flex-wrap:wrap;gap:8px 20px;padding:9px 14px;border-bottom:1px solid #dce8f8;background:#f8fbff;color:#65738b;font-size:12px;line-height:20px; }
 .platform-update-help b { color:#344766; }
 .platform-sticky-table { flex:1 1 auto;min-height:0;overflow:auto; }
 .platform-sticky-table .platform-table th { position:sticky;z-index:2;top:0; }
-.platform-sticky-table code { color:#40516c;font:11px Consolas,monospace; }
+.platform-sticky-table code { color:#40516c;font:12px Consolas,monospace; }
 
 .platform-cleaning-flow {
   grid-column: 1 / -1;
@@ -2981,7 +3115,7 @@ print(response.json())</pre>
   border-radius: 50%;
   background: var(--primary);
   color: #fff;
-  font-size: 15px;
+  font-size: 14px;
   font-style: normal;
   font-weight: 700;
   box-shadow: 0 0 0 5px rgba(22, 93, 255, 0.12);
@@ -3006,7 +3140,7 @@ print(response.json())</pre>
   border-radius: 999px;
   background: #eef5ff;
   color: var(--primary);
-  font-size: 13px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -3043,19 +3177,19 @@ print(response.json())</pre>
 
 .platform-cleaning-relation-list strong {
   color: var(--text-primary);
-  font-size: 15px;
+  font-size: 14px;
   line-height: 22px;
 }
 
 .platform-cleaning-relation-list span {
   color: var(--primary);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 20px;
 }
 
 .platform-cleaning-relation-list em {
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   font-style: normal;
 }
 
@@ -3078,13 +3212,13 @@ print(response.json())</pre>
 }
 
 .platform-processing > .platform-task-list .platform-table th {
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .platform-processing > .platform-task-list .platform-status {
   min-height: 26px;
   padding: 0 11px;
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .platform-review {
@@ -3176,7 +3310,7 @@ print(response.json())</pre>
 
 .platform-timeline p {
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .platform-timeline span {
@@ -3247,7 +3381,7 @@ print(response.json())</pre>
 
 .platform-review p {
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 20px;
 }
 
@@ -3291,7 +3425,7 @@ print(response.json())</pre>
 
 .platform-discovery__grid span {
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .platform-discovery__grid strong {
@@ -3304,7 +3438,7 @@ print(response.json())</pre>
   margin: 0;
   color: var(--text-secondary);
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .platform-gates__grid {
@@ -3326,7 +3460,7 @@ print(response.json())</pre>
 .platform-gates__grid span {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 20px;
 }
 
@@ -3340,7 +3474,7 @@ print(response.json())</pre>
   margin: 0;
   color: var(--text-secondary);
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .platform-overview-grid {
@@ -3410,7 +3544,7 @@ print(response.json())</pre>
   overflow: hidden;
   color: var(--text-tertiary);
   font-size: 14px;
-  line-height: 20px;
+  line-height: 22px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3418,7 +3552,7 @@ print(response.json())</pre>
 .platform-schema-list em,
 .platform-relation-list em {
   color: var(--text-secondary);
-  font-size: 15px;
+  font-size: 14px;
   font-style: normal;
   white-space: nowrap;
 }
@@ -3469,7 +3603,7 @@ print(response.json())</pre>
   box-shadow: 0 8px 20px rgba(48, 105, 194, .08);
 }
 
-.platform-build-stats span { color: var(--text-secondary); font-size: 13px; }
+.platform-build-stats span { color: var(--text-secondary); font-size: 12px; }
 .platform-build-stats strong { color: #10264c; font-size: 24px; line-height: 31px; }
 .platform-build-stats em { color: var(--text-tertiary); font-size: 12px; font-style: normal; }
 .platform-schema-readonly { grid-column: 1 / -1; overflow: auto; }
@@ -3520,7 +3654,7 @@ print(response.json())</pre>
   color: var(--primary);
   font-size: 12px;
   font-weight: 600;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .platform-build-results__body,
@@ -3572,7 +3706,7 @@ print(response.json())</pre>
 .platform-build-results__body span,
 .platform-audit-reasons span {
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 20px;
 }
 
@@ -3594,7 +3728,7 @@ print(response.json())</pre>
   margin: 6px 0 0;
   color: var(--text-tertiary);
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .platform-construction-kpis {
@@ -3616,7 +3750,7 @@ print(response.json())</pre>
 
 .platform-construction-kpis span {
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 20px;
 }
 
@@ -3632,7 +3766,7 @@ print(response.json())</pre>
   margin: 6px 0 0;
   color: var(--text-tertiary);
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .platform-build-pipeline {
@@ -3685,7 +3819,7 @@ print(response.json())</pre>
 .platform-build-pipeline__body span,
 .platform-schema-mapping__body span {
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 20px;
 }
 
@@ -3712,7 +3846,7 @@ print(response.json())</pre>
 .platform-schema-mapping__body p {
   margin: 6px 0 0;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 20px;
 }
 
@@ -3777,7 +3911,7 @@ print(response.json())</pre>
 .platform-batch-list article > span,
 .platform-build-rules__body span {
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 20px;
 }
 
@@ -3812,7 +3946,7 @@ print(response.json())</pre>
   margin: 0;
   color: var(--text-secondary);
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .platform-build-rules__body strong {
@@ -3824,7 +3958,7 @@ print(response.json())</pre>
 .platform-build-rules__body p {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 20px;
 }
 
@@ -3854,7 +3988,7 @@ print(response.json())</pre>
   margin: -4px 14px 0;
   color: var(--text-secondary);
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .platform-build-footer {
@@ -3905,7 +4039,7 @@ print(response.json())</pre>
   border-radius: 999px;
   background: #fff;
   color: var(--primary);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1;
   cursor: pointer;
 }
@@ -3922,7 +4056,7 @@ print(response.json())</pre>
   margin-left: 6px;
   overflow: hidden;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 20px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3947,7 +4081,7 @@ print(response.json())</pre>
 .platform-manage-filter span {
   color: var(--text-secondary);
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .platform-manage-filter input,
@@ -3960,7 +4094,7 @@ print(response.json())</pre>
   border-radius: 6px;
   background: #fff;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .platform-manage-filter button {
@@ -3970,7 +4104,7 @@ print(response.json())</pre>
   border-radius: 6px;
   background: var(--primary);
   color: #fff;
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
 }
 
@@ -3981,7 +4115,7 @@ print(response.json())</pre>
   gap: 12px;
   padding: 10px 14px 0;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 20px;
 }
 
@@ -4047,7 +4181,7 @@ print(response.json())</pre>
 
 .platform-impact span {
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .platform-impact strong {
@@ -4066,7 +4200,7 @@ print(response.json())</pre>
 .platform-rule-note p {
   margin: 8px 0 0;
   color: #7a4a00;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 20px;
 }
 
@@ -4117,7 +4251,7 @@ print(response.json())</pre>
   border-radius: 50%;
   background: #e8f1ff;
   color: var(--primary);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
 }
 
@@ -4125,7 +4259,7 @@ print(response.json())</pre>
   margin: 2px 0 0;
   color: var(--text-secondary);
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .platform-query,
@@ -4199,7 +4333,7 @@ print(response.json())</pre>
   border: 0;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
 }
 
@@ -4252,7 +4386,7 @@ print(response.json())</pre>
   border-radius: 6px;
   background: #fff;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .platform-service-console__actions {
@@ -4268,7 +4402,7 @@ print(response.json())</pre>
   border-radius: 6px;
   background: #fff;
   color: var(--primary);
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
 }
 
@@ -4322,14 +4456,14 @@ print(response.json())</pre>
 .platform-service-summary span {
   color: var(--text-secondary);
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .platform-service-summary strong {
   color: var(--text-primary);
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 14px;
-  line-height: 20px;
+  line-height: 22px;
 }
 
 .platform-service-request {
@@ -4344,7 +4478,7 @@ print(response.json())</pre>
 .platform-service-request strong,
 .platform-service-payload strong {
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .platform-service-request dl {
@@ -4371,7 +4505,7 @@ print(response.json())</pre>
   margin: 0;
   min-width: 0;
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .platform-service-request dt {
@@ -4391,9 +4525,9 @@ print(response.json())</pre>
   border-radius: 999px;
   background: #eef5ff;
   color: var(--primary);
-  font-size: 11px;
+  font-size: 12px;
   font-style: normal;
-  line-height: 18px;
+  line-height: 20px;
 }
 .platform-evidence ul {
   display: grid;
@@ -4401,7 +4535,7 @@ print(response.json())</pre>
   margin: 0;
   padding-left: 18px;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 20px;
 }
 
@@ -4424,7 +4558,7 @@ print(response.json())</pre>
 
 .platform-result-grid span {
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .platform-result-grid strong {
@@ -4460,7 +4594,7 @@ print(response.json())</pre>
 
 .platform-service-info strong {
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .platform-service-info dl {
@@ -4486,7 +4620,7 @@ print(response.json())</pre>
   margin: 0;
   min-width: 0;
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
   overflow-wrap: anywhere;
 }
 
@@ -4541,7 +4675,7 @@ print(response.json())</pre>
   min-width: 0;
   overflow: hidden;
   color: var(--text-tertiary);
-  font-size: 13px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4579,7 +4713,7 @@ print(response.json())</pre>
   border-bottom: 1px solid #e2ebf8;
   color: var(--text-primary);
   font-size: 14px;
-  line-height: 20px;
+  line-height: 22px;
 }
 
 .platform-code-sample {
@@ -4788,7 +4922,7 @@ print(response.json())</pre>
 
 .platform-review-summary strong {
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 20px;
 }
 
@@ -4796,7 +4930,7 @@ print(response.json())</pre>
   margin: 0;
   color: var(--text-secondary);
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .platform-review__title {
@@ -4811,7 +4945,7 @@ print(response.json())</pre>
   height: 22px;
   padding: 0 8px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 22px;
 }
 
@@ -4836,24 +4970,24 @@ print(response.json())</pre>
 
 .platform-query-empty strong {
   color: var(--text-primary);
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .platform-query-empty p {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 22px;
 }
 
 .asset-change-mask{position:fixed;z-index:49;inset:0;border:0;background:rgba(16,36,76,.22)}
 .asset-change-drawer{position:fixed;z-index:50;top:0;right:0;display:grid;grid-template-rows:auto auto auto minmax(0,1fr) auto;width:min(820px,78vw);height:100vh;background:#f8fbff;box-shadow:-18px 0 42px rgba(34,74,132,.22)}
-.asset-change-drawer>header{display:flex;align-items:flex-start;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.asset-change-drawer>header span{color:#004ecc;font-size:11px}.asset-change-drawer h2{margin:6px 0 3px;font-size:20px}.asset-change-drawer header p{margin:0;color:#718098;font-size:12px}.asset-change-drawer header>button{width:31px;height:31px;border:0;border-radius:5px;background:transparent;color:#52647f;font-size:20px;cursor:pointer}
-.asset-change-summary{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:14px}.asset-change-summary article{display:grid;gap:5px;padding:14px;border:1px solid #c7dcfb;border-radius:7px;background:#fff}.asset-change-summary span{color:#718098;font-size:11px}.asset-change-summary strong{color:#004ecc;font-size:24px}.asset-change-summary article:last-child strong{color:#067647}
-.asset-change-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 14px 12px;flex-wrap:wrap}.asset-change-hint{color:#8a6116;font-size:11px}
+.asset-change-drawer>header{display:flex;align-items:flex-start;justify-content:space-between;padding:20px;border-bottom:1px solid #dce8f8;background:#fff}.asset-change-drawer>header span{color:#004ecc;font-size:12px}.asset-change-drawer h2{margin:6px 0 3px;font-size:20px}.asset-change-drawer header p{margin:0;color:#718098;font-size:12px}.asset-change-drawer header>button{width:31px;height:31px;border:0;border-radius:5px;background:transparent;color:#52647f;font-size:20px;cursor:pointer}
+.asset-change-summary{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:14px}.asset-change-summary article{display:grid;gap:5px;padding:14px;border:1px solid #c7dcfb;border-radius:7px;background:#fff}.asset-change-summary span{color:#718098;font-size:12px}.asset-change-summary strong{color:#004ecc;font-size:24px}.asset-change-summary article:last-child strong{color:#f53f3f}
+.asset-change-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 14px 12px;flex-wrap:wrap}.asset-change-hint{color:#8a6116;font-size:12px}
 .asset-change-table{min-height:0;overflow:auto;padding:0 14px 14px}.asset-change-table table{width:100%;border-collapse:collapse;border:1px solid #dce8f8;background:#fff;font-size:12px}.asset-change-table th,.asset-change-table td{height:48px;padding:10px 12px;border-bottom:1px solid #e3ebf6;text-align:left}.asset-change-table th{position:sticky;top:0;background:#f3f7fc;color:#62728a}.asset-change-table td{color:#344861}.asset-change-table code{color:#004ecc;font-family:inherit}.asset-change-table td.asset-change-count{font-weight:600;font-variant-numeric:tabular-nums}.asset-change-table td .asset-change-source{display:inline-block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 .asset-change-table tr.is-clickable{cursor:pointer}.asset-change-table tr.is-clickable:focus-visible{background:#f4f8ff;outline:2px solid #004ecc;outline-offset:-2px}
-.asset-change-drawer>footer{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.asset-change-drawer>footer span{color:#718098;font-size:11px}.asset-change-drawer>footer a{height:32px;padding:0 12px;border-radius:5px;background:#004ecc;color:#fff;font-size:11px;line-height:32px;text-decoration:none}
+.asset-change-drawer>footer{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-top:1px solid #dce8f8;background:#fff}.asset-change-drawer>footer span{color:#718098;font-size:12px}.asset-change-drawer>footer .net-added{font-style:normal;color:#f53f3f;font-weight:600;margin-left:10px}.asset-change-drawer>footer a{height:32px;padding:0 12px;border-radius:5px;background:#004ecc;color:#fff;font-size:12px;line-height:32px;text-decoration:none}
 @media(max-width:760px){.asset-change-drawer{width:94vw}.asset-change-table table{min-width:700px}}
 
 .platform-query-algo__toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:40px;border-bottom:1px solid #e5e6eb}
@@ -4904,7 +5038,8 @@ print(response.json())</pre>
 .platform-query .kg-button{height:32px;padding:0 16px;border-radius:4px;font-size:14px;line-height:22px}
 
 /* 综合图谱展示 / 查询结果：复用科技专家同事关系页的预览与详情布局。 */
-.platform-query{grid-row:1/-1;height:100%;min-height:0;align-self:stretch;overflow:auto}
+/* 与实体列表一致，结果区不再叠加右内距；滚动条按实际溢出出现并贴右边缘。 */
+.platform-query{grid-row:1/-1;box-sizing:border-box;height:100%;min-height:0;align-self:stretch;overflow:auto;scrollbar-gutter:auto;padding-right:0}
 
 .platform-query .platform-status{display:inline-flex;align-items:center;gap:6px;min-height:22px;padding:0;border-radius:0;background:transparent;font-size:14px;line-height:22px}.platform-query .platform-status::before{display:block;width:6px;height:6px;border-radius:50%;background:currentColor;content:""}
 .platform-query .platform-table th,.platform-query .platform-table td{height:40px;padding:0 16px;font-size:14px;line-height:22px}.platform-query .platform-table th{background:#f7f8fa;font-weight:500}
@@ -4938,7 +5073,7 @@ print(response.json())</pre>
 .platform-query-result__title-marker{width:3px;height:14px;border-radius:1px;background:#004ecc;flex:0 0 auto}
 .platform-query-result__body{display:flex;flex-direction:column;overflow:hidden;border:1px solid #e5e6eb;border-radius:6px;background:#fff}
 .platform-query-result__table{min-width:0;overflow:hidden}
-.platform-query-result__empty{display:grid;place-content:center;min-height:160px;padding:24px;color:#86909c;font-size:13px;line-height:22px;text-align:center}
+.platform-query-result__empty{display:grid;place-content:center;min-height:160px;padding:24px;color:#86909c;font-size:12px;line-height:22px;text-align:center}
 /* 查询页统一纵向滚动，当前页结果按行数展开，分页位于表格底部。 */
 .platform-query .platform-query-result{flex:0 0 auto;min-width:0}
 .platform-query .platform-query-result__body{flex:0 0 auto;min-width:0}
@@ -4974,16 +5109,16 @@ print(response.json())</pre>
 .platform-query-algo__actions>button{flex:0 0 auto;white-space:nowrap}
 
 .platform-query-algo__job{display:grid;border:1px solid #e5e6eb;border-radius:4px;background:#f7f8fa;padding:10px 12px;gap:8px}
-.platform-query-algo__job-running{display:flex;align-items:center;gap:8px;color:#1d2129;font-size:13px;line-height:20px}
+.platform-query-algo__job-running{display:flex;align-items:center;gap:8px;color:#1d2129;font-size:12px;line-height:20px}
 .platform-query-algo__job-spinner{display:inline-block;width:14px;height:14px;border:2px solid #c9cdd4;border-top-color:#004ecc;border-radius:50%;animation:platform-algo-spin .8s linear infinite;flex:0 0 auto}
 @keyframes platform-algo-spin{to{transform:rotate(360deg)}}
-.platform-query-algo__no-params{margin:0;color:#86909c;font-size:13px;line-height:20px}
-.platform-query-algo__job-meta{display:flex;align-items:center;gap:12px;color:#4e5969;font-size:13px;line-height:20px;flex-wrap:wrap}
+.platform-query-algo__no-params{margin:0;color:#86909c;font-size:12px;line-height:20px}
+.platform-query-algo__job-meta{display:flex;align-items:center;gap:12px;color:#4e5969;font-size:12px;line-height:20px;flex-wrap:wrap}
 .platform-query-algo__job-id{color:#1d2129;font-weight:500}
 .platform-query-algo__job-error{display:grid;border:1px solid #ffd6c6;border-radius:4px;background:#fff;padding:8px 12px;gap:8px}
-.platform-query-algo__job-error p{margin:0;color:#b42318;font-size:13px;line-height:20px;overflow-wrap:anywhere}
+.platform-query-algo__job-error p{margin:0;color:#b42318;font-size:12px;line-height:20px;overflow-wrap:anywhere}
 .platform-query-algo__job-long-hint{color:#ad6800}
-.platform-query-algo__job-log summary{color:#4e5969;font-size:13px;line-height:20px;cursor:pointer}
+.platform-query-algo__job-log summary{color:#4e5969;font-size:12px;line-height:20px;cursor:pointer}
 .platform-query-algo__job-log pre{max-height:160px;margin:8px 0 0;overflow:auto;padding:8px;border-radius:4px;background:#0d1117;color:#e6edf3;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
 /* 窄屏（此前该宽度区间对分布图无任何处理）：饼图与图例上下堆叠，避免固定列挤压 */
 @media(max-width:760px){
@@ -5071,12 +5206,12 @@ print(response.json())</pre>
 </style>
 <style scoped>
 .platform-query.platform-content{scrollbar-width:thin!important;scrollbar-color:transparent transparent!important}
-.platform-query.platform-content:hover,.platform-query.platform-content.kg-is-scrolling{scrollbar-color:rgba(78,89,105,.55) transparent!important}
+.platform-query.platform-content:hover{scrollbar-color:rgba(78,89,105,.55) transparent!important}
 .platform-query :deep(pre),.platform-query :deep(textarea){scrollbar-width:thin;scrollbar-color:transparent transparent}
-.platform-query:hover,.platform-query.kg-is-scrolling,.platform-query :deep(pre:hover),.platform-query :deep(pre.kg-is-scrolling),.platform-query :deep(textarea:hover),.platform-query :deep(textarea.kg-is-scrolling){scrollbar-color:rgba(78,89,105,.55) transparent}
+.platform-query :deep(pre:hover),.platform-query :deep(pre.kg-is-scrolling),.platform-query :deep(textarea:hover),.platform-query :deep(textarea.kg-is-scrolling){scrollbar-color:rgba(78,89,105,.55) transparent}
 .platform-query::-webkit-scrollbar,.platform-query :deep(pre::-webkit-scrollbar),.platform-query :deep(textarea::-webkit-scrollbar){width:8px!important;height:8px!important}
 .platform-query::-webkit-scrollbar-track,.platform-query :deep(pre::-webkit-scrollbar-track),.platform-query :deep(textarea::-webkit-scrollbar-track){background:transparent}
 .platform-query::-webkit-scrollbar-thumb,.platform-query :deep(pre::-webkit-scrollbar-thumb),.platform-query :deep(textarea::-webkit-scrollbar-thumb){border:2px solid transparent;border-radius:999px;background-color:transparent!important;background-clip:padding-box}
-.platform-query:hover::-webkit-scrollbar-thumb,.platform-query.kg-is-scrolling::-webkit-scrollbar-thumb,.platform-query :deep(pre:hover::-webkit-scrollbar-thumb),.platform-query :deep(pre.kg-is-scrolling::-webkit-scrollbar-thumb),.platform-query :deep(textarea:hover::-webkit-scrollbar-thumb),.platform-query :deep(textarea.kg-is-scrolling::-webkit-scrollbar-thumb){background-color:rgba(78,89,105,.55)!important}
+.platform-query:hover::-webkit-scrollbar-thumb,.platform-query :deep(pre:hover::-webkit-scrollbar-thumb),.platform-query :deep(pre.kg-is-scrolling::-webkit-scrollbar-thumb),.platform-query :deep(textarea:hover::-webkit-scrollbar-thumb),.platform-query :deep(textarea.kg-is-scrolling::-webkit-scrollbar-thumb){background-color:rgba(78,89,105,.55)!important}
 .platform-query::-webkit-scrollbar-thumb:hover,.platform-query :deep(pre::-webkit-scrollbar-thumb:hover),.platform-query :deep(textarea::-webkit-scrollbar-thumb:hover){background-color:rgba(78,89,105,.8)!important}
 </style>

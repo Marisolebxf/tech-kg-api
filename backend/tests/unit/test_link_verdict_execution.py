@@ -27,7 +27,8 @@ def _make_service():
 
 
 class FakeGraph:
-    """假图客户端：DESCRIBE 返回空 schema（_coerce_to_schema 走原样透传分支）。"""
+    """假图客户端：DESCRIBE 返回空 schema（_coerce_to_schema 走原样透传分支）；
+    FETCH（execute_read）返回空——目标无旧属性，合并结果即扣留行列。"""
 
     def __init__(self):
         self.writes: list[str] = []
@@ -51,10 +52,24 @@ class FakeGraph:
 
         return _Result()
 
+    def execute_read(self, q, *args, **kwargs):
+        class _Result:
+            records = []
+
+        return _Result()
+
 
 @pytest.fixture
 def service():
     return _make_service()
+
+
+@pytest.fixture(autouse=True)
+def disable_vid_lock(monkeypatch):
+    """关掉 per-VID 写锁（裁决写图路径与工作流共用）：本文件测裁决语义本身，
+    锁行为（fail-closed/跨路径互斥）见 test_manual_review_merge_property_loss.py
+    ——与 test_write_records_* 对工作流侧的处理同口径。"""
+    monkeypatch.setenv("ENTITY_WRITE_VID_LOCK_ENABLED", "0")
 
 
 @pytest.fixture(autouse=True)

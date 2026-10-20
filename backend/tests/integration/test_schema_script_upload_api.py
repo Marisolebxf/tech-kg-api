@@ -43,7 +43,13 @@ class _SafeLLM:
     """固定放行的假 LLM（fixture 默认；安全门行为专项测试内覆写）。"""
 
     def synthesize(
-        self, prompt: str, max_tokens: int = 2048, *, timeout: float | None = None
+        self,
+        prompt: str,
+        max_tokens: int = 2048,
+        *,
+        timeout: float | None = None,
+        result_meta: dict | None = None,
+        abort_reg: list | None = None,
     ) -> str | None:
         return '{"safe": true, "issues": [], "summary": "安全"}'
 
@@ -53,7 +59,13 @@ class _FakeLLM:
         self._response = response
 
     def synthesize(
-        self, prompt: str, max_tokens: int = 2048, *, timeout: float | None = None
+        self,
+        prompt: str,
+        max_tokens: int = 2048,
+        *,
+        timeout: float | None = None,
+        result_meta: dict | None = None,
+        abort_reg: list | None = None,
     ) -> str | None:
         return self._response
 

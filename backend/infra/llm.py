@@ -8,6 +8,7 @@ import os
 from collections.abc import Sequence
 from typing import Any
 
+import httpx
 from openai import OpenAI
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,45 @@ def thinking_extra_body(model: str) -> dict[str, Any]:
     if model.startswith("glm-5."):
         return {}
     return {"thinking": {"type": "disabled"}}
+
+
+def classify_llm_error(exc: Exception) -> str:
+    """LLM 调用失败的错误分类（供安全门/日志归类；粗粒度，非精确语义）。
+
+    rate_limit / timeout / auth / forbidden / insufficient_balance /
+    http_<状态码> / other。智谱 1113（余额不足）经响应体文本识别。
+    """
+    text = str(exc)
+    if isinstance(exc, httpx.TimeoutException):
+        return "timeout"
+    try:
+        from openai import APITimeoutError
+
+        if isinstance(exc, APITimeoutError):
+            return "timeout"
+    except ImportError:  # pragma: no cover - openai 版本差异
+        pass
+    if "1113" in text or "余额" in text:
+        return "insufficient_balance"
+    try:
+        from openai import (
+            AuthenticationError,
+            PermissionDeniedError,
+            RateLimitError,
+        )
+
+        if isinstance(exc, RateLimitError):
+            return "rate_limit"
+        if isinstance(exc, AuthenticationError):
+            return "auth"
+        if isinstance(exc, PermissionDeniedError):
+            return "forbidden"
+    except ImportError:  # pragma: no cover
+        pass
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    if isinstance(status, int):
+        return f"http_{status}"
+    return "other"
 
 
 class LLMClient:
@@ -70,8 +110,22 @@ class LLMClient:
         max_tokens: int = DEFAULT_MAX_TOKENS,
         *,
         timeout: float | None = None,
+        result_meta: dict[str, Any] | None = None,
+        abort_reg: list | None = None,
     ) -> str | None:
-        """单轮生成；timeout=None 用客户端默认（DEFAULT_TIMEOUT），语义同 synthesize_json。"""
+        """单轮生成；timeout=None 用客户端默认（DEFAULT_TIMEOUT），语义同 synthesize_json。
+
+        timeout 显式给出时（脚本安全门的墙钟预算路径）：
+        - 改用独立 httpx 传输 + max_retries=0——SDK 内部默认重试 2 次会把
+          同一次超时的时长放大；独立传输使调用方可安全地中断本次连接。
+        - abort_reg 非空时把本次专属传输登记进去：调用方放弃等待后 close()
+          它以**尽力**中断在飞请求。同步线程阻塞在 socket recv 上无法强杀，
+          关闭传输依赖 OS 层 socket 关闭语义使阻塞读尽快出错，是尽力手段
+          而非硬保证；权威的总时长上界始终是调用方的墙钟等待（future.result）。
+        - result_meta 非空时回填诊断：成功记 finish_reason/reasoning_tokens；
+          失败记 error_class（classify_llm_error）与 error_detail。
+        """
+        own_http: httpx.Client | None = None
         try:
             create_kwargs: dict[str, Any] = {
                 "model": self._model,
@@ -82,15 +136,36 @@ class LLMClient:
             client = self._client
             if timeout is not None:
                 create_kwargs["timeout"] = timeout
-                # 显式超时的调用同时关掉 SDK 内部重试：重试会把同一次超时放大
-                # 到 3 倍时长，调用方（脚本安全门的墙钟预算）放弃后请求仍在
-                # 工作线程里拖尾巴占用并发槽。
-                client = client.with_options(max_retries=0)
+                own_http = httpx.Client(timeout=timeout)
+                client = OpenAI(
+                    api_key=self._api_key,
+                    base_url=self._base_url,
+                    http_client=own_http,
+                    max_retries=0,
+                )
+                if abort_reg is not None:
+                    abort_reg.append(own_http)
             resp = client.chat.completions.create(**create_kwargs)
+            if result_meta is not None:
+                result_meta["finish_reason"] = resp.choices[0].finish_reason
+                details = getattr(resp.usage, "completion_tokens_details", None)
+                result_meta["reasoning_tokens"] = getattr(details, "reasoning_tokens", None)
             return resp.choices[0].message.content or None
         except Exception as exc:  # noqa: BLE001
-            logger.warning("LLM synthesize failed, degrading: %s", exc)
+            if result_meta is not None:
+                result_meta["error_class"] = classify_llm_error(exc)
+                result_meta["error_detail"] = str(exc)[:200]
+            logger.warning(
+                "LLM synthesize failed (%s), degrading: %s", classify_llm_error(exc), exc
+            )
             return None
+        finally:
+            # 正常返回/抛错即关闭专属传输（幂等；调用方提前 close 过也无害）。
+            if own_http is not None:
+                try:
+                    own_http.close()
+                except Exception:  # pragma: no cover - 关闭失败不影响降级
+                    logger.exception("关闭 LLM 专属传输失败")
 
     def synthesize_json(
         self,

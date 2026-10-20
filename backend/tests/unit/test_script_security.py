@@ -18,7 +18,13 @@ class _FakeLLM:
         self.calls: list[tuple[str, int, float]] = []
 
     def synthesize(
-        self, prompt: str, max_tokens: int = 2048, *, timeout: float | None = None
+        self,
+        prompt: str,
+        max_tokens: int = 2048,
+        *,
+        timeout: float | None = None,
+        result_meta: dict | None = None,
+        abort_reg: list | None = None,
     ) -> str | None:
         self.calls.append((prompt, max_tokens, timeout or 0.0))
         return self._response
@@ -32,7 +38,13 @@ class _ScriptedLLM:
         self.calls = 0
 
     def synthesize(
-        self, prompt: str, max_tokens: int = 2048, *, timeout: float | None = None
+        self,
+        prompt: str,
+        max_tokens: int = 2048,
+        *,
+        timeout: float | None = None,
+        result_meta: dict | None = None,
+        abort_reg: list | None = None,
     ) -> str | None:
         idx = min(self.calls, len(self._responses) - 1)
         self.calls += 1
@@ -64,11 +76,14 @@ def test_review_unsafe_with_evidence_kept() -> None:
     verdict = review_script_security(client, "evil.py", "import os\nos.system('rm -rf /')\n")
     assert verdict.safe is False
     assert verdict.issues == ["调用 os.system 执行系统命令"]
-    assert verdict.summary == "危险脚本"
+    assert verdict.summary.startswith("危险脚本")
+    assert "源码命中静态高危调用" in verdict.summary  # 审计标注（评审修订 A）
+    assert verdict.category == "rejected"
 
 
-def test_review_hallucinated_evidence_released() -> None:
-    """模型判不安全，但证据在源码中找不到 → 视为幻觉，放行并留审计说明。"""
+def test_review_hallucinated_evidence_still_blocked() -> None:
+    """评审修订 A：模型判不安全即维持拦截——无逐字证据的理由从展示清单剔除，
+    计数与静态高危命中情况写入 summary 供人工复核，不再反转放行。"""
     client = _FakeLLM(
         '{"safe": false, "issues": ['
         '{"problem": "读取敏感环境变量", "evidence": "os.environ[\'LLM_API_KEY\']"},'
@@ -80,53 +95,58 @@ def test_review_hallucinated_evidence_released() -> None:
         "organization_entity_step.py",
         "import hashlib\nimport json\n\n\ndef run(row):\n    return row\n",
     )
-    assert verdict.safe is True
-    assert verdict.issues == []
-    assert "无实证放行" in verdict.summary
-    assert "日志注入" in verdict.summary  # 保留模型原判供审计
+    assert verdict.safe is False
+    assert verdict.issues == ["模型判不安全：存在环境变量读取与日志注入"]
+    assert "2 条理由未附可逐字验证的证据" in verdict.summary
+    assert "源码未命中静态高危调用（供人工复核）" in verdict.summary
+    assert verdict.category == "rejected"
 
 
-def test_review_plain_string_issues_released() -> None:
-    """旧格式（无 evidence 的纯字符串理由）一律视为无实证 → 放行。"""
+def test_review_plain_string_issues_format_error() -> None:
+    """评审修订 B：旧版纯字符串 issues 不再接受——结构不完整按格式异常处理。"""
     client = _FakeLLM(
         '{"safe": false, "issues": ["使用 os.system", "读取 os.environ"], "summary": "危险脚本"}'
     )
     verdict = review_script_security(client, "evil.py", "import os\nos.system('rm -rf /')\n")
-    assert verdict.safe is True
-    assert verdict.issues == []
-    assert "无实证放行" in verdict.summary
+    assert verdict.safe is False
+    assert verdict.unavailable is True
+    assert any("格式异常" in i for i in verdict.issues)
+    assert len(client.calls) == 2  # 格式异常重试一次
 
 
 def test_review_evidence_whitespace_tolerant() -> None:
-    """模型微调了缩进/换行，压缩空白后仍能命中的证据算有效。"""
+    """模型微调了缩进/换行，压缩空白后仍能命中的证据算有效（展示层清洗）。"""
     client = _FakeLLM(
         '{"safe": false, "issues": [{"problem": "执行系统命令", '
         '"evidence": "import os\\nos.system(1)"}], "summary": "危险"}'
     )
     verdict = review_script_security(client, "evil.py", "import  os\nos . system(1)\n")
-    # 逐字与压空白都不命中（多了空格）→ 放行
-    assert verdict.safe is True
+    # 逐字与压空白都不命中（多了空格）→ 剔除该 issue，但判定仍维持拦截
+    assert verdict.safe is False
+    assert verdict.issues == ["模型判不安全：危险"]
     client2 = _FakeLLM(
         '{"safe": false, "issues": [{"problem": "执行系统命令", '
         '"evidence": "import os\\n    os.system(1)"}], "summary": "危险"}'
     )
     verdict2 = review_script_security(client2, "evil.py", "import os\nos.system(1)\n")
-    # 换行/缩进差异命中 → 拦截
+    # 换行/缩进差异命中 → 带证据拦截
     assert verdict2.safe is False
+    assert verdict2.issues == ["执行系统命令"]
 
 
-def test_review_real_evidence_but_no_high_risk_released() -> None:
-    """证据真实、但源码无任何静态高危调用 → 结论错误，按误报放行。"""
+def test_review_real_evidence_no_high_risk_blocked_with_audit() -> None:
+    """评审修订 A：证据真实但源码无静态高危调用也不再"误报放行"——
+    维持拦截并标注"供人工复核"。"""
     client = _FakeLLM(
         '{"safe": false, "issues": [{"problem": "构造 payload 存在网络访问风险",'
         ' "evidence": "json.dumps(row, sort_keys=True)"}], "summary": "存在网络访问风险"}'
     )
     source = "import json\n\n\ndef run(row):\n    return json.dumps(row, sort_keys=True)\n"
     verdict = review_script_security(client, "transform.py", source)
-    assert verdict.safe is True
-    assert verdict.issues == []
-    assert "误报放行" in verdict.summary
-    assert "网络访问风险" in verdict.summary  # 保留模型原判供审计
+    assert verdict.safe is False
+    assert verdict.issues == ["构造 payload 存在网络访问风险"]
+    assert "源码未命中静态高危调用（供人工复核）" in verdict.summary
+    assert verdict.category == "rejected"
 
 
 def test_review_real_high_risk_still_blocked() -> None:
@@ -139,10 +159,11 @@ def test_review_real_high_risk_still_blocked() -> None:
     verdict = review_script_security(client, "evil.py", source)
     assert verdict.safe is False
     assert verdict.issues == ["派生子进程"]
+    assert "源码命中静态高危调用" in verdict.summary
 
 
-def test_review_re_compile_not_high_risk() -> None:
-    """re.compile 属模块前缀调用，不算高危：误报应放行。"""
+def test_review_re_compile_annotated_not_released() -> None:
+    """re.compile 属模块前缀调用，不算高危：仅影响审计标注，不再放行。"""
     response = json.dumps(
         {
             "safe": False,
@@ -154,8 +175,9 @@ def test_review_re_compile_not_high_risk() -> None:
     client = _FakeLLM(response)
     source = 'import re\n\n_SUFFIX_RE = re.compile("ab+")\n\n\ndef run(row):\n    return row\n'
     verdict = review_script_security(client, "transform.py", source)
-    assert verdict.safe is True
-    assert "误报放行" in verdict.summary
+    assert verdict.safe is False
+    assert verdict.issues == ["动态构造可执行代码"]
+    assert "源码未命中静态高危调用（供人工复核）" in verdict.summary
 
 
 def test_review_duplicate_issues_deduped() -> None:
@@ -231,12 +253,43 @@ def test_review_strips_code_fence() -> None:
     assert verdict.summary == "ok"
 
 
-def test_review_normalizes_bad_issues_field() -> None:
+def test_review_bad_issues_field_format_error() -> None:
+    """评审修订 B：issues 非数组/summary 非字符串不再"容错归一"，按结构不完整处理。"""
     client = _FakeLLM('{"safe": true, "issues": "not a list", "summary": 123}')
     verdict = review_script_security(client, "transform.py", "x = 1\n")
-    assert verdict.safe is True
-    assert verdict.issues == []
-    assert verdict.summary == ""
+    assert verdict.safe is False
+    assert verdict.unavailable is True
+    assert any("格式异常" in i for i in verdict.issues)
+    assert len(client.calls) == 2
+
+
+def test_review_minimal_valid_json_safe_not_released() -> None:
+    """评审修订 B 的准确口径验证：截断恰好拼成最小合法 JSON {"safe": true}
+    属"结构不完整"，不会判 safe。"""
+    client = _FakeLLM('{"safe": true}')
+    verdict = review_script_security(client, "transform.py", "x = 1\n")
+    assert verdict.safe is False
+    assert verdict.unavailable is True
+    assert any("格式异常" in i for i in verdict.issues)
+    assert len(client.calls) == 2
+
+
+def test_review_issue_missing_evidence_field_format_error() -> None:
+    """issue 缺 evidence 字段：结构不完整（旧版会当无证据静默丢弃）。"""
+    client = _FakeLLM('{"safe": false, "issues": [{"problem": "调用系统命令"}], "summary": "危险"}')
+    verdict = review_script_security(client, "evil.py", "import os\nos.system(1)\n")
+    assert verdict.safe is False
+    assert verdict.unavailable is True
+    assert any("格式异常" in i for i in verdict.issues)
+    assert len(client.calls) == 2
+
+
+def test_review_unsafe_empty_issues_format_error() -> None:
+    client = _FakeLLM('{"safe": false, "issues": [], "summary": "危险"}')
+    verdict = review_script_security(client, "transform.py", "x = 1\n")
+    assert verdict.safe is False
+    assert verdict.unavailable is True
+    assert any("格式异常" in i for i in verdict.issues)
 
 
 def test_review_truncated_json_never_released() -> None:
@@ -304,6 +357,8 @@ def test_review_busy_pool_fast_unavailable() -> None:
         client = _FakeLLM('{"safe": true, "issues": [], "summary": "安全"}')
         verdict = review_script_security(client, "transform.py", CLEAN_SOURCE)
         assert verdict.unavailable is True
+        assert verdict.category == "unavailable_busy"
+        assert any("并发已满" in i for i in verdict.issues)
         assert client.calls == []  # 未发起任何 LLM 调用
     finally:
         for _ in range(acquired.count(True)):
@@ -325,7 +380,13 @@ def test_review_stage_wall_clock_bound(monkeypatch) -> None:
 
     class _SlowLLM:
         def synthesize(
-            self, prompt: str, max_tokens: int = 2048, *, timeout: float | None = None
+            self,
+            prompt: str,
+            max_tokens: int = 2048,
+            *,
+            timeout: float | None = None,
+            result_meta: dict | None = None,
+            abort_reg: list | None = None,
         ) -> str | None:
             _time.sleep(2.0)
             return '{"safe": true, "issues": [], "summary": "安全"}'
@@ -333,4 +394,6 @@ def test_review_stage_wall_clock_bound(monkeypatch) -> None:
     started = _time.monotonic()
     verdict = review_script_security(_SlowLLM(), "transform.py", CLEAN_SOURCE)
     assert verdict.unavailable is True
+    assert verdict.category == "unavailable_stage_deadline"
+    assert any("预算耗尽" in i for i in verdict.issues)
     assert _time.monotonic() - started < 1.9

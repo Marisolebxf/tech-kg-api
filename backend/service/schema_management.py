@@ -909,8 +909,12 @@ class SchemaManagementService:
             if verdict.unavailable:
                 # 校验服务限流/超时/输出损坏 ≠ 脚本不安全：明确提示重传，
                 # 避免误导用户改脚本（issues 首条即具体原因文案）。
+                # code/category 为机器可读归类（rate_limit/timeout/busy/…），
+                # 前端/运维据此分类提示与告警。
                 yield {
                     "type": "error",
+                    "code": "llm_unavailable",
+                    "category": verdict.category,
                     "stage": "llm",
                     "message": (verdict.issues or ["LLM 安全校验暂不可用，请稍后重传"])[0],
                     "issues": verdict.issues,
@@ -919,6 +923,8 @@ class SchemaManagementService:
             if not verdict.safe:
                 yield {
                     "type": "error",
+                    "code": "llm_rejected",
+                    "category": verdict.category,
                     "stage": "llm",
                     "message": verdict.summary or "脚本未通过 LLM 安全校验",
                     "issues": verdict.issues or ["脚本未通过 LLM 安全校验"],

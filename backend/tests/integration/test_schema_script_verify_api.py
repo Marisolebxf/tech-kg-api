@@ -44,7 +44,13 @@ class _FakeLLM:
         self._response = response
 
     def synthesize(
-        self, prompt: str, max_tokens: int = 2048, *, timeout: float | None = None
+        self,
+        prompt: str,
+        max_tokens: int = 2048,
+        *,
+        timeout: float | None = None,
+        result_meta: dict | None = None,
+        abort_reg: list | None = None,
     ) -> str | None:
         return self._response
 
@@ -152,9 +158,31 @@ async def test_verify_unsafe_not_saved(schema_api, monkeypatch) -> None:
     assert types[-1] == "error"
     err = events[-1]
     assert err["stage"] == "llm"
-    # 证据锚定语义（evidence-1017 合入后）：unsafe 结论须带源码逐字 evidence
-    # 且源码命中静态高危 pattern 才拦截——无 evidence 的旧格式会被"无实证放行"。
+    # SSE 终态携带机器可读 code+category（2026-10-21 评审：便于前端/运维归类）。
+    assert err["code"] == "llm_rejected"
+    assert err["category"] == "rejected"
+    # 评审修订 A：模型判不安全一律拦截——issues 带源码逐字 evidence 的问题清单。
     assert err["issues"] == ["调用 os.system 执行系统命令"]
+
+
+@pytest.mark.asyncio
+async def test_verify_llm_verdict_unavailable_terminal_code(schema_api, monkeypatch) -> None:
+    """限流/超时类不可用（verdict.unavailable）：SSE 终态 code=llm_unavailable，
+    category 带错误分类，不伪装成"脚本不安全"。"""
+    _set_llm(monkeypatch, None)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        expert = await _list_expert(client)
+        response = await _verify(client, expert["id"], "schema-admin", "expert.py", BENIGN_SCRIPT)
+        assert response.status_code == 200
+        events = _parse_sse(response.text)
+
+    err = events[-1]
+    assert err["type"] == "error"
+    assert err["stage"] == "llm"
+    assert err["code"] == "llm_unavailable"
+    assert err["category"].startswith("unavailable_")
+    assert "暂不可用" in err["message"]
+    assert "稍后重传" in err["message"]
 
 
 @pytest.mark.asyncio

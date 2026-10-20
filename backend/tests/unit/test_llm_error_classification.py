@@ -116,12 +116,31 @@ def test_abort_handle_register_cancel_mutex() -> None:
     assert handle.closed_count == 1
 
 
+def test_abort_handle_mark_cancelled_sync_flag_close_async() -> None:
+    """复核 942b442e：置标志与关传输分离——标志同步生效（关没关都拒迟登记）。"""
+    handle = LLMAbortHandle()
+    first = httpx.Client()
+    assert handle.register(first) is True
+    pending = handle.mark_cancelled()
+    # 标志已同步置位：即使 close_transports 尚未执行（守护线程未获调度），
+    # 迟到的 register 也必被拒。
+    assert handle.cancelled is True
+    assert len(pending) == 1
+    late = httpx.Client()
+    assert handle.register(late) is False
+    # 关闭是独立一步（生产路径放守护线程），之后幂等：再 mark 无新增。
+    handle.close_transports(pending)
+    assert handle.closed_count == 1
+    assert handle.mark_cancelled() == []
+    assert handle.closed_count == 1
+
+
 def test_synthesize_aborted_before_request_never_calls_sdk() -> None:
-    """迟登记竞态修复验证：handle 已取消时 synthesize 直接放弃，
-    不构造 OpenAI 客户端、不发起任何请求。"""
+    """迟登记竞态修复验证：handle 已取消（仅同步置标志，关闭未执行）时
+    synthesize 直接放弃，不构造 OpenAI 客户端、不发起任何请求。"""
     client, stub = _client_with(_resp("hello", "stop"))
     handle = LLMAbortHandle()
-    handle.cancel()
+    assert handle.mark_cancelled() == []  # 同步置标志；close_transports 不执行
     meta: dict = {}
     out = client.synthesize("p", timeout=5.0, result_meta=meta, abort_reg=handle)
     assert out is None

@@ -57,6 +57,10 @@ E3 迟登记竞态与慢清理（SEC-LIFETIME）：LLMAbortHandle 以锁+取消�
    取消与迟登记互斥——取消后登记的传输立即关闭且不再发起请求；清理
    （close）移入守护线程，不拖住调用方返回。槽位仍以工作线程真正收尾
    为准释放，不伪造容量恢复。调用方墙钟仍是权威总上界。
+   复核 942b442e 收口：逻辑取消（置标志+取传输）改在调用线程**同步**
+   完成（mark_cancelled），只有传输关闭留给守护线程——此前 cancel()
+   整体进守护线程，线程未获调度时迟到 register 仍会成功并在调用方
+   返回后发出请求（Codex 确定性交错复现）。
 E4 前端终态（SEC-SSE）：前端 verifyAndSaveScript 增加终态标志——无终态
    EOF 按错误收尾（不再让页面停在校验中）；错误回调接通 code/category。
 """
@@ -373,12 +377,21 @@ def review_script_security(client: LLMClient, filename: str, source: str) -> Scr
             raw = future.result(timeout=left)
         except concurrent.futures.TimeoutError:
             # 排队未启动的直接取消（done-callback 会释放槽位）；运行中的
-            # HTTP 请求靠 handle.cancel() 尽力中断：置取消标志（此后迟登记的
-            # 传输会被立即关闭、不再发请求）+ close 已登记传输（阻塞读随
-            # 连接复位出错，滴流实验实证，非硬保证；权威总上界是本次墙钟等待）。
-            # 清理放守护线程：close 慢/挂不拖住返回（复核 SEC-LIFETIME）。
+            # HTTP 请求靠句柄取消尽力中断。复核 942b442e：逻辑取消（置标志
+            # +取走在登记传输，短锁无 I/O）必须在调用线程**同步**完成——
+            # 否则守护线程未获调度前，迟到初始化的工作线程仍可 register
+            # 成功并在调用方返回后发出请求；只有可能阻塞的传输关闭留给
+            # 守护线程（close 慢/挂不拖住返回）。已登记传输被 close 后
+            # 阻塞读随连接复位出错（滴流实验实证，非硬保证；权威总上界
+            # 是本次墙钟等待）。
             future.cancel()
-            threading.Thread(target=aborts.cancel, daemon=True, name="llm-review-abort").start()
+            pending = aborts.mark_cancelled()
+            threading.Thread(
+                target=aborts.close_transports,
+                args=(pending,),
+                daemon=True,
+                name="llm-review-abort",
+            ).start()
             last_meta["error_class"] = "timeout"
             logger.warning("LLM 安全校验调用超过阶段预算 %.0fs，放弃等待并尽力关闭在飞连接", left)
             return None

@@ -82,10 +82,15 @@ def classify_llm_error(exc: Exception) -> str:
 class LLMAbortHandle:
     """调用方放弃指示器（2026-10-21 复核 SEC-LIFETIME）：锁 + 已取消标志。
 
-    取消与"迟登记"互斥：cancel() 置位后，之后任何 register() 都返回 False，
-    登记方须立即关闭自己的传输并放弃请求——调用方已超时返回的情况下，
-    工作线程不得再发起新的 HTTP 请求（此前的竞态：传输在调用方超时后才
-    登记进列表，调用方的关闭循环扑空，请求照发）。
+    取消分两步（复核 942b442e：此前 cancel() 整体进守护线程，线程未获
+    调度前迟到的 register() 仍会成功、请求仍会在调用方返回后发出）：
+    - mark_cancelled()：调用线程内**同步**完成逻辑取消——置标志 + 取走
+      在登记传输（短锁、无 I/O），保证"调用方返回后任何 register 必被拒"；
+    - close_transports()：可能阻塞的传输关闭，交给守护线程异步执行。
+
+    迟登记互斥：标志置位后任何 register() 都返回 False，登记方须立即关闭
+    自己的传输并放弃请求；置位前登记的传输进入待关列表，由后台 close
+    尽力中断在飞读（非硬保证；权威总上界是调用方墙钟）。
     """
 
     def __init__(self) -> None:
@@ -107,18 +112,35 @@ class LLMAbortHandle:
             self._transports.append(transport)
             return True
 
-    def cancel(self) -> None:
-        """置取消标志并关闭已登记传输（幂等；单个关闭失败不影响其余）。"""
+    def mark_cancelled(self) -> list[httpx.Client]:
+        """同步置取消标志并取走在登记传输（快，无 I/O）。
+
+        必须在调用方"放弃等待"的返回路径上同步执行——只有这样才能保证
+        迟到的 register()（工作线程初始化慢于调用方超时）必被拒；可能
+        阻塞的关闭动作由调用方交给后台线程：close_transports(mark_cancelled())。
+        """
         with self._lock:
             self._cancelled = True
             pending = list(self._transports)
             self._transports.clear()
-        for transport in pending:
+        return pending
+
+    def close_transports(self, transports: list[httpx.Client]) -> None:
+        """关闭一批传输（幂等；单个失败不影响其余）。可能阻塞，放后台线程。"""
+        for transport in transports:
             try:
                 transport.close()
                 self.closed_count += 1
             except Exception:  # pragma: no cover - 关闭失败不影响其余清理
                 logger.exception("放弃等待后关闭在飞请求传输失败")
+
+    def cancel(self) -> None:
+        """同步全量取消（置标志 + 关传输，幂等）。
+
+        生产超时路径用 mark_cancelled + 后台 close_transports 拆分；此方法
+        保留给测试与无"返回时长"约束的直接调用场景。
+        """
+        self.close_transports(self.mark_cancelled())
 
 
 class LLMClient:
@@ -163,9 +185,11 @@ class LLMClient:
           同一次超时的时长放大；独立传输使调用方可安全地中断本次连接。
         - abort_reg（LLMAbortHandle）在发起请求**前**登记专属传输；若登记时
           调用方已取消（register 返回 False），立即关闭传输并放弃请求——
-          消除"调用方超时返回后请求才登记/发出"的竞态。已登记后的取消靠
-          close() **尽力**中断在飞读（同步线程阻塞在 socket recv 上无法强杀，
-          依赖 OS 层 socket 关闭语义），非硬保证；权威总上界是调用方墙钟等待。
+          消除"调用方超时返回后请求才登记/发出"的竞态（调用方侧取消 =
+          同步 mark_cancelled 置标志 + 后台 close_transports，见句柄类注释）。
+          已登记后的取消靠 close() **尽力**中断在飞读（同步线程阻塞在
+          socket recv 上无法强杀，依赖 OS 层 socket 关闭语义），非硬保证；
+          权威总上界是调用方墙钟等待。
         - result_meta 非空时回填诊断：成功记 finish_reason/reasoning_tokens；
           内容为空记 error_class=empty_response；失败记 error_class
           （classify_llm_error）与 error_detail。

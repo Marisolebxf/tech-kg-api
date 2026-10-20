@@ -469,6 +469,66 @@ def test_review_capacity_recovers_after_timeouts(monkeypatch) -> None:
     assert verdict is not None and verdict.safe
 
 
+def test_review_cancel_flag_set_synchronously_before_return(monkeypatch) -> None:
+    """复核 942b442e（SEC-LIFETIME 收口）：取消标志须在调用方返回前同步置位。
+
+    Codex 确定性交错复现的竞态：清理线程"尚未获调度"（close 被闸挡住），
+    调用方已超时返回，迟到初始化的工作线程此时才 register——若标志要等
+    守护线程里才置位，register 会成功、请求会在放弃后发出。本测试固定
+    该交错：清理线程全程被闸住，调用方返回后才放行工作线程初始化，
+    register 必被拒、模拟 SDK create 零调用（旧实现此用例必失败）。
+    """
+    import threading as _threading
+    import time as _time
+
+    import service.script_security as mod
+    from infra.llm import LLMAbortHandle
+
+    monkeypatch.setattr(mod, "REVIEW_STAGE_SECONDS", 0.5)
+    monkeypatch.setattr(mod, "_RETRY_FLOOR_SECONDS", 0.3)
+
+    close_gate = _threading.Event()
+    init_gate = _threading.Event()
+    state: dict = {"register_ok": None, "dispatch": 0, "close_done": False}
+
+    def gated_close(self, transports):  # noqa: ANN001
+        assert close_gate.wait(10.0)  # 模拟清理线程未获调度/慢 close
+        state["close_done"] = True
+
+    monkeypatch.setattr(LLMAbortHandle, "close_transports", gated_close)
+
+    class _LateInitLLM:
+        def synthesize(
+            self,
+            prompt: str,
+            max_tokens: int = 2048,
+            *,
+            timeout: float | None = None,
+            result_meta: dict | None = None,
+            abort_reg: object | None = None,
+        ) -> str | None:
+            # 初始化暂停：停在 register 之前（Codex 复现的专属传输构造点）
+            assert init_gate.wait(10.0)
+            assert abort_reg is not None
+            state["register_ok"] = bool(abort_reg.register(object()))
+            if state["register_ok"]:
+                state["dispatch"] += 1  # register 成功即视为 SDK create 已发出
+            return None
+
+    verdict = mod.review_script_security(_LateInitLLM(), "late.py", "x = 1\n")
+    assert verdict.unavailable is True
+    # 调用方已返回、清理线程仍被闸住（未完成）：此刻才放行迟到初始化。
+    init_gate.set()
+    deadline = _time.monotonic() + 5.0
+    while _time.monotonic() < deadline and state["register_ok"] is None:
+        _time.sleep(0.05)
+    # 标志在调用线程同步置位：迟登记必被拒，请求零发出，且清理尚未完成。
+    assert state["register_ok"] is False
+    assert state["dispatch"] == 0
+    assert state["close_done"] is False
+    close_gate.set()  # 放行清理线程收尾（幂等；此刻无在登记传输）
+
+
 def test_prompt_scope_contract() -> None:
     """提示词分诊化（2026-10-21）的检查范围契约：八类信号、证据要求、防注入、
     JSON 契约与旧版一致；开放式"审计专家（不限于）"人设不得回流。"""

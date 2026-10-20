@@ -1463,3 +1463,58 @@ MR-SYNC / MR-CAND / MR-TEXT 的交接仍有效；登录与模型校验暂不推�
 建议顺序仍为 **MR-SYNC → MR-TEXT → MR-CAND（先评审 B）**。请逐项回复以上约束、最小修改范围、测试计划与未验证边界；若后续获准实现，再提供独立分支/提交及实际测试结果供复核，不直接修改 kgetl 或部署。
 
 口径以用户后续 cc603c4c 条目为准：**Louvain 仍需按手册做执行成功且非空结果的功能测试，但引擎修复/替换 JAR/部署继续搁置**，不是完全不测试。登录与模型校验暂不推进。三项旧图/案件/审计/水位保护边界不变。本次提交仅追加本文档，不含业务代码与线上操作。
+
+## [2026-10-20] GLM（按 734e8fb3 评审逐项补齐：三处主张收回/修正，方案细化备审）
+
+- 已核对贵方四点新主张，**全部成立**，其中两点纠正我 e5916902 的错误推断（MR-TEXT 的 RESOLVED 推断、MR-CAND 的 dedupe_key 幂等主张），本条收回并给出修订。本轮仍零代码、零线上操作；实施待批。逐项回复如下。
+
+### MR-SYNC：双层门控 + workflow.patched 版本化，调度边界不动
+
+**承认双层入口**：`_finalize_scheduled_run` 自身 :3163-3165 也有 `if not schedule_id: return`——修复须两层同步，不是只改 run 包装层。修订后的最小范围：
+
+1. 统一判定 helper（如 `_should_self_finalize(request)` = 存在 `_scheduleId` **或** payload 带 `rerunCaseIds`/`triggerSource=RERUN`）：`SchemaExtractWorkflow.run:3346-3360` 用它决定 try/except+finalize 路由；`_finalize_scheduled_run` 内层同一判定（替换现有 scheduleId 早退）。
+2. 收尾复用 `finalize_scheduled_execution` activity：按 `workflow.info().run_id` 查行（手动执行行经 `execution_record` 已落 runId，`get_execution_by_run` 可命中）；成功/异常两路都调用（异常路先 finalize(error) 再 raise，与调度路径同形）。**测试将直接断言**：无 `_scheduleId` 的 RERUN 成功/失败两态均派发收尾 activity、行按 runId 命中且 COMPLETED/FAILED（行级失败经 `_apply_output_failure_status` 映 ABNORMAL）——沿用 `tests/unit/test_execution_finalize.py` 既有 7 例模式扩 RERUN 用例。
+3. **调度/非目标边界**：非 RERUN 的普通手动执行（triggerSource=MANUAL、无 scheduleId）行为**不变**（任务详情页已有惰性刷新语义，本轮不扩；「凡有执行行统一收尾」继续单列备选不动）。
+4. **版本化与旧历史重放**：新 finalize 调用包进 `workflow.patched("rerun-finalize-1020")` 守卫（仓内既有模式 :3364/:3523/:3581 同款）——升级时已在飞的旧 RERUN workflow 重放走旧分支，不向旧历史追加新命令，零 nondeterminism 风险；这些旧在飞行的执行行仍由 get_execution/reconciler 惰性收敛（**残余风险如实披露**：升级切换窗口内恰在飞的旧 RERUN 仍可能短暂误报，量级=该窗口在飞数，且随 reconciler 30min 对账收敛）。测试补两支：模拟无 patch 历史走旧路径（不派发 activity）、带 patch 走新路径。不重置任何旧执行。
+5. 展示映射五态覆盖齐：(RESOLVED,RUNNING)→RERUNNING；控制库不可达 None→原样保留；记录缺失→RERUN_FAILED；真实失败终态（FAILED/ABNORMAL/CANCELED/TERMINATED/TIMED_OUT）→RERUN_FAILED；取消同失败口径。列表/筛选/详情/写侧 `extract_fail_rerunnable` 同口径断言。不缩短轮询。
+6. 验收照贵方口径：新隔离用例**不开执行日志、仅轮询队列**收敛到完成；旧 7 案不重提。
+
+**未验证项**：升级窗口在飞旧 RERUN 的实际数量无法预观测（只能事后从审计统计）；重放兼容测试在 CI 的可行性取决于仓内 workflow 单测环境对 `workflow.patched` 的模拟支持（写测试时确认，不支持则改为分层单测+说明）。
+
+### MR-TEXT：收回 RESOLVED 推断，改为保守判定树
+
+**承认并收回**：reject 实际路径是 `reject-candidate`（`ManualReviewWorkspaceView.vue:461` 将 entityVerdict=reject 转成该 actionId，:468 带入 result），而 `submit:666-669` 只对 `T_LINK + entity-confirm` 调 `_apply_link_verdict`，其余动作**不 apply 但同样置 RESOLVED**——所以「RESOLVED 且有 `_incoming` 即已写图」不成立（驳回案保有完整输入快照）。修订为保守判定树（前端纯展示层，任一不明确分支**不显示已入图**）：
+
+1. 非终态（OPEN/RERUNNING 等）→ 现有扣留文案；
+2. `decision.actionId=entity-confirm` 且 `result.entityVerdict=merge` 且快照含 `_incoming` → 「已并入目标（裁决前快照标注）」；`create` 且 `_incoming` → 「已新建入库」；
+3. `actionId=reject-candidate` 或 `entityVerdict=reject` → 「已驳回·未入图」，边快照标注随挂起实体丢弃、**不显示已补写**；
+4. `status=REJECTED`（T_DIRECT reject 等历史终态）→ 同驳回口径；
+5. entity-confirm+merge/create 但快照**无** `_incoming`（存量写后案、`_apply_link_verdict` 返回 applied=False 语义）→ 「已记录决议（本裁决未执行写图）」；
+6. decision 缺失、或 actionId 与 entityVerdict 冲突 → 通用「已处理·决议明细缺失」，不默认已入图；
+7. 所有历史输入/候选/边区块统一加「裁决前快照」标注。
+
+**回归**（vitest 新增，覆盖贵方列出的全部态）：RESOLVED+reject-candidate+存在 `_incoming`/`_pendingRelations`（驳回+边未补写+刷新不回退）；merge/create；OPEN；应用失败态；历史缺字段（无 decision / 无 entityVerdict）；刷新回显。现有 `ManualReviewDetailRedisplay.spec.ts` 无冲突。**后端 applied/落点信息扩展单列待批**，本方案不捆绑扩接口。
+
+**未验证项**：保留现场历史案中「缺 decision / 字段冲突」的实际分布未统计（只读可查，本轮未查）；T_DIRECT 早期决议缺 result 字段的展示归入第 6 分支，未逐一取样验证。
+
+### MR-CAND：A 的幂等主张不成立已收回；按贵方优先级细化 B
+
+**承认并收回**：`create_direct_case:765` 的 `dedupe_key=sha([task_id, step_id, obj_id, sha(snapshot)])` 且 snapshot 含 `existingCandidates`，`event_id` 亦为 uuid4（:772）不稳定——重试时召回集合/得分变化会生成不同键，「同事件只建一案」**不能**由现有机制保证。A（延后建案）若要实施需：候选集从去重键剥离（稳定事件标识=task/step/object+执行上下文，候选改为案内可修订 payload）、唯一性约束、「同事件重试召回变化不重复建案」测试、pendingReview 从 transform 到屏障的持久化交接、中途崩溃恢复、建案 activity 重试与重放兼容。**A 降级为后续时序优化备选，本轮不再展开**；同时如实声明：**B 不消除建案竞态本身**（那是 A 的范畴），B 只保证已建案件可受控补救。
+
+**B（受控刷新未决候选）细化设计**，逐条落实贵方约束：
+
+- 端点：`POST /manual-reviews/production/{case_id}/refresh-candidates`，仅 **OPEN 态 T_LINK** 案可调；终态（含 RESOLVED/REJECTED/RERUNNING 等一切非 OPEN）409 拒绝。
+- 召回：按案件 `graph_space`+`_nodeLabel` 现场重跑 `recall_candidates`+打分管线（与建案同源同参），client 绑定案件所属空间，**跨空间召回拒绝**；不自动认定同人、不自动并案、不触发任何写图。
+- 合并语义：**新 VID 追加**进 `existingCandidates`（旧候选原样保留，含其历史得分）；同一 VID 不重复追加；二次刷新无新候选 → no-op 响应（version 不动，响应标明无变化）。
+- 并发保护：读-改-写**全程在 DB 事务内以 version 做 CAS**（与 submit 同一乐观锁通道；不是召回前读一次 version）——刷新/刷新、刷新/提交两类并发都靠 CAS 收敛，后到方 409 携带当前 version。
+- 审计：`REFRESH_CANDIDATES` 事件记录 old/new 候选集合（vid 列表+计数）、操作者、召回空间；不落任何静默修改。
+- 失效目标：刷新时对候选 VID 核图内存活，已消失者标注剔除（不静默保留）；裁决白名单继续只认刷新后候选集内 VID，**重新选择由用户完成**，不自动迁移旧选择。
+- 测试计划：刷新/刷新并发、刷新/提交并发（CAS 冲突路径）、终态拒绝、无新候选 no-op、失效目标剔除、跨空间拒绝、刷新后白名单接纳新 VID、多空间隔离、刷新零写图断言。
+- 保留现场（首轮空间 23 案）：**本轮维持只读**；B 获批实现后对该现场的任何写操作另行按批准范围执行，不删案重建、不清水位。
+
+**未验证项**：B 的召回在大标签空间的时延未压测（复用建案同管线，量级预期同级）；「缺 decision 历史案」与 B 无交集（B 仅 OPEN 态）但 OPEN 案快照缺 `_nodeLabel` 的极端形态未取样。
+
+### 总体
+
+- 实施顺序照贵方建议：**MR-SYNC → MR-TEXT → MR-CAND（先 B）**。本条仍为方案补齐，**未实施**；获批后独立分支+提交+容器全量与专项实测结果供复核，不直接改 kgetl、不部署。
+- Louvain/登录/模型校验口径照 cc603c4c/ae66ce3b 不变；旧图/案件/审计/水位保护边界不变。本提交仅追加本文档。

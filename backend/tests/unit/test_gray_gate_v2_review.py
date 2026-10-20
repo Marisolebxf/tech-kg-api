@@ -263,17 +263,33 @@ class TestParkEdgesV2:
         assert len(snapshot["_pendingRelations"]) == 1
 
     def test_terminal_v2_merge_rewrites_endpoint(self, service):
+        # R7：merge 重放的 canonical 只能来自经批准的持久 remap（方案 A 另批）——
+        # 应用行/决议目标不得充当映射，未登记即 MERGE_CANONICAL_MISSING 失败关闭
         case_id = _link_case(service, vid="sch_t")
         _resolve(
             service,
             case_id,
             result={"entityVerdict": "merge", "targetEntityId": "sch_9"},
         )
-        out = service.park_or_rewrite_edges(
-            "AUTHORED_BY", [_edge(frm="sch_t")], "dev2", decision_policy=decision_policy()
+        from service.gray_gate import (
+            MergeCanonicalMissingError,
+            register_canonical_remap_resolver,
         )
-        assert out["records"] == [{**_edge(frm="sch_t"), "fromId": "sch_9"}]
-        assert out["parked"] == 0 and out["dropped"] == 0
+
+        with pytest.raises(MergeCanonicalMissingError) as ei:
+            service.park_or_rewrite_edges(
+                "AUTHORED_BY", [_edge(frm="sch_t")], "dev2", decision_policy=decision_policy()
+            )
+        assert ei.value.detail == {"reason": "remap_unavailable"}
+        register_canonical_remap_resolver({"sch_t": "sch_9"}.get)
+        try:
+            out = service.park_or_rewrite_edges(
+                "AUTHORED_BY", [_edge(frm="sch_t")], "dev2", decision_policy=decision_policy()
+            )
+            assert out["records"] == [{**_edge(frm="sch_t"), "fromId": "sch_9"}]
+            assert out["parked"] == 0 and out["dropped"] == 0
+        finally:
+            register_canonical_remap_resolver(None)
 
     def test_terminal_v2_reject_drops_edge(self, service):
         case_id = _link_case(service, vid="sch_t")
@@ -307,14 +323,45 @@ class TestParkEdgesV2:
                 "AUTHORED_BY", [_edge(frm="sch_t")], "dev2", decision_policy=decision_policy()
             )
 
-    def test_terminal_v1_case_falls_back_to_decision_read(self, service):
-        # 全 v1 终态案：回落决议结果读取（保留现行为——v1 案没有 application 语义）
+    def test_terminal_v1_snapshot_with_application_row_is_authoritative(self, service):
+        # v1 快照案经 v2 两段提交：application 行同样权威——merge 重放不因快照
+        # 版本回退决议目标直接放行，仍走持久 remap（R7）
         case_id = _link_case(service, vid="sch_old", policy="disambiguation-gray-v1")
         _resolve(service, case_id, result={"entityVerdict": "merge", "targetEntityId": "sch_9"})
+        from service.gray_gate import MergeCanonicalMissingError
+
+        with pytest.raises(MergeCanonicalMissingError):
+            service.park_or_rewrite_edges(
+                "AUTHORED_BY", [_edge(frm="sch_old")], "dev2", decision_policy=decision_policy()
+            )
+
+    def test_terminal_v1_without_application_row_reject_drops(self, service):
+        # 真 v1 终态案（无任何 application 行）：回落决议读取——reject=不写图的
+        # 保守处置，语义可靠
+        case_id = _link_case(service, vid="sch_old", policy="script-pending-gray-v1")
+        _resolve(service, case_id, action="reject-candidate", result={"entityVerdict": "reject"})
+        with service.sf() as s:
+            s.query(ReviewVerdictApplication).delete()
+            s.commit()
         out = service.park_or_rewrite_edges(
             "AUTHORED_BY", [_edge(frm="sch_old")], "dev2", decision_policy=decision_policy()
         )
-        assert out["records"] == [{**_edge(frm="sch_old"), "fromId": "sch_9"}]
+        assert out == {"records": [], "parked": 0, "dropped": 1}
+
+    def test_terminal_v1_without_application_row_merge_fails_closed(self, service):
+        # 真 v1 终态案的 merge 无应用权威：按 UNKNOWN 失败关闭（历史强制案禁
+        # merge/create 仅留 reject，收口口径）
+        case_id = _link_case(service, vid="sch_old", policy="script-pending-gray-v1")
+        _resolve(service, case_id, result={"entityVerdict": "merge", "targetEntityId": "sch_9"})
+        with service.sf() as s:
+            s.query(ReviewVerdictApplication).delete()
+            s.commit()
+        from service.gray_gate import VerdictNotAppliedError
+
+        with pytest.raises(VerdictNotAppliedError):
+            service.park_or_rewrite_edges(
+                "AUTHORED_BY", [_edge(frm="sch_old")], "dev2", decision_policy=decision_policy()
+            )
 
     def test_unregistered_snapshot_version_fails_closed(self, service):
         _link_case(service, vid="sch_x", policy="gray-gate-v3-rc1")
@@ -411,3 +458,234 @@ class TestSubmitTwoPhase:
         service._finish_verdict_application(case_id, actor(), "entity-confirm", "APPLIED")
         app = _app_row(service, case_id)
         assert app.apply_status == "FAILED"
+
+
+# ---------------------------------------------------------------------------
+# R5：APPLY_FAILED 案的 ingress 应答失败关闭（不得当开放案吞新来源）
+# ---------------------------------------------------------------------------
+
+
+class TestIngressResponseR5:
+    def _to_apply_failed(self, service, case_id):
+        with service.sf() as s:
+            c = s.get(ReviewCase, case_id)
+            c.status = "APPLY_FAILED"
+            s.add(
+                ReviewVerdictApplication(
+                    case_id=case_id,
+                    verdict="create",
+                    apply_status="FAILED",
+                    created_at=c.created_at,
+                    updated_at=c.updated_at,
+                )
+            )
+            s.commit()
+
+    def test_apply_failed_duplicate_ingress_fails_closed(self, service):
+        from service.gray_gate import VerdictNotAppliedError
+
+        case_id = _link_case(service)
+        self._to_apply_failed(service, case_id)
+        with service.sf() as s:
+            c = s.get(ReviewCase, case_id)
+            with pytest.raises(VerdictNotAppliedError) as ei:
+                service._ingress_response(c, True, session=s)
+        assert ei.value.detail == {"applyStatus": "FAILED", "caseStatus": "APPLY_FAILED"}
+
+    def test_apply_failed_without_marker_row_is_unknown(self, service):
+        # 缺整行=UNKNOWN 崩溃窗口收敛态：同样失败关闭，不猜测图写结果
+        from service.gray_gate import VerdictNotAppliedError
+
+        case_id = _link_case(service)
+        with service.sf() as s:
+            c = s.get(ReviewCase, case_id)
+            c.status = "APPLY_FAILED"
+            s.commit()
+            with pytest.raises(VerdictNotAppliedError) as ei:
+                service._ingress_response(c, True, session=s)
+        assert ei.value.detail == {"applyStatus": "UNKNOWN", "caseStatus": "APPLY_FAILED"}
+
+    def test_find_ingress_case_round_trip(self, service):
+        # R2 查询侧回环：纯源事件材料命中同一案——开放案=普通重复应答
+        material = ["bind-1", "row-1", "v-1", "dev2", "Scholar", "sch_x"]
+        resp = service.create_direct_case(
+            task_id="TASK-1",
+            execution_id="EXEC-1",
+            step_id="source:bind-1#main",
+            kind="entity",
+            candidate={"name": "张三"},
+            object_id="sch_x",
+            object_name="张三",
+            node_label="Scholar",
+            reason="灰区",
+            confidence=0.8,
+            template_id="T_LINK",
+            graph_space="dev2",
+            dedupe_material=material,
+        )
+        assert resp["duplicate"] is False
+        hit = service.find_ingress_case(material)
+        assert hit["reviewId"] == resp["reviewId"]
+        assert hit["duplicate"] is True and "priorVerdict" not in hit
+        assert service.find_ingress_case(["bind-1", "row-9", "v-2", "dev2", "Scholar", "y"]) is None
+
+    def test_find_ingress_case_apply_failed_fails_closed(self, service):
+        from service.gray_gate import VerdictNotAppliedError
+
+        material = ["bind-1", "row-1", "v-1", "dev2", "Scholar", "sch_x"]
+        resp = service.create_direct_case(
+            task_id="TASK-1",
+            execution_id="EXEC-1",
+            step_id="source:bind-1#main",
+            kind="entity",
+            candidate={"name": "张三"},
+            object_id="sch_x",
+            object_name="张三",
+            node_label="Scholar",
+            reason="灰区",
+            confidence=0.8,
+            template_id="T_LINK",
+            graph_space="dev2",
+            dedupe_material=material,
+        )
+        self._to_apply_failed(service, resp["reviewId"])
+        with pytest.raises(VerdictNotAppliedError):
+            service.find_ingress_case(material)
+
+
+# ---------------------------------------------------------------------------
+# R6：裁决后补边双端点统一路由（另一端未决转交 / 端点存在性终判）
+# ---------------------------------------------------------------------------
+
+
+class TestFlushPendingRelationsR6:
+    def _fake_graph(self, monkeypatch):
+        from types import SimpleNamespace
+
+        edges: list = []
+        fake = SimpleNamespace(create_edge=lambda f, t, e, p: edges.append((f, t)))
+        monkeypatch.setattr(ManualReviewService, "_graph_client_for", lambda *a: fake)
+        monkeypatch.setattr(ManualReviewService, "_insert_withheld_vertex", lambda *a: None)
+        monkeypatch.setattr(ManualReviewService, "_coerce_to_schema", lambda *a, **k: {})
+        monkeypatch.setattr(ManualReviewService, "_edge_fields", lambda *a: set())
+        monkeypatch.setattr(ManualReviewService, "_sync_entity_search_after_write", lambda *a: None)
+        return edges
+
+    def test_other_open_endpoint_captures_flushed_edge(self, service, monkeypatch):
+        # 探针⑦回归：a 案 create 裁决补边——b 端仍有开放案 → 边转交 b 案，
+        # 不绕过第二端扣留直接写图
+        a_id = _link_case(service, vid="a")
+        b_id = _link_case(service, vid="b")
+        service.park_or_rewrite_edges(
+            "LINK",
+            [{"fromId": "a", "toId": "b", "props": {}}],
+            "dev2",
+            decision_policy=decision_policy(),
+        )
+        edges = self._fake_graph(monkeypatch)
+        service.submit(a_id, 1, "entity-confirm", {"entityVerdict": "create"}, "裁决", actor())
+        assert edges == []  # 没有直接写边
+        with service.sf() as s:
+            snap_a = json.loads(s.get(ReviewCase, a_id).candidate_snapshot)
+            snap_b = json.loads(s.get(ReviewCase, b_id).candidate_snapshot)
+        assert snap_a["_pendingRelations"] == []  # 已处置边从本案摘除
+        assert snap_b["_pendingRelations"] == [
+            {"edgeType": "LINK", "fromId": "a", "toId": "b", "props": {}}
+        ]
+        # 图写明细入 VERDICT_APPLIED audit（补边去向可审计）
+        from db_model.manual_review import ReviewAuditLog
+
+        with service.sf() as s:
+            row = s.scalar(
+                select(ReviewAuditLog).where(
+                    ReviewAuditLog.case_id == a_id, ReviewAuditLog.event_type == "VERDICT_APPLIED"
+                )
+            )
+        assert json.loads(row.detail)["pendingRelationsParked"] == 1
+
+    def test_missing_endpoint_fails_closed_no_hanging_edge(self, service, monkeypatch):
+        # 另一端无案但图中不存在 → 存在性终判失败关闭（案 APPLY_FAILED，零写边）
+        from types import SimpleNamespace
+
+        a_id = _link_case(service, vid="a")
+        with service.sf() as s:
+            c = s.get(ReviewCase, a_id)
+            snap = json.loads(c.candidate_snapshot)
+            snap["_pendingRelations"] = [
+                {"edgeType": "LINK", "fromId": "a", "toId": "ghost", "props": {}}
+            ]
+            c.candidate_snapshot = json.dumps(snap, ensure_ascii=False)
+            s.commit()
+        edges = self._fake_graph(monkeypatch)
+        # 存在性探针：ghost 不存在
+        monkeypatch.setattr(
+            ManualReviewService,
+            "_graph_client_for",
+            lambda *a: SimpleNamespace(
+                create_edge=lambda f, t, e, p: edges.append((f, t)),
+                get_node=lambda vid: None,
+            ),
+        )
+        from service.manual_review_domain import ReviewConflictError
+
+        with pytest.raises((RuntimeError, ReviewConflictError)):
+            service.submit(a_id, 1, "entity-confirm", {"entityVerdict": "create"}, "裁决", actor())
+        assert edges == []
+        assert _open_case_status(service, a_id) == "APPLY_FAILED"
+        app = _app_row(service, a_id)
+        assert app.apply_status == "FAILED"
+
+
+# ---------------------------------------------------------------------------
+# R8：详情富化不覆盖建案证据（重算进 recheck，带取数时点）
+# ---------------------------------------------------------------------------
+
+
+class TestDetailEnrichR8:
+    def _case_with_props(self, service, *, evidence_fields: bool):
+        case_id = _link_case(service)
+        with service.sf() as s:
+            c = s.get(ReviewCase, case_id)
+            snap = json.loads(c.candidate_snapshot)
+            snap["_incoming"]["props"] = {"name": "张三", "org": "A"}
+            if evidence_fields:
+                # v2 建案快照：候选带证据字段（建案时点 propsAgree=0.5）
+                snap["existingCandidates"][0].update(
+                    propsAgree=0.5, propCompared=0, propMatched=0, comparedProps=[]
+                )
+            s.commit()
+            return c, snap
+
+    def test_build_time_evidence_read_only_recheck_recorded(self, service, monkeypatch):
+        # 探针⑧回归：当前图库属性与建案时点一致甚至变化——建案证据字段一律
+        # 只读，重算结果进独立 recheck（带 asOf 时点），不与总分互相矛盾
+        c, snap = self._case_with_props(service, evidence_fields=True)
+        monkeypatch.setattr(ManualReviewService, "_graph_client_for", lambda *a: object())
+        monkeypatch.setattr(
+            ManualReviewService,
+            "_es_same_name_by_vid",
+            lambda *a: {"sch_9": {"props": {"name": "张三", "org": "A"}}},
+        )
+        out = service._enrich_link_snapshot(c, snap)
+        cand = out["existingCandidates"][0]
+        assert cand["propsAgree"] == 0.5  # 建案证据不被覆盖
+        assert cand["score"] == 0.8  # 总分同为建案时点
+        assert "recheck" in cand
+        assert cand["recheck"]["nameSim"] == 1.0
+        assert cand["recheck"]["propsAgree"] == 1.0  # 重算如实呈现当前图库
+        assert cand["recheck"]["comparedProps"] == [{"key": "org", "match": True, "side": "both"}]
+        assert out["_enriched"]["asOf"]
+
+    def test_v1_snapshot_enriched_in_place(self, service, monkeypatch):
+        # v1 存量快照（候选无证据字段）：向后兼容原位补齐，无 recheck
+        c, snap = self._case_with_props(service, evidence_fields=False)
+        monkeypatch.setattr(ManualReviewService, "_graph_client_for", lambda *a: object())
+        monkeypatch.setattr(
+            ManualReviewService,
+            "_es_same_name_by_vid",
+            lambda *a: {"sch_9": {"props": {"name": "张三", "org": "A"}}},
+        )
+        out = service._enrich_link_snapshot(c, snap)
+        cand = out["existingCandidates"][0]
+        assert cand["nameSim"] == 1.0 and cand["propsAgree"] == 1.0
+        assert "recheck" not in cand

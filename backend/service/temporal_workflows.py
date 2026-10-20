@@ -2736,18 +2736,23 @@ def _gray_ingress_material(
     """灰案 ingress 逻辑键材料（gray-gate-v2）。
 
     ``[sourceBindingId, sourceRecordId, sourceEventVersion, graphSpace, nodeLabel,
-    vid (, reprocessBatchId)?]``——sourceEventVersion 声明值权威（记录自带
+    vid (, reprocessBatchId)?]``——``sourceRecordId`` 权威（来源行主键，缺省回退
+    ``id``＝vid）；sourceEventVersion 声明值权威（记录自带
     ``sourceEventVersion`` 即用之），否则 canonicalization-v1 全量 HMAC（dedupe
-    专用密钥 ``GRAY_GATE_DEDUPE_IDENTITY_KEY``，缺失失败关闭=部署前置条件）。
-    执行 id、策略/评分版本、快照哈希一律不进键：重跑/换版命中同一案。
+    专用密钥 ``GRAY_GATE_DEDUPE_IDENTITY_KEY``，缺失失败关闭=部署前置条件），
+    摘要排除运行时生成的摄取/审计列（``GRAY_GATE_VOLATILE_SOURCE_KEYS``，
+    R4）——同一源业务行跨重跑换 digest 不再重复建案。执行 id、策略/评分
+    版本、快照哈希一律不进键：重跑/换版命中同一案。
     """
-    from service.gray_gate import UnstableSourceIdentityError
+    from service.gray_gate import GRAY_GATE_VOLATILE_SOURCE_KEYS, UnstableSourceIdentityError
 
-    source_record_id = str(record.get("id") or record.get("sourceRecordId") or "").strip()
+    source_record_id = str(record.get("sourceRecordId") or record.get("id") or "").strip()
     if not source_record_id:
         raise UnstableSourceIdentityError({"stage": "ingress"})
     event_version, basis = compute_event_version(
-        record, declared_version=record.get("sourceEventVersion")
+        record,
+        declared_version=record.get("sourceEventVersion"),
+        volatile_keys=GRAY_GATE_VOLATILE_SOURCE_KEYS,
     )
     material = [
         _source_binding_of_step(step_id),
@@ -2762,6 +2767,68 @@ def _gray_ingress_material(
     # 与 gray_gate.ingress_dedupe_key 同构（create_direct_case 对材料整体 sha）：
     # 逻辑键派生口径的唯一权威在 gray_gate，此处只组材料
     return material, event_version, basis
+
+
+def _prior_ingress_disposition(
+    *,
+    step_id: str,
+    record: dict[str, Any],
+    graph_space: str | None,
+    name_tag: str,
+    policy: dict[str, Any] | None = None,
+    stage: str,
+) -> dict[str, Any] | None:
+    """稳定事件身份前置裁决（R2）：先于重新评分与任何图写副作用。
+
+    按逻辑 ingress identity 查既有案（``find_ingress_case``，材料与建案同构）：
+
+    - 无既有案 → None（调用方正常评分建案）；
+    - 既有案待裁决（OPEN/CLAIMED/IN_REVIEW 重复命中）→ ``{"action":
+      "withheld"}``——来源行幂等入账后并入既有案等裁决，不重新评分建新案；
+    - 既有案终态 → ``priorVerdict`` 三态处置（reject 召回退化/评分变化不再
+      复活写图；merge 在 remap 未就绪时 ``MERGE_CANONICAL_MISSING`` 失败关闭）；
+    - 应用失败/UNKNOWN → 失败关闭上抛（VerdictNotAppliedError，不猜测）。
+
+    失败关闭族原样上抛——调用方的 fail-open except 必须重抛。
+    """
+    from service.gray_gate import prior_verdict_disposition
+    from service.manual_review_production import manual_review_service
+
+    material, event_version, _basis = _gray_ingress_material(
+        step_id=step_id, record=record, graph_space=graph_space, name_tag=name_tag
+    )
+    found = manual_review_service.find_ingress_case(material)
+    if not found:
+        return None
+    prior = found.get("priorVerdict") if isinstance(found, dict) else None
+    if isinstance(prior, dict):
+        disposition = prior_verdict_disposition(prior, source_vid=str(record.get("id") or ""))
+        if disposition["disposition"] == "drop_record":
+            return {"action": "dropped", "rewriteVid": None}
+        if disposition["disposition"] == "rewrite_to_canonical":
+            return {"action": "kept_rewrite", "rewriteVid": str(disposition["vid"])}
+        return {"action": "kept_as_new", "rewriteVid": None}
+    # 重复命中待裁决案：并入既有案（来源行幂等入账），不重新评分
+    info, task_id, execution_id, execution = _execution_context_for_cases()
+    manual_review_service.append_case_sources(
+        str(found.get("reviewId") or ""),
+        [
+            {
+                "executionId": str(execution_id or ""),
+                "sourceBindingId": _source_binding_of_step(step_id),
+                "sourceRecordId": str(record.get("sourceRecordId") or record.get("id") or ""),
+                "sourceEventVersion": event_version,
+                "evidence": {
+                    "stage": stage,
+                    "policyVersion": (policy or {}).get("version"),
+                    "nameRuleVersion": (policy or {}).get("nameRuleVersion") or NAME_RULE_VERSION,
+                    "propKeys": sorted((record.get("props") or {}).keys()),
+                },
+                "reason": f"gray-dup:{stage}",
+            }
+        ],
+    )
+    return {"action": "withheld", "rewriteVid": None}
 
 
 def _open_entity_gray_case_v2(
@@ -2861,7 +2928,7 @@ def _open_entity_gray_case_v2(
         exception_code="KG_ENTITY_DISAMBIGUATION_GRAY",
         resume_token=f"extract-resolve:{execution_id}:{record.get('id')}",
         source_table=source_table or None,
-        source_record_id=str(record.get("id")),
+        source_record_id=str(record.get("sourceRecordId") or record.get("id") or ""),
         dedupe_material=material,
         extra_snapshot={
             "jobId": execution.get("jobId"),
@@ -2872,8 +2939,8 @@ def _open_entity_gray_case_v2(
     prior = response.get("priorVerdict") if isinstance(response, dict) else None
     if isinstance(prior, dict):
         # 终态案重放：三态处置（FAILED/UNKNOWN 在 prior_verdict_disposition 内
-        # 失败关闭上抛，调用方不得吞）
-        disposition = prior_verdict_disposition(prior)
+        # 失败关闭上抛，调用方不得吞；merge 重放 canonical 只能来自持久 remap）
+        disposition = prior_verdict_disposition(prior, source_vid=str(record.get("id") or ""))
         if disposition["disposition"] == "drop_record":
             return {"action": "dropped", "rewriteVid": None}
         if disposition["disposition"] == "rewrite_to_canonical":
@@ -2886,7 +2953,7 @@ def _open_entity_gray_case_v2(
             {
                 "executionId": str(execution_id or ""),
                 "sourceBindingId": _source_binding_of_step(step_id),
-                "sourceRecordId": str(record.get("id")),
+                "sourceRecordId": str(record.get("sourceRecordId") or record.get("id") or ""),
                 "sourceEventVersion": event_version,
                 "evidence": {
                     "stage": stage,
@@ -2909,39 +2976,39 @@ def _pending_write_descriptor_ok(client: Any, node_label: str, graph_space: str 
     实际可读；③ 实际列含至少一个显示名列（``name_columns_in``）。任一不满足即
     该 pending 实体不可写（``skippedInvalidPending`` + 进 ``invalidEndpointVids``，
     引用它的边随后被过滤）——平台没有「合法写入口」的实体不允许借旁路上图。
+
+    业务判定（invalid）只有两种：目录确无该实体、DESCRIBE 成功且列确不含
+    显示名列。技术故障（目录查询失败 / 连接 / 超时 / DESCRIBE 异常 / 响应
+    损坏=空列集）原样上抛（R1）——activity 失败、执行 FAILED、受影响来源
+    水位不推进；不得把技术故障当作业务 invalid 计入水位照推。
     """
     from sqlalchemy import select as _sa_select
 
     from db_model.schema_management import GraphSchemaDefinition
+    from infra.graph_db.config import TRSGraphSettings
     from infra.mysql import get_session_factory
     from service.entity_disambiguation import name_columns_in
 
-    try:
-        from infra.graph_db.config import TRSGraphSettings
-
-        effective_space = str(graph_space or "") or TRSGraphSettings.from_env().space
-        with get_session_factory()() as session:
-            row = session.scalar(
-                _sa_select(GraphSchemaDefinition.id).where(
-                    GraphSchemaDefinition.name == node_label,
-                    GraphSchemaDefinition.graph_space == effective_space,
-                    GraphSchemaDefinition.kind == "entity",
-                    GraphSchemaDefinition.is_deleted.is_(False),
-                    GraphSchemaDefinition.ddl_status == "succeeded",
-                )
+    effective_space = str(graph_space or "") or TRSGraphSettings.from_env().space
+    with get_session_factory()() as session:
+        row = session.scalar(
+            _sa_select(GraphSchemaDefinition.id).where(
+                GraphSchemaDefinition.name == node_label,
+                GraphSchemaDefinition.graph_space == effective_space,
+                GraphSchemaDefinition.kind == "entity",
+                GraphSchemaDefinition.is_deleted.is_(False),
+                GraphSchemaDefinition.ddl_status == "succeeded",
             )
-        if row is None:
-            return False
-        described = client.execute_query(f"DESCRIBE TAG `{node_label}`")
-        fields = {
-            f for f in (r.get("Field") for r in described.records or []) if isinstance(f, str)
-        }
-        if not fields:
-            return False
-        return bool(name_columns_in(fields))
-    except Exception as exc:  # noqa: BLE001 - 门控判定失败=不通过（防旁路写坏图）
-        logger.warning("pending 写入描述符门控查询失败 label=%s：按不通过处理: %s", node_label, exc)
+        )
+    if row is None:
         return False
+    described = client.execute_query(f"DESCRIBE TAG `{node_label}`")
+    fields = {f for f in (r.get("Field") for r in described.records or []) if isinstance(f, str)}
+    if not fields:
+        # 目录 succeeded + DESCRIBE 成功但零列=响应损坏（DESCRIBE TAG 至少返回
+        # 自身业务列），不是合法业务态——按技术故障上抛，不判 invalid
+        raise RuntimeError("DESCRIBE TAG 响应无列（label 存在且 ddl=succeeded），按技术故障上抛")
+    return bool(name_columns_in(fields))
 
 
 def _apply_endpoint_overrides(
@@ -3318,11 +3385,15 @@ async def _resolve_entity_batch_v2(
 
     - eligibility 前置过滤（``eligible_candidates``）：只做 vid≠自身 + 归一显示名
       相同两件事——异名近邻候选只作诊断（召回信封 routes），不进 decide；
+    - 稳定事件身份前置裁决（R2）：重新评分与任何图写副作用之前，按逻辑
+      ingress identity 查既有案——待裁决重复并入既有案（来源行入账），
+      终态案按 priorVerdict 三态处置（reject 不因召回退化复活），应用失败/
+      UNKNOWN 失败关闭；
     - 两阶段执行：先整批纯 decide，任一记录命中 merge → ``DEFERRED_MERGE_BLOCKED``
       失败关闭（B′：scoreDecision=merge 不是真实灰区，remap 未就绪不写实体/
       不放行边/不建案/不伪装，任何副作用前抛出；受影响来源水位不推进，执行
       FAILED，remap 方案 A 部署后手动重跑恢复）。批内同名 first-by-name 去重
-      保留 v1 语义（目标 vid 同批落图无悬挂）；
+      同口径：真实 merge 同样失败关闭（R3，不改写 id 继续）；
     - 真实 decide=gray 才建 T_LINK（逻辑 ingress identity dedupe + 证据 v2 +
       来源账本 + priorVerdict 三态处置）。
     """
@@ -3346,8 +3417,27 @@ async def _resolve_entity_batch_v2(
         )
     batch_vids = {str(r.get("id")) for r in records}
 
-    # 1) 批内同名 first-by-name 去重（保留 v1 语义）：≥merge 阈值改写 vid 并入
-    #    先到记录（同批 upsert，无悬挂）；灰区打标 _batchGray（阶段 3 建案）
+    # 0) 稳定事件身份前置裁决（R2）：既有案/既有裁决处置先于重新评分与任何
+    #    副作用（批内去重改写、召回、建案、放行）
+    prior_handled: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    remaining_records: list[dict[str, Any]] = []
+    for record in records:
+        prior = _prior_ingress_disposition(
+            step_id=str(request.get("stepId") or "align"),
+            record=record,
+            graph_space=graph.get("space"),
+            name_tag=name_tag,
+            policy=policy,
+            stage="resolve",
+        )
+        if prior is None:
+            remaining_records.append(record)
+        else:
+            prior_handled.append((record, prior))
+    records = remaining_records
+
+    # 1) 批内同名 first-by-name 去重：真实 merge 与阶段 3 同口径失败关闭（R3）；
+    #    灰区打标 _batchGray（阶段 3 建案）
     first_by_name: dict[str, dict[str, Any]] = {}
     deduped = 0
     for record in records:
@@ -3381,9 +3471,18 @@ async def _resolve_entity_batch_v2(
         ]
         outcome = decide(scored)
         if outcome["decision"] == "merge":
-            record["id"] = str(first.get("id"))
-            deduped += 1
-        elif outcome["decision"] == "gray":
+            # R3：批内同名真实 merge 与阶段 3 同口径统一失败关闭（B′）——不
+            # 改写 id 继续写图（等于在无 remap 的情况下执行合并）、不伪装状态；
+            # 受影响来源水位不推进，remap 方案 A 落地后手动重跑恢复
+            raise DeferredMergeBlockedError(
+                {
+                    "stage": "resolve-batch-dedupe",
+                    "score": round(float(outcome["score"]), 3),
+                    "autoMergeEnabled": False,
+                    "policyVersion": policy.get("version"),
+                }
+            )
+        if outcome["decision"] == "gray":
             record["_batchGray"] = {"scored": scored, "outcome": outcome}
 
     # 2) 多路召回（信封五态：routes 状态进 extra_snapshot，不遮蔽判定分支）
@@ -3514,6 +3613,19 @@ async def _resolve_entity_batch_v2(
         else:  # kept_as_new：终态 create 重放，按预留 vid 原样写
             kept.append(record)
             stats["keptAsNew"] += 1
+    # 前置裁决（R2）的记录折入统计与放行清单（与建案路径三态同口径）
+    for record, prior in prior_handled:
+        action = prior["action"]
+        if action == "withheld":
+            stats["withheld"] += 1
+        elif action == "dropped":
+            stats["priorDropped"] += 1
+        elif action == "kept_rewrite":
+            kept.append({**record, "id": str(prior["rewriteVid"])})
+            stats["priorRewritten"] += 1
+        else:  # kept_as_new：终态 create 重放，按预留 vid 原样写
+            kept.append(record)
+            stats["keptAsNew"] += 1
     if request.get("recordsKey"):
         from service.extract_payload_store import put_extract_payload_json
 
@@ -3534,12 +3646,14 @@ async def resolve_pending_entities(request: dict[str, Any]) -> dict[str, Any]:
 
     取代 v1「挂起实体一律强制 T_LINK」（取消测试脚本强制送审）：挂起实体按
     同一套 eligibility + 评分 decide——真实 gray 才建 T_LINK（逻辑键/证据 v2/
-    来源账本/priorVerdict 三态）；new 直接写图（写入描述符门控三条件：目录
+    来源账本/priorVerdict 三态）；重新评分前先按稳定事件身份前置查既有案
+    （R2：reject 不因召回退化复活、待裁决重复并入既有案、应用失败/UNKNOWN
+    失败关闭）；new 直接写图（写入描述符门控三条件：目录
     Schema 存在且 ddl 成功 + DESCRIBE TAG 可读 + 实际列含显示名列，不满足=
     ``skippedInvalidPending`` + 进 ``invalidEndpointVids``，引用它的边随后被
-    write_records 过滤）；merge 在 autoMergeEnabled=false 下统一
-    ``DEFERRED_MERGE_BLOCKED`` 失败关闭（B′）。批内两阶段：先整批纯 decide，
-    任一 deferred 在任何副作用（写图/建案）前抛出。返回
+    write_records 过滤；技术故障上抛、水位不推进）；merge 在 autoMergeEnabled=false
+    下统一 ``DEFERRED_MERGE_BLOCKED`` 失败关闭（B′）。批内两阶段：先整批纯
+    decide，任一 deferred 在任何副作用（写图/建案）前抛出。返回
     ``{written, grayCases, skippedInvalidPending, invalidEndpointVids,
     rewriteMap}`` 供 workflow 聚合传给写边请求。失败关闭族在边界转
     ApplicationError（不可重试、零标识符）。
@@ -3645,11 +3759,13 @@ async def resolve_pending_entities(request: dict[str, Any]) -> dict[str, Any]:
                 label: env.get("routes") or {} for label, env in recall_by_label.items()
             }
 
-            # 阶段一：门控标记 + 纯 decide（merge → 任何副作用前失败关闭）
-            # decisions: (item, display, decision, outcome, scored)
+            # 阶段一：前置裁决（R2）+ 门控标记 + 纯 decide（merge → 任何副作用前
+            # 失败关闭）。decisions: (item, display, decision, outcome, scored)；
+            # prior_items: (item, node_label, record, prior处置)
             decisions: list[
                 tuple[dict[str, Any], str, str, dict[str, Any], list[dict[str, Any]]]
             ] = []
+            prior_items: list[tuple[dict[str, Any], str, dict[str, Any], dict[str, Any]]] = []
             for item in entities:
                 candidate = item.get("candidate") or {}
                 display = str(item.get("objectName") or candidate.get("name") or "").strip()
@@ -3660,6 +3776,24 @@ async def resolve_pending_entities(request: dict[str, Any]) -> dict[str, Any]:
                     from service.gray_gate import UnstableSourceIdentityError
 
                     raise UnstableSourceIdentityError({"stage": "pending"})
+                record = {
+                    "id": vid,
+                    "props": {**(candidate.get("props") or {}), "name": display},
+                    "sourceTable": item.get("sourceTable") or source_table,
+                    "sourceRecordId": item.get("sourceRecordId"),
+                }
+                # 稳定事件身份前置（R2）：既有案/既有裁决先于重新评分与任何写副作用
+                prior = _prior_ingress_disposition(
+                    step_id=step_id,
+                    record=record,
+                    graph_space=graph.get("space"),
+                    name_tag=node_label,
+                    policy=policy,
+                    stage="pending",
+                )
+                if prior is not None:
+                    prior_items.append((item, node_label, record, prior))
+                    continue
                 if not _gate(node_label):
                     continue  # 阶段二计入 skippedInvalidPending/invalidEndpointVids
                 incoming_props = dict(candidate.get("props") or {})
@@ -3753,6 +3887,29 @@ async def resolve_pending_entities(request: dict[str, Any]) -> dict[str, Any]:
                         vid,
                         record["props"],
                         item.get("sourceTable") or source_table,
+                    )
+                    written += 1
+
+            # 前置裁决（R2）的处置：与建案路径三态同口径
+            for _item, node_label, record, prior in prior_items:
+                vid = str(record["id"])
+                action = prior["action"]
+                if action == "withheld":
+                    # 既有待裁决案重复命中：记录继续扣留等裁决
+                    gray_cases += 1
+                elif action == "dropped":
+                    # 终态 reject 重放：实体不写，边由 park 丢弃；vid 无效引用
+                    invalid_endpoint_vids.append(vid)
+                elif action == "kept_rewrite":
+                    rewrite_map[vid] = str(prior["rewriteVid"])
+                else:  # kept_as_new：终态 create 重放，按预留 vid 幂等补写
+                    await asyncio.to_thread(
+                        _write_pending_vertex,
+                        client,
+                        node_label,
+                        vid,
+                        record["props"],
+                        record["sourceTable"],
                     )
                     written += 1
 

@@ -143,8 +143,8 @@ const templateId = computed(
 const handleCategory = computed(() => (record.value ? getHandleCategory(record.value) : '质量校验'))
 
 const note = ref(record.value?.decisionNote ?? '')
-/** 操作反馈：按 Arco Alert 规范分状态展示（成功/错误/警告），带前置提示符。 */
-type FeedbackTone = 'success' | 'error' | 'warning'
+/** 操作反馈：按 Arco Alert 规范分状态展示（信息/成功/错误/警告），带前置提示符。 */
+type FeedbackTone = 'info' | 'success' | 'error' | 'warning'
 const feedback = ref<{ type: FeedbackTone; text: string } | null>(null)
 function notify(type: FeedbackTone, text: string) {
   feedback.value = { type, text }
@@ -172,6 +172,21 @@ const linkSnapshot = computed<Record<string, unknown> | null>(() => {
   const snapshot = productionCase.value?.candidate
   return snapshot && typeof snapshot === 'object' ? (snapshot as Record<string, unknown>) : null
 })
+/** 逐字段证据信封（证据 v2）：布尔化结果，不含业务值。 */
+interface LinkComparedProp {
+  key: string
+  match: boolean
+  side?: string
+}
+/** 建案后图库属性变化的重算结果（detail-enrich，_enriched.asOf 时点）——
+ *  建案时点证据字段（nameSim/propsAgree/comparedProps）只读不覆盖。 */
+interface LinkCandidateRecheck {
+  nameSim?: number | null
+  propsAgree?: number | null
+  propCompared?: number | null
+  propMatched?: number | null
+  comparedProps?: LinkComparedProp[]
+}
 /** T_LINK 候选：建案快照存 vid/name/score，详情富化（detail-enrich）补
  *  props（候选全量属性）与 nameSim/propsAgree/comparedProps（评分明细）。 */
 interface LinkCandidate {
@@ -180,9 +195,12 @@ interface LinkCandidate {
   score: number | null
   nameSim?: number | null
   propsAgree?: number | null
-  comparedProps?: string[]
+  comparedProps?: LinkComparedProp[]
+  recheck?: LinkCandidateRecheck
   props?: Record<string, unknown>
 }
+const isComparedProps = (v: unknown): v is LinkComparedProp[] =>
+  Array.isArray(v) && v.every((item) => item && typeof item === 'object' && 'key' in item)
 const linkCandidates = computed<LinkCandidate[]>(() => {
   const raw = linkSnapshot.value?.existingCandidates
   if (!Array.isArray(raw) || !raw.length) return []
@@ -195,7 +213,8 @@ const linkCandidates = computed<LinkCandidate[]>(() => {
       score: typeof c.score === 'number' ? c.score : null,
       nameSim: typeof c.nameSim === 'number' ? c.nameSim : null,
       propsAgree: typeof c.propsAgree === 'number' ? c.propsAgree : null,
-      comparedProps: Array.isArray(c.comparedProps) ? (c.comparedProps as string[]) : undefined,
+      comparedProps: isComparedProps(c.comparedProps) ? c.comparedProps : undefined,
+      recheck: (c.recheck && typeof c.recheck === 'object' ? c.recheck : undefined) as LinkCandidateRecheck | undefined,
       props: (c.props && typeof c.props === 'object' ? c.props : undefined) as Record<string, unknown> | undefined,
     }))
 })

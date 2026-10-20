@@ -26,7 +26,7 @@ import hmac
 import json
 import os
 import struct
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import date, datetime
 from typing import Any
 
@@ -161,14 +161,19 @@ def select_capture_case(cases: list[Any]) -> Any | None:
 # ---------------------------------------------------------------------------
 
 
-def prior_verdict_disposition(prior: Mapping[str, Any] | None) -> dict[str, Any]:
+def prior_verdict_disposition(
+    prior: Mapping[str, Any] | None, *, source_vid: Any = None
+) -> dict[str, Any]:
     """终态 T_LINK 案重放处置派生（application 表权威，四态失败关闭）。
 
     输入 ``_ingress_response`` 的 ``priorVerdict`` 信封；输出处置指令：
 
     - reject + NOT_REQUIRED → ``{"disposition": "drop_record"}``；
     - create + APPLIED → ``{"disposition": "write_as_new", "vid": reserved_vid}``；
-    - merge + APPLIED → ``{"disposition": "rewrite_to_canonical", "vid": canonical_vid}``；
+    - merge + APPLIED → ``{"disposition": "rewrite_to_canonical", "vid": <remap 解析>}
+      （R7：canonical 只能来自经批准的持久 remap（方案 A，另批）。应用行的
+      ``canonical_vid`` 仅为审计留痕，不得充当重放映射——resolver 未登记 /
+      未解析一律 ``MERGE_CANONICAL_MISSING`` 失败关闭，链式目标须解析到终点）；
     - applyStatus ∈ {FAILED, UNKNOWN} / 组合不合法 / 落点缺失 → 失败关闭
       （VerdictNotAppliedError / MergeCanonicalMissingError），不猜测。
     """
@@ -183,10 +188,74 @@ def prior_verdict_disposition(prior: Mapping[str, Any] | None) -> dict[str, Any]
             raise VerdictNotAppliedError({"applyStatus": apply_status, "verdict": verdict})
         return {"disposition": "write_as_new", "vid": target}
     if apply_status == "APPLIED" and verdict == "merge":
-        if not target:
-            raise MergeCanonicalMissingError({"applyStatus": apply_status})
-        return {"disposition": "rewrite_to_canonical", "vid": target}
+        # 信封里的 targetEntityId（= application.canonical_vid）不作为重放映射：
+        # 映射唯一权威是 resolve_canonical_vid（持久 remap）
+        canonical = resolve_canonical_vid(source_vid)
+        return {"disposition": "rewrite_to_canonical", "vid": canonical}
     raise VerdictNotAppliedError({"applyStatus": apply_status or None, "verdict": verdict or None})
+
+
+# ---------------------------------------------------------------------------
+# canonical remap 解析器（方案 A 前置接口，R7）
+# ---------------------------------------------------------------------------
+
+# resolver 契约：old vid → 下一跳 canonical vid（单跳）；无映射/不可用返回 None。
+# 链式目标（A→B→C）由 resolve_canonical_vid 迭代解析到终点并做环检测。
+CanonicalRemapResolver = Callable[[str], "str | None"]
+
+_canonical_remap_resolver: CanonicalRemapResolver | None = None
+# 单次解析的最大跳数上限（超出=映射表异常，失败关闭不猜测）
+MAX_CANONICAL_REMAP_HOPS = 8
+
+
+def register_canonical_remap_resolver(resolver: CanonicalRemapResolver | None) -> None:
+    """登记 / 撤销持久 remap（方案 A）解析器。
+
+    方案 A 建表落地（另批）后由部署侧登记；传 None 撤销（默认未登记——
+    merge 重放一律 ``MERGE_CANONICAL_MISSING`` 失败关闭）。应用行
+    ``canonical_vid`` / 决议 ``targetEntityId`` 不得充当 resolver。
+    """
+    global _canonical_remap_resolver
+    _canonical_remap_resolver = resolver
+
+
+def resolve_canonical_vid(vid: Any) -> str:
+    """old vid → 链终点 canonical vid（唯一权威=已登记的持久 remap）。
+
+    resolver 未登记 → ``remap_unavailable``；无映射 / 映射回自身 →
+    ``remap_unresolved``；环 / 超过跳数上限 / resolver 异常 → 同码失败关闭。
+    任何情形都不回退应用表或决议目标。
+    """
+    resolver = _canonical_remap_resolver
+    if resolver is None:
+        raise MergeCanonicalMissingError({"reason": "remap_unavailable"})
+    current = str(vid or "").strip()
+    if not current:
+        raise MergeCanonicalMissingError({"reason": "missing_source_vid"})
+    seen = {current}
+
+    def _one_hop(value: str) -> str | None:
+        try:
+            nxt = resolver(value)
+        except GrayGateFailClosedError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - resolver 故障=不可用，不猜测
+            raise MergeCanonicalMissingError({"reason": "resolver_error"}) from exc
+        return str(nxt or "").strip() or None
+
+    for _ in range(MAX_CANONICAL_REMAP_HOPS):
+        nxt = _one_hop(current)
+        if nxt is None:
+            break
+        if nxt in seen:
+            raise MergeCanonicalMissingError({"reason": "remap_cycle"})
+        current = nxt
+        seen.add(nxt)
+    else:
+        raise MergeCanonicalMissingError({"reason": "remap_chain_too_long"})
+    if current == str(vid or "").strip():
+        raise MergeCanonicalMissingError({"reason": "remap_unresolved"})
+    return current
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +352,27 @@ FAIL_CLOSED_CODES = frozenset(
 DEDUPE_IDENTITY_KEY_ENV = "GRAY_GATE_DEDUPE_IDENTITY_KEY"
 CANONICALIZATION_VERSION = "canonicalization-v1"
 
+# 运行时生成的摄取/审计元数据列：转换脚本每跑一次就重写（ingest_time 取当次
+# 时间），参与行摘要会让同一源行跨重跑换摘要→重复建案（R4）。事件摘要取
+# canonical 源业务行，递归剥离这些列后计算；声明 sourceEventVersion 优先不受影响。
+GRAY_GATE_VOLATILE_SOURCE_KEYS = frozenset(
+    {"create_time", "update_time", "ingest_time", "ingest_batch", "source_update_time"}
+)
+
+
+def _without_volatile_keys(value: Any, volatile: frozenset[str]) -> Any:
+    """递归剥离 volatile 列（dict 键 / 嵌套 list 元素同构处理）。"""
+    if isinstance(value, Mapping):
+        return {
+            key: _without_volatile_keys(item, volatile)
+            for key, item in value.items()
+            if key not in volatile
+        }
+    if isinstance(value, (list, tuple)):
+        return [_without_volatile_keys(item, volatile) for item in value]
+    return value
+
+
 # 标量类型标签（canonical 字节的首字符）：不同类型同值不坍缩（"1" vs 1）
 _TAG_STR = b"s"
 _TAG_BYTES = b"b"
@@ -360,15 +450,21 @@ def compute_event_version(
     *,
     declared_version: Any = None,
     key: str | None = None,
+    volatile_keys: Any = None,
 ) -> tuple[str, str]:
     """sourceEventVersion：声明值权威，否则完整 HMAC-SHA256(canonical 行字节)。
 
     返回 ``(version, basis)``；basis ∈ {"declared", "row-hmac", "item-hmac"}
     （进案件 input_snapshot 供审计，不进 dedupe 键）。密钥缺失失败关闭。
+    ``volatile_keys``（如 ``GRAY_GATE_VOLATILE_SOURCE_KEYS``）：行字节计算前
+    递归剥离的运行时生成列——同一源业务行跨重跑摘要稳定（R4），真实业务
+    列变化仍换摘要（= 新事件允许新案）。
     """
-    basis_source = dict(row or {})
+    basis_source: Any = dict(row or {})
     if declared_version is not None and str(declared_version).strip():
         return str(declared_version).strip(), "declared"
+    if volatile_keys:
+        basis_source = _without_volatile_keys(basis_source, frozenset(volatile_keys))
     digest = hmac.new(
         dedupe_identity_key(key).encode("utf-8"),
         canonical_row_bytes(basis_source),

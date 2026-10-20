@@ -403,23 +403,26 @@ class TestResolveEntityBatchV2:
         assert _cases(review_service) == []
 
     @pytest.mark.asyncio
-    async def test_batch_same_name_dedupe_keeps_v1_semantics(
+    async def test_batch_same_name_merge_fails_closed(
         self, review_service, pipeline_env, monkeypatch
     ):
         from service.temporal_workflows import resolve_entity_batch
 
         graph = use_graph(monkeypatch, FakeGraph())
-        # 批内同名、属性全一致 → first-by-name 并入（≥merge 阈值不算 DEFERRED：
-        # 目标 vid 同批落图，无悬挂）——v1 语义保留项，PR 中说明
+        # R3：批内同名真实 merge 与阶段 3 同口径统一失败关闭（B′）——不改写
+        # id 继续写图（那等于在无 remap 的情况下执行合并）、零副作用、受影响
+        # 来源水位不推进；remap 方案 A 落地后手动重跑恢复
         records = [
             {"id": "sch_1", "props": {"name": "张三", "org": "A"}},
             {"id": "sch_2", "props": {"name": "张三", "org": "A"}},
         ]
-        out = await resolve_entity_batch(_resolve_request(records))
-        assert out["deduped"] == 1
-        # v1 语义：改写 id 并入但不删记录（同 vid 两行由实体写图层批内列级合并）
-        assert [r["id"] for r in out["records"]] == ["sch_1", "sch_1"]
-        assert graph.writes == []  # resolve 不写图（写图在 write_records）
+        with pytest.raises(ApplicationError) as ei:
+            await resolve_entity_batch(_resolve_request(records))
+        assert _app_error_type(ei) == "DEFERRED_MERGE_BLOCKED"
+        assert ei.value.details[0]["stage"] == "resolve-batch-dedupe"
+        assert ei.value.non_retryable is True
+        assert _cases(review_service) == []  # 零建案副作用
+        assert graph.writes == []
 
     @pytest.mark.asyncio
     async def test_unknown_policy_fails_closed(self, review_service, pipeline_env, monkeypatch):
@@ -453,6 +456,181 @@ class TestResolveEntityBatchV2:
         del request["decisionPolicy"]
         out = await resolve_entity_batch(request)
         assert out["records"] == [{"id": "sch_a", "props": {"name": "李四"}}]
+
+
+# ---------------------------------------------------------------------------
+# 稳定事件身份前置裁决（R2）：重新评分/副作用之前按既有案处置
+# ---------------------------------------------------------------------------
+
+
+class _GrayRecallGraph:
+    """首跑带同名候选（真实落灰区）的图夹具工厂。"""
+
+    @staticmethod
+    def make(monkeypatch, with_candidate: bool):
+        recall = {
+            "Scholar": [
+                {
+                    "vid": "sch_9",
+                    "props": {"name": "张三", "org": "A", "city": "X", "email": "E1"},
+                }
+            ]
+            if with_candidate
+            else []
+        }
+        return use_graph(monkeypatch, FakeGraph(recall=recall))
+
+
+class TestPriorIngressDisposition:
+    @pytest.mark.asyncio
+    async def test_rejected_case_replay_stays_rejected_on_recall_change(
+        self, review_service, pipeline_env, monkeypatch
+    ):
+        # R2：reject 后召回退化（重跑时空召回）不得让旧裁决失效复活写图
+        from service.temporal_workflows import resolve_entity_batch
+
+        _GrayRecallGraph.make(monkeypatch, with_candidate=True)
+        records = [
+            {"id": "sch_new", "props": {"name": "张三", "org": "A", "city": "Y", "email": "E2"}}
+        ]
+        await resolve_entity_batch(_resolve_request(records))
+        case_id, _ = _cases(review_service)[0]
+        from service.manual_review_domain import ReviewIdentity
+
+        review_service.submit(
+            case_id,
+            1,
+            "reject-candidate",
+            {"entityVerdict": "reject"},
+            "r2 回归",
+            ReviewIdentity("u", "u", frozenset({"reviewer"}), frozenset({"graph"}), "o", "e"),
+        )
+        # 重跑：空召回（无候选 → 无前置裁决时会判 new 放行写图）
+        graph = _GrayRecallGraph.make(monkeypatch, with_candidate=False)
+        out = await resolve_entity_batch(_resolve_request(records))
+        assert out["priorDropped"] == 1
+        assert out["records"] == [] and out["new"] == 0
+        assert graph.writes == []
+        assert len(_cases(review_service)) == 1  # 不重复建案
+
+    @pytest.mark.asyncio
+    async def test_open_case_replay_withholds_without_rescoring(
+        self, review_service, pipeline_env, monkeypatch
+    ):
+        # R2：待裁决案重复命中——并入既有案（来源行幂等），不重新评分建新案
+        from service.temporal_workflows import resolve_entity_batch
+
+        _GrayRecallGraph.make(monkeypatch, with_candidate=True)
+        records = [
+            {"id": "sch_new", "props": {"name": "张三", "org": "A", "city": "Y", "email": "E2"}}
+        ]
+        first = await resolve_entity_batch(_resolve_request(records))
+        assert first["withheld"] == 1
+        _GrayRecallGraph.make(monkeypatch, with_candidate=False)
+        second = await resolve_entity_batch(_resolve_request(records))
+        assert second["withheld"] == 1
+        assert len(_cases(review_service)) == 1
+        from db_model.manual_review import ReviewCase
+
+        with review_service.sf() as s:
+            case = s.scalar(select(ReviewCase))
+            assert case.source_count == 1  # 同执行同源记录重放：来源行不加计
+
+    @pytest.mark.asyncio
+    async def test_apply_failed_case_replay_fails_closed(
+        self, review_service, pipeline_env, monkeypatch
+    ):
+        # R5/R2：应用失败的案重放 → VERDICT_NOT_APPLIED 失败关闭（不吞入开放案）
+        from db_model.manual_review import ReviewVerdictApplication
+        from service.temporal_workflows import resolve_entity_batch
+
+        _GrayRecallGraph.make(monkeypatch, with_candidate=True)
+        records = [
+            {"id": "sch_new", "props": {"name": "张三", "org": "A", "city": "Y", "email": "E2"}}
+        ]
+        await resolve_entity_batch(_resolve_request(records))
+        case_id, _ = _cases(review_service)[0]
+        with review_service.sf() as s:
+            from db_model.manual_review import ReviewCase as _Case
+
+            case = s.get(_Case, case_id)
+            case.status = "APPLY_FAILED"
+            s.add(
+                ReviewVerdictApplication(
+                    case_id=case_id,
+                    verdict="create",
+                    apply_status="FAILED",
+                    created_at=case.created_at,
+                    updated_at=case.updated_at,
+                )
+            )
+            s.commit()
+        _GrayRecallGraph.make(monkeypatch, with_candidate=False)
+        with pytest.raises(ApplicationError) as ei:
+            await resolve_entity_batch(_resolve_request(records))
+        assert _app_error_type(ei) == "VERDICT_NOT_APPLIED"
+
+
+class TestIngressIdentity:
+    """R4：sourceRecordId 权威 + 运行时摄取列不进事件摘要。"""
+
+    def _material(self, monkeypatch, record):
+        from service.temporal_workflows import _gray_ingress_material
+
+        monkeypatch.setenv("GRAY_GATE_DEDUPE_IDENTITY_KEY", "unit-test-identity-key")
+        return _gray_ingress_material(
+            step_id="source:bind-1#main",
+            record=record,
+            graph_space="dev2",
+            name_tag="Scholar",
+        )
+
+    def test_source_record_id_is_authoritative(self, monkeypatch):
+        material, _, _ = self._material(
+            monkeypatch, {"id": "vid-1", "sourceRecordId": "row-9", "props": {"name": "张三"}}
+        )
+        assert material[1] == "row-9"  # 来源行主键，不取 vid
+        assert material[5] == "vid-1"  # vid 元素保持记录 vid
+
+    def test_falls_back_to_vid_when_no_source_record_id(self, monkeypatch):
+        material, _, _ = self._material(monkeypatch, {"id": "vid-1", "props": {"name": "张三"}})
+        assert material[1] == "vid-1"
+
+    def test_same_source_row_stable_across_reruns_and_chunks(self, monkeypatch):
+        # 跨重跑：脚本重写 ingest_time/update_time/ingest_batch；跨 chunk：
+        # step_id 同源绑定恒定——同一源业务行材料不变，重放命中同一案
+        first, _, _ = self._material(
+            monkeypatch,
+            {
+                "id": "vid-1",
+                "sourceRecordId": "row-9",
+                "ingest_time": "2026-10-21 09:00:00",
+                "ingest_batch": "run-1",
+                "props": {"name": "张三", "update_time": "2026-10-21 09:00:01"},
+            },
+        )
+        second, _, _ = self._material(
+            monkeypatch,
+            {
+                "id": "vid-1",
+                "sourceRecordId": "row-9",
+                "ingest_time": "2026-10-21 11:30:00",
+                "ingest_batch": "run-2",
+                "props": {"name": "张三", "update_time": "2026-10-21 11:30:02"},
+            },
+        )
+        assert first == second
+
+    def test_same_vid_different_source_rows_are_distinct_cases(self, monkeypatch):
+        # 同 VID 多源行（一条记录出现在多个来源行）：身份键按源行区分，
+        # 各自建案（不因同 vid 塌缩成一个事件）
+        r1, _, _ = self._material(
+            monkeypatch, {"id": "vid-1", "sourceRecordId": "row-1", "props": {"name": "张三"}}
+        )
+        r2, _, _ = self._material(
+            monkeypatch, {"id": "vid-1", "sourceRecordId": "row-2", "props": {"name": "张三"}}
+        )
+        assert r1 != r2
 
 
 # ---------------------------------------------------------------------------
@@ -642,6 +820,36 @@ class TestResolvePendingEntities:
         assert second["invalidEndpointVids"] == [vid]
         assert second["rewriteMap"] == {}
         assert len(_cases(review_service)) == 1  # 不建新案（逻辑键命中）
+
+    @pytest.mark.asyncio
+    async def test_open_case_replay_withholds_into_existing_case(
+        self, review_service, pipeline_env, monkeypatch
+    ):
+        # R2（pending 流）：待裁决案重复命中 → 并入既有案不再建案，行为 withheld
+        from service.temporal_workflows import resolve_pending_entities
+
+        schema_catalog(monkeypatch, "Person")
+        name = "张三"
+        use_graph(
+            monkeypatch,
+            FakeGraph(
+                recall={
+                    "Person": [
+                        {
+                            "vid": "p_9",
+                            "props": {"name": name, "org": "A", "city": "X", "email": "E"},
+                        }
+                    ]
+                }
+            ),
+        )
+        item = _pending_item(name, props={"name": name, "org": "A", "city": "Y", "email": "F"})
+        first = await resolve_pending_entities(_pending_request([item]))
+        assert first["grayCases"] == 1 and first["written"] == 0
+        second = await resolve_pending_entities(_pending_request([item]))
+        assert second["grayCases"] == 1 and second["written"] == 0
+        assert second["invalidEndpointVids"] == [] and second["rewriteMap"] == {}
+        assert len(_cases(review_service)) == 1  # 同逻辑键命中：不建新案
 
     @pytest.mark.asyncio
     async def test_pending_key_shape_downloads_from_s3(

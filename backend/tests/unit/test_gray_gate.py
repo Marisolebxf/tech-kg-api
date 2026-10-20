@@ -17,6 +17,7 @@ from service.gray_gate import (
     AUTO_MERGE_ENABLED,
     GRAY_GATE_EVIDENCE_VERSION,
     GRAY_GATE_POLICY_VERSION,
+    GRAY_GATE_VOLATILE_SOURCE_KEYS,
     NAME_RULE_VERSION,
     BlockedByLegacyCaseError,
     DeferredMergeBlockedError,
@@ -32,7 +33,9 @@ from service.gray_gate import (
     dedupe_identity_key,
     ingress_dedupe_key,
     prior_verdict_disposition,
+    register_canonical_remap_resolver,
     require_known_policy,
+    resolve_canonical_vid,
     select_capture_case,
 )
 from service.temporal_workflows import _fail_closed_error
@@ -150,16 +153,31 @@ class TestPriorVerdictDisposition:
         assert out == {"disposition": "write_as_new", "vid": "sch_1"}
 
     def test_merge_applied_rewrites_to_canonical(self):
-        out = prior_verdict_disposition(
-            {"entityVerdict": "merge", "applyStatus": "APPLIED", "targetEntityId": "org_9"}
-        )
-        assert out == {"disposition": "rewrite_to_canonical", "vid": "org_9"}
-
-    def test_merge_applied_without_canonical_fails_closed(self):
-        with pytest.raises(MergeCanonicalMissingError):
-            prior_verdict_disposition(
-                {"entityVerdict": "merge", "applyStatus": "APPLIED", "targetEntityId": ""}
+        # R7：canonical 只能来自持久 remap resolver——信封 targetEntityId（应用行
+        # canonical_vid 审计留痕）不作为映射（传一个「过期审计值」验证被忽略）
+        register_canonical_remap_resolver({"org_old": "org_9"}.get)
+        try:
+            out = prior_verdict_disposition(
+                {
+                    "entityVerdict": "merge",
+                    "applyStatus": "APPLIED",
+                    "targetEntityId": "stale-audit-value",
+                },
+                source_vid="org_old",
             )
+            assert out == {"disposition": "rewrite_to_canonical", "vid": "org_9"}
+        finally:
+            register_canonical_remap_resolver(None)
+
+    def test_merge_applied_without_remap_fails_closed(self):
+        # remap 未登记（方案 A 另批）：merge 重放一律 MERGE_CANONICAL_MISSING，
+        # 不回退应用行/决议目标
+        with pytest.raises(MergeCanonicalMissingError) as ei:
+            prior_verdict_disposition(
+                {"entityVerdict": "merge", "applyStatus": "APPLIED", "targetEntityId": "org_9"},
+                source_vid="org_old",
+            )
+        assert ei.value.detail == {"reason": "remap_unavailable"}
 
     @pytest.mark.parametrize(
         "envelope",
@@ -176,6 +194,64 @@ class TestPriorVerdictDisposition:
         # FAILED / UNKNOWN / 组合不合法：不猜测，VERDICT_NOT_APPLIED 失败关闭
         with pytest.raises(VerdictNotAppliedError):
             prior_verdict_disposition(envelope)
+
+
+# ---------------------------------------------------------------------------
+# canonical remap resolver（方案 A 前置接口，R7）
+# ---------------------------------------------------------------------------
+
+
+class TestCanonicalRemapResolver:
+    def teardown_method(self):
+        register_canonical_remap_resolver(None)
+
+    def test_unregistered_is_unavailable(self):
+        with pytest.raises(MergeCanonicalMissingError) as ei:
+            resolve_canonical_vid("a")
+        assert ei.value.detail == {"reason": "remap_unavailable"}
+
+    def test_missing_source_vid_fails_closed(self):
+        register_canonical_remap_resolver({"a": "b"}.get)
+        with pytest.raises(MergeCanonicalMissingError) as ei:
+            resolve_canonical_vid(None)
+        assert ei.value.detail == {"reason": "missing_source_vid"}
+
+    def test_no_mapping_is_unresolved(self):
+        register_canonical_remap_resolver({"a": "b"}.get)
+        with pytest.raises(MergeCanonicalMissingError) as ei:
+            resolve_canonical_vid("zzz")
+        assert ei.value.detail == {"reason": "remap_unresolved"}
+
+    def test_chain_resolves_to_terminal(self):
+        # 链式目标 A→B→C：resolver 单跳，解析到链终点 C
+        register_canonical_remap_resolver({"a": "b", "b": "c"}.get)
+        assert resolve_canonical_vid("a") == "c"
+
+    def test_cycle_fails_closed(self):
+        register_canonical_remap_resolver({"a": "b", "b": "a"}.get)
+        with pytest.raises(MergeCanonicalMissingError) as ei:
+            resolve_canonical_vid("a")
+        assert ei.value.detail == {"reason": "remap_cycle"}
+
+    def test_self_map_fails_closed(self):
+        register_canonical_remap_resolver({"a": "a"}.get)
+        with pytest.raises(MergeCanonicalMissingError):
+            resolve_canonical_vid("a")
+
+    def test_resolver_exception_is_unavailable(self):
+        def boom(_vid):
+            raise RuntimeError("remap table down")
+
+        register_canonical_remap_resolver(boom)
+        with pytest.raises(MergeCanonicalMissingError) as ei:
+            resolve_canonical_vid("a")
+        assert ei.value.detail == {"reason": "resolver_error"}
+
+    def test_unregister_restores_unavailable(self):
+        register_canonical_remap_resolver({"a": "b"}.get)
+        register_canonical_remap_resolver(None)
+        with pytest.raises(MergeCanonicalMissingError):
+            resolve_canonical_vid("a")
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +333,41 @@ class TestEventVersion:
     def test_item_hmac_for_empty_row(self, monkeypatch):
         monkeypatch.setenv("GRAY_GATE_DEDUPE_IDENTITY_KEY", "k1")
         assert compute_event_version(None)[1] == "item-hmac"
+
+    def test_volatile_keys_do_not_change_digest(self, monkeypatch):
+        # R4：运行时生成的摄取/审计列（脚本每跑必重写）不参与源业务行身份
+        monkeypatch.setenv("GRAY_GATE_DEDUPE_IDENTITY_KEY", "k1")
+        base = {"id": "v1", "name": "张三", "org": "A", "props": {"name": "张三"}}
+        rerun = {
+            **base,
+            "ingest_time": "2026-10-21 09:00:00",
+            "ingest_batch": "run-2",
+            "create_time": "2026-10-21 09:00:00",
+            "props": {"name": "张三", "update_time": "2026-10-21 09:00:01"},
+        }
+        v1 = compute_event_version(base, volatile_keys=GRAY_GATE_VOLATILE_SOURCE_KEYS)[0]
+        v2 = compute_event_version(rerun, volatile_keys=GRAY_GATE_VOLATILE_SOURCE_KEYS)[0]
+        assert v1 == v2  # 同一源业务行跨重跑摘要稳定
+
+    def test_business_column_change_still_changes_digest(self, monkeypatch):
+        # 真实业务列变化=新事件（换摘要允许新案），volatile 排除不吞业务变化
+        monkeypatch.setenv("GRAY_GATE_DEDUPE_IDENTITY_KEY", "k1")
+        v1 = compute_event_version(
+            {"id": "v1", "org": "A"}, volatile_keys=GRAY_GATE_VOLATILE_SOURCE_KEYS
+        )[0]
+        v2 = compute_event_version(
+            {"id": "v1", "org": "B"}, volatile_keys=GRAY_GATE_VOLATILE_SOURCE_KEYS
+        )[0]
+        assert v1 != v2
+
+    def test_declared_version_ignores_volatile_keys(self, monkeypatch):
+        monkeypatch.delenv("GRAY_GATE_DEDUPE_IDENTITY_KEY", raising=False)
+        out = compute_event_version(
+            {"id": "v1", "ingest_time": "t"},
+            declared_version="v-42",
+            volatile_keys=GRAY_GATE_VOLATILE_SOURCE_KEYS,
+        )
+        assert out == ("v-42", "declared")
 
 
 class TestIngressDedupeKey:

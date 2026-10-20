@@ -58,6 +58,12 @@ class FakeGraph:
 
         return _Result()
 
+    def get_node(self, vid):
+        # R6 存在性终判：非当次已活端点须真实存在——返回带属性的节点对象
+        from types import SimpleNamespace
+
+        return SimpleNamespace(properties={"name": "节点存在"}, vid=vid)
+
 
 @pytest.fixture
 def service():
@@ -513,6 +519,8 @@ def test_create_verdict_triggers_entity_search_sync(service, graph, entity_searc
             "graphSpace": "dev2",
             "nodeLabel": "Organization",
             "pendingRelationsWritten": 0,
+            "pendingRelationsParked": 0,
+            "pendingRelationsDropped": 0,
         }
     ]
 

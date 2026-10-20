@@ -103,6 +103,7 @@ def _make_activities(
     plan=None,
     pending_review=False,
     pending_response=None,
+    fail_pending=False,
 ):
     """假 activity 集：读按游标吐批次；转换对毒行（id=bad）报 failures；记录调用。
 
@@ -209,6 +210,10 @@ def _make_activities(
         # gray-gate-v2 双流：转换带 pendingMode=resolve 时挂起项交本 activity
         # 真实灰区门控处置（假实现只记账，响应可注入 invalid/rewrite 观测下游）
         state.setdefault("pending_resolved", []).append(dict(request))
+        if fail_pending:
+            # R1 复核收口口径：门控内技术故障（如 DESCRIBE TAG 传输失败）失败
+            # 关闭上抛——activity 失败而非记 invalid 静默放行
+            raise RuntimeError("DESCRIBE TAG 响应无列（label 存在且 ddl=succeeded）")
         return pending_response or {
             "written": 0,
             "grayCases": 0,
@@ -435,6 +440,39 @@ class TestSchemaExtractOrchestration:
         assert write_req["decisionPolicy"]["version"] == "gray-gate-v2"
         assert write_req["invalidEndpointVids"] == ["pending_1"]
         assert write_req["rewriteMap"] == {"pending_2": "org_9"}
+
+    async def test_pending_gate_failure_fails_workflow_and_skips_advance(self):
+        """R1 复核收口：挂起项门控 activity 技术故障（DESCRIBE TAG 传输失败/
+        响应无列）→ 失败关闭上抛 → workflow FAILED、游标不推进——不得记
+        invalid 静默放行后继续推水位（假 activity 抛错模拟真实门控上抛）。"""
+        state: dict[str, Any] = {}
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue="t-gg2-gate",
+                workflows=[SchemaExtractWorkflow],
+                activities=_make_activities(
+                    state,
+                    rows_per_batch=3,
+                    batches=1,
+                    pending_review=True,
+                    fail_pending=True,
+                ),
+            ):
+                with pytest.raises(WorkflowFailureError):
+                    await _run(
+                        env.client,
+                        "t-gg2-gate",
+                        {
+                            "schemaId": "schema-e2e",
+                            "graphSpace": "dev2",
+                            "batchSize": 3,
+                            "triggerSource": "MANUAL",
+                        },
+                    )
+        assert state["pending_resolved"]  # 门控 activity 确实被调并上抛
+        assert state.get("advances") in (None, [])  # 水位不推进
+        assert state.get("index") in (None, [])  # 不重建索引
 
     async def test_poison_rows_go_to_failure_cases(self):
         state: dict[str, Any] = {}

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import ClearableTextarea from '../../components/ClearableTextarea.vue'
+import ClearableInput from '../../components/ClearableInput.vue'
 import { vDialogFocus } from '../../directives/dialog-focus'
 import {
   computed,
@@ -43,7 +45,6 @@ import {
   FormItem as AFormItem,
   Input as AInput,
   Popover as APopover,
-  Textarea as ATextarea,
 } from '@arco-design/web-vue'
 import QueryResultTable from './QueryResultTable.vue'
 import { IconInfoCircle, IconRefresh } from '@arco-design/web-vue/es/icon'
@@ -1912,7 +1913,7 @@ const pageMeta = computed(() => {
           </div>
         </div>
         <div v-if="queryMode === 'ngql'" class="platform-ngql-input">
-          <ATextarea
+          <ClearableTextarea
             v-model="ngqlStatement"
             :textarea-attrs="{ 'aria-label': 'nGQL 查询语句', spellcheck: false }"
             :auto-size="{ minRows: 4, maxRows: 6 }"
@@ -1991,7 +1992,7 @@ const pageMeta = computed(() => {
                 <label class="platform-form-label" :for="`algo-param-${param.key}`">
                   <i v-if="param.required" class="platform-query-algo__required">*</i>{{ param.label }}
                 </label>
-                <a-select
+                <a-select allow-clear
                   v-if="param.type === 'enum'"
                   :id="`algo-param-${param.key}`"
                   v-model="algoParamValues[selectedAlgorithm][param.key]"
@@ -2011,7 +2012,7 @@ const pageMeta = computed(() => {
                   />
                   <span>{{ param.hint ?? '启用' }}</span>
                 </label>
-                <input
+                <ClearableInput
                   v-else-if="param.type === 'int' || param.type === 'float'"
                   :id="`algo-param-${param.key}`"
                   v-model.number="algoParamValues[selectedAlgorithm][param.key]"
@@ -2022,7 +2023,7 @@ const pageMeta = computed(() => {
                   :step="param.type === 'float' ? (param.step ?? 0.01) : 1"
                   :placeholder="param.placeholder"
                 />
-                <input
+                <ClearableInput
                   v-else
                   :id="`algo-param-${param.key}`"
                   v-model="algoParamValues[selectedAlgorithm][param.key]"

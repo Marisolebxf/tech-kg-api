@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ClearableInput from '../../components/ClearableInput.vue'
 import { ref, computed } from 'vue'
 import AppAlert from '../../components/AppAlert.vue'
 
@@ -456,7 +457,7 @@ const handleDecide = (accepted: boolean) => {
       <h2 class="dd-block-title">⑤ 决策</h2>
       <label class="dd-note">
         <span>备注（可选）</span>
-        <input aria-label="审核备注..." v-model="note" placeholder="审核备注..." />
+        <ClearableInput aria-label="审核备注..." v-model="note" placeholder="审核备注..." />
       </label>
       <div class="dd-actions">
         <button type="button" class="dd-accept" :disabled="submitting" @click="handleDecide(true)">

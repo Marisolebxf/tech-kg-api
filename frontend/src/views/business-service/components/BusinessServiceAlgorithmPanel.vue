@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import IconClose from "@arco-design/web-vue/es/icon/icon-close";
+import ClearableInput from '../../../components/ClearableInput.vue'
 import { useSpacePermissions } from "../../../composables/use-space-permissions"
 const { canWrite, spaces } = useSpacePermissions()
 
@@ -4579,13 +4581,6 @@ function handleParameterInput(fieldName: string, event: Event | string) {
 
   clearParameterError(fieldName);
 }
-function clearOptionalParameter(fieldName: string) {
-  parameterValues.value = {
-    ...parameterValues.value,
-    [fieldName]: "",
-  };
-  clearParameterError(fieldName);
-}
 
 function handleMonthParameterInput(fieldName: string, value: string | null) {
   const nextValues = {
@@ -4687,6 +4682,8 @@ function clearGraphSelection() {
           >{{ field.label ?? field.name }}</span
         >
         <ElSelect
+          :clear-icon="IconClose"
+          clearable
           v-if="field.type === 'select' || field.type === 'boolean'"
           :key="`${field.name}-${paramResetToken}`"
           class="service-console__select"
@@ -4703,6 +4700,7 @@ function clearGraphSelection() {
           <ElOption v-for="option in field.options" :key="option" :value="option" :label="option" />
         </ElSelect>
         <ElSelect
+          :clear-icon="IconClose"
           v-else-if="field.name === 'achievementTypes'"
           v-model="achievementTypeSelection"
           class="cooperation-type-select"
@@ -4726,6 +4724,7 @@ function clearGraphSelection() {
           />
         </ElSelect>
         <ElSelect
+          :clear-icon="IconClose"
           v-else-if="field.name === 'relationTypes'"
           v-model="panoramaRelationSelection"
           class="cooperation-type-select"
@@ -4749,6 +4748,7 @@ function clearGraphSelection() {
           />
         </ElSelect>
         <ElSelect
+          :clear-icon="IconClose"
           v-else-if="field.name === 'educationStage' && isLiveAlumni"
           v-model="educationStageSelection"
           class="alumni-stage-select"
@@ -4796,7 +4796,7 @@ function clearGraphSelection() {
           @update:model-value="handleMonthParameterInput(field.name, $event)"
         />
         <div v-else class="service-console__input-wrap">
-          <input
+          <ClearableInput
             :aria-label="field.label ?? field.name"
             type="text"
             :key="`${field.name}-${paramResetToken}`"
@@ -4811,16 +4811,6 @@ function clearGraphSelection() {
             "
             @input="handleParameterInput(field.name, $event)"
           />
-          <button
-            v-if="field.required !== '是' && parameterValues[field.name]"
-            class="service-console__input-clear"
-            type="button"
-            :aria-label="`清空${field.label ?? field.name}`"
-            :title="`清空${field.label ?? field.name}`"
-            @click="clearOptionalParameter(field.name)"
-          >
-            ×
-          </button>
         </div>
         <small
           v-if="parameterErrors[field.name]"
@@ -5135,7 +5125,7 @@ function clearGraphSelection() {
             <div v-for="(row, index) in liveRelationRows" :key="`rel-${row.label}-${index}`">
               <dt>{{ row.label }}</dt>
               <dd v-if="row.edgeKey" class="result-panel__annotation">
-                <input
+                <ClearableInput
                   v-model="relationAnnotationDrafts[row.edgeKey]"
                   class="result-panel__annotation-input"
                   type="text"
@@ -5444,69 +5434,6 @@ function clearGraphSelection() {
 .service-console__input-wrap {
   position: relative;
   min-width: 0;
-}
-
-.service-console__input-wrap > input {
-  box-sizing: border-box;
-  width: 100%;
-  height: 32px;
-  min-width: 0;
-  padding: 0 32px 0 11px;
-  border: 1px solid #d9d9d9;
-  border-radius: 6px;
-  outline: 0;
-  background: #fff;
-  color: #1f1f1f;
-  font-size: 14px;
-  line-height: 30px;
-  transition:
-    border-color 0.2s,
-    box-shadow 0.2s;
-}
-
-.service-console__input-wrap > input:hover {
-  border-color: #4096ff;
-}
-
-.service-console__input-wrap > input:focus {
-  border-color: #1677ff;
-  box-shadow: 0 0 0 2px rgba(5, 145, 255, 0.1);
-}
-
-.service-console__input-wrap > input::placeholder {
-  color: #bfbfbf;
-  opacity: 1;
-}
-
-.service-console__input-clear {
-  position: absolute;
-  z-index: 2;
-  top: 50%;
-  right: 7px;
-  display: grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: #8c8c8c;
-  font-size: 17px;
-  line-height: 18px;
-  cursor: pointer;
-  transform: translateY(-50%);
-}
-
-.service-console__input-clear:hover,
-.service-console__input-clear:focus-visible {
-  background: #f0f0f0;
-  color: #434343;
-  outline: none;
-}
-
-.service-console__params label.has-error .service-console__input-wrap > input {
-  border-color: var(--danger);
 }
 
 .service-console__params > label > input,

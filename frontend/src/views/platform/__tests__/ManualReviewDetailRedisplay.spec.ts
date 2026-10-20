@@ -11,6 +11,7 @@ import ManualReviewWorkspaceView from '../ManualReviewWorkspaceView.vue'
 const api = vi.hoisted(() => ({
   getProductionReview: vi.fn(), heartbeatProductionReview: vi.fn(), rerunExtractFailures: vi.fn(),
   directDecideProductionReview: vi.fn(), submitProductionReview: vi.fn(),
+  refreshProductionReviewCandidates: vi.fn(),
 }))
 vi.mock('../../../api/workflowOperations', () => api)
 vi.mock('vue-router', () => ({

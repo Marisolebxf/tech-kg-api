@@ -140,8 +140,10 @@ def effective_extract_fail_status(
 ) -> str:
     """T_EXTRACT_FAIL 案的有效状态（只读推导，不回写库）。
 
-    - RESOLVED：绑定重跑执行 COMPLETED → 维持「已完成」（只读）；执行非成功
-      终态或记录缺失 → RERUN_FAILED（重跑失败，可再次重跑，不冒认完成）。
+    - RESOLVED：绑定重跑执行 COMPLETED → 维持「已完成」（只读）；执行 RUNNING
+      → RERUNNING（完成回写在途/待同步——执行行尚未收尾时如实展示「重跑中」，
+      不冒认完成也不误报失败；写侧门控同口径 RUNNING 禁止重复派发）；执行
+      非成功终态或记录缺失 → RERUN_FAILED（重跑失败，可再次重跑，不冒认完成）。
     - RERUNNING：执行仍在跑 → 维持「重跑中」；执行已终态但案未回写（回滚
       失败滞留）或记录缺失 → RERUN_FAILED，避免永久卡成不可操作行。
     - 其余状态原样返回；exec_statuses 为 None（控制面不可达）时不推导。
@@ -151,9 +153,12 @@ def effective_extract_fail_status(
     if stored == "RESOLVED":
         if not rerun_execution_id:
             return stored
-        return (
-            "RESOLVED" if exec_statuses.get(rerun_execution_id) == "COMPLETED" else "RERUN_FAILED"
-        )
+        status = exec_statuses.get(rerun_execution_id)
+        if status == "COMPLETED":
+            return "RESOLVED"
+        if status == "RUNNING":
+            return "RERUNNING"
+        return "RERUN_FAILED"
     if stored == "RERUNNING":
         status = exec_statuses.get(rerun_execution_id or "")
         return "RERUNNING" if status == "RUNNING" else "RERUN_FAILED"
@@ -1841,6 +1846,127 @@ class ManualReviewService:
                 old,
                 c.status,
                 audit_detail,
+            )
+            s.commit()
+            return self.detail(s, c)
+
+    def refresh_candidates(self, i: str, v: int, a: Any) -> dict[str, Any]:
+        """T_LINK 受控刷新未决候选（MR-CAND B）：按案件图空间重跑多路召回+打分。
+
+        只重读图、零写图。合并策略：旧候选保留（评审员可能已开始对照）、图中
+        已失效的剔除、新召回的按得分追加；快照候选形维持 ``{vid,name,score}``
+        （props/nameSim 等证据字段由详情富化现查现补，不入快照）。
+
+        - 判定「变更」含失效剔除与名称/得分刷新（不能因「没有新增候选」当
+          no-op）；真 no-op（合并结果逐字段等于旧集）不动版本、不落审计。
+        - 读-改-写全程在同一事务：召回期间不预读版本，最终以 version CAS 落位
+          （与 submit 同通道）——刷新/刷新、刷新/提交并发时后到者 409。
+        - 快照即白名单：刷新后 ``_apply_link_verdict`` 只认新候选集，指向已
+          剔除候选的 merge 目标会被 400 拒绝（评审员按刷新后列表重选）。
+        """
+        with self.sf() as s:
+            c = self.need(s, i)
+            self.require_case_access(a, c)
+            if not role_can_review(a, c.phase):
+                raise ReviewForbiddenError("角色与任务阶段不匹配")
+            if canonical_template(c.template_id) != "T_LINK":
+                raise ReviewValidationError("仅 T_LINK 消歧案支持刷新候选")
+            if c.status not in SUBMITTABLE_STATUSES:
+                raise ReviewConflictError(STATE_OR_VERSION_CONFLICT)
+            snapshot = load(c.candidate_snapshot) or {}
+            incoming = snapshot.get("_incoming")
+            if not isinstance(incoming, dict) or not incoming:
+                raise ReviewValidationError("存量写后案无待入库记录，不支持刷新候选")
+            display = str(snapshot.get("name") or c.object_name or "")
+            node_label = str(snapshot.get("_nodeLabel") or "")
+            if not (display and node_label):
+                raise ReviewValidationError("快照缺少名称或节点标签，无法刷新候选")
+            incoming_props = dict(incoming.get("props") or {})
+            incoming_vid = str(incoming.get("vid") or c.object_id or "")
+            space = str(snapshot.get("_graphSpace") or c.graph_space or "") or None
+            from service.entity_disambiguation import TOP_K, recall_candidates, score_candidate
+
+            client = self._graph_client_for(snapshot)
+            recalled = (recall_candidates(client, node_label, [display], space=space) or {}).get(
+                display, []
+            )
+            scored: list[dict[str, Any]] = []
+            for cand in recalled:
+                vid = str(cand.get("vid") or "")
+                if not vid or vid == incoming_vid:
+                    continue
+                score, detail = score_candidate(
+                    display, incoming_props, cand.get("name"), cand.get("props")
+                )
+                scored.append(
+                    {"vid": vid, "name": cand.get("name"), "score": round(score, 3), **detail}
+                )
+            fresh = sorted(scored, key=lambda x: x["score"], reverse=True)[:TOP_K]
+            fresh_by_vid = {
+                str(x["vid"]): {
+                    "vid": str(x["vid"]),
+                    "name": x.get("name"),
+                    "score": x.get("score"),
+                }
+                for x in fresh
+            }
+            old = [
+                x
+                for x in (snapshot.get("existingCandidates") or [])
+                if isinstance(x, dict) and x.get("vid")
+            ]
+            old_vids = {str(x["vid"]) for x in old}
+            kept = [
+                {**x, **fresh_by_vid[str(x["vid"])]} for x in old if str(x["vid"]) in fresh_by_vid
+            ]
+            added_vids = [vid for vid in fresh_by_vid if vid not in old_vids]
+            merged = kept + [fresh_by_vid[vid] for vid in added_vids]
+            if merged == old:
+                # 真 no-op：零新增、零剔除、名称/得分无变化 → 不动版本不落审计
+                return self.detail(s, c)
+            t = now()
+            reserved = s.execute(
+                update(ReviewCase)
+                .where(
+                    ReviewCase.id == i,
+                    ReviewCase.version == v,
+                    ReviewCase.status.in_(SUBMITTABLE_STATUSES),
+                )
+                .values(version=ReviewCase.version + 1, updated_at=t)
+            )
+            if reserved.rowcount != 1:
+                raise ReviewConflictError(STATE_OR_VERSION_CONFLICT)
+            s.expire(c, ["version", "updated_at"])
+            removed_vids = sorted(old_vids - set(fresh_by_vid))
+            snapshot["existingCandidates"] = merged
+            snapshot["_candidateRefresh"] = {
+                "policyVersion": "refresh-candidates-v1",
+                "recallPolicy": "exact+milvus-dense-v1",
+                "refreshedAt": t.strftime("%Y-%m-%d %H:%M:%S"),
+                "addedVids": added_vids,
+                "removedVids": removed_vids,
+            }
+            c.candidate_snapshot = dump(snapshot)
+            c.updated_at = t
+            self.audit(
+                s,
+                c,
+                a,
+                "CANDIDATES_REFRESHED",
+                c.status,
+                c.status,
+                {
+                    "addedVids": added_vids,
+                    "removedVids": removed_vids,
+                    "oldCandidates": [
+                        {"vid": str(x.get("vid")), "name": x.get("name"), "score": x.get("score")}
+                        for x in old
+                    ],
+                    "newCandidates": [
+                        {"vid": str(x.get("vid")), "name": x.get("name"), "score": x.get("score")}
+                        for x in merged
+                    ],
+                },
             )
             s.commit()
             return self.detail(s, c)

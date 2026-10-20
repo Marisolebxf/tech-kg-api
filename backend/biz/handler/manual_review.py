@@ -385,6 +385,27 @@ async def direct_decide_case(case_id: str, body: DirectDecideRequest, identity: 
         _raise_production_error(exc)
 
 
+@router.post("/production/{case_id}/refresh-candidates", response_model=ApiResponse)
+async def refresh_case_candidates(case_id: str, body: VersionRequest, identity: ReviewIdentityDep):
+    """T_LINK 受控刷新未决候选：按案件图空间重跑召回+打分，零写图（MR-CAND B）。
+
+    失效候选剔除也算变更（version+1+审计）；并发刷新/提交由 version CAS 拦截。
+    """
+    _queue_cache_clear()
+    try:
+        # 重跑召回是同步图查询（秒级），挪线程池避免占住事件循环
+        return ApiResponse(
+            data=await asyncio.to_thread(
+                production_service.refresh_candidates,
+                case_id,
+                body.version,
+                identity,
+            )
+        )
+    except Exception as exc:
+        _raise_production_error(exc)
+
+
 @router.post("/production/rerun-extract-failures", response_model=ApiResponse)
 async def rerun_extract_failures(body: ExtractFailuresRerunRequest, identity: ReviewIdentityDep):
     """T_EXTRACT_FAIL 抽取失败记录重跑：所选 case 按 schema 合并为新执行（重新执行）。

@@ -24,7 +24,7 @@ Content-Type: application/json
 ```
 
 - 接入前向本系统管理员提供业务方名称，由管理员分配 client_id、API Key 和有效期。调用方无需登录用户中心，应在后端保存凭证并随请求发送。原始 Key 仅在创建或轮换时显示一次，数据库仅保存 SHA-256 哈希值。
-- 默认有效期为 90 天，以管理员签发为准。过期前联系管理员轮换；轮换后旧 Key 立即失效，停用后不能调用。凭证只授予 project-relations:read 权限，仅支持此项目关系查询接口；不能使用 TRSGraph 服务的内部 API Key。
+- 默认有效期为 365 天，以管理员签发为准。过期前联系管理员轮换；轮换后旧 Key 立即失效，停用后不能调用。凭证只授予 project-relations:read 权限，仅支持此项目关系查询接口；不能使用 TRSGraph 服务的内部 API Key。
 - 原 `Authorization: Bearer <access_token>` 及登录 Cookie 继续兼容。携带 X-Client-Id 或 X-API-Key 任意一个 Header 即优先校验 API Key；缺项或校验失败不会回退到 Bearer/Cookie。正式接入应启用 AUTH_ENABLED=true，不依赖测试环境的关闭登录配置。
 
 > 修订说明：本稿补充 API Key 接入方式，待对应后端代码部署并完成验收后生效；不代表当前测试环境已经启用。

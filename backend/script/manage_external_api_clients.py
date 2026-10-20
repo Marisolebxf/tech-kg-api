@@ -20,7 +20,7 @@ def main() -> None:
         if name == "create":
             command.add_argument("--business-name", required=True)
         if name != "disable":
-            command.add_argument("--expires-days", type=int, default=90)
+            command.add_argument("--expires-days", type=int, default=365)
             command.add_argument(
                 "--scopes",
                 default=None,

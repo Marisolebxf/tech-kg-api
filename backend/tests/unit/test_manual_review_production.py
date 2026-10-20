@@ -990,3 +990,165 @@ def test_fix_mojibake_repairs_latin1_and_cp1252_double_encoding():
     assert fix("") == ""
     assert fix(None) is None
     assert fix(123) == 123
+
+
+# ---- MR-CAND B：T_LINK 受控刷新未决候选 ----
+
+
+def _refreshable_link_case(service):
+    """带 _incoming/_nodeLabel 的 T_LINK 灰区案（刷新候选的最小快照形态）。"""
+    created = service.create_direct_case(
+        task_id="TASK-R",
+        execution_id="EXEC-R",
+        step_id="align",
+        kind="entity",
+        candidate={
+            "name": "张三",
+            "newIds": ["S-1"],
+            "existingCandidates": [{"vid": "old-1", "name": "张三", "score": 0.7}],
+            "_incoming": {"vid": "S-1", "props": {"name": "张三", "org": "中国科学院"}},
+            "_pendingRelations": [],
+            "_graphSpace": "dev2",
+            "_nodeLabel": "Expert",
+        },
+        object_id="S-1",
+        object_name="张三",
+        node_label="Expert",
+        reason="消歧灰区待人工裁决",
+        confidence=0.7,
+        domain="talent",
+        template_id="T_LINK",
+        graph_space="dev2",
+    )
+    return service.get_case(created["reviewId"], actor())
+
+
+def _patch_recall(monkeypatch, recalled, calls=None, score=0.9):
+    """假召回+打分（零图写：recall/score 均为纯函数，客户端不被触写）。"""
+    import service.entity_disambiguation as ed
+
+    def fake_recall(client, tag, names, space=None):
+        if calls is not None:
+            calls.append({"tag": tag, "names": list(names), "space": space})
+        return {names[0]: list(recalled)} if recalled else {}
+
+    monkeypatch.setattr(ed, "recall_candidates", fake_recall)
+    monkeypatch.setattr(
+        ed, "score_candidate", lambda display, iprops, cname, cprops: (score, {"nameSim": score})
+    )
+    # 详情富化与图客户端按最小桩处理（富化只读有独立覆盖；refresh 召回已假化，
+    # 客户端本体不再被触达——由此也约束了刷新路径零图写）
+    monkeypatch.setattr(ManualReviewService, "_enrich_link_snapshot", lambda self, c, snap: snap)
+    monkeypatch.setattr(ManualReviewService, "_graph_client_for", lambda self, snap: object())
+
+
+def _audit_events(service, case_id):
+    from db_model.manual_review import ReviewAuditLog
+
+    with service.sf() as s:
+        rows = s.query(ReviewAuditLog).filter(ReviewAuditLog.case_id == case_id).all()
+        return [r.event_type for r in rows]
+
+
+def test_refresh_appends_new_candidate_and_bumps_version(service, monkeypatch):
+    detail = _refreshable_link_case(service)
+    _patch_recall(
+        monkeypatch,
+        [
+            {"vid": "old-1", "name": "张三", "props": {}},
+            {"vid": "fresh-2", "name": "张三丰", "props": {}},
+        ],
+    )
+    out = service.refresh_candidates(detail["id"], detail["version"], actor())
+    vids = [c["vid"] for c in out["candidate"]["existingCandidates"]]
+    # 旧候选保留在原位，新候选按得分追加
+    assert vids == ["old-1", "fresh-2"]
+    assert out["version"] == detail["version"] + 1
+    refresh = out["candidate"]["_candidateRefresh"]
+    assert refresh["addedVids"] == ["fresh-2"]
+    assert refresh["removedVids"] == []
+    assert "CANDIDATES_REFRESHED" in _audit_events(service, detail["id"])
+
+
+def test_refresh_dropping_stale_candidate_is_a_change(service, monkeypatch):
+    """失效候选被剔除也算变更：version+1+审计，不能因「没有新增」当 no-op。"""
+    detail = _refreshable_link_case(service)
+    _patch_recall(monkeypatch, [])  # 图中 old-1 已不存在（同名+近邻均召回不到）
+    out = service.refresh_candidates(detail["id"], detail["version"], actor())
+    assert out["candidate"]["existingCandidates"] == []
+    assert out["version"] == detail["version"] + 1
+    assert out["candidate"]["_candidateRefresh"]["removedVids"] == ["old-1"]
+    events = _audit_events(service, detail["id"])
+    assert events.count("CANDIDATES_REFRESHED") == 1
+
+
+def test_refresh_true_noop_keeps_version(service, monkeypatch):
+    """召回结果与现快照完全一致（零新增零剔除零变化）→ 不动版本不落审计。"""
+    detail = _refreshable_link_case(service)
+    _patch_recall(
+        monkeypatch,
+        [{"vid": "old-1", "name": "张三", "props": {}}],
+        score=0.7,  # 与快照 score 完全一致
+    )
+    out = service.refresh_candidates(detail["id"], detail["version"], actor())
+    assert out["version"] == detail["version"]
+    assert "CANDIDATES_REFRESHED" not in _audit_events(service, detail["id"])
+    assert "_candidateRefresh" not in out["candidate"]
+
+
+def test_refresh_uses_case_graph_space(service, monkeypatch):
+    """召回按案件图空间+快照节点标签重跑（跨空间不串）。"""
+    detail = _refreshable_link_case(service)
+    calls: list[dict] = []
+    _patch_recall(monkeypatch, [], calls=calls)
+    service.refresh_candidates(detail["id"], detail["version"], actor())
+    assert calls == [{"tag": "Expert", "names": ["张三"], "space": "dev2"}]
+
+
+def test_refresh_conflict_on_stale_version(service, monkeypatch):
+    """刷新/刷新（或刷新/提交）并发：后到者按 version CAS 拒绝（409 口径）。"""
+    detail = _refreshable_link_case(service)
+    _patch_recall(
+        monkeypatch,
+        [{"vid": "fresh-2", "name": "张三丰", "props": {}}],
+    )
+    first = service.refresh_candidates(detail["id"], detail["version"], actor())
+    # 召回结果有新变化（又见新候选）才能构成第二次「变更」，此时旧版本被 CAS 拒
+    _patch_recall(
+        monkeypatch,
+        [
+            {"vid": "old-1", "name": "张三", "props": {}},
+            {"vid": "fresh-3", "name": "张三省", "props": {}},
+        ],
+    )
+    with pytest.raises(ReviewConflictError):
+        service.refresh_candidates(detail["id"], detail["version"], actor())
+    # 持新版本再刷即可（拿最新 version 重试）
+    _patch_recall(monkeypatch, [])
+    second = service.refresh_candidates(first["id"], first["version"], actor())
+    assert second["candidate"]["existingCandidates"] == []
+
+
+def test_refresh_rejects_terminal_case(service, monkeypatch):
+    detail = _refreshable_link_case(service)
+    # reject-candidate 不触图写（entity-confirm/create 会走 _apply_link_verdict 写图）
+    service.submit(
+        detail["id"],
+        detail["version"],
+        "reject-candidate",
+        {"entityVerdict": "reject"},
+        "",
+        actor(),
+    )
+    _patch_recall(monkeypatch, [])
+    with pytest.raises(ReviewConflictError):
+        service.refresh_candidates(detail["id"], detail["version"] + 5, actor())
+
+
+def test_refresh_rejects_cases_without_pending_incoming(service, monkeypatch):
+    """存量写后案（无 _incoming）/ 非 T_LINK 模板不支持刷新（422 口径）。"""
+    created = service.create_direct_case(**link_case_kwargs())  # 无 _incoming 的 T_LINK
+    detail = service.get_case(created["reviewId"], actor())
+    _patch_recall(monkeypatch, [])
+    with pytest.raises(ReviewValidationError):
+        service.refresh_candidates(detail["id"], detail["version"], actor())

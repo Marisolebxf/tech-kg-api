@@ -1115,3 +1115,395 @@ class TestExecuteTransformDualStream:
         out = await execute_transform(_transform_request(script))
         assert "pendingReview" not in out  # v1：activity 内消化，不随返回值上抛
         assert calls and calls[0][0]["objectId"] == "pending_1"
+
+
+# ---------------------------------------------------------------------------
+# 二次复审回归（R2-b）：已确认人工裁决贯穿到写前守卫最后一步
+# ---------------------------------------------------------------------------
+
+
+def _review_actor():
+    from service.manual_review_domain import ReviewIdentity
+
+    return ReviewIdentity("u", "u", frozenset({"reviewer"}), frozenset({"graph"}), "o", "e")
+
+
+def _resolve_create(review_service, case_id):
+    """直审 create（_apply_link_verdict 打桩为无图写成功 → application APPLIED）。"""
+    orig = ManualReviewService._apply_link_verdict
+    ManualReviewService._apply_link_verdict = (  # type: ignore[method-assign]
+        lambda self, c, r: {"applied": True, "vid": r.get("targetEntityId") or c.object_id}
+    )
+    try:
+        review_service.submit(
+            case_id, 1, "entity-confirm", {"entityVerdict": "create"}, "r2b 回归", _review_actor()
+        )
+    finally:
+        ManualReviewService._apply_link_verdict = orig  # type: ignore[method-assign]
+
+
+def _write_entity_request(records, **overrides):
+    request = {
+        "kind": "entity",
+        "name": "Scholar",
+        "graph": {"space": "dev2"},
+        "sourceTable": "dwd.dwd_scholar",
+        "stepId": "source:bind-1#main",
+        "batchIdx": 0,
+        "chunkIdx": 0,
+        "records": records,
+        "decisionPolicy": decision_policy(),
+    }
+    request.update(overrides)
+    return request
+
+
+class TestPrewriteGuardPriorR2b:
+    """R2-b：写前守卫（默认开启）从可信事件身份+耐久应用标记重新确认——
+    已应用 create 幂等写入不被重评分阻断；待裁决案/旧 reject 同口径处置。"""
+
+    @pytest.mark.asyncio
+    async def test_applied_create_survives_resolve_then_write_records_with_default_guard(
+        self, review_service, monkeypatch
+    ):
+        # 写前守卫保持开启（只关与本案无关的 Redis 锁与近邻路），不靠关守卫通过
+        monkeypatch.setenv("ENTITY_DISAMBIGUATION_MILVUS_RECALL", "0")
+        monkeypatch.setenv("ENTITY_DISAMBIGUATION_NAME_LOCK", "0")
+        monkeypatch.setenv("ENTITY_WRITE_VID_LOCK_ENABLED", "0")
+
+        from service.manual_review_production import sha
+        from service.temporal_workflows import (
+            _gray_ingress_material,
+            resolve_entity_batch,
+            write_records,
+        )
+
+        record = {
+            "id": "sch_new",
+            "sourceRecordId": "row-1",
+            "props": {"name": "张三", "org": "A"},
+        }
+        material, _, _ = _gray_ingress_material(
+            step_id="source:bind-1#main", record=record, graph_space="dev2", name_tag="Scholar"
+        )
+        case_id = review_service.create_direct_case(
+            task_id="T",
+            execution_id="E",
+            step_id="source:bind-1#main",
+            kind="entity",
+            candidate={
+                "name": "张三",
+                "newIds": ["sch_new"],
+                "existingCandidates": [{"vid": "sch_9", "name": "张三", "score": 0.7}],
+                "_incoming": {
+                    "vid": "sch_new",
+                    "props": {"name": "张三", "org": "A"},
+                    "sourceTable": "dwd.dwd_scholar",
+                },
+                "_pendingRelations": [],
+                "_graphSpace": "dev2",
+                "_nodeLabel": "Scholar",
+                "_resolution": {
+                    "policyVersion": "gray-gate-v2",
+                    "scoreDecision": "gray",
+                    "effectiveDisposition": "withhold_pending_review",
+                },
+            },
+            object_id="sch_new",
+            object_name="张三",
+            node_label="Scholar",
+            reason="r2b",
+            confidence=0.7,
+            template_id="T_LINK",
+            graph_space="dev2",
+        )["reviewId"]
+        with review_service.sf() as s:
+            s.get(ReviewCase, case_id).dedupe_key = sha(material)
+            s.commit()
+        _resolve_create(review_service, case_id)  # 人工 create + APPLIED
+
+        # 守卫召回命中同名且属性一致的既有候选（重评分 1.0=merge）：已确认
+        # create 豁免重评分、幂等写入，不得再抛 DEFERRED_MERGE_BLOCKED
+        graph = use_graph(
+            monkeypatch,
+            FakeGraph(
+                recall={"Scholar": [{"vid": "sch_9", "props": {"name": "张三", "org": "A"}}]}
+            ),
+        )
+        resolved = await resolve_entity_batch(_resolve_request([dict(record)]))
+        assert resolved["keptAsNew"] == 1
+        out = await write_records(_write_entity_request(resolved["records"]))
+        assert out["written"] == 1
+        assert out["guardWithheld"] == 0
+        assert out.get("guardPriorDropped", 0) == 0
+        assert graph.writes and '"sch_new"' in graph.writes[0]
+
+    @pytest.mark.asyncio
+    async def test_open_case_opened_between_resolve_and_write_withholds_at_guard(
+        self, review_service, monkeypatch
+    ):
+        # 并行批次交错：resolve 时无案判 new → 写前另一 worker 同事件建案 →
+        # 守卫前置裁决并入既有案（guardWithheld），不重复写图
+        monkeypatch.setenv("ENTITY_DISAMBIGUATION_MILVUS_RECALL", "0")
+        monkeypatch.setenv("ENTITY_DISAMBIGUATION_NAME_LOCK", "0")
+        monkeypatch.setenv("ENTITY_WRITE_VID_LOCK_ENABLED", "0")
+
+        from service.temporal_workflows import (
+            _gray_ingress_material,
+            resolve_entity_batch,
+            write_records,
+        )
+
+        record = {
+            "id": "sch_new",
+            "sourceRecordId": "row-1",
+            "props": {"name": "张三", "org": "A", "city": "Y", "email": "F"},
+        }
+        graph = use_graph(monkeypatch, FakeGraph(recall={"Scholar": []}))  # resolve 时无候选
+        resolved = await resolve_entity_batch(_resolve_request([dict(record)]))
+        assert resolved["new"] == 1
+        material, _, _ = _gray_ingress_material(
+            step_id="source:bind-1#main", record=record, graph_space="dev2", name_tag="Scholar"
+        )
+        review_service.create_direct_case(
+            task_id="T",
+            execution_id="E",
+            step_id="source:bind-1#main",
+            kind="entity",
+            candidate={
+                "name": "张三",
+                "newIds": ["sch_new"],
+                "existingCandidates": [],
+                "_incoming": {
+                    "vid": "sch_new",
+                    "props": {"name": "张三", "org": "A"},
+                    "sourceTable": "dwd.dwd_scholar",
+                },
+                "_pendingRelations": [],
+                "_graphSpace": "dev2",
+                "_nodeLabel": "Scholar",
+                "_resolution": {
+                    "policyVersion": "gray-gate-v2",
+                    "scoreDecision": "gray",
+                    "effectiveDisposition": "withhold_pending_review",
+                },
+            },
+            object_id="sch_new",
+            object_name="张三",
+            node_label="Scholar",
+            reason="r2b",
+            confidence=0.7,
+            template_id="T_LINK",
+            graph_space="dev2",
+            dedupe_material=material,
+        )
+        out = await write_records(_write_entity_request(resolved["records"]))
+        assert out["written"] == 0
+        assert out["guardWithheld"] == 1
+        assert graph.writes == []
+
+    @pytest.mark.asyncio
+    async def test_reject_landed_between_resolve_and_write_drops_at_guard(
+        self, review_service, monkeypatch
+    ):
+        # resolve 判 new 后、写前同事件案已 reject → 守卫按 priorVerdict 剔除
+        monkeypatch.setenv("ENTITY_DISAMBIGUATION_MILVUS_RECALL", "0")
+        monkeypatch.setenv("ENTITY_DISAMBIGUATION_NAME_LOCK", "0")
+        monkeypatch.setenv("ENTITY_WRITE_VID_LOCK_ENABLED", "0")
+
+        from service.temporal_workflows import (
+            _gray_ingress_material,
+            resolve_entity_batch,
+            write_records,
+        )
+
+        record = {
+            "id": "sch_new",
+            "sourceRecordId": "row-1",
+            "props": {"name": "张三", "org": "A", "city": "Y", "email": "F"},
+        }
+        graph = use_graph(monkeypatch, FakeGraph(recall={"Scholar": []}))
+        resolved = await resolve_entity_batch(_resolve_request([dict(record)]))
+        assert resolved["new"] == 1
+        material, _, _ = _gray_ingress_material(
+            step_id="source:bind-1#main", record=record, graph_space="dev2", name_tag="Scholar"
+        )
+        case_id = review_service.create_direct_case(
+            task_id="T",
+            execution_id="E",
+            step_id="source:bind-1#main",
+            kind="entity",
+            candidate={
+                "name": "张三",
+                "newIds": ["sch_new"],
+                "existingCandidates": [],
+                "_incoming": {
+                    "vid": "sch_new",
+                    "props": {"name": "张三", "org": "A"},
+                    "sourceTable": "dwd.dwd_scholar",
+                },
+                "_pendingRelations": [],
+                "_graphSpace": "dev2",
+                "_nodeLabel": "Scholar",
+                "_resolution": {
+                    "policyVersion": "gray-gate-v2",
+                    "scoreDecision": "gray",
+                    "effectiveDisposition": "withhold_pending_review",
+                },
+            },
+            object_id="sch_new",
+            object_name="张三",
+            node_label="Scholar",
+            reason="r2b",
+            confidence=0.7,
+            template_id="T_LINK",
+            graph_space="dev2",
+            dedupe_material=material,
+        )["reviewId"]
+        review_service.submit(
+            case_id, 1, "reject-candidate", {"entityVerdict": "reject"}, "r2b 回归", _review_actor()
+        )
+        out = await write_records(_write_entity_request(resolved["records"]))
+        assert out["written"] == 0
+        assert out["guardPriorDropped"] == 1
+        assert graph.writes == []
+
+
+# ---------------------------------------------------------------------------
+# 二次复审回归（R4-b）：声明事件版本全链透传（pending / 主流 / S3 两形状）
+# ---------------------------------------------------------------------------
+
+
+class TestPendingDeclaredEventVersionR4b:
+    """R4-b：pending 重建 record 透传 sourceEventVersion——声明版本变化=新事件，
+    纯摄取时间变化=同事件；跨 chunk 与 S3/内联一致。"""
+
+    def _gray_graph(self, monkeypatch):
+        return use_graph(
+            monkeypatch,
+            FakeGraph(
+                recall={
+                    "Person": [
+                        {
+                            "vid": "p9",
+                            "props": {"name": "王五", "org": "A", "city": "X", "email": "E"},
+                        }
+                    ]
+                }
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_declared_version_change_opens_new_case_after_reject(
+        self, review_service, pipeline_env, monkeypatch
+    ):
+        from service.temporal_workflows import resolve_pending_entities
+
+        schema_catalog(monkeypatch, "Person")
+        self._gray_graph(monkeypatch)
+        item = _pending_item("王五", props={"name": "王五", "org": "A", "city": "Y", "email": "F"})
+        item["sourceEventVersion"] = "business-version-1"
+        first = await resolve_pending_entities(_pending_request([dict(item)]))
+        assert first["grayCases"] == 1
+        case_id, _ = _cases(review_service)[0]
+        review_service.submit(
+            case_id, 1, "reject-candidate", {"entityVerdict": "reject"}, "r4b 回归", _review_actor()
+        )
+        # 同源行业务版本 v1→v2：新事件——旧 reject 不得吞掉重新判定
+        item["sourceEventVersion"] = "business-version-2"
+        second = await resolve_pending_entities(_pending_request([dict(item)]))
+        assert second["grayCases"] == 1
+        assert len(_cases(review_service)) == 2
+
+    @pytest.mark.asyncio
+    async def test_ingest_time_change_with_same_declared_version_keeps_same_case(
+        self, review_service, pipeline_env, monkeypatch
+    ):
+        from service.temporal_workflows import resolve_pending_entities
+
+        schema_catalog(monkeypatch, "Person")
+        self._gray_graph(monkeypatch)
+        base = {"name": "王五", "org": "A", "city": "Y", "email": "F"}
+        item = _pending_item("王五", props=dict(base, ingest_time="2026-10-21 09:00:00"))
+        item["sourceEventVersion"] = "business-version-1"
+        first = await resolve_pending_entities(_pending_request([dict(item)]))
+        assert first["grayCases"] == 1
+        # 声明版本不变、仅摄取时间变化：同事件 → 并入既有案，不建新案
+        item2 = _pending_item("王五", props=dict(base, ingest_time="2026-10-21 11:30:00"))
+        item2["sourceEventVersion"] = "business-version-1"
+        second = await resolve_pending_entities(_pending_request([dict(item2)]))
+        assert second["grayCases"] == 1
+        assert len(_cases(review_service)) == 1
+
+    @pytest.mark.asyncio
+    async def test_cross_chunk_and_s3_shape_hit_same_case(
+        self, review_service, pipeline_env, monkeypatch, fake_s3
+    ):
+        from service.temporal_workflows import resolve_pending_entities
+
+        schema_catalog(monkeypatch, "Person")
+        self._gray_graph(monkeypatch)
+        item = _pending_item("王五", props={"name": "王五", "org": "A", "city": "Y", "email": "F"})
+        item["sourceEventVersion"] = "business-version-1"
+        # chunk 0 建案
+        await resolve_pending_entities(_pending_request([dict(item)], chunkIdx=0))
+        assert len(_cases(review_service)) == 1
+        # 跨 chunk（chunkIdx=3）重放：同事件 → 命中同案
+        await resolve_pending_entities(_pending_request([dict(item)], chunkIdx=3))
+        assert len(_cases(review_service)) == 1
+        # S3 形状（pendingKey）与内联一致：同键命中同案
+        key = store.put_extract_payload_json("source:bind-1#main", 0, "pending-r4b", [dict(item)])
+        request = _pending_request([], pendingKey=key)
+        request.pop("pending")
+        await resolve_pending_entities(request)
+        assert len(_cases(review_service)) == 1
+
+
+class TestMainStreamDeclaredEventVersionR4b:
+    """R4-b：主流（resolve_entity_batch）声明版本透传，与 pending 双流同键。"""
+
+    @pytest.mark.asyncio
+    async def test_declared_version_change_new_case_and_s3_shape_same_identity(
+        self, review_service, pipeline_env, monkeypatch, fake_s3
+    ):
+        from service.temporal_workflows import resolve_entity_batch
+
+        use_graph(
+            monkeypatch,
+            FakeGraph(
+                recall={
+                    "Scholar": [
+                        {
+                            "vid": "sch_9",
+                            "props": {"name": "张三", "org": "A", "city": "X", "email": "E"},
+                        }
+                    ]
+                }
+            ),
+        )
+        base = {"name": "张三", "org": "A", "city": "Y", "email": "F"}
+        record = {
+            "id": "sch_new",
+            "sourceRecordId": "row-1",
+            "sourceEventVersion": "business-version-1",
+            "props": dict(base, ingest_time="2026-10-21 09:00:00"),
+        }
+        first = await resolve_entity_batch(_resolve_request([dict(record)]))
+        assert first["withheld"] == 1
+        # 摄取时间变化（声明版本不变）：同事件 → 并入既有案
+        replay = dict(record, props=dict(base, ingest_time="2026-10-21 11:30:00"))
+        second = await resolve_entity_batch(_resolve_request([dict(replay)]))
+        assert second["withheld"] == 1
+        assert len(_cases(review_service)) == 1
+        # 声明版本变化：新事件 → 新案
+        bumped = dict(record, sourceEventVersion="business-version-2")
+        third = await resolve_entity_batch(_resolve_request([dict(bumped)]))
+        assert third["withheld"] == 1
+        assert len(_cases(review_service)) == 2
+        # S3 形状（recordsKey）与内联一致：同键命中同案
+        key = store.put_extract_payload_json("source:bind-1#main", 0, "records-r4b", [dict(replay)])
+        request = _resolve_request([], recordsKey=key)
+        request.pop("records")
+        fourth = await resolve_entity_batch(request)
+        assert fourth["withheld"] == 1
+        assert len(_cases(review_service)) == 2

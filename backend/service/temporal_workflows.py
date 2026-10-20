@@ -1888,11 +1888,14 @@ async def _prewrite_recheck(
     原地变异 ``records``（改写 id / 剔除扣留项），调用方随后照常写图。召回
     失败 fail-open：本批按 resolve 判定原样写（不劣于守卫前行为）。
 
-    gray-gate-v2（``decision_policy`` 传入时）：eligibility 前置过滤 + 两阶段
-    执行——先整批纯 decide，任一记录命中 merge → ``DEFERRED_MERGE_BLOCKED``
-    失败关闭（任何建案/改写副作用前抛出，B′）；真实 gray 走 v2 建案（逻辑键
-    + 证据 v2 + 来源账本 + priorVerdict 三态处置）；fail-open except 重抛
-    失败关闭族（不吞）。v1 请求（无 decision_policy）行为不变。
+    gray-gate-v2（``decision_policy`` 传入时）：**前置裁决（R2-b）先于召回与
+    评分**——按稳定事件身份重新确认既有案/已应用裁决（kept_as_new/
+    kept_rewrite 幂等写入豁免重评分，withheld/prior-dropped 扣留剔除，FAILED/
+    UNKNOWN 失败关闭），已确认的人工裁决不被重评分否定；eligibility 前置过滤
+    + 两阶段执行——先整批纯 decide，任一记录命中 merge →
+    ``DEFERRED_MERGE_BLOCKED`` 失败关闭（任何建案/改写副作用前抛出，B′）；
+    真实 gray 走 v2 建案（逻辑键 + 证据 v2 + 来源账本 + priorVerdict 三态处置）；
+    fail-open except 重抛失败关闭族（不吞）。v1 请求（无 decision_policy）行为不变。
     """
     from service.entity_disambiguation import (
         decide,
@@ -1901,18 +1904,55 @@ async def _prewrite_recheck(
         score_candidate,
     )
 
+    stats: dict[str, int] = {"guardMerged": 0, "guardWithheld": 0}
+
+    policy: dict[str, Any] | None = None
+    if decision_policy is not None:
+        policy = dict(require_known_policy(decision_policy))
+
+    # 前置裁决（R2-b，v2 专用）：已确认的人工裁决贯穿至写入前最后一步——写前
+    # 守卫从可信事件身份+耐久应用标记重新确认，不依据可由脚本伪造的 bypass
+    # 标记。已应用 create/merge 幂等写入（豁免重评分，否则候选得分变为 merge
+    # 会以 DEFERRED_MERGE_BLOCKED 阻断已确认裁决）；reject/待裁决案与 resolve
+    # 同口径处置；FAILED/UNKNOWN 由 _prior_ingress_disposition 失败关闭上抛。
+    # 先于召回执行：召回 fail-open 提前返回时，扣留/剔除同样生效（已确认裁决
+    # 不因召回故障被绕过）。
+    prior_exempt: set[int] = set()  # id(record)：已确认裁决豁免重评分
+    if policy is not None:
+        kept_records: list[dict[str, Any]] = []
+        for record in records:
+            prior = _prior_ingress_disposition(
+                step_id=step_id,
+                record=record,
+                graph_space=graph.get("space"),
+                name_tag=name_tag,
+                policy=policy,
+                stage="prewrite",
+            )
+            if prior is None:
+                kept_records.append(record)
+                continue
+            action = prior["action"]
+            if action == "withheld":
+                # 既有待裁决案重复命中：并入既有案（来源行入账），不重复写图
+                stats["guardWithheld"] += 1
+            elif action == "dropped":
+                stats["guardPriorDropped"] = stats.get("guardPriorDropped", 0) + 1
+            else:
+                if action == "kept_rewrite":
+                    record["id"] = str(prior["rewriteVid"])
+                # kept_as_new：已应用 create 幂等写入，原样落图
+                prior_exempt.add(id(record))
+                kept_records.append(record)
+        records[:] = kept_records
+
     by_name: dict[str, list[dict[str, Any]]] = {}
     for record in records:
         display = display_name(record.get("props"))
         if display:
             by_name.setdefault(display, []).append(record)
-    stats: dict[str, int] = {"guardMerged": 0, "guardWithheld": 0}
     if not by_name:
         return stats
-
-    policy: dict[str, Any] | None = None
-    if decision_policy is not None:
-        policy = dict(require_known_policy(decision_policy))
 
     def _recall() -> Any:
         if policy is not None:
@@ -1959,9 +1999,12 @@ async def _prewrite_recheck(
             return eligible
         return [c for c in existing.get(display, []) if c["vid"] != self_vid]
 
-    # v2 两阶段：先整批纯 decide（merge 在任何副作用前失败关闭），再落副作用
+    # v2 两阶段：先整批纯 decide（merge 在任何副作用前失败关闭），再落副作用；
+    # prior 豁免记录（已确认 create/merge 重放）不进重评分
     decisions: list[tuple[int, dict[str, Any], str, dict[str, Any], list[dict[str, Any]]]] = []
     for pos, record in enumerate(records):
+        if id(record) in prior_exempt:
+            continue
         display = display_name(record.get("props"))
         if not display:
             continue
@@ -3781,6 +3824,8 @@ async def resolve_pending_entities(request: dict[str, Any]) -> dict[str, Any]:
                     "props": {**(candidate.get("props") or {}), "name": display},
                     "sourceTable": item.get("sourceTable") or source_table,
                     "sourceRecordId": item.get("sourceRecordId"),
+                    # 声明事件版本（R4-b）：业务版本变化=新事件，摄取时间变化=同事件
+                    "sourceEventVersion": item.get("sourceEventVersion"),
                 }
                 # 稳定事件身份前置（R2）：既有案/既有裁决先于重新评分与任何写副作用
                 prior = _prior_ingress_disposition(
@@ -3841,6 +3886,8 @@ async def resolve_pending_entities(request: dict[str, Any]) -> dict[str, Any]:
                     "props": {**(candidate.get("props") or {}), "name": display},
                     "sourceTable": item.get("sourceTable") or source_table,
                     "sourceRecordId": item.get("sourceRecordId"),
+                    # 声明事件版本（R4-b）：与阶段一同键，查案/建案材料一致
+                    "sourceEventVersion": item.get("sourceEventVersion"),
                 }
                 if decision != "gray":
                     # decide=new：门控已过，直接写图（列级合并防覆盖清列）

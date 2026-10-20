@@ -689,3 +689,136 @@ class TestDetailEnrichR8:
         cand = out["existingCandidates"][0]
         assert cand["nameSim"] == 1.0 and cand["propsAgree"] == 1.0
         assert "recheck" not in cand
+
+
+# ---------------------------------------------------------------------------
+# R6-b：park / 转交 / 摘除 / submit 共用版本 CAS——成功确认的边不丢
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrentParkCasR6b:
+    """并发暂存/裁决不丢边：确定性交错复现（调度随 CAS 锁模型调整，断言不变）。"""
+
+    def test_two_successful_concurrent_parks_preserve_both_edges(self, service, monkeypatch):
+        # 同案双 park：第一个 session 的 commit 前注入第二个完整 park。旧行为
+        # =读-改-写整体覆盖，后提交者抹掉先提交者、两边都报成功；CAS 下第二
+        # 写者读到第一写者刚提交的快照再追加——成功确认的边总数与去向一致
+        case_id = _link_case(service, vid="a")
+        original_factory = service.sf
+        injected = False
+
+        def factory():
+            nonlocal injected
+            session = original_factory()
+            if not injected:
+                injected = True
+                original_commit = session.commit
+
+                def commit_after_other_writer():
+                    service.park_or_rewrite_edges(
+                        "LINK",
+                        [{"fromId": "a", "toId": "c", "props": {}}],
+                        "dev2",
+                        decision_policy=decision_policy(),
+                    )
+                    original_commit()
+
+                session.commit = commit_after_other_writer
+            return session
+
+        monkeypatch.setattr(service, "sf", factory)
+        result = service.park_or_rewrite_edges(
+            "LINK",
+            [{"fromId": "a", "toId": "b", "props": {}}],
+            "dev2",
+            decision_policy=decision_policy(),
+        )
+        assert result["parked"] == 1
+        with original_factory() as session:
+            pending = json.loads(session.get(ReviewCase, case_id).candidate_snapshot)[
+                "_pendingRelations"
+            ]
+        assert {rel["toId"] for rel in pending} == {"b", "c"}
+
+    def test_park_attach_racing_submit_fails_closed_then_reroutes(self, service, monkeypatch):
+        # park 与 submit：外层 park 按 OPEN 分类后、attach 落库前裁决先提交 →
+        # CAS 短事务同读状态+快照 → 失败关闭（不产孤儿暂存边）；活动重试后按
+        # 终态处置重路由（create 放行写图，边不丢）
+        a_id = _link_case(service, vid="a")
+        orig = ManualReviewService._cas_mutate_case_snapshot
+        fired: list = []
+
+        def wrapper(self_, case_id_, mutate, **kw):
+            if not fired:
+                fired.append(case_id_)
+                _resolve(service, a_id, result={"entityVerdict": "create"})
+            return orig(self_, case_id_, mutate, **kw)
+
+        monkeypatch.setattr(ManualReviewService, "_cas_mutate_case_snapshot", wrapper)
+        with pytest.raises(RuntimeError):
+            service.park_or_rewrite_edges(
+                "LINK",
+                [{"fromId": "a", "toId": "b", "props": {}}],
+                "dev2",
+                decision_policy=decision_policy(),
+            )
+        assert fired  # 交错真实发生
+        with service.sf() as s:
+            snap = json.loads(s.get(ReviewCase, a_id).candidate_snapshot)
+        assert snap["_pendingRelations"] == []  # 案已终态：无孤儿暂存边
+        # 活动重试：终态 create+APPLIED → 端点放行（去向=写图，唯一且一致）
+        out = service.park_or_rewrite_edges(
+            "LINK",
+            [{"fromId": "a", "toId": "b", "props": {}}],
+            "dev2",
+            decision_policy=decision_policy(),
+        )
+        assert out == {
+            "records": [{"fromId": "a", "toId": "b", "props": {}}],
+            "parked": 0,
+            "dropped": 0,
+        }
+
+    def test_flush_transfer_racing_other_endpoint_submit_keeps_edge_accounted(
+        self, service, monkeypatch
+    ):
+        # 转交与另一端 submit：a 案补边转交 b 案前，b 案被并发驳回 → 转交
+        # attach 失败关闭（a APPLY_FAILED 走人工重应用），边仍耐久记在 a 案
+        # 快照、b 案零孤儿挂边——成功确认的边不丢、去向唯一
+        a_id = _link_case(service, vid="a")
+        b_id = _link_case(service, vid="b")
+        with service.sf() as s:
+            c = s.get(ReviewCase, a_id)
+            snap = json.loads(c.candidate_snapshot)
+            snap["_pendingRelations"] = [
+                {"edgeType": "LINK", "fromId": "a", "toId": "b", "props": {}}
+            ]
+            c.candidate_snapshot = json.dumps(snap, ensure_ascii=False)
+            s.commit()
+        TestFlushPendingRelationsR6._fake_graph(None, monkeypatch)
+        orig = ManualReviewService._cas_mutate_case_snapshot
+        fired: list = []
+
+        def wrapper(self_, case_id_, mutate, **kw):
+            if case_id_ == b_id and not fired:
+                fired.append(case_id_)
+                _resolve(
+                    service, b_id, action="reject-candidate", result={"entityVerdict": "reject"}
+                )
+            return orig(self_, case_id_, mutate, **kw)
+
+        monkeypatch.setattr(ManualReviewService, "_cas_mutate_case_snapshot", wrapper)
+        from service.manual_review_domain import ReviewConflictError
+
+        with pytest.raises((RuntimeError, ReviewConflictError)):
+            service.submit(a_id, 1, "entity-confirm", {"entityVerdict": "create"}, "裁决", actor())
+        assert fired  # 交错真实发生
+        assert _open_case_status(service, a_id) == "APPLY_FAILED"
+        assert _open_case_status(service, b_id) == "RESOLVED"
+        with service.sf() as s:
+            snap_a = json.loads(s.get(ReviewCase, a_id).candidate_snapshot)
+            snap_b = json.loads(s.get(ReviewCase, b_id).candidate_snapshot)
+        assert snap_a["_pendingRelations"] == [
+            {"edgeType": "LINK", "fromId": "a", "toId": "b", "props": {}}
+        ]  # 边耐久记在 a 案：不丢，待人工重应用通道收敛（另批）
+        assert snap_b["_pendingRelations"] == []  # b 案无孤儿挂边（去向唯一）

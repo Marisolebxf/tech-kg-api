@@ -1605,6 +1605,69 @@ class ManualReviewService:
             kept.append(out)
         return {"records": kept, "parked": len(parked_records), "dropped": dropped}
 
+    def _cas_mutate_case_snapshot(
+        self,
+        case_id: str,
+        mutate,
+        *,
+        require_submittable: bool = False,
+        max_attempts: int = 8,
+    ):
+        """案件快照乐观 CAS 短事务读改写（R6-b）。
+
+        park attach / 转交 / 裁决摘除共用同一并发约束：每次尝试在独立短事务
+        内重读最新 ``(version, status, candidate_snapshot)``，条件 UPDATE 以
+        **双谓词**守卫（等价同事务锁定重读）：
+
+        - ``version = 读值``：submit 的 version CAS 预留会递增 version——裁决
+          与 park 互斥，案件转终态后 attach 必然失配重试（重读状态后失败
+          关闭），不产孤儿暂存边；
+        - ``candidate_snapshot = 读到的原字节``：park 与 park 互斥（park 不递增
+          version，不占用 submit 的乐观锁梯子——评审端提交版本号不因暂存边
+          到达而失效）。
+
+        ``mutate`` 就地修改快照，返回值在提交成功后透传。``rowcount = 0``
+        （并发提交抢先）整体重试，重试基于他人刚提交的新快照再次套用——成功
+        park 的边不丢。重试耗尽抛 RuntimeError（失败关闭：activity 失败、
+        来源水位不推进）。
+
+        ``require_submittable``（park attach 用）：同事务重读发现案件已转
+        终态（裁决先落库）时不追加，抛 RuntimeError 让调用方重试重路由——
+        杜绝「裁决已定、边后到被挂进永不再看的快照」的孤儿边。
+        """
+        for _ in range(max_attempts):
+            with self.sf() as s:
+                row = s.execute(
+                    select(
+                        ReviewCase.version,
+                        ReviewCase.status,
+                        ReviewCase.candidate_snapshot,
+                    ).where(ReviewCase.id == case_id)
+                ).first()
+                if row is None:
+                    return None  # 案件行已不存在：调用方按自身语义处置
+                if require_submittable and row.status not in SUBMITTABLE_STATUSES:
+                    raise RuntimeError("capture 案在暂存落库前已转终态，失败关闭重试重路由")
+                snapshot = load(row.candidate_snapshot) or {}
+                out = mutate(snapshot)
+                stale_bytes = row.candidate_snapshot
+                snapshot_pred = (
+                    ReviewCase.candidate_snapshot == stale_bytes
+                    if stale_bytes is not None
+                    else ReviewCase.candidate_snapshot.is_(None)
+                )
+                reserved = s.execute(
+                    update(ReviewCase)
+                    .where(ReviewCase.id == case_id, ReviewCase.version == row.version)
+                    .where(snapshot_pred)
+                    .values(candidate_snapshot=dump(snapshot), updated_at=now())
+                )
+                if reserved.rowcount == 1:
+                    s.commit()
+                    return out
+                s.rollback()
+        raise RuntimeError("案件快照并发冲突重试耗尽（park/裁决补边失败关闭）")
+
     def _park_edges_v2(
         self,
         s: Any,
@@ -1628,6 +1691,12 @@ class ManualReviewService:
         ``live_resolved_vids``（R6，裁决补边路径专用）：本次裁决已活的端点
         （创建落点 / merge 目标）——凭评审员当次决议直接放行，跳过案件路由
         （含该端点上无关的开放案，避免评审员已定的边被别的案再扣）。
+
+        R6-b：attach 不再「读快照→内存追加→整体覆盖提交」（两个 worker 并发
+        park 同案会互相覆盖、都报成功、被覆盖边永不可见），改走
+        ``_cas_mutate_case_snapshot`` 版本 CAS 短事务——park、转交、摘除与
+        submit 的 version CAS 共用一致并发约束；案件落库前转终态（并发裁决
+        先提交）失败关闭，重试后按终态处置重路由，不产孤儿暂存边。
         """
         live = {str(v) for v in (live_resolved_vids or ())}
         open_by_vid: dict[str, list[ReviewCase]] = {}
@@ -1745,24 +1814,32 @@ class ManualReviewService:
                 for v in (str(record.get("fromId")), str(record.get("toId")))
                 if v in capture_by_vid
             )
-            case = capture_by_vid[vid]
-            snapshot = load(case.candidate_snapshot) or {}
-            pending = snapshot.setdefault("_pendingRelations", [])
             rel = {
                 "edgeType": edge_type,
                 "fromId": str(record.get("fromId")),
                 "toId": str(record.get("toId")),
                 "props": record.get("props") or {},
             }
-            if not any(
-                p.get("edgeType") == rel["edgeType"]
-                and p.get("fromId") == rel["fromId"]
-                and p.get("toId") == rel["toId"]
-                for p in pending
-            ):
-                pending.append(rel)
-                case.candidate_snapshot = dump(snapshot)
-                case.updated_at = now()
+
+            # R6-b：attach 走版本 CAS 短事务（不再内存改快照后整体覆盖提交）。
+            # 并发 park 同案在 version 守卫下串行化：后到者读到先到者刚提交的
+            # 快照再追加，双方成功确认的边都保留；案件在落库前转终态则失败
+            # 关闭重试重路由（require_submittable）。
+            def _attach(snapshot: dict[str, Any], _rel: dict[str, Any] = rel) -> None:
+                pending = snapshot.setdefault("_pendingRelations", [])
+                if not any(
+                    p.get("edgeType") == _rel["edgeType"]
+                    and p.get("fromId") == _rel["fromId"]
+                    and p.get("toId") == _rel["toId"]
+                    for p in pending
+                ):
+                    pending.append(_rel)
+
+            self._cas_mutate_case_snapshot(
+                str(capture_by_vid[vid].id), _attach, require_submittable=True
+            )
+        # 外层读事务收尾提交：快照写入已全部走 CAS 短事务，此处无脏对象；
+        # 保留 commit 维持事务边界语义（长事务不再覆写 candidate_snapshot）
         s.commit()
         kept: list[dict[str, Any]] = []
         dropped = 0
@@ -2097,7 +2174,7 @@ class ManualReviewService:
 
         written = parked = dropped = 0
         remaining: list[dict[str, Any]] = []
-        handled = False
+        handled_rels: list[dict[str, Any]] = []
         edge_fields: dict[str, set[str] | None] = {}
         for rel in pending_rels:
             edge_type = rel.get("edgeType")
@@ -2149,17 +2226,30 @@ class ManualReviewService:
                 )
                 written += 1
             if routed["parked"] or routed["dropped"] or routed["records"]:
-                handled = True
-        if handled:
-            # 已处置边（转交/丢弃/写出）从本案快照摘除并落库；同步改内存对象，
-            # 调用方 detail 视图不回显陈旧挂起边
+                handled_rels.append(rel)
+        if handled_rels:
+            # 已处置边（转交/丢弃/写出）从本案快照摘除（R6-b：版本 CAS 短事务
+            # 按 (edgeType, fromId, toId) 精确摘除——并发 park 在窗口内追加的
+            # 新边不在摘除清单内，不丢）；同步改内存对象，调用方 detail 视图
+            # 不回显陈旧挂起边
             snapshot["_pendingRelations"] = remaining
-            with self.sf() as sx:
-                cx = sx.scalar(select(ReviewCase).where(ReviewCase.id == c.id))
-                if cx is not None:
-                    cx.candidate_snapshot = dump(snapshot)
-                    cx.updated_at = now()
-                    sx.commit()
+
+            def _detach(current: dict[str, Any]) -> None:
+                keys = {
+                    (str(r.get("edgeType")), str(r.get("fromId")), str(r.get("toId")))
+                    for r in handled_rels
+                }
+                current["_pendingRelations"] = [
+                    r2
+                    for r2 in (current.get("_pendingRelations") or [])
+                    if not (
+                        isinstance(r2, dict)
+                        and (str(r2.get("edgeType")), str(r2.get("fromId")), str(r2.get("toId")))
+                        in keys
+                    )
+                ]
+
+            self._cas_mutate_case_snapshot(str(c.id), _detach)
             c.candidate_snapshot = dump(snapshot)
         return written, parked, dropped
 

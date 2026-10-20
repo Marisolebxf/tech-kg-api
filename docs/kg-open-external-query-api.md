@@ -36,7 +36,7 @@ X-API-Key: <管理员签发的密钥>
 - 3 个接口统一要求 `kg-open:read`。只有 `project-relations:read` 的旧凭证不能调用这些接口。
 - 凭证由本系统自己的 `external_api_client` 表管理，不需要调用方登录统一用户中心；每个业务系统单独签发，不要共用其他系统的凭证。
 - API Key 为 32 字节安全随机数，数据库只存 SHA-256 摘要。明文仅创建或轮换时显示一次。
-- 默认有效期 **90 天**；签发/轮换可指定 `--expires-days 1～3650`。精确过期时刻为签发 UTC 时刻加指定天数；请求不会续期。
+- 默认有效期 **365 天**；签发/轮换可指定 `--expires-days 1～3650`。精确过期时刻为签发 UTC 时刻加指定天数；请求不会续期。
 - 带任一 API Key Header 就选择机器认证，缺项、重复、错误、过期或停用均拒绝，不回退到 Bearer/Cookie。
 - 不带两个 API Key Header 时，兼容平台用户的 Bearer/Cookie 认证和空间读权限检查。
 - 固定查询后端 `TRS_GRAPH_SPACE` 配置的默认空间，未配置时为 `dev`。请求中的 `space`、`graphSpace` 和 `X-Graph-Space` 不用于切换空间。
@@ -90,30 +90,204 @@ X-API-Key: <管理员签发的密钥>
 
 ## 4. 接口明细
 
-### 4.1 GET `/schema`
+三个接口的外层响应壳一致（`code` / `success` / `data` / `msg`），`data` 内均含生效的 `space`。以下仅描述 `data` 中的业务字段。
 
-无业务入参。返回目录库中的有效类型，包含：
+### 4.1 GET `/schema` — 查询类型目录
 
-| 字段 | 说明 |
-|---|---|
-| `entityTypes[]` | `name`、`displayName`、`description`、`properties[]`、`count`、`countIsEstimate` |
-| `relationTypes[]` | 上述字段，另有 `sourceType`、`targetType` |
-| `properties[]` | `{name, type, required}`，是目录定义，不保证每条实体都有值 |
-| `statsAvailable` | 是否取得图统计；无统计时各 count 为 -1，仍返回目录 |
+**用途**：一次性返回当前图谱全部有效的实体类型与关系类型定义（类型编码、显示名、描述、属性清单、关系端点），并附每类的参考计数。这是调用另外两个接口的前提——先从本接口拿到合法的类型编码 `name`，再去做分页枚举；类型编码不存在时枚举接口直接返回 404。
 
-类型名以 `name` 为准，不能使用中文 `displayName` 代替。端点定义可能用 `|` 表示多个实体类型，如 `Paper|Patent|Report`。
+**输入参数**：无业务入参，仅携带认证 Header。
 
-### 4.2 GET `/entity-types/{name}/entities`
+**输出参数**（`data`）：
 
-`name` 为目录中的实体类型编码（`[A-Za-z_][A-Za-z0-9_]{0,127}`）。Query 参数：`limit`、`cursor`，兼容旧 `offset`。
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `space` | string | 实际生效的图空间（固定默认业务空间） |
+| `entityTypes` | array | 实体类型列表，元素结构见下表 |
+| `relationTypes` | array | 关系类型列表，元素结构见下表 |
+| `statsAvailable` | bool | 是否取得了图统计；false 时所有 `count` 均为 -1，目录仍正常返回 |
 
-返回：`entityType`、`entities[]`、`limit`、`offset`、`hasMore`、`nextCursor`、`total`、`totalIsEstimate`、`relationTypes[]`（该实体类型参与的关系类名）。本接口列出实体，**不会自动返回这些实体的所有关联边**。
+`entityTypes[]` / `relationTypes[]` 元素结构：
 
-### 4.3 GET `/relation-types/{name}/edges`
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `name` | string | 类型编码。调用 4.2 / 4.3 时传这个值，**不能用中文 `displayName` 代替** |
+| `displayName` | string | 中文显示名，仅用于界面展示 |
+| `description` | string | 类型描述，可为空字符串 |
+| `properties` | array | 属性定义列表，元素 `{name, type, required}`：属性编码、目录登记的数据类型（string/int/float/bool 等）、目录定义是否必填。这只是目录定义，不保证每条实体/边上该属性有值 |
+| `count` | int | 该类型的参考计数（SHOW STATS 快照，约 300 秒缓存）；未知为 **-1** |
+| `countIsEstimate` | bool | 恒为 true，`count` 是估计值不是精确总数 |
+| `sourceType` | string | 仅 `relationTypes`：关系起点实体类型编码。端点定义可能用 `\|` 表示多个实体类型，如 `Paper\|Patent\|Report` |
+| `targetType` | string | 仅 `relationTypes`：关系终点实体类型编码，规则同上 |
 
-`name` 为目录中的关系类型。Query 参数：`limit`、`cursor`、兼容旧 `offset`，以及 `includeEntities`（默认 true）。
+**响应示例**（截短，仅保留 1 个类型）：
 
-返回：`relationType`、`edges[]`、`limit`、`offset`、`hasMore`、`nextCursor`、`total`、`totalIsEstimate`。
+```json
+{
+  "code": 200, "success": true, "msg": "success",
+  "data": {
+    "space": "dev",
+    "statsAvailable": true,
+    "entityTypes": [
+      {
+        "name": "Paper", "displayName": "论文", "description": "",
+        "properties": [
+          {"name": "id", "type": "string", "required": true},
+          {"name": "title_zh", "type": "string", "required": false},
+          {"name": "doi", "type": "string", "required": false}
+        ],
+        "count": 92000, "countIsEstimate": true
+      }
+    ],
+    "relationTypes": [
+      {
+        "name": "AUTHORED_BY", "displayName": "作者关系", "description": "",
+        "properties": [{"name": "confidence", "type": "float", "required": false}],
+        "sourceType": "Paper", "targetType": "Person",
+        "count": -1, "countIsEstimate": true
+      }
+    ]
+  }
+}
+```
+
+### 4.2 GET `/entity-types/{name}/entities` — 按实体类型枚举实体
+
+**用途**：分页枚举指定实体类型下的全部实体，返回每个实体的完整属性。本接口只返回点，**不返回边**——也不会自动附带这些实体参与的关联边；需要边和两端实体一起返回时使用 4.3。
+
+**输入参数**：
+
+路径参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `name` | string | 是 | 实体类型编码（`/schema` 返回的 `entityTypes[].name`），须匹配 `[A-Za-z_][A-Za-z0-9_]{0,127}`；不匹配返回 400，目录中不存在返回 404 |
+
+Query 参数：
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `limit` | int | 否 | 20 | 页大小，范围 1～500 |
+| `cursor` | string | 否 | 空串 | 翻页游标。首页不传或传空串；之后原样回传上一页 `nextCursor`。最长 4096 字符；与服务端记录的空间/接口/类型绑定，换类型必须从头开始；与 `offset` 非零值同传返回 400 |
+| `offset` | int | 否 | 0 | 旧 offset 分页兼容参数，范围 0～10000000。新调用方一律使用 `cursor` |
+
+**输出参数**（`data`）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `entityType` | string | 本次查询的实体类型编码（回显） |
+| `entities` | array | 实体列表，元素结构见下；按 `id`（VID）升序排列 |
+| `limit` | int | 生效页大小（回显） |
+| `offset` | int | 生效 offset（回显；cursor 翻页时为 0） |
+| `hasMore` | bool | 是否还有下一页，**翻页结束的唯一依据**（不要用 total 判断） |
+| `nextCursor` | string | 下一页游标；`hasMore=false` 时为空字符串 |
+| `total` | int | 该类型参考总数（SHOW STATS 快照）；未知为 -1 |
+| `totalIsEstimate` | bool | 恒为 true |
+| `relationTypes` | array[string] | 该实体类型作为起点或终点参与的关系类型编码列表，提示可用 4.3 继续枚举这些边 |
+
+`entities[]` 元素结构：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | string | 实体 VID，原样保存使用，可含 `/` 等字符，**不要从中解析业务信息** |
+| `type` | string | 第一个标签（兼容旧调用方的字段） |
+| `types` | array[string] | 该实体的全部标签 |
+| `name` | string | 便捷名称：优先取属性 `name`，其次 `title`，均无为空字符串 |
+| `properties` | object | 该实体全部属性的键值对，完整返回，值可为 null |
+
+**响应示例**（`limit=1` 截短）：
+
+```json
+{
+  "code": 200, "success": true, "msg": "success",
+  "data": {
+    "space": "dev", "entityType": "Paper",
+    "entities": [
+      {
+        "id": "paper_100000040", "type": "Paper", "types": ["Paper"], "name": "",
+        "properties": {
+          "doi": "10.1515/zna-2023-0322",
+          "title_zh": "自旋1/2简并致密量子等离子体中的磁声波：非线性动力学与耗散效应"
+        }
+      }
+    ],
+    "limit": 1, "offset": 0, "hasMore": true,
+    "nextCursor": "eyJ2IjogMSwgInNjb3BlIjogIjk1MDUzMjY5NzI1MmU2OTE0NmQ5MjEx...",
+    "total": 92000, "totalIsEstimate": true,
+    "relationTypes": ["AUTHORED_BY", "CITED_BY"]
+  }
+}
+```
+
+示例中 `name` 为空字符串：该实体没有 `name`/`title` 属性，标题在 `title_zh`。需要展示名称时自行从 `properties` 里取合适的字段。
+
+### 4.3 GET `/relation-types/{name}/edges` — 按关系类型枚举边
+
+**用途**：分页枚举指定关系类型下的全部边，返回每条边的完整属性；`includeEntities=true`（默认）时同时附带两端实体的完整数据，通过 `source`/`target` 与实体 `id` 对齐。**需要"点+边"一起拿数据时使用本接口**；只想要点用 4.2 更快。
+
+**输入参数**：
+
+路径参数：`name` — 关系类型编码（`/schema` 返回的 `relationTypes[].name`），命名规则与错误码同 4.2。
+
+Query 参数：
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `limit` | int | 否 | 20 | 页大小，范围 1～500 |
+| `cursor` | string | 否 | 空串 | 翻页游标，规则同 4.2；本接口游标绑定 `(source, target, rank)` 三键位置 |
+| `offset` | int | 否 | 0 | 旧 offset 分页兼容参数，规则同 4.2 |
+| `includeEntities` | bool | 否 | true | 是否附带两端实体对象。false 时每条边省略 `sourceEntity`/`targetEntity` 字段，响应更小；已用 4.2 单独枚举过实体时建议关闭以减少重复传输 |
+
+**输出参数**（`data`）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `relationType` | string | 本次查询的关系类型编码（回显） |
+| `edges` | array | 边列表，元素结构见下；按 `(source, target, rank)` 升序排列 |
+| `limit` / `offset` / `hasMore` / `nextCursor` / `total` / `totalIsEstimate` | — | 语义与 4.2 对应字段完全一致 |
+
+`edges[]` 元素结构：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | string | 服务端生成的完整关系标识，即 JSON 数组字符串 `["类型","source","target",rank]`，调用方原样保存即可，不要自行拼接 |
+| `type` | string | 关系类型编码 |
+| `source` | string | 起点实体 VID（始终为存储方向） |
+| `target` | string | 终点实体 VID（始终为存储方向，入向查询也不会反转） |
+| `rank` | int | 边 rank（int64）。相同两端可存在多条不同 rank 的平行边；完整去重键 = `(type, source, target, rank)` |
+| `properties` | object | 该边全部属性的键值对，值可为 null |
+| `sourceEntity` | object 或 null | 起点实体对象，结构同 4.2 的 `entities[]` 元素；端点实体在图中不存在（悬挂边）时为 **null，不伪造实体** |
+| `targetEntity` | object 或 null | 终点实体对象，规则同上 |
+
+`includeEntities=false` 时 `sourceEntity`/`targetEntity` 两个字段整体省略（不是 null）。
+
+**响应示例**（`limit=1` 截短）：
+
+```json
+{
+  "code": 200, "success": true, "msg": "success",
+  "data": {
+    "space": "dev", "relationType": "ACTUAL_CONTROLLER_OF",
+    "edges": [
+      {
+        "id": "[\"ACTUAL_CONTROLLER_OF\",\"person_15f36a9c...\",\"org_MOCK_...\",7889892470359242357]",
+        "type": "ACTUAL_CONTROLLER_OF",
+        "source": "person_15f36a9cd43ddbe691e002fde0498cd5",
+        "target": "org_MOCK_FORG_20260721_036",
+        "rank": 7889892470359242357,
+        "properties": {"confidence": 0.95, "direct_pct": 85.0},
+        "sourceEntity": {"id": "person_15f36a9cd43ddbe691e002fde0498cd5", "type": "Person",
+                          "types": ["Person"], "name": "谭某某", "properties": {"...": "..."}},
+        "targetEntity": {"id": "org_MOCK_FORG_20260721_036", "type": "Organization",
+                          "types": ["Organization"], "name": "Mei Tan Demo Holdings", "properties": {"...": "..."}}
+      }
+    ],
+    "limit": 1, "offset": 0, "hasMore": true,
+    "nextCursor": "eyJ2IjogMSwgInNjb3BlIjog...",
+    "total": -1, "totalIsEstimate": true
+  }
+}
+```
 
 ## 5. 完整调用示例
 

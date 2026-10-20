@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ClearableInput from '../../components/ClearableInput.vue'
 import { useSpacePermissions } from "../../composables/use-space-permissions"
 const { canReview } = useSpacePermissions()
 
@@ -673,7 +674,7 @@ const runPrimary = () => {
             <tbody>
               <tr v-for="[key, val] in directCandidateFields" :key="String(key)" :class="{ 'is-edited': directEditing && directEdits[key] !== undefined && directEdits[key] !== directOriginalText(val) }">
                 <th>{{ key }}</th>
-                <td v-if="directEditing"><input aria-label="directEdits[key]" v-model="directEdits[key]" :disabled="!isEditable" :placeholder="directOriginalText(val)" /></td>
+                <td v-if="directEditing"><ClearableInput aria-label="directEdits[key]" v-model="directEdits[key]" :disabled="!isEditable" :placeholder="directOriginalText(val)" /></td>
                 <td v-else>{{ directOriginalText(val) }}</td>
               </tr>
             </tbody>

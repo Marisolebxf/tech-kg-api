@@ -104,15 +104,15 @@ async function loadColumns() {
 }
 
 function onDatasourceChange(value: ArcoSelectValue | undefined) {
-  patch({ datasourceId: asString(value), databaseName: '', tableName: '', pkColumn: 'id', timeColumn: 'update_time' })
+  patch({ datasourceId: asString(value), databaseName: '', tableName: '', pkColumn: value ? 'id' : '', timeColumn: value ? 'update_time' : '' })
 }
 
 function onDatabaseChange(value: ArcoSelectValue | undefined) {
-  patch({ databaseName: asString(value), tableName: '', pkColumn: 'id', timeColumn: 'update_time' })
+  patch({ databaseName: asString(value), tableName: '', pkColumn: value ? 'id' : '', timeColumn: value ? 'update_time' : '' })
 }
 
 function onTableChange(value: ArcoSelectValue | undefined) {
-  patch({ tableName: asString(value), pkColumn: 'id', timeColumn: 'update_time' })
+  patch({ tableName: asString(value), pkColumn: value ? 'id' : '', timeColumn: value ? 'update_time' : '' })
 }
 
 watch(
@@ -162,7 +162,7 @@ function applyColumnDefaults() {
 
 <template>
   <div class="source-binding-row">
-    <a-select
+    <a-select allow-clear
       :model-value="row.datasourceId"
       class="source-binding-row__select source-binding-row__ds"
       :title="dsLabel(row.datasourceId)"
@@ -177,7 +177,7 @@ function applyColumnDefaults() {
         {{ ds.name }}（{{ ds.host }}）
       </a-option>
     </a-select>
-    <a-select
+    <a-select allow-clear
       :model-value="row.databaseName"
       class="source-binding-row__select source-binding-row__db"
       :title="row.databaseName"
@@ -190,7 +190,7 @@ function applyColumnDefaults() {
     >
       <a-option v-for="db in databases" :key="db" :value="db" :title="db">{{ db }}</a-option>
     </a-select>
-    <a-select
+    <a-select allow-clear
       :model-value="row.tableName"
       class="source-binding-row__select source-binding-row__table"
       :title="row.tableName"
@@ -203,7 +203,7 @@ function applyColumnDefaults() {
     >
       <a-option v-for="t in tables" :key="t.name" :value="t.name" :title="t.name">{{ t.name }}</a-option>
     </a-select>
-    <a-select
+    <a-select allow-clear
       :model-value="row.pkColumn"
       class="source-binding-row__select source-binding-row__col"
       :title="row.pkColumn"

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import ClearableTextarea from '../../components/ClearableTextarea.vue'
+import ClearableInput from '../../components/ClearableInput.vue'
 import { vDialogFocus } from '../../directives/dialog-focus'
 import AppAlert from '../../components/AppAlert.vue'
 import { useSpacePermissions } from "../../composables/use-space-permissions"
@@ -415,6 +417,10 @@ async function submitAddProperty() {
   const propNameError = validateText('属性名', name, PROP_NAME_RULE)
   if (propNameError) {
     showToast(propNameError, 'warning')
+    return
+  }
+  if (!propertyForm.value.dataType) {
+    showToast('请选择属性类型', 'warning')
     return
   }
   if (propertyForm.value.dataType === 'fixed_string') {
@@ -871,6 +877,10 @@ async function saveItem() {
     showToast('至少添加一个属性', 'warning')
     return
   }
+  if (props.some((p) => !p.dataType)) {
+    showToast('请选择每个属性的类型', 'warning')
+    return
+  }
   const lengthError = firstFixedLengthError(props)
   if (lengthError) {
     showToast(lengthError, 'warning')
@@ -1236,7 +1246,7 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
         <button class="primary schema-tabs__create" type="button" :disabled="!canWrite" @click="openCreate">＋ 增加</button>
         <form class="schema-toolbar__actions" role="search" @submit.prevent="submitKeyword">
           <span class="limit-field">
-            <a-input v-model="keyword" class="schema-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" :aria-label="`搜索${activeTab}`" :placeholder="`搜索${activeTab}`" />
+            <a-input allow-clear v-model="keyword" class="schema-search-input" :max-length="SEARCH_KEYWORD_MAX_LENGTH" :aria-label="`搜索${activeTab}`" :placeholder="`搜索${activeTab}`" />
             <span v-if="atLimit(keyword, SEARCH_KEYWORD_MAX_LENGTH)" class="limit-field__hint">已达 {{ SEARCH_KEYWORD_MAX_LENGTH }} 字上限，无法继续输入</span>
           </span>
           <button class="primary" type="submit" :disabled="listLoading">查询</button>
@@ -1278,24 +1288,24 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
           <a-form ref="createFormRef" :model="createForm" :rules="createFormRules" class="schema-modal__body schema-create-body" layout="vertical" :inert="creating">
             <div class="create-row">
               <a-form-item class="create-field create-field--limit-note" field="name" :label="isRelationTab() ? '关系英文名' : '实体名'" required>
-                <input aria-label="name" v-model="createForm.name" class="create-text-input" :class="{ 'is-at-limit': atLimit(createForm.name, nameRuleMax) }" :maxlength="nameRuleMax" :placeholder="isRelationTab() ? 'USES_TECHNOLOGY' : 'Gadget'" />
+                <ClearableInput aria-label="name" v-model="createForm.name" class="create-text-input" :class="{ 'is-at-limit': atLimit(createForm.name, nameRuleMax) }" :maxlength="nameRuleMax" :placeholder="isRelationTab() ? 'USES_TECHNOLOGY' : 'Gadget'" />
                 <p v-if="atLimit(createForm.name, nameRuleMax)" class="limit-field-note">已达 {{ nameRuleMax }} 字上限，无法继续输入</p>
               </a-form-item>
               <a-form-item class="create-field create-field--limit-note" field="label" label="中文名" required>
-                <input aria-label="如：技术" v-model="createForm.label" class="create-text-input" :class="{ 'is-at-limit': atLimit(createForm.label, SCHEMA_LABEL_RULE.max) }" :maxlength="SCHEMA_LABEL_RULE.max" placeholder="如：技术" />
+                <ClearableInput aria-label="如：技术" v-model="createForm.label" class="create-text-input" :class="{ 'is-at-limit': atLimit(createForm.label, SCHEMA_LABEL_RULE.max) }" :maxlength="SCHEMA_LABEL_RULE.max" placeholder="如：技术" />
                 <p v-if="atLimit(createForm.label, SCHEMA_LABEL_RULE.max)" class="limit-field-note">已达 {{ SCHEMA_LABEL_RULE.max }} 字上限，无法继续输入</p>
               </a-form-item>
             </div>
 
             <div v-if="isRelationTab()" class="create-row">
               <a-form-item class="create-field" field="sourceEntityId" label="起点实体" label-component="div" required>
-                <a-select v-model="createForm.sourceEntityId" class="schema-select" placeholder="请选择" popup-container=".schema-create-modal" :scrollbar="false">
+                <a-select allow-clear v-model="createForm.sourceEntityId" class="schema-select" placeholder="请选择" popup-container=".schema-create-modal" :scrollbar="false">
                   <a-option v-for="e in entityOptions" :key="e.id" :value="e.id">{{ e.name }}（{{ e.label }}）</a-option>
                   <template #empty>当前图空间暂无实体 Schema，请先新增实体</template>
                 </a-select>
               </a-form-item>
               <a-form-item class="create-field" field="targetEntityId" label="终点实体" label-component="div" required>
-                <a-select v-model="createForm.targetEntityId" class="schema-select" placeholder="请选择" popup-container=".schema-create-modal" :scrollbar="false">
+                <a-select allow-clear v-model="createForm.targetEntityId" class="schema-select" placeholder="请选择" popup-container=".schema-create-modal" :scrollbar="false">
                   <a-option v-for="e in entityOptions" :key="e.id" :value="e.id">{{ e.name }}（{{ e.label }}）</a-option>
                   <template #empty>当前图空间暂无实体 Schema，请先新增实体</template>
                 </a-select>
@@ -1303,7 +1313,7 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
             </div>
 
             <a-form-item class="create-field create-field--full create-field--limit-note" field="description" label="说明">
-              <a-textarea v-model="createForm.description" class="schema-description-textarea" :max-length="SCHEMA_DESC_RULE.max" show-word-limit :auto-size="{ minRows: 3, maxRows: 5 }" />
+              <ClearableTextarea v-model="createForm.description" class="schema-description-textarea" :max-length="SCHEMA_DESC_RULE.max" show-word-limit :auto-size="{ minRows: 3, maxRows: 5 }" />
               <p v-if="atLimit(createForm.description, SCHEMA_DESC_RULE.max)" class="limit-field-note">已达 {{ SCHEMA_DESC_RULE.max }} 字上限，无法继续输入</p>
             </a-form-item>
             <a-form-item class="create-props" field="properties" required label-component="div">
@@ -1319,7 +1329,7 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
                 :class="{ 'create-prop-row--has-length': p.dataType === 'fixed_string', 'create-prop-row--locked': p.locked }"
               >
                 <a-form-item class="prop-name-field" :field="`properties.${i}.name`" :rules="[{ required: true, message: '请输入属性名称' }, { validator: validatePropName }]" hide-label>
-                  <input aria-label="属性名" v-model="p.name" :maxlength="PROP_NAME_RULE.max" placeholder="属性名" class="prop-name" :class="{ 'is-at-limit': !p.locked && atLimit(p.name, PROP_NAME_RULE.max) }" :disabled="!canWrite || p.locked" :title="p.locked ? '公共必选属性，不可修改' : undefined" />
+                  <ClearableInput aria-label="属性名" v-model="p.name" :maxlength="PROP_NAME_RULE.max" placeholder="属性名" class="prop-name" :class="{ 'is-at-limit': !p.locked && atLimit(p.name, PROP_NAME_RULE.max) }" :disabled="!canWrite || p.locked" :title="p.locked ? '公共必选属性，不可修改' : undefined" />
                 </a-form-item>
                 <template v-if="p.locked">
                   <span class="prop-locked-type">string</span>
@@ -1329,10 +1339,10 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
                   </span>
                 </template>
                 <template v-else>
-                  <a-select v-model="p.dataType" class="schema-select prop-type" popup-container=".schema-create-modal" :scrollbar="false">
+                  <a-select allow-clear v-model="p.dataType" class="schema-select prop-type" popup-container=".schema-create-modal" :scrollbar="false">
                     <a-option v-for="t in PROPERTY_TYPES" :key="t" :value="t">{{ t }}</a-option>
                   </a-select>
-                  <input aria-label="1~1024" v-if="p.dataType === 'fixed_string'" :value="p.length" type="text" inputmode="numeric" :maxlength="FIXED_STRING_MAX_INPUT_CHARS" class="prop-len" :class="{ 'prop-len--invalid': fixedLengthInvalid(p) }" :title="validateFixedLength(p.length) || undefined" placeholder="1~1024" @input="onLengthInput(p, $event)" />
+                  <ClearableInput aria-label="1~1024" v-if="p.dataType === 'fixed_string'" :value="p.length" type="text" inputmode="numeric" :maxlength="FIXED_STRING_MAX_INPUT_CHARS" class="prop-len" :class="{ 'prop-len--invalid': fixedLengthInvalid(p) }" :title="validateFixedLength(p.length) || undefined" placeholder="1~1024" @input="onLengthInput(p, $event)" />
                   <a-checkbox v-model="p.required" class="prop-required">必填</a-checkbox>
                   <button type="button" class="prop-remove" @click="removeProperty(i)" title="删除">×</button>
                 </template>
@@ -1478,11 +1488,11 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
             <div class="property-section">
               <div class="property-section__head"><strong>新增属性</strong><span>新增后在图库执行 ALTER ADD（可空列）</span></div>
               <div class="property-add-form">
-                <a-input :disabled="!canWrite || !propertyTarget?.canManageProperties" v-model="propertyForm.name" :max-length="PROP_NAME_RULE.max" aria-label="属性名（字母/数字/下划线）" placeholder="属性名（字母/数字/下划线）" class="property-add-form__name" :class="{ 'is-at-limit': atLimit(propertyForm.name, PROP_NAME_RULE.max) }" />
-                <a-select :disabled="!canWrite || !propertyTarget?.canManageProperties" v-model="propertyForm.dataType" class="property-add-form__type" popup-container=".property-modal" :scrollbar="false">
+                <a-input allow-clear :disabled="!canWrite || !propertyTarget?.canManageProperties" v-model="propertyForm.name" :max-length="PROP_NAME_RULE.max" aria-label="属性名（字母/数字/下划线）" placeholder="属性名（字母/数字/下划线）" class="property-add-form__name" :class="{ 'is-at-limit': atLimit(propertyForm.name, PROP_NAME_RULE.max) }" />
+                <a-select allow-clear :disabled="!canWrite || !propertyTarget?.canManageProperties" v-model="propertyForm.dataType" class="property-add-form__type" popup-container=".property-modal" :scrollbar="false">
                   <a-option v-for="t in PROPERTY_TYPES" :key="t" :value="t">{{ t }}</a-option>
                 </a-select>
-                <input :disabled="!canWrite || !propertyTarget?.canManageProperties" aria-label="1~1024" v-if="propertyForm.dataType === 'fixed_string'" :value="propertyForm.length" type="text" inputmode="numeric" :maxlength="FIXED_STRING_MAX_INPUT_CHARS" class="property-add-form__len" :class="{ 'property-add-form__len--invalid': propertyLengthInvalid }" :title="propertyLengthError || undefined" placeholder="1~1024" @input="onPropertyLengthInput" />
+                <ClearableInput :disabled="!canWrite || !propertyTarget?.canManageProperties" aria-label="1~1024" v-if="propertyForm.dataType === 'fixed_string'" :value="propertyForm.length" type="text" inputmode="numeric" :maxlength="FIXED_STRING_MAX_INPUT_CHARS" class="property-add-form__len" :class="{ 'property-add-form__len--invalid': propertyLengthInvalid }" :title="propertyLengthError || undefined" placeholder="1~1024" @input="onPropertyLengthInput" />
                 <a-checkbox :disabled="!canWrite || !propertyTarget?.canManageProperties" v-model="propertyForm.required" class="property-add-form__required">必填</a-checkbox>
                 <button type="button" class="primary" :disabled="!canWrite || !propertyTarget?.canManageProperties || propertySaving" @click="submitAddProperty">{{ propertySaving ? '新增中...' : '确认新增' }}</button>
               </div>

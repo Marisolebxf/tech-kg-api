@@ -87,9 +87,9 @@ const searchResults = ref<EntitySearchItem[]>([])
 // 检索结果列表可手动收起；新的检索命中时自动展开
 const startListVisible = ref(true)
 const startNode = ref<EntitySearchItem | null>(null)
-const depth = ref<GraphDepth>(3)
-const perHopLimit = ref(16)
-const direction = ref<GraphDirection>('both')
+const depth = ref<GraphDepth | undefined>(3)
+const perHopLimit = ref<number | undefined>(16)
+const direction = ref<GraphDirection | undefined>('both')
 const selectedEdgeTypes = ref<string[]>([])
 
 // ---------- 查询结果与展示过滤 ----------
@@ -440,9 +440,9 @@ async function autoPreview(): Promise<void> {
     const result = await browseEntities({ space: space.value || null, limit: 10 })
     if (context !== graphContextVersion) return
     const probeParams = {
-      depth: depth.value,
-      limit: perHopLimit.value,
-      direction: direction.value,
+      depth: depth.value ?? 3,
+      limit: perHopLimit.value ?? 16,
+      direction: direction.value ?? 'both',
       space: space.value || undefined,
     }
     for (const item of result.items) {
@@ -542,9 +542,9 @@ async function runQuery(vidOverride?: string, labelOverride?: string): Promise<v
   const context = graphContextVersion
   const edgeTypes = [...selectedEdgeTypes.value]
   const baseParams = {
-    depth: depth.value,
-    limit: perHopLimit.value,
-    direction: direction.value,
+    depth: depth.value ?? 3,
+    limit: perHopLimit.value ?? 16,
+    direction: direction.value ?? 'both',
   }
   querying.value = true
   selectedNodeId.value = null
@@ -585,9 +585,9 @@ async function runQuery(vidOverride?: string, labelOverride?: string): Promise<v
       space: space.value,
       vid,
       centerLabel: labelOverride ?? startNode.value?.name ?? vid,
-      depth: depth.value,
-      limit: perHopLimit.value,
-      direction: direction.value,
+      depth: depth.value ?? 3,
+      limit: perHopLimit.value ?? 16,
+      direction: direction.value ?? 'both',
       edgeTypes,
       time: formatQueryTimestamp(new Date()),
     }
@@ -647,11 +647,13 @@ function onEntityTypeSelect(value: unknown): void {
 }
 
 function onDepthSelect(value: unknown): void {
+  if (value == null || value === '') { depth.value = undefined; return }
   const n = Number(value)
   if (n === 1 || n === 2 || n === 3) depth.value = n
 }
 
 function onLimitInput(value: unknown): void {
+  if (value == null || value === '') { perHopLimit.value = undefined; return }
   const n = Math.round(Number(value))
   if (!Number.isFinite(n)) return
   // 与 a-input-number 的 min/max 同步夹紧，兜住手输越界值
@@ -659,6 +661,7 @@ function onLimitInput(value: unknown): void {
 }
 
 function onDirectionSelect(value: unknown): void {
+  if (value == null || value === '') { direction.value = undefined; return }
   const s = String(value)
   if (s === 'both' || s === 'out' || s === 'in') direction.value = s
 }
@@ -746,7 +749,7 @@ onUnmounted(() => {
           <div class="graphviz-field graphviz-field--grow">
             <label for="graphviz-keyword">起点检索（实体名称 / 关键词，无空格词可作 VID 直查）</label>
             <div class="graphviz-search">
-              <a-input
+              <a-input allow-clear
                 id="graphviz-keyword"
                 v-model="searchKeyword"
                 class="graphviz-input"
@@ -798,8 +801,9 @@ onUnmounted(() => {
         <div class="graphviz-form__grid graphviz-form__grid--params">
           <div class="graphviz-field">
             <label for="graphviz-depth">查询深度</label>
-            <a-select
+            <a-select allow-clear
               id="graphviz-depth"
+              placeholder="默认 3 跳"
               class="graphviz-select"
               :model-value="depth"
               :scrollbar="false"
@@ -810,8 +814,9 @@ onUnmounted(() => {
           </div>
           <div class="graphviz-field">
             <label for="graphviz-limit">每跳边数上限（1-256）</label>
-            <a-input-number
+            <a-input-number allow-clear
               id="graphviz-limit"
+              placeholder="默认 16"
               v-model="perHopLimit"
               class="graphviz-input-number"
               :min="PER_HOP_LIMIT_MIN"
@@ -824,8 +829,9 @@ onUnmounted(() => {
           </div>
           <div class="graphviz-field">
             <label for="graphviz-direction">查询方向</label>
-            <a-select
+            <a-select allow-clear
               id="graphviz-direction"
+              placeholder="默认双向"
               class="graphviz-select"
               :model-value="direction"
               :scrollbar="false"

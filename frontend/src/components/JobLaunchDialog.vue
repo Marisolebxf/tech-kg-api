@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ClearableInput from './ClearableInput.vue'
 import { vDialogFocus } from '../directives/dialog-focus'
 import { useSpacePermissions } from "../composables/use-space-permissions"
 const { canWrite } = useSpacePermissions()
@@ -111,8 +112,12 @@ const executionTime = ref('02:00')
 const weekday = ref(1)
 
 /** 预览与提交共用同一生成函数，所见即所得 */
-const schedulePreview = computed(() =>
-  describeCron(buildScheduleCron(frequency.value, executionTime.value, weekday.value)),
+const scheduleComplete = computed(() => Boolean(
+  frequency.value && executionTime.value && (frequency.value !== '每周' || weekday.value != null),
+))
+const schedulePreview = computed(() => scheduleComplete.value
+  ? describeCron(buildScheduleCron(frequency.value, executionTime.value, weekday.value))
+  : '请补全频率、星期和首次执行时间',
 )
 
 const submitting = ref(false)
@@ -126,7 +131,8 @@ const sinceError = computed(() =>
 const batchSizeError = computed(() => validateNumericField(extractBatchSize.value, { label: '批大小', min: 1, max: 5000 }))
 
 const canSubmit = computed(() => {
-  if (schemasLoading.value || !name.value.trim()) return false
+  if (schemasLoading.value || !name.value.trim() || !taskType.value) return false
+  if (executeMode.value === 'recurring' && !scheduleComplete.value) return false
   if (nameError.value || sinceError.value || batchSizeError.value) return false
   if (taskType.value === 'chain') {
     return chainSteps.value.length >= 2 && chainSteps.value.length <= CHAIN_SCHEMA_LIMIT
@@ -286,7 +292,7 @@ async function submit() {
         <div class="job-basics">
           <label class="job-field">
             <span><i class="job-required" aria-hidden="true">*</i>任务名称</span>
-            <input aria-label="如：论文-专家抽取" aria-required="true" v-model="name" :maxlength="JOB_NAME_RULE.max" placeholder="如：论文-专家抽取" />
+            <ClearableInput aria-label="如：论文-专家抽取" aria-required="true" v-model="name" :maxlength="JOB_NAME_RULE.max" placeholder="如：论文-专家抽取" />
             <small v-if="nameError" class="field-error">{{ nameError }}</small>
           </label>
           <div class="job-field">
@@ -299,7 +305,7 @@ async function submit() {
               >暂无可抽取 Schema——请先在 Schema 管理页上传抽取脚本并绑定来源表；若已配置过，请检查 Schema 所在图空间与当前「{{ graphSpace || '默认空间' }}」是否一致（平台总览的图空间选择器可切换）</small>
             </div>
             <!-- label 会把点击转发给 a-select 内部 input 造成"开→关"双切换，包 a-select 的字段一律用 div -->
-            <a-select v-model="taskType" class="job-select" aria-label="任务类型">
+            <a-select allow-clear v-model="taskType" class="job-select" aria-label="任务类型">
               <a-option value="extract">单脚本抽取</a-option>
               <a-option value="chain">多脚本串行</a-option>
             </a-select>
@@ -318,7 +324,7 @@ async function submit() {
           </div>
           <label class="job-field">
             <span>批大小（默认 500）</span>
-            <input aria-label="500" :value="extractBatchSize" type="number" min="1" max="5000" placeholder="500" @input="extractBatchSize = ($event.target as HTMLInputElement).value" />
+            <ClearableInput aria-label="500" :value="extractBatchSize" type="number" min="1" max="5000" placeholder="500" @input="extractBatchSize = ($event.target as HTMLInputElement).value" />
             <small v-if="batchSizeError" class="field-error">{{ batchSizeError }}</small>
           </label>
         </div>
@@ -347,7 +353,7 @@ async function submit() {
           <div class="job-row">
             <label class="job-field">
               <span>批大小（默认 500，对每个 Schema 生效）</span>
-              <input aria-label="500" :value="extractBatchSize" type="number" min="1" max="5000" placeholder="500" @input="extractBatchSize = ($event.target as HTMLInputElement).value" />
+              <ClearableInput aria-label="500" :value="extractBatchSize" type="number" min="1" max="5000" placeholder="500" @input="extractBatchSize = ($event.target as HTMLInputElement).value" />
               <small v-if="batchSizeError" class="field-error">{{ batchSizeError }}</small>
             </label>
           </div>
@@ -362,7 +368,7 @@ async function submit() {
           </div>
           <div class="job-field">
             <span>数据库</span>
-            <a-select v-model="mysqlDatabase" class="job-select" aria-label="数据库" :loading="false" :disabled="!mysqlDatasourceId" placeholder="选择数据库">
+            <a-select allow-clear v-model="mysqlDatabase" class="job-select" aria-label="数据库" :loading="false" :disabled="!mysqlDatasourceId" placeholder="选择数据库">
               <a-option v-for="db in mysqlDatabases" :key="db" :value="db" :title="db">{{ db }}</a-option>
             </a-select>
           </div>
@@ -376,7 +382,7 @@ async function submit() {
               <span class="field-help" tabindex="0" role="note" aria-label="增量游标说明">?</span>
             </a-tooltip>
           </div>
-          <input aria-label="如 2026-08-01 00:00:00" v-model="since" :maxlength="SINCE_RULE.max" placeholder="如 2026-08-01 00:00:00" />
+          <ClearableInput aria-label="如 2026-08-01 00:00:00" v-model="since" :maxlength="SINCE_RULE.max" placeholder="如 2026-08-01 00:00:00" />
           <small v-if="sinceError" class="field-error">{{ sinceError }}</small>
         </label>
 
@@ -393,11 +399,11 @@ async function submit() {
           <div v-if="executeMode === 'recurring'" class="job-row">
             <div class="job-field">
               <span>频率</span>
-              <a-select v-model="frequency" class="job-select" aria-label="频率" :options="['每天', '每12小时', '每6小时', '每周']" />
+              <a-select allow-clear v-model="frequency" class="job-select" aria-label="频率" :options="['每天', '每12小时', '每6小时', '每周']" />
             </div>
             <div v-if="frequency === '每周'" class="job-field">
               <span>星期</span>
-              <a-select v-model="weekday" class="job-select" aria-label="星期">
+              <a-select allow-clear v-model="weekday" class="job-select" aria-label="星期">
                 <a-option :value="1">周一</a-option>
                 <a-option :value="2">周二</a-option>
                 <a-option :value="3">周三</a-option>
@@ -409,7 +415,7 @@ async function submit() {
             </div>
             <label class="job-field">
               <span>首次执行时间</span>
-              <input aria-label="executionTime" v-model="executionTime" type="time" />
+              <ClearableInput aria-label="executionTime" v-model="executionTime" type="time" />
             </label>
           </div>
           <div v-else class="job-field checkbox-field job-mode-option">

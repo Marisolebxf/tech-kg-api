@@ -740,9 +740,13 @@ def _admin():
     "exec_status,expected",
     [
         ("COMPLETED", "RESOLVED"),
+        # MR-SYNC：案已 RESOLVED 但执行行仍 RUNNING（收尾在途/待同步）→ 如实
+        # 展示「重跑中」，不误报 RERUN_FAILED（写侧门控同口径 RUNNING 禁发）
+        ("RUNNING", "RERUNNING"),
         ("ABNORMAL", "RERUN_FAILED"),
         ("FAILED", "RERUN_FAILED"),
         ("CANCELED", "RERUN_FAILED"),
+        ("TERMINATED", "RERUN_FAILED"),
         ("TIMED_OUT", "RERUN_FAILED"),
         (None, "RERUN_FAILED"),  # 执行记录已缺失（控制库被清理）
     ],
@@ -787,6 +791,9 @@ def test_queue_status_derived_from_execution_summary(service, monkeypatch):
     gone = _bound_extract_fail_case(service, status="RESOLVED", rerun_execution_id="EXEC-GONE")
     stuck = _bound_extract_fail_case(service, status="RERUNNING", rerun_execution_id="EXEC-STUCK")
     running = _bound_extract_fail_case(service, status="RERUNNING", rerun_execution_id="EXEC-RUN")
+    # MR-SYNC 现场形态：案已被 workflow 结尾的 resolve activity 置 RESOLVED，但
+    # 执行行仍滞留 RUNNING（收尾在途）——此前被误报成 RERUN_FAILED
+    settle = _bound_extract_fail_case(service, status="RESOLVED", rerun_execution_id="EXEC-SETTLE")
     _patch_execution_statuses(
         monkeypatch,
         {
@@ -794,6 +801,7 @@ def test_queue_status_derived_from_execution_summary(service, monkeypatch):
             "EXEC-BAD": "ABNORMAL",
             "EXEC-STUCK": "FAILED",
             "EXEC-RUN": "RUNNING",
+            "EXEC-SETTLE": "RUNNING",
         },
     )  # EXEC-GONE 故意不在映射里 = 执行记录缺失
     out = service.list_cases({"template_id": "T_EXTRACT_FAIL"}, _admin())
@@ -803,6 +811,7 @@ def test_queue_status_derived_from_execution_summary(service, monkeypatch):
     assert statuses[gone] == "RERUN_FAILED"
     assert statuses[stuck] == "RERUN_FAILED"
     assert statuses[running] == "RERUNNING"
+    assert statuses[settle] == "RERUNNING"
 
 
 def test_non_extract_templates_unaffected_by_execution_map(service, monkeypatch):

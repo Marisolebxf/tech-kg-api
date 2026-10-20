@@ -140,8 +140,10 @@ def effective_extract_fail_status(
 ) -> str:
     """T_EXTRACT_FAIL 案的有效状态（只读推导，不回写库）。
 
-    - RESOLVED：绑定重跑执行 COMPLETED → 维持「已完成」（只读）；执行非成功
-      终态或记录缺失 → RERUN_FAILED（重跑失败，可再次重跑，不冒认完成）。
+    - RESOLVED：绑定重跑执行 COMPLETED → 维持「已完成」（只读）；执行 RUNNING
+      → RERUNNING（完成回写在途/待同步——执行行尚未收尾时如实展示「重跑中」，
+      不冒认完成也不误报失败；写侧门控同口径 RUNNING 禁止重复派发）；执行
+      非成功终态或记录缺失 → RERUN_FAILED（重跑失败，可再次重跑，不冒认完成）。
     - RERUNNING：执行仍在跑 → 维持「重跑中」；执行已终态但案未回写（回滚
       失败滞留）或记录缺失 → RERUN_FAILED，避免永久卡成不可操作行。
     - 其余状态原样返回；exec_statuses 为 None（控制面不可达）时不推导。
@@ -151,9 +153,12 @@ def effective_extract_fail_status(
     if stored == "RESOLVED":
         if not rerun_execution_id:
             return stored
-        return (
-            "RESOLVED" if exec_statuses.get(rerun_execution_id) == "COMPLETED" else "RERUN_FAILED"
-        )
+        status = exec_statuses.get(rerun_execution_id)
+        if status == "COMPLETED":
+            return "RESOLVED"
+        if status == "RUNNING":
+            return "RERUNNING"
+        return "RERUN_FAILED"
     if stored == "RERUNNING":
         status = exec_statuses.get(rerun_execution_id or "")
         return "RERUNNING" if status == "RUNNING" else "RERUN_FAILED"

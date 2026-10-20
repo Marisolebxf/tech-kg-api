@@ -3152,16 +3152,35 @@ async def _register_scheduled_run(request: dict[str, Any]) -> None:
     )
 
 
+def _is_rerun_request(request: dict[str, Any]) -> bool:
+    """手动 RERUN 载荷识别（rerun_failed_records 构造，schema_extraction.py）。
+
+    带 ``rerunCaseIds`` / ``triggerSource=RERUN`` 且无 ``_scheduleId``——这类执行
+    不经 Schedule 直发，控制库执行行此前无人收尾（MR-SYNC：审核队列把已成功
+    重跑误报成 RERUN_FAILED 的根因之一）。extract 类定义 workflow 入参为扁平
+    payload（temporal_runtime 对 sourceKind=extract 不包装），保险起见两种
+    层级都认（与 _finalize_scheduled_run 读 _scheduleId 同口径）。
+    """
+    payload = request.get("payload") or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    for carrier in (request, payload):
+        if carrier.get("rerunCaseIds") or carrier.get("triggerSource") == "RERUN":
+            return True
+    return False
+
+
 async def _finalize_scheduled_run(
     request: dict[str, Any], *, result: Any = None, error: str | None = None
 ) -> None:
     """与 ``_register_scheduled_run`` 对称的收尾：workflow 自报终态回写控制库。
 
-    只在 payload 带 ``_scheduleId`` 时生效；best-effort（失败不阻断 workflow 终态），
-    CANCELLED 场景 workflow 无法收尾，由 ``service.execution_reconciler`` 对账兜底。
+    在 payload 带 ``_scheduleId``（周期调度）**或为手动 RERUN 载荷**时生效；
+    best-effort（失败不阻断 workflow 终态），CANCELLED 场景 workflow 无法收尾，
+    由 ``service.execution_reconciler`` 对账兜底。
     """
     schedule_id = request.get("_scheduleId") or (request.get("payload") or {}).get("_scheduleId")
-    if not schedule_id:
+    if not schedule_id and not _is_rerun_request(request):
         return
     info = workflow.info()
     try:
@@ -3346,10 +3365,18 @@ class SchemaExtractWorkflow:
     async def run(self, request: dict[str, Any]) -> dict[str, Any]:
         # 周期 Schedule 触发的执行：收尾时自报终态回写控制库（与开头的
         # register_scheduled_execution 落行对称），否则没人查看详情就永远 RUNNING。
+        # rerun-finalize-1020：手动 RERUN 执行同样收尾——执行行滞留 RUNNING 会让
+        # 审核队列把已成功重跑误报成 RERUN_FAILED（MR-SYNC）。patched 守卫保证
+        # 升级时已在飞的旧 RERUN workflow 重放走旧分支、不向旧历史追加新命令；
+        # 残余（升级窗口在飞的旧 RERUN）由 get_execution 惰性刷新/reconciler 对账
+        # 兜底，不据此宣称旧历史重放零风险（未做真实旧历史回放验证）。
         schedule_id = request.get("_scheduleId") or (request.get("payload") or {}).get(
             "_scheduleId"
         )
-        if not schedule_id:
+        finalize = bool(schedule_id) or (
+            workflow.patched("rerun-finalize-1020") and _is_rerun_request(request)
+        )
+        if not finalize:
             return await self._run_dispatch(request)
         try:
             result = await self._run_dispatch(request)

@@ -222,6 +222,12 @@ def _make_activities(
         state["resolve_llm"] = state.get("resolve_llm", 0) + 1
         return {}
 
+    @activity.defn(name="finalize_scheduled_execution")
+    async def finalize_exec(request: dict[str, Any]) -> dict[str, Any]:
+        # MR-SYNC：手动 RERUN 收尾也走 finalize_scheduled_execution（假实现只记账）
+        state.setdefault("finalize", []).append(request)
+        return {"ok": True, "status": "COMPLETED"}
+
     return [
         load_plan,
         read_batch,
@@ -237,6 +243,7 @@ def _make_activities(
         build_index,
         refresh_stats,
         resolve_llm,
+        finalize_exec,
     ]
 
 
@@ -274,6 +281,9 @@ class TestSchemaExtractOrchestration:
         assert result["failures"]["count"] == 0
         # 2 批 × 3 行 = 6 行；写图按行数累计
         assert sum(state["writes"]) == 6
+        # 手动 MANUAL（无 _scheduleId、非 RERUN 载荷）不收尾——执行行由
+        # 触发它的 API 请求侧落状态（MR-SYNC 边界）
+        assert state.get("finalize") in (None, [])
         # 游标只推进一次（全部批次成功后）
         assert len(state.get("advances", [])) == 1
         # 实体环随环增量索引（方案②a）：索引 activity 收 vid 工件 key 集，不再全量重建
@@ -314,9 +324,51 @@ class TestSchemaExtractOrchestration:
         # 重跑模式：resolve 必调且拿到失败键
         assert state["resolve"]
         assert state["resolve"][0]["failures"][0]["recordId"] == "bad"
+        # MR-SYNC：手动 RERUN 收尾必发——执行行终态由 workflow 自报回写，
+        # 否则滞留 RUNNING 会被审核队列误报成 RERUN_FAILED
+        finalize_calls = state.get("finalize") or []
+        assert len(finalize_calls) == 1
+        assert finalize_calls[0]["runId"]
+        assert finalize_calls[0]["result"]["status"] == "completed"
         # 重跑不推游标、不重建索引
         assert state.get("advances") in (None, [])
         assert state.get("index") in (None, [])
+
+    async def test_rerun_crash_finalizes_execution_as_failed(self):
+        """MR-SYNC 失败分支：重跑 workflow 抛错时收尾也必须发出（带 error），不能静默。
+
+        用 load_plan 失败制造真异常（重跑模式的批次失败按设计不炸 workflow——
+        整批记失败记录后正常收尾，见 test_poison_rows_go_to_failure_cases）。"""
+        state: dict[str, Any] = {}
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue="t-2-crash",
+                workflows=[SchemaExtractWorkflow],
+                activities=_make_activities(state, rows_per_batch=1, batches=1, fail_plan=True),
+            ):
+                with pytest.raises(WorkflowFailureError):
+                    await _run(
+                        env.client,
+                        "t-2-crash",
+                        {
+                            "schemaId": "schema-e2e",
+                            "graphSpace": "dev2",
+                            "batchSize": 5,
+                            "recordIdsBySource": {"bind-1": ["bad"]},
+                            "rerunCaseIds": ["MR-1"],
+                            "rerunOfExecutionId": "EXEC-1",
+                            "triggerSource": "RERUN",
+                        },
+                    )
+        finalize_calls = state.get("finalize") or []
+        assert len(finalize_calls) == 1
+        assert finalize_calls[0]["runId"]
+        # workflow 侧拿到的 ActivityError 文案是通用的（真实原因在 cause 里，
+        # error 截断后仍非空即可证明失败分支收尾已发出）
+        assert finalize_calls[0]["error"]
+        # 崩溃路径同时回滚 case 为 OPEN（可再次重跑）
+        assert state.get("reverts")
 
     async def test_batch_crash_fails_workflow_and_skips_advance(self):
         state: dict[str, Any] = {}

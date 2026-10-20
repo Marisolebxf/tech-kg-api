@@ -144,3 +144,51 @@ async def test_reconcile_leaves_running_alone(monkeypatch):
     )
     assert await reconcile_once() == 0
     assert repo.saved is None
+
+
+def test_is_rerun_request_matches_manual_rerun_payload():
+    """MR-SYNC：手动 RERUN 载荷识别（rerunCaseIds / triggerSource=RERUN 任一命中）。
+
+    extract 类定义 workflow 入参为扁平 payload（temporal_runtime 不包装），
+    两种层级都认；空列表 / 其它来源 / 周期调度均不视为 RERUN。
+    """
+    from service.temporal_workflows import _is_rerun_request
+
+    # 扁平（extract 定义实际形态，schema_extraction.rerun_failed_records）
+    assert _is_rerun_request({"rerunCaseIds": ["MR-1"], "triggerSource": "RERUN"}) is True
+    assert _is_rerun_request({"triggerSource": "RERUN"}) is True
+    # 包裹形态（与 _finalize_scheduled_run 读 _scheduleId 同口径）
+    assert _is_rerun_request({"payload": {"rerunCaseIds": ["MR-1"]}}) is True
+    assert _is_rerun_request({"payload": {"triggerSource": "RERUN"}}) is True
+    # 非命中：空列表 / 其它来源 / 周期调度（_scheduleId 通道）/ 空入参
+    assert _is_rerun_request({"rerunCaseIds": []}) is False
+    assert _is_rerun_request({"triggerSource": "MANUAL"}) is False
+    assert _is_rerun_request({"payload": {"_scheduleId": "sch-1"}}) is False
+    assert _is_rerun_request({"payload": "not-a-dict"}) is False
+    assert _is_rerun_request({}) is False
+
+
+async def test_finalize_manual_rerun_execution_row(monkeypatch):
+    """MR-SYNC：手动重跑落下的执行行（无调度绑定、triggerSource=RERUN）同样按 runId 收尾。"""
+    from service.temporal_workflows import finalize_scheduled_execution
+
+    repo = _FakeRepo(_running_execution(message="手动重跑失败记录", triggerSource="RERUN"))
+    _patch_common(monkeypatch, repo)
+    result = await finalize_scheduled_execution(
+        {"runId": "run-1", "result": {"status": "completed", "failures": {"count": 0}}}
+    )
+    assert result == {"ok": True, "status": "COMPLETED"}
+    assert repo.saved is not None
+    assert repo.saved["status"] == "COMPLETED"
+
+
+async def test_finalize_manual_rerun_failure_path(monkeypatch):
+    """MR-SYNC：手动重跑 workflow 抛错时收尾把执行行置 FAILED（不再滞留 RUNNING）。"""
+    from service.temporal_workflows import finalize_scheduled_execution
+
+    repo = _FakeRepo(_running_execution(message="手动重跑失败记录", triggerSource="RERUN"))
+    _patch_common(monkeypatch, repo)
+    result = await finalize_scheduled_execution({"runId": "run-1", "error": "boom"})
+    assert result == {"ok": True, "status": "FAILED"}
+    assert repo.saved is not None
+    assert repo.saved["status"] == "FAILED"

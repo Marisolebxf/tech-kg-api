@@ -64,14 +64,24 @@ class LLMClient:
     def api_key(self) -> str:
         return self._api_key
 
-    def synthesize(self, prompt: str, max_tokens: int = DEFAULT_MAX_TOKENS) -> str | None:
+    def synthesize(
+        self,
+        prompt: str,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        *,
+        timeout: float | None = None,
+    ) -> str | None:
+        """单轮生成；timeout=None 用客户端默认（DEFAULT_TIMEOUT），语义同 synthesize_json。"""
         try:
-            resp = self._client.chat.completions.create(
-                model=self._model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=max_tokens,
-                extra_body=thinking_extra_body(self._model),
-            )
+            create_kwargs: dict[str, Any] = {
+                "model": self._model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": max_tokens,
+                "extra_body": thinking_extra_body(self._model),
+            }
+            if timeout is not None:
+                create_kwargs["timeout"] = timeout
+            resp = self._client.chat.completions.create(**create_kwargs)
             return resp.choices[0].message.content or None
         except Exception as exc:  # noqa: BLE001
             logger.warning("LLM synthesize failed, degrading: %s", exc)

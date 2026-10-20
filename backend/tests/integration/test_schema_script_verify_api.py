@@ -43,7 +43,9 @@ class _FakeLLM:
     def __init__(self, response: str | None) -> None:
         self._response = response
 
-    def synthesize(self, prompt: str, max_tokens: int = 2048) -> str | None:
+    def synthesize(
+        self, prompt: str, max_tokens: int = 2048, *, timeout: float | None = None
+    ) -> str | None:
         return self._response
 
 

@@ -42,7 +42,9 @@ class FakeS3Storage:
 class _SafeLLM:
     """固定放行的假 LLM（fixture 默认；安全门行为专项测试内覆写）。"""
 
-    def synthesize(self, prompt: str, max_tokens: int = 2048) -> str | None:
+    def synthesize(
+        self, prompt: str, max_tokens: int = 2048, *, timeout: float | None = None
+    ) -> str | None:
         return '{"safe": true, "issues": [], "summary": "安全"}'
 
 
@@ -50,7 +52,9 @@ class _FakeLLM:
     def __init__(self, response: str | None) -> None:
         self._response = response
 
-    def synthesize(self, prompt: str, max_tokens: int = 2048) -> str | None:
+    def synthesize(
+        self, prompt: str, max_tokens: int = 2048, *, timeout: float | None = None
+    ) -> str | None:
         return self._response
 
 

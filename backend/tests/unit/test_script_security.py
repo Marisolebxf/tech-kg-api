@@ -4,16 +4,23 @@ from __future__ import annotations
 
 import json
 
-from service.script_security import ScriptSecurityVerdict, review_script_security
+from service.script_security import (
+    REVIEW_MAX_TOKENS,
+    REVIEW_STAGE_SECONDS,
+    ScriptSecurityVerdict,
+    review_script_security,
+)
 
 
 class _FakeLLM:
     def __init__(self, response: str | None) -> None:
         self._response = response
-        self.calls: list[tuple[str, int]] = []
+        self.calls: list[tuple[str, int, float]] = []
 
-    def synthesize(self, prompt: str, max_tokens: int = 2048) -> str | None:
-        self.calls.append((prompt, max_tokens))
+    def synthesize(
+        self, prompt: str, max_tokens: int = 2048, *, timeout: float | None = None
+    ) -> str | None:
+        self.calls.append((prompt, max_tokens, timeout or 0.0))
         return self._response
 
 
@@ -24,7 +31,9 @@ class _ScriptedLLM:
         self._responses = list(responses)
         self.calls = 0
 
-    def synthesize(self, prompt: str, max_tokens: int = 2048) -> str | None:
+    def synthesize(
+        self, prompt: str, max_tokens: int = 2048, *, timeout: float | None = None
+    ) -> str | None:
         idx = min(self.calls, len(self._responses) - 1)
         self.calls += 1
         return self._responses[idx]
@@ -41,7 +50,10 @@ def test_review_safe() -> None:
     assert verdict.issues == []
     assert verdict.summary == "安全"
     assert client.calls
-    assert client.calls[0][1] == 1024
+    # 思考型模型预算（2026-10-20）：max_tokens 必须覆盖 reasoning，超时封顶低于
+    # web nginx 60s（SSE 静默期上限）。首调用拿的是"剩余墙钟时间"=50−ε。
+    assert client.calls[0][1] == REVIEW_MAX_TOKENS
+    assert REVIEW_STAGE_SECONDS - 1 <= client.calls[0][2] <= REVIEW_STAGE_SECONDS
 
 
 def test_review_unsafe_with_evidence_kept() -> None:
@@ -225,3 +237,29 @@ def test_review_normalizes_bad_issues_field() -> None:
     assert verdict.safe is True
     assert verdict.issues == []
     assert verdict.summary == ""
+
+
+def test_review_stage_wall_clock_bound(monkeypatch) -> None:
+    """LLM 调用超过阶段墙钟预算时按"暂不可用"快速返回，不无限等待。
+
+    httpx 的 read 超时按字节到达间隔计，思考型模型慢生成拦不住总时长，
+    阶段封顶靠 future.result(timeout=) 硬顶（2026-10-20）。
+    """
+    import time as _time
+
+    import service.script_security as mod
+
+    monkeypatch.setattr(mod, "REVIEW_STAGE_SECONDS", 1.0)
+    monkeypatch.setattr(mod, "_RETRY_FLOOR_SECONDS", 0.5)
+
+    class _SlowLLM:
+        def synthesize(
+            self, prompt: str, max_tokens: int = 2048, *, timeout: float | None = None
+        ) -> str | None:
+            _time.sleep(2.0)
+            return '{"safe": true, "issues": [], "summary": "安全"}'
+
+    started = _time.monotonic()
+    verdict = review_script_security(_SlowLLM(), "transform.py", CLEAN_SOURCE)
+    assert verdict.unavailable is True
+    assert _time.monotonic() - started < 1.9

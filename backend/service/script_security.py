@@ -13,18 +13,50 @@ issue 附 evidence——源码中逐字存在的片段；引不出真实代码�
 模型输出损坏（2026-10-18）：模型偶尔返回非约定 JSON（46 脚本实测 4 例），
 旧逻辑直接判 unsafe。现与限流同待遇：重试一次，仍坏归入校验不可用，
 提示稍后重传。
+
+思考预算（2026-10-20）：glm-5.x 系全程思考且关不掉——paas 报 1210"该模型始终
+思考"，coding 端点直接忽略 disabled/low 开关，且思考深度随 max_tokens 水涨
+船高（7KB 脚本：1024 预算思考 901、2048 思考 2047、3072 思考 ~2800）。1024
+预算下答案 JSON 被截断或整体为空，校验一律落到"暂不可用"（authored_by_fault_7
+上传必败的根因）。预算提到 3072，并把整个校验阶段封顶 50s（future.result 硬顶，
+httpx read 超时按字节间隔计、SDK 内部还会默认重试 2 次，per-request timeout
+拦不住总时长）：上传走 SSE 且阶段间无心跳，web nginx 未配 proxy_read_timeout
+（默认 60s），静默越过即 504。思考旗舰在长脚本上物理塞不进 50s（实测 72-94s），
+此时快速返回"暂不可用"属预期——默认模型请选可关思考的 4.x 系，或等异步门/
+SSE 心跳方案。
 """
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
+import logging
 import re
+import time
 from dataclasses import dataclass, field
 
 from infra.llm import LLMClient
 
+logger = logging.getLogger(__name__)
+
 LLM_RESPONSE_FORMAT_ERROR = "LLM 返回格式异常"
 LLM_UNAVAILABLE = "LLM 安全校验暂不可用"
+
+# 思考型模型的 completion 预算必须把 reasoning 计入（见模块头 2026-10-20）。
+REVIEW_MAX_TOKENS = 3072
+# 整个 LLM 校验阶段（含重试）的墙钟预算：必须明显低于 web nginx 默认
+# proxy_read_timeout(60s)，否则 SSE 静默期把上传连接拖成 504。
+REVIEW_STAGE_SECONDS = 50.0
+# 剩余时间不足时不再发起下一次调用（含重试）——刚够半次的调用没有意义。
+_RETRY_FLOOR_SECONDS = 5.0
+# 墙钟硬顶用的执行池：httpx 的 read 超时按"字节到达间隔"计，思考型模型的
+# 慢生成拦不住总时长（实测 timeout=5 的调用跑了 9.1s、50s 预算跑了 93.9s，
+# SDK 内部还会默认重试 2 次）；future.result(timeout=) 才是可靠的总时长上界。
+# 超时放弃的在飞请求留在工作线程里自行了断；池满时新调用排队、同样被
+# result(timeout) 按时判"暂不可用"，不会雪崩。
+_REVIEW_POOL = concurrent.futures.ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="script-sec-review"
+)
 
 # 静态高危 pattern：与提示词的风险类别对齐。re.compile 等模块前缀调用不算
 # （lookbehind 排除），避免把正则预编译误当代码执行。
@@ -208,11 +240,29 @@ def _unavailable(message: str) -> ScriptSecurityVerdict:
 
 def review_script_security(client: LLMClient, filename: str, source: str) -> ScriptSecurityVerdict:
     prompt = _build_prompt(filename, source)
-    raw = client.synthesize(prompt, max_tokens=1024)
+    deadline = time.monotonic() + REVIEW_STAGE_SECONDS
+
+    def call() -> str | None:
+        # 每次调用只拿"剩余墙钟时间"当超时，阶段总时长（含重试）封顶不越
+        # REVIEW_STAGE_SECONDS；剩余不足 _RETRY_FLOOR_SECONDS 时直接返回 None，
+        # 不再发起注定超时的调用。
+        left = deadline - time.monotonic()
+        if left < _RETRY_FLOOR_SECONDS:
+            return None
+        future = _REVIEW_POOL.submit(
+            client.synthesize, prompt, max_tokens=REVIEW_MAX_TOKENS, timeout=left
+        )
+        try:
+            return future.result(timeout=left)
+        except concurrent.futures.TimeoutError:
+            logger.warning("LLM 安全校验调用超过阶段预算 %.0fs，放弃等待", left)
+            return None
+
+    raw = call()
     if raw is None:
         # 限流/超时重试一次（glm flash 429 高发），仍失败则明确区分
         # "校验服务不可用"与"脚本不安全"，不把网络问题伪装成安全结论。
-        raw = client.synthesize(prompt, max_tokens=1024)
+        raw = call()
     if raw is None:
         return _unavailable("LLM 安全校验暂不可用（限流或超时），请稍后重传")
     verdict = _parse_verdict(raw, source)
@@ -220,9 +270,9 @@ def review_script_security(client: LLMClient, filename: str, source: str) -> Scr
         return verdict
     # 模型输出损坏（非约定 JSON）与限流同待遇：重试一次，仍坏按校验不可用
     # 处理——"裁判输出抽风"同样不该伪装成"脚本不安全"（实测 46 脚本 4 例）。
-    retry = client.synthesize(prompt, max_tokens=1024)
+    retry = call()
     if retry is not None:
         verdict = _parse_verdict(retry, source)
-    if retry is None or verdict.summary == LLM_RESPONSE_FORMAT_ERROR:
+    if verdict.summary == LLM_RESPONSE_FORMAT_ERROR:
         return _unavailable("LLM 安全校验暂不可用（模型返回格式异常），请稍后重传")
     return verdict

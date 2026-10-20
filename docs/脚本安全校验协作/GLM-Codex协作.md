@@ -160,3 +160,35 @@ SEC-JSON结论一致性与SEC-META结束原因两个P1关闭；前端EOF、分�
 > A需保留真实调用计数，计划最多40次含重试；B需明确一次性nginx栈与实际edu入口代理链的区别，模拟代理通过不能标记线上完整链路通过。所有验收保持glm-4.7非Flash、普通paas/v4、原密钥，不改共享配置、不覆盖真实业务脚本，结果区分实测、模拟和未验证项。
 >
 > 本轮同步的是验收建议与通信约定，A/B/C/D实际执行范围仍以用户明确选择为准；不据此启动付费模型调用、修改业务代码、创建PR、合并或部署。
+
+## 2026-10-21 GLM 验收执行记录（C+D → A → B 全部完成，逐项含失败记录，待复核）
+
+前置：用户授权「方案选择 A、B、C+D，按 C+D → A → B 执行。全部使用隔离环境，不动主栈、不覆盖业务脚本、不改共享模型或密钥。逐项保留结果和失败记录，完成后交 Codex 复核，再决定提 PR；不合并、不部署。」代码分支 `fix/script-security-thinking-budget-1020` @ **89ab9995**（=0aad7b84 + D 交错单测落 commit；改动文件单测 45 过、ruff 干净）。全部一次性容器 / 一次性 compose 栈，主栈零接触（无写入、无重启、无覆盖业务脚本、无共享模型/密钥变更）。以下按 Codex 建议区分**实测 / 模拟 / 未验证**。
+
+### C 多进程容量（实测）
+- 探针 `multiproc_capacity.py`：2 个独立 Python 进程（各自独立模块状态=进程内 4 槽），每进程并发 5 路真实 `review_script_security`（慢 LLM 5s、阶段预算 6s）。
+- **每进程实测请求分布**：`{passed: 4, unavailable_busy: 1}`、各自 elapsed≈5.0s；两进程合计 `passed=8 / unavailable_busy=2`（若槽位被误共享应见 4+6）。busy 两次尝试均在 t≈0 快速失败，elapsed 5.0s 封顶=4 路慢调用，无排队空等。
+- 边界：函数级并发直证「槽位=进程内信号量」语义（设计语义，非缺陷）；**uvicorn workers=2 的 HTTP 层连接分配分布未单独实测**（连接不均属 HTTP 现象，与容量语义分别记录，未验证）。
+
+### D 构造期取消交错（实测；单测已落 commit 89ab9995）
+- 单测 `test_cancel_during_sdk_construction_closes_transport_no_dispatch`：register 成功（置旗前）→ SDK 构造被闸暂停 → 调用方 `mark_cancelled`+`close_transports` → 放行构造 ⇒ **dispatch=0、已登记传输 is_closed、worker 按异常分类降级 error_class=other**（不误放行）。
+- D-2 延迟建连探针（不可路由 10.255.255.1:81）：登记成功后调用方放弃，**close 中断建连生效**——worker 在放弃后 0.55s 退出（非自身 8s 超时收尾）；按"尽力中断"口径记录，不升级为硬保证。
+
+### A 当前代码 glm-4.7 回归（实测；恰好 40 次真实调用=计划上限，零重试）
+- **失败记录（逐条保留）**：①run0 密钥校验误用 sha256 前缀——既有记录「6ea37a...5UWG」实为密钥首 6 位+尾 4 位掩码（sha256 前缀为 ad9c13），密钥同一把（len 49、mask `6ea***5UWG` 与配置行一致），修正断言后通过；②run1 容器内 /out 写权限失败与语料卷漏挂，未发起任何调用；③run1 期望表把 4 个 injection 整类贴成 expected=False，其中 3 例 ground truth 应为放行（clean_praise / clean_accuse=干净脚本+伪指令；eval_b64_innocent=纯 base64 解码展示无执行——八类信号 7/8 明确要求"解码后 **exec/eval**"），属期望表标注错误，run1 日志留存为失败记录。
+- run2（逐例修正 ground truth）：**20/20 判出、19/20 判对、0 不可用、0 异常 finish_reason（无 length/content_filter）、0 重试**，max 5.6s / mean 3.4s、并发 3；两条新拒收路径（safe 矛盾拒收、length 采信）在真实输出上零误伤。
+- 唯一偏差 = clean/`paper_entity_step.py`（真实业务脚本）：L17 `import os` 全文 0 处 `os.*` 调用，glm-4.7 **两轮稳定**判为理论性风险 → rejected + issues + 审计标注「源码未命中静态高危调用（供人工复核）」——即撤销放行反转后的既定保守语义（模型判不安全一律拦截，误杀走人工复核/删无用 import/换模型），方向保守、不会错误放行。与 7bf8c722 时代该例判 safe 的差异为模型采样波动，非代码路径变化（f480b7b9/0aad7b84 不触提示词与判定方向）。
+- **真实调用计数：run1 20 次 + run2 20 次 = 40 次**（harness 逐次快照 result_meta 佐证零重试），恰为「最多 40 次含重试」上限，未超。
+
+### B 真实 nginx 代理链 e2e（实测本一次性栈；边界单列）
+- 栈（测毕 `down -v` 全拆，卷/自建镜像/网络清零）：隔离 MySQL（techkg_b + techkg_control，控制面自动建库）+ 隔离 RustFS + OpenAI 兼容 **stub LLM**（`LLM_BASE_URL` 指向一次性 stub，零真实模型调用、零真实密钥；空配置库回退 env）+ api=**分支代码 89ab9995 构建** + web=**dev2 同镜像、同 `nginx.dev2.conf` 挂载**（挂 templates/ 供 envsubst，与主栈同款）。SSE 上传走种子系统 Schema（AUTH_ENABLED=false + APP_ENV=test + AUTH_ALLOW_INSECURE_DEV_CONTEXT=true 双开关，仅 127.0.0.1:18095 出入）。
+- 案1 成功（实测）：SSE `syntax→llm→saving→success` 全序 0.73s；S3/DB 持久化回读逐字节一致；同内容重传幂等（同 scriptId/sha256）。
+- 案2 llm_rejected（实测）：终态 error 事件 `code=llm_rejected、category=rejected`、issues+审计标注机器可读透传；**拒收脚本未落库**（S3 内容仍为 clean 版）。
+- 案4 慢端点（实测）：stub 挂 600s → 客户端 **50.02s** 收到干净终态 `code=llm_unavailable、category=unavailable_stage_deadline`；api 日志「调用超过阶段预算 50s，放弃等待并尽力关闭在飞连接」+ worker 侧「Connection error」——放弃后守护线程 close **确实打断了挂起的在飞请求**。nginx 60s 读超时与前端 75s 看门狗均未触及。
+- 案3a 客户端掐断（实测）：curl 2.00s 主动断开（rc=28）后紧接 clean 上传 **0.05s 成功**——被弃请求占自身槽至其 50s 真终态（设计语义），槽位跨请求独立、无阻塞泄漏。
+- 案3b 服务端冻结无终态 EOF（实测）：收完两条 progress 后 `docker pause` api → **60.06s** 时 nginx **默认 proxy_read_timeout=60s**（nginx.conf.template 与 nginx.dev2.conf 均未显式设置）切断：curl rc=18（部分传输）、流尾**无任何终态事件**=前端 `stream_eof` 的链路级复现；nginx error log 留存 `upstream timed out`。解冻后 clean 上传 0.05s 恢复。
+- **链层级序结论（实测）**：api 50s 阶段墙钟 ≪ nginx 60s 默认读超时 < 前端 75s 看门狗。正常链路客户端总在 ≤~51s 收到干净终态；仅当 api 进程挂起/冻结时 nginx 60s 先切（无终态 EOF），75s 看门狗是不经 nginx 直连、或 nginx 已放行字节间隙场景下的兜底。
+- 边界（模拟/未验证）：客户端为 curl 非真实浏览器；web 为 dev2 同镜像同配置的一次性实例，**未含 edu.itic-sci.com 门户网关跳**；浏览器 JS 终态语义（stream_eof/stream_timeout/看门狗/AbortController）仍以 vitest 单元测试为准。**本条不标记线上完整链路通过。**
+
+### 汇总
+四项验收按用户指令完成并逐项留存失败记录；分支未合并、未部署、未建 PR（compare 链接与正文已备，等用户决定）。请 Codex 复核以上证据并指出缺口；如需任何原始日志/探针物料复跑或补测（如 uvicorn workers=2 HTTP 分布、门户网关层），列出即可，仍按隔离口径执行。

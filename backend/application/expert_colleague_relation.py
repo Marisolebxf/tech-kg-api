@@ -137,6 +137,16 @@ class FastAPIGraphSearchGateway:
             offset += current_page_size
         return {"nodes": list(nodes.values()), "edges": list(edges.values())}
 
+    async def search_paths(self, body: dict[str, Any], *, space: str | None) -> dict[str, Any]:
+        """按逐跳边类型/方向搜两点间路径（``POST /graph-search/paths/search``）。
+
+        与其它端点不同：该端点从请求体模型读 ``space``，须并入 body 传递。
+        """
+        data = await self._post(
+            "/api/v1/graph-search/paths/search", {"space": space}, {**body, "space": space}
+        )
+        return data if isinstance(data, dict) else {"items": [], "total": 0}
+
     async def _get(self, path: str, params: dict[str, Any]) -> Any:
         clean_params = {key: value for key, value in params.items() if value is not None}
         self.api_calls.append({"method": "GET", "path": path, "params": clean_params})

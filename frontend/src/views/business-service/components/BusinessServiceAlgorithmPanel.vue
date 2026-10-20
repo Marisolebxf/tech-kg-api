@@ -654,6 +654,9 @@ function formatRelationConfidence(edge: GraphEdgeData): string {
   return formatConfidence(edge.confidence);
 }
 
+// coreNodeIds：需要画布中心强调（level=0 光环/加粗/更大半径）的起始/查询
+// 节点集合。后端图节点未带 level 时按此兜底：命中集合或 nodeType=main 记 0，
+// 其余外圈节点记 1，与直接模块的查询专家同口径。
 function mapLiveGraph(
   nodes:
     | Array<{
@@ -697,6 +700,7 @@ function mapLiveGraph(
         confidenceBasis?: GraphEdgeData["confidenceBasis"];
       }>
     | undefined,
+  coreNodeIds?: Set<string>,
 ): {
   nodes: GraphNodeData[];
   edges: GraphEdgeData[];
@@ -713,27 +717,32 @@ function mapLiveGraph(
     "event",
   ]);
   return {
-    nodes: nodes.map((node) => ({
-      id: node.id,
-      label: node.label,
-      nodeType: (allowed.has(String(node.nodeType))
+    nodes: nodes.map((node) => {
+      const mappedType = (allowed.has(String(node.nodeType))
         ? node.nodeType
-        : "expert") as GraphNodeData["nodeType"],
-      x: node.x ?? 220,
-      y: node.y ?? 200,
-      entityType: node.entityType,
-      confidence: node.confidence,
-      confidenceSource: node.confidenceSource,
-      confidenceBasis: node.confidenceBasis,
-      relations: node.relations ?? "",
-      evidence: node.evidence ?? [],
-      level: node.level,
-      sourceTable: node.sourceTable,
-      sourceRecordId: node.sourceRecordId,
-      sourceField: node.sourceField,
-      ingestBatch: node.ingestBatch,
-      ingestTime: node.ingestTime,
-    })),
+        : "expert") as GraphNodeData["nodeType"];
+      return {
+        id: node.id,
+        label: node.label,
+        nodeType: mappedType,
+        x: node.x ?? 220,
+        y: node.y ?? 200,
+        entityType: node.entityType,
+        confidence: node.confidence,
+        confidenceSource: node.confidenceSource,
+        confidenceBasis: node.confidenceBasis,
+        relations: node.relations ?? "",
+        evidence: node.evidence ?? [],
+        level:
+          node.level ??
+          (coreNodeIds?.has(node.id) || mappedType === "main" ? 0 : 1),
+        sourceTable: node.sourceTable,
+        sourceRecordId: node.sourceRecordId,
+        sourceField: node.sourceField,
+        ingestBatch: node.ingestBatch,
+        ingestTime: node.ingestTime,
+      };
+    }),
     edges: (edges || []).map((edge) => ({
       id: edge.id,
       from: edge.from,
@@ -1129,6 +1138,9 @@ function buildPaperCoopRealGraph(
       nodeType: nodeTypeByBackend[type] || "expert",
       x: position?.x ?? 220,
       y: position?.y ?? 200,
+      // 两位查询专家 level=0 触发画布中心强调（光环/加粗/更大半径），
+      // 与直接模块的专家行同口径；论文/主题/期刊/合著者按外圈标记。
+      level: type === "expert" ? 0 : 1,
       entityType: entityTypeByBackend[type] || "科技成果",
       relations: String(node.subtitle || ""),
       // 机构名等属性信息保留在 evidence 里，命中关系由下方按边统计。
@@ -1217,6 +1229,8 @@ function buildLiveGraph(
       ingestTime?: string;
       confidence?: number;
     },
+    // 起始/查询节点传 0 触发画布中心强调（光环/加粗/更大半径），外圈节点默认 1。
+    level = 1,
   ) => {
     if (!id || nodes.some((n) => n.id === id)) return;
     const nodeConfidence =
@@ -1236,6 +1250,7 @@ function buildLiveGraph(
       confidence: nodeConfidence,
       relations,
       evidence: ev,
+      level,
       ...(provenance && {
         sourceTable: provenance.sourceTable,
         sourceField: provenance.sourceField,
@@ -1277,6 +1292,8 @@ function buildLiveGraph(
       ).join("；") || "暂无企业关联",
       data.entity_provenance?.[data.expert_id]?.confidence,
       data.entity_provenance?.[data.expert_id],
+      // 查询专家是起始节点，level=0 触发画布中心强调。
+      0,
     );
     for (const r of rels) {
       addNode(
@@ -1319,6 +1336,8 @@ function buildLiveGraph(
       ).join("；") || "暂无关联事件",
       data.entity_provenance?.[data.chain_node_id]?.confidence,
       data.entity_provenance?.[data.chain_node_id],
+      // 产业链节点是查询起始节点，level=0 触发画布中心强调。
+      0,
     );
     const linkedOrgs = new Set<string>();
     for (const ev0 of topEvents) {
@@ -1411,15 +1430,19 @@ function buildLiveGraph(
       core: {
         label: authors[0] || "专家 A",
         relations: "核心专家",
+        // 两位查询专家都按起始节点强调（level=0），与真实子图路径同口径。
+        level: 0,
+        // 单位查不到时不拼「单位 …」分句，不落「未知机构」占位文案。
         evidence: [
-          `专家 ${authors[0] || "-"}，单位 ${units[0] || "未知机构"}。`,
+          `专家 ${authors[0] || "-"}${units[0] ? `，单位 ${units[0]}` : ""}。`,
         ],
       },
       "expert-1": {
         label: authors[1] || "专家 B",
         relations: "合作专家",
+        level: 0,
         evidence: [
-          `专家 ${authors[1] || "-"}，单位 ${units[1] || "未知机构"}。`,
+          `专家 ${authors[1] || "-"}${units[1] ? `，单位 ${units[1]}` : ""}。`,
         ],
       },
       "paper-1": {
@@ -1531,14 +1554,24 @@ const liveModuleGraph = computed(() => {
     const data = liveAlumniResult.value;
     if (!data) return null;
     return (
-      mapLiveGraph(data.graph?.nodes, data.graph?.edges) ??
-      buildAlumniGraph(data)
+      mapLiveGraph(
+        data.graph?.nodes,
+        data.graph?.edges,
+        new Set([data.expert?.id].filter(Boolean)),
+      ) ?? buildAlumniGraph(data)
     );
   }
   if (isLiveCoop.value) {
     const data = liveCoopResult.value;
     if (!data) return null;
-    return mapLiveGraph(data.graph?.nodes, data.graph?.edges);
+    // 双点合作：两侧查询专家都是起始节点，与直接/论文模块的双专家强调同口径。
+    return mapLiveGraph(
+      data.graph?.nodes,
+      data.graph?.edges,
+      new Set(
+        [data.source?.id, data.target?.id].filter(Boolean) as string[],
+      ),
+    );
   }
   if (isLiveColleague.value) {
     const data = expertColleagueResponse.value?.data;
@@ -1631,6 +1664,10 @@ const liveModuleGraph = computed(() => {
         ingestBatch: edge.data?.ingest_batch,
         ingestTime: edge.data?.ingest_time,
       })),
+      // 双点同事：两侧查询专家都是起始节点，与直接模块的双专家强调同口径。
+      new Set(
+        [data.expert?.id, data.targetExpert?.id].filter(Boolean) as string[],
+      ),
     );
   }
   return null;
@@ -2445,9 +2482,14 @@ function buildLiveSummary(
     const tr = sr.cooperationTimeRange || {};
     const authors = sr.authorList || [];
     const units = sr.authorUnits || [];
-    out["核心专家"] = authors[0] ? `${authors[0]}｜${units[0] || ""}` : "-";
-    out["合作专家"] = authors[1] ? `${authors[1]}｜${units[1] || ""}` : "-";
-    out["作者单位"] = units.join("；") || "-";
+    // 单位查不到时后端返回空串：只显示专家名，不落「｜」尾巴和占位机构文案。
+    out["核心专家"] = authors[0]
+      ? `${authors[0]}${units[0] ? `｜${units[0]}` : ""}`
+      : "-";
+    out["合作专家"] = authors[1]
+      ? `${authors[1]}${units[1] ? `｜${units[1]}` : ""}`
+      : "-";
+    out["作者单位"] = units.filter(Boolean).join("；") || "-";
     out["合作发表时间"] = tr.displayText || "暂无数据";
     out["论文主题"] = (sr.paperTopics || []).slice(0, 4).join("、") || "-";
     out["合作论文数量"] = `${sr.cooperationPaperCount ?? 0} 篇`;
@@ -2525,6 +2567,12 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
         : summary.overlapDuration || "—";
     const relationConfidence =
       summary.relationConfidence ?? primary?.confidence;
+    // 实际发出的查询窗口：空结果时用户需要看到页面用了哪个时间段。
+    const colleagueReq = ((liveApiPayload.value as Record<string, any>)?.request ??
+      {}) as Record<string, string>;
+    const colleagueWindow = colleagueReq.start_time || colleagueReq.end_time
+      ? `${colleagueReq.start_time || "最早"} 至 ${colleagueReq.end_time || "最新"}`
+      : "未限定（全部时间段）";
     return [
       { label: "专家 A", value: summary.coreExpert || "—" },
       { label: "核心专家机构", value: summary.coreExpertOrganization || "—" },
@@ -2556,6 +2604,12 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
       {
         label: "关系判定",
         value: data.total ? "存在同事关系" : "不存在同事关系",
+      },
+      {
+        label: "查询时间窗口",
+        value: data.total
+          ? colleagueWindow
+          : `${colleagueWindow}（窗口内无共事记录，请核对起止月份）`,
       },
     ];
   }
@@ -3731,6 +3785,9 @@ function buildAlumniGraph(
       nodeType: "main",
       x: cx,
       y: cy,
+      // 起点专家 level=0 触发画布中心强调（光环/加粗/更大半径），与直接
+      // 模块同口径；环绕的校友节点按外圈标记。
+      level: 0,
       entityType: "科技专家",
       relations: data.total
         ? data.total > 3
@@ -3773,6 +3830,7 @@ function buildAlumniGraph(
       nodeType: "expert",
       x: cx + Math.cos(angle) * radius + 200,
       y: cy + Math.sin(angle) * radius,
+      level: 1,
       entityType: "科技专家",
       relations: `与${data.expert.name || data.expert.id}存在校友关系（${dimensionText}；共同院校：${sharedInstitutionText}）`,
       evidence: [
@@ -4059,11 +4117,16 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         selectedGraphNodeId.value = null;
         selectedGraphEdgeId.value = null;
         if (!total) {
-          // 未命中同事关系也保留返回数据：摘要展示两位专家与"不存在同事关系"
+          // 未命中同事关系也保留返回数据：摘要展示两位专家与"不存在同事关系"。
+          // toast 带上实际查询窗口：total=0 多数是月份选择落错年份导致窗口
+          // 没命中共事期，让用户第一时间看到页面到底用了哪个时间段。
           const now = new Date();
           lastTestTime.value = formatTimestamp(now);
           lastUpdateTime.value = now.getTime();
-          showToast("未查询到相关同事关系数据", "info");
+          const windowText = startTime || endTime
+            ? `（窗口 ${startTime || "最早"} 至 ${endTime || "最新"}）`
+            : "";
+          showToast(`未查询到相关同事关系数据${windowText}`, "info");
           resultMode.value = "summary";
           return;
         }

@@ -46,6 +46,15 @@ async def query_expert_colleague_relation(
     request: Request,
 ) -> Response:
     """组合公开查图 API 推理专家同事关系。"""
+    # 空结果排查关键信息：total=0 多数是时间窗口未命中共事期，
+    # 访问日志只有路径没有参数，这里把实际窗口记下来便于定位。
+    logger.info(
+        "同事关系查询参数: expert_a=%s expert_b=%s start=%s end=%s",
+        body.expertId,
+        body.targetExpertId,
+        body.startTime,
+        body.endTime,
+    )
     key = _cache_key(body)
     cached = get_cached_json(key)
     if cached is not None:

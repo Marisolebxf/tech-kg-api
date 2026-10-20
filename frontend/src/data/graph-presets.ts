@@ -358,7 +358,7 @@ const serviceNode = (
   relations: string,
   evidence: string,
   confidence = 0.9,
-  level = 1,
+  level?: number,
 ): GraphNodeData => ({
   id,
   label,
@@ -370,7 +370,9 @@ const serviceNode = (
   confidence,
   relations,
   evidence: [evidence],
-  level,
+  // 核心节点（main）默认 level=0 触发画布中心强调（光环/加粗/更大半径），
+  // 外圈节点默认 level=1；显式传入的分层值优先。
+  level: level ?? (nodeType === 'main' ? 0 : 1),
 })
 
 export const serviceGraphPresets: Record<string, GraphPreset> = {
@@ -526,7 +528,7 @@ export const serviceGraphPresets: Record<string, GraphPreset> = {
   },
   'industry-chain-panorama': {
     nodes: [
-      serviceNode('core', '人工智能计算链', 'main', 380, 65, '产业链', '节点 186/关系 420', '产业链实体与关系已完成汇聚。', 0.95, 1),
+      serviceNode('core', '人工智能计算链', 'main', 380, 65, '产业链', '节点 186/关系 420', '产业链实体与关系已完成汇聚。', 0.95, 0),
       serviceNode('topic-1', '上游基础资源', 'topic', 130, 190, '产业链节点', '上游节点', '汇聚数据资源与算力芯片。', 0.92, 1),
       serviceNode('topic-2', '中游核心技术', 'topic', 380, 190, '产业链节点', '中游节点', '汇聚知识图谱、机器学习与大模型。', 0.93, 1),
       serviceNode('topic-3', '下游应用场景', 'topic', 630, 190, '产业链节点', '下游节点', '汇聚智能制造、医疗与交通场景。', 0.91, 1),
@@ -562,6 +564,7 @@ const defaultServiceGraph: GraphPreset = {
       confidence: 0.94,
       relations: '命中关系 9',
       evidence: expertEvidence,
+      level: 0,
     },
     {
       id: 'expert-1',

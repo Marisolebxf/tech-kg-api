@@ -237,13 +237,43 @@ def _display_name(node: dict[str, Any], fallback: str) -> str:
     return str(props.get("name_zh") or props.get("name_en") or fallback)
 
 
+def _extra_affiliation(node: dict[str, Any]) -> str:
+    """从图节点 extra_json.affiliation 解析论文侧作者单位（仍属纯查图口径）。
+
+    论文作者点（dwd_zh_author 抽取）没有 scholar_org 属性，作者单位只随
+    extra_json 落图；affiliation 是 JSON 字符串套列表或原生列表，两种都收。
+    """
+    raw = (node.get("properties") or {}).get("extra_json")
+    if not raw:
+        return ""
+    try:
+        extra = json.loads(raw)
+    except (TypeError, ValueError):
+        return ""
+    affiliation = extra.get("affiliation") if isinstance(extra, dict) else None
+    if isinstance(affiliation, str):
+        try:
+            affiliation = json.loads(affiliation)
+        except (TypeError, ValueError):
+            affiliation = [affiliation]
+    items = affiliation if isinstance(affiliation, list) else [affiliation]
+    return next((str(item).strip() for item in items if str(item).strip()), "")
+
+
 def _organization(node: dict[str, Any]) -> str:
+    """专家机构名：查不到就返回空串，绝不落"未知机构"占位文案。
+
+    空串口径下摘要「作者单位」行与画布副标题都不会显示占位机构；
+    跨机构判断两侧都查不到时视为同口径（不算跨机构），与原占位值
+    相等的语义一致。
+    """
     props = node.get("properties") or {}
     return str(
         props.get("scholar_org_name_zh")
         or props.get("scholar_org_name_en")
         or props.get("scholar_org")
-        or "未知机构"
+        or _extra_affiliation(node)
+        or ""
     )
 
 
@@ -838,12 +868,15 @@ def _build_graph(
                 "confidence": fill_entity_confidence(props, labels),
                 "confidenceSource": "derived",
             }
+        # 机构与摘要同链路（scholar_org 属性 → extra_json.affiliation）；
+        # 查不到时 _organization 返回空串，画布不落占位机构字样。
+        org_name = _organization(node)
         nodes.append(
             {
                 "id": node_id,
                 "type": node_type,
                 "label": label,
-                "subtitle": str(props.get("scholar_org") or ""),
+                "subtitle": org_name,
                 "data": {
                     "labels": labels,
                     "confidence": score["confidence"],

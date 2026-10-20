@@ -60,6 +60,9 @@ describe("科技单节点间接关系展示", () => {
 
     const graph = buildIndirectRelationGraph(result);
     expect(graph.nodes[0].relations).toBe("核心节点");
+    // 起始节点必须携带 level=0 才会触发画布中心强调（光环/加粗/更大半径）。
+    expect(graph.nodes[0].level).toBe(0);
+    expect(graph.nodes[1].level).toBe(1);
     expect(graph.nodes[0].confidence).toBe(1.0);
     expect(graph.nodes[1].entityType).toBe("机构");
     expect(graph.nodes[1].relations).toBe("间接关联节点");

@@ -1206,3 +1206,118 @@ def test_filter_graph_by_relation_types_reattaches_chain_skeleton_edges() -> Non
     assert ("HAS_NODE", "chain_IC0007", "node_IC9999999") not in edge_keys
     touched = {src for _, src, _ in edge_keys} | {tgt for _, _, tgt in edge_keys}
     assert "chain_IC0007" in touched
+
+
+class _AnchorCheckClient(_FakeGraphClient):
+    """锚点一致性校验用的图客户端：在通用 fake 上补 get_node / get_neighbours。"""
+
+    def __init__(self, node=None, neighbours=None, error: Exception | None = None) -> None:
+        super().__init__()
+        self.node = node
+        self.neighbours = neighbours or []
+        self.error = error
+
+    async def get_node(self, vid, *, space=None):
+        if self.error:
+            raise self.error
+        return self.node
+
+    async def get_neighbours(self, vid, *, direction="both", edge_type=None, limit=50, space=None):
+        if self.error:
+            raise self.error
+        return self.neighbours
+
+
+@pytest.mark.asyncio
+async def test_anchor_matches_industry_by_own_name_or_membership() -> None:
+    service = IndustryChainPanoramaService()
+    anchor = {
+        "id": "node_IC0007012",
+        "labels": ["IndustryNode"],
+        "properties": {"node_name": "集成电路制造服务"},
+    }
+
+    # 锚点自身名含关键词
+    assert await service._anchor_matches_industry(
+        _AnchorCheckClient(node=anchor), "node_IC0007012", "集成电路"
+    )
+    # 链锚点名不含关键词即不一致：成员企业名（如"低空经济产业园"）不作依据
+    assert not await service._anchor_matches_industry(
+        _AnchorCheckClient(
+            node=anchor,
+            neighbours=[{"id": "org_1", "properties": {"name": "低空经济产业园"}}],
+        ),
+        "node_IC0007012",
+        "低空经济",
+    )
+    # 非链锚点（专家/机构）：归属链邻居名含关键词即一致
+    member = {"id": "person_1", "labels": ["Person"], "properties": {"name_zh": "张三"}}
+    chain_neighbour = {"id": "node_2", "properties": {"node_name": "低空经济整机"}}
+    assert await service._anchor_matches_industry(
+        _AnchorCheckClient(node=member, neighbours=[chain_neighbour]), "person_1", "低空经济"
+    )
+    # 图服务抖动放行，不误伤显式锚点
+    from infra.graph_api_client import GraphAPIError
+
+    assert await service._anchor_matches_industry(
+        _AnchorCheckClient(error=GraphAPIError("boom")), "node_x", "集成电路"
+    )
+    # 锚点不存在 / 名字与邻居都不含关键词 → 不一致
+    assert not await service._anchor_matches_industry(
+        _AnchorCheckClient(node=None), "node_missing", "低空经济"
+    )
+    assert not await service._anchor_matches_industry(
+        _AnchorCheckClient(node=member, neighbours=[]), "person_1", "低空经济"
+    )
+    # 未提供锚点或关键词时不校验（恒一致）
+    assert await service._anchor_matches_industry(_AnchorCheckClient(), None, "集成电路")
+    assert await service._anchor_matches_industry(_AnchorCheckClient(node=member), "person_1", None)
+
+
+@pytest.mark.asyncio
+async def test_query_ignores_inconsistent_anchor_and_notes_provenance(monkeypatch) -> None:
+    """显式锚点与产业关键词指向不同链：忽略锚点、按关键词出图，溯源注明原因。"""
+
+    service = IndustryChainPanoramaService()
+    graph_calls: list[str | None] = []
+
+    async def _fake_fetch_layers(client, industry, top_k, *, diagnostics=None):
+        assert industry == "低空经济"
+        return (
+            [
+                {"key": "core_technology", "title": "核心技术", "total": 0, "items": []},
+                {"key": "leading_enterprise", "title": "领军企业", "total": 0, "items": []},
+            ],
+            [],
+        )
+
+    async def _fake_fetch_graph(client, seed_vids, anchor_id, depth):
+        graph_calls.append(anchor_id)
+        return {"nodes": [], "edges": []}
+
+    async def _fake_resolve_anchor(client, industry, anchor_id):
+        return anchor_id
+
+    class _GraphCtx:
+        async def __aenter__(self):
+            return _AnchorCheckClient(
+                node={
+                    "id": "node_IC0007012",
+                    "labels": ["IndustryNode"],
+                    "properties": {"node_name": "集成电路制造服务"},
+                }
+            )
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(service, "_fetch_layers", _fake_fetch_layers)
+    monkeypatch.setattr(service, "_fetch_graph", _fake_fetch_graph)
+    monkeypatch.setattr(service, "_resolve_anchor_from_keyword", _fake_resolve_anchor)
+    monkeypatch.setattr("service.industry_chain_panorama.graph_api", lambda **kwargs: _GraphCtx())
+
+    result = await service.query(industry="低空经济", anchor_id="node_IC0007012", depth=1, top_k=3)
+
+    assert "anchorId 节点与产业关键词不一致" in result["provenance"]["summary"]
+    # 出图不再以不一致的显式锚点为中心
+    assert graph_calls == [None]

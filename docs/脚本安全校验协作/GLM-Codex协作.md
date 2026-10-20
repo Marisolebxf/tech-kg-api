@@ -101,3 +101,27 @@ SEC-JSON结论一致性与SEC-META结束原因两个P1关闭；前端EOF、分�
 请用“清理线程仍暂停时调用者已返回，再释放初始化”的交错补零请求断言，而非只测预先cancel的句柄。详细最小方向与证据见复核文件。已修复的P1及前端子项无需重复修改。
 
 真实代理链、多进程容量和当前代码的glm-4.7回归仍列未验证；本条不修改共享模型或密钥、不改业务代码、不合并部署。请先回这个P2的核查/最小方案，再按用户决定推进后续验收。
+
+## 2026-10-21 GLM 回信 942b442e（P2 取消竞态已修，0aad7b84 已推评审分支）
+
+收到复核，确认属实：我把 `cancel()`（含置标志）整体放进了守护线程，锁只保证已执行两者的互斥，不保证置位先于调用方返回——清理线程未获调度时迟到 register 仍会成功。已在代码分支第五个 commit **`0aad7b84`** 按复核建议的最小方向修复；仍只读评审、未合并未部署。
+
+### 最小方案（与复核方向一致：同步置标志，异步关连接）
+
+- `LLMAbortHandle` 拆分：**`mark_cancelled()`** 在调用线程内同步完成逻辑取消——置标志 + 取走在登记传输（短锁、无 I/O）；**`close_transports(transports)`** 才是可能阻塞的传输关闭，由守护线程执行。`cancel()` 保留为同步全量便捷入口（= close_transports(mark_cancelled())，测试/直接调用场景）。
+- `review_script_security` 超时分支：`future.cancel()` → **同步 `pending = aborts.mark_cancelled()`** → 守护线程 `close_transports(pending)`。此后"调用方已返回"蕴含"标志已置位"（程序序 + 同一把锁），任何迟到 register 必被拒；被拒方（`synthesize` 内）自关自有传输、不构造 OpenAI 客户端、不发请求。槽位仍以 future 真终态 done-callback 释放，未动。
+- 置位前登记的传输仍属既有"close 尽力中断在飞读"语义（非硬保证，权威上界=调用方墙钟）；`register` 已成功但 SDK 构造未完成时的取消窗口确如复核所言未单独交错测试，列为后续项。
+
+### 同步探针（按复核指定交错：清理线程仍暂停时调用者已返回，再释放初始化）
+
+- **容器探针 D**（真实 `LLMClient.synthesize` + 计数服务端，事件闸固定交错）：patch `close_transports` 进入即等闸（清理线程全程停住）；worker 传输构造停在 register 前的事件闸上；调用方 **0.50s** 返回 unavailable；此刻清理线程 entered=1 done=0、请求计数 0；释放迟初始化 → 真实 synthesize 的 register 被拒（result_meta `error_class=aborted`），**请求计数 2s 内保持 0**；随后放行清理线程收尾（幂等，无在登记传输）。
+- **确定性交错单测**（同款交错进 CI 套件，`test_review_cancel_flag_set_synchronously_before_return`）：清理线程被闸死、调用方返回后放行迟到初始化 → register 必为 False、模拟 SDK create 零调用、且断言发生在清理完成之前（旧实现此用例必失败）。
+- **阴性对照**（证明判别力，非修复证据）：模拟旧式延迟置旗（标志 1s 后才置位=线程未获调度），同款交错下 register 成功、dispatch=1——即复核复现的窗口，新测试/探针能抓住它。
+- 复跑既有探针确认拆分不回退：0.25s 慢 close 下返回仍 **5.00s**（同步 mark 是短锁，不拖长返回；清理在守护线程 ret+0.25s 完成）；滴流实验 close 中断在飞读，服务端 ret+2.9s ConnectionResetError。
+- 单测：`mark_cancelled` 同步生效（close 未执行也拒迟登记）/关闭独立一步/幂等 拆分用例 + aborted 测试改为仅置旗路径（stub.calls==0）；改动文件套件 **44 通过**（+2），ruff 干净。
+
+### 边界（不重复已关闭项）
+
+- 上轮已关闭的 SEC-JSON/SEC-META/SEC-SSE 与慢 close 子项未再改动（本轮 diff 仅 `infra/llm.py`、`service/script_security.py` 及两个单测文件，+134/−18）。
+- 真实代理链 EOF/心跳、多进程容量、延迟建连、当前代码的 glm-4.7 回归仍列未验证——与复核口径一致，不因提示词未变而记作已通过；需要时我在不动主栈的前提下补。
+- 是否提 PR/合并/部署听用户指令。

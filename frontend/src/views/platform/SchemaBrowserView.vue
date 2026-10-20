@@ -1113,7 +1113,9 @@ async function handleUploadFile(file: File) {
       onError: (message, issues) => {
         uploadState.value = 'error'
         uploadMessage.value = message
-        uploadIssues.value = issues
+        // 后端错误事件的 issues 与 message 同文时（限流/语法/权限等单句错误），
+        // 明细列表再渲染一遍就是重复——滤掉与结论行逐字相同的条目
+        uploadIssues.value = issues.filter((issue) => issue !== message)
       },
     })
     if (succeeded) {

@@ -4548,8 +4548,17 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
   }
 }
 
-function handleParameterInput(fieldName: string, event: Event | string) {
-  const value = typeof event === "string" ? event : (event.target as HTMLInputElement).value;
+function handleParameterInput(
+  fieldName: string,
+  input: Event | string | number | boolean | null | undefined,
+) {
+  // Select clears may emit undefined/null; native inputs emit an Event.
+  // Keep parameter values as strings for the existing validation/payload code.
+  const value = input == null
+    ? ""
+    : typeof input === "object"
+      ? String((input.target as HTMLInputElement | null)?.value ?? "")
+      : String(input);
   const nextValues = {
     ...parameterValues.value,
     [fieldName]: value,
@@ -4689,14 +4698,14 @@ function clearGraphSelection() {
           class="service-console__select"
           popper-class="business-parameter-options"
           :fit-input-width="true"
-          :model-value="parameterValues[field.name] ?? ''"
+          :model-value="parameterValues[field.name] || undefined"
+          value-on-clear=""
           :aria-label="field.label ?? field.name"
           :aria-invalid="Boolean(parameterErrors[field.name])"
           placeholder="请选择"
           :title="field.description"
           @update:model-value="handleParameterInput(field.name, $event)"
         >
-          <ElOption value="" label="请选择" :disabled="field.required === '是'" />
           <ElOption v-for="option in field.options" :key="option" :value="option" :label="option" />
         </ElSelect>
         <ElSelect

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import threading
@@ -13,10 +14,20 @@ from service.base_module import KGModuleScaffoldService
 from service.graph_space_context import get_current_space
 from service.provenance_recorder import record_node_source
 
+logger = logging.getLogger(__name__)
+
 PERSON_LABELS = {"Person", "Scholar", "Expert"}
 ACHIEVEMENT_LABELS = {"Paper", "Project", "Patent", "Report", "Award"}
 TEAM_LABELS = {"Team", "Laboratory", "Department", "Project"}
+# 成果年份属性键：图上 Paper 的实际属性是 publication_year（论文日期契约），
+# 兼容旧数据/夹具的 year 等键；缺这组键会把期间内成果整体滤成 0 项。
+YEAR_KEYS = ("publication_year", "year", "publish_year", "start_year", "publication_date")
+# 共同论文路径搜索单次上限：成果出参最多 10 条，留足期间过滤余量即可。
+JOINT_PAPER_PATH_LIMIT = 100
 NAME_KEYS = ("name_zh", "name_cn", "name", "title", "name_en")
+# 成果标题键链：图上 Paper 的实际标题属性是 title_zh/title_en（论文标题
+# 契约，与直接关系模块同款），缺这组键成果标题会落成节点 ID。
+TITLE_KEYS = ("title_zh", "title_cn", "title", "title_en", "zh_name", "en_name", "name")
 ORG_KEYS = ("scholar_org", "organization", "affiliation_name", "institution_zh")
 DEPARTMENT_KEYS = ("work_experience_department_zh", "department", "team_name")
 DATE_KEYS = ("work_experience_date", "employment_period", "tenure_period")
@@ -49,6 +60,8 @@ class GraphSearchGateway(Protocol):
         edge_type: str | None = None,
         space: str | None = None,
     ) -> dict[str, Any]: ...
+
+    async def search_paths(self, body: dict[str, Any], *, space: str | None) -> dict[str, Any]: ...
 
 
 class ExpertColleagueRelationService(KGModuleScaffoldService):
@@ -187,6 +200,7 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
         skipped_missing_period: set[tuple[str, str]] = set()
         candidates: dict[str, dict[str, Any]] = {}
         candidate_graph_cache: dict[str, dict[str, Any]] = {}
+        joint_cache: dict[str, dict[str, list[dict[str, Any]]]] = {}
         for affiliation in affiliations:
             org_graph = await gateway.subgraph(
                 affiliation["id"],
@@ -252,6 +266,26 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
                 shared_nodes = [
                     context["nodes"][node_id] for node_id in shared if node_id in context["nodes"]
                 ]
+                # 上下文子图按 limit 截断取边：高产专家（边数超 limit）的共同论文
+                # 会整批漏出交集（实测 409 条 AUTHORED_BY 的专家 18 篇共同论文
+                # 只剩 4 篇）。改由服务端 A→AUTHORED_BY→Paper→AUTHORED_BY→B
+                # 路径搜索补齐（与论文合作/直接关系模块同口径），拉回的节点/边
+                # 并入上下文，供成果与证据构建。同一人跨多机构时只搜一次。
+                joint = joint_cache.get(candidate_id)
+                if joint is None:
+                    joint = await self._joint_papers(
+                        gateway, str(expert_node["id"]), candidate_id, space
+                    )
+                    joint_cache[candidate_id] = joint
+                for node in joint["nodes"]:
+                    context["nodes"].setdefault(str(node.get("id")), node)
+                context["edges"].extend(joint["edges"])
+                merged_shared: dict[str, dict[str, Any]] = {
+                    str(item.get("id")): item for item in shared_nodes
+                }
+                for node in joint["nodes"]:
+                    merged_shared.setdefault(str(node.get("id")), node)
+                shared_nodes = list(merged_shared.values())
                 teams = sorted(
                     {
                         self._node_name(item)
@@ -656,6 +690,60 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
             neighbors[target].add(source)
         return {"nodes": nodes, "neighbors": neighbors, "edges": list(graph.get("edges", []))}
 
+    async def _joint_papers(
+        self,
+        gateway: GraphSearchGateway,
+        person_a: str,
+        person_b: str,
+        space: str | None,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """经 /paths/search 服务端搜两位专家的共同论文（A→Paper→B 两跳）。
+
+        上下文子图有 limit 截断：高产专家的共同论文会整批漏出交集，这里把
+        路径上的论文节点与边拉回给调用方并入上下文。方向口径与直接关系/
+        论文合作模块一致：techkg 为 Scholar-[AUTHORED]->Paper（out），
+        其余空间为 Paper-[AUTHORED_BY]->Person（从人走 in）。
+        """
+        space_is_techkg = space == "techkg"
+        person_to_paper = "out" if space_is_techkg else "in"
+        paper_to_person = "in" if space_is_techkg else "out"
+        request = {
+            "sourceId": person_a,
+            "targetId": person_b,
+            "steps": [
+                {
+                    "edgeType": "AUTHORED" if space_is_techkg else "AUTHORED_BY",
+                    "direction": person_to_paper,
+                    "targetLabel": "Paper",
+                    "targetFilters": [],
+                },
+                {
+                    "edgeType": "AUTHORED" if space_is_techkg else "AUTHORED_BY",
+                    "direction": paper_to_person,
+                    "targetLabel": "Scholar" if space_is_techkg else "Person",
+                    "targetFilters": [],
+                },
+            ],
+            "limit": JOINT_PAPER_PATH_LIMIT,
+            "offset": 0,
+            "countTotal": False,
+            "space": space,
+        }
+        try:
+            result = await gateway.search_paths(request, space=space)
+        except Exception:  # noqa: BLE001 - 补齐失败退回子图交集，不影响主链路
+            logger.warning("joint paper search failed for %s×%s", person_a, person_b)
+            return {"nodes": [], "edges": []}
+        nodes: list[dict[str, Any]] = []
+        edges: list[dict[str, Any]] = []
+        for path in result.get("items") or []:
+            path_nodes = path.get("nodes") or []
+            if len(path_nodes) < 2:
+                continue
+            nodes.extend(path_nodes)
+            edges.extend(path.get("edges") or [])
+        return {"nodes": nodes, "edges": edges}
+
     def _coauthor_counts(self, expert_id: str, graph: dict[str, Any]) -> dict[str, int]:
         counts: dict[str, int] = {}
         for edge in graph.get("edges", []):
@@ -694,9 +782,7 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
     ) -> dict[str, Any]:
         labels = self._labels(node)
         kind = next((label for label in labels if label in ACHIEVEMENT_LABELS), "Achievement")
-        year = self._year(
-            self._property(node, ("year", "publish_year", "start_year", "publication_date"))
-        )
+        year = self._year(self._property(node, YEAR_KEYS))
         node_id = str(node.get("id", ""))
         graph_links = [
             {
@@ -715,7 +801,7 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
         return {
             "id": str(node.get("id", "")),
             "type": kind,
-            "title": self._node_name(node),
+            "title": self._property(node, TITLE_KEYS) or self._node_name(node),
             "year": year,
             "graphLinks": list(
                 {
@@ -829,9 +915,7 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
         return bool(normalize(left) and normalize(left) == normalize(right))
 
     def _node_within_period(self, node: dict[str, Any], period: tuple[int, int]) -> bool:
-        year = self._year(
-            self._property(node, ("year", "publish_year", "start_year", "publication_date"))
-        )
+        year = self._year(self._property(node, YEAR_KEYS))
         return bool(year and period[0] <= year * 12 + 11 and year * 12 <= period[1])
 
     def _graph_key(self, value: str) -> str:

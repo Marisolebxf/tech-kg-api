@@ -79,6 +79,8 @@ def test_legacy_entity_provenance_uses_mysql_column(table, field, vid):
 class FakeGraphSearchGateway:
     def __init__(self) -> None:
         self.api_calls: list[dict[str, Any]] = []
+        # 可注入的 /paths/search 返回值（默认空：共同论文走上下文子图交集）
+        self.path_search_result: dict[str, Any] = {"items": [], "total": 0}
         self.expert = node(
             "person_a",
             ["Person"],
@@ -112,6 +114,12 @@ class FakeGraphSearchGateway:
     async def resolve_person(self, keyword: str, space: str | None) -> dict[str, Any] | None:
         self.api_calls.append({"method": "GET", "path": "/api/v1/graph-search/nodes/person_a"})
         return self.expert
+
+    async def search_paths(self, body: dict[str, Any], *, space: str | None) -> dict[str, Any]:
+        self.api_calls.append(
+            {"method": "POST", "path": "/api/v1/graph-search/paths/search", "body": body}
+        )
+        return self.path_search_result
 
     async def subgraph(
         self,
@@ -275,6 +283,114 @@ async def test_query_time_window_outside_employment_overlap_excludes_colleague()
 
     assert result["total"] == 0
     assert result["colleagues"] == []
+
+
+@pytest.mark.asyncio
+async def test_joint_papers_refetched_via_path_search_when_subgraph_truncated() -> None:
+    """上下文子图取数被截断（高产专家论文边刷屏）时，共同论文改由
+    服务端路径搜索补齐，期间内成果不再整批丢成 0 项。"""
+    gateway = FakeGraphSearchGateway()
+    original_subgraph = gateway.subgraph
+
+    async def truncated_subgraph(
+        node_id: str,
+        *,
+        depth: int,
+        limit: int,
+        direction: str = "both",
+        edge_type: str | None = None,
+        space: str | None = None,
+    ) -> dict[str, Any]:
+        graph = await original_subgraph(
+            node_id,
+            depth=depth,
+            limit=limit,
+            direction=direction,
+            edge_type=edge_type,
+            space=space,
+        )
+        # 只截断专家的上下文子图（无 edge_type 分支）：共同论文整体丢失
+        if node_id == "person_a" and edge_type is None:
+            return {"nodes": [gateway.expert, gateway.org], "edges": [gateway.expert_aff_edge]}
+        return graph
+
+    gateway.subgraph = truncated_subgraph  # type: ignore[method-assign]
+    gateway.path_search_result = {
+        "items": [
+            {
+                "nodes": [
+                    gateway.expert,
+                    node("paper_1", ["Paper"], title="科技知识图谱关系推理", year="2022"),
+                    gateway.colleague,
+                ],
+                "edges": [
+                    edge("paper_1", "person_a", "AUTHORED_BY"),
+                    edge("paper_1", "person_b", "AUTHORED_BY"),
+                ],
+            }
+        ],
+        "total": 1,
+    }
+
+    result = await ExpertColleagueRelationService().query(gateway, expert_id="person_a")
+
+    relation = result["colleagues"][0]
+    assert relation["colleague"]["id"] == "person_b"
+    # 2022 在共事期间（2020-2023）内：成果须由路径搜索补齐，不能是 0 项
+    assert [item["id"] for item in relation["achievements"]] == ["paper_1"]
+    assert relation["workContent"] == ["科技知识图谱关系推理"]
+    path_calls = [c for c in result["apiCalls"] if "paths/search" in c["path"]]
+    assert path_calls, "共同论文应改走 /paths/search 服务端路径搜索"
+
+
+@pytest.mark.asyncio
+async def test_achievement_year_reads_publication_year_property() -> None:
+    """图上 Paper 的年份属性是 publication_year：缺该键时期间内成果会被整批滤成 0。"""
+    gateway = FakeGraphSearchGateway()
+    gateway.paper = node(
+        "paper_1",
+        ["Paper"],
+        title="科技知识图谱关系推理",
+        publication_year="2022",
+    )
+
+    original_subgraph = gateway.subgraph
+
+    async def subgraph_with_new_paper(
+        node_id: str,
+        *,
+        depth: int,
+        limit: int,
+        direction: str = "both",
+        edge_type: str | None = None,
+        space: str | None = None,
+    ) -> dict[str, Any]:
+        graph = await original_subgraph(
+            node_id,
+            depth=depth,
+            limit=limit,
+            direction=direction,
+            edge_type=edge_type,
+            space=space,
+        )
+        if node_id == "person_a" and edge_type is None:
+            return {
+                "nodes": [gateway.expert, gateway.colleague, gateway.org, gateway.paper],
+                "edges": [
+                    gateway.expert_aff_edge,
+                    gateway.colleague_aff_edge,
+                    edge("paper_1", "person_a", "AUTHORED_BY"),
+                    edge("paper_1", "person_b", "AUTHORED_BY"),
+                ],
+            }
+        return graph
+
+    gateway.subgraph = subgraph_with_new_paper  # type: ignore[method-assign]
+
+    result = await ExpertColleagueRelationService().query(gateway, expert_id="person_a")
+
+    relation = result["colleagues"][0]
+    assert [item["id"] for item in relation["achievements"]] == ["paper_1"]
 
 
 @pytest.mark.asyncio
@@ -474,6 +590,7 @@ class _Response:
 class _GatewayClient:
     def __init__(self) -> None:
         self.get_calls: list[tuple[str, dict[str, Any]]] = []
+        self.post_calls: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
 
     async def get(self, path: str, params: dict[str, Any]) -> _Response:
         self.get_calls.append((path, params))
@@ -487,6 +604,7 @@ class _GatewayClient:
         return _Response({"success": False, "code": 404, "msg": "not found"})
 
     async def post(self, path: str, params: dict[str, Any], json: dict[str, Any]) -> _Response:
+        self.post_calls.append((path, params, json))
         if "name_zh" in json:
             items = [
                 {"id": "person_1", "properties": {"name_zh": "张三"}},
@@ -517,6 +635,21 @@ async def test_gateway_subgraph_respects_total_limit() -> None:
     assert len(graph["edges"]) == 3
     subgraph_calls = [item for item in client.get_calls if "/subgraph/" in item[0]]
     assert len(subgraph_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_gateway_search_paths_carries_space_in_body() -> None:
+    """paths/search 端点从请求体读 space（与其余 GET 端点不同），适配层须并入 body。"""
+    client = _GatewayClient()
+    gateway = FastAPIGraphSearchGateway(client)  # type: ignore[arg-type]
+
+    result = await gateway.search_paths({"sourceId": "a", "targetId": "b"}, space="dev")
+
+    path, _params, body = client.post_calls[-1]
+    assert path == "/api/v1/graph-search/paths/search"
+    assert body["space"] == "dev"
+    assert body["sourceId"] == "a"
+    assert result == {"items": [], "total": 0}
 
 
 @pytest.mark.parametrize(

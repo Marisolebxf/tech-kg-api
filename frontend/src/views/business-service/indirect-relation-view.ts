@@ -185,6 +185,9 @@ export function buildIndirectRelationGraph(
       nodeType: graphNodeType(node, node.id === result.coreNode.id),
       x: 85 + level * (550 / maxLevel),
       y,
+      // 起始节点 level=0 触发画布中心强调（光环/加粗/更大半径），与直接
+      // 模块的查询专家同口径；其余节点按所在跳数标记。
+      level,
       entityType: displayEntityType(node, node.id === result.coreNode.id),
       confidence: nodeConfidence(node),
       relations:

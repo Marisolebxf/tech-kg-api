@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 
@@ -544,16 +545,39 @@ class _OrglessGraphApi(FakeGraphSearchApi):
         return node
 
 
+class _PaperAuthorGraphApi(FakeGraphSearchApi):
+    """论文侧作者点（dwd_zh_author）：无 scholar_org，单位只随 extra_json 落图。"""
+
+    async def get_node(self, node_id: str, *, space: str):
+        node = await super().get_node(node_id, space=space)
+        if node["id"] == "person_B":
+            props = dict(node["properties"])
+            props.pop("scholar_org", None)
+            props["extra_json"] = json.dumps({"affiliation": json.dumps(["乙单位实验室", ""])})
+            node = {**node, "properties": props}
+        return node
+
+
+@pytest.mark.asyncio
+async def test_structured_result_paper_author_unit_from_extra_json():
+    """论文侧作者点机构从 extra_json.affiliation 解析，仍属纯查图口径。"""
+    clear_caches()
+    body = ExpertPaperCooperationDemoRequest(expertAId="A", expertBId="B")
+    result = await _build_structured_result(_PaperAuthorGraphApi(), body)
+
+    assert result["authorUnits"] == ["甲单位", "乙单位实验室"]
+
+
 @pytest.mark.asyncio
 async def test_structured_result_orgless_expert_stays_graph_only():
-    """仅查图数据库：图节点缺机构属性时按"未知机构"展示，不再回退源表兜底。"""
+    """仅查图数据库：图节点缺机构属性时不落"未知机构"占位，单位返回空串。"""
     clear_caches()
     assert not hasattr(expert_paper_cooperation_api, "gkx_element_read_session")
 
     body = ExpertPaperCooperationDemoRequest(expertAId="A", expertBId="B")
     result = await _build_structured_result(_OrglessGraphApi(), body)
 
-    assert result["authorUnits"] == ["甲单位", "未知机构"]
+    assert result["authorUnits"] == ["甲单位", ""]
     graph_nodes = {n["id"]: n for n in result["_graph"]["nodes"]}
     assert graph_nodes["person_B"]["subtitle"] == ""
 

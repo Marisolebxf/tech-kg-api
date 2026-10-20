@@ -237,19 +237,32 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
         graph: dict[str, list[Any]] = {"nodes": [], "edges": []}
         industry_chains: list[str] = []
         fallback_reason: str | None = None
+        anchor_ignored_note: str | None = None
 
         try:
             async with graph_api(
                 auth_headers=auth_headers,
                 timeout_seconds=_PANORAMA_GRAPH_API_TIMEOUT_SECONDS,
             ) as client:
-                resolved_anchor, layer_payload, industry_chains = await asyncio.gather(
+                (
+                    resolved_anchor,
+                    layer_payload,
+                    industry_chains,
+                    anchor_usable,
+                ) = await asyncio.gather(
                     self._resolve_anchor_from_keyword(client, industry_kw, anchor),
                     self._fetch_layers(client, industry_kw, top_k, diagnostics=diagnostics),
                     self._fetch_industry_chain_labels(client),
+                    self._anchor_matches_industry(client, anchor, industry_kw),
                 )
                 layers, seed_vids = layer_payload
                 anchor = resolved_anchor
+                if anchor and not anchor_usable:
+                    # 显式锚点与必填产业关键词指向不同链：不能拿着锚点子图
+                    # 冒充该产业的全景（改关键词后页面纹丝不动全是旧链）。
+                    # 忽略该锚点、回退关键词解析，并在溯源里如实注明。
+                    anchor_ignored_note = "anchorId 节点与产业关键词不一致，已按产业关键词选取锚点"
+                    anchor = await self._resolve_anchor_from_keyword(client, industry_kw, None)
                 # 关键词未命中不兜底：不再回退到全库紧凑全景，让结果保持空，
                 # 由 provenance 如实说明未命中，驱动前端「未查询到数据」提示。
                 if rel_types:
@@ -312,6 +325,8 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             source["normalizedIndustry"] = industry_kw or ""
         if anchor and not anchor_id:
             source["autoAnchorId"] = anchor
+        if anchor_ignored_note:
+            source["anchorIgnored"] = anchor_ignored_note
         if fallback_reason is not None:
             source["reason"] = fallback_reason
 
@@ -376,6 +391,52 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             if resolved:
                 return resolved
         return None
+
+    async def _anchor_matches_industry(
+        self,
+        client: GraphAPIClient,
+        anchor_id: str | None,
+        industry: str | None,
+    ) -> bool:
+        """显式锚点与产业关键词的一致性：锚点名或其归属链名包含关键词。
+
+        产业关键词是必填主键，anchorId 只是可选的中心点：两者指向不同链时
+        以关键词为准（见 query）。图服务抖动时放行（True），不误伤合法锚点。
+        """
+        if not anchor_id or not industry:
+            return True
+        try:
+            node = await client.get_node(anchor_id)
+        except GraphAPIError:
+            return True
+        if node is None:
+            return False
+        if self._node_text_contains(node, industry):
+            return True
+        # 链锚点（IndustryNode/IndustryChain）名字不含关键词即不一致：
+        # 它的成员企业/专家名与产业无关，不作为判断依据。
+        labels = {str(item) for item in node.get("labels") or []}
+        if labels & {"IndustryNode", "IndustryChain"}:
+            return False
+        # 非链锚点（专家/机构）：经产业链归属边（BELONGS_TO_NODE）一跳看
+        # 归属链名是否含关键词。图空间没有其它归属边类型，别猜不存在的
+        # 类型名（会 400 成 GraphAPIError 被误判成抖动放行）。
+        try:
+            neighbours = await client.get_neighbours(
+                anchor_id, direction="both", edge_type="BELONGS_TO_NODE", limit=50
+            )
+        except GraphAPIError:
+            return True
+        return any(self._node_text_contains(item, industry) for item in neighbours)
+
+    @staticmethod
+    def _node_text_contains(node: dict[str, Any], keyword: str) -> bool:
+        props = node.get("properties") or {}
+        folded = keyword.casefold()
+        return any(
+            folded in str(props.get(key) or "").casefold()
+            for key in ("node_name", "name_cn", "name_en", "name", "industry_class")
+        )
 
     async def _resolve_unique_anchor_candidate(
         self,
@@ -1261,6 +1322,11 @@ class IndustryChainPanoramaService(KGModuleScaffoldService):
             head = "图库未命中任何实体。"
         else:
             head = "分层实体与子图均来自图查询 API。"
+        # 显式锚点与产业关键词不一致被忽略时，把原因放在溯源最前面，避免
+        # 「改了关键词但页面还是旧锚点链」被误读成查询没生效。
+        anchor_note = str(source.get("anchorIgnored") or "")
+        if anchor_note:
+            head = f"{anchor_note}；{head}"
 
         nodes = graph.get("nodes") or []
         edges = graph.get("edges") or []

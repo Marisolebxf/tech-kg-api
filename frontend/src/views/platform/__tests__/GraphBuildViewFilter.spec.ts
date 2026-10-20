@@ -128,7 +128,7 @@ describe('图谱构建任务筛选与清空', () => {
   it('类型下拉仅提供真实类型，不提供空值选项', () => {
     const typeSelect = wrapper.find('#graph-build-filter-type')
     const options = typeSelect.findAll('option')
-    expect(options.map(option => option.attributes('value'))).toEqual(['extract', 'single', 'chain', 'upload'])
+    expect(options.map(option => option.attributes('value'))).toEqual(['extract', 'chain'])
   })
 
   it('状态选择后可通过清除按钮恢复全部', async () => {

@@ -9,7 +9,6 @@ import { directDecideProductionReview, getProductionReview, heartbeatProductionR
 
 import {
   getHandleCategory,
-  getReviewConsequence,
   getReviewTemplate,
   labelZh,
   type ReviewAction,
@@ -141,10 +140,6 @@ const templateId = computed(
   () => productionCase.value?.templateId ?? template.value?.id ?? '',
 )
 const handleCategory = computed(() => (record.value ? getHandleCategory(record.value) : '质量校验'))
-const consequence = computed(() => {
-  if (productionCase.value?.consequence) return { ...productionCase.value.consequence, rerunAnchor: productionCase.value.pipelineStepName || productionCase.value.consequence.rerunStepId, phase: record.value?.module || '图谱构建' }
-  return record.value ? getReviewConsequence(record.value) : null
-})
 
 const note = ref(record.value?.decisionNote ?? '')
 /** 操作反馈：按 Arco Alert 规范分状态展示（成功/错误/警告），带前置提示符。 */
@@ -242,6 +237,44 @@ const linkPendingRelations = computed<LinkPendingRelation[]>(() => {
       toName: r.toName ? String(r.toName) : undefined,
     }))
     .filter((r) => r.edgeType && r.fromId && r.toId)
+})
+/** MR-TEXT：终态判定树——完成态不再按「已扣留，未写图」展示，按落库决议保守
+ * 判定写图结果；决议缺失/字段冲突/无待入库快照的分支一律不宣称已入图
+ * （宁可少说，不可说错；RESOLVED 不等于写图成功——reject-candidate 也落 RESOLVED）。 */
+interface TerminalOutcome { tone: 'success' | 'warning' | 'info'; badge: string; text: string; edgesText: string }
+const terminalOutcome = computed<TerminalOutcome | null>(() => {
+  const status = productionCase.value?.status || ''
+  if (!['RESOLVED', 'REJECTED', 'CANCELLED'].includes(status)) return null
+  if (status === 'CANCELLED') {
+    return { tone: 'info', badge: '已撤销', text: '该案已撤销，候选未写入图。', edgesText: '这些暂存边已随案撤销，未写图。' }
+  }
+  const decision = productionCase.value?.decision
+  const result = (decision?.result || {}) as Record<string, unknown>
+  const actionId = decision?.actionId || ''
+  const verdict = String(result.entityVerdict || '')
+  // 驳回族：案被 REJECTED，或决议为驳回类动作 / 裁决值 reject（reject-candidate 不写图也落 RESOLVED）
+  if (status === 'REJECTED' || verdict === 'reject' || ['reject-candidate', 'reject', 'discard-record'].includes(actionId)) {
+    return { tone: 'warning', badge: '已驳回 · 未入图', text: '该记录经人工裁决驳回，候选未写入图。', edgesText: '这些暂存边已随挂起实体一并丢弃，未写图。' }
+  }
+  const writtenAction = actionId === 'entity-confirm' ? ['merge', 'create'].includes(verdict) : ['accept', 'accept-fix'].includes(actionId)
+  if (!writtenAction) {
+    return { tone: 'info', badge: '已裁决 · 决议不完整', text: `该案已结束（${actionId || '决议动作缺失'}），但决议字段不完整或冲突，无法判定写图结果——以下均为裁决前快照。`, edgesText: '这些暂存边的处理结果无法从决议确认（见上方判定）。' }
+  }
+  if (templateId.value === 'T_LINK' && !linkSnapshot.value?._incoming) {
+    return { tone: 'info', badge: '已裁决 · 仅记录决议', text: '该案建案时无待入库快照（存量写后案），本次裁决仅记录决议，未发生新的写图。', edgesText: '裁决前快照，处理结果以该案建立时的写图为准。' }
+  }
+  if (actionId === 'entity-confirm' && verdict === 'merge') {
+    if (!result.targetEntityId) {
+      return { tone: 'info', badge: '已裁决 · 决议不完整', text: '决议缺少并入目标（targetEntityId），无法确认写图结果——以下均为裁决前快照。', edgesText: '这些暂存边的处理结果无法从决议确认（见上方判定）。' }
+    }
+    const target = String(result.targetEntityId)
+    const name = linkCandidates.value.find((cand) => cand.vid === target)?.name
+    return { tone: 'success', badge: '已并入图', text: `该记录已并入候选${name ? `「${name}」` : ''}（${target}），案落 RESOLVED。`, edgesText: '这些暂存边已按并入端点补写落图。' }
+  }
+  if (actionId === 'entity-confirm' && verdict === 'create') {
+    return { tone: 'success', badge: '已新建实体', text: '该记录已确认为新实体写入图，案落 RESOLVED。', edgesText: '这些暂存边已随新实体落图。' }
+  }
+  return { tone: 'success', badge: '已写入图', text: '该候选经人工确认已写入图，案落 RESOLVED。', edgesText: '这些暂存边已随之写图。' }
 })
 /** 待入库 vs 候选的逐字段对照：same=一致 / differ=冲突 / missing=单侧缺失。 */
 type LinkPropDiff = { key: string; left: string; right: string; status: 'same' | 'differ' | 'missing' }
@@ -447,9 +480,14 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
       record.value = mapProductionRecord(productionCase.value)
       directEditing.value = false
       directEdits.value = {}
-      notify('success', action.id === 'accept-fix'
-        ? `已按修正后候选写入图（修改 ${editedCount} 个字段，已记入审计）`
-        : action.id === 'accept' ? '已通过，候选已写入图' : '已驳回，候选丢弃')
+      // MR-TEXT 同口径：accept 宣称写图前核对回写状态（accept→RESOLVED / reject→REJECTED）
+      const decidedStatus = productionCase.value?.status
+      const decidedOk = action.id === 'reject' ? decidedStatus === 'REJECTED' : decidedStatus === 'RESOLVED'
+      notify(decidedOk ? 'success' : 'warning', decidedOk
+        ? (action.id === 'accept-fix'
+          ? `已按修正后候选写入图（修改 ${editedCount} 个字段，已记入审计），案已落 RESOLVED。`
+          : action.id === 'accept' ? '已通过，候选已写入图，案已落 RESOLVED。' : '已驳回，候选丢弃，案已落 REJECTED。')
+        : `裁决已提交（状态 ${decidedStatus || '未知'}），但回写状态异常，写图结果待确认——请刷新详情核对。`)
     } catch (error) {
       notify('error', error instanceof Error ? error.message : '决策失败')
     } finally {
@@ -477,7 +515,19 @@ const handleAction = async (action: ReviewAction | { id: string; label: string; 
       record.value = mapProductionRecord(productionCase.value)
       window.clearInterval(heartbeatTimer)
     }
-    notify('success', `裁决已回写「${consequence.value?.writeTarget ?? '处理结果'}」。`)
+    // MR-TEXT：宣称「已写入图」前先核对回写——状态必须 RESOLVED 且决议字段与
+    // 提交一致；不一致（提交成功但回写异常/字段冲突）保守降级，不冒认写图
+    const decidedResult = (productionCase.value?.decision?.result || {}) as Record<string, unknown>
+    const fieldsConsistent = productionCase.value?.status === 'RESOLVED'
+      && String(decidedResult.entityVerdict || '') === entityVerdict.value
+      && (entityVerdict.value !== 'merge' || String(decidedResult.targetEntityId || '') === selectedTarget.value)
+    if (fieldsConsistent) {
+      notify('success', entityVerdict.value === 'merge'
+        ? `已并入图（目标 ${selectedTarget.value || '—'}），案已落 RESOLVED。`
+        : entityVerdict.value === 'create' ? '已确认为新实体写入图，案已落 RESOLVED。' : '已驳回，候选未写入图。')
+    } else {
+      notify('warning', `裁决已提交（状态 ${productionCase.value?.status || '未知'}），但回写决议与提交不一致，写图结果待确认——请刷新详情核对。`)
+    }
   } catch (error) {
     notify('error', error instanceof Error ? error.message : '人工处理提交失败')
   } finally {
@@ -573,9 +623,10 @@ const runPrimary = () => {
       <section v-else-if="templateId === 'T_LINK' || templateId === 'T_DIRECT'" class="zone zone-entity">
         <AppAlert v-if="record.type === '单任务执行失败'" type="warning" class="zone-banner">对齐任务超时未生成候选，请基于源记录人工裁决后重跑。</AppAlert>
 
-        <!-- 待入库记录卡（T_LINK：消歧扣留记录；T_DIRECT：低置信抽取候选） -->
+        <!-- 待入库记录卡（T_LINK：消歧扣留记录；T_DIRECT：低置信抽取候选）。
+             终态按判定树换文案：写图结果如实展示，不再一律「已扣留，未写图」 -->
         <div class="link-incoming">
-          <span>待入库记录（已扣留，未写图）</span>
+          <span>{{ terminalOutcome ? `待入库记录 · ${terminalOutcome.badge}` : '待入库记录（已扣留，未写图）' }}</span>
           <strong>{{ record.object }}</strong>
           <dl class="link-incoming-meta">
             <div><dt>类型</dt><dd>{{ incomingKindLabel }}</dd></div>
@@ -587,7 +638,7 @@ const runPrimary = () => {
           <template v-if="templateId === 'T_LINK'">
             <p v-if="linkResolution">消歧得分 {{ linkResolution.matchScore ?? '—' }} · 候选分差 {{ linkResolution.margin ?? '—' }} · 灰区人工裁决</p>
             <details v-if="linkIncomingProps.length" class="link-incoming-props zone-extra">
-              <summary>待入库实体属性（{{ linkIncomingProps.length }} 项）</summary>
+              <summary>待入库实体属性（{{ linkIncomingProps.length }} 项{{ terminalOutcome ? ' · 裁决前快照' : '' }}）</summary>
               <table class="direct-fields">
                 <tbody>
                   <tr v-for="[key, val] in linkIncomingProps" :key="key">
@@ -603,22 +654,26 @@ const runPrimary = () => {
             <p>抽取置信度 {{ directConfidence ?? '—' }} · 低于自动入库阈值 0.85，需人工复核</p>
           </template>
         </div>
+        <!-- 终态判定结果（MR-TEXT）：与裁决前快照并列，先说结论再看快照 -->
+        <AppAlert v-if="terminalOutcome" :type="terminalOutcome.tone" class="link-outcome">{{ terminalOutcome.text }}</AppAlert>
 
-        <!-- T_LINK 挂起边可见：驳回会把这些边一并丢弃，评审员需看见代价 -->
+        <!-- T_LINK 挂起边可见：驳回会把这些边一并丢弃，评审员需看见代价（终态为裁决前快照） -->
         <div v-if="templateId === 'T_LINK' && linkPendingRelations.length" class="link-pending">
-          <p class="link-candidates-title">本裁决挂起的暂存边（{{ linkPendingRelations.length }} 条，未写图）：</p>
+          <p class="link-candidates-title">{{ terminalOutcome ? `裁决前快照 · 挂起的暂存边（${linkPendingRelations.length} 条）` : `本裁决挂起的暂存边（${linkPendingRelations.length} 条，未写图）：` }}</p>
           <ul class="link-pending-list">
             <li v-for="(rel, idx) in linkPendingRelations" :key="`${rel.edgeType}-${rel.fromId}-${rel.toId}-${idx}`">
               {{ labelZh(rel.edgeType) || rel.edgeType }}：<code>{{ rel.fromName || rel.fromId }}</code> → <code>{{ rel.toName || rel.toId }}</code>
             </li>
           </ul>
-          <p class="link-pending-hint">合并 / 确认为新实体时这些边按裁决端点补写；驳回时将随挂起实体一并丢弃。</p>
+          <p v-if="terminalOutcome" class="link-pending-hint">{{ terminalOutcome.edgesText }}</p>
+          <p v-else class="link-pending-hint">合并 / 确认为新实体时这些边按裁决端点补写；驳回时将随挂起实体一并丢弃。</p>
         </div>
 
-        <!-- T_LINK：快照带真实候选（existingCandidates + _incoming）时渲染候选选择 -->
+        <!-- T_LINK：快照带真实候选（existingCandidates + _incoming）时渲染候选选择（终态为裁决前快照） -->
         <template v-if="linkCandidates.length">
           <p class="link-candidates-title">
-            选择要并入的候选（merge 时生效）：
+            <template v-if="terminalOutcome">候选（裁决前快照，{{ linkCandidates.length }} 个）：</template>
+            <template v-else>选择要并入的候选（merge 时生效）：</template>
             <span v-if="linkSameNameTotal !== null" class="link-samename-total">图库同名实体共 {{ linkSameNameTotal }} 个，按得分展示前 {{ linkCandidates.length }} 个</span>
           </p>
           <ul class="link-candidates">
@@ -657,9 +712,10 @@ const runPrimary = () => {
           </ul>
         </template>
 
-        <!-- T_LINK 空候选（脚本挂实体改道、召回无同名）：无 merge 目标，降级为新建/驳回 -->
+        <!-- T_LINK 空候选（脚本挂实体改道、召回无同名）：无 merge 目标，降级为新建/驳回（终态为裁决前快照） -->
         <AppAlert v-else-if="templateId === 'T_LINK' && linkSnapshot" type="info" class="zone-banner">
-          图库无同名候选，无法并入——请「确认为新实体」落图，或驳回丢弃该挂起实体及其暂存边。
+          <template v-if="terminalOutcome">裁决前快照：建案时图库无同名候选（该裁决未发生并入）。</template>
+          <template v-else>图库无同名候选，无法并入——请「确认为新实体」落图，或驳回丢弃该挂起实体及其暂存边。</template>
         </AppAlert>
 
         <!-- T_DIRECT：待入库候选字段（可修正，确认时按修正后写图） -->
@@ -1314,6 +1370,11 @@ const runPrimary = () => {
   margin: 0;
   color: #b54708;
   font-size: 12px;
+}
+
+/* 终态判定结果条（MR-TEXT）：紧跟待入库记录卡，先结论后快照 */
+.link-outcome {
+  margin-bottom: 12px;
 }
 
 .link-incoming-props {

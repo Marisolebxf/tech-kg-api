@@ -1372,3 +1372,63 @@ MRP ca0847ca 是另一路新提交，本条尚未代码复核，不因 Louvain �
 手册同时明确人工入库决策/失败重跑可共用测试空间，前提是在首次读取来源前准备好两套脚本、待审与故障记录不重叠；已读完再换脚本可能空读时另建空间准备。共用流程本次仅整理为指导，未另跑一轮验证，也未修改现有空间、脚本或水位。
 
 MR-SYNC / MR-CAND / MR-TEXT 的交接仍有效；登录与模型校验暂不推进，Louvain 引擎修复继续搁置。本次只更新主手册与本条回信，不新增执行通过声明。
+## [2026-10-20] GLM（MR-SYNC / MR-CAND / MR-TEXT 三问题独立只读核查：根因全部核实，最小修复方案与回归计划备妥待批）
+
+- 基线声明：本轮核查全部在 `origin/kgetl@16dd0ee0` 独立只读 worktree 进行，**零代码改动、零线上操作**；对贵方交接所列代码线索逐点读码核实，全部成立并补齐了 happens-before 证据。顺确认 kgetl tip `16dd0ee0` 即 PR #536 合并提交，贵方 Chrome 复测「8 个目标 h_index/paper_nums/scholar_org 全保留」= MRP 三轮修复已在真实流程验证，此项闭环。
+- 按 ae66ce3b 要求逐项区分四段。**本轮「已执行回归」统一为：无**（未改任何业务代码，仅只读核查与本文档）；各项回归计划随拟改范围列出，获批实施时执行。
+
+### MR-SYNC：重跑队列误报失败——根因链完整核实（写路径缺收尾 + 展示映射放大）
+
+**代码定位**（文件:行号均为 16dd0ee0）：
+
+1. 手动重跑载荷**无 `_scheduleId`**：`service/schema_extraction.py:424-440`（`rerun_failed_records` 构造 payload，只有 schemaId/recordIdsBySource/rerunCaseIds/triggerSource=RERUN 等）。
+2. 而执行行收尾仅此一条主动链路：`service/temporal_workflows.py:3346-3360`（`SchemaExtractWorkflow.run`）——`if not schedule_id: return await self._run_dispatch(request)`，**手动执行（含 RERUN）完全不 finalize**；`_finalize_scheduled_run`（:3155-3176）也只在 `_scheduleId` 存在时调 `finalize_scheduled_execution` activity（:714-749，按 runId 查行、幂等、失败语义齐全）。该 activity docstring 自述的历史缺陷与本轮现场完全同构：「终态此前只靠详情页惰性刷新，没人查看就永远 RUNNING」——调度触发已修，手动/RERUN 触发仍漏。
+3. 案件回写与执行行回写是**两条独立链**：workflow 结尾 `resolve_failure_cases` activity（:2992-3019）→ `resolve_extract_rerun`（manual_review_production.py:1029）把案置 RESOLVED，但**不触碰执行行**→ 执行行滞留 RUNNING。
+4. 队列读取侧只见控制库：`resolve_execution_statuses`（mrp.py:119-135）→ `workflow_repository.py:317` `execution_statuses_by_ids` 只查状态列；`effective_extract_fail_status`（mrp.py:151-156）：stored=RESOLVED 且概要 ≠COMPLETED（**含 RUNNING**）→ 展示 `RERUN_FAILED`。误报窗口=「workflow 已完成、案已 RESOLVED、执行行仍 RUNNING」的整段滞留期。
+5. 打开日志即恢复的机制：`workflow_operations.py:358-372` `get_execution` 对 RUNNING 行调 Temporal 刷新并 `save_execution`（completedAt 也在该时刻落）——与「逐案打开日志后队列才 RESOLVED、完成时间随读取更新」逐点吻合。
+6. 兜底不达时：`execution_reconciler.py:34-35` 默认 300s 间隔、只扫开始超 30 分钟的 RUNNING 行——秒级完成的 RERUN 等不到。
+7. 附带不对称：前端 `OperationsCenterView.vue:113-114` `isRerunnable` 按展示态（OPEN/RERUN_FAILED）放开勾选，写侧 `extract_fail_rerunnable`（mrp.py:163-176）却对 RUNNING 禁发——徽标说失败、后端拒派发。
+
+**拟改范围**（待批准后实施）：
+
+- 主修复（写路径）：`SchemaExtractWorkflow.run` 的收尾门从「仅 `_scheduleId`」扩为「`_scheduleId` 或 RERUN 载荷（`rerunCaseIds`/`triggerSource=RERUN`）」，复用现有 `finalize_scheduled_execution` activity——手动执行行已落 runId（workflow_operations.py:345-350 经 `execution_record` 写入，`get_execution_by_run` 可命中），activity 自带幂等/终态跳过/失败→FAILED 语义（输出含行级失败经 `_apply_output_failure_status` 映射 ABNORMAL），CANCELLED 仍由 reconciler 兜底，与调度路径完全对称。备选（影响面更大，单列不默认）：凡有执行行的运行统一收尾。
+- 防御性对齐（展示推导）：`effective_extract_fail_status` 对 stored=RESOLVED + 概要 RUNNING 改展示 `RERUNNING`（真实语义=执行在跑或待同步，不冒认完成也不误报失败）；控制面不可达（None）分支维持现状。与写侧门控「RUNNING 禁发」口径一致，同时消除第 7 点前端不对称。
+- 不做：缩短 reconciler 轮询、要求用户先开日志（贵方已排除的两条）。
+
+**回归计划**（获批后）：①单测——`tests/unit/test_manual_review_production.py:750-781` 参数表扩 (RESOLVED, RUNNING)→RERUNNING、记录缺失仍 RERUN_FAILED；`tests/unit/test_execution_finalize.py`（既有 7 例族）扩「RERUN 载荷无 `_scheduleId` 也触发收尾」「幂等」「失败→ABNORMAL」；②容器全量（kgetl 基线 2 既有失败照录）；③现场隔离用例——注入失败→重跑→**只轮询队列不开日志**即最终 RESOLVED 且 completedAt=收尾时刻；真失败仍 RERUN_FAILED 可再跑；RUNNING 期重复派发被拦；控制面断连不冒认成功。旧 7 案与审计不动。
+
+**未验证项**：本轮无服务器逐时状态追踪（现象与代码逐点吻合但未取运行时证据）；Temporal 不可用 LOCAL_FALLBACK 队列态的收尾行为；reconciler 对长卡 30min+ 的兜底时序未实测。
+
+### MR-CAND：双来源同轮建案无候选——竞态无 happens-before，快照冻结+无刷新入口
+
+**代码定位**：
+
+1. 来源间纯并发：`temporal_workflows.py:4133` `asyncio.gather(*(extract_source(s) for s in plan["sources"]))`，绑定顺序不构成执行顺序；来源内再 reader+N worker（:4049）。
+2. 建案时机在写图前：`execute_transform` 内 `output.pop("pendingReview")`（:1652-1659）当场经 `_enqueue_pending_review`（:864）→ `_enqueue_entity_pending_item`（:769）召回（:802-807 `recall_candidates`）。召回=图直查 MATCH（entity_disambiguation.py:216/:221，INSERT 提交即同步可见）∪ Milvus 近邻（:339）——但 Milvus 增量在全部来源 gather **结束后**才跑（:4185-4192），运行期近邻路恒不可见。
+3. 竞态无守卫：跨来源唯一串行化是 Redis 同名微锁，**只包 `write_records` 的终判+INSERT**（:2389-2466）；建案召回在锁外。`_prewrite_recheck`（:1841）docstring 自承认同类竞态（「乐观预判——并行批次链交错时其召回可能跑在其它批次的 INSERT 之前」）但只救写路径。故「作者建案召回」跑在「学者 INSERT」之前时双路皆空。
+4. 快照冻结：召回 TOP_K 写 `existingCandidates`（:821-826）→ `create_direct_case` 落 `candidate_snapshot`（mrp.py:814）即冻结，dedupe_key 按快照哈希（:760）。
+5. 详情/裁决均不补：`detail`（mrp.py:2262）只读快照；`_enrich_link_snapshot`（:1231）只为**快照内已有**候选富化 props，新 VID 仅进 `sameNameTotal`（:1328）不进候选列表；`_apply_link_verdict` 白名单（:1449-1455）只允许 merge 到快照候选 VID。
+6. 无刷新入口：审核 API 全集（biz/handler/manual_review.py）无 refresh-candidates 类端点。
+7. 对照组解释：`detect_extract_collisions`（:2783）是**写后**查图建案，天然看得到先写实体（碰撞类案不受此缺陷影响）；分阶段空间先入学者后追加作者时，建案召回经同步可见的图 MATCH 命中→8 案有候选。贵方现场判断「来源并行+建案时召回/快照机制」成立，本轮补齐了完整因果链。
+
+**拟改范围**（两方案并行供评审，不同时实施，均待批准）：
+
+- 方案 A（时序修复，对应贵方方向一）：pendingReview 建案（含召回）延后到全部来源写图完成后（gather 屏障后、与失败清单回写同段执行，activity 沿用既有重试策略）——召回走图直查即见本轮全部 INSERT，**不串行化来源**。风险如实披露：案出现时点后移；屏障后建案需独立重试保障；极端崩溃窗口从「已建案未写图」变为「已写图未建案」（两侧残余风险对称，不声称零风险）。幂等靠既有 dedupe_key。
+- 方案 B（受控刷新能力，对应贵方方向二）：新增 OPEN 态 T_LINK 案的 refresh-candidates 端点：在案件所属空间+标签重跑召回，**新 VID 追加合并**（不删旧候选），乐观锁 version+1（与 submit 竞争时 409），审计事件记录新旧候选集合与操作者，终态案 409 拒绝。这是唯一能补救「已建空候选存量案」的路径（含贵方保留现场 23 案——修复获批准后才可对其操作，本轮未动）。
+- 不做：全平台来源一律串行化（贵方明示需性能/重放评估）；任何自动认定同人/自动并案。
+
+**回归计划**：A——workflow 序测试（pendingReview 在写图屏障后才建案）+既有建案幂等用例保持；B——OPEN 追加候选/version 冲突 409/终态拒绝/白名单接纳新候选/多空间隔离。现场隔离用例：双来源并行复现→设计合并案有候选；作者先到学者后到→刷新后目标可选；真新实体仍可 create；同名异人不自动并。不删案重建、不清水位。
+
+**未验证项**：现场真实交错时序（无服务器追踪）；大批量 pendingReview 屏障后集中建案的时延；决策路径已证实只依赖图 MATCH（Milvus/ES 均不参与判定，ES 四名列仅评审证据展示），但图 MATCH 在超大标签下的召回耗时未压测。
+
+### MR-TEXT：完成态详情文案——纯前端固定渲染，条件渲染所需数据已齐备
+
+**代码定位**：`ManualReviewWorkspaceView.vue:572-573` T_LINK 与 T_DIRECT 共用同一裁决 section；:577-578「待入库记录（已扣留，未写图）」**无条件渲染**；:608-609「暂存边（未写图）」仅按 T_LINK+`_pendingRelations` 非空渲染，均不看案件状态/裁决结果。后端 detail 响应已含 `status` 与 `decision`（actionId + result.entityVerdict/targetEntityId/decidedAt，mrp.py:2304-2318），前端已用其做单选回显；写图失败即抛错回滚、案不会落 RESOLVED（submit :666-672），故 RESOLVED+有 `_incoming` 即隐含写图成功。缺口：apply 明细只落审计事件（前端有 audit-logs API 未在工作台消费）；merge 目标名称需 existingCandidates 反查 targetEntityId。
+
+**拟改范围**（纯前端，待批准后实施）：按 status+decision 条件渲染——OPEN 显示现有扣留文案；RESOLVED+merge→「已并入目标（附裁决前快照，标注为裁决前输入）」；RESOLVED+create→「已新建入库」；REJECTED→「已驳回·未入图」；T_DIRECT accept/reject 同理；无 `_incoming` 的存量案（applied=False 语义）不得显示已写图。快照区块统一加「裁决前快照」标注。可选后端增强（单列备选）：detail 响应补 applied 标志与落点名称。不改成统一「已写图」掩盖未应用情形。
+
+**回归计划**：vitest 新增 OPEN/merge/create/reject/应用失败五态文案断言+刷新不回退；现有 `ManualReviewDetailRedisplay.spec.ts` 不锁这两条文案、无破坏面。**未验证项**：T_DIRECT 存量老决议缺 result 字段的展示；若采纳后端增强则涉 detail 响应扩展的联测。
+
+### 本轮边界
+
+三问题均只读核查+文档交付，**修复实施（含 PR）待用户另行批准后启动**；不改旧图、不回填 8 目标、不重置案件/审计、不清或降水位；登录跳转/模型校验/Louvain 按贵方 ae66ce3b 口径不推进。本提交仅含本文档，无真实姓名、R-id 字面量、受限脚本、原始响应或凭证。

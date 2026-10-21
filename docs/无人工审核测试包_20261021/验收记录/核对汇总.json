@@ -1,0 +1,89 @@
+{
+  "space": "gkx_pdf_no_review_20261021_01",
+  "nodeCounts": [
+    {
+      "entity_type": [
+        "IndustryChain"
+      ],
+      "total": 2
+    },
+    {
+      "entity_type": [
+        "Paper"
+      ],
+      "total": 90
+    },
+    {
+      "entity_type": [
+        "Journal"
+      ],
+      "total": 9
+    },
+    {
+      "entity_type": [
+        "Person"
+      ],
+      "total": 357
+    },
+    {
+      "entity_type": [
+        "Organization"
+      ],
+      "total": 16
+    },
+    {
+      "entity_type": [
+        "IndustryNode"
+      ],
+      "total": 10
+    }
+  ],
+  "edgeCounts": [
+    {
+      "relation": "BELONGS_TO_NODE",
+      "total": 18
+    },
+    {
+      "relation": "PUBLISHED_IN",
+      "total": 90
+    },
+    {
+      "relation": "AUTHORED_BY",
+      "total": 340
+    }
+  ],
+  "pageRank": {
+    "rows": 451,
+    "expected": 451,
+    "unique": 451,
+    "maxAbsError": 3.552713678800501e-15,
+    "missing": 0
+  },
+  "degree": {
+    "rows": 451,
+    "expected": 451,
+    "unique": 451,
+    "missing": 0,
+    "mismatches": 0,
+    "sumIn": 448,
+    "sumOut": 448,
+    "sumDegree": 896
+  },
+  "louvain": {
+    "rows": 451,
+    "unique": 451,
+    "expected": 451,
+    "missing": 0,
+    "extra": 0,
+    "communities": 44,
+    "emptyCommunity": 0,
+    "communityNotVertex": 0,
+    "samplePosition": "451"
+  },
+  "emptyRerun": {
+    "id": "EXEC-285AEE08A576401D",
+    "status": "COMPLETED",
+    "allStepsZero": true
+  },
+  "problem": "Job aggregate status RUNNING conflicts with execution COMPLETED"
+}

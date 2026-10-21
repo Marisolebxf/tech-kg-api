@@ -143,8 +143,8 @@ const templateId = computed(
 const handleCategory = computed(() => (record.value ? getHandleCategory(record.value) : '质量校验'))
 
 const note = ref(record.value?.decisionNote ?? '')
-/** 操作反馈：按 Arco Alert 规范分状态展示（成功/错误/警告），带前置提示符。 */
-type FeedbackTone = 'success' | 'error' | 'warning'
+/** 操作反馈：按 Arco Alert 规范分状态展示（成功/错误/警告/中性提示），带前置提示符。 */
+type FeedbackTone = 'success' | 'error' | 'warning' | 'info'
 const feedback = ref<{ type: FeedbackTone; text: string } | null>(null)
 function notify(type: FeedbackTone, text: string) {
   feedback.value = { type, text }

@@ -42,7 +42,15 @@ class FakeS3Storage:
 class _SafeLLM:
     """固定放行的假 LLM（fixture 默认；安全门行为专项测试内覆写）。"""
 
-    def synthesize(self, prompt: str, max_tokens: int = 2048) -> str | None:
+    def synthesize(
+        self,
+        prompt: str,
+        max_tokens: int = 2048,
+        *,
+        timeout: float | None = None,
+        result_meta: dict | None = None,
+        abort_reg: list | None = None,
+    ) -> str | None:
         return '{"safe": true, "issues": [], "summary": "安全"}'
 
 
@@ -50,7 +58,15 @@ class _FakeLLM:
     def __init__(self, response: str | None) -> None:
         self._response = response
 
-    def synthesize(self, prompt: str, max_tokens: int = 2048) -> str | None:
+    def synthesize(
+        self,
+        prompt: str,
+        max_tokens: int = 2048,
+        *,
+        timeout: float | None = None,
+        result_meta: dict | None = None,
+        abort_reg: list | None = None,
+    ) -> str | None:
         return self._response
 
 
@@ -318,14 +334,15 @@ async def test_put_upload_rejected_when_llm_not_configured(script_api, monkeypat
 
 @pytest.mark.asyncio
 async def test_put_upload_persists_safety_verdict(script_api, monkeypatch) -> None:
-    """审计落库：放行时把 LLM 校验结论写入 kg_schema_script.safety_*，详情可回读。"""
+    """审计落库：放行时把 LLM 校验结论写入 kg_schema_script.safety_*，详情可回读。
+
+    2026-10-21 复核 SEC-JSON 后契约收紧：safe=true 必须 issues 为空
+    （自相矛盾输出按格式异常拒收），故放行样本不再携带"备注型 issues"。
+    """
     _, _set_actor, _storage = script_api
     monkeypatch.setattr(
         "service.schema_management.get_llm_client",
-        lambda: _FakeLLM(
-            '{"safe": true, "issues": [{"problem": "备注：使用 hashlib 生成指纹",'
-            ' "evidence": "import hashlib"}], "summary": "安全（含备注）"}'
-        ),
+        lambda: _FakeLLM('{"safe": true, "issues": [], "summary": "安全：仅 hashlib 指纹计算"}'),
     )
     source = (
         b"import hashlib\n\nfrom kg_sdk import step\n\n\n@step\ndef fingerprint(payload):\n"
@@ -339,8 +356,8 @@ async def test_put_upload_persists_safety_verdict(script_api, monkeypatch) -> No
         )
         assert response.status_code == 200
         script = (await _detail(client, entity["id"]))["script"]
-        assert script["safetySummary"] == "安全（含备注）"
-        assert script["safetyIssues"] == ["备注：使用 hashlib 生成指纹"]
+        assert script["safetySummary"] == "安全：仅 hashlib 指纹计算"
+        assert script["safetyIssues"] == []
 
         # 重传换 verdict：safety_* 随最新一次校验覆盖，不残留旧值
         monkeypatch.setattr(

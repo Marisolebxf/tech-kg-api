@@ -389,6 +389,23 @@ def _type_label(code: str | None) -> str:
     return EVENT_TYPE_LABEL.get(code or "", code or "未知")
 
 
+# 财务类源表（年报/上市财务）没有标题列，Event 抽取把 title 兜底成表名——
+# 同链 TOP-N 事件会齐刷刷同名（"年报财务信息"×N）。展示层用「企业名+年份」
+# 拼出可区分标题，图本体不动。
+_GENERIC_EVENT_TITLES = {"年报财务信息", "上市企业财务信息"}
+
+
+def _event_display_title(ev: dict[str, Any]) -> str | None:
+    title = ev.get("title")
+    if title not in _GENERIC_EVENT_TITLES:
+        return title
+    org = str(ev.get("org_name") or "").strip()
+    year = str(ev.get("occur_date") or "").split(".")[0].split("-")[0][:4]
+    if not (org or year):
+        return title
+    return f"{org}{year}年{title}"
+
+
 def _impact_score(event_type, amount, occur_date, chain_score):
     weight = EVENT_WEIGHT.get(event_type or "", 1.0)
     try:
@@ -572,7 +589,7 @@ class IndustryNodeTopEventsService:
                 event_type=ev.get("event_type"),
                 occur_date=ev.get("occur_date"),
                 amount=ev.get("amount"),
-                title=ev.get("title"),
+                title=_event_display_title(ev),
                 impact_score=round(ev["_score"], 3),
                 rank=i + 1,
                 org_id=ev.get("org_id"),
@@ -608,7 +625,7 @@ class IndustryNodeTopEventsService:
                 resp.relations.append(
                     EventExpertRelation(
                         event_id=ev["event_id"],
-                        event_title=ev.get("title"),
+                        event_title=_event_display_title(ev),
                         expert_id=pid,
                         expert_name=(
                             props.get("name_cn") or props.get("name_zh") or props.get("name_en")

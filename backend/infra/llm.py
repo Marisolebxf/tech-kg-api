@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from collections.abc import Sequence
 from typing import Any
 
+import httpx
 from openai import OpenAI
 
 logger = logging.getLogger(__name__)
@@ -38,6 +40,109 @@ def thinking_extra_body(model: str) -> dict[str, Any]:
     return {"thinking": {"type": "disabled"}}
 
 
+def classify_llm_error(exc: Exception) -> str:
+    """LLM 调用失败的错误分类（供安全门/日志归类；粗粒度，非精确语义）。
+
+    rate_limit / timeout / auth / forbidden / insufficient_balance /
+    http_<状态码> / other。智谱 1113（余额不足）经响应体文本识别。
+    """
+    text = str(exc)
+    if isinstance(exc, httpx.TimeoutException):
+        return "timeout"
+    try:
+        from openai import APITimeoutError
+
+        if isinstance(exc, APITimeoutError):
+            return "timeout"
+    except ImportError:  # pragma: no cover - openai 版本差异
+        pass
+    if "1113" in text or "余额" in text:
+        return "insufficient_balance"
+    try:
+        from openai import (
+            AuthenticationError,
+            PermissionDeniedError,
+            RateLimitError,
+        )
+
+        if isinstance(exc, RateLimitError):
+            return "rate_limit"
+        if isinstance(exc, AuthenticationError):
+            return "auth"
+        if isinstance(exc, PermissionDeniedError):
+            return "forbidden"
+    except ImportError:  # pragma: no cover
+        pass
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    if isinstance(status, int):
+        return f"http_{status}"
+    return "other"
+
+
+class LLMAbortHandle:
+    """调用方放弃指示器（2026-10-21 复核 SEC-LIFETIME）：锁 + 已取消标志。
+
+    取消分两步（复核 942b442e：此前 cancel() 整体进守护线程，线程未获
+    调度前迟到的 register() 仍会成功、请求仍会在调用方返回后发出）：
+    - mark_cancelled()：调用线程内**同步**完成逻辑取消——置标志 + 取走
+      在登记传输（短锁、无 I/O），保证"调用方返回后任何 register 必被拒"；
+    - close_transports()：可能阻塞的传输关闭，交给守护线程异步执行。
+
+    迟登记互斥：标志置位后任何 register() 都返回 False，登记方须立即关闭
+    自己的传输并放弃请求；置位前登记的传输进入待关列表，由后台 close
+    尽力中断在飞读（非硬保证；权威总上界是调用方墙钟）。
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._transports: list[httpx.Client] = []
+        self._cancelled = False
+        self.closed_count = 0
+
+    @property
+    def cancelled(self) -> bool:
+        with self._lock:
+            return self._cancelled
+
+    def register(self, transport: httpx.Client) -> bool:
+        """登记专属传输；已取消返回 False（调用方须自行关闭并不再发请求）。"""
+        with self._lock:
+            if self._cancelled:
+                return False
+            self._transports.append(transport)
+            return True
+
+    def mark_cancelled(self) -> list[httpx.Client]:
+        """同步置取消标志并取走在登记传输（快，无 I/O）。
+
+        必须在调用方"放弃等待"的返回路径上同步执行——只有这样才能保证
+        迟到的 register()（工作线程初始化慢于调用方超时）必被拒；可能
+        阻塞的关闭动作由调用方交给后台线程：close_transports(mark_cancelled())。
+        """
+        with self._lock:
+            self._cancelled = True
+            pending = list(self._transports)
+            self._transports.clear()
+        return pending
+
+    def close_transports(self, transports: list[httpx.Client]) -> None:
+        """关闭一批传输（幂等；单个失败不影响其余）。可能阻塞，放后台线程。"""
+        for transport in transports:
+            try:
+                transport.close()
+                self.closed_count += 1
+            except Exception:  # pragma: no cover - 关闭失败不影响其余清理
+                logger.exception("放弃等待后关闭在飞请求传输失败")
+
+    def cancel(self) -> None:
+        """同步全量取消（置标志 + 关传输，幂等）。
+
+        生产超时路径用 mark_cancelled + 后台 close_transports 拆分；此方法
+        保留给测试与无"返回时长"约束的直接调用场景。
+        """
+        self.close_transports(self.mark_cancelled())
+
+
 class LLMClient:
     """智谱 GLM 客户端。默认 glm-5.3-flash 始终思考，读 message.content（思考在 reasoning_content）。"""
 
@@ -64,18 +169,90 @@ class LLMClient:
     def api_key(self) -> str:
         return self._api_key
 
-    def synthesize(self, prompt: str, max_tokens: int = DEFAULT_MAX_TOKENS) -> str | None:
+    def synthesize(
+        self,
+        prompt: str,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        *,
+        timeout: float | None = None,
+        result_meta: dict[str, Any] | None = None,
+        abort_reg: LLMAbortHandle | None = None,
+    ) -> str | None:
+        """单轮生成；timeout=None 用客户端默认（DEFAULT_TIMEOUT），语义同 synthesize_json。
+
+        timeout 显式给出时（脚本安全门的墙钟预算路径）：
+        - 改用独立 httpx 传输 + max_retries=0——SDK 内部默认重试 2 次会把
+          同一次超时的时长放大；独立传输使调用方可安全地中断本次连接。
+        - abort_reg（LLMAbortHandle）在发起请求**前**登记专属传输；若登记时
+          调用方已取消（register 返回 False），立即关闭传输并放弃请求——
+          消除"调用方超时返回后请求才登记/发出"的竞态（调用方侧取消 =
+          同步 mark_cancelled 置标志 + 后台 close_transports，见句柄类注释）。
+          已登记后的取消靠 close() **尽力**中断在飞读（同步线程阻塞在
+          socket recv 上无法强杀，依赖 OS 层 socket 关闭语义），非硬保证；
+          权威总上界是调用方墙钟等待。
+        - result_meta 非空时回填诊断：成功记 finish_reason/reasoning_tokens；
+          内容为空记 error_class=empty_response；失败记 error_class
+          （classify_llm_error）与 error_detail。
+        """
+        own_http: httpx.Client | None = None
         try:
-            resp = self._client.chat.completions.create(
-                model=self._model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=max_tokens,
-                extra_body=thinking_extra_body(self._model),
-            )
-            return resp.choices[0].message.content or None
+            create_kwargs: dict[str, Any] = {
+                "model": self._model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": max_tokens,
+                "extra_body": thinking_extra_body(self._model),
+            }
+            client = self._client
+            if timeout is not None:
+                create_kwargs["timeout"] = timeout
+                own_http = httpx.Client(timeout=timeout)
+                if abort_reg is not None and not abort_reg.register(own_http):
+                    # 调用方已在本传输登记前放弃：不再发起请求（复核 SEC-LIFETIME）。
+                    if result_meta is not None:
+                        result_meta["error_class"] = "aborted"
+                        result_meta["error_detail"] = "调用方在请求发起前已取消"
+                    return None
+                client = OpenAI(
+                    api_key=self._api_key,
+                    base_url=self._base_url,
+                    http_client=own_http,
+                    max_retries=0,
+                )
+            resp = client.chat.completions.create(**create_kwargs)
+            if result_meta is not None:
+                result_meta["finish_reason"] = resp.choices[0].finish_reason
+                details = getattr(resp.usage, "completion_tokens_details", None)
+                result_meta["reasoning_tokens"] = getattr(details, "reasoning_tokens", None)
+            content = resp.choices[0].message.content
+            if not content or not content.strip():
+                # 空回答不是"脚本不安全"也不是未知错误：显式归类，避免落 unknown
+                # （复核 SEC-META：length 截断烧光预算时 content 常为空串）。
+                if result_meta is not None:
+                    result_meta["error_class"] = "empty_response"
+                    result_meta["error_detail"] = (
+                        f"content 为空，finish_reason={result_meta.get('finish_reason')}"
+                    )
+                logger.warning(
+                    "LLM synthesize 空回答（finish_reason=%s）",
+                    result_meta.get("finish_reason") if result_meta else None,
+                )
+                return None
+            return content
         except Exception as exc:  # noqa: BLE001
-            logger.warning("LLM synthesize failed, degrading: %s", exc)
+            if result_meta is not None:
+                result_meta["error_class"] = classify_llm_error(exc)
+                result_meta["error_detail"] = str(exc)[:200]
+            logger.warning(
+                "LLM synthesize failed (%s), degrading: %s", classify_llm_error(exc), exc
+            )
             return None
+        finally:
+            # 正常返回/抛错即关闭专属传输（幂等；调用方提前 close 过也无害）。
+            if own_http is not None:
+                try:
+                    own_http.close()
+                except Exception:  # pragma: no cover - 关闭失败不影响降级
+                    logger.exception("关闭 LLM 专属传输失败")
 
     def synthesize_json(
         self,

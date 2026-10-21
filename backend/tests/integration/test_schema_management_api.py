@@ -39,7 +39,15 @@ class FakeS3Storage:
 class _SafeLLM:
     """固定放行的假 LLM（PUT 脚本通道已全员过门）。"""
 
-    def synthesize(self, prompt: str, max_tokens: int = 2048) -> str | None:
+    def synthesize(
+        self,
+        prompt: str,
+        max_tokens: int = 2048,
+        *,
+        timeout: float | None = None,
+        result_meta: dict | None = None,
+        abort_reg: list | None = None,
+    ) -> str | None:
         return '{"safe": true, "issues": [], "summary": "安全"}'
 
 

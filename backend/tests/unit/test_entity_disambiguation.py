@@ -52,7 +52,12 @@ def test_full_agreement_scores_one():
     )
     assert score == 1.0
     assert detail["propsAgree"] == 1.0
-    assert detail["comparedProps"] == ["province", "address"]
+    # 证据 v2（gray-gate-v2）：每字段 {key, match, side} 布尔化，不含业务值
+    assert detail["comparedProps"] == [
+        {"key": "province", "match": True, "side": "both"},
+        {"key": "address", "match": True, "side": "both"},
+    ]
+    assert detail["propCompared"] == 2 and detail["propMatched"] == 2
 
 
 def test_no_comparable_props_is_neutral_gray():
@@ -107,7 +112,8 @@ def test_platform_lineage_columns_do_not_count_as_evidence():
             "org": "北京大学",
         },
     )
-    assert detail["comparedProps"] == ["org"]
+    assert detail["comparedProps"] == [{"key": "org", "match": False, "side": "both"}]
+    assert detail["propCompared"] == 1 and detail["propMatched"] == 0
     assert score < GRAY_LOW
 
 
@@ -176,10 +182,11 @@ def _hit(vid: str, name: str, distance: float, props: str = "{}") -> dict[str, A
 def test_fuzzy_recall_kill_switch(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ENTITY_DISAMBIGUATION_MILVUS_RECALL", "0")
     milvus = _FakeMilvus([[_hit("v9", "无关", 0.99)]])
+    # gray-gate-v2：返回 (载荷, routeStatus)——开关关闭属可用性降级 degraded
     out = ed._milvus_fuzzy_recall(
         "Person", ["张三"], "dev2", milvus=milvus, embedder=_FakeEmbedder()
     )
-    assert out == {}
+    assert out == ({}, "degraded")
     assert milvus.search_calls == []  # 关闭时不发任何检索
 
 
@@ -199,10 +206,11 @@ def test_fuzzy_recall_filters_by_min_sim_and_parses_props(monkeypatch: pytest.Mo
             ]
         ]
     )
-    out = ed._milvus_fuzzy_recall(
+    merged, status = ed._milvus_fuzzy_recall(
         "Organization", ["华为技术"], "dev2", milvus=milvus, embedder=_FakeEmbedder()
     )
-    cands = out["华为技术"]
+    assert status == "ok"  # 有命中
+    cands = merged["华为技术"]
     assert [c["vid"] for c in cands] == ["v1", "v3"]
     assert cands[0]["props"] == {"province": "广东省"}
     assert cands[1]["props"] == {}
@@ -214,7 +222,7 @@ def test_fuzzy_recall_degrades_without_embedder(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr("service.entity_search._embedding_client", lambda: None)
     milvus = _FakeMilvus([[_hit("v9", "无关", 0.99)]])
     out = ed._milvus_fuzzy_recall("Person", ["张三"], "dev2", milvus=milvus, embedder=None)
-    assert out == {}
+    assert out == ({}, "degraded")  # embedding 未配置=可用性降级
     assert milvus.search_calls == []
 
 
@@ -226,7 +234,7 @@ def test_fuzzy_recall_degrades_on_milvus_error():
     out = ed._milvus_fuzzy_recall(
         "Person", ["张三"], "dev2", milvus=_Broken([]), embedder=_FakeEmbedder()
     )
-    assert out == {}
+    assert out == ({}, "service_error")  # 检索异常≠真空，状态如实区分
 
 
 class _FakeGraph:
@@ -254,12 +262,15 @@ def test_recall_candidates_unions_two_roads_dedup_by_vid(monkeypatch: pytest.Mon
     monkeypatch.setattr(
         ed,
         "_milvus_fuzzy_recall",
-        lambda tag, names, space, **kw: {
-            "王伟": [
-                {"vid": "e2", "name": "王伟", "props": {}, "similarity": 0.9},
-                {"vid": "e3", "name": "汪伟", "props": {"province": "北京"}, "similarity": 0.8},
-            ]
-        },
+        lambda tag, names, space, **kw: (
+            {
+                "王伟": [
+                    {"vid": "e2", "name": "王伟", "props": {}, "similarity": 0.9},
+                    {"vid": "e3", "name": "汪伟", "props": {"province": "北京"}, "similarity": 0.8},
+                ]
+            },
+            "ok",
+        ),
     )
     out = recall_candidates(_FakeGraph(), "Person", ["王伟"], space="dev2")
     vids = [c["vid"] for c in out["王伟"]]
@@ -267,7 +278,8 @@ def test_recall_candidates_unions_two_roads_dedup_by_vid(monkeypatch: pytest.Mon
 
 
 def test_recall_candidates_fuzzy_failure_falls_back_to_exact(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(ed, "_milvus_fuzzy_recall", lambda *a, **kw: {})
+    # 近邻路异常（service_error）fail-open：载荷空，仅同名路候选
+    monkeypatch.setattr(ed, "_milvus_fuzzy_recall", lambda *a, **kw: ({}, "service_error"))
     out = recall_candidates(_FakeGraph(), "Person", ["王伟"], space="dev2")
     assert [c["vid"] for c in out["王伟"]] == ["e1", "e2"]
 

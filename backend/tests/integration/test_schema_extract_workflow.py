@@ -100,8 +100,17 @@ def _make_activities(
     fail_plan=False,
     fail_index=False,
     upload_vids=True,
+    plan=None,
+    pending_review=False,
+    pending_response=None,
+    fail_pending=False,
 ):
-    """假 activity 集：读按游标吐批次；转换对毒行（id=bad）报 failures；记录调用。"""
+    """假 activity 集：读按游标吐批次；转换对毒行（id=bad）报 failures；记录调用。
+
+    gray-gate-v2 接线观测：plan 可覆写（如关系计划）、pending_review 让转换吐
+    挂起项（走 resolve_pending_entities 双流，pending_response 可定制其响应）；
+    完整请求记入 transform_requests/resolve_requests/write_requests/pending_resolved。
+    """
 
     @activity.defn(name="load_schema_extract_plan")
     async def load_plan(schema_id: str | dict[str, Any]) -> dict[str, Any]:
@@ -112,7 +121,7 @@ def _make_activities(
         state["load_plan"] = state.get("load_plan", 0) + 1
         if fail_plan:
             raise ValueError("下载 Schema 脚本失败: NoSuchKey")
-        return PLAN
+        return plan or PLAN
 
     @activity.defn(name="read_source_batch")
     async def read_batch(request: dict[str, Any]) -> dict[str, Any]:
@@ -145,20 +154,42 @@ def _make_activities(
     @activity.defn(name="execute_transform")
     async def transform(request: dict[str, Any]) -> dict[str, Any]:
         state.setdefault("transforms", []).append(len(request.get("rows") or []))
-        entities = []
+        state.setdefault("transform_requests", []).append(dict(request))
+        records: list[dict[str, Any]] = []
         failures = []
         for row in request.get("rows") or []:
             if row["id"] == "bad":
                 failures.append({"recordId": "bad", "error": "ValueError: 毒行"})
+            elif request.get("kind") == "relation":
+                records.append(
+                    {"fromId": f"widget_{row['id']}", "toId": "org_9", "props": {"weight": 1}}
+                )
             else:
-                entities.append({"id": f"widget_{row['id']}", "props": {"name": row["name"]}})
+                records.append({"id": f"widget_{row['id']}", "props": {"name": row["name"]}})
         if fail_batch is not None and len(state["transforms"]) >= fail_batch:
             raise RuntimeError("批次脚本崩溃")
-        return {"entities": entities, "failures": failures}
+        result: dict[str, Any] = {
+            "edges" if request.get("kind") == "relation" else "entities": records,
+            "failures": failures,
+        }
+        if pending_review:
+            result["pendingReview"] = [
+                {
+                    "kind": "entity",
+                    "nodeLabel": "Widget",
+                    "objectId": "pending_1",
+                    "objectName": "待定甲",
+                    "candidate": {"name": "待定甲", "props": {"name": "待定甲"}},
+                    "sourceTable": "gkx.dwd_widget",
+                    "sourceRecordId": "2:inventors:0",
+                }
+            ]
+        return result
 
     @activity.defn(name="write_records")
     async def write_records(request: dict[str, Any]) -> dict[str, Any]:
         state.setdefault("writes", []).append(len(request.get("records") or []))
+        state.setdefault("write_requests", []).append(dict(request))
         result: dict[str, Any] = {"written": len(request.get("records") or [])}
         if upload_vids and request.get("indexVids"):
             # 模拟真实 activity：vid 清单上传 S3 后只回传 key（增量索引 claim-check）
@@ -170,8 +201,26 @@ def _make_activities(
 
     @activity.defn(name="resolve_entity_batch")
     async def resolve_entities(request: dict[str, Any]) -> dict[str, Any]:
+        state.setdefault("resolve_requests", []).append(dict(request))
         records = request.get("records") or []
         return {"records": records, "merged": 0, "withheld": 0, "deduped": 0, "new": len(records)}
+
+    @activity.defn(name="resolve_pending_entities")
+    async def resolve_pending(request: dict[str, Any]) -> dict[str, Any]:
+        # gray-gate-v2 双流：转换带 pendingMode=resolve 时挂起项交本 activity
+        # 真实灰区门控处置（假实现只记账，响应可注入 invalid/rewrite 观测下游）
+        state.setdefault("pending_resolved", []).append(dict(request))
+        if fail_pending:
+            # R1 复核收口口径：门控内技术故障（如 DESCRIBE TAG 传输失败）失败
+            # 关闭上抛——activity 失败而非记 invalid 静默放行
+            raise RuntimeError("DESCRIBE TAG 响应无列（label 存在且 ddl=succeeded）")
+        return pending_response or {
+            "written": 0,
+            "grayCases": 0,
+            "skippedInvalidPending": 0,
+            "invalidEndpointVids": [],
+            "rewriteMap": {},
+        }
 
     @activity.defn(name="record_schema_script_run")
     async def record_script_run(request: dict[str, Any]) -> dict[str, Any]:
@@ -233,6 +282,7 @@ def _make_activities(
         read_batch,
         transform,
         resolve_entities,
+        resolve_pending,
         record_script_run,
         write_records,
         advance,
@@ -294,7 +344,135 @@ class TestSchemaExtractOrchestration:
             "runs/mock/source:bind-1#main/0-0/vids.json.gz",
             "runs/mock/source:bind-1#main/1-0/vids.json.gz",
         ]
-        assert len(state.get("collisions_calls", [])) >= 2
+        # gray-gate-v2 新 run 退出 v1 碰撞检测：detect 不再被调（消歧前置判定接管）
+        assert state.get("collisions_calls") in (None, [])
+
+    async def test_gray_gate_v2_wiring_policy_and_no_detect(self):
+        """gray-gate-v2 接线：新 run（patched 恒 True）下转换带 pendingMode=resolve、
+        消歧/写图请求带冻结 decisionPolicy（autoMergeEnabled 恒 false）、detect 不被调。"""
+        state: dict[str, Any] = {}
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue="t-gg2",
+                workflows=[SchemaExtractWorkflow],
+                activities=_make_activities(state, rows_per_batch=3, batches=1),
+            ):
+                result = await _run(
+                    env.client,
+                    "t-gg2",
+                    {
+                        "schemaId": "schema-e2e",
+                        "graphSpace": "dev2",
+                        "batchSize": 3,
+                        "triggerSource": "MANUAL",
+                    },
+                )
+        assert result["status"] == "completed"
+        # 转换请求带 pendingMode=resolve（双流：挂起项交 workflow 侧真实门控）
+        assert state["transform_requests"] and all(
+            r.get("pendingMode") == "resolve" for r in state["transform_requests"]
+        )
+        # 消歧请求带冻结策略（activity 不读环境改行为，重放确定）
+        assert state["resolve_requests"] and all(
+            r["decisionPolicy"]["version"] == "gray-gate-v2"
+            and r["decisionPolicy"]["autoMergeEnabled"] is False
+            for r in state["resolve_requests"]
+        )
+        # 写图请求同带策略；实体路径不携带关系端点覆写字段
+        assert state["write_requests"] and all(
+            r.get("decisionPolicy", {}).get("version") == "gray-gate-v2"
+            for r in state["write_requests"]
+        )
+        assert all("invalidEndpointVids" not in r for r in state["write_requests"])
+        # 转换未吐挂起项 → resolve_pending_entities 不被调
+        assert state.get("pending_resolved") in (None, [])
+
+    async def test_gray_gate_v2_pending_overrides_flow_to_relation_write(self):
+        """pending 旁路聚合随写边请求下发：resolve_pending_entities 的端点处置
+        （invalid 过滤 / canonical 改写映射）进关系 write_request。"""
+        state: dict[str, Any] = {}
+        relation_plan = {
+            **PLAN,
+            "kind": "relation",
+            "name": "AuthoredBy",
+            "label": "署名",
+            "activeProps": ["weight"],
+        }
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue="t-gg2-pending",
+                workflows=[SchemaExtractWorkflow],
+                activities=_make_activities(
+                    state,
+                    rows_per_batch=3,
+                    batches=1,
+                    plan=relation_plan,
+                    pending_review=True,
+                    pending_response={
+                        "written": 0,
+                        "grayCases": 0,
+                        "skippedInvalidPending": 1,
+                        "invalidEndpointVids": ["pending_1"],
+                        "rewriteMap": {"pending_2": "org_9"},
+                    },
+                ),
+            ):
+                result = await _run(
+                    env.client,
+                    "t-gg2-pending",
+                    {
+                        "schemaId": "schema-e2e",
+                        "graphSpace": "dev2",
+                        "batchSize": 3,
+                        "triggerSource": "MANUAL",
+                    },
+                )
+        assert result["status"] == "completed"
+        # 挂起项交真实门控 activity（带冻结策略），不再 activity 内强制送审
+        assert len(state["pending_resolved"]) == 1
+        assert state["pending_resolved"][0]["decisionPolicy"]["version"] == "gray-gate-v2"
+        assert [i["objectId"] for i in state["pending_resolved"][0]["pending"]] == ["pending_1"]
+        # 聚合的端点处置随关系写边请求下发（write_records 内做三步失败关闭链）
+        write_req = state["write_requests"][-1]
+        assert write_req["kind"] == "relation"
+        assert write_req["decisionPolicy"]["version"] == "gray-gate-v2"
+        assert write_req["invalidEndpointVids"] == ["pending_1"]
+        assert write_req["rewriteMap"] == {"pending_2": "org_9"}
+
+    async def test_pending_gate_failure_fails_workflow_and_skips_advance(self):
+        """R1 复核收口：挂起项门控 activity 技术故障（DESCRIBE TAG 传输失败/
+        响应无列）→ 失败关闭上抛 → workflow FAILED、游标不推进——不得记
+        invalid 静默放行后继续推水位（假 activity 抛错模拟真实门控上抛）。"""
+        state: dict[str, Any] = {}
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue="t-gg2-gate",
+                workflows=[SchemaExtractWorkflow],
+                activities=_make_activities(
+                    state,
+                    rows_per_batch=3,
+                    batches=1,
+                    pending_review=True,
+                    fail_pending=True,
+                ),
+            ):
+                with pytest.raises(WorkflowFailureError):
+                    await _run(
+                        env.client,
+                        "t-gg2-gate",
+                        {
+                            "schemaId": "schema-e2e",
+                            "graphSpace": "dev2",
+                            "batchSize": 3,
+                            "triggerSource": "MANUAL",
+                        },
+                    )
+        assert state["pending_resolved"]  # 门控 activity 确实被调并上抛
+        assert state.get("advances") in (None, [])  # 水位不推进
+        assert state.get("index") in (None, [])  # 不重建索引
 
     async def test_poison_rows_go_to_failure_cases(self):
         state: dict[str, Any] = {}
@@ -635,6 +813,19 @@ def _make_step_activities(state: dict[str, Any], *, fail_on=None, block_on=None,
         state.setdefault("resolve", []).append(request)
         return {"resolved": 1, "refailed": 0, "recreated": 0}
 
+    @activity.defn(name="resolve_pending_entities")
+    async def resolve_pending(request: dict[str, Any]) -> dict[str, Any]:
+        # gray-gate-v2 双流：step_resolve 吐的挂起项（机构名为空行）交本 activity
+        # 真实灰区门控处置，不再 activity 内强制送审（关系项在真实现中丢弃告警）
+        state.setdefault("resolve_pending", []).append(request)
+        return {
+            "written": 0,
+            "grayCases": 0,
+            "skippedInvalidPending": 0,
+            "invalidEndpointVids": [],
+            "rewriteMap": {},
+        }
+
     @activity.defn(name="record_schema_script_run")
     async def record_script_run(request: dict[str, Any]) -> dict[str, Any]:
         return {"ok": True}
@@ -663,6 +854,7 @@ def _make_step_activities(state: dict[str, Any], *, fail_on=None, block_on=None,
         collisions,
         record_failures,
         resolve,
+        resolve_pending,
         record_script_run,
         build_index,
         refresh_stats,
@@ -714,6 +906,9 @@ class TestSchemaExtractMultiStep:
         # 只有 emit 步出了 edges → write_records 只拿到那一步的记录
         assert len(state["writes"]) == 1
         assert [e["fromId"] for e in state["writes"][0]] == ["w_1"]
+        # gray-gate-v2 双流：resolve 步的挂起项（机构名为空行）交
+        # resolve_pending_entities 真实灰区门控处置，不再 activity 内强制送审
+        assert len(state.get("resolve_pending") or []) == 1
         # 分步统计：聚合计数 + COMPLETED 状态 + 步序/起止时间（详情页排序与耗时列）
         for sid, pos, failed in (("clean", 1, 1), ("resolve", 2, 0), ("emit", 3, 0)):
             stat = result["steps"][sid]
@@ -922,9 +1117,9 @@ class TestSchemaExtractChain:
         assert state["plan_order"] == ["schema-alpha", "schema-beta"]
         # 每环水位各自推进一次（键仍是 schema-extract-{schemaKey}）
         assert state["advances"] == ["schema-extract-alpha", "schema-extract-beta"]
-        # 实体环重建索引 + 消歧；关系环不重建
+        # 实体环重建索引；关系环不重建。gray-gate-v2 下 detect（v1 碰撞检测）退出
         assert len(state.get("index", [])) == 1
-        assert len(state.get("collisions_calls", [])) == 1
+        assert state.get("collisions_calls") in (None, [])
         steps = result["steps"]
         assert list(steps) == ["schema:schema-alpha", "schema:schema-beta"]
         alpha = steps["schema:schema-alpha"]
@@ -1339,9 +1534,9 @@ class TestSchemaExtractS3Relay:
         assert all(not r["hasInlineRows"] and r["rowsKey"] for r in reqs)
         assert {(r["batchIdx"], r["chunkIdx"]) for r in reqs} == {(0, 0), (1, 0)}
         assert reqs[0]["rowsKey"] == "rows-b0-c0" and reqs[1]["rowsKey"] == "rows-b1-c0"
-        # 写图/冲突检测收 recordsKey（resolve 中转产物）
+        # 写图收 recordsKey（resolve 中转产物）；gray-gate-v2 下 detect 退出不收
         assert sum(state["writes"]) == 6
-        assert state["collisions_calls"] == [True, True]
+        assert state.get("collisions_calls") in (None, [])
         # 载荷对象确实落在共享存储（rows/out/resolved 三类）；resolve 的 stepId
         # 带 #stepId 后缀（ctxStepId 语义）
         assert "rows-b0-c0" in state["objects"] and "rows-b1-c0" in state["objects"]

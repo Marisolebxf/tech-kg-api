@@ -66,7 +66,7 @@ from infra.graph_db.config import TRSGraphSettings
 from infra.graph_db.exceptions import GraphRequestError
 from service import entity_write_guard as guard
 from service import manual_review_production as mrp
-from service.manual_review_domain import ReviewIdentity
+from service.manual_review_domain import ReviewConflictError, ReviewIdentity
 from service.manual_review_production import ManualReviewService
 
 
@@ -620,22 +620,26 @@ def test_workflow_holding_vid_lock_blocks_mrp_write_fail_closed(service, monkeyp
     with pytest.raises(TimeoutError):
         _merge_submit(service, case_id, version)
 
-    # fail-closed 零覆盖：无 INSERT、无 FETCH（锁在 FETCH 之前），案件状态未前移
+    # fail-closed 零覆盖：无 INSERT、无 FETCH（锁在 FETCH 之前）。gray-gate-v2
+    # 两段提交：Tx1 决议先落库（version+1），锁竞争失败在 Tx2 收敛 FAILED →
+    # 案 APPLY_FAILED 进 failed 队列——决议保留可审计，恢复=人工经批准通道
+    # 重应用（复核文档 §verdict application 最终契约；不再「回 OPEN 待重提」）
     assert handler.write_stmts == []
     assert handler.fetch_stmts == []
     status, ver, decisions, audits = _db_state(service, case_id)
-    assert status == "OPEN"
-    assert ver == version
-    assert decisions == 0
-    assert audits == 1  # 仅建案的 CASE_CREATED，失败提交零追加
+    assert status == "APPLY_FAILED"
+    assert ver == version + 1
+    assert decisions == 1
+    assert audits == 3  # CASE_CREATED + DECISION_SUBMITTED + APPLY_FAILED
     # 同键证明：MRP 尝试获取的正是工作流占用的那把锁（跨路径互斥）
     assert key in lock_store.attempts
 
-    # 工作流释放后重提成功（等待语义的兜底路径：稍后重试）
+    # 工作流释放后重提也被拒：APPLY_FAILED 不在可提交状态（失败关闭；
+    # 重应用端点另行审批）——杜绝绕过 failed 队列的二次图写
     del lock_store.held[key]
-    out = _merge_submit(service, case_id, version)
-    assert out["status"] == "RESOLVED"
-    assert handler.state[TARGET_VID]["h_index"] == 31
+    with pytest.raises(ReviewConflictError):
+        _merge_submit(service, case_id, ver)
+    assert handler.write_stmts == []
 
 
 def test_lock_acquire_failure_fail_closed_zero_write(service, monkeypatch, lock_store):
@@ -650,7 +654,8 @@ def test_lock_acquire_failure_fail_closed_zero_write(service, monkeypatch, lock_
 
     assert handler.write_stmts == []
     assert handler.fetch_stmts == []
-    assert _db_state(service, case_id)[0] == "OPEN"
+    # v2 两段提交：获取即抛也在 Tx2 失败收敛 → failed 队列（不降级无锁写）
+    assert _db_state(service, case_id) == ("APPLY_FAILED", version + 1, 1, 3)
 
 
 # ---------------------------------------------------------------------------
@@ -671,9 +676,10 @@ def test_fetch_read_failure_zero_write_case_not_advanced(service, monkeypatch, l
     assert len(handler.fetch_stmts) == 2
     assert handler.write_stmts == []
     status, ver, decisions, audits = _db_state(service, case_id)
-    assert status == "OPEN"
-    assert ver == version
-    assert decisions == 0 and audits == 1  # 仅建案审计，失败提交零追加
+    # v2：FETCH 失败同样 Tx2 收敛 FAILED → failed 队列（决议保留可审计）
+    assert status == "APPLY_FAILED"
+    assert ver == version + 1
+    assert decisions == 1 and audits == 3
     # 锁在 finally 里已释放，不留死锁
     assert not lock_store.held
 
@@ -698,17 +704,19 @@ def test_corrupt_existing_props_zero_write(service, monkeypatch, lock_store, raw
         _merge_submit(service, case_id, version)
 
     assert handler.write_stmts == []
-    assert _db_state(service, case_id)[0] == "OPEN"
+    # v2：旧属性损坏熔断 → Tx2 FAILED 收敛，案进 failed 队列
+    assert _db_state(service, case_id) == ("APPLY_FAILED", version + 1, 1, 3)
     assert not lock_store.held
 
 
 # ---------------------------------------------------------------------------
-# (e) apply 失败不产半写状态：案件状态不前移、决议/审计/暂存边零落，
-#     重提幂等成功后顶点与暂存边各写一次
+# (e) apply 失败不产半写状态：图侧零写（顶点与暂存边），v2 两段提交下决议
+#     落库 + application=FAILED + 案 APPLY_FAILED 进 failed 队列，重提被拒
+#     （恢复=人工经批准通道重应用，复核文档 §verdict application）
 # ---------------------------------------------------------------------------
 
 
-def test_apply_failure_then_resubmit_is_idempotent_with_pending_edges(
+def test_apply_failure_fail_closed_zero_write_pending_edges_blocked(
     service, monkeypatch, lock_store
 ):
     handler = FakeTRSREST(existing={TARGET_VID: dict(TARGET_PROPS)})
@@ -734,23 +742,18 @@ def test_apply_failure_then_resubmit_is_idempotent_with_pending_edges(
         _merge_submit(service, case_id, version)
     assert handler.write_stmts == []
     assert handler.edge_writes == []
-    assert _db_state(service, case_id) == ("OPEN", version, 0, 1)  # audits 仅建案 1 条
+    # v2：决议已落（Tx1），失败收敛 FAILED → 案 APPLY_FAILED（Tx2）
+    assert _db_state(service, case_id) == ("APPLY_FAILED", version + 1, 1, 3)
 
-    # 恢复后重提：同 version 仍有效（回滚已还原占位），一次成功
+    # 恢复图侧后重提也被拒：APPLY_FAILED 不可再提交，暂存边零补写——
+    # 「顶点与暂存边各写一次」的收敛保证移交人工重应用通道（另批），
+    # 本阶段失败关闭杜绝重试路径的二次图写
     handler.fetch_error = False
-    out = _merge_submit(service, case_id, version)
-    assert out["status"] == "RESOLVED"
-    assert len(handler.write_stmts) == 1
-    assert handler.state[TARGET_VID]["h_index"] == 31
-    # 暂存边按改写端点（预留 vid → 合并目标）补写一次，审计列按边 schema 补
-    ((frm, to, etype, eprops),) = handler.edge_writes
-    assert (frm, to, etype) == (TARGET_VID, "person_77", "EMPLOYED_BY")
-    assert eprops["role"] == "engineer"
-    assert eprops["create_time"] and eprops["update_time"]
-    assert eprops["source_table"] == "schema_extract"
-    status, ver, decisions, audits = _db_state(service, case_id)
-    assert status == "RESOLVED" and decisions == 1 and ver == version + 1
-    assert audits == 2  # CASE_CREATED + DECISION_SUBMITTED
+    with pytest.raises(ReviewConflictError):
+        _merge_submit(service, case_id, version + 1)
+    assert handler.write_stmts == []
+    assert handler.edge_writes == []
+    assert _db_state(service, case_id) == ("APPLY_FAILED", version + 1, 1, 3)
 
 
 # ---------------------------------------------------------------------------
@@ -813,8 +816,9 @@ def test_lease_expired_takeover_second_writer_no_insert(service, monkeypatch, lo
     assert lock_store.held.get(key) == "wr-writer-b"
     guard._release_sync_quiet(key, "wr-writer-b")
     assert key not in lock_store.held
-    # submit 事务回滚：案件状态/版本不前移、决议零落、审计仅建案 1 条
-    assert _db_state(service, case_id) == ("OPEN", version, 0, 1)
+    # v2 两段提交：续租失败抛错零 INSERT，决议已在 Tx1 落库，Tx2 收敛
+    # FAILED → 案 APPLY_FAILED 进 failed 队列（接管者的列完好可续审）
+    assert _db_state(service, case_id) == ("APPLY_FAILED", version + 1, 1, 3)
 
 
 def test_renew_failure_zero_new_write(service, monkeypatch, lock_store):
@@ -831,7 +835,8 @@ def test_renew_failure_zero_new_write(service, monkeypatch, lock_store):
 
     assert len(handler.fetch_stmts) == 1  # FETCH 正常完成（合并输入已就绪）
     assert handler.write_stmts == []  # 续租失败熔断：execute_write 零调用
-    assert _db_state(service, case_id) == ("OPEN", version, 0, 1)
+    # v2：续租通道故障 → Tx2 FAILED 收敛，案进 failed 队列
+    assert _db_state(service, case_id) == ("APPLY_FAILED", version + 1, 1, 3)
     assert not lock_store.held  # 释放通道不受续租注错影响，不留死锁
 
 
@@ -1050,15 +1055,16 @@ def test_heartbeat_renew_success_slow_write_lease_stays_valid(service, monkeypat
     assert _db_state(service, case_id)[0] == "RESOLVED"
 
 
-def test_heartbeat_lost_during_inflight_write_rolls_back_resubmittable(
+def test_heartbeat_lost_during_inflight_write_fail_closed_not_resubmittable(
     service, monkeypatch, lock_store
 ):
     """c) 续租故障（Redis 中途坏）：在途期间心跳判丢 → INSERT 返回后抛
-    VidWriteLeaseLostError、零后续写（暂存边不派发）、submit 四维回滚（状态
-    /版本/决议/审计），恢复后案件可重提、重提重新 FETCH 合并收敛。
+    VidWriteLeaseLostError、零后续写（暂存边不派发）。gray-gate-v2 两段
+    提交下 Tx1 决议已落库，Tx2 收敛 FAILED → 案 APPLY_FAILED 进 failed
+    队列，重提被拒（恢复=人工经批准通道重应用，另批）。
 
     诚实边界：已派发的 INSERT 不可取消——本用例同时断言图写**确实已落地**
-    （write_stmts==1），抛错只熔断后续写并回滚事务，不假装能回滚图库。"""
+    （write_stmts==1），抛错只熔断后续写并失败关闭，不假装能回滚图库。"""
     monkeypatch.setenv("ENTITY_DISAMBIGUATION_NAME_LOCK_TTL_SECONDS", "5")
     monkeypatch.setenv("ENTITY_WRITE_VID_LOCK_HEARTBEAT_SECONDS", "0.1")
     handler = FakeTRSREST(existing={TARGET_VID: dict(TARGET_PROPS)})
@@ -1103,16 +1109,18 @@ def test_heartbeat_lost_during_inflight_write_rolls_back_resubmittable(
     assert isinstance(outcome.get("exc"), guard.VidWriteLeaseLostError)
     assert len(handler.write_stmts) == 1  # 在途 INSERT 已落地（不可取消，如实断言）
     assert handler.edge_writes == []  # 零后续写：暂存边未派发
-    # submit 四维回滚：状态/版本不前移、决议零落、审计仅建案 1 条
-    assert _db_state(service, case_id) == ("OPEN", version, 0, 1)
+    # v2：决议已落（Tx1），丢租熔断收敛 FAILED → 案 APPLY_FAILED（Tx2）
+    assert _db_state(service, case_id) == ("APPLY_FAILED", version + 1, 1, 3)
     assert not lock_store.held  # 释放通道（RELEASE lua）不受续租故障影响
 
-    # 案件可重提：恢复续租通道后同 version 重提成功，重新 FETCH 合并收敛
+    # 案件不可重提：恢复续租通道后提交仍被拒（APPLY_FAILED 失败关闭，
+    # 重应用另行审批）——顶点不二次派发、暂存边零补写，图侧停在已落地的
+    # 一次 INSERT 上，收敛移交人工重应用通道
     lock_store.renew_error = None
-    out = _merge_submit(service, case_id, version)
-    assert out["status"] == "RESOLVED"
-    assert len(handler.write_stmts) == 2  # 重提重新派发 INSERT（幂等收敛）
-    assert len(handler.edge_writes) == 1  # 暂存边这次补写
+    with pytest.raises(ReviewConflictError):
+        _merge_submit(service, case_id, version + 1)
+    assert len(handler.write_stmts) == 1
+    assert handler.edge_writes == []
     final = handler.state[TARGET_VID]
     assert final["h_index"] == 31
     assert final["person_kind"] == "legal_representative"

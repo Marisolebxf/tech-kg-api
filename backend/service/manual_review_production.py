@@ -25,12 +25,23 @@ from sqlalchemy.exc import IntegrityError
 from db_model.manual_review import (
     ReviewAuditLog,
     ReviewCase,
+    ReviewCaseSource,
     ReviewDecision,
     ReviewDraft,
     ReviewEvidence,
+    ReviewVerdictApplication,
 )
 from infra.mysql import get_session_factory
 from infra.s3 import S3Storage
+from service.gray_gate import (
+    BlockedByLegacyCaseError,
+    GrayGateFailClosedError,
+    VerdictNotAppliedError,
+    case_policy_rank,
+    case_policy_version,
+    prior_verdict_disposition,
+    select_capture_case,
+)
 from service.manual_review_domain import (
     EDITABLE_STATUSES,
     PIPELINE_STEPS,
@@ -73,6 +84,43 @@ def load(v):
 
 def sha(v):
     return hashlib.sha256(dump(v).encode()).hexdigest()
+
+
+def _load_ingress_state(s, c) -> dict:
+    """终态/失败案的耐久应用状态读取（priorVerdict 信封材料）。
+
+    manual_review_verdict_application 为权威（APPLIED 带落点）；旧案缺整行时
+    决议里的 entityVerdict 可读（reject 语义可靠），应用状态一律 UNKNOWN——
+    不从 RESOLVED/APPROVED 猜测图写结果。
+    """
+    app = s.scalar(select(ReviewVerdictApplication).where(ReviewVerdictApplication.case_id == c.id))
+    if app:
+        return {
+            "entityVerdict": app.verdict,
+            "applyStatus": app.apply_status,
+            "targetEntityId": (app.canonical_vid if app.verdict == "merge" else app.reserved_vid),
+        }
+    d = s.scalar(
+        select(ReviewDecision)
+        .where(ReviewDecision.case_id == c.id)
+        .order_by(ReviewDecision.id.desc())
+    )
+    res = (load(d.result) or {}) if d else {}
+    return {
+        "entityVerdict": res.get("entityVerdict"),
+        "applyStatus": "UNKNOWN",
+        "targetEntityId": None,
+    }
+
+
+def _case_has_application(s, case_id) -> bool:
+    """案是否有 verdict application 行（终态处置的权威优先判定）。"""
+    return (
+        s.scalar(
+            select(ReviewVerdictApplication.id).where(ReviewVerdictApplication.case_id == case_id)
+        )
+        is not None
+    )
 
 
 def resolve_job_ids(execution_ids: list[str | None]) -> dict[str, str]:
@@ -286,8 +334,22 @@ class ManualReviewService:
                 raise ReviewValidationError("没有可重跑的审核记录")
             return [row.id for row in rows]
 
-    def _ingress_response(self, c, duplicate):
-        return {
+    def _ingress_response(self, c, duplicate, *, session=None):
+        """建案 ingress 应答（gray-gate-v2 扩展 priorVerdict）。
+
+        命中存量案（duplicate=True）且为 T_LINK 终态时附 ``priorVerdict``：
+        ``{caseId, status, entityVerdict, targetEntityId, applyStatus}``——
+        applyStatus 权威落点 manual_review_verdict_application（APPLIED 带写点），
+        旧案缺整行按 UNKNOWN（不得从 RESOLVED/APPROVED 猜测）。三态处置
+        （drop_record / write_as_new / rewrite_to_canonical）由调用方经
+        ``service.gray_gate.prior_verdict_disposition`` 派生，此处只上桌事实。
+
+        R5：非终态按可提交状态区分——OPEN/CLAIMED/IN_REVIEW 是真正待裁决的
+        开放案（普通重复应答，继续扣留等裁决）；其余（APPLY_FAILED/中断等）
+        先读耐久应用标记，FAILED/UNKNOWN 一律 ``VERDICT_NOT_APPLIED`` 失败
+        关闭（不得把应用失败的案当开放案吞入新来源、也不猜测图写结果）。
+        """
+        response = {
             "reviewId": c.id,
             "status": c.status,
             "riskLevel": _risk_label(c.risk_level),
@@ -296,6 +358,59 @@ class ManualReviewService:
             else "ISOLATE_OBJECT",
             "duplicate": duplicate,
         }
+        if not duplicate or canonical_template(c.template_id) != "T_LINK":
+            return response
+        if c.status in SUBMITTABLE_STATUSES:
+            return response
+        if c.status not in TERMINAL_STATUSES:
+            # APPLY_FAILED / 中断等：应用标记权威，FAILED/UNKNOWN 失败关闭
+            try:
+                if session is not None:
+                    state = _load_ingress_state(session, c)
+                else:
+                    with self.sf() as s:
+                        state = _load_ingress_state(s, c)
+            except GrayGateFailClosedError:
+                raise
+            except Exception:  # noqa: BLE001 - 标记读取失败同按 UNKNOWN 失败关闭
+                logger.warning("priorVerdict 读取失败 case=%s，按 UNKNOWN 对待", c.id)
+                state = {"entityVerdict": None, "applyStatus": "UNKNOWN", "targetEntityId": None}
+            raise VerdictNotAppliedError(
+                {"applyStatus": state.get("applyStatus") or "UNKNOWN", "caseStatus": c.status}
+            )
+
+        try:
+            if session is not None:
+                state = _load_ingress_state(session, c)
+            else:
+                with self.sf() as s:
+                    state = _load_ingress_state(s, c)
+        except Exception:  # noqa: BLE001 - priorVerdict 读失败按 UNKNOWN 失败关闭
+            logger.warning("priorVerdict 读取失败 case=%s，按 UNKNOWN 对待", c.id, exc_info=True)
+            state = {"entityVerdict": None, "applyStatus": "UNKNOWN", "targetEntityId": None}
+        response["priorVerdict"] = {
+            "caseId": c.id,
+            "status": c.status,
+            **state,
+        }
+        return response
+
+    def find_ingress_case(self, dedupe_material: list[str] | None):
+        """稳定事件身份查既有案（R2 前置裁决的查询侧）。
+
+        ``dedupe_material`` 与建案时同构（``_gray_ingress_material`` 材料，键=对
+        材料整体 sha）；无既有案返回 None，命中返回 ``_ingress_response(case,
+        True)``——终态附 priorVerdict、待裁决返回普通重复应答、应用失败/
+        UNKNOWN 在应答内失败关闭（调用方不得把技术失败当业务态）。
+        """
+        if not dedupe_material:
+            return None
+        key = sha(list(dedupe_material))
+        with self.sf() as s:
+            existing = s.scalar(select(ReviewCase).where(ReviewCase.dedupe_key == key))
+            if existing is None:
+                return None
+            return self._ingress_response(existing, True, session=s)
 
     def _flipped_rerun_failed_ids(self, conditions: list) -> set[str]:
         """圈定「库内 RESOLVED/RERUNNING 但有效状态=重跑失败」的 T_EXTRACT_FAIL 案 ID。
@@ -621,7 +736,19 @@ class ManualReviewService:
 
         已被他人领取的 case 仍限领取人 / review_admin 操作；并发仍是 version
         乐观锁——两人同开一个 case，先提交者生效，后提交者报版本冲突。
+
+        gray-gate-v2 起 T_LINK 裁决走两段提交（docs/人工审核专项方案复核
+        _20261021.md）：Tx1 = 决议 + 意图标记（``manual_review_verdict_application``：
+        无图写的裁决直接 NOT_REQUIRED；写前扣留案（快照带 ``_incoming``）的
+        merge/create 记 UNKNOWN 意图与落点 vid）+ 案 RESOLVED，先落库；
+        随后图写在事务外执行；Tx2 按结果把标记收敛为 APPLIED（applied_at）/
+        FAILED（error_code + 案 APPLY_FAILED 进 failed 队列），异常照常上抛。
+        重放与跨执行改写（priorVerdict / park）一律以 application 表为权威，
+        缺行或 UNKNOWN 即失败关闭——决议 RESOLVED 不再隐含「图已写」。输入
+        问题（retype / 目标不在候选集）在 Tx1 前拒绝，案保持可提交（与旧
+        事务内回滚语义等价）。
         """
+        needs_apply = False
         with self.sf() as s:
             c = self.need(s, i)
             self.require_case_access(a, c)
@@ -649,6 +776,47 @@ class ManualReviewService:
                 raise ReviewConflictError(STATE_OR_VERSION_CONFLICT)
             s.expire(c, ["version", "updated_at"])
             validate_action(c.template_id, action, result)
+            verdict = str(result.get("entityVerdict") or "")
+            snapshot = load(c.candidate_snapshot) or {}
+            incoming = snapshot.get("_incoming")
+            application: ReviewVerdictApplication | None = None
+            if canonical_template(c.template_id) == "T_LINK" and action in (
+                "entity-confirm",
+                "reject-candidate",
+            ):
+                if action == "entity-confirm" and incoming:
+                    if verdict == "retype":
+                        raise ReviewValidationError("retype 暂不支持：请驳回后修正脚本重跑")
+                    if verdict == "merge":
+                        allowed = {
+                            str(x.get("vid"))
+                            for x in snapshot.get("existingCandidates") or []
+                            if x.get("vid")
+                        }
+                        if str(result.get("targetEntityId") or "") not in allowed:
+                            raise ReviewValidationError("目标实体不在候选集内")
+                # 写前扣留案（带 _incoming）的 merge/create 才有图写第二段；
+                # reject / 存量写后案（实体已在图）不需要图写 → 直接 NOT_REQUIRED
+                needs_apply = (
+                    bool(incoming) and action == "entity-confirm" and verdict in ("merge", "create")
+                )
+                application = ReviewVerdictApplication(
+                    case_id=i,
+                    verdict=verdict,
+                    apply_status="UNKNOWN" if needs_apply else "NOT_REQUIRED",
+                    canonical_vid=(
+                        str(result.get("targetEntityId") or "")[:256] or None
+                        if verdict == "merge"
+                        else None
+                    ),
+                    reserved_vid=(
+                        str(incoming.get("vid") or c.object_id)[:256] or None
+                        if verdict == "create" and incoming
+                        else None
+                    ),
+                    created_at=t,
+                    updated_at=t,
+                )
             d = ReviewDecision(
                 case_id=i,
                 action_id=action,
@@ -661,16 +829,15 @@ class ManualReviewService:
             )
             s.add(d)
             s.flush()
+            if application is not None:
+                application.decision_id = d.id
+                s.add(application)
             old = c.status
             c.submitted_by = a.user_id
             # OPEN 直审时记录处理人，历史里可追溯（队列不再显示"待领取"）
             if not c.assignee_id:
                 c.assignee_id = a.user_id
                 c.assignee_name = a.user_name
-            apply_detail: dict[str, Any] | None = None
-            if canonical_template(c.template_id) == "T_LINK" and action == "entity-confirm":
-                # 消歧裁决真实执行（写前扣留 case 写图；存量写后 case 仅记录决议）
-                apply_detail = self._apply_link_verdict(c, result)
             c.status = "RESOLVED"
             c.completed_at = t
             c.updated_at = t
@@ -681,20 +848,101 @@ class ManualReviewService:
                 "DECISION_SUBMITTED",
                 old,
                 c.status,
-                {"actionId": action, **(apply_detail or {})},
+                {
+                    "actionId": action,
+                    "applyIntent": application.apply_status if application else None,
+                },
             )
             s.commit()
-            # 事务落库后再联动实体检索（索引增量 + 缓存失效），best-effort 不影响
-            # 裁决结果。挪后台线程执行：embedding + 索引写入秒级耗时不拖裁决响应
-            # （图已写、决议已落库，联动失败本就由下次全量重建兜底）。
-            if apply_detail:
+        # 两段提交第二段（gray-gate-v2）：图写在 Tx1 落库后、事务外执行。
+        # 失败不回滚决议——application 标记 FAILED、案置 APPLY_FAILED 进
+        # failed 队列（人工重应用另行审批）；异常照常上抛给审核端。
+        if needs_apply:
+            with self.sf() as s2:
+                c2 = self.need(s2, i)
+                try:
+                    apply_detail = self._apply_link_verdict(c2, result)
+                except Exception as exc:
+                    self._finish_verdict_application(
+                        i, a, action, "FAILED", error_code=type(exc).__name__
+                    )
+                    raise
+                self._finish_verdict_application(i, a, action, "APPLIED", apply_detail=apply_detail)
+                # 事务落库后再联动实体检索（索引增量 + 缓存失效），best-effort 不影响
+                # 裁决结果。挪后台线程执行：embedding + 索引写入秒级耗时不拖裁决响应
+                # （图已写、标记已落库，联动失败本就由下次全量重建兜底）。
                 threading.Thread(
                     target=self._sync_entity_search_after_write,
                     args=(apply_detail,),
                     daemon=True,
-                    name=f"review-index-sync-{c.id}",
+                    name=f"review-index-sync-{c2.id}",
                 ).start()
-            return self.detail(s, c)
+                return self.detail(s2, c2)
+        with self.sf() as s3:
+            return self.detail(s3, self.need(s3, i))
+
+    def _finish_verdict_application(
+        self,
+        case_id: str,
+        a: Any,
+        action_id: str,
+        outcome: str,
+        *,
+        error_code: str | None = None,
+        apply_detail: dict[str, Any] | None = None,
+    ) -> None:
+        """两段提交 Tx2：application 意图标记收敛（UNKNOWN → APPLIED / FAILED）。
+
+        - APPLIED：``applied_at`` 落库 + ``VERDICT_APPLIED`` audit（带图写明细）；
+        - FAILED：``error_code`` + 案置 ``APPLY_FAILED``（failed 队列）+ audit。
+        只从 UNKNOWN 收敛（已 APPLIED/FAILED 的幂等重放不覆盖）。标记自身失败
+        仅记日志：图写已发生/未发生的事实不因标记失败改变，缺 APPLIED 的
+        UNKNOWN 即崩溃窗口收敛口径，重放侧失败关闭兜底。
+        """
+        t = now()
+        try:
+            with self.sf() as s:
+                app = s.scalar(
+                    select(ReviewVerdictApplication).where(
+                        ReviewVerdictApplication.case_id == case_id
+                    )
+                )
+                if app is None or app.apply_status != "UNKNOWN":
+                    return
+                case = s.scalar(select(ReviewCase).where(ReviewCase.id == case_id))
+                if outcome == "APPLIED":
+                    app.apply_status = "APPLIED"
+                    app.applied_at = t
+                    if case is not None:
+                        self.audit(
+                            s,
+                            case,
+                            a,
+                            "VERDICT_APPLIED",
+                            case.status,
+                            case.status,
+                            {"actionId": action_id, **(apply_detail or {})},
+                        )
+                else:
+                    app.apply_status = "FAILED"
+                    app.error_code = (str(error_code or "") or "UNKNOWN_ERROR")[:64]
+                    if case is not None:
+                        old_status = case.status
+                        case.status = "APPLY_FAILED"
+                        case.updated_at = t
+                        self.audit(
+                            s,
+                            case,
+                            a,
+                            "APPLY_FAILED",
+                            old_status,
+                            case.status,
+                            {"actionId": action_id, "errorCode": app.error_code},
+                        )
+                app.updated_at = t
+                s.commit()
+        except Exception:  # noqa: BLE001 - Tx2 标记失败不吞图写结果
+            logger.exception("verdict application 标记失败 case=%s outcome=%s", case_id, outcome)
 
     def create_direct_case(
         self,
@@ -728,6 +976,7 @@ class ManualReviewService:
         resume_token: str | None = None,
         extra_snapshot: dict[str, Any] | None = None,
         graph_space: str | None = None,
+        dedupe_material: list[str] | None = None,
     ) -> dict[str, Any]:
         """直接 OPEN 状态入队（打开即可裁决，无需领取）。
 
@@ -735,6 +984,14 @@ class ManualReviewService:
         kind/nodeLabel/edgeType/fromId/toId 元字段，direct_decide 读这些字段写图。
         ``template_id`` 可选 T_EXTRACT_FAIL（抽取失败重跑）/ T_LINK（同名冲突对齐），
         ``extra_snapshot`` 合入 input_snapshot 供对应处理端读取。
+
+        ``dedupe_material``（gray-gate-v2 逻辑 ingress identity）：给定即取代
+        ``sha([task_id, step_id, obj_id, sha(snapshot)])`` 作为 dedupe 键材料——
+        纯源事件身份 ``[sourceBindingId, sourceRecordId, sourceEventVersion,
+        graph_space, nodeLabel, vid, reprocessBatchId?]``（不含 execution_id 与
+        任何策略/评分版本）：跨手工恢复/失败重跑重放命中同一案（OPEN=no-op、
+        TERMINAL=按 priorVerdict 重放），源事件版本变化=新键允许新案。快照哈希
+        随召回可用性/证据版本漂移的问题随之消除。
         """
         t = now()
         recorded_spaces = {
@@ -767,7 +1024,11 @@ class ManualReviewService:
             "_toId": to_id,
             "_confidence": confidence,
         }
-        dedupe_key = sha([task_id, step_id, obj_id, sha(snapshot)])
+        dedupe_key = (
+            sha(list(dedupe_material))
+            if dedupe_material
+            else sha([task_id, step_id, obj_id, sha(snapshot)])
+        )
         risk = "P1" if (confidence is None or confidence >= 0.7) else "P0"
         effective_workflow_type = workflow_type or "kg.custom.steps"
         c = ReviewCase(
@@ -852,6 +1113,91 @@ class ManualReviewService:
                     raise
                 return self._ingress_response(existing, True)
         return self._ingress_response(c, False)
+
+    # ------------------------------------------------------------------
+    # gray-gate-v2：来源账本 + 裁决应用标记
+    # ------------------------------------------------------------------
+
+    # 案件来源行 evidence 上限（前 N 个来源带全量 evidence，之后行如实插入但
+    # evidence 置空，靠 source_truncated_count 表达截断——明细行无界、evidence 有界）
+    CASE_SOURCE_EVIDENCE_LIMIT = 32
+    # advisory 告警线：单案来源行数超过即记 warning（转人工口径），不阻塞追加
+    CASE_SOURCE_ROWS_ADVISORY = 1024
+
+    def append_case_sources(
+        self,
+        case_id: str,
+        sources: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """T_LINK 案来源行幂等追加（gray-gate-v2）。
+
+        同一 MySQL 事务内：``SELECT ... FOR UPDATE`` 锁案行 → 逐条 INSERT
+        （唯一键 ``(case_id, execution_id, source_record_id)``；已存在=同执行
+        同源记录重放，跳过不加计）→ UPDATE 逻辑计数（source_count /
+        source_truncated_count）。evidence 只存字段名与布尔（≤2KB，零业务值），
+        案件生命周期内前 ``CASE_SOURCE_EVIDENCE_LIMIT`` 个非截断来源携带，其余
+        行 evidence 空。冲突/异常整体回滚不加计（IntegrityError 上抛交活动重试，
+        重放收敛靠唯一键）。>1024 行记 warning（advisory，转人工告警口径）。
+        """
+        if not sources:
+            return {"appended": 0, "skipped": 0}
+        t = now()
+        appended = 0
+        skipped = 0
+        with self.sf() as s:
+            case = s.scalar(select(ReviewCase).where(ReviewCase.id == case_id).with_for_update())
+            if case is None:
+                # 案件不存在（并发删除等）：不加计不报错——来源账本从属于案件
+                return {"appended": 0, "skipped": 0, "missingCase": True}
+            carried = int(case.source_count or 0) - int(case.source_truncated_count or 0)
+            for source in sources:
+                execution_id = str(source.get("executionId") or "")[:64]
+                record_id = str(source.get("sourceRecordId") or "")[:128]
+                if not record_id:
+                    continue
+                exists = s.scalar(
+                    select(ReviewCaseSource.id).where(
+                        ReviewCaseSource.case_id == case_id,
+                        ReviewCaseSource.execution_id == execution_id,
+                        ReviewCaseSource.source_record_id == record_id,
+                    )
+                )
+                if exists:
+                    skipped += 1
+                    continue
+                evidence = dump(source.get("evidence") or "")
+                if len(evidence) > 2000:
+                    evidence = evidence[:2000]
+                keep_evidence = carried < self.CASE_SOURCE_EVIDENCE_LIMIT
+                if not keep_evidence:
+                    evidence = ""
+                s.add(
+                    ReviewCaseSource(
+                        case_id=case_id,
+                        execution_id=execution_id,
+                        source_binding_id=str(source.get("sourceBindingId") or "")[:64],
+                        source_record_id=record_id,
+                        source_event_version=str(source.get("sourceEventVersion") or "")[:128],
+                        evidence=evidence if keep_evidence else "",
+                        reason=str(source.get("reason") or "")[:256],
+                        created_at=t,
+                    )
+                )
+                carried += 1
+                case.source_count = int(case.source_count or 0) + 1
+                if not keep_evidence:
+                    case.source_truncated_count = int(case.source_truncated_count or 0) + 1
+                case.updated_at = t
+                appended += 1
+            if int(case.source_count or 0) > self.CASE_SOURCE_ROWS_ADVISORY:
+                logger.warning(
+                    "T_LINK 案来源行数超过 advisory 线（case=%s rows=%s>%s），建议转人工核查",
+                    case_id,
+                    case.source_count,
+                    self.CASE_SOURCE_ROWS_ADVISORY,
+                )
+            s.commit()
+        return {"appended": appended, "skipped": skipped}
 
     # ------------------------------------------------------------------
     # T_EXTRACT_FAIL：抽取失败记录重跑生命周期
@@ -1149,6 +1495,8 @@ class ManualReviewService:
         edge_type: str,
         records: list[dict[str, Any]],
         graph_space: str | None = None,
+        decision_policy: dict[str, Any] | None = None,
+        live_resolved_vids: set[str] | None = None,
     ) -> dict[str, Any]:
         """关系写图前端点消歧处理（``write_records`` 关系分支调用，跨执行兜底）。
 
@@ -1162,11 +1510,22 @@ class ManualReviewService:
         指同一学者），T_LINK case 却按空间归属——不按空间过滤时，其它空间
         （gkx_verify_1 等验证场）的未决 case 会拦下本空间的边并暂存进外空间
         快照，裁决补写也落到外空间图。传空时不过滤（旧调用兼容）。
+
+        ``decision_policy``（gray-gate-v2）：传 gray-gate-v2 策略时走版本化路由
+        （``_park_edges_v2``）——开放案按 rank 表确定性选 capture 案（仅 rank ≥ 2
+        收新边），端点只余 v1 强制案时 ``BLOCKED_BY_LEGACY_CASE`` 失败关闭（不再
+        「计数后继续」）；非终态且不可提交（APPLY_FAILED/中断）失败关闭（R5）；
+        终态案处置以 ``manual_review_verdict_application`` 为权威
+        （``prior_verdict_disposition`` 三态；merge 重放 canonical 只能来自持久
+        remap，R7）。传 None（旧调用/在飞 run 重放）时本方法行为与
+        gray-gate-v2 之前逐字节一致。
+
+        ``live_resolved_vids``：当次裁决已活的端点（R6 裁决补边专用，见
+        ``_park_edges_v2``）；仅 v2 路由生效。
         """
         if not records:
             return {"records": [], "parked": 0, "dropped": 0}
         endpoints = {str(r.get("fromId")) for r in records} | {str(r.get("toId")) for r in records}
-        verdicts: dict[str, tuple[str | None, str | None]] = {}
         with self.sf() as s:
             filters = [
                 ReviewCase.template_id == "T_LINK",
@@ -1175,52 +1534,318 @@ class ManualReviewService:
             if graph_space:
                 filters.append(ReviewCase.graph_space == graph_space)
             cases = s.scalars(select(ReviewCase).where(*filters)).all()
-            open_cases = {c.object_id: c for c in cases if c.status not in TERMINAL_STATUSES}
-            for c in cases:
-                if c.object_id in open_cases:
-                    continue
-                d = s.scalar(
-                    select(ReviewDecision)
-                    .where(ReviewDecision.case_id == c.id)
-                    .order_by(ReviewDecision.id.desc())
+            if decision_policy is not None:
+                return self._park_edges_v2(
+                    s, edge_type, records, cases, live_resolved_vids=live_resolved_vids
                 )
-                res = (load(d.result) or {}) if d else {}
-                verdicts[c.object_id] = (res.get("entityVerdict"), res.get("targetEntityId"))
-            parked_records = [
-                r
-                for r in records
-                if str(r.get("fromId")) in open_cases or str(r.get("toId")) in open_cases
-            ]
-            for record in parked_records:
-                vid = next(
-                    v
-                    for v in (str(record.get("fromId")), str(record.get("toId")))
-                    if v in open_cases
-                )
-                case = open_cases[vid]
-                snapshot = load(case.candidate_snapshot) or {}
-                pending = snapshot.setdefault("_pendingRelations", [])
-                rel = {
-                    "edgeType": edge_type,
-                    "fromId": str(record.get("fromId")),
-                    "toId": str(record.get("toId")),
-                    "props": record.get("props") or {},
-                }
-                if not any(
-                    p.get("edgeType") == rel["edgeType"]
-                    and p.get("fromId") == rel["fromId"]
-                    and p.get("toId") == rel["toId"]
-                    for p in pending
-                ):
-                    pending.append(rel)
-                    case.candidate_snapshot = dump(snapshot)
-                    case.updated_at = now()
-            s.commit()
+            return self._park_edges_v1(s, edge_type, records, cases)
+
+    def _park_edges_v1(
+        self,
+        s: Any,
+        edge_type: str,
+        records: list[dict[str, Any]],
+        cases: list[ReviewCase],
+    ) -> dict[str, Any]:
+        """park 旧路径（gray-gate-v2 之前的行为，在飞 run 重放安全）。"""
+        verdicts: dict[str, tuple[str | None, str | None]] = {}
+        open_cases = {c.object_id: c for c in cases if c.status not in TERMINAL_STATUSES}
+        for c in cases:
+            if c.object_id in open_cases:
+                continue
+            d = s.scalar(
+                select(ReviewDecision)
+                .where(ReviewDecision.case_id == c.id)
+                .order_by(ReviewDecision.id.desc())
+            )
+            res = (load(d.result) or {}) if d else {}
+            verdicts[c.object_id] = (res.get("entityVerdict"), res.get("targetEntityId"))
+        parked_records = [
+            r
+            for r in records
+            if str(r.get("fromId")) in open_cases or str(r.get("toId")) in open_cases
+        ]
+        for record in parked_records:
+            vid = next(
+                v for v in (str(record.get("fromId")), str(record.get("toId"))) if v in open_cases
+            )
+            case = open_cases[vid]
+            snapshot = load(case.candidate_snapshot) or {}
+            pending = snapshot.setdefault("_pendingRelations", [])
+            rel = {
+                "edgeType": edge_type,
+                "fromId": str(record.get("fromId")),
+                "toId": str(record.get("toId")),
+                "props": record.get("props") or {},
+            }
+            if not any(
+                p.get("edgeType") == rel["edgeType"]
+                and p.get("fromId") == rel["fromId"]
+                and p.get("toId") == rel["toId"]
+                for p in pending
+            ):
+                pending.append(rel)
+                case.candidate_snapshot = dump(snapshot)
+                case.updated_at = now()
+        s.commit()
         kept: list[dict[str, Any]] = []
         dropped = 0
         for record in records:
             frm, to = str(record.get("fromId")), str(record.get("toId"))
             if frm in open_cases or to in open_cases:
+                continue
+            if "reject" in (verdicts.get(frm, (None, None))[0], verdicts.get(to, (None, None))[0]):
+                dropped += 1
+                continue
+            out = dict(record)
+            for key, vid in (("fromId", frm), ("toId", to)):
+                verdict, target = verdicts.get(vid, (None, None))
+                if verdict == "merge" and target:
+                    out[key] = str(target)
+            kept.append(out)
+        return {"records": kept, "parked": len(parked_records), "dropped": dropped}
+
+    def _cas_mutate_case_snapshot(
+        self,
+        case_id: str,
+        mutate,
+        *,
+        require_submittable: bool = False,
+        max_attempts: int = 8,
+    ):
+        """案件快照乐观 CAS 短事务读改写（R6-b）。
+
+        park attach / 转交 / 裁决摘除共用同一并发约束：每次尝试在独立短事务
+        内重读最新 ``(version, status, candidate_snapshot)``，条件 UPDATE 以
+        **双谓词**守卫（等价同事务锁定重读）：
+
+        - ``version = 读值``：submit 的 version CAS 预留会递增 version——裁决
+          与 park 互斥，案件转终态后 attach 必然失配重试（重读状态后失败
+          关闭），不产孤儿暂存边；
+        - ``candidate_snapshot = 读到的原字节``：park 与 park 互斥（park 不递增
+          version，不占用 submit 的乐观锁梯子——评审端提交版本号不因暂存边
+          到达而失效）。
+
+        ``mutate`` 就地修改快照，返回值在提交成功后透传。``rowcount = 0``
+        （并发提交抢先）整体重试，重试基于他人刚提交的新快照再次套用——成功
+        park 的边不丢。重试耗尽抛 RuntimeError（失败关闭：activity 失败、
+        来源水位不推进）。
+
+        ``require_submittable``（park attach 用）：同事务重读发现案件已转
+        终态（裁决先落库）时不追加，抛 RuntimeError 让调用方重试重路由——
+        杜绝「裁决已定、边后到被挂进永不再看的快照」的孤儿边。
+        """
+        for _ in range(max_attempts):
+            with self.sf() as s:
+                row = s.execute(
+                    select(
+                        ReviewCase.version,
+                        ReviewCase.status,
+                        ReviewCase.candidate_snapshot,
+                    ).where(ReviewCase.id == case_id)
+                ).first()
+                if row is None:
+                    return None  # 案件行已不存在：调用方按自身语义处置
+                if require_submittable and row.status not in SUBMITTABLE_STATUSES:
+                    raise RuntimeError("capture 案在暂存落库前已转终态，失败关闭重试重路由")
+                snapshot = load(row.candidate_snapshot) or {}
+                out = mutate(snapshot)
+                stale_bytes = row.candidate_snapshot
+                snapshot_pred = (
+                    ReviewCase.candidate_snapshot == stale_bytes
+                    if stale_bytes is not None
+                    else ReviewCase.candidate_snapshot.is_(None)
+                )
+                reserved = s.execute(
+                    update(ReviewCase)
+                    .where(ReviewCase.id == case_id, ReviewCase.version == row.version)
+                    .where(snapshot_pred)
+                    .values(candidate_snapshot=dump(snapshot), updated_at=now())
+                )
+                if reserved.rowcount == 1:
+                    s.commit()
+                    return out
+                s.rollback()
+        raise RuntimeError("案件快照并发冲突重试耗尽（park/裁决补边失败关闭）")
+
+    def _park_edges_v2(
+        self,
+        s: Any,
+        edge_type: str,
+        records: list[dict[str, Any]],
+        cases: list[ReviewCase],
+        live_resolved_vids: set[str] | None = None,
+    ) -> dict[str, Any]:
+        """park 版本化路由（gray-gate-v2）。
+
+        每个端点 vid 独立路由：开放案走 ``select_capture_case``（rank 降序 →
+        created_at 升序 → case_id 字典序，仅 rank ≥ 2 收新边），无 v2 开放案
+        而仍有 v1 强制案 → ``BLOCKED_BY_LEGACY_CASE`` 失败关闭；非终态且不可
+        提交（APPLY_FAILED/中断）→ ``VERDICT_NOT_APPLIED`` 失败关闭（R5：应用
+        失败的案不得吞入新边，恢复走人工重应用通道）；终态案以 application
+        表权威派生处置（drop / 原样写 / 改写 canonical——merge 重放的 canonical
+        只能来自经批准的持久 remap（R7），应用行/决议目标不得充当映射）。快照
+        含未登记 policyVersion 串 → ``UNKNOWN_POLICY_VERSION``。错误 detail
+        零标识符（完整端点清单由调用方走受控 claim-check）。
+
+        ``live_resolved_vids``（R6，裁决补边路径专用）：本次裁决已活的端点
+        （创建落点 / merge 目标）——凭评审员当次决议直接放行，跳过案件路由
+        （含该端点上无关的开放案，避免评审员已定的边被别的案再扣）。
+
+        R6-b：attach 不再「读快照→内存追加→整体覆盖提交」（两个 worker 并发
+        park 同案会互相覆盖、都报成功、被覆盖边永不可见），改走
+        ``_cas_mutate_case_snapshot`` 版本 CAS 短事务——park、转交、摘除与
+        submit 的 version CAS 共用一致并发约束；案件落库前转终态（并发裁决
+        先提交）失败关闭，重试后按终态处置重路由，不产孤儿暂存边。
+        """
+        live = {str(v) for v in (live_resolved_vids or ())}
+        open_by_vid: dict[str, list[ReviewCase]] = {}
+        terminal_by_vid: dict[str, list[ReviewCase]] = {}
+        ranks: dict[str, int] = {}
+        for c in cases:
+            if str(c.object_id) in live:
+                continue  # 当次裁决已活端点：不再进路由（R6）
+            # 未登记版本串在此失败关闭（含开放与终态案，不做词法比较）
+            ranks[c.id] = case_policy_rank(case_policy_version(c))
+            if c.status in TERMINAL_STATUSES:
+                bucket = terminal_by_vid
+            elif c.status in SUBMITTABLE_STATUSES:
+                bucket = open_by_vid
+            else:
+                # APPLY_FAILED / 中断等：耐久应用标记权威，FAILED/UNKNOWN 失败
+                # 关闭（R5）——不吞边、不猜测
+                app = s.scalar(
+                    select(ReviewVerdictApplication).where(ReviewVerdictApplication.case_id == c.id)
+                )
+                raise VerdictNotAppliedError(
+                    {
+                        "applyStatus": (app.apply_status if app else "UNKNOWN"),
+                        "caseRank": ranks[c.id],
+                    }
+                )
+            bucket.setdefault(c.object_id, []).append(c)
+
+        # 终态处置：application 行存在即权威（prior_verdict_disposition 三态；
+        # merge 走持久 remap 解析，R7）。无任何 application 行的真 v1 终态案
+        # 回落决议读取——仅 reject 语义可靠，merge/create 无应用权威按 UNKNOWN
+        # 失败关闭（历史强制案禁 merge/create，收口口径）
+        verdicts: dict[str, tuple[str | None, str | None]] = {}
+        for vid, tcases in terminal_by_vid.items():
+            capture = select_capture_case(tcases)
+            authority = capture
+            if authority is None:
+                with_app = [c for c in tcases if _case_has_application(s, c.id)]
+                if with_app:
+                    # v1 快照案但经 v2 两段提交落裁决：application 行同样权威
+                    authority = max(
+                        with_app, key=lambda c: (ranks[c.id], c.created_at or "", str(c.id))
+                    )
+            if authority is not None:
+                app = s.scalar(
+                    select(ReviewVerdictApplication).where(
+                        ReviewVerdictApplication.case_id == authority.id
+                    )
+                )
+                if app is None:
+                    # 案缺 application 行=UNKNOWN，失败关闭不猜测
+                    raise VerdictNotAppliedError(
+                        {"applyStatus": "UNKNOWN", "caseRank": ranks[authority.id]}
+                    )
+                target = None
+                if app.verdict == "create":
+                    target = app.reserved_vid
+                disposition = prior_verdict_disposition(
+                    {
+                        "entityVerdict": app.verdict,
+                        "applyStatus": app.apply_status,
+                        "targetEntityId": target,
+                    },
+                    source_vid=vid,
+                )
+            else:
+                for c in tcases:
+                    d = s.scalar(
+                        select(ReviewDecision)
+                        .where(ReviewDecision.case_id == c.id)
+                        .order_by(ReviewDecision.id.desc())
+                    )
+                    res = (load(d.result) or {}) if d else {}
+                    if res.get("entityVerdict") == "reject":
+                        verdicts[vid] = ("reject", None)
+                    else:
+                        raise VerdictNotAppliedError(
+                            {"applyStatus": "UNKNOWN", "caseRank": ranks[c.id]}
+                        )
+                continue
+            if disposition["disposition"] == "drop_record":
+                verdicts[vid] = ("reject", None)
+            elif disposition["disposition"] == "rewrite_to_canonical":
+                verdicts[vid] = ("merge", disposition["vid"])
+            else:  # write_as_new：端点即预留 vid（resolve 路径已落图），原样写
+                verdicts[vid] = ("create", disposition["vid"])
+
+        # 开放案路由：capture 选择（仅 rank≥2）；无 v2 开放案 → BLOCKED_BY_LEGACY_CASE
+        capture_by_vid: dict[str, ReviewCase] = {}
+        legacy_blocked: list[str] = []
+        for vid, ocases in open_by_vid.items():
+            capture = select_capture_case(ocases)
+            if capture is None:
+                legacy_blocked.append(vid)
+            else:
+                capture_by_vid[vid] = capture
+        if legacy_blocked:
+            # 失败关闭：不把 v2 的边挂进 v1 案快照（v1 案裁决语义不含 application）
+            raise BlockedByLegacyCaseError(
+                {
+                    "edgeType": edge_type,
+                    "blockedEndpointCount": len(legacy_blocked),
+                    "openCaseCount": sum(len(v) for v in open_by_vid.values()),
+                }
+            )
+
+        parked_records = [
+            r
+            for r in records
+            if str(r.get("fromId")) in capture_by_vid or str(r.get("toId")) in capture_by_vid
+        ]
+        for record in parked_records:
+            vid = next(
+                v
+                for v in (str(record.get("fromId")), str(record.get("toId")))
+                if v in capture_by_vid
+            )
+            rel = {
+                "edgeType": edge_type,
+                "fromId": str(record.get("fromId")),
+                "toId": str(record.get("toId")),
+                "props": record.get("props") or {},
+            }
+
+            # R6-b：attach 走版本 CAS 短事务（不再内存改快照后整体覆盖提交）。
+            # 并发 park 同案在 version 守卫下串行化：后到者读到先到者刚提交的
+            # 快照再追加，双方成功确认的边都保留；案件在落库前转终态则失败
+            # 关闭重试重路由（require_submittable）。
+            def _attach(snapshot: dict[str, Any], _rel: dict[str, Any] = rel) -> None:
+                pending = snapshot.setdefault("_pendingRelations", [])
+                if not any(
+                    p.get("edgeType") == _rel["edgeType"]
+                    and p.get("fromId") == _rel["fromId"]
+                    and p.get("toId") == _rel["toId"]
+                    for p in pending
+                ):
+                    pending.append(_rel)
+
+            self._cas_mutate_case_snapshot(
+                str(capture_by_vid[vid].id), _attach, require_submittable=True
+            )
+        # 外层读事务收尾提交：快照写入已全部走 CAS 短事务，此处无脏对象；
+        # 保留 commit 维持事务边界语义（长事务不再覆写 candidate_snapshot）
+        s.commit()
+        kept: list[dict[str, Any]] = []
+        dropped = 0
+        for record in records:
+            frm, to = str(record.get("fromId")), str(record.get("toId"))
+            if frm in capture_by_vid or to in capture_by_vid:
                 continue
             if "reject" in (verdicts.get(frm, (None, None))[0], verdicts.get(to, (None, None))[0]):
                 dropped += 1
@@ -1240,6 +1865,8 @@ class ManualReviewService:
         评分明细与候选属性），存量 OPEN 案打开详情时现查图库补齐：
 
         - 每个候选补全量 ``props`` 并重算评分明细（nameSim/propsAgree/comparedProps）；
+          建案快照已带证据字段（v2）时建案时点只读——重算结果进独立 ``recheck``
+          （``_enriched.asOf`` 取数时点），总分与明细不互相矛盾（R8）；
         - 图库同名实体总数（TOP_K 截断外的候选评审员看不见）；
         - ``_pendingRelations`` 挂起边补两端显示名（reject 会把这些边一并丢弃）。
 
@@ -1270,14 +1897,17 @@ class ManualReviewService:
                     if es_by_vid is not None:
                         by_vid = es_by_vid
                     else:
-                        # ES 不可用/名字列未回填 → 图召回（四列 OR 全扫，实测秒级）
-                        recalled: dict[str, list[dict[str, Any]]] = (
-                            recall_same_name(client, node_label, [display]) or {}
-                        )
+                        # ES 不可用/名字列未回填 → 图召回（四列 OR 全扫，实测秒级）；
+                        # v2 起返回 (candidates, routeStatus) 信封，此处只用候选
+                        recalled, _route_status = recall_same_name(client, node_label, [display])
+                        recalled = recalled or {}
                         # 矛盾防御：快照有候选而召回为空（trs-graph 会话池紧张时 DESCRIBE
                         # 偶发 500 → 降级裸 name 列 → 空结果），重试一次再采信
                         if not any(recalled.values()) and snapshot.get("existingCandidates"):
-                            recalled = recall_same_name(client, node_label, [display]) or {}
+                            recalled, _route_status = recall_same_name(
+                                client, node_label, [display]
+                            )
+                            recalled = recalled or {}
                         by_vid = {
                             str(cand.get("vid")): cand
                             for cands in recalled.values()
@@ -1315,7 +1945,25 @@ class ManualReviewService:
                             str(cand.get("name") or display_name(props)),
                             props,
                         )
-                        cand.update(detail)  # nameSim / propsAgree / comparedProps
+                        if any(
+                            key in cand
+                            for key in ("nameSim", "propsAgree", "comparedProps", "propCompared")
+                        ):
+                            # R8：建案时点证据只读——当前图库属性与建案时不一致
+                            # 本身就是需要如实呈现的事实（总分/明细若被覆盖，
+                            # cand.score 与重算明细会互相矛盾）。重算结果进独立
+                            # ``recheck``（带 asOf 时点），不覆盖建案证据字段；
+                            # cand.score / _resolution.matchScore 同为建案时点不动
+                            cand["recheck"] = {
+                                "nameSim": detail.get("nameSim"),
+                                "propsAgree": detail.get("propsAgree"),
+                                "propCompared": detail.get("propCompared"),
+                                "propMatched": detail.get("propMatched"),
+                                "comparedProps": detail.get("comparedProps"),
+                            }
+                        else:
+                            # 存量案建案无证据字段（v1 快照）：原位补齐（向后兼容）
+                            cand.update(detail)  # nameSim / propsAgree / comparedProps
 
                 # 挂起边两端显示名（reject 裁决会把这些边一并丢弃，评审员需可见代价）
                 names: dict[str, str] = {}
@@ -1332,6 +1980,8 @@ class ManualReviewService:
                 snapshot["_enriched"] = {
                     "policyVersion": "detail-enrich-v1",
                     "sameNameTotal": len(by_vid),
+                    # R8：recheck（建案后候选属性变化的重算）取数时点
+                    "asOf": _now_str(),
                 }
             finally:
                 pass  # 客户端已换 infra 按空间共享缓存，不可 close
@@ -1431,9 +2081,11 @@ class ManualReviewService:
         ``_insert_withheld_vertex``（per-VID 锁 + FETCH 旧值列级合并后整列
         INSERT——Nebula 整标签覆盖语义下裸 INSERT 会清掉目标既有列，见其
         docstring），merge 与 create 是同一条语句、仅 vid 不同；
-        ``_pendingRelations`` 里的待定边在实体落图后按改写端点补写。图写
-        失败异常上抛 → 事务回滚 → 审核员重新提交即重试（幂等安全）。存量
-        写后 case（无 ``_incoming``）只记录决议。
+        ``_pendingRelations`` 里的待定边在实体落图后经 ``_flush_pending_relations``
+        双端点统一路由补写（R6：另一端未决转交该端开放案、reject 丢弃、两端
+        允许才存在性终判后 INSERT）。图写失败异常上抛 → Tx2 收敛 FAILED、案
+        APPLY_FAILED 进 failed 队列（人工重应用另批）。存量写后 case（无
+        ``_incoming``）只记录决议。
         """
         snapshot = load(c.candidate_snapshot) or {}
         from service.business_access_control import rbac_enabled
@@ -1465,20 +2117,95 @@ class ManualReviewService:
         client = self._graph_client_for(snapshot)
         try:
             self._insert_withheld_vertex(client, c, snapshot, incoming, vid, graph_space)
-            old_vid = str(incoming.get("vid") or c.object_id)
-            written_edges = 0
-            edge_fields: dict[str, set[str] | None] = {}
-            for rel in snapshot.get("_pendingRelations") or []:
-                edge_type = rel.get("edgeType")
-                frm, to = str(rel.get("fromId")), str(rel.get("toId"))
-                if not edge_type:
-                    continue
-                if frm == old_vid:
-                    frm = vid
-                if to == old_vid:
-                    to = vid
+            written_edges, parked_edges, dropped_edges = self._flush_pending_relations(
+                c,
+                snapshot,
+                client,
+                graph_space,
+                old_vid=str(incoming.get("vid") or c.object_id),
+                vid=vid,
+            )
+        finally:
+            pass  # 客户端已换 infra 按空间共享缓存，不可 close
+        return {
+            "applied": True,
+            "verdict": verdict,
+            "vid": vid,
+            "graphSpace": graph_space,
+            "nodeLabel": node_label,
+            "pendingRelationsWritten": written_edges,
+            "pendingRelationsParked": parked_edges,
+            "pendingRelationsDropped": dropped_edges,
+        }
+
+    def _flush_pending_relations(
+        self,
+        c: ReviewCase,
+        snapshot: dict[str, Any],
+        client: Any,
+        graph_space: str,
+        *,
+        old_vid: str,
+        vid: str,
+    ) -> tuple[int, int, int]:
+        """裁决后补写 ``_pendingRelations`` 挂起边（R6：双端点统一路由）。
+
+        旧 vid 改写为当次裁决落点后，每条边经 ``park_or_rewrite_edges`` 统一
+        路由（当次已活端点凭评审员决议直接放行，不再被其它开放案扣留）：
+
+        - 另一端仍待裁决（OPEN/CLAIMED/IN_REVIEW）→ 转交该端 capture 案耐久
+          暂存（attach 先落库、再从本案快照摘除，同案幂等去重；崩溃窗口内的
+          双挂由另一端案去重收敛，本案已终态不会二次补写）；
+        - 另一端已 reject → 丢弃；
+        - 另一端应用失败/UNKNOWN、或仅剩 v1 强制案 → 失败关闭（案 APPLY_FAILED，
+          走人工重应用恢复，另批）；
+        - 两端允许（已活端点 / 终态 create / 无案）→ 存在性终判后 INSERT：
+          非已活端点必须 ``get_node`` 真实存在，缺失或探查失败即失败关闭，
+          不产悬挂边。
+
+        返回 ``(written, parked, dropped)``。
+        """
+        pending_rels = [
+            rel for rel in (snapshot.get("_pendingRelations") or []) if isinstance(rel, dict)
+        ]
+        if not pending_rels:
+            return 0, 0, 0
+        from service.gray_gate import decision_policy as _v2_policy
+
+        written = parked = dropped = 0
+        remaining: list[dict[str, Any]] = []
+        handled_rels: list[dict[str, Any]] = []
+        edge_fields: dict[str, set[str] | None] = {}
+        for rel in pending_rels:
+            edge_type = rel.get("edgeType")
+            frm, to = str(rel.get("fromId")), str(rel.get("toId"))
+            if not edge_type:
+                remaining.append(rel)
+                continue
+            if frm == old_vid:
+                frm = vid
+            if to == old_vid:
+                to = vid
+            record = {"fromId": frm, "toId": to, "props": dict(rel.get("props") or {})}
+            routed = self.park_or_rewrite_edges(
+                str(edge_type),
+                [record],
+                graph_space,
+                decision_policy=_v2_policy(),
+                live_resolved_vids={vid},
+            )
+            parked += routed["parked"]
+            dropped += routed["dropped"]
+            for out in routed["records"]:
+                # 存在性终判：非当次已活端点必须真实存在（探查异常原样上抛）
+                for key in ("fromId", "toId"):
+                    endpoint = str(out.get(key) or "")
+                    if not endpoint or endpoint == vid:
+                        continue
+                    if client.get_node(endpoint) is None:
+                        raise RuntimeError("pending 边端点在图中不存在，按失败关闭处理")
                 props = self._coerce_to_schema(
-                    client, edge_type, rel.get("props") or {}, is_edge=True
+                    client, edge_type, out.get("props") or {}, is_edge=True
                 )
                 # 平台 DDL 给边注入 NOT NULL create_time/update_time（无默认值），
                 # 暂存边属性没有这些列 → INSERT 被 Nebula 拒（400 not nullable）。
@@ -1494,18 +2221,37 @@ class ManualReviewService:
                 ):
                     if fields is None or key in fields:
                         props.setdefault(key, value)
-                client.create_edge(frm, to, edge_type, props)
-                written_edges += 1
-        finally:
-            pass  # 客户端已换 infra 按空间共享缓存，不可 close
-        return {
-            "applied": True,
-            "verdict": verdict,
-            "vid": vid,
-            "graphSpace": graph_space,
-            "nodeLabel": node_label,
-            "pendingRelationsWritten": written_edges,
-        }
+                client.create_edge(
+                    str(out.get("fromId")), str(out.get("toId")), str(edge_type), props
+                )
+                written += 1
+            if routed["parked"] or routed["dropped"] or routed["records"]:
+                handled_rels.append(rel)
+        if handled_rels:
+            # 已处置边（转交/丢弃/写出）从本案快照摘除（R6-b：版本 CAS 短事务
+            # 按 (edgeType, fromId, toId) 精确摘除——并发 park 在窗口内追加的
+            # 新边不在摘除清单内，不丢）；同步改内存对象，调用方 detail 视图
+            # 不回显陈旧挂起边
+            snapshot["_pendingRelations"] = remaining
+
+            def _detach(current: dict[str, Any]) -> None:
+                keys = {
+                    (str(r.get("edgeType")), str(r.get("fromId")), str(r.get("toId")))
+                    for r in handled_rels
+                }
+                current["_pendingRelations"] = [
+                    r2
+                    for r2 in (current.get("_pendingRelations") or [])
+                    if not (
+                        isinstance(r2, dict)
+                        and (str(r2.get("edgeType")), str(r2.get("fromId")), str(r2.get("toId")))
+                        in keys
+                    )
+                ]
+
+            self._cas_mutate_case_snapshot(str(c.id), _detach)
+            c.candidate_snapshot = dump(snapshot)
+        return written, parked, dropped
 
     def _sync_entity_search_after_write(self, apply_detail: dict[str, Any]) -> None:
         """T_LINK 裁决写图成功后联动实体检索（FUNC-00813 队列与图库联动）：

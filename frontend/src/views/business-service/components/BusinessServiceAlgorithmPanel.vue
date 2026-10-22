@@ -534,8 +534,8 @@ const achievementTypeSelection = computed<AchievementTypeOption[]>({
 });
 const liveResponse = ref<Record<string, any> | null>(null);
 const paramResetToken = ref(0);
-// 月份日历面板展开期间禁用字段气泡，避免气泡压住日期（原生 title 时代气泡跟随光标不遮挡）
-const monthPanelVisible = ref(false);
+// 下拉/日历面板展开期间禁用字段气泡，避免气泡压住选项/日期（原生 title 时代气泡跟随光标不遮挡）
+const fieldPanelVisible = ref(false);
 const selectedGraphNodeId = ref<string | null>(null);
 const selectedGraphEdgeId = ref<string | null>(null);
 const liveAlumniResult = ref<AlumniQueryResult | null>(null);
@@ -4725,7 +4725,7 @@ function clearGraphSelection() {
           v-if="field.type === 'select' || field.type === 'boolean'"
           position="bottom"
           :content="field.description"
-          :disabled="!field.description"
+          :disabled="!field.description || fieldPanelVisible"
         >
           <ElSelect
             :clear-icon="IconClose"
@@ -4739,6 +4739,7 @@ function clearGraphSelection() {
             :aria-label="field.label ?? field.name"
             :aria-invalid="Boolean(parameterErrors[field.name])"
             placeholder="请选择"
+            @visible-change="fieldPanelVisible = $event"
             @update:model-value="handleParameterInput(field.name, $event)"
           >
             <ElOption v-for="option in field.options" :key="option" :value="option" :label="option" />
@@ -4748,7 +4749,7 @@ function clearGraphSelection() {
           v-else-if="field.name === 'achievementTypes'"
           position="bottom"
           :content="field.description"
-          :disabled="!field.description"
+          :disabled="!field.description || fieldPanelVisible"
         >
           <ElSelect
             :clear-icon="IconClose"
@@ -4763,6 +4764,7 @@ function clearGraphSelection() {
             clearable
             placeholder="留空为全部类型"
             aria-label="成果类型"
+            @visible-change="fieldPanelVisible = $event"
             @update:model-value="clearParameterError(field.name)"
           >
             <ElOption
@@ -4777,7 +4779,7 @@ function clearGraphSelection() {
           v-else-if="field.name === 'relationTypes'"
           position="bottom"
           :content="field.description"
-          :disabled="!field.description"
+          :disabled="!field.description || fieldPanelVisible"
         >
           <ElSelect
             :clear-icon="IconClose"
@@ -4791,6 +4793,7 @@ function clearGraphSelection() {
             :max-collapse-tags="1"
             clearable
             placeholder="留空为全部关系"
+            @visible-change="fieldPanelVisible = $event"
             :aria-label="field.label ?? field.name"
             @update:model-value="clearParameterError(field.name)"
           >
@@ -4829,7 +4832,7 @@ function clearGraphSelection() {
           v-else-if="field.type === 'month'"
           position="bottom"
           :content="field.description"
-          :disabled="!field.description || monthPanelVisible"
+          :disabled="!field.description || fieldPanelVisible"
         >
           <AMonthPicker
             :key="`${field.name}-${paramResetToken}`"
@@ -4853,7 +4856,7 @@ function clearGraphSelection() {
             "
             :error="Boolean(parameterErrors[field.name])"
             @update:model-value="handleMonthParameterInput(field.name, $event)"
-            @popup-visible-change="monthPanelVisible = $event"
+            @popup-visible-change="fieldPanelVisible = $event"
           />
         </a-tooltip>
         <div v-else class="service-console__input-wrap">

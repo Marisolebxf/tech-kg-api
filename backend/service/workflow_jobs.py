@@ -432,17 +432,49 @@ class WorkflowJobService:
         executions = self.repo.list_executions(limit=200, job_id=job_id)
         if rbac_enabled():
             executions = [item for item in executions if workflow_resource_visible(actor, item)]
-        latest = executions[0] if executions else None
-        if latest and latest.get("status") == "RUNNING":
-            # 惰性刷新最新一条（每 job 最多 1 次 Temporal RPC）
+        # 代表执行 = 最近一次「作业执行」（MANUAL/SCHEDULE 触发）。RERUN 是逐行
+        # 失败案的恢复执行：继承了 jobId、会混进执行历史，但不是作业口径——
+        # 按最新执行取值会让重跑的 COMPLETED 把作业本身的 ABNORMAL 掩成「已完成」。
+        representative = next(
+            (item for item in executions if (item.get("triggerSource") or "") != "RERUN"),
+            None,
+        )
+        if representative and representative.get("status") == "RUNNING":
+            # 惰性刷新代表执行（每 job 最多 1 次 Temporal RPC）
             try:
-                refreshed = await workflow_operations_service.get_execution(latest["id"])
+                refreshed = await workflow_operations_service.get_execution(representative["id"])
                 if refreshed is not None:
-                    executions[0] = refreshed
-                    job["lastExecutionStatus"] = refreshed.get("status")
-                    self.repo.save_job(job)
+                    representative = refreshed
+                    executions = [
+                        refreshed if item.get("id") == refreshed.get("id") else item
+                        for item in executions
+                    ]
             except Exception:  # noqa: BLE001
                 pass
+        # 终态对账：执行行的终态由惰性刷新/轮询路径回写（只补 execution+task），
+        # job 聚合（详情页顶部「执行状态」与任务列表的口径）此前仅在「本方法
+        # 亲手刷新成功」时更新——执行已被别处翻成终态时聚合永远卡在 RUNNING，
+        # 顶部「运行中」与执行历史 ABNORMAL 同屏矛盾。此处按代表执行对账补齐。
+        pointed = next(
+            (item for item in executions if item.get("id") == job.get("lastExecutionId")),
+            None,
+        )
+        needs_sync = representative is not None and (
+            not job.get("lastExecutionId")
+            or job.get("lastExecutionId") == representative.get("id")
+            and job.get("lastExecutionStatus") != representative.get("status")
+            or pointed is not None
+            and (pointed.get("triggerSource") or "") == "RERUN"
+        )
+        if needs_sync:
+            # 与 _refresh_running_jobs 同款并发保护：重读现值只补聚合字段，
+            # 避免整包旧 payload 回滚触发/暂停路径的并发写入
+            current = self.repo.get_job(job_id) or job
+            current["lastRunAt"] = representative.get("startedAt")
+            current["lastExecutionId"] = representative.get("id")
+            current["lastExecutionStatus"] = representative.get("status")
+            self.repo.save_job(current)
+            job = current
         return {
             "job": workflow_resource_capabilities(actor, job),
             "executions": [

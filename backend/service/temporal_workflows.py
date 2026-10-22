@@ -716,6 +716,11 @@ def _stamp_job_latest(execution: dict[str, Any]) -> None:
     job_id = execution.get("jobId")
     if not job_id:
         return
+    if (execution.get("triggerSource") or "") == "RERUN":
+        # 逐行失败重跑是审核案级恢复执行（rerun_failed_records 继承原执行 jobId）：
+        # 不推进作业聚合——否则对账协程按重跑的 COMPLETED 回写，会把作业本身的
+        # ABNORMAL 掩成「已完成」（任务详情顶部/任务列表的口径=最近一次作业执行）。
+        return
     try:
         from service.workflow_repository import repository as _repo
 

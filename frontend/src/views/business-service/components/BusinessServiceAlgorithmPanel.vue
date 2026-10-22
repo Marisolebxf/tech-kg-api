@@ -534,6 +534,8 @@ const achievementTypeSelection = computed<AchievementTypeOption[]>({
 });
 const liveResponse = ref<Record<string, any> | null>(null);
 const paramResetToken = ref(0);
+// 月份日历面板展开期间禁用字段气泡，避免气泡压住日期（原生 title 时代气泡跟随光标不遮挡）
+const monthPanelVisible = ref(false);
 const selectedGraphNodeId = ref<string | null>(null);
 const selectedGraphEdgeId = ref<string | null>(null);
 const liveAlumniResult = ref<AlumniQueryResult | null>(null);
@@ -4827,7 +4829,7 @@ function clearGraphSelection() {
           v-else-if="field.type === 'month'"
           position="bottom"
           :content="field.description"
-          :disabled="!field.description"
+          :disabled="!field.description || monthPanelVisible"
         >
           <AMonthPicker
             :key="`${field.name}-${paramResetToken}`"
@@ -4851,6 +4853,7 @@ function clearGraphSelection() {
             "
             :error="Boolean(parameterErrors[field.name])"
             @update:model-value="handleMonthParameterInput(field.name, $event)"
+            @popup-visible-change="monthPanelVisible = $event"
           />
         </a-tooltip>
         <div v-else class="service-console__input-wrap">

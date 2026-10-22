@@ -4866,7 +4866,7 @@ function clearGraphSelection() {
             :key="`${field.name}-${paramResetToken}`"
             :model-value="parameterValues[field.name] || ''"
             class="service-console__month-picker"
-            :trigger-props="{ contentClass: 'business-month-options', autoFitPosition: true, autoFitPopupWidth: true }"
+            :trigger-props="{ contentClass: 'business-month-options', autoFitPosition: true, autoFitPopupMinWidth: true }"
             format="YYYY年MM月"
             value-format="YYYY-MM"
             :placeholder="field.placeholder ?? '请选择年月'"
@@ -5725,6 +5725,8 @@ function clearGraphSelection() {
   max-width: calc(100vw - 24px);
 }
 
+/* 桌面：autoFitPopupMinWidth 让面板自然撑到 Arco 原生 265px，十一月/十二月一行放下；
+   手机：受上面 max-width: 视口宽 约束继续压缩（保留 2444066a 防溢出意图），此时才允许换行。 */
 :global(.business-month-options :is(.arco-picker-container, .arco-panel-month, .arco-panel-year)) {
   width: 100%;
   min-width: 0;

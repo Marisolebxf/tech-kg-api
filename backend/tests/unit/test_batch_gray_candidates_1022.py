@@ -10,6 +10,10 @@ merge 会指向图内不存在的目标。
 覆盖：双方扣留纠偏（A1+A2）/ 纠偏失败 fail-open + 裁决端防线兜底（A3）/
 多条同名 / 先到自身灰区剔除批内候选 / 重放幂等 / merge 目标存在性终判
 （submit 早期 + ``_apply_link_verdict`` 兜底，正常 merge 不受影响）。
+
+补证（PR 前追加，通过标准不止「merge 最终被拒」）：先到判 new 后写入失败
+（瞬态重试自愈 + 终局失败大声拦截且案可处置）/ 写前扣留与 resolve 新建案
+满足「有效同名候选 + 真实判定灰区」/ 候选纠偏 CAS 版本冲突与并发终态保护。
 """
 
 from __future__ import annotations
@@ -27,8 +31,13 @@ from sqlalchemy.pool import StaticPool
 
 from db_model.base import Base
 from db_model.manual_review import ReviewAuditLog, ReviewCase
+from service.entity_disambiguation import GRAY_LOW, MERGE_THRESHOLD
 from service.gray_gate import decision_policy
-from service.manual_review_domain import ReviewIdentity, ReviewValidationError
+from service.manual_review_domain import (
+    ReviewConflictError,
+    ReviewIdentity,
+    ReviewValidationError,
+)
 from service.manual_review_production import ManualReviewService
 
 # ---------------------------------------------------------------------------
@@ -230,8 +239,10 @@ class TestBatchGrayPhantomFix:
         assert [c["vid"] for c in snapshot["existingCandidates"]] == ["sch_first"]
         assert "批内同名" in reason
 
-        # 写前终判时并行 worker 已把同名 RSCH 落图（事故时序）
+        # 写前终判时并行 worker 已把同名 RSCH 落图（事故时序；nodes 使 get_node
+        # 可验候选真实存在）
         graph.recall["Scholar"] = [dict(RSCH_ROW)]
+        graph.nodes.add("sch_rsch")
         kept = [dict(r) for r in out["records"]]
         stats = await _prewrite_recheck(
             graph,
@@ -268,6 +279,21 @@ class TestBatchGrayPhantomFix:
         assert detail["deadVids"] == ["sch_first"]
         assert detail["oldCandidates"] == ["sch_first"]
         assert detail["newCandidates"] == ["sch_rsch"]
+        # 新建 T_LINK 有效性补证：两案候选全部是图内真实节点（get_node 可验），
+        # 判定均为真实灰区（scoreDecision=gray，分数落在 [0.65, 0.85)），证据
+        # 字段真实上桌——不是无候选强建，也不是 merge 误判
+        for _, _, snap in _cases(review_service):
+            res = snap["_resolution"]
+            assert res["scoreDecision"] == "gray"
+            assert res["effectiveDisposition"] == "withhold_pending_review"
+            assert GRAY_LOW <= res["matchScore"] < MERGE_THRESHOLD
+            cands = snap["existingCandidates"]
+            assert cands  # 有效同名候选非空才建案
+            for cand in cands:
+                assert cand["vid"] == "sch_rsch"  # 无幻影候选残留
+                assert graph.get_node(cand["vid"]) is not None
+                assert GRAY_LOW <= cand["score"] < MERGE_THRESHOLD
+                assert cand["propCompared"] == 3
 
     @pytest.mark.asyncio
     async def test_rescope_failure_fails_open_verdict_guard_holds(
@@ -522,3 +548,328 @@ class TestVerdictTargetExistence:
             )
         assert "不在候选集内" in str(ei.value)  # 候选集已清空
         assert graph.writes == []
+
+
+# ---------------------------------------------------------------------------
+# 补证（PR 前）：先到判 new 后写入失败 / 新建案有效性 / 纠偏 CAS 冲突
+# ---------------------------------------------------------------------------
+
+
+class TestEvidenceSupplement1022:
+    """三场景补证：通过标准不止「merge 最终被拒」——新建 T_LINK 必须满足
+    「有效同名候选 + 真实判定灰区」，幻影候选滞留路径必须大声报错（非静默）
+    且案可处置、有恢复机制。
+    """
+
+    @pytest.mark.asyncio
+    async def test_first_write_transient_failure_self_heals_on_retry(
+        self, review_service, monkeypatch
+    ):
+        """场景1a 先到判 new 后写入失败（瞬态）：INSERT 失败上抛触发活动重试，
+        重试重跑写前终判——先到无既有案可命中仍判 new 照写；先到落图后后到
+        案候选由幻影成真，merge 一次通过（自愈链，无需纠偏）。"""
+        from service.temporal_workflows import _prewrite_recheck, resolve_entity_batch
+
+        graph = use_graph(monkeypatch, FakeGraph(recall={"Scholar": []}))
+        use_space_client(monkeypatch, graph)
+        out = await resolve_entity_batch(_resolve_request([dict(FIRST), dict(LATER)]))
+        refs = out["batchCandidateRefs"]
+        later_case_id = refs["sch_first"][0]
+        # 第一次尝试：写前终判放行（图内无同名），INSERT 随后失败——以「图内
+        # 仍无该节点」表达失败后的图状态（activity 上抛，Temporal 同请求重试）
+        kept = [dict(r) for r in out["records"]]
+        stats = await _prewrite_recheck(
+            graph,
+            "Scholar",
+            kept,
+            graph={"space": "dev2"},
+            source_table="dwd.dwd_scholar",
+            step_id="source:bind-1#main",
+            decision_policy=decision_policy(),
+            batch_candidate_refs=refs,
+        )
+        assert stats["guardWithheld"] == 0 and [r["id"] for r in kept] == ["sch_first"]
+        assert graph.get_node("sch_first") is None  # 写入失败：先到未落图
+        # 重试：同一请求重跑写前终判——不因重试被扣留（先到无既有案）
+        retry_records = [dict(FIRST)]
+        stats2 = await _prewrite_recheck(
+            graph,
+            "Scholar",
+            retry_records,
+            graph={"space": "dev2"},
+            source_table="dwd.dwd_scholar",
+            step_id="source:bind-1#main",
+            decision_policy=decision_policy(),
+            batch_candidate_refs=refs,
+        )
+        assert stats2["guardWithheld"] == 0 and [r["id"] for r in retry_records] == ["sch_first"]
+        assert len(_cases(review_service)) == 1  # 先到判 new：无有效候选不建案
+        # 重试写入成功：先到落图，后到案候选成真——A3 校验通过，merge 畅通
+        graph.nodes.add("sch_first")
+        result = review_service.submit(
+            later_case_id,
+            1,
+            "entity-confirm",
+            {"entityVerdict": "merge", "targetEntityId": "sch_first"},
+            "",
+            actor(),
+        )
+        assert result["status"] == "RESOLVED"
+        assert any('VALUES "sch_first"' in w for w in graph.writes)
+
+    @pytest.mark.asyncio
+    async def test_first_write_terminal_failure_phantom_is_loud_and_disposable(
+        self, review_service, monkeypatch
+    ):
+        """场景1b 先到判 new 后写入终局失败：写前未扣留 → 无纠偏触发点，后到
+        案确实滞留幻影候选——但绝不静默：A3 大声拒绝 merge（不凭空建点）、案
+        保持可提交且可驳回处置不卡死；执行失败水位不推进，重跑按场景1a 自愈。"""
+        from service.temporal_workflows import _prewrite_recheck, resolve_entity_batch
+
+        graph = use_graph(monkeypatch, FakeGraph(recall={"Scholar": []}))
+        use_space_client(monkeypatch, graph)
+        out = await resolve_entity_batch(_resolve_request([dict(FIRST), dict(LATER)]))
+        refs = out["batchCandidateRefs"]
+        later_case_id = refs["sch_first"][0]
+        kept = [dict(r) for r in out["records"]]
+        stats = await _prewrite_recheck(
+            graph,
+            "Scholar",
+            kept,
+            graph={"space": "dev2"},
+            source_table="dwd.dwd_scholar",
+            step_id="source:bind-1#main",
+            decision_policy=decision_policy(),
+            batch_candidate_refs=refs,
+        )
+        assert stats["guardWithheld"] == 0 and [r["id"] for r in kept] == ["sch_first"]
+        assert graph.get_node("sch_first") is None  # 终局失败：先到永未落图
+        assert len(_cases(review_service)) == 1  # 无有效候选不建案：先到零案
+        # A3：幻影 merge 大声拒绝，事务回滚不留副作用，案保持可提交
+        with pytest.raises(ReviewValidationError) as ei:
+            review_service.submit(
+                later_case_id,
+                1,
+                "entity-confirm",
+                {"entityVerdict": "merge", "targetEntityId": "sch_first"},
+                "",
+                actor(),
+            )
+        assert "不在图内" in str(ei.value)
+        row = _case_row(review_service, later_case_id)
+        assert row.status == "OPEN" and row.version == 1
+        assert graph.writes == []
+        # 恢复路径：评审员驳回处置（reject 不做图写）——案不卡死
+        result = review_service.submit(
+            later_case_id, 1, "reject-candidate", {"entityVerdict": "reject"}, "", actor()
+        )
+        assert result["status"] == "RESOLVED"
+        assert graph.writes == []
+
+    @pytest.mark.asyncio
+    async def test_prewrite_withheld_new_case_valid_candidate_real_gray(
+        self, review_service, monkeypatch
+    ):
+        """场景2 写前扣留新建案的有效性：先到被写前终判改判灰区建案——候选
+        =图内真实节点（get_node 非 None），判定=真实灰区（分数落在
+        [GRAY_LOW, MERGE_THRESHOLD)，证据字段上桌，stage=写前终判）；resolve
+        建的后到案纠偏后同样满足有效候选 + 真实 gray。"""
+        from service.temporal_workflows import _prewrite_recheck, resolve_entity_batch
+
+        graph = use_graph(monkeypatch, FakeGraph(recall={"Scholar": []}))
+        use_space_client(monkeypatch, graph)
+        out = await resolve_entity_batch(_resolve_request([dict(FIRST), dict(LATER)]))
+        refs = out["batchCandidateRefs"]
+        later_case_id = refs["sch_first"][0]
+        graph.recall["Scholar"] = [dict(RSCH_ROW)]
+        graph.nodes.add("sch_rsch")
+        kept = [dict(r) for r in out["records"]]
+        stats = await _prewrite_recheck(
+            graph,
+            "Scholar",
+            kept,
+            graph={"space": "dev2"},
+            source_table="dwd.dwd_scholar",
+            step_id="source:bind-1#main",
+            decision_policy=decision_policy(),
+            batch_candidate_refs=refs,
+        )
+        assert stats["guardWithheld"] == 1 and kept == []
+        cases = {
+            snap["_incoming"]["vid"]: (cid, reason, snap)
+            for cid, reason, snap in _cases(review_service)
+        }
+        # 写前终判为「先到」新建的案：真实 gray + 图内真实候选
+        first_case_id, first_reason, first_snap = cases["sch_first"]
+        res = first_snap["_resolution"]
+        assert res["scoreDecision"] == "gray"
+        assert res["effectiveDisposition"] == "withhold_pending_review"
+        assert GRAY_LOW <= res["matchScore"] < MERGE_THRESHOLD
+        assert res["thresholds"]["merge"] == 0.85 and res["thresholds"]["grayLow"] == 0.65
+        assert "写前终判" in first_reason and "灰区" in first_reason
+        cands = first_snap["existingCandidates"]
+        assert len(cands) == 1 and cands[0]["vid"] == "sch_rsch"
+        assert graph.get_node(cands[0]["vid"]) is not None
+        assert GRAY_LOW <= cands[0]["score"] < MERGE_THRESHOLD
+        assert cands[0]["propCompared"] == 3 and cands[0]["propMatched"] == 1
+        assert first_case_id != later_case_id  # 各自独立成案
+        # resolve 建的后到案（纠偏后）：同样真实 gray + 图内真实候选
+        _, _, later_snap = cases["sch_later"]
+        lres = later_snap["_resolution"]
+        assert lres["scoreDecision"] == "gray"
+        assert GRAY_LOW <= lres["matchScore"] < MERGE_THRESHOLD
+        later_cands = later_snap["existingCandidates"]
+        assert [c["vid"] for c in later_cands] == ["sch_rsch"]
+        for cand in later_cands:
+            assert graph.get_node(cand["vid"]) is not None
+            assert GRAY_LOW <= cand["score"] < MERGE_THRESHOLD
+
+    @pytest.mark.asyncio
+    async def test_rescope_skips_resolved_case_concurrent_verdict_wins(
+        self, review_service, monkeypatch
+    ):
+        """场景3a 纠偏遇并发终态：评审员先一步驳回（RESOLVED）——门控跳过
+        纠偏，终态决议/候选/版本不被覆盖（不会把已结案改回可合并状态）。"""
+        from service.temporal_workflows import _prewrite_recheck, resolve_entity_batch
+
+        graph = use_graph(monkeypatch, FakeGraph(recall={"Scholar": []}))
+        use_space_client(monkeypatch, graph)
+        out = await resolve_entity_batch(_resolve_request([dict(FIRST), dict(LATER)]))
+        refs = out["batchCandidateRefs"]
+        later_case_id = refs["sch_first"][0]
+        # 并发写者：评审员先驳回后到案（终态，version 1→2）
+        result = review_service.submit(
+            later_case_id, 1, "reject-candidate", {"entityVerdict": "reject"}, "", actor()
+        )
+        assert result["status"] == "RESOLVED"
+        # 写前终判扣留先到并触发纠偏——门控发现终态即跳过（不覆盖）
+        graph.recall["Scholar"] = [dict(RSCH_ROW)]
+        graph.nodes.add("sch_rsch")
+        kept = [dict(r) for r in out["records"]]
+        stats = await _prewrite_recheck(
+            graph,
+            "Scholar",
+            kept,
+            graph={"space": "dev2"},
+            source_table="dwd.dwd_scholar",
+            step_id="source:bind-1#main",
+            decision_policy=decision_policy(),
+            batch_candidate_refs=refs,
+        )
+        assert stats["guardWithheld"] == 1 and kept == []
+        row = _case_row(review_service, later_case_id)
+        assert row.status == "RESOLVED" and row.version == 2
+        snapshot = json.loads(row.candidate_snapshot)
+        assert [c["vid"] for c in snapshot["existingCandidates"]] == ["sch_first"]  # 终态原样
+        assert "_candidateRescope" not in snapshot
+        with review_service.sf() as s:
+            audits = s.scalars(
+                select(ReviewAuditLog).where(
+                    ReviewAuditLog.case_id == later_case_id,
+                    ReviewAuditLog.event_type == "CANDIDATES_RESCOPED",
+                )
+            ).all()
+        assert audits == []
+        # 门控直证：终态案再纠偏 = 状态门拒绝
+        gated = review_service.rescope_case_candidates(
+            later_case_id, dead_vids={"sch_first"}, graph_space="dev2", node_label="Scholar"
+        )
+        assert gated == {"rescoped": False, "reason": "status-RESOLVED"}
+
+    @pytest.mark.asyncio
+    async def test_rescope_version_conflict_fails_open_concurrent_state_intact(
+        self, review_service, monkeypatch
+    ):
+        """场景3b 纠偏 CAS 版本冲突（案仍 OPEN）：审查读后并发写者先落一版
+        ——CAS 拒绝上抛（不盲写覆盖并发修改）；helper 层 fail-open 吞掉不阻断
+        写图；并发版本/候选原样保留；A3 仍拦幻影 merge，案可提交；冲突消解
+        后重纠一次即恢复（rescope 幂等可重试）。"""
+        from sqlalchemy import update as sa_update
+
+        import service.entity_disambiguation as ed
+        from service.temporal_workflows import (
+            _prewrite_recheck,
+            _rescope_batch_gray_cases,
+            resolve_entity_batch,
+        )
+
+        graph = use_graph(monkeypatch, FakeGraph(recall={"Scholar": []}))
+        use_space_client(monkeypatch, graph)
+        out = await resolve_entity_batch(_resolve_request([dict(FIRST), dict(LATER)]))
+        refs = out["batchCandidateRefs"]
+        later_case_id = refs["sch_first"][0]
+        graph.recall["Scholar"] = [dict(RSCH_ROW)]
+        graph.nodes.add("sch_rsch")
+        # 在「读案之后、CAS 之前」注入并发写者：rescope 在读案与更新之间必经
+        # eligible_candidates（纯函数），借道它先把版本落一版（version+7）
+        orig_eligible = ed.eligible_candidates
+
+        def racing_eligible(*args, **kwargs):
+            with review_service.sf.begin() as s2:
+                s2.execute(
+                    sa_update(ReviewCase)
+                    .where(ReviewCase.id == later_case_id)
+                    .values(version=ReviewCase.version + 7)
+                )
+            return orig_eligible(*args, **kwargs)
+
+        monkeypatch.setattr(ed, "eligible_candidates", racing_eligible)
+        with pytest.raises(ReviewConflictError):
+            review_service.rescope_case_candidates(
+                later_case_id, dead_vids={"sch_first"}, graph_space="dev2", node_label="Scholar"
+            )
+        ed.eligible_candidates = orig_eligible  # 竞争注入只此一次
+        # 并发写者的成果不被覆盖：版本已到 8、候选仍原样、无纠偏审计
+        row = _case_row(review_service, later_case_id)
+        assert row.version == 8 and row.status == "OPEN"
+        snapshot = json.loads(row.candidate_snapshot)
+        assert [c["vid"] for c in snapshot["existingCandidates"]] == ["sch_first"]
+        assert "_candidateRescope" not in snapshot
+        # helper 层 fail-open：CAS 冲突上抛被吞，写前终判照常完成
+        real_rescope = review_service.rescope_case_candidates
+
+        def conflict(*args, **kwargs):
+            raise ReviewConflictError("版本竞争")
+
+        monkeypatch.setattr(review_service, "rescope_case_candidates", conflict)
+        _rescope_batch_gray_cases(refs, "sch_first", {"space": "dev2"}, "Scholar")  # 不上抛
+        kept = [dict(r) for r in out["records"]]
+        stats = await _prewrite_recheck(
+            graph,
+            "Scholar",
+            kept,
+            graph={"space": "dev2"},
+            source_table="dwd.dwd_scholar",
+            step_id="source:bind-1#main",
+            decision_policy=decision_policy(),
+            batch_candidate_refs=refs,
+        )
+        assert stats["guardWithheld"] == 1 and kept == []
+        # A3 仍拦幻影 merge；案保持可提交（并发版本 8 未被占）
+        with pytest.raises(ReviewValidationError) as ei:
+            review_service.submit(
+                later_case_id,
+                8,
+                "entity-confirm",
+                {"entityVerdict": "merge", "targetEntityId": "sch_first"},
+                "",
+                actor(),
+            )
+        assert "不在图内" in str(ei.value)
+        assert _case_row(review_service, later_case_id).version == 8
+        # 恢复机制：冲突消解（无并发）后重纠一次即成功，merge 畅通
+        monkeypatch.setattr(review_service, "rescope_case_candidates", real_rescope)
+        fixed = review_service.rescope_case_candidates(
+            later_case_id, dead_vids={"sch_first"}, graph_space="dev2", node_label="Scholar"
+        )
+        assert fixed["rescoped"] is True and fixed["candidates"] == ["sch_rsch"]
+        result = review_service.submit(
+            later_case_id,
+            9,
+            "entity-confirm",
+            {"entityVerdict": "merge", "targetEntityId": "sch_rsch"},
+            "",
+            actor(),
+        )
+        assert result["status"] == "RESOLVED"
+        assert any('VALUES "sch_rsch"' in w for w in graph.writes)

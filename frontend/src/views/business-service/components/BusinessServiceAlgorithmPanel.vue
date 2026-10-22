@@ -5725,14 +5725,17 @@ function clearGraphSelection() {
   max-width: calc(100vw - 24px);
 }
 
-/* 月份/年份面板宽度跟随输入框（「之前」的观感：弹层与框同宽），但用 min-width: 220px 兜住
-   「十一月」一行（面板内左右 padding 32px、3 列平分，220px 时每格文字区 ~55px > 文字 42px；
-   182px 是不折行的硬底线）。Arco 原生固定 265px 比输入框宽一截（2026-10 反馈偏宽）；
-   纯 width:100% 无下限则会退化到 ~182px 内容宽（2444066a 折行根因），必须带上 min-width。
-   trigger-props 用 autoFitPopupMinWidth：弹层宽度 = max(输入框宽, 面板下限)，能跟也能兜。 */
+/* 月份/年份面板宽度跟随输入框（「之前」的观感：弹层与框同宽），仅用 min-width: 190px 兜住
+   「十一月」一行：面板内左右 padding 32px、3 列平分，每格文字区 = (宽-32)/3-8，
+   「十一月」文字 42px → 182px 是不折行硬临界，190px 留少量余量。
+   输入框 ≥190px 的模块（桌面常见）日历与框完全同宽；个别月份列被栅格压到 ~150px 的模块
+   （产业链 TOP-N 事件 minmax(0,150px)）日历按 190 兜底、比框宽约 40px——再窄必折行，属物理边界。
+   Arco 原生固定 265px 比输入框宽一截（2026-10 反馈偏宽）；纯 width:100% 无下限
+   则退化到内容宽（2444066a 折行根因）。trigger-props 用 autoFitPopupMinWidth：
+   弹层宽度 = max(输入框宽, 190px)，能跟也能兜。 */
 :global(.business-month-options :is(.arco-panel-month, .arco-panel-year)) {
   width: 100%;
-  min-width: 220px;
+  min-width: 190px;
 }
 
 .cooperation-type-select {

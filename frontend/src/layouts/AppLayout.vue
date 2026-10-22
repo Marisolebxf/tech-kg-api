@@ -456,7 +456,6 @@ onBeforeUnmount(() => {
               <span>知识图谱构建服务</span>
             </div>
             <div v-if="isAdminUser" class="app-nav__query-group">
-              <a-tooltip position="right" content="图谱查询" :disabled="!sidebarCollapsed">
               <button
                 class="app-nav__item app-nav__item--top app-nav__item--button"
                 :class="{
@@ -484,26 +483,20 @@ onBeforeUnmount(() => {
                   <path d="m4 6 4 4 4-4" />
                 </svg>
               </button>
-              </a-tooltip>
               <template v-if="showQueryNavItems">
-                <a-tooltip
+                <RouterLink
                   v-for="item in queryNavItems"
                   :key="item.to"
-                  position="right"
-                  :content="item.fullLabel"
+                  class="app-nav__item app-nav__item--sub"
+                  active-class="app-nav__item--active"
+                  :to="item.to"
                 >
-                  <RouterLink
-                    class="app-nav__item app-nav__item--sub"
-                    active-class="app-nav__item--active"
-                    :to="item.to"
+                  <span class="app-nav__sub-wrap app-nav__marquee"
+                    ><span class="app-nav__sub-label app-nav__marquee-label">{{
+                      item.label
+                    }}</span></span
                   >
-                    <span class="app-nav__sub-wrap app-nav__marquee"
-                      ><span class="app-nav__sub-label app-nav__marquee-label">{{
-                        item.label
-                      }}</span></span
-                    >
-                  </RouterLink>
-                </a-tooltip>
+                </RouterLink>
               </template>
               <aside
                 v-if="sidebarCollapsed"

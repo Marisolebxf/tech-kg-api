@@ -5346,7 +5346,6 @@ function clearGraphSelection() {
           <article v-for="rule in liveRules" :key="rule.name">
             <header>
               <strong>{{ rule.name }}</strong>
-              <span>{{ rule.type }}</span>
             </header>
             <dl>
               <div>
@@ -6449,16 +6448,6 @@ function clearGraphSelection() {
 .result-panel__rules strong {
   color: var(--primary);
   font-size: 14px;
-}
-
-.result-panel__rules header span {
-  flex: 0 0 auto;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--primary-subtle);
-  color: var(--primary);
-  font-size: 12px;
-  line-height: 20px;
 }
 
 .result-panel__rules dl {

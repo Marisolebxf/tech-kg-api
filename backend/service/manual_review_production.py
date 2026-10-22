@@ -1242,14 +1242,27 @@ class ManualReviewService:
         乐观 CAS 更新（version+1，不加行锁——图召回耗秒级，不拖住评审端提交）
         + ``CANDIDATES_RESCOPED`` 审计；冲突原样上抛，由调用方 fail-open 兜底
         （裁决端另有合并目标存在性终判防线）。
+
+        证据版本（R3，1022 Codex 复核）：建案原始证据 ``_resolution`` **只读不
+        动**（matchScore/scoreDecision 反映建案时点判定）；纠偏后的候选与判定
+        形成独立证据块 ``_candidateRescope``——``candidates``（新候选全量证据）、
+        ``oldCandidates``（被替换前的候选原样留档）、``resolution``（本次纠偏的
+        decide/bestScore/margin/阈值/规则版本/时点）。decide=merge 只入证据，
+        **不自动执行合并**、不修改任何已有裁决——合并仍需评审员提交且过存在性
+        终判。
         """
         from service.entity_disambiguation import (
+            GRAY_LOW,
+            MARGIN,
+            MERGE_THRESHOLD,
             TOP_K,
+            decide,
             display_name,
             eligible_candidates,
             recall_same_name,
             score_candidate,
         )
+        from service.gray_gate import NAME_RULE_VERSION
 
         dead = {str(v) for v in dead_vids if v}
         with self.sf() as s:
@@ -1292,6 +1305,9 @@ class ManualReviewService:
                     {"vid": vid, "name": cand["name"], "score": round(score, 3), **detail}
                 )
             scored.sort(key=lambda x: x["score"], reverse=True)
+            # 纠偏判定独立成证（R3）：对整组重评分结果真实 decide（TOP_K 截断
+            # 前），与建案时点的 ``_resolution`` 并存两版本——页面据此区分
+            rescope_outcome = decide(scored)
             new_candidates = [
                 {
                     "vid": x["vid"],
@@ -1319,11 +1335,26 @@ class ManualReviewService:
                 # 幂等：候选 vid 序列未变（重放/纠正后无差异）不加版本
                 return {"rescoped": False, "reason": "no-change", "candidates": new_vids}
             t = now()
+            old_candidates = list(snapshot.get("existingCandidates") or [])
             snapshot["existingCandidates"] = new_candidates
             snapshot["_candidateRescope"] = {
                 "at": t.isoformat(),
                 "deadVids": sorted(dead),
                 "stage": "batch-gray-fix-1022",
+                "oldCandidates": old_candidates,
+                "candidates": new_candidates,
+                "resolution": {
+                    "decide": rescope_outcome["decision"],
+                    "bestScore": rescope_outcome["score"],
+                    "margin": rescope_outcome["margin"],
+                    "thresholds": {
+                        "merge": MERGE_THRESHOLD,
+                        "grayLow": GRAY_LOW,
+                        "margin": MARGIN,
+                    },
+                    "ruleVersion": NAME_RULE_VERSION,
+                    "at": t.isoformat(),
+                },
             }
             reserved = s.execute(
                 update(ReviewCase)
@@ -1358,6 +1389,8 @@ class ManualReviewService:
                     "oldCandidates": old_vids,
                     "newCandidates": new_vids,
                     "stage": "batch-gray-fix-1022",
+                    "decide": rescope_outcome["decision"],
+                    "bestScore": rescope_outcome["score"],
                 },
             )
             s.commit()

@@ -224,6 +224,37 @@ const linkResolution = computed(() => {
     ? (raw as { matchScore?: number; margin?: number | null })
     : null
 })
+/** 候选纠偏独立证据版本（R3，1022）：_candidateRescope 与建案时点 _resolution
+ *  是两个时点的证据，并列展示互不覆盖；decide 只入证据不自动执行（merge 仍
+ *  需评审员提交且过合并目标存在性终判）。 */
+const RESCOPE_DECIDE_LABELS: Record<string, string> = {
+  merge: '达到合并阈值（不自动执行，仍需人工提交）',
+  gray: '灰区（人工裁决）',
+  new: '无同名候选（建议新建或驳回）',
+}
+const linkRescope = computed(() => {
+  const raw = linkSnapshot.value?._candidateRescope
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  const resolution =
+    r.resolution && typeof r.resolution === 'object'
+      ? (r.resolution as Record<string, unknown>)
+      : {}
+  const decide = typeof resolution.decide === 'string' ? resolution.decide : ''
+  const countVids = (list: unknown): number =>
+    Array.isArray(list) ? list.filter((c) => c && typeof c === 'object' && (c as { vid?: unknown }).vid).length : 0
+  return {
+    at: typeof r.at === 'string' ? r.at : '',
+    deadVids: (Array.isArray(r.deadVids) ? r.deadVids : []).map((v) => String(v)),
+    oldCount: countVids(r.oldCandidates),
+    newCount: countVids(r.candidates),
+    decide,
+    decideLabel: RESCOPE_DECIDE_LABELS[decide] || decide,
+    bestScore: typeof resolution.bestScore === 'number' ? resolution.bestScore : null,
+    margin: typeof resolution.margin === 'number' ? resolution.margin : null,
+    ruleVersion: typeof resolution.ruleVersion === 'string' ? resolution.ruleVersion : null,
+  }
+})
 /** 详情富化元信息：图库同名实体总数（TOP_K=5 截断外评审员原本看不见）。 */
 const linkSameNameTotal = computed<number | null>(() => {
   const raw = (linkSnapshot.value?._enriched as { sameNameTotal?: number } | undefined) || undefined
@@ -686,6 +717,10 @@ const runPrimary = () => {
           </dl>
           <template v-if="templateId === 'T_LINK'">
             <p v-if="linkResolution">消歧得分 {{ linkResolution.matchScore ?? '—' }} · 候选分差 {{ linkResolution.margin ?? '—' }} · 灰区人工裁决</p>
+            <!-- 候选纠偏（R3，1022）：独立证据版本，与上方建案时点原始证据并列区分 -->
+            <p v-if="linkRescope" class="link-rescope-hint">
+              候选已纠偏（{{ linkRescope.at || '—' }}）：剔除 {{ linkRescope.deadVids.length }} 个未落图候选，{{ linkRescope.oldCount }} 个 → {{ linkRescope.newCount }} 个 · 纠偏判定 {{ linkRescope.bestScore ?? '—' }}（{{ linkRescope.decideLabel }}）<template v-if="linkRescope.margin !== null"> · 候选分差 {{ linkRescope.margin }}</template><template v-if="linkRescope.ruleVersion"> · 规则 {{ linkRescope.ruleVersion }}</template>——上方消歧得分为建案时点原始证据，未因纠偏覆盖
+            </p>
             <details v-if="linkIncomingProps.length" class="link-incoming-props zone-extra">
               <summary>待入库实体属性（{{ linkIncomingProps.length }} 项{{ terminalOutcome ? ' · 裁决前快照' : '' }}）</summary>
               <table class="direct-fields">
@@ -1426,6 +1461,13 @@ const runPrimary = () => {
 .link-pending-hint {
   margin: 0;
   color: #b54708;
+  font-size: 12px;
+}
+
+/* 候选纠偏独立证据横幅（R3，1022）：与建案时点原始证据并列，色带区分两时点 */
+.link-rescope-hint {
+  margin: 2px 0 0;
+  color: #0e7490;
   font-size: 12px;
 }
 

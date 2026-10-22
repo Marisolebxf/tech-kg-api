@@ -210,10 +210,12 @@ export const serviceModules: ServiceModule[] = [
     requestFields: [
       { name: 'expert_a_id', type: 'string', required: '是', maxLength: 64, description: '请输入专家 A，最多 64 个字符' },
       { name: 'expert_b_id', type: 'string', required: '是', maxLength: 64, description: '请输入专家 B，最多 64 个字符' },
+      { name: 'start_time', type: 'month', required: '否', description: '可选；留空则使用数据库任职开始时间' },
+      { name: 'end_time', type: 'month', required: '否', description: '可选；留空则使用数据库任职结束时间' },
     ],
     responseFields: apiResponseFields,
     // 测试数据不再作为表单默认值，避免用户误提交样例专家。
-    requestExample: { expert_a_id: 'person_0512632S', expert_b_id: 'person_2406B66w' },
+    requestExample: { expert_a_id: 'person_0512632S', expert_b_id: 'person_2406B66w', start_time: '2020-01', end_time: '2024-12' },
     responseExample: { code: 200, success: true, msg: 'success', data: { total: 1, summary: { commonOrganization: '中国科学院自动化研究所', commonDepartment: '智能系统实验室', effectivePeriod: '2018-01 至 2022-12', overlapDuration: '4 年', periodAchievements: 6 } } },
     summaryRows: [
       { label: '核心专家', value: '张明远｜研究员' },

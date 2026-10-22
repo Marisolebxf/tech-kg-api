@@ -1,6 +1,5 @@
 export interface ActualServiceRule {
   name: string;
-  type: string;
   target: string;
   trigger: string;
   logic: string;
@@ -24,10 +23,7 @@ const bidAlgorithmNames: Record<string, string> = {
   "industry-chain-panorama": "产业链架构建模与可视化算法",
 };
 
-const bidAlgorithmRules: Record<
-  string,
-  Omit<ActualServiceRule, "name" | "type">
-> = {
+const bidAlgorithmRules: Record<string, Omit<ActualServiceRule, "name">> = {
   "expert-direct": {
     target: "专家 Person 节点及 COAUTHOR_WITH 合作边",
     trigger: "输入专家 A，可选专家 B、机构和时间范围",
@@ -130,7 +126,6 @@ export const actualServiceRules: Record<string, ActualServiceRule[]> =
         {
           ...bidAlgorithmRules[key],
           name: bidAlgorithmNames[key],
-          type: "标书要求算法",
         },
       ],
     ]),

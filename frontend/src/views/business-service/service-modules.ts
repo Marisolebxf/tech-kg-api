@@ -24,7 +24,6 @@ export type ServiceSummaryRow = {
 
 export type ServiceRule = {
   name: string
-  type: string
   target: string
   trigger: string
   logic: string

@@ -5725,12 +5725,10 @@ function clearGraphSelection() {
   max-width: calc(100vw - 24px);
 }
 
-/* 桌面：autoFitPopupMinWidth 让面板自然撑到 Arco 原生 265px，十一月/十二月一行放下；
-   手机：受上面 max-width: 视口宽 约束继续压缩（保留 2444066a 防溢出意图），此时才允许换行。 */
-:global(.business-month-options :is(.arco-picker-container, .arco-panel-month, .arco-panel-year)) {
-  width: 100%;
-  min-width: 0;
-}
+/* 面板宽度交给 Arco 原生 .arco-panel-month/.arco-panel-year { width: 265px }，十一月/十二月一行放下；
+   trigger-props 用 autoFitPopupMinWidth（只设 min-width 不锁宽），弹层宽度跟随面板自动长到 265px。
+   此前 2444066a 遗留的 width:100% 覆写会抹掉原生 265px（面板退化成内容宽 ~200px，末尾月份折行），已删；
+   窄屏防溢出仍由上面弹层 max-width: calc(100vw - 24px) 兜底（≥289px 视口 265px 均放得下）。 */
 
 .cooperation-type-select {
   --el-input-text-color: #bfbfbf;

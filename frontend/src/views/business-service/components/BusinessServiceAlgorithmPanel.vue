@@ -5725,10 +5725,15 @@ function clearGraphSelection() {
   max-width: calc(100vw - 24px);
 }
 
-/* 面板宽度交给 Arco 原生 .arco-panel-month/.arco-panel-year { width: 265px }，十一月/十二月一行放下；
-   trigger-props 用 autoFitPopupMinWidth（只设 min-width 不锁宽），弹层宽度跟随面板自动长到 265px。
-   此前 2444066a 遗留的 width:100% 覆写会抹掉原生 265px（面板退化成内容宽 ~200px，末尾月份折行），已删；
-   窄屏防溢出仍由上面弹层 max-width: calc(100vw - 24px) 兜底（≥289px 视口 265px 均放得下）。 */
+/* 月份/年份面板宽度跟随输入框（「之前」的观感：弹层与框同宽），但用 min-width: 220px 兜住
+   「十一月」一行（面板内左右 padding 32px、3 列平分，220px 时每格文字区 ~55px > 文字 42px；
+   182px 是不折行的硬底线）。Arco 原生固定 265px 比输入框宽一截（2026-10 反馈偏宽）；
+   纯 width:100% 无下限则会退化到 ~182px 内容宽（2444066a 折行根因），必须带上 min-width。
+   trigger-props 用 autoFitPopupMinWidth：弹层宽度 = max(输入框宽, 面板下限)，能跟也能兜。 */
+:global(.business-month-options :is(.arco-panel-month, .arco-panel-year)) {
+  width: 100%;
+  min-width: 220px;
+}
 
 .cooperation-type-select {
   --el-input-text-color: #bfbfbf;

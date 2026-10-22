@@ -1,4 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
+import { Tooltip as ATooltip } from '@arco-design/web-vue'
 import { h } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -990,14 +991,15 @@ describe('分页统计与页数收缩收敛（FUNC-00781）/ 处理实例 ID 纯
     }))
   })
 
-  it('处理实例 ID 为纯文本（中性色 code，非链接），title 悬停提供全称', async () => {
+  it('处理实例 ID 为纯文本（中性色 code，非链接），a-tooltip 悬停提供全称', async () => {
     const wrapper = renderReview()
     await flushPromises()
 
-    // 首列处理实例 ID 单元格：纯 code 文本，不带链接，悬停 title 可看全称
+    // 首列处理实例 ID 单元格：纯 code 文本，不带链接，悬停 a-tooltip 可看全称；
+    // 视图显式 import 了 arco Tooltip：真组件原地克隆触发元素不加包装层，content 是组件 prop
     const idCell = wrapper.findAll('tbody tr td.review-id-cell')[0]
     const code = idCell.get('code.review-id-plain')
-    expect(code.attributes('title')).toBe('MR-1')
+    expect(idCell.findComponent(ATooltip).props('content')).toBe('MR-1')
     expect(code.text()).toBe('MR-1')
     expect(idCell.find('router-link-stub').exists()).toBe(false)
     expect(idCell.find('a').exists()).toBe(false)

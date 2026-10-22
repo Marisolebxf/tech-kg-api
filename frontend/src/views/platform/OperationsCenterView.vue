@@ -826,7 +826,7 @@ onMounted(() => {
               :checked="rerunSelection.has(row.id)"
               @change="((event?: Event) => toggleRerunPick(row.id, Boolean((event?.target as HTMLInputElement)?.checked)))"
             /></td>
-            <td class="review-id-cell"><code class="review-id-plain" :title="row.id">{{ row.id }}</code></td>
+            <td class="review-id-cell"><a-tooltip position="top" :content="row.id"><code class="review-id-plain">{{ row.id }}</code></a-tooltip></td>
             <!-- 待处理对象：超长对象名单行省略（不再撑高行），悬浮查看完整内容 -->
             <td class="review-object-cell">
               <a-tooltip v-if="row.object" position="top" :content="row.object">
@@ -1152,8 +1152,9 @@ onMounted(() => {
 .ops-review-table-scroll:hover::-webkit-scrollbar-thumb,.ops-review-table-scroll.review-scroll--active::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
 .ops-review-table-scroll::-webkit-scrollbar-thumb:hover{background-color:rgba(78,89,105,.8)}
 /* 类型徽标 / 勾选禁用态 / 删除按钮 */
-/* 处理实例 ID 纯文本：中性色，区别于可点击的链接蓝 */
-.review-id-cell .review-id-plain{color:#4e5969}
+/* 处理实例 ID 纯文本：字体随表格（去掉 code 默认等宽/字号），中性色区别于可点击的链接蓝；
+ * 悬停气泡与待处理对象列一致，用 a-tooltip 默认样式 */
+.review-id-cell .review-id-plain{color:#4e5969;font-family:inherit;font-size:inherit;line-height:inherit}
 .review-kind-badge{display:inline-flex;white-space:nowrap;padding:0 8px;border-radius:4px;background:#f2f3f5;color:#4e5969;font-size:12px;line-height:20px}
 .review-kind-badge.is-实体{background:#eaf2ff;color:#175cd3}
 .review-kind-badge.is-关系{background:#fff3d8;color:#b54708}

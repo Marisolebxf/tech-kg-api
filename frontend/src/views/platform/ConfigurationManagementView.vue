@@ -859,11 +859,9 @@ onUnmounted(() => {
     <section class="config-workbench">
       <aside class="category-nav">
         <header><strong>配置分类</strong></header>
-        <a-tooltip v-for="category in categories" :key="category.key" position="right" :content="`${category.label}：${category.hint}`">
-          <button type="button" :class="{ active: activeCategory === category.key }" @click="switchCategory(category.key)">
-            <span><strong>{{ category.label }}</strong></span><em>{{ categoryCount(category.key) }}</em>
-          </button>
-        </a-tooltip>
+        <button v-for="category in categories" :key="category.key" type="button" :class="{ active: activeCategory === category.key }" @click="switchCategory(category.key)">
+          <span><strong>{{ category.label }}</strong></span><em>{{ categoryCount(category.key) }}</em>
+        </button>
       </aside>
 
       <main class="config-list">

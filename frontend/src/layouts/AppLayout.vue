@@ -456,6 +456,7 @@ onBeforeUnmount(() => {
               <span>知识图谱构建服务</span>
             </div>
             <div v-if="isAdminUser" class="app-nav__query-group">
+              <a-tooltip position="right" content="图谱查询" :disabled="!sidebarCollapsed">
               <button
                 class="app-nav__item app-nav__item--top app-nav__item--button"
                 :class="{
@@ -483,6 +484,7 @@ onBeforeUnmount(() => {
                   <path d="m4 6 4 4 4-4" />
                 </svg>
               </button>
+              </a-tooltip>
               <template v-if="showQueryNavItems">
                 <a-tooltip
                   v-for="item in queryNavItems"
@@ -519,6 +521,7 @@ onBeforeUnmount(() => {
               </aside>
             </div>
             <div class="app-nav__service-group">
+              <a-tooltip position="right" :content="businessServiceTitle" :disabled="!sidebarCollapsed">
               <button
                 class="app-nav__item app-nav__item--top app-nav__item--button"
                 :class="{
@@ -546,6 +549,7 @@ onBeforeUnmount(() => {
                   <path d="m4 6 4 4 4-4" />
                 </svg>
               </button>
+              </a-tooltip>
               <template v-if="showServiceNavItems">
                 <a-tooltip
                   v-for="item in serviceNavItems"

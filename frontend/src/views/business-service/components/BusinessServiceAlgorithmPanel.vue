@@ -534,8 +534,18 @@ const achievementTypeSelection = computed<AchievementTypeOption[]>({
 });
 const liveResponse = ref<Record<string, any> | null>(null);
 const paramResetToken = ref(0);
-// 下拉/日历面板展开期间禁用字段气泡，避免气泡压住选项/日期（原生 title 时代气泡跟随光标不遮挡）
+// 下拉/日历面板展开期间隐藏字段气泡，避免气泡压住选项/日期（原生 title 时代气泡跟随光标不遮挡）。
+// 注意不能用 a-tooltip 的 disabled：Arco Trigger 的 disabled 只拦「打开」，已展开的气泡不会收起，
+// 连 mouseleave 都被短路，气泡会僵在原地（反而压住日期面板两侧）。
 const fieldPanelVisible = ref(false);
+// 悬停状态由 tooltip 自身事件驱动（v-model:popup-visible 回写），面板展开期间强制钳为 false。
+const fieldTipHover = ref(false);
+const fieldTipVisible = computed({
+  get: () => fieldTipHover.value && !fieldPanelVisible.value,
+  set: (value: boolean) => {
+    fieldTipHover.value = value;
+  },
+});
 const selectedGraphNodeId = ref<string | null>(null);
 const selectedGraphEdgeId = ref<string | null>(null);
 const liveAlumniResult = ref<AlumniQueryResult | null>(null);
@@ -4724,8 +4734,9 @@ function clearGraphSelection() {
         <a-tooltip
           v-if="field.type === 'select' || field.type === 'boolean'"
           position="bottom"
+          v-model:popup-visible="fieldTipVisible"
           :content="field.description"
-          :disabled="!field.description || fieldPanelVisible"
+          :disabled="!field.description"
         >
           <ElSelect
             :clear-icon="IconClose"
@@ -4748,8 +4759,9 @@ function clearGraphSelection() {
         <a-tooltip
           v-else-if="field.name === 'achievementTypes'"
           position="bottom"
+          v-model:popup-visible="fieldTipVisible"
           :content="field.description"
-          :disabled="!field.description || fieldPanelVisible"
+          :disabled="!field.description"
         >
           <ElSelect
             :clear-icon="IconClose"
@@ -4778,8 +4790,9 @@ function clearGraphSelection() {
         <a-tooltip
           v-else-if="field.name === 'relationTypes'"
           position="bottom"
+          v-model:popup-visible="fieldTipVisible"
           :content="field.description"
-          :disabled="!field.description || fieldPanelVisible"
+          :disabled="!field.description"
         >
           <ElSelect
             :clear-icon="IconClose"
@@ -4831,8 +4844,9 @@ function clearGraphSelection() {
         <a-tooltip
           v-else-if="field.type === 'month'"
           position="bottom"
+          v-model:popup-visible="fieldTipVisible"
           :content="field.description"
-          :disabled="!field.description || fieldPanelVisible"
+          :disabled="!field.description"
         >
           <AMonthPicker
             :key="`${field.name}-${paramResetToken}`"

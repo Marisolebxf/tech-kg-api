@@ -795,6 +795,27 @@ class ManualReviewService:
                         }
                         if str(result.get("targetEntityId") or "") not in allowed:
                             raise ReviewValidationError("目标实体不在候选集内")
+                        # 1022：merge 目标存在性终判——批内同名先到记录可能已被
+                        # 写前终判扣留/剔除（vid 永不落图），快照候选随之失真。
+                        # Tx1 前挡下（回滚释放占位），案保持可提交（换目标/驳回）；
+                        # 探查失败不拦决议，_apply_link_verdict 兜底终判
+                        target_vid = str(result.get("targetEntityId") or "")
+                        try:
+                            target_missing = (
+                                self._graph_client_for(snapshot).get_node(target_vid) is None
+                            )
+                        except Exception as exc:  # noqa: BLE001 — 图不可达不吞决议
+                            logger.warning(
+                                "merge 目标存在性探查失败 case=%s target=%s: %s",
+                                i,
+                                target_vid,
+                                exc,
+                            )
+                            target_missing = False
+                        if target_missing:
+                            raise ReviewValidationError(
+                                "合并目标实体不在图内，请驳回或刷新候选后重选"
+                            )
                 # 写前扣留案（带 _incoming）的 merge/create 才有图写第二段；
                 # reject / 存量写后案（实体已在图）不需要图写 → 直接 NOT_REQUIRED
                 needs_apply = (
@@ -1198,6 +1219,149 @@ class ManualReviewService:
                 )
             s.commit()
         return {"appended": appended, "skipped": skipped}
+
+    def rescope_case_candidates(
+        self,
+        case_id: str,
+        *,
+        dead_vids: set[str],
+        graph_space: str | None = None,
+        node_label: str | None = None,
+    ) -> dict[str, Any]:
+        """批内灰区案候选纠偏（1022）：按图内现状重做同名召回刷新候选。
+
+        批内同名先到记录被写前终判扣留/剔除/改写时，其 vid 永不落图；仍把它
+        列为候选的在建 T_LINK 案会展示幻影候选（评审 merge 指向图内不存在的
+        目标）。此方法按案快照 ``_incoming`` 的口径重做图内同名召回 +
+        eligibility + 评分（排除 ``dead_vids`` 与案自身 incoming vid），整组替换
+        ``existingCandidates``——刷新为空时同样落库（前端走「无同名候选」分支：
+        新建/驳回），不再保留死候选。
+
+        门控与幂等：只处理 SUBMITTABLE 状态的 T_LINK 案（终态/failed 队列不
+        动，重放安全）；候选 vid 序列无变化即跳过（不加版本不写审计）。
+        乐观 CAS 更新（version+1，不加行锁——图召回耗秒级，不拖住评审端提交）
+        + ``CANDIDATES_RESCOPED`` 审计；冲突原样上抛，由调用方 fail-open 兜底
+        （裁决端另有合并目标存在性终判防线）。
+        """
+        from service.entity_disambiguation import (
+            TOP_K,
+            display_name,
+            eligible_candidates,
+            recall_same_name,
+            score_candidate,
+        )
+
+        dead = {str(v) for v in dead_vids if v}
+        with self.sf() as s:
+            c = s.scalar(select(ReviewCase).where(ReviewCase.id == case_id))
+            if c is None:
+                return {"rescoped": False, "reason": "case-missing"}
+            if canonical_template(c.template_id) != "T_LINK":
+                return {"rescoped": False, "reason": f"template-{c.template_id}"}
+            if c.status not in SUBMITTABLE_STATUSES:
+                return {"rescoped": False, "reason": f"status-{c.status}"}
+            snapshot = load(c.candidate_snapshot) or {}
+            incoming = snapshot.get("_incoming") or {}
+            display = str(snapshot.get("name") or "") or display_name(incoming.get("props") or {})
+            if not display:
+                return {"rescoped": False, "reason": "no-display-name"}
+            self_vid = str(incoming.get("vid") or c.object_id or "")
+            tag = str(snapshot.get("_nodeLabel") or node_label or "")
+            space = str(snapshot.get("_graphSpace") or c.graph_space or graph_space or "")
+            client = self._graph_client_for({**snapshot, "_graphSpace": space, "_nodeLabel": tag})
+            recalled, _route = recall_same_name(client, tag, [display])
+            eligible, _ = eligible_candidates(
+                display,
+                self_vid,
+                recalled.get(display) or [],
+                graph_space=space,
+                node_label=tag,
+            )
+            scored = []
+            for cand in eligible:
+                vid = str(cand["vid"])
+                if vid in dead or vid == self_vid:
+                    continue
+                score, detail = score_candidate(
+                    display,
+                    incoming.get("props") or {},
+                    cand["name"],
+                    cand.get("props") or {},
+                )
+                scored.append(
+                    {"vid": vid, "name": cand["name"], "score": round(score, 3), **detail}
+                )
+            scored.sort(key=lambda x: x["score"], reverse=True)
+            new_candidates = [
+                {
+                    "vid": x["vid"],
+                    "name": x["name"],
+                    "score": x["score"],
+                    **{
+                        key: x[key]
+                        for key in (
+                            "nameSim",
+                            "propsAgree",
+                            "propCompared",
+                            "propMatched",
+                            "comparedProps",
+                        )
+                        if key in x
+                    },
+                }
+                for x in scored[:TOP_K]
+            ]
+            old_vids = [
+                str(x.get("vid")) for x in snapshot.get("existingCandidates") or [] if x.get("vid")
+            ]
+            new_vids = [str(x.get("vid")) for x in new_candidates]
+            if old_vids == new_vids:
+                # 幂等：候选 vid 序列未变（重放/纠正后无差异）不加版本
+                return {"rescoped": False, "reason": "no-change", "candidates": new_vids}
+            t = now()
+            snapshot["existingCandidates"] = new_candidates
+            snapshot["_candidateRescope"] = {
+                "at": t.isoformat(),
+                "deadVids": sorted(dead),
+                "stage": "batch-gray-fix-1022",
+            }
+            reserved = s.execute(
+                update(ReviewCase)
+                .where(
+                    ReviewCase.id == case_id,
+                    ReviewCase.version == c.version,
+                    ReviewCase.status.in_(SUBMITTABLE_STATUSES),
+                )
+                .values(version=c.version + 1, candidate_snapshot=dump(snapshot), updated_at=t)
+            )
+            if reserved.rowcount != 1:
+                raise ReviewConflictError(STATE_OR_VERSION_CONFLICT)
+            # 防 identity-map 回写：raw UPDATE 后 ORM 对象仍持旧属性，同会话
+            # 后续任何写回都会盖掉 CAS 结果（relevant 字段逐个过期）
+            s.expire(c, ["version", "candidate_snapshot", "updated_at"])
+            self.audit(
+                s,
+                c,
+                ReviewIdentity(
+                    "system",
+                    "system",
+                    frozenset({"review_admin"}),
+                    frozenset({"*"}),
+                    "",
+                    "batch-gray-rescope",
+                ),
+                "CANDIDATES_RESCOPED",
+                c.status,
+                c.status,
+                {
+                    "deadVids": sorted(dead),
+                    "oldCandidates": old_vids,
+                    "newCandidates": new_vids,
+                    "stage": "batch-gray-fix-1022",
+                },
+            )
+            s.commit()
+        return {"rescoped": True, "caseId": case_id, "candidates": new_vids}
 
     # ------------------------------------------------------------------
     # T_EXTRACT_FAIL：抽取失败记录重跑生命周期
@@ -2115,6 +2279,12 @@ class ManualReviewService:
         else:
             raise ReviewValidationError("retype 暂不支持：请驳回后修正脚本重跑")
         client = self._graph_client_for(snapshot)
+        if verdict == "merge" and client.get_node(vid) is None:
+            # 1022 兜底：合并目标必须图内真实存在——批内同名先到记录被写前
+            # 终判扣留后 vid 永不落图，直接 INSERT VERTEX 会凭空建点。submit
+            # 已早期校验，此处防扣留与裁决之间的竞态；异常 → Tx2 FAILED（案
+            # APPLY_FAILED 进 failed 队列，人工重应用恢复）
+            raise ReviewValidationError("合并目标实体不在图内，无法执行合并")
         try:
             self._insert_withheld_vertex(client, c, snapshot, incoming, vid, graph_space)
             written_edges, parked_edges, dropped_edges = self._flush_pending_relations(

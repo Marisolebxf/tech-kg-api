@@ -390,6 +390,17 @@ class FakeTRSREST:
         path = request.url.path
         if path == "/health":
             return httpx.Response(200, json={"status": "UP"})
+        if request.method == "GET" and path.startswith("/api/v1/nodes/"):
+            # get_node 单点探针（1022 裁决端 merge 目标存在性终判）：按 state
+            # 如实应答——目标在伪图状态里存在（existing 预置/已 INSERT）即 200，
+            # 不在则 404（GraphNotFoundError → get_node None）
+            vid = path.rsplit("/", 1)[-1]
+            if vid in self.state:
+                return httpx.Response(
+                    200,
+                    json={"id": vid, "labels": ["Person"], "properties": dict(self.state[vid])},
+                )
+            return httpx.Response(404, json={"message": "node not found"})
         if path == "/api/v1/edges":
             body = json.loads(request.content or b"{}")
             self.edge_writes.append(

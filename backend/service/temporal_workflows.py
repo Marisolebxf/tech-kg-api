@@ -1876,6 +1876,7 @@ async def _prewrite_recheck(
     source_table: str,
     step_id: str,
     decision_policy: dict[str, Any] | None = None,
+    batch_candidate_refs: dict[str, list[str]] | None = None,
 ) -> dict[str, int]:
     """写前权威终判（守卫核心）：INSERT 落笔前对整批重做多路召回 + 评分。
 
@@ -1896,6 +1897,11 @@ async def _prewrite_recheck(
     ``DEFERRED_MERGE_BLOCKED`` 失败关闭（任何建案/改写副作用前抛出，B′）；
     真实 gray 走 v2 建案（逻辑键 + 证据 v2 + 来源账本 + priorVerdict 三态处置）；
     fail-open except 重抛失败关闭族（不吞）。v1 请求（无 decision_policy）行为不变。
+
+    1022 批内灰区幻影候选修复：``batch_candidate_refs``（resolve 回传「批内先到
+    候选 vid → 引用案」）传入时，任何记录被扣留/剔除/改写（原 vid 不落图）且
+    该 vid 恰为某案的批内候选，即触发 ``_rescope_batch_gray_cases`` 按图内现状
+    刷新该案候选（fail-open：纠正失败不阻断写图，裁决端存在性终判兜底）。
     """
     from service.entity_disambiguation import (
         decide,
@@ -1936,10 +1942,20 @@ async def _prewrite_recheck(
             if action == "withheld":
                 # 既有待裁决案重复命中：并入既有案（来源行入账），不重复写图
                 stats["guardWithheld"] += 1
+                _rescope_batch_gray_cases(
+                    batch_candidate_refs, str(record.get("id")), graph, name_tag
+                )
             elif action == "dropped":
                 stats["guardPriorDropped"] = stats.get("guardPriorDropped", 0) + 1
+                _rescope_batch_gray_cases(
+                    batch_candidate_refs, str(record.get("id")), graph, name_tag
+                )
             else:
                 if action == "kept_rewrite":
+                    # 原 vid 被改写为 canonical，不再落图 → 引用案候选须纠偏
+                    _rescope_batch_gray_cases(
+                        batch_candidate_refs, str(record.get("id")), graph, name_tag
+                    )
                     record["id"] = str(prior["rewriteVid"])
                 # kept_as_new：已应用 create 幂等写入，原样落图
                 prior_exempt.add(id(record))
@@ -2064,10 +2080,21 @@ async def _prewrite_recheck(
                     if action == "withheld":
                         stats["guardWithheld"] += 1
                         dropped.add(pos)
+                        # 1022：写前终判扣留（含既有 OPEN 案重复命中）→ 原 vid
+                        # 不落图，仍把它列为候选的批内灰区案须纠偏
+                        _rescope_batch_gray_cases(
+                            batch_candidate_refs, str(record.get("id")), graph, name_tag
+                        )
                     elif action == "dropped":
                         stats["guardPriorDropped"] = stats.get("guardPriorDropped", 0) + 1
                         dropped.add(pos)
+                        _rescope_batch_gray_cases(
+                            batch_candidate_refs, str(record.get("id")), graph, name_tag
+                        )
                     elif action == "kept_rewrite":
+                        _rescope_batch_gray_cases(
+                            batch_candidate_refs, str(record.get("id")), graph, name_tag
+                        )
                         record["id"] = str(result["rewriteVid"])
                     # kept_as_new：终态 create 重放，原样落图
                 else:
@@ -2674,6 +2701,7 @@ async def write_records(request: dict[str, Any]) -> dict[str, Any]:
                         source_table=source_table,
                         step_id=request.get("stepId") or "write",
                         decision_policy=request.get("decisionPolicy"),
+                        batch_candidate_refs=request.get("batchCandidateRefs"),
                     )
                 except GrayGateFailClosedError as exc:
                     # 写前终判的失败关闭族（DEFERRED_MERGE_BLOCKED 等）不降级照写
@@ -2810,6 +2838,37 @@ def _gray_ingress_material(
     # 与 gray_gate.ingress_dedupe_key 同构（create_direct_case 对材料整体 sha）：
     # 逻辑键派生口径的唯一权威在 gray_gate，此处只组材料
     return material, event_version, basis
+
+
+def _rescope_batch_gray_cases(
+    refs: dict[str, list[str]] | None,
+    dead_vid: str,
+    graph: dict[str, Any],
+    name_tag: str,
+) -> None:
+    """批内同名先到候选 vid 确认不落图时，纠正仍把它列为候选的在办案（1022）。
+
+    写前终判把先到记录扣留/剔除/改写后，其 vid 永不落图；批内灰区案若仍展示
+    该候选，评审 merge 会指向图内不存在的目标（裁决端另有存在性终判兜底）。
+    按 resolve 回传的 ``batchCandidateRefs`` 逐案重做图内召回刷新候选（排除
+    dead vid）。fail-open：纠正失败不阻断写图（残留幻影候选由裁决端防线
+    拦截），只记 warning。
+    """
+    case_ids = (refs or {}).get(str(dead_vid)) or []
+    if not case_ids:
+        return
+    from service.manual_review_production import manual_review_service
+
+    for case_id in case_ids:
+        try:
+            manual_review_service.rescope_case_candidates(
+                case_id,
+                dead_vids={str(dead_vid)},
+                graph_space=graph.get("space"),
+                node_label=name_tag,
+            )
+        except Exception as exc:  # noqa: BLE001 — fail-open，见 docstring
+            logger.warning("批内灰区案候选纠偏失败 case=%s deadVid=%s: %s", case_id, dead_vid, exc)
 
 
 def _prior_ingress_disposition(
@@ -3008,7 +3067,8 @@ def _open_entity_gray_case_v2(
             }
         ],
     )
-    return {"action": "withheld", "rewriteVid": None}
+    # caseId：批内候选 vid → 引用案清单（写前终判扣留先到记录时纠正候选用）
+    return {"action": "withheld", "rewriteVid": None, "caseId": str(response.get("reviewId") or "")}
 
 
 def _pending_write_descriptor_ok(client: Any, node_label: str, graph_space: str | None) -> bool:
@@ -3526,7 +3586,14 @@ async def _resolve_entity_batch_v2(
                 }
             )
         if outcome["decision"] == "gray":
-            record["_batchGray"] = {"scored": scored, "outcome": outcome}
+            # batchVid/batchKey：阶段 3 按先到记录自身判定决定其候选资格
+            # （1022 批内灰区幻影候选修复），写前终判纠偏按 vid 反查引用案
+            record["_batchGray"] = {
+                "scored": scored,
+                "outcome": outcome,
+                "batchVid": str(first.get("id")),
+                "batchKey": key,
+            }
 
     # 2) 多路召回（信封五态：routes 状态进 extra_snapshot，不遮蔽判定分支）
     by_name: dict[str, list[dict[str, Any]]] = {}
@@ -3562,16 +3629,25 @@ async def _resolve_entity_batch_v2(
     routes = envelope.get("routes") or {}
 
     # 3) 纯 decide 阶段：全部记录先出判定（无副作用）——merge 在任何建案/放行
-    #    前统一失败关闭，防部分扣留部分并入的伪装态
-    decisions: list[tuple[dict[str, Any], str, dict[str, Any], list[dict[str, Any]], str]] = []
+    #    前统一失败关闭，防部分扣留部分并入的伪装态。
+    #    批内同名灰区（_batchGray）不再短路（1022 修复）：图内召回候选一并
+    #    评分上桌——此前短路使后到记录的案看不见图内真实同名候选；且其唯一
+    #    候选「批内先到记录」若自身被判灰区扣留/被前置裁决扣留剔除，vid 永
+    #    不落图，案就长期展示幻影候选。先到候选仅当其自身判定=new（将随本批
+    #    落图）时保留进案；先到判定=merge 时照旧失败关闭（R3 同口径）。
+    decisions: list[
+        tuple[dict[str, Any], str, dict[str, Any], list[dict[str, Any]], str, str | None]
+    ] = []
+    first_decisions: dict[str, str] = {}  # 批内同名归一键 → 先到记录自身的判定
     for record in records:
         display = display_name(record.get("props"))
         batch_gray = record.get("_batchGray")
+        batch_candidate_vid: str | None = None
         if batch_gray is not None:
-            decisions.append(
-                (record, "gray", batch_gray["outcome"], batch_gray["scored"], "批内同名")
-            )
-            continue
+            # 先到记录先于后到记录出现于批内，其判定已算出：new=随本批落图，
+            # 才有资格作合并目标候选；gray/被扣留=永不落图，剔除
+            if first_decisions.get(str(batch_gray.get("batchKey"))) == "new":
+                batch_candidate_vid = str(batch_gray.get("batchVid") or "")
         eligible, _ = eligible_candidates(
             display,
             str(record.get("id")),
@@ -3589,6 +3665,8 @@ async def _resolve_entity_batch_v2(
             scored.append(
                 {"vid": cand["vid"], "name": cand["name"], "score": round(score, 3), **detail}
             )
+        if batch_gray is not None and batch_candidate_vid:
+            scored = [*batch_gray["scored"], *scored]
         outcome = decide(scored)
         if outcome["decision"] == "merge":
             raise DeferredMergeBlockedError(
@@ -3599,11 +3677,25 @@ async def _resolve_entity_batch_v2(
                     "policyVersion": policy.get("version"),
                 }
             )
-        decisions.append((record, outcome["decision"], outcome, scored, "resolve"))
+        if batch_gray is None:
+            name_key = normalize_display_name(display)
+            if name_key and name_key not in first_decisions:
+                first_decisions[name_key] = outcome["decision"]
+        decisions.append(
+            (
+                record,
+                outcome["decision"],
+                outcome,
+                scored,
+                "批内同名" if batch_candidate_vid else "resolve",
+                batch_candidate_vid,
+            )
+        )
 
     # 4) 副作用阶段：gray → v2 建案（逻辑键/证据 v2/来源账本/priorVerdict 处置）
     info, task_id, execution_id, execution = _execution_context_for_cases()
     kept: list[dict[str, Any]] = []
+    batch_candidate_refs: dict[str, list[str]] = {}
     stats: dict[str, int] = {
         "merged": 0,
         "withheld": 0,
@@ -3613,7 +3705,7 @@ async def _resolve_entity_batch_v2(
         "priorRewritten": 0,
         "keptAsNew": 0,
     }
-    for record, decision, outcome, scored, stage in decisions:
+    for record, decision, outcome, scored, stage, batch_candidate_vid in decisions:
         record.pop("_batchGray", None)
         if decision != "gray":
             stats["new"] += 1
@@ -3648,6 +3740,11 @@ async def _resolve_entity_batch_v2(
         action = result["action"]
         if action == "withheld":
             stats["withheld"] += 1
+            # 批内先到候选 vid → 引用案登记（写前终判扣留/剔除先到时纠偏用）
+            if batch_candidate_vid and result.get("caseId"):
+                batch_candidate_refs.setdefault(batch_candidate_vid, []).append(
+                    str(result["caseId"])
+                )
         elif action == "dropped":
             stats["priorDropped"] += 1
         elif action == "kept_rewrite":
@@ -3679,8 +3776,13 @@ async def _resolve_entity_batch_v2(
             f"resolved-{int(request.get('chunkIdx') or 0):02d}",
             kept,
         )
-        return {"outKey": out_key, "keptCount": len(kept), **stats}
-    return {"records": kept, **stats}
+        out: dict[str, Any] = {"outKey": out_key, "keptCount": len(kept), **stats}
+    else:
+        out = {"records": kept, **stats}
+    if batch_candidate_refs:
+        # 非空才带（v1/无批内灰区案的返回形状不变，重放安全）
+        out["batchCandidateRefs"] = batch_candidate_refs
+    return out
 
 
 @activity.defn
@@ -5214,6 +5316,10 @@ class SchemaExtractWorkflow:
                                     step_fail_count = len(step_failures)
                                     batch_failures.extend(step_failures)
                                 step_written = 0
+                                # 1022 批内灰区幻影候选修复：resolve 回传「批内先到
+                                # 候选 vid → 引用案」清单，随写图请求下发——写前
+                                # 终判扣留/剔除/改写先到记录时按此纠正案内候选
+                                batch_candidate_refs: dict[str, list[str]] = {}
                                 if records_count and kind == "entity":
                                     # 消歧 v2（写前判定）：同名召回+评分，改写 vid 并入 /
                                     # 灰区扣留建 T_LINK case / 其余原样——灰区记录从本批
@@ -5249,6 +5355,8 @@ class SchemaExtractWorkflow:
                                     else:
                                         records_count = len(resolved.get("records") or [])
                                         records_arg = {"records": resolved.get("records") or []}
+                                    if resolved.get("batchCandidateRefs"):
+                                        batch_candidate_refs = dict(resolved["batchCandidateRefs"])
                                 if records_count:
                                     write_request: dict[str, Any] = {
                                         "kind": kind,
@@ -5267,6 +5375,10 @@ class SchemaExtractWorkflow:
                                         # decisionPolicy 分支；pending 旁路聚合的端点
                                         # 处置（invalid 过滤 / rewrite 改写）随关系请求下发
                                         write_request["decisionPolicy"] = decision_policy
+                                        if kind == "entity" and batch_candidate_refs:
+                                            write_request["batchCandidateRefs"] = (
+                                                batch_candidate_refs
+                                            )
                                         if kind == "relation":
                                             write_request["invalidEndpointVids"] = sorted(
                                                 pending_invalid_endpoints

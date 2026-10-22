@@ -297,7 +297,7 @@ describe('配置管理 · 管理抽屉编辑隔离', () => {
     await flushPromises()
 
     // 切到 MySQL 数据源分类并打开管理抽屉
-    const mysqlNav = wrapper.findAll('.category-nav > button').find((b) => b.text().includes('MySQL'))
+    const mysqlNav = wrapper.findAll('.category-nav button').find((b) => b.text().includes('MySQL'))
     await mysqlNav?.trigger('click')
     await flushPromises()
     await openDrawer(wrapper)
@@ -360,7 +360,7 @@ describe('停用配置的连接测试', () => {
     const wrapper = mountView()
     await flushPromises()
     try {
-      await wrapper.findAll('.category-nav > button').find(b => b.text().includes('MySQL'))!.trigger('click')
+      await wrapper.findAll('.category-nav button').find(b => b.text().includes('MySQL'))!.trigger('click')
       await flushPromises()
       const openDrawerByName = async (name: string) => {
         const row = wrapper.findAll('.config-table-wrap tbody tr')
@@ -427,7 +427,7 @@ describe('配置说明计数与输入上限', () => {
     const wrapper = mountView(true)
     await flushPromises()
     try {
-      await wrapper.findAll('.category-nav > button').find(b => b.text().includes('MySQL'))!.trigger('click')
+      await wrapper.findAll('.category-nav button').find(b => b.text().includes('MySQL'))!.trigger('click')
       await flushPromises()
       await wrapper.get('.create-entry').trigger('click')
       const create = wrapper.get('.config-create-dialog .config-description-textarea')
@@ -506,7 +506,7 @@ describe('开发人员共享配置只读', () => {
       expect(wrapper.get('.detail-form input').attributes('disabled')).toBeDefined()
       expect(wrapper.get('.detail-drawer footer button').attributes('disabled')).toBeDefined()
       await wrapper.get('.detail-drawer header button').trigger('click')
-      await wrapper.findAll('.category-nav > button')[2]!.trigger('click')
+      await wrapper.findAll('.category-nav button')[2]!.trigger('click')
       await flushPromises()
       expect(wrapper.get('.create-entry').attributes('disabled')).toBeUndefined()
       await wrapper.get('.create-entry').trigger('click')
@@ -537,7 +537,7 @@ describe('业务配置权限与归属', () => {
     try {
       await flushPromises()
       if (kind === 'mysql') {
-        await wrapper.findAll('.category-nav > button')[1]!.trigger('click')
+        await wrapper.findAll('.category-nav button')[1]!.trigger('click')
         await flushPromises()
       }
       expect(wrapper.get('.config-ownership').text()).toBe(`亿级知识图谱${kind === 'llm' ? '语言模型' : '数据库'}`)
@@ -571,7 +571,7 @@ describe('业务配置权限与归属', () => {
     ])
     const wrapper = mountView()
     await flushPromises()
-    await wrapper.findAll('.category-nav > button')[2]!.trigger('click')
+    await wrapper.findAll('.category-nav button')[2]!.trigger('click')
     await flushPromises()
     expect(wrapper.findAll('.space-table th').map(cell => cell.text())).toEqual(['图空间名称 / 说明', '标识', '绑定状态', '操作'])
     expect(wrapper.findAll('.space-table tbody tr').map(row => row.findAll('td')[1]!.text())).toEqual(['亿级知识图谱图空间', '公共图空间'])

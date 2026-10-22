@@ -4719,72 +4719,87 @@ function clearGraphSelection() {
           ><i v-if="field.required === '是'">*</i
           >{{ field.label ?? field.name }}</span
         >
-        <ElSelect
-          :clear-icon="IconClose"
-          clearable
+        <a-tooltip
           v-if="field.type === 'select' || field.type === 'boolean'"
-          :key="`${field.name}-${paramResetToken}`"
-          class="service-console__select"
-          popper-class="business-parameter-options"
-          :fit-input-width="true"
-          :model-value="parameterValues[field.name] || undefined"
-          value-on-clear=""
-          :aria-label="field.label ?? field.name"
-          :aria-invalid="Boolean(parameterErrors[field.name])"
-          placeholder="请选择"
-          :title="field.description"
-          @update:model-value="handleParameterInput(field.name, $event)"
+          position="top"
+          :content="field.description"
+          :disabled="!field.description"
         >
-          <ElOption v-for="option in field.options" :key="option" :value="option" :label="option" />
-        </ElSelect>
-        <ElSelect
-          :clear-icon="IconClose"
+          <ElSelect
+            :clear-icon="IconClose"
+            clearable
+            :key="`${field.name}-${paramResetToken}`"
+            class="service-console__select"
+            popper-class="business-parameter-options"
+            :fit-input-width="true"
+            :model-value="parameterValues[field.name] || undefined"
+            value-on-clear=""
+            :aria-label="field.label ?? field.name"
+            :aria-invalid="Boolean(parameterErrors[field.name])"
+            placeholder="请选择"
+            @update:model-value="handleParameterInput(field.name, $event)"
+          >
+            <ElOption v-for="option in field.options" :key="option" :value="option" :label="option" />
+          </ElSelect>
+        </a-tooltip>
+        <a-tooltip
           v-else-if="field.name === 'achievementTypes'"
-          v-model="achievementTypeSelection"
-          class="cooperation-type-select"
-          popper-class="business-parameter-options"
-          :fit-input-width="true"
-          :data-empty="achievementTypeSelection.length === 0"
-          multiple
-          collapse-tags
-          :max-collapse-tags="1"
-          clearable
-          placeholder="留空为全部类型"
-          aria-label="成果类型"
-          :title="field.description"
-          @update:model-value="clearParameterError(field.name)"
+          position="top"
+          :content="field.description"
+          :disabled="!field.description"
         >
-          <ElOption
-            v-for="option in achievementTypeOptions"
-            :key="option.value"
-            :label="option.label"
-            :value="option.value"
-          />
-        </ElSelect>
-        <ElSelect
-          :clear-icon="IconClose"
+          <ElSelect
+            :clear-icon="IconClose"
+            v-model="achievementTypeSelection"
+            class="cooperation-type-select"
+            popper-class="business-parameter-options"
+            :fit-input-width="true"
+            :data-empty="achievementTypeSelection.length === 0"
+            multiple
+            collapse-tags
+            :max-collapse-tags="1"
+            clearable
+            placeholder="留空为全部类型"
+            aria-label="成果类型"
+            @update:model-value="clearParameterError(field.name)"
+          >
+            <ElOption
+              v-for="option in achievementTypeOptions"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
+          </ElSelect>
+        </a-tooltip>
+        <a-tooltip
           v-else-if="field.name === 'relationTypes'"
-          v-model="panoramaRelationSelection"
-          class="cooperation-type-select"
-          popper-class="business-parameter-options"
-          :fit-input-width="true"
-          :data-empty="panoramaRelationSelection.length === 0"
-          multiple
-          collapse-tags
-          :max-collapse-tags="1"
-          clearable
-          placeholder="留空为全部关系"
-          :aria-label="field.label ?? field.name"
-          :title="field.description"
-          @update:model-value="clearParameterError(field.name)"
+          position="top"
+          :content="field.description"
+          :disabled="!field.description"
         >
-          <ElOption
-            v-for="option in PANORAMA_RELATION_TYPES"
-            :key="option.value"
-            :label="option.label"
-            :value="option.value"
-          />
-        </ElSelect>
+          <ElSelect
+            :clear-icon="IconClose"
+            v-model="panoramaRelationSelection"
+            class="cooperation-type-select"
+            popper-class="business-parameter-options"
+            :fit-input-width="true"
+            :data-empty="panoramaRelationSelection.length === 0"
+            multiple
+            collapse-tags
+            :max-collapse-tags="1"
+            clearable
+            placeholder="留空为全部关系"
+            :aria-label="field.label ?? field.name"
+            @update:model-value="clearParameterError(field.name)"
+          >
+            <ElOption
+              v-for="option in PANORAMA_RELATION_TYPES"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
+          </ElSelect>
+        </a-tooltip>
         <ElSelect
           :clear-icon="IconClose"
           v-else-if="field.name === 'educationStage' && isLiveAlumni"
@@ -4808,47 +4823,57 @@ function clearGraphSelection() {
             :value="stage.value"
           />
         </ElSelect>
-        <AMonthPicker
+        <a-tooltip
           v-else-if="field.type === 'month'"
-          :key="`${field.name}-${paramResetToken}`"
-          :model-value="parameterValues[field.name] || ''"
-          class="service-console__month-picker"
-          :trigger-props="{ contentClass: 'business-month-options', autoFitPosition: true, autoFitPopupWidth: true }"
-          format="YYYY年MM月"
-          value-format="YYYY-MM"
-          :placeholder="field.placeholder ?? '请选择年月'"
-          allow-clear
-          disabled-input
-          :locale="zhCN"
-          :title="field.description"
-          :aria-label="field.name"
-          :disabled-date="
-            isLiveColleague ||
-            isExpertDirect ||
-            isLiveCoop ||
-            isPaperCooperation
-              ? disableFutureMonth
-              : undefined
-          "
-          :error="Boolean(parameterErrors[field.name])"
-          @update:model-value="handleMonthParameterInput(field.name, $event)"
-        />
-        <div v-else class="service-console__input-wrap">
-          <ClearableInput
-            :aria-label="field.label ?? field.name"
-            type="text"
+          position="top"
+          :content="field.description"
+          :disabled="!field.description"
+        >
+          <AMonthPicker
             :key="`${field.name}-${paramResetToken}`"
-            :value="parameterValues[field.name] ?? ''"
-            :placeholder="field.placeholder ?? field.description"
-            :title="field.description"
-            :aria-invalid="Boolean(parameterErrors[field.name])"
-            :maxlength="
-              liveValidationFieldNames.includes(field.name)
-                ? undefined
-                : field.maxLength
+            :model-value="parameterValues[field.name] || ''"
+            class="service-console__month-picker"
+            :trigger-props="{ contentClass: 'business-month-options', autoFitPosition: true, autoFitPopupWidth: true }"
+            format="YYYY年MM月"
+            value-format="YYYY-MM"
+            :placeholder="field.placeholder ?? '请选择年月'"
+            allow-clear
+            disabled-input
+            :locale="zhCN"
+            :aria-label="field.name"
+            :disabled-date="
+              isLiveColleague ||
+              isExpertDirect ||
+              isLiveCoop ||
+              isPaperCooperation
+                ? disableFutureMonth
+                : undefined
             "
-            @input="handleParameterInput(field.name, $event)"
+            :error="Boolean(parameterErrors[field.name])"
+            @update:model-value="handleMonthParameterInput(field.name, $event)"
           />
+        </a-tooltip>
+        <div v-else class="service-console__input-wrap">
+          <a-tooltip
+            position="top"
+            :content="field.description"
+            :disabled="!field.description"
+          >
+            <ClearableInput
+              :aria-label="field.label ?? field.name"
+              type="text"
+              :key="`${field.name}-${paramResetToken}`"
+              :value="parameterValues[field.name] ?? ''"
+              :placeholder="field.placeholder ?? field.description"
+              :aria-invalid="Boolean(parameterErrors[field.name])"
+              :maxlength="
+                liveValidationFieldNames.includes(field.name)
+                  ? undefined
+                  : field.maxLength
+              "
+              @input="handleParameterInput(field.name, $event)"
+            />
+          </a-tooltip>
         </div>
         <small
           v-if="parameterErrors[field.name]"
@@ -4885,31 +4910,37 @@ function clearGraphSelection() {
       <div class="kg-panel__header">
         <h2 class="kg-panel__title">测试结果预览</h2>
         <div class="graph-panel__time">
-          <label
+          <a-tooltip
             v-if="isPanorama"
-            class="graph-panel__autorefresh"
-            title="勾选后每 60 秒自动忽略缓存刷新一次"
+            position="top"
+            content="勾选后每 60 秒自动忽略缓存刷新一次"
           >
-            <input
-              aria-label="选择此项"
-              v-model="panoramaAutoRefresh"
-              type="checkbox"
+            <label class="graph-panel__autorefresh">
+              <input
+                aria-label="选择此项"
+                v-model="panoramaAutoRefresh"
+                type="checkbox"
+                :disabled="running"
+              />
+              <span>自动更新</span>
+            </label>
+          </a-tooltip>
+          <a-tooltip
+            v-if="isPanorama"
+            position="top"
+            content="忽略服务端缓存，重新拉取分层与子图"
+          >
+            <button
+              class="kg-button kg-button--secondary graph-panel__refresh"
+              :class="{ 'graph-panel__refresh--loading': panoramaRefreshing }"
+              type="button"
               :disabled="running"
-            />
-            <span>自动更新</span>
-          </label>
-          <button
-            v-if="isPanorama"
-            class="kg-button kg-button--secondary graph-panel__refresh"
-            :class="{ 'graph-panel__refresh--loading': panoramaRefreshing }"
-            type="button"
-            :disabled="running"
-            title="忽略服务端缓存，重新拉取分层与子图"
-            @click="handleRefreshPanorama"
-          >
+              @click="handleRefreshPanorama"
+            >
             <AIconRefresh class="graph-panel__refresh-icon" />
             {{ panoramaRefreshing ? "刷新中…" : "刷新图谱" }}
-          </button>
+            </button>
+          </a-tooltip>
           <span>最近测试时间：</span>
           <strong>{{ lastTestTime }}</strong>
         </div>

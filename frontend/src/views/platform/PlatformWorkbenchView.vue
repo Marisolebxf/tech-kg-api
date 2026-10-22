@@ -1610,7 +1610,7 @@ const pageMeta = computed(() => {
       <div class="platform-hero__main">
         <h1>{{ pageMeta.title }}</h1>
       </div>
-      <div class="platform-hero__actions"><span :title="overviewMeta.warnings.join('\n')"><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个执行运行中 · {{ overviewMeta.dataMode === 'partial' ? '部分实时' : '降级数据' }}</span><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看任务</RouterLink><RouterLink v-if="canEnterAdminPages" to="/manual-review">进入人工处理</RouterLink></div>
+      <div class="platform-hero__actions"><a-tooltip position="bottom" content-class="platform-status-tip" :content="overviewMeta.warnings.join('\n')" :disabled="!overviewMeta.warnings.length"><span><i></i>{{ overviewMeta.platformStatus }} · {{ overviewMeta.pendingBatchCount }} 个执行运行中 · {{ overviewMeta.dataMode === 'partial' ? '部分实时' : '降级数据' }}</span></a-tooltip><RouterLink v-if="canEnterAdminPages" to="/graph-build">查看任务</RouterLink><RouterLink v-if="canEnterAdminPages" to="/manual-review">进入人工处理</RouterLink></div>
     </header>
 
     <header v-else-if="activeTab !== 'query'" class="platform-page-head">
@@ -1670,8 +1670,8 @@ const pageMeta = computed(() => {
           <template v-if="overviewReviewsState === 'ready'">
             <div class="platform-review-list">
               <RouterLink v-for="row in overviewReviewRows" :key="row.id" :to="reviewItemRoute(row.case)">
-                <strong :title="row.name">{{ row.name }}</strong>
-                <em :title="row.category">{{ row.category }}<span v-if="row.count > 1" class="platform-review-dup" :title="`同名对象共 ${row.count} 条待审记录`">×{{ row.count }}</span></em>
+                <a-tooltip position="top" :content="row.name"><strong>{{ row.name }}</strong></a-tooltip>
+                <em><a-tooltip position="top" :content="row.category"><span>{{ row.category }}</span></a-tooltip><a-tooltip v-if="row.count > 1" position="top" :content="`同名对象共 ${row.count} 条待审记录`"><span class="platform-review-dup">×{{ row.count }}</span></a-tooltip></em>
               </RouterLink>
             </div>
             <RouterLink v-if="overviewReviewsTotal > overviewReviews.length" class="platform-review-more" to="/manual-review">还有 {{ overviewReviewsTotal - overviewReviews.length }} 条待处理</RouterLink>
@@ -1941,10 +1941,13 @@ const pageMeta = computed(() => {
               </div>
             </nav>
             <div class="platform-query-algo__engine">
-              <span
-                :class="['platform-status', algoEngineStatus.tone]"
-                :title="algoMetadata?.engine?.message ?? undefined"
-              >算法引擎{{ algoEngineStatus.label }}</span>
+              <a-tooltip
+                position="top"
+                :content="algoMetadata?.engine?.message ?? undefined"
+                :disabled="!algoMetadata?.engine?.message"
+              >
+                <span :class="['platform-status', algoEngineStatus.tone]">算法引擎{{ algoEngineStatus.label }}</span>
+              </a-tooltip>
               <button
                 class="kg-button kg-button--text platform-query-engine-refresh"
                 type="button"
@@ -5203,6 +5206,8 @@ print(response.json())</pre>
 .platform-structure-legend .platform-legend-label{cursor:help}
 .platform-legend-tooltip{border:1px solid #e5e6eb;box-shadow:0 4px 10px rgba(31,35,41,.1)}
 .platform-legend-members{min-width:150px;max-height:224px;overflow-y:auto;font-size:12px;line-height:1.9;color:#1d2129}
+/* 顶部平台状态气泡：多条告警按行展示，Arco 默认内容不保留换行，需 pre-line（teleport 到 body，须全局） */
+.platform-status-tip{white-space:pre-line}
 </style>
 <style scoped>
 .platform-query.platform-content{scrollbar-width:thin!important;scrollbar-color:transparent transparent!important}

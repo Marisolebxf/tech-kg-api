@@ -859,9 +859,11 @@ onUnmounted(() => {
     <section class="config-workbench">
       <aside class="category-nav">
         <header><strong>配置分类</strong></header>
-        <button v-for="category in categories" :key="category.key" type="button" :class="{ active: activeCategory === category.key }" :title="`${category.label}：${category.hint}`" @click="switchCategory(category.key)">
-          <span><strong>{{ category.label }}</strong></span><em>{{ categoryCount(category.key) }}</em>
-        </button>
+        <a-tooltip v-for="category in categories" :key="category.key" position="right" :content="`${category.label}：${category.hint}`">
+          <button type="button" :class="{ active: activeCategory === category.key }" @click="switchCategory(category.key)">
+            <span><strong>{{ category.label }}</strong></span><em>{{ categoryCount(category.key) }}</em>
+          </button>
+        </a-tooltip>
       </aside>
 
       <main class="config-list">
@@ -876,13 +878,14 @@ onUnmounted(() => {
                 <td class="config-status-col"><span class="status" :class="space.mine ? 'is-正常' : 'is-停用'"><i />{{ space.mine ? '已绑定' : '已解绑' }}</span></td>
                 <td class="config-action-col">
                   <div class="row-actions">
-                    <button
-                      :class="space.mine ? 'link danger' : 'link'"
-                      type="button"
-                      :disabled="!canManageSpaces || spaceWorkingName === space.name"
-                      :title="space.mine ? '解绑仅从我的图空间列表移除（平台总览筛选不再显示），图数据保留，重新绑定后照常使用' : '绑定到我的图空间列表'"
-                      @click.stop="toggleSpaceBinding(space)"
-                    >{{ spaceWorkingName === space.name ? '处理中…' : space.mine ? '解绑' : '绑定' }}</button>
+                    <a-tooltip position="top" :content="space.mine ? '解绑仅从我的图空间列表移除（平台总览筛选不再显示），图数据保留，重新绑定后照常使用' : '绑定到我的图空间列表'">
+                      <button
+                        :class="space.mine ? 'link danger' : 'link'"
+                        type="button"
+                        :disabled="!canManageSpaces || spaceWorkingName === space.name"
+                        @click.stop="toggleSpaceBinding(space)"
+                      >{{ spaceWorkingName === space.name ? '处理中…' : space.mine ? '解绑' : '绑定' }}</button>
+                    </a-tooltip>
                   </div>
                 </td>
               </tr>

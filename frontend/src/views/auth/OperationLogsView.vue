@@ -89,7 +89,7 @@ onMounted(() => loadLogs())
           <thead><tr><th>操作时间</th><th>操作</th><th>类型</th><th>IP 地址</th><th>设备</th><th>结果</th><th>详情</th></tr></thead>
           <tbody>
             <tr v-for="item in logs.items" :key="item.id">
-              <td>{{ formatTime(item.occurredAt) }}</td><td><strong>{{ item.action }}</strong></td><td><span class="category">{{ item.category }}</span></td><td><code>{{ item.ipAddress || '--' }}</code></td><td :title="item.userAgent">{{ deviceLabel(item.userAgent) }}</td><td><b>{{ item.result }}</b></td><td>{{ item.detail || '--' }}</td>
+              <td>{{ formatTime(item.occurredAt) }}</td><td><strong>{{ item.action }}</strong></td><td><span class="category">{{ item.category }}</span></td><td><code>{{ item.ipAddress || '--' }}</code></td><td><a-tooltip position="top" :content="item.userAgent" :disabled="!item.userAgent"><span>{{ deviceLabel(item.userAgent) }}</span></a-tooltip></td><td><b>{{ item.result }}</b></td><td>{{ item.detail || '--' }}</td>
             </tr>
             <tr v-if="!loading && logs.items.length === 0"><td class="empty" colspan="7">当前筛选条件下没有操作记录</td></tr>
           </tbody>

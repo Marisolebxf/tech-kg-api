@@ -42,25 +42,26 @@ watch(
 </script>
 
 <template>
-  <div
-    ref="selector"
-    class="app-space-select"
-    :title="graphSpaceStore.loadError ? '图空间列表加载失败，请重试' : graphSpaceStore.current ? `切换当前工作图空间：${graphSpaceStore.current}` : '切换当前工作图空间'"
+  <a-tooltip
+    position="bottom"
+    :content="graphSpaceStore.loadError ? '图空间列表加载失败，请重试' : graphSpaceStore.current ? `切换当前工作图空间：${graphSpaceStore.current}` : '切换当前工作图空间'"
   >
-    <span class="app-space-select__label">图空间</span>
-    <a-cascader
-      class="app-space-select__input"
-      aria-label="图空间"
-      :model-value="graphSpaceStore.current"
-      :options="options"
-      :placeholder="showEmpty ? '暂无可用图空间' : '图空间'"
-      :loading="graphSpaceStore.loading"
-      :disabled="graphSpaceStore.loading"
-      :show-path="false"
-      :trigger-props="{ contentClass: 'app-space-select-popup', contentStyle: { width: `${popupWidth}px` } }"
-      @change="(value: unknown) => graphSpaceStore.setCurrent(String(value ?? ''))"
-    />
-  </div>
+    <div ref="selector" class="app-space-select">
+      <span class="app-space-select__label">图空间</span>
+      <a-cascader
+        class="app-space-select__input"
+        aria-label="图空间"
+        :model-value="graphSpaceStore.current"
+        :options="options"
+        :placeholder="showEmpty ? '暂无可用图空间' : '图空间'"
+        :loading="graphSpaceStore.loading"
+        :disabled="graphSpaceStore.loading"
+        :show-path="false"
+        :trigger-props="{ contentClass: 'app-space-select-popup', contentStyle: { width: `${popupWidth}px` } }"
+        @change="(value: unknown) => graphSpaceStore.setCurrent(String(value ?? ''))"
+      />
+    </div>
+  </a-tooltip>
 </template>
 
 <style scoped>

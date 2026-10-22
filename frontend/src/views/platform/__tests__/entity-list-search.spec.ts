@@ -63,10 +63,11 @@ describe('实体搜索结果', () => {
     expect(options[1].text()).toBe('DataSource')
     expect(options[1].attributes('title')).toBe('DataSource')
     expect(options[1].find('.entity-type-option__en').exists()).toBe(false)
-    // 类型列 chip 同口径：中文名 + 悬浮「中文名（英文 TAG）」
+    // 类型列 chip 同口径：中文名 + 悬浮「中文名（英文 TAG）」（a-tooltip 气泡，
+    // 测试环境未注册组件，渲染为携带 content 属性的包裹元素）
     const chip = wrapper.get('.entity-type-chip')
     expect(chip.text()).toBe('专家 / 人才 / 学者')
-    expect(chip.attributes('title')).toBe('专家 / 人才 / 学者（Expert）')
+    expect(chip.element.parentElement?.getAttribute('content')).toBe('专家 / 人才 / 学者（Expert）')
     wrapper.unmount()
   })
 
@@ -165,7 +166,7 @@ describe('实体搜索结果', () => {
     const popover = wrapper.findComponent(Popover)
     expect(popover.props('trigger')).toEqual(['hover', 'click'])
     expect(popover.props('position')).toBe('bl')
-    expect(wrapper.findAll('.entity-property-popover__item').map(item => item.attributes('title')))
+    expect(wrapper.findAll('.entity-property-popover__item').map(item => item.element.parentElement?.getAttribute('content')))
       .toEqual(['fifth: 5', 'sixth: 6'])
     await more.trigger('click')
     expect(wrapper.find('.entity-detail-row').exists()).toBe(false)

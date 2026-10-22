@@ -187,7 +187,13 @@ describe('既有侧边栏按有效管理员身份显隐', () => {
     const docs = actions.get('a.app-docs-link')
     expect(docs.attributes('href')).toBe('/docs/')
     expect(docs.attributes('target')).toBe('_blank')
-    expect(docs.element.nextElementSibling).toBe(selector.element)
+    // a-tooltip 在测试环境渲染为包裹元素，取 actions 的直接子级再比较相邻关系
+    const directChildOfActions = (el: Element): Element => {
+      let node: Element = el
+      while (node.parentElement && !node.parentElement.classList.contains('app-breadcrumb__actions')) node = node.parentElement
+      return node
+    }
+    expect(directChildOfActions(docs.element).nextElementSibling).toBe(directChildOfActions(selector.element))
     expect(wrapper.find('.app-top-actions .app-docs-link').exists()).toBe(false)
   })
 
@@ -283,14 +289,15 @@ describe('面包屑统一（Arco 规范：/ 分隔、除当前页外每级可点
   it('行首「<」返回按钮：无应用内历史时回最近上级，首页直达时不显示', async () => {
     const job = await renderLayout(true, '/graph-build/jobs/job-1')
     const back = job.wrapper.get('button.app-breadcrumb__back')
-    expect(back.attributes('title')).toBe('返回图谱构建')
+    // 悬停气泡走 a-tooltip（测试环境未注册组件，渲染为携带 content 属性的包裹元素）
+    expect(back.element.parentElement?.getAttribute('content')).toBe('返回图谱构建')
     await back.trigger('click')
     await flushPromises()
     expect(job.wrapper.get('.app-breadcrumb__current').text()).toBe('图谱构建')
 
     // 业务服务页：组入口 /business-service 重定向回首服务（等价自页），兜底再上一级
     const service = await renderLayout(true, '/expert-direct')
-    expect(service.wrapper.get('button.app-breadcrumb__back').attributes('title')).toBe('返回知识图谱构建服务')
+    expect(service.wrapper.get('button.app-breadcrumb__back').element.parentElement?.getAttribute('content')).toBe('返回知识图谱构建服务')
 
     // 平台总览直达（无上级、无应用内历史）：不渲染返回按钮
     const home = await renderLayout(true, '/overview')

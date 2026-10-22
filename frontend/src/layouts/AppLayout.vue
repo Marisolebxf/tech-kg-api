@@ -347,84 +347,109 @@ onBeforeUnmount(() => {
           <div v-if="!sidebarCollapsed && isAdminUser" class="app-nav__group">
             <span>工作台</span>
           </div>
-            <RouterLink
+            <a-tooltip
               v-if="isAdminUser"
-              class="app-nav__item app-nav__item--top app-nav__item--leaf"
-              active-class="app-nav__item--active"
-              to="/overview"
-              :title="sidebarCollapsed ? '平台总览' : undefined"
+              position="right"
+              content="平台总览"
+              :disabled="!sidebarCollapsed"
             >
-              <span
-                class="app-nav__icon"
-                :style="navIconStyle(navOverview)"
-                aria-hidden="true"
-              ></span>
-              <span v-if="!sidebarCollapsed">平台总览</span>
-            </RouterLink>
+              <RouterLink
+                class="app-nav__item app-nav__item--top app-nav__item--leaf"
+                active-class="app-nav__item--active"
+                to="/overview"
+              >
+                <span
+                  class="app-nav__icon"
+                  :style="navIconStyle(navOverview)"
+                  aria-hidden="true"
+                ></span>
+                <span v-if="!sidebarCollapsed">平台总览</span>
+              </RouterLink>
+            </a-tooltip>
 
             <!-- 图谱建设与治理/平台管理仅管理员可见；工作台、图谱查询与业务服务对普通用户开放。 -->
             <template v-if="isAdminUser">
             <div v-if="!sidebarCollapsed" class="app-nav__group">
               <span>图谱建设与治理</span>
             </div>
-            <RouterLink
-              class="app-nav__item app-nav__item--top app-nav__item--leaf"
-              active-class="app-nav__item--active"
-              to="/schema"
-              :title="sidebarCollapsed ? 'Schema 管理' : undefined"
+            <a-tooltip
+              position="right"
+              content="Schema 管理"
+              :disabled="!sidebarCollapsed"
             >
-              <span
-                class="app-nav__icon"
-                :style="navIconStyle(navSchema)"
-                aria-hidden="true"
-              ></span>
-              <span v-if="!sidebarCollapsed">Schema 管理</span>
-            </RouterLink>
-            <RouterLink
-              class="app-nav__item app-nav__item--top app-nav__item--leaf"
-              :class="{ 'app-nav__item--active': isNavSectionActive('/graph-build') }"
-              active-class="app-nav__item--active"
-              to="/graph-build"
-              :title="sidebarCollapsed ? '图谱构建' : undefined"
+              <RouterLink
+                class="app-nav__item app-nav__item--top app-nav__item--leaf"
+                active-class="app-nav__item--active"
+                to="/schema"
+              >
+                <span
+                  class="app-nav__icon"
+                  :style="navIconStyle(navSchema)"
+                  aria-hidden="true"
+                ></span>
+                <span v-if="!sidebarCollapsed">Schema 管理</span>
+              </RouterLink>
+            </a-tooltip>
+            <a-tooltip
+              position="right"
+              content="图谱构建"
+              :disabled="!sidebarCollapsed"
             >
-              <span
-                class="app-nav__icon"
-                :style="navIconStyle(navGraph)"
-                aria-hidden="true"
-              ></span>
-              <span v-if="!sidebarCollapsed">图谱构建</span>
-            </RouterLink>
-            <RouterLink
-              class="app-nav__item app-nav__item--top app-nav__item--leaf"
-              :class="{ 'app-nav__item--active': isNavSectionActive('/manual-review') }"
-              active-class="app-nav__item--active"
-              to="/manual-review"
-              :title="sidebarCollapsed ? '人工审核' : undefined"
+              <RouterLink
+                class="app-nav__item app-nav__item--top app-nav__item--leaf"
+                :class="{ 'app-nav__item--active': isNavSectionActive('/graph-build') }"
+                active-class="app-nav__item--active"
+                to="/graph-build"
+              >
+                <span
+                  class="app-nav__icon"
+                  :style="navIconStyle(navGraph)"
+                  aria-hidden="true"
+                ></span>
+                <span v-if="!sidebarCollapsed">图谱构建</span>
+              </RouterLink>
+            </a-tooltip>
+            <a-tooltip
+              position="right"
+              content="人工审核"
+              :disabled="!sidebarCollapsed"
             >
-              <span
-                class="app-nav__icon"
-                :style="navIconStyle(navReview)"
-                aria-hidden="true"
-              ></span>
-              <span v-if="!sidebarCollapsed">人工审核</span>
-            </RouterLink>
+              <RouterLink
+                class="app-nav__item app-nav__item--top app-nav__item--leaf"
+                :class="{ 'app-nav__item--active': isNavSectionActive('/manual-review') }"
+                active-class="app-nav__item--active"
+                to="/manual-review"
+              >
+                <span
+                  class="app-nav__icon"
+                  :style="navIconStyle(navReview)"
+                  aria-hidden="true"
+                ></span>
+                <span v-if="!sidebarCollapsed">人工审核</span>
+              </RouterLink>
+            </a-tooltip>
 
             <div v-if="!sidebarCollapsed" class="app-nav__group">
               <span>平台管理</span>
             </div>
-            <RouterLink
-              class="app-nav__item app-nav__item--top app-nav__item--leaf"
-              active-class="app-nav__item--active"
-              to="/configurations"
-              :title="sidebarCollapsed ? '配置管理' : undefined"
+            <a-tooltip
+              position="right"
+              content="配置管理"
+              :disabled="!sidebarCollapsed"
             >
-              <span
-                class="app-nav__icon"
-                :style="navIconStyle(navTools)"
-                aria-hidden="true"
-              ></span>
-              <span v-if="!sidebarCollapsed">配置管理</span>
-            </RouterLink>
+              <RouterLink
+                class="app-nav__item app-nav__item--top app-nav__item--leaf"
+                active-class="app-nav__item--active"
+                to="/configurations"
+              >
+                <span
+                  class="app-nav__icon"
+                  :style="navIconStyle(navTools)"
+                  aria-hidden="true"
+                ></span>
+                <span v-if="!sidebarCollapsed">配置管理</span>
+              </RouterLink>
+            </a-tooltip>
             </template>
             <!-- 知识图谱构建服务父目录：图谱查询与业务服务两个子组的共同上级，两类账号均可见。 -->
             <div v-if="!sidebarCollapsed" class="app-nav__group">
@@ -438,7 +463,6 @@ onBeforeUnmount(() => {
                   'app-nav__item--context': isGraphQueryRoute,
                 }"
                 type="button"
-                :title="sidebarCollapsed ? '图谱查询' : undefined"
                 :aria-expanded="
                   sidebarCollapsed ? undefined : !queryNavCollapsed
                 "
@@ -466,7 +490,6 @@ onBeforeUnmount(() => {
                   class="app-nav__item app-nav__item--sub"
                   active-class="app-nav__item--active"
                   :to="item.to"
-                  :title="item.fullLabel"
                 >
                   <span class="app-nav__sub-wrap app-nav__marquee"
                     ><span class="app-nav__sub-label app-nav__marquee-label">{{
@@ -498,7 +521,6 @@ onBeforeUnmount(() => {
                   'app-nav__item--context': isBusinessServiceRoute,
                 }"
                 type="button"
-                :title="sidebarCollapsed ? businessServiceTitle : undefined"
                 :aria-expanded="
                   sidebarCollapsed ? undefined : !serviceNavCollapsed
                 "
@@ -526,7 +548,6 @@ onBeforeUnmount(() => {
                   class="app-nav__item app-nav__item--sub"
                   active-class="app-nav__item--active"
                   :to="item.to"
-                  :title="item.fullLabel"
                 >
                   <span class="app-nav__sub-wrap app-nav__marquee"
                     ><span class="app-nav__sub-label app-nav__marquee-label">{{
@@ -677,17 +698,17 @@ onBeforeUnmount(() => {
           <!-- 面包屑统一走 AppBreadcrumb（Arco 规范：首项图标回首页、/ 分隔、末项当前页） -->
           <AppBreadcrumb :class="{ 'app-breadcrumb--with-actions': isOverviewPage }">
             <div v-if="isOverviewPage" class="app-breadcrumb__actions">
-              <a
-                v-if="isOverviewPage && isAdminUser"
-                class="app-docs-link"
-                :href="docsHref"
-                target="_blank"
-                rel="noopener"
-                aria-label="打开文档中心（新标签页）"
-                title="文档中心"
-              >
-                <img :src="iconBook" alt="" aria-hidden="true" />
-              </a>
+              <a-tooltip v-if="isOverviewPage && isAdminUser" position="bottom" content="文档中心">
+                <a
+                  class="app-docs-link"
+                  :href="docsHref"
+                  target="_blank"
+                  rel="noopener"
+                  aria-label="打开文档中心（新标签页）"
+                >
+                  <img :src="iconBook" alt="" aria-hidden="true" />
+                </a>
+              </a-tooltip>
               <GraphSpaceSelector />
             </div>
           </AppBreadcrumb>

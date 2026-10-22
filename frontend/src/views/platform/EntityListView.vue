@@ -301,22 +301,27 @@ watch(
                   <td><b>{{ item.name || '（未命名）' }}</b></td>
                   <td><code>{{ item.entityId || item.vid }}</code></td>
                   <td>
-                    <span
-                      class="entity-type-chip"
-                      :title="item.entityType ? typeTitle(item.entityType) : undefined"
-                    >{{ typeDisplayName(item.entityType) }}</span>
+                    <a-tooltip
+                      position="top"
+                      :content="item.entityType ? typeTitle(item.entityType) : undefined"
+                      :disabled="!item.entityType"
+                    >
+                      <span class="entity-type-chip">{{ typeDisplayName(item.entityType) }}</span>
+                    </a-tooltip>
                   </td>
                   <td class="entity-props-cell">
                     <div class="entity-props">
-                      <span
+                      <a-tooltip
                         v-for="[key, value] in visiblePropertyEntries(item)"
                         :key="key"
-                        class="entity-props__chip"
-                        :title="`${key}: ${value}`"
+                        position="top"
+                        :content="`${key}: ${value}`"
                       >
-                        <b>{{ key }}</b>
-                        <em>{{ value }}</em>
-                      </span>
+                        <span class="entity-props__chip">
+                          <b>{{ key }}</b>
+                          <em>{{ value }}</em>
+                        </span>
+                      </a-tooltip>
                       <APopover
                         v-if="propertyOverflow(item)"
                         :trigger="['hover', 'click']"
@@ -334,15 +339,17 @@ watch(
                           <div class="entity-property-popover__content">
                             <p class="entity-property-popover__title">其他公共属性（{{ propertyOverflow(item) }}）</p>
                             <div class="entity-property-popover__grid">
-                              <span
+                              <a-tooltip
                                 v-for="[key, value] in hiddenPropertyEntries(item)"
                                 :key="key"
-                                class="entity-property-popover__item"
-                                :title="`${key}: ${value}`"
+                                position="top"
+                                :content="`${key}: ${value}`"
                               >
-                                <b>{{ key }}</b>
-                                <em>{{ value }}</em>
-                              </span>
+                                <span class="entity-property-popover__item">
+                                  <b>{{ key }}</b>
+                                  <em>{{ value }}</em>
+                                </span>
+                              </a-tooltip>
                             </div>
                           </div>
                         </template>

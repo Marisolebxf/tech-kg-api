@@ -800,20 +800,19 @@ onMounted(() => {
         </colgroup>
         <thead>
           <tr>
-            <th v-if="reviewCategory === 'C'" class="pick-col"><input aria-label="checkbox-input"
+            <th v-if="reviewCategory === 'C'" class="pick-col"><a-tooltip position="top" content="全选当前页可重跑的失败记录（仅「待处理 / 重跑失败」状态可勾选）"><input aria-label="checkbox-input"
               type="checkbox"
-              title="全选当前页可重跑的失败记录（仅「待处理 / 重跑失败」状态可勾选）"
               :disabled="!rerunPageEligibleIds.length || reviewLoading || rerunSubmitting || batchDeleteSubmitting"
               :checked="rerunAllChecked"
               :indeterminate="rerunSomeChecked"
               @change="toggleRerunPickAll"
-            /></th>
+            /></a-tooltip></th>
             <th>处理实例 ID</th>
             <th>待处理对象</th>
             <th>类型</th>
             <th>来源记录</th>
             <th>状态</th>
-            <th class="th-time-sort" :class="{ 'is-active': reviewTimeSort !== 'default' }" title="按更新时间排序" @click="toggleReviewTimeSort">更新时间<span class="sort-arrow">{{ reviewTimeSort === 'desc' ? '↓' : reviewTimeSort === 'asc' ? '↑' : '↕' }}</span></th>
+            <th class="th-time-sort" :class="{ 'is-active': reviewTimeSort !== 'default' }" @click="toggleReviewTimeSort"><a-tooltip position="top" content="按更新时间排序"><span>更新时间<span class="sort-arrow">{{ reviewTimeSort === 'desc' ? '↓' : reviewTimeSort === 'asc' ? '↑' : '↕' }}</span></span></a-tooltip></th>
             <th class="review-action-col">操作</th>
           </tr>
         </thead>

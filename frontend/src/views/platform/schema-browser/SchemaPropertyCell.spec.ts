@@ -42,7 +42,8 @@ describe('Schema 属性单元格', () => {
     ])
 
     expect(wrapper.findAll('.schema-properties__chip')).toHaveLength(4)
-    expect(wrapper.findAll('.schema-properties__chip').map(item => item.attributes('title')))
+    // 悬停气泡走 a-tooltip（测试环境未注册组件，渲染为携带 content 属性的包裹元素）
+    expect(wrapper.findAll('.schema-properties__chip').map(item => item.element.parentElement?.getAttribute('content')))
       .toEqual(['first: string', 'second: int', 'third: boolean', 'fourth: datetime'])
 
     const more = wrapper.get('.schema-properties__more')
@@ -52,7 +53,7 @@ describe('Schema 属性单元格', () => {
     const popover = wrapper.findComponent(Popover)
     expect(popover.props('trigger')).toEqual(['hover', 'click'])
     expect(popover.props('position')).toBe('bl')
-    expect(wrapper.findAll('.schema-property-popover__item').map(item => item.attributes('title')))
+    expect(wrapper.findAll('.schema-property-popover__item').map(item => item.element.parentElement?.getAttribute('content')))
       .toEqual(['fifth: float', 'sixth: string'])
 
     await more.trigger('click')

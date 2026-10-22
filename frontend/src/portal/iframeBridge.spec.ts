@@ -86,6 +86,32 @@ describe('iframeBridge', () => {
     expect(postMessage).not.toHaveBeenCalled()
   })
 
+  it.each(['http://183.62.232.63', 'https://new-portal.example.test'])(
+    'uses the deployment same-origin setting after moving to %s',
+    (currentOrigin) => {
+      const { environment, eventTarget, parentSource, postMessage } = testEnvironment()
+      const bridge = new IframeBridge({
+        environment: { ...environment, currentOrigin, referrer: currentOrigin + '/portal/' },
+        allowedOrigins: ['/'],
+        targetOrigin: '/',
+      })
+      const handler = vi.fn()
+      bridge.on(PortalAction.LOGOUT, handler)
+      bridge.start()
+      bridge.ready('tech-kg-api', '平台总览')
+      expect(postMessage.mock.calls[0][1]).toBe(currentOrigin)
+      for (const origin of ['https://old-portal.example.test', currentOrigin]) {
+        eventTarget.dispatchEvent(new MessageEvent('message', {
+          source: parentSource,
+          origin,
+          data: bridgeMessage(),
+        }))
+      }
+      expect(handler).toHaveBeenCalledTimes(1)
+      bridge.stop()
+    },
+  )
+
   it('accepts valid parent messages from an allowed origin', () => {
     const { environment, eventTarget, parentSource } = testEnvironment()
     const bridge = new IframeBridge({

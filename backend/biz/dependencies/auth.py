@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, Response, status
@@ -57,6 +58,19 @@ async def require_authenticated_user(
         if session_id:
             try:
                 context = await application.get_session(session_id)
+                if application.settings.login_mode == "portal":
+                    portal_token = request.cookies.get(
+                        application.settings.portal_token_cookie_name, ""
+                    )
+                    # 门户专用部署跟随门户切换账号和退出。原 OAuth/混合部署保持原有行为。
+                    if (
+                        context.token_source != "portal"
+                        or not portal_token
+                        or not hmac.compare_digest(
+                            portal_token.encode(), context.access_token.encode()
+                        )
+                    ):
+                        raise AuthenticationError("门户登录状态已变化，请重新进入")
                 if context.token_source in {"portal", "unknown"} and portal_sso_blocked(
                     request, application.settings, context.access_token
                 ):

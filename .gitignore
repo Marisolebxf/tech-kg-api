@@ -21,6 +21,7 @@ build/
 # Environment variables
 .env
 .env.local
+deploy/supercompute.env
 
 # IDE
 .vscode/

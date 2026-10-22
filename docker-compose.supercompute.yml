@@ -1,0 +1,42 @@
+# 与根 docker-compose.yml 叠加；不修改现有智谱部署的默认值。
+# 仅覆盖门户接入配置，数据库、图服务、存储与网络沿用同事现有部署。
+services:
+  api:
+    environment:
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?请填写平台公共入口}
+      APP_BASE: ${APP_BASE:-/bkg_zp}
+      AUTH_ENABLED: "true"
+      AUTH_LOGIN_MODE: portal
+      USER_CENTER_PORTAL_LOGIN_URL: ${USER_CENTER_PORTAL_LOGIN_URL:-/portal/}
+      USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED: "true"
+      USER_CENTER_PORTAL_TOKEN_COOKIE: ${USER_CENTER_PORTAL_TOKEN_COOKIE:?请核对门户 Cookie 名称}
+      USER_CENTER_CLIENT_ID: ${USER_CENTER_CLIENT_ID:?请填写超算应用 Client ID}
+      USER_CENTER_CLIENT_SECRET: ${USER_CENTER_CLIENT_SECRET:?请通过部署环境提供 Client Secret}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:?HTTP 临时入口填 false，HTTPS 填 true}
+      AUTH_COOKIE_PATH: ${APP_BASE:-/bkg_zp}
+      AUTH_FRONTEND_URL: ${PUBLIC_BASE_URL}${APP_BASE:-/bkg_zp}
+      USER_CENTER_OAUTH_BASE_URL: ${USER_CENTER_OAUTH_BASE_URL:-${PUBLIC_BASE_URL}/uc/admin-api/system/oauth2}
+      # 留空时由后端根据实际 OAuth API 入口推导，支持后端改走内网 UC。
+      USER_CENTER_OPEN_API_BASE_URL: ${USER_CENTER_OPEN_API_BASE_URL:-}
+      USER_CENTER_SSO_LOGIN_URL: ${PUBLIC_BASE_URL}/uc/sso/login
+      USER_CENTER_ACCOUNT_URL: ${PUBLIC_BASE_URL}/uc/admin/login?redirect=/index
+      # 兼容原配置项；portal 模式不会调用本系统 OAuth callback，无需为它登记回调。
+      USER_CENTER_REDIRECT_URI: ${PUBLIC_BASE_URL}${APP_BASE:-/bkg_zp}/api/v1/auth/callback
+      # 角色沿用用户中心和本系统业务权限，不通过“首个访问者”自动授予管理员。
+      PLATFORM_BOOTSTRAP_FIRST_ADMIN: "false"
+  web:
+    build:
+      args:
+        VITE_BASE: /__BASE__/
+        VITE_API_BASE: ""
+        VITE_AUTH_ENABLED: "true"
+    environment:
+      APP_BASE: ${APP_BASE:-/bkg_zp}
+      APP_API_BASE: ${APP_BASE:-/bkg_zp}/api
+      TRS_GRAPH_SPACE: ${TRS_GRAPH_SPACE:-dev}
+      AUTH_ENABLED: "true"
+      # "/" 被 iframeBridge 解析为当前 origin，覆盖镜像中可能残留的旧构建值。
+      PORTAL_ALLOWED_ORIGINS: /
+      PORTAL_TARGET_ORIGIN: /
+      PORTAL_EMBEDDED_DEFAULT: "false"
+      ADMIN_EXAMPLE_FALLBACK: "false"

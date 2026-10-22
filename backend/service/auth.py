@@ -382,7 +382,9 @@ class AuthService:
             recommendations.append("账号联系方式完整，请定期在统一用户中心更新密码")
         return AccountSecurityData(
             account_status="正常" if profile.user.status == 0 else "停用",
-            authentication_method="统一用户中心 OAuth2",
+            authentication_method=(
+                "统一门户登录" if self.settings.login_mode == "portal" else "统一用户中心 OAuth2"
+            ),
             password_managed_by="统一用户中心",  # NOSONAR
             account_management_url=self.settings.user_center_portal_url,
             email_bound=bool(profile.user.email),

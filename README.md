@@ -28,6 +28,10 @@ update
 
 ## 快速开始
 
+超算环境采用门户登录、同源菜单路径，部署请使用
+[超算门户接入说明](docs/supercompute-portal-integration.md)及专用配置覆盖文件；
+下文智谱/dev2 的域名、路径和开发免登录配置不适用于超算环境。
+
 ### 方式一：Docker（推荐）
 
 ```bash

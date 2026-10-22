@@ -94,7 +94,7 @@ onBeforeUnmount(() => window.removeEventListener("pageshow", resetSubmitting));
         <ul>
           <li><strong>亿级</strong><span>实体与关系统一治理</span></li>
           <li><strong>9 类</strong><span>标书业务场景覆盖</span></li>
-          <li><strong>OAuth2</strong><span>统一用户中心授权</span></li>
+          <li><strong>统一认证</strong><span>按账号权限访问</span></li>
         </ul>
       </div>
       <footer>深圳市科技创新资源知识图谱平台</footer>
@@ -104,12 +104,11 @@ onBeforeUnmount(() => window.removeEventListener("pageshow", resetSubmitting));
       <div class="login-card">
         <span class="login-card__badge">统一身份认证</span>
         <h2>欢迎登录</h2>
-        <p>系统将跳转到统一用户中心完成身份验证。账号密码不会提交给本平台。</p>
+        <p>系统将通过统一登录入口完成身份验证。账号密码由统一用户中心管理。</p>
         <div class="login-card__security">
           <i aria-hidden="true">✓</i>
           <span
-            ><strong>安全授权</strong>通过 OAuth2
-            授权码模式登录，访问令牌仅保存在后端会话中。</span
+            ><strong>统一身份</strong>登录后使用当前账号已获授权的功能和数据。</span
           >
         </div>
         <p v-if="feedback" class="login-card__error" role="alert">

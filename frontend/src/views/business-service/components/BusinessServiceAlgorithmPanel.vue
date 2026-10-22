@@ -10,7 +10,7 @@ import { MonthPicker as AMonthPicker } from "@arco-design/web-vue";
 import { IconRefresh as AIconRefresh } from "@arco-design/web-vue/es/icon";
 import zhCN from "@arco-design/web-vue/es/locale/lang/zh-cn";
 import dayjs from "dayjs";
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 
 import {
   describeExpertAlumniRelation,
@@ -534,18 +534,28 @@ const achievementTypeSelection = computed<AchievementTypeOption[]>({
 });
 const liveResponse = ref<Record<string, any> | null>(null);
 const paramResetToken = ref(0);
-// 下拉/日历面板展开期间隐藏字段气泡，避免气泡压住选项/日期（原生 title 时代气泡跟随光标不遮挡）。
-// 注意不能用 a-tooltip 的 disabled：Arco Trigger 的 disabled 只拦「打开」，已展开的气泡不会收起，
+// 逐字段受控气泡显隐：悬停状态由各气泡自身事件回写（:popup-visible + @update:popupVisible）；
+// 该字段的下拉/日历面板展开期间强制隐藏，避免气泡压住选项/日期（原生 title 跟随光标不遮挡）。
+// 必须逐字段分账：共享一个状态会导致悬停 A 字段时其他字段的气泡同时弹出。
+// 也不用 a-tooltip 的 disabled：Arco Trigger 的 disabled 只拦「打开」，已展开的气泡不收起，
 // 连 mouseleave 都被短路，气泡会僵在原地（反而压住日期面板两侧）。
-const fieldPanelVisible = ref(false);
-// 悬停状态由 tooltip 自身事件驱动（v-model:popup-visible 回写），面板展开期间强制钳为 false。
-const fieldTipHover = ref(false);
-const fieldTipVisible = computed({
-  get: () => fieldTipHover.value && !fieldPanelVisible.value,
-  set: (value: boolean) => {
-    fieldTipHover.value = value;
-  },
-});
+const fieldTipHoverState: Record<string, boolean> = reactive({});
+const fieldPanelOpenNames = ref(new Set<string>());
+function fieldTipVisible(fieldName: string): boolean {
+  return Boolean(fieldTipHoverState[fieldName]) && !fieldPanelOpenNames.value.has(fieldName);
+}
+function setFieldTipVisible(fieldName: string, visible: boolean): void {
+  fieldTipHoverState[fieldName] = visible;
+}
+function setFieldPanelOpen(fieldName: string, open: boolean): void {
+  const next = new Set(fieldPanelOpenNames.value);
+  if (open) {
+    next.add(fieldName);
+  } else {
+    next.delete(fieldName);
+  }
+  fieldPanelOpenNames.value = next;
+}
 const selectedGraphNodeId = ref<string | null>(null);
 const selectedGraphEdgeId = ref<string | null>(null);
 const liveAlumniResult = ref<AlumniQueryResult | null>(null);
@@ -4734,7 +4744,8 @@ function clearGraphSelection() {
         <a-tooltip
           v-if="field.type === 'select' || field.type === 'boolean'"
           position="bottom"
-          v-model:popup-visible="fieldTipVisible"
+          :popup-visible="fieldTipVisible(field.name)"
+          @update:popupVisible="setFieldTipVisible(field.name, $event)"
           :content="field.description"
           :disabled="!field.description"
         >
@@ -4750,7 +4761,7 @@ function clearGraphSelection() {
             :aria-label="field.label ?? field.name"
             :aria-invalid="Boolean(parameterErrors[field.name])"
             placeholder="请选择"
-            @visible-change="fieldPanelVisible = $event"
+            @visible-change="setFieldPanelOpen(field.name, $event)"
             @update:model-value="handleParameterInput(field.name, $event)"
           >
             <ElOption v-for="option in field.options" :key="option" :value="option" :label="option" />
@@ -4759,7 +4770,8 @@ function clearGraphSelection() {
         <a-tooltip
           v-else-if="field.name === 'achievementTypes'"
           position="bottom"
-          v-model:popup-visible="fieldTipVisible"
+          :popup-visible="fieldTipVisible(field.name)"
+          @update:popupVisible="setFieldTipVisible(field.name, $event)"
           :content="field.description"
           :disabled="!field.description"
         >
@@ -4776,7 +4788,7 @@ function clearGraphSelection() {
             clearable
             placeholder="留空为全部类型"
             aria-label="成果类型"
-            @visible-change="fieldPanelVisible = $event"
+            @visible-change="setFieldPanelOpen(field.name, $event)"
             @update:model-value="clearParameterError(field.name)"
           >
             <ElOption
@@ -4790,7 +4802,8 @@ function clearGraphSelection() {
         <a-tooltip
           v-else-if="field.name === 'relationTypes'"
           position="bottom"
-          v-model:popup-visible="fieldTipVisible"
+          :popup-visible="fieldTipVisible(field.name)"
+          @update:popupVisible="setFieldTipVisible(field.name, $event)"
           :content="field.description"
           :disabled="!field.description"
         >
@@ -4806,7 +4819,7 @@ function clearGraphSelection() {
             :max-collapse-tags="1"
             clearable
             placeholder="留空为全部关系"
-            @visible-change="fieldPanelVisible = $event"
+            @visible-change="setFieldPanelOpen(field.name, $event)"
             :aria-label="field.label ?? field.name"
             @update:model-value="clearParameterError(field.name)"
           >
@@ -4844,7 +4857,8 @@ function clearGraphSelection() {
         <a-tooltip
           v-else-if="field.type === 'month'"
           position="bottom"
-          v-model:popup-visible="fieldTipVisible"
+          :popup-visible="fieldTipVisible(field.name)"
+          @update:popupVisible="setFieldTipVisible(field.name, $event)"
           :content="field.description"
           :disabled="!field.description"
         >
@@ -4870,7 +4884,7 @@ function clearGraphSelection() {
             "
             :error="Boolean(parameterErrors[field.name])"
             @update:model-value="handleMonthParameterInput(field.name, $event)"
-            @popup-visible-change="fieldPanelVisible = $event"
+            @popup-visible-change="setFieldPanelOpen(field.name, $event)"
           />
         </a-tooltip>
         <div v-else class="service-console__input-wrap">

@@ -76,6 +76,15 @@ async def get_login_url(
                 expires_in=application.settings.state_ttl_seconds,
             )
         )
+    if application.settings.login_mode == "portal":
+        try:
+            url = application.settings.require_portal_login_url()
+        except ValueError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        # 此接口仅在用户主动点击登录时调用。允许退出后使用同一门户登录态重新进入；
+        # 不生成子系统 OAuth state，也不猜测门户的回跳参数。
+        clear_portal_logout_cookie(response, application.settings)
+        return LoginUrlResponse(data=LoginUrlData(url=url, expires_in=0))
     try:
         url, expires_in, state = await application.create_login_url(next_path)
     except AuthenticationError as exc:
@@ -101,6 +110,8 @@ async def oauth_callback(
     error: str | None = None,
     error_description: str | None = None,
 ) -> Response:
+    if application.settings.login_mode == "portal":
+        raise HTTPException(status_code=404, detail="当前部署由统一门户处理登录回调")
     if error:
         response = RedirectResponse(
             _login_error_url(application, error_description or error),

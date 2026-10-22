@@ -1,14 +1,16 @@
 # 超算门户接入与部署交接
 
-本次接入使用远程 kgetl 分支。应用已由使用方创建，名称为“亿级科技知识图谱引擎-超算环境”，当前为空。
+本次接入使用远程 kgetl 分支。应用已由使用方创建，名称为“亿级科技知识图谱引擎-超算环境”。
 门户展示位置为“国科信 → AI战略咨询 → 本应用目录”，与“超大规模智算引擎”并列。
 代码通过 PR 交付，由部署同事合并、部署；菜单配置在服务可用后进行。
 
 ## 接入约定
 
-门户方已明确：统一用户中心中的应用“访问地址”是登录后访问的业务地址，只有门户直接进行 SSO 登录，进入子系统由门户重定向处理。
+按使用方转达的门户方最新要求，统一用户中心中的应用“访问地址”登记完整回调地址：
+`http://183.62.232.63/bkg_zp/api/v1/auth/callback`。不要改成业务首页。
+这一登记要求尚不能确定实际登录协议；门户是否访问此地址、携带什么参数、是否先经过本应用发起授权，仍需完整链路联调确认。
 
-因此本环境设置 AUTH_LOGIN_MODE=portal：
+当前模板设置 AUTH_LOGIN_MODE=portal，适用于门户共享 Cookie 登录的以下流程；它尚不是已验收的首次登录方案：
 
 1. 用户在门户完成登录，门户把共享登录凭据写入同站 Cookie。
 2. 门户菜单打开 /bkg_zp/overview?embedded=1 等子系统页面。
@@ -16,7 +18,9 @@
 4. 用户直接打开子系统且未登录时，点击“进入平台”会打开 USER_CENTER_PORTAL_LOGIN_URL 指定的门户入口。
 5. 门户模式跟随共享 Cookie 的删除和变更：缺失时拒绝旧会话，变更时校验新身份。子系统主动退出只结束自己的会话，不撤销门户供其他应用使用的共享凭据。
 
-本次不让子系统自行请求 OAuth 授权码，/api/v1/auth/callback 在 portal 模式返回 404。
+portal 模式不让子系统自行请求 OAuth 授权码，/api/v1/auth/callback 在该模式返回 404。
+如果门户实际访问登记的 callback，此模式不能完成回跳，应先确认双方交接协议再部署对应模式。
+oauth 模式只处理本应用发起且通过一次性 state 校验的授权码回跳；不能为了接受门户跳转而取消 state 校验。
 现有智谱环境不设置 AUTH_LOGIN_MODE 时仍采用 oauth 模式，原回调流程和混合登录行为保持兼容。
 Client ID/Secret 仍用于后端验证门户令牌和查询用户信息，不能省略，也不能注入前端。
 
@@ -36,7 +40,7 @@ Client ID/Secret 仍用于后端验证门户令牌和查询用户信息，不能
 | --- | --- |
 | PUBLIC_BASE_URL | http://183.62.232.63；只包含协议、主机及可选端口，末尾不加 / |
 | APP_BASE | /bkg_zp；前后端保持一致，末尾不加 / |
-| AUTH_LOGIN_MODE | portal |
+| AUTH_LOGIN_MODE | 当前模板为 portal；首次登录实际链路未验收，部署前确认模式 |
 | AUTH_ENABLED | true，前后端都启用 |
 | USER_CENTER_PORTAL_LOGIN_URL | /portal/；以门户实际可用入口为准 |
 | USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED | true |
@@ -87,32 +91,54 @@ Client Secret 使用现有 Secret 管理方式注入后端。
 
 ## 应用与菜单配置
 
-应用“访问地址”按业务首页填写，临时完整地址为 http://183.62.232.63/bkg_zp/。
-若门户要求该字段也改成站内路径，则填写 /bkg_zp/；不要填写本系统的 OAuth callback。
-该地址登记不能代替门户提供进入子系统的重定向能力。
+应用“访问地址”按门户方最新要求填写完整回调地址：
+`http://183.62.232.63/bkg_zp/api/v1/auth/callback`。
+菜单页面地址才使用下面不带域名的路径。登记 callback 不会自动切换本系统的登录模式或启用回跳处理。
 
 为现有超算应用添加一个顶层“目录”，名称“亿级科技知识图谱引擎-超算环境”，
 目录编码可使用 kgetl_supercompute，目录地址留空。具体页面建为“菜单”，地址如下。
 叶子菜单编码需与 frontend/src/portal/portalRoutes.ts 一致，便于门户保存和恢复子页面。
 
+目录结构沿用智谱正式应用（不是智谱中误建的同名超算目录）：
+
+```text
+亿级科技知识图谱引擎-超算环境 (kgetl_supercompute)
+├─ 工作台 (workbench)
+│  └─ 平台总览
+├─ 图谱建设与治理 (governance)
+│  ├─ Schema 管理
+│  ├─ 图谱构建
+│  └─ 人工审核
+├─ 平台管理 (platform_admin)
+│  └─ 配置管理
+└─ 知识图谱构建服务 (kg_service)
+   ├─ 图谱查询 (graph_query_group)
+   │  ├─ 综合查询
+   │  └─ 实体列表
+   └─ 科技专家/人才知识推理构建服务 (expert_service_group)
+      └─ 下表九个业务应用菜单，按表中顺序排列
+```
+
+以上六个分组都建为地址为空的“目录”，同级从 1 开始排序；16 个页面放入对应父目录，不能全部平铺在根目录下。
+
 | 分组 | 菜单名称 | 菜单编码 | 菜单地址 |
 | --- | --- | --- | --- |
 | 工作台 | 平台总览 | overview | /bkg_zp/overview?embedded=1 |
-| 图谱治理 | Schema 管理 | schema | /bkg_zp/schema?embedded=1 |
-| 图谱治理 | 图谱构建 | graph_build | /bkg_zp/graph-build?embedded=1 |
-| 图谱治理 | 人工审核 | manual_review | /bkg_zp/manual-review?embedded=1 |
+| 图谱建设与治理 | Schema 管理 | schema | /bkg_zp/schema?embedded=1 |
+| 图谱建设与治理 | 图谱构建 | graph_build | /bkg_zp/graph-build?embedded=1 |
+| 图谱建设与治理 | 人工审核 | manual_review | /bkg_zp/manual-review?embedded=1 |
 | 平台管理 | 配置管理 | configurations | /bkg_zp/configurations?embedded=1 |
-| 图谱服务 | 综合查询 | graph_query | /bkg_zp/graph-query?embedded=1 |
-| 图谱服务 | 实体列表 | graph_query_entities | /bkg_zp/graph-query/entities?embedded=1 |
-| 业务应用 | 科技专家/人才直接关系 | yjkjzstp_expert_direct | /bkg_zp/expert-direct?embedded=1 |
-| 业务应用 | 科技单节点间接关系 | yjkjzstp_node_indirect | /bkg_zp/node-indirect?embedded=1 |
-| 业务应用 | 科技两点合作成果 | yjkjzstp_two_point_achievement | /bkg_zp/two-point-achievement?embedded=1 |
-| 业务应用 | 科技专家同事关系 | yjkjzstp_expert_colleague | /bkg_zp/expert-colleague?embedded=1 |
-| 业务应用 | 科技专家校友关系 | yjkjzstp_expert_alumni | /bkg_zp/expert-alumni?embedded=1 |
-| 业务应用 | 科技专家论文合作关系 | yjkjzstp_paper_cooperation | /bkg_zp/paper-cooperation?embedded=1 |
-| 业务应用 | 重点关注科技企业关系 | yjkjzstp_enterprise_relation | /bkg_zp/enterprise-relation?embedded=1 |
-| 业务应用 | 科技产业链点TOP-N事件关系 | yjkjzstp_industry_chain_event | /bkg_zp/industry-chain-event?embedded=1 |
-| 业务应用 | 科技产业链全景图 | yjkjzstp_industry_chain_panorama | /bkg_zp/industry-chain-panorama?embedded=1 |
+| 知识图谱构建服务 / 图谱查询 | 综合查询 | graph_query | /bkg_zp/graph-query?embedded=1 |
+| 知识图谱构建服务 / 图谱查询 | 实体列表 | graph_query_entities | /bkg_zp/graph-query/entities?embedded=1 |
+| 知识图谱构建服务 / 科技专家/人才知识推理构建服务 | 科技专家/人才直接关系 | yjkjzstp_expert_direct | /bkg_zp/expert-direct?embedded=1 |
+| 知识图谱构建服务 / 科技专家/人才知识推理构建服务 | 科技单节点间接关系 | yjkjzstp_node_indirect | /bkg_zp/node-indirect?embedded=1 |
+| 知识图谱构建服务 / 科技专家/人才知识推理构建服务 | 科技两点合作成果 | yjkjzstp_two_point_achievement | /bkg_zp/two-point-achievement?embedded=1 |
+| 知识图谱构建服务 / 科技专家/人才知识推理构建服务 | 科技专家同事关系 | yjkjzstp_expert_colleague | /bkg_zp/expert-colleague?embedded=1 |
+| 知识图谱构建服务 / 科技专家/人才知识推理构建服务 | 科技专家校友关系 | yjkjzstp_expert_alumni | /bkg_zp/expert-alumni?embedded=1 |
+| 知识图谱构建服务 / 科技专家/人才知识推理构建服务 | 科技专家论文合作关系 | yjkjzstp_paper_cooperation | /bkg_zp/paper-cooperation?embedded=1 |
+| 知识图谱构建服务 / 科技专家/人才知识推理构建服务 | 重点关注科技企业关系 | yjkjzstp_enterprise_relation | /bkg_zp/enterprise-relation?embedded=1 |
+| 知识图谱构建服务 / 科技专家/人才知识推理构建服务 | 科技产业链点TOP-N事件关系 | yjkjzstp_industry_chain_event | /bkg_zp/industry-chain-event?embedded=1 |
+| 知识图谱构建服务 / 科技专家/人才知识推理构建服务 | 科技产业链全景图 | yjkjzstp_industry_chain_panorama | /bkg_zp/industry-chain-panorama?embedded=1 |
 
 目录名称与分组不影响真实页面路由。业务/空间权限继续由后端检查，添加菜单不会自动授予管理权限。
 确认部署可用后，把该应用目录拖到右侧“国科信 → AI战略咨询”下，与“超大规模智算引擎”并列，再保存。
@@ -121,16 +147,16 @@ Client Secret 使用现有 Secret 管理方式注入后端。
 ## 联调与验收
 
 1. 门户方确认 IP 入口自身的 SSO 登录及回跳地址已同步更新，不再把用户带回停用的 next 域名。
-2. 同事验证 /bkg_zp/、深层页面刷新和静态资源正常；/bkg_zp/api/v1/auth/login-url 返回配置的门户入口，响应不包含 OAuth state 或授权参数。
+2. 同事核对实际部署版本与 AUTH_LOGIN_MODE，并验证 /bkg_zp/、深层页面刷新和静态资源。portal 模式的 /bkg_zp/api/v1/auth/login-url 返回配置的门户入口，不包含 OAuth state；oauth 模式应验证本应用发起授权及匹配 state 的回调。
 3. 已登录门户后访问子系统，/auth/me 能识别当前账号。核对共享 Cookie 名称、范围及用户中心可达性；不要将令牌或密钥贴入日志、PR。
 4. 切换门户账号后子系统同步身份；删除门户登录态后旧子系统会话不能继续访问；子系统退出不影响其他应用，点击登录后允许重新进入。
 5. 验证总览、Schema、构建、审核和查询等实际功能，普通账号与管理账号权限正确。服务出现 502 时先由同事检查网关与后端日志。
-6. 门户方确认自动回到子系统的协议后，单独验证未登录直达子页面的完整链路；在这之前不把“自动返回原页面”记为通过。
+6. 单独验证“全新未登录访问 → 门户登录 → 返回子系统”完整链路，记录实际落点及是否经过 callback。已有 Cookie 下的 /auth/me 成功会直接进入业务页，不能作为这条链路通过的证据；协议未确认前不把首次登录和自动返回原页面记为通过。
 
 上线后的业务联调依赖真实部署，单元测试通过不代表以上验收已完成。
 
 ## 正式域名切换
 
-同事更新 PUBLIC_BASE_URL，HTTPS 环境同步启用 AUTH_COOKIE_SECURE，然后更新应用登记的完整业务地址
+同事更新 PUBLIC_BASE_URL，HTTPS 环境同步启用 AUTH_COOKIE_SECURE，然后更新应用登记的完整回调地址
 以及门户自己维护的 SSO 回跳配置。站内菜单路径、前端消息来源配置无需逐条改域名，也无需仅为域名变化重建前端。
 若曾显式覆盖 USER_CENTER_* 或 AUTH_FRONTEND_URL，需一起更新或移除旧覆盖值；内网 API 地址按实际网络保留。

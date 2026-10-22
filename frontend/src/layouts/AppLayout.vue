@@ -484,19 +484,24 @@ onBeforeUnmount(() => {
                 </svg>
               </button>
               <template v-if="showQueryNavItems">
-                <RouterLink
+                <a-tooltip
                   v-for="item in queryNavItems"
                   :key="item.to"
-                  class="app-nav__item app-nav__item--sub"
-                  active-class="app-nav__item--active"
-                  :to="item.to"
+                  position="right"
+                  :content="item.fullLabel"
                 >
-                  <span class="app-nav__sub-wrap app-nav__marquee"
-                    ><span class="app-nav__sub-label app-nav__marquee-label">{{
-                      item.label
-                    }}</span></span
+                  <RouterLink
+                    class="app-nav__item app-nav__item--sub"
+                    active-class="app-nav__item--active"
+                    :to="item.to"
                   >
-                </RouterLink>
+                    <span class="app-nav__sub-wrap app-nav__marquee"
+                      ><span class="app-nav__sub-label app-nav__marquee-label">{{
+                        item.label
+                      }}</span></span
+                    >
+                  </RouterLink>
+                </a-tooltip>
               </template>
               <aside
                 v-if="sidebarCollapsed"
@@ -542,19 +547,24 @@ onBeforeUnmount(() => {
                 </svg>
               </button>
               <template v-if="showServiceNavItems">
-                <RouterLink
+                <a-tooltip
                   v-for="item in serviceNavItems"
                   :key="item.to"
-                  class="app-nav__item app-nav__item--sub"
-                  active-class="app-nav__item--active"
-                  :to="item.to"
+                  position="right"
+                  :content="item.fullLabel"
                 >
-                  <span class="app-nav__sub-wrap app-nav__marquee"
-                    ><span class="app-nav__sub-label app-nav__marquee-label">{{
-                      item.label
-                    }}</span></span
+                  <RouterLink
+                    class="app-nav__item app-nav__item--sub"
+                    active-class="app-nav__item--active"
+                    :to="item.to"
                   >
-                </RouterLink>
+                    <span class="app-nav__sub-wrap app-nav__marquee"
+                      ><span class="app-nav__sub-label app-nav__marquee-label">{{
+                        item.label
+                      }}</span></span
+                    >
+                  </RouterLink>
+                </a-tooltip>
               </template>
               <aside
                 v-if="sidebarCollapsed"

@@ -826,12 +826,11 @@ onMounted(() => {
               :checked="rerunSelection.has(row.id)"
               @change="((event?: Event) => toggleRerunPick(row.id, Boolean((event?.target as HTMLInputElement)?.checked)))"
             /></td>
-            <td class="review-id-cell"><code class="review-id-plain" :title="row.id">{{ row.id }}</code></td>
+            <td class="review-id-cell"><a-tooltip position="top" :content="row.id"><code class="review-id-plain">{{ row.id }}</code></a-tooltip></td>
             <!-- 待处理对象：超长对象名单行省略（不再撑高行），悬浮查看完整内容 -->
             <td class="review-object-cell">
-              <a-tooltip v-if="row.object" position="top" content-class="review-object-tooltip">
+              <a-tooltip v-if="row.object" position="top" :content="row.object">
                 <strong class="review-object-text">{{ row.object }}</strong>
-                <template #content><div class="review-object-tooltip-content">{{ row.object }}</div></template>
               </a-tooltip>
               <strong v-else class="review-object-text">—</strong>
             </td>
@@ -1129,10 +1128,7 @@ onMounted(() => {
 /* 待处理对象：单行省略，超长对象名不再撑高行；完整内容悬浮查看 */
 .ops-review-table-scroll .review-object-cell{padding-top:8px;padding-bottom:8px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .ops-review-table-scroll .review-object-cell>strong{display:inline-block;box-sizing:border-box;max-width:100%;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom;word-break:normal;overflow-wrap:normal}
-/* 完整对象名悬浮层（teleport 到 body）：常态单行——对象名多为「表名#32位主键」（约 450px），
- *  限宽 420px 会恰好折成两行（悬浮还是两排的根因），放宽到 720px；更长的内容仍在浮层内换行/滚动 */
-:global(.review-object-tooltip){box-sizing:border-box;max-width:min(720px,calc(100vw - 32px))!important;padding:8px 6px 8px 12px!important}
-.review-object-tooltip-content{max-height:min(260px,50vh);padding-right:6px;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;white-space:pre-wrap;word-break:break-word}
+/* 完整对象名悬浮层走 a-tooltip 默认样式（深色气泡、限宽 350px 自动换行），不再加宽覆盖 */
 .ops-review-table-scroll td{white-space:normal}
 .ops-review-table-scroll :is(code,.review-id-cell,.review-status){white-space:nowrap}
 .ops-review-table-scroll :is(th,td):last-child{white-space:nowrap}
@@ -1156,8 +1152,10 @@ onMounted(() => {
 .ops-review-table-scroll:hover::-webkit-scrollbar-thumb,.ops-review-table-scroll.review-scroll--active::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
 .ops-review-table-scroll::-webkit-scrollbar-thumb:hover{background-color:rgba(78,89,105,.8)}
 /* 类型徽标 / 勾选禁用态 / 删除按钮 */
-/* 处理实例 ID 纯文本：中性色，区别于可点击的链接蓝 */
-.review-id-cell .review-id-plain{color:#4e5969}
+/* 处理实例 ID 纯文本：字体随表格（去掉 code 默认等宽/字号；size 需 !important 反压
+ * .app-workspace :where(code) 的 12px 全局规则，与待处理对象列同为 14px），
+ * 中性色区别于可点击的链接蓝；悬停气泡与待处理对象列一致，用 a-tooltip 默认样式 */
+.review-id-cell .review-id-plain{color:#4e5969;font-family:inherit;font-size:inherit !important;line-height:inherit !important}
 .review-kind-badge{display:inline-flex;white-space:nowrap;padding:0 8px;border-radius:4px;background:#f2f3f5;color:#4e5969;font-size:12px;line-height:20px}
 .review-kind-badge.is-实体{background:#eaf2ff;color:#175cd3}
 .review-kind-badge.is-关系{background:#fff3d8;color:#b54708}

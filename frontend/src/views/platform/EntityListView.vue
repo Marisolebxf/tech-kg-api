@@ -408,7 +408,8 @@ watch(
 /* 名称列对齐 Schema 页：td b 压回常规字重（Schema 页 DESIGN_RULES 同款），避免加粗显黑显大 */
 .entity-table-wrap td b{font-weight:400}
 /* ID 列与其他列字号统一 14px（此前 13px 显小）；不加蓝色背景块，长 ID 允许换行 */
-.entity-table-wrap td code{color:inherit;font-family:inherit;font-size:14px;line-height:22px;font-weight:400;word-break:normal;overflow-wrap:anywhere}
+/* ID 列 code 需 !important 反压 .app-workspace :where(code) 的 12px 全局规则，保持与实体名称列同为 14px */
+.entity-table-wrap td code{color:inherit;font-family:inherit;font-size:14px !important;line-height:22px !important;font-weight:400;word-break:normal;overflow-wrap:anywhere}
 .entity-table-wrap td:first-child{min-width:160px}
 .entity-table-wrap td:nth-child(2){min-width:240px}
 .entity-type-chip{display:inline-flex;padding:2px 6px;border-radius:4px;background:#edf4ff;color:#165dff;font-size:12px;line-height:20px;white-space:nowrap}

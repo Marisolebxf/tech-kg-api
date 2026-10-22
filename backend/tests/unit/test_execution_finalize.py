@@ -146,6 +146,46 @@ async def test_reconcile_leaves_running_alone(monkeypatch):
     assert repo.saved is None
 
 
+def test_stamp_job_latest_skips_rerun(monkeypatch):
+    """重跑执行不推进作业聚合：否则重跑收尾/对账按 COMPLETED 回写，会把作业
+    本身的 ABNORMAL 掩成「已完成」（2026-10-21 job-1e89e0b6fbc4 复现路径）。"""
+    from service.temporal_workflows import _stamp_job_latest
+
+    saved: dict[str, dict[str, Any]] = {}
+
+    class _JobRepo:
+        def get_job(self, job_id: str) -> dict[str, Any]:
+            return {"id": job_id, "name": "链任务"}
+
+        def save_job(self, job: dict[str, Any]) -> None:
+            saved[job["id"]] = dict(job)
+
+    monkeypatch.setattr("service.workflow_repository.repository", _JobRepo())
+
+    _stamp_job_latest(
+        {
+            "jobId": "job-x",
+            "id": "EXEC-R2",
+            "status": "COMPLETED",
+            "triggerSource": "RERUN",
+            "startedAt": "2026-10-21 09:51:04",
+        }
+    )
+    assert saved == {}  # RERUN：不写
+
+    _stamp_job_latest(
+        {
+            "jobId": "job-x",
+            "id": "EXEC-CHAIN",
+            "status": "ABNORMAL",
+            "triggerSource": "MANUAL",
+            "startedAt": "2026-10-21 09:39:38",
+        }
+    )
+    assert saved["job-x"]["lastExecutionId"] == "EXEC-CHAIN"
+    assert saved["job-x"]["lastExecutionStatus"] == "ABNORMAL"
+
+
 def test_is_rerun_request_matches_manual_rerun_payload():
     """MR-SYNC：手动 RERUN 载荷识别（rerunCaseIds / triggerSource=RERUN 任一命中）。
 

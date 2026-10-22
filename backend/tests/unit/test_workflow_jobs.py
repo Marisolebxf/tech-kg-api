@@ -567,6 +567,150 @@ async def test_pause_idle_job_sends_no_signal(env):
     assert temporal.signals == []
 
 
+# ---------- get_job_detail：作业聚合状态（顶部「执行状态」格）对账 ----------
+# 复现口径（2026-10-21 job-1e89e0b6fbc4）：链执行 ABNORMAL（7 条逐行失败）后
+# 聚合卡 RUNNING → 详情页顶部「运行中」与执行历史 ABNORMAL 同屏；逐行重跑
+# （triggerSource=RERUN，继承 jobId）完成后又把聚合盖成 COMPLETED → 「已完成」。
+
+
+def _detail_job(**over):
+    base = {
+        "id": "job-x",
+        "name": "链任务",
+        "taskType": "chain",
+        "definitionId": "chain-1",
+        "owner": "u1",
+        "status": "启用",
+        "schedule": {"kind": "once"},
+        "createdAt": "2026-10-21 09:39:00",
+        "lastRunAt": "2026-10-21 09:39:38",
+        "lastExecutionId": "EXEC-CHAIN",
+        "lastExecutionStatus": "RUNNING",
+    }
+    base.update(over)
+    return base
+
+
+def _detail_execution(exec_id, status, *, trigger="MANUAL", started, job_id="job-x"):
+    return {
+        "id": exec_id,
+        "status": status,
+        "triggerSource": trigger,
+        "startedAt": started,
+        "jobId": job_id,
+        "workflowId": f"wf-{exec_id}",
+        "definitionId": "schema-extract-widget",
+        "payload": {"graphSpace": "dev2"},
+    }
+
+
+async def test_get_job_detail_heals_stale_running_aggregate(env):
+    """执行行已被惰性刷新翻成 ABNORMAL、job 聚合卡 RUNNING 时，详情访问即对账。"""
+    service, repo, ops, _ = env
+    repo.jobs["job-x"] = _detail_job()
+    repo.save_execution(_detail_execution("EXEC-CHAIN", "ABNORMAL", started="2026-10-21 09:39:38"))
+
+    refreshed_ids: list[str] = []
+    orig_get = ops.get_execution
+
+    async def _spy(execution_id):
+        refreshed_ids.append(execution_id)
+        return await orig_get(execution_id)
+
+    ops.get_execution = _spy
+
+    detail = await service.get_job_detail(_actor("u1"), "job-x")
+
+    # 执行已是终态：无需再向 Temporal 复核，直接按行真值对账
+    assert refreshed_ids == []
+    assert detail["job"]["lastExecutionStatus"] == "ABNORMAL"
+    assert repo.jobs["job-x"]["lastExecutionStatus"] == "ABNORMAL"
+
+
+async def test_get_job_detail_rerun_does_not_mask_abnormal(env):
+    """重跑执行（更新、COMPLETED）不得覆盖作业聚合：顶部保持「运行异常」口径。"""
+    service, repo, _, _ = env
+    # 聚合已被重跑收尾盖成 COMPLETED（复现现场终态）
+    repo.jobs["job-x"] = _detail_job(
+        lastExecutionId="EXEC-R2", lastExecutionStatus="COMPLETED", lastRunAt="2026-10-21 09:51:04"
+    )
+    # 执行历史最新在前：两条 RERUN + 一条链执行（ABNORMAL）
+    repo.save_execution(
+        _detail_execution("EXEC-R2", "COMPLETED", trigger="RERUN", started="2026-10-21 09:51:04")
+    )
+    repo.save_execution(
+        _detail_execution("EXEC-R1", "COMPLETED", trigger="RERUN", started="2026-10-21 09:51:00")
+    )
+    repo.save_execution(_detail_execution("EXEC-CHAIN", "ABNORMAL", started="2026-10-21 09:39:38"))
+
+    detail = await service.get_job_detail(_actor("u1"), "job-x")
+
+    assert detail["job"]["lastExecutionId"] == "EXEC-CHAIN"
+    assert detail["job"]["lastExecutionStatus"] == "ABNORMAL"
+    assert detail["job"]["lastRunAt"] == "2026-10-21 09:39:38"
+    assert repo.jobs["job-x"]["lastExecutionStatus"] == "ABNORMAL"
+    # 执行历史仍完整保留重跑记录（仅聚合口径不取它）
+    assert [e["id"] for e in detail["executions"]] == ["EXEC-R2", "EXEC-R1", "EXEC-CHAIN"]
+
+
+async def test_get_job_detail_refreshes_representative_not_rerun(env):
+    """代表执行（作业执行）RUNNING 时惰性刷新它；重跑执行不在刷新与聚合口径内。"""
+    service, repo, ops, _ = env
+    repo.jobs["job-x"] = _detail_job()
+    repo.save_execution(
+        _detail_execution("EXEC-R2", "RUNNING", trigger="RERUN", started="2026-10-21 09:51:04")
+    )
+    repo.save_execution(_detail_execution("EXEC-CHAIN", "RUNNING", started="2026-10-21 09:39:38"))
+    ops.execution_by_id["EXEC-CHAIN"] = _detail_execution(
+        "EXEC-CHAIN", "ABNORMAL", started="2026-10-21 09:39:38"
+    )
+
+    detail = await service.get_job_detail(_actor("u1"), "job-x")
+
+    assert detail["job"]["lastExecutionStatus"] == "ABNORMAL"
+    statuses = {e["id"]: e["status"] for e in detail["executions"]}
+    assert statuses == {"EXEC-R2": "RUNNING", "EXEC-CHAIN": "ABNORMAL"}
+
+
+async def test_get_job_detail_keeps_newer_concurrent_run(env):
+    """聚合指针指向不在列表里的更新执行（并发触发的下一轮）时不回写旧执行。"""
+    service, repo, ops, _ = env
+    repo.jobs["job-x"] = _detail_job(
+        lastExecutionId="EXEC-NEXT", lastExecutionStatus="RUNNING", lastRunAt="2026-10-21 10:00:00"
+    )
+    repo.save_execution(_detail_execution("EXEC-CHAIN", "ABNORMAL", started="2026-10-21 09:39:38"))
+
+    refreshed_ids: list[str] = []
+    orig_get = ops.get_execution
+
+    async def _spy(execution_id):
+        refreshed_ids.append(execution_id)
+        return await orig_get(execution_id)
+
+    ops.get_execution = _spy
+
+    detail = await service.get_job_detail(_actor("u1"), "job-x")
+
+    assert refreshed_ids == []
+    assert detail["job"]["lastExecutionId"] == "EXEC-NEXT"
+    assert repo.jobs["job-x"]["lastExecutionStatus"] == "RUNNING"
+
+
+async def test_get_job_detail_only_rerun_executions_leaves_aggregate(env):
+    """仅剩重跑执行（作业执行行已删）时不强行对账，维持既有聚合值。"""
+    service, repo, _, _ = env
+    repo.jobs["job-x"] = _detail_job(
+        lastExecutionId="EXEC-R1", lastExecutionStatus="COMPLETED", lastRunAt="2026-10-21 09:51:00"
+    )
+    repo.save_execution(
+        _detail_execution("EXEC-R1", "COMPLETED", trigger="RERUN", started="2026-10-21 09:51:00")
+    )
+
+    detail = await service.get_job_detail(_actor("u1"), "job-x")
+
+    assert detail["job"]["lastExecutionStatus"] == "COMPLETED"
+
+
 async def test_delete_running_job_cancels_execution(env):
     """删除任务时终止运行中的执行：步间暂停落地后，孤儿挂起 workflow 会永远
     等不到恢复信号，任务行卡「执行中」——删除必须一并 cancel。"""

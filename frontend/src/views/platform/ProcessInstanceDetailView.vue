@@ -761,6 +761,19 @@ async function selectExecution(executionId: string) {
 // 选中的执行仍在运行时轮询刷新（重拉执行 + 任务详情），终态即停；
 // 页面切到后台时跳过本轮，避免不可见时白白打接口
 let execPollTimer: ReturnType<typeof setInterval> | null = null
+/** 执行离开运行态后补拉一次 job：顶部「执行状态」格取 job.lastExecutionStatus
+ *  （服务端 get_job_detail 按代表执行对账后的口径），不补拉则停留在开页时的
+ *  「运行中」直到手动刷新——与已终态的执行历史同屏矛盾。 */
+async function refreshJobAfterRun() {
+  if (!jobId.value) return
+  try {
+    const detail = await getJob(jobId.value)
+    job.value = detail.job
+    if (detail.executions?.length) jobExecutions.value = detail.executions
+  } catch {
+    // 拉取失败保持现值，下次进页面自会校正
+  }
+}
 watch(
   () => selectedExecution.value?.status === 'RUNNING',
   (running) => {
@@ -771,6 +784,7 @@ watch(
     } else if (!running && execPollTimer !== null) {
       clearInterval(execPollTimer)
       execPollTimer = null
+      void refreshJobAfterRun()
     }
   },
   { immediate: true },

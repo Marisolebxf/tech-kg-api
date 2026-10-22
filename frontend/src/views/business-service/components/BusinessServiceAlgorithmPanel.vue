@@ -4721,7 +4721,7 @@ function clearGraphSelection() {
         >
         <a-tooltip
           v-if="field.type === 'select' || field.type === 'boolean'"
-          position="top"
+          position="bottom"
           :content="field.description"
           :disabled="!field.description"
         >
@@ -4744,7 +4744,7 @@ function clearGraphSelection() {
         </a-tooltip>
         <a-tooltip
           v-else-if="field.name === 'achievementTypes'"
-          position="top"
+          position="bottom"
           :content="field.description"
           :disabled="!field.description"
         >
@@ -4773,7 +4773,7 @@ function clearGraphSelection() {
         </a-tooltip>
         <a-tooltip
           v-else-if="field.name === 'relationTypes'"
-          position="top"
+          position="bottom"
           :content="field.description"
           :disabled="!field.description"
         >
@@ -4825,7 +4825,7 @@ function clearGraphSelection() {
         </ElSelect>
         <a-tooltip
           v-else-if="field.type === 'month'"
-          position="top"
+          position="bottom"
           :content="field.description"
           :disabled="!field.description"
         >
@@ -4855,7 +4855,7 @@ function clearGraphSelection() {
         </a-tooltip>
         <div v-else class="service-console__input-wrap">
           <a-tooltip
-            position="top"
+            position="bottom"
             :content="field.description"
             :disabled="!field.description"
           >

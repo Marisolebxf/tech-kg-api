@@ -1152,9 +1152,10 @@ onMounted(() => {
 .ops-review-table-scroll:hover::-webkit-scrollbar-thumb,.ops-review-table-scroll.review-scroll--active::-webkit-scrollbar-thumb{background-color:rgba(78,89,105,.55)}
 .ops-review-table-scroll::-webkit-scrollbar-thumb:hover{background-color:rgba(78,89,105,.8)}
 /* 类型徽标 / 勾选禁用态 / 删除按钮 */
-/* 处理实例 ID 纯文本：字体随表格（去掉 code 默认等宽/字号），中性色区别于可点击的链接蓝；
- * 悬停气泡与待处理对象列一致，用 a-tooltip 默认样式 */
-.review-id-cell .review-id-plain{color:#4e5969;font-family:inherit;font-size:inherit;line-height:inherit}
+/* 处理实例 ID 纯文本：字体随表格（去掉 code 默认等宽/字号；size 需 !important 反压
+ * .app-workspace :where(code) 的 12px 全局规则，与待处理对象列同为 14px），
+ * 中性色区别于可点击的链接蓝；悬停气泡与待处理对象列一致，用 a-tooltip 默认样式 */
+.review-id-cell .review-id-plain{color:#4e5969;font-family:inherit;font-size:inherit !important;line-height:inherit !important}
 .review-kind-badge{display:inline-flex;white-space:nowrap;padding:0 8px;border-radius:4px;background:#f2f3f5;color:#4e5969;font-size:12px;line-height:20px}
 .review-kind-badge.is-实体{background:#eaf2ff;color:#175cd3}
 .review-kind-badge.is-关系{background:#fff3d8;color:#b54708}

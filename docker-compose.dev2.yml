@@ -131,7 +131,7 @@ services:
       AUTH_SESSION_COOKIE: ${AUTH_SESSION_COOKIE:-techkg_session}
       USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED: ${USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED:-false}
       USER_CENTER_PORTAL_TOKEN_COOKIE: ${USER_CENTER_PORTAL_TOKEN_COOKIE:-access_token}
-      USER_CENTER_OPEN_API_BASE_URL: ${USER_CENTER_OPEN_API_BASE_URL:-https://edu.itic-sci.com/uc/open-api/system}
+      USER_CENTER_OPEN_API_BASE_URL: ${USER_CENTER_OPEN_API_BASE_URL:-${BASE_URL:-https://edu.itic-sci.com}/uc/open-api/system}
       USER_CENTER_PORTAL_ADMIN_ENABLED: ${USER_CENTER_PORTAL_ADMIN_ENABLED:-true}
       USER_CENTER_PORTAL_ROLE_CACHE_TTL_SECONDS: ${USER_CENTER_PORTAL_ROLE_CACHE_TTL_SECONDS:-60}
       AUTH_SESSION_TTL_SECONDS: ${AUTH_SESSION_TTL_SECONDS:-604800}
@@ -141,13 +141,13 @@ services:
       AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-true}
       AUTH_COOKIE_SAMESITE: ${AUTH_COOKIE_SAMESITE:-lax}
       AUTH_COOKIE_PATH: ${AUTH_COOKIE_PATH:-/bkg_zpt}
-      AUTH_FRONTEND_URL: ${AUTH_FRONTEND_URL:-https://edu.itic-sci.com/bkg_zpt}
-      USER_CENTER_SSO_LOGIN_URL: ${USER_CENTER_SSO_LOGIN_URL:-https://edu.itic-sci.com/uc/sso/login}
-      USER_CENTER_OAUTH_BASE_URL: ${USER_CENTER_OAUTH_BASE_URL:-https://edu.itic-sci.com/uc/admin-api/system/oauth2}
-      USER_CENTER_ACCOUNT_URL: ${USER_CENTER_ACCOUNT_URL:-https://edu.itic-sci.com/uc/admin/login?redirect=/index}
+      AUTH_FRONTEND_URL: ${AUTH_FRONTEND_URL:-${BASE_URL:-https://edu.itic-sci.com}/bkg_zpt}
+      USER_CENTER_SSO_LOGIN_URL: ${USER_CENTER_SSO_LOGIN_URL:-${BASE_URL:-https://edu.itic-sci.com}/uc/sso/login}
+      USER_CENTER_OAUTH_BASE_URL: ${USER_CENTER_OAUTH_BASE_URL:-${BASE_URL:-https://edu.itic-sci.com}/uc/admin-api/system/oauth2}
+      USER_CENTER_ACCOUNT_URL: ${USER_CENTER_ACCOUNT_URL:-${BASE_URL:-https://edu.itic-sci.com}/uc/admin/login?redirect=/index}
       USER_CENTER_CLIENT_ID: ${USER_CENTER_CLIENT_ID:-}
       USER_CENTER_CLIENT_SECRET: ${USER_CENTER_CLIENT_SECRET:-}
-      USER_CENTER_REDIRECT_URI: ${USER_CENTER_REDIRECT_URI:-https://edu.itic-sci.com/bkg_zpt/api/v1/auth/callback}
+      USER_CENTER_REDIRECT_URI: ${USER_CENTER_REDIRECT_URI:-${BASE_URL:-https://edu.itic-sci.com}/bkg_zpt/api/v1/auth/callback}
       USER_CENTER_SCOPE: ${USER_CENTER_SCOPE:-}
       REDIS_URL: ${REDIS_URL:-redis://auth-redis:6379/0}
       # ==== ES 实体关键词检索（#502 查询侧 + #506 随环增量）====
@@ -264,8 +264,8 @@ services:
       TRS_GRAPH_SPACE: ${TRS_GRAPH_SPACE:-dev2}
       AUTH_ENABLED: ${AUTH_ENABLED:-true}
       ADMIN_EXAMPLE_FALLBACK: ${ADMIN_EXAMPLE_FALLBACK:-false}
-      PORTAL_ALLOWED_ORIGINS: ${PORTAL_ALLOWED_ORIGINS:-https://edu.itic-sci.com}
-      PORTAL_TARGET_ORIGIN: ${PORTAL_TARGET_ORIGIN:-https://edu.itic-sci.com}
+      PORTAL_ALLOWED_ORIGINS: ${PORTAL_ALLOWED_ORIGINS:-${BASE_URL:-https://edu.itic-sci.com}}
+      PORTAL_TARGET_ORIGIN: ${PORTAL_TARGET_ORIGIN:-${BASE_URL:-https://edu.itic-sci.com}}
     volumes:
       # 覆盖镜像内 nginx 模板（upstream 指向 api-dev2 而非生产的 api）。
       # 必须挂到 templates/ 供 20-envsubst 渲染——直挂 conf.d 只读文件会让
@@ -290,6 +290,9 @@ services:
       TRS_GRAPH_SPACE: ${TRS_GRAPH_SPACE:-dev2}
       AUTH_ENABLED: ${AUTH_ENABLED:-true}
       ADMIN_EXAMPLE_FALLBACK: ${ADMIN_EXAMPLE_FALLBACK:-false}
+      # 根路径实例不被门户嵌入：CSP 模板引用此变量，给空值=frame-ancestors 仅 'self'。
+      # 必须显式定义——20-envsubst 只替换已定义变量，缺省会留下字面 ${...} 导致 nginx -t 失败。
+      PORTAL_ALLOWED_ORIGINS: ""
     volumes:
       - ./frontend/nginx.dev2.conf:/etc/nginx/templates/default.conf.template:ro
     depends_on:

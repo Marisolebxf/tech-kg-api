@@ -168,8 +168,23 @@ function navIconStyle(icon: string) {
 }
 
 function refreshSubNavOverflow() {
-  document.querySelectorAll<HTMLElement>('.app-nav__marquee').forEach((wrap) => {
-    wrap.title = wrap.textContent?.trim() ?? '';
+  const wraps = document.querySelectorAll<HTMLElement>(".app-nav__marquee");
+  wraps.forEach((wrap) => {
+    const label = wrap.querySelector<HTMLElement>(".app-nav__marquee-label");
+    if (!label) return;
+    const overflow = Math.ceil(label.scrollWidth - wrap.clientWidth);
+    if (overflow > 1) {
+      const pixelsPerSecond = 24;
+      const movingPart = 0.8;
+      const duration = overflow / (pixelsPerSecond * movingPart);
+      wrap.classList.add("is-overflowing");
+      wrap.style.setProperty("--sub-scroll-distance", `-${overflow + 1}px`);
+      wrap.style.setProperty("--marquee-duration", `${duration.toFixed(2)}s`);
+    } else {
+      wrap.classList.remove("is-overflowing");
+      wrap.style.removeProperty("--sub-scroll-distance");
+      wrap.style.removeProperty("--marquee-duration");
+    }
   });
 }
 
@@ -1018,15 +1033,13 @@ onBeforeUnmount(() => {
 }
 
 .app-nav__sub-label {
-  display: block;
-  flex: 1 1 auto;
+  display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
-  height: auto;
+  height: 100%;
   line-height: 22px;
   white-space: nowrap;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  will-change: transform;
 }
 
 .app-nav__service-title {
@@ -1038,14 +1051,29 @@ onBeforeUnmount(() => {
 }
 
 .app-nav__service-title-label {
-  display: block;
-  flex: 1 1 auto;
+  display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
-  height: auto;
+  height: 100%;
   white-space: nowrap;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  will-change: transform;
+}
+
+.app-nav__marquee.is-overflowing:hover .app-nav__marquee-label,
+.app-nav__item:focus-visible .app-nav__marquee.is-overflowing .app-nav__marquee-label {
+  animation: app-nav-marquee var(--marquee-duration, 5s) linear infinite alternate;
+}
+
+@keyframes app-nav-marquee {
+  0%, 10% { transform: translateX(0); }
+  90%, 100% { transform: translateX(var(--sub-scroll-distance, 0)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-nav__marquee.is-overflowing:hover .app-nav__marquee-label,
+  .app-nav__item:focus-visible .app-nav__marquee.is-overflowing .app-nav__marquee-label {
+    animation: none;
+  }
 }
 
 .app-nav__service-group {

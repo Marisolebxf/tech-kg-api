@@ -22,8 +22,19 @@ from service.platform_access import ADMIN_ROLE, PORTAL_ROLE_SNAPSHOT
 def bind(session: Session, plan: dict, settings: AuthSettings, *, apply: bool = False) -> dict:
     if not settings.enabled or not settings.portal_developer_role_codes:
         raise ValueError("请启用真实认证并配置 USER_CENTER_PORTAL_DEVELOPER_ROLE_CODES")
-    if not isinstance(plan, dict) or set(plan) != {"businesses", "members"}:
-        raise ValueError("计划只接受 businesses 和 members")
+    if (
+        not isinstance(plan, dict)
+        or not {"businesses", "members"} <= set(plan)
+        or set(plan) - {"businesses", "members", "userCenterOpenApiBaseUrl"}
+    ):
+        raise ValueError("计划需要 businesses、members，可选 userCenterOpenApiBaseUrl")
+    if "userCenterOpenApiBaseUrl" in plan:
+        expected = plan["userCenterOpenApiBaseUrl"]
+        actual = settings.user_center_open_api_base_url or (
+            f"{settings.user_center_base_url.split('/admin-api/', 1)[0]}/open-api/system"
+        )
+        if not isinstance(expected, str) or expected.rstrip("/") != actual.rstrip("/"):
+            raise ValueError("计划与当前用户中心环境不一致，禁止跨环境绑定")
     businesses, members = plan["businesses"], plan["members"]
     if not isinstance(businesses, list) or not isinstance(members, list) or not members:
         raise ValueError("businesses 和 members 必须为列表，成员不能为空")
@@ -52,14 +63,34 @@ def bind(session: Session, plan: dict, settings: AuthSettings, *, apply: bool = 
         if same_name and same_name.client_id != cid:
             raise ValueError(f"业务名称 {name} 已对应其他编号，请沿用现有编号")
     users = set()
+    resolved_members = []
     for member in members:
-        if not isinstance(member, dict) or set(member) != {"userId", "username", "clientId"}:
-            raise ValueError("成员需要 userId、username 和 clientId")
-        uid = member["userId"]
+        if not isinstance(member, dict) or set(member) not in (
+            {"userId", "username", "clientId"},
+            {"username", "clientId"},
+        ):
+            raise ValueError("成员需要 username 和 clientId，userId 可选")
+        username = member["username"]
+        if not isinstance(username, str) or not username.strip():
+            raise ValueError("成员账号不能为空")
+        if "userId" in member:
+            uid = member["userId"]
+            if not isinstance(uid, str) or not uid:
+                raise ValueError("用户编号无效")
+            user = session.get(PlatformUser, uid)
+        else:
+            matches = list(
+                session.scalars(select(PlatformUser).where(PlatformUser.username == username))
+            )
+            # MySQL 可能使用不区分大小写的排序规则，仍按完整账号精确匹配。
+            matches = [user for user in matches if user.username == username]
+            if len(matches) != 1:
+                raise ValueError("目标实例必须存在唯一的完整账号，请先登录子系统并核对账号")
+            user = matches[0]
+            uid = user.user_id
         if not isinstance(uid, str) or not uid or uid in users:
             raise ValueError("用户编号无效/重复")
         users.add(uid)
-        user = session.get(PlatformUser, uid)
         if not user or user.username != member["username"]:
             raise ValueError(f"用户 {uid} 与计划账号不一致，请先在目标实例登录核验")
         if member["clientId"] not in business_ids:
@@ -85,6 +116,7 @@ def bind(session: Session, plan: dict, settings: AuthSettings, *, apply: bool = 
                 bound.add(legacy.client_id)
         if bound - {member["clientId"]}:
             raise ValueError(f"用户 {uid} 已绑定其他业务，本工具不隐式转移")
+        resolved_members.append({**member, "userId": uid})
     # 使用部署实例的签名凭据验证门户角色；接口不兼容或角色未授权时不写任何记录。
     client = UserCenterClient(settings)
     portal_users = set()
@@ -98,7 +130,7 @@ def bind(session: Session, plan: dict, settings: AuthSettings, *, apply: bool = 
             if session.get(BusinessClient, business["clientId"]) is None:
                 session.add(BusinessClient(client_id=business["clientId"], name=business["name"]))
         session.flush()
-        for member in members:
+        for member in resolved_members:
             uid, cid = member["userId"], member["clientId"]
             if session.get(BusinessMembershipState, uid) is None:
                 session.add(BusinessMembershipState(user_id=uid))
@@ -110,7 +142,7 @@ def bind(session: Session, plan: dict, settings: AuthSettings, *, apply: bool = 
     return {
         "applied": apply,
         "businesses": businesses,
-        "members": members,
+        "members": resolved_members,
         "graphSpacesChanged": False,
         "legacyMembershipsChanged": False,
     }

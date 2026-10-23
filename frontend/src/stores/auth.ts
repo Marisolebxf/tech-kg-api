@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { currentSessionVersion, invalidateSessionVersion } from "../auth/sessionVersion";
 import { useGraphSpaceStore } from "./graphSpace";
+import { useToast } from "../composables/use-toast";
 
 import {
   getCurrentProfile,
@@ -34,6 +35,7 @@ export const useAuthStore = defineStore("auth", {
     loggingOut: false,
     skipSilentLogin: false,
     sessionExpired: false,
+    bindingNoticeUserId: "",
   }),
   getters: {
     isAuthenticated: (state) => state.profile !== null,
@@ -50,6 +52,22 @@ export const useAuthStore = defineStore("auth", {
     isAdmin: (state) => Boolean(state.profile?.isAdmin) && !state.profile?.businessOnly,
   },
   actions: {
+    notifyBusinessBinding(profile: AuthProfile): void {
+      if (
+        !profile.developerBusinessBindingRequired ||
+        profile.isAdmin || profile.businessOnly || profile.canDevelop
+      ) {
+        this.bindingNoticeUserId = "";
+        return;
+      }
+      const userId = String(profile.user.id);
+      if (this.bindingNoticeUserId === userId) return;
+      this.bindingNoticeUserId = userId;
+      useToast().showToast(
+        "您已获得门户开发人员身份，但尚未绑定可开发的业务，请联系管理员为您绑定业务。",
+        "warning",
+      );
+    },
     invalidate(expired = false): void {
       invalidateSessionVersion();
       profileLoads.delete(this);
@@ -57,6 +75,7 @@ export const useAuthStore = defineStore("auth", {
       this.initialized = true;
       this.loading = false;
       this.sessionExpired = expired;
+      this.bindingNoticeUserId = "";
       useGraphSpaceStore().reset();
     },
     async loadCurrentUser(force = false): Promise<AuthProfile | null> {
@@ -73,6 +92,7 @@ export const useAuthStore = defineStore("auth", {
           this.profile = profile;
           this.sessionExpired = false;
           useGraphSpaceStore().bindUser(String(profile.user?.id ?? ""));
+          this.notifyBusinessBinding(profile);
           return profile;
         } catch (error) {
           if (version !== currentSessionVersion()) return null;
@@ -104,6 +124,7 @@ export const useAuthStore = defineStore("auth", {
       this.profile = profile;
       this.sessionExpired = false;
       useGraphSpaceStore().bindUser(String(profile.user?.id ?? ""));
+      this.notifyBusinessBinding(profile);
       this.initialized = true;
       return profile;
     },

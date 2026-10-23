@@ -120,18 +120,47 @@ def profile(user_id):
 def test_portal_developer_needs_local_business_binding(db, directory):
     _, state, _ = directory
     state.users.add("plain")
-    assert profile("plain").can_develop is False
+    unbound = profile("plain")
+    assert unbound.can_develop is False
+    assert unbound.developer_business_binding_required is True
+    assert unbound.model_dump(by_alias=True)["developerBusinessBindingRequired"] is True
     result = profile("dev")
     assert result.platform_role == "developer"
     assert result.can_develop and not result.is_admin
     assert result.developer_business_ids == ["a"]
     assert "member:manage" not in result.platform_permissions
+    assert result.developer_business_binding_required is False
+
+
+def test_binding_notice_does_not_grant_access_and_clears_after_binding(db, directory):
+    _, state, _ = directory
+    state.users.add("plain")
+    assert profile("plain").developer_business_binding_required
+    db.add(BusinessMember(user_id="plain", client_id="a", role="developer"))
+    db.commit()
+    result = profile("plain")
+    assert result.can_develop and not result.developer_business_binding_required
+
+
+def test_no_binding_notice_for_ordinary_admin_or_capped_account(db, monkeypatch):
+    assert not profile("plain").developer_business_binding_required
+    assert not profile("admin").developer_business_binding_required
+    monkeypatch.setenv("PLATFORM_BUSINESS_ONLY_USER_IDS", "dev")
+    assert not profile("dev").developer_business_binding_required
+
+
+def test_unavailable_portal_does_not_mislabel_unbound_user_or_block_public_login(db, directory):
+    _, state, _ = directory
+    state.failure = True
+    result = profile("plain")
+    assert not result.developer_business_binding_required and not result.can_develop
 
 
 def test_local_user_binding_is_not_upgraded_by_portal_role(db, directory):
     db.get(BusinessMember, "dev").role = "user"
     db.commit()
     assert profile("dev").can_develop is False
+    assert profile("dev").developer_business_binding_required is True
 
 
 def test_new_team_has_public_read_only_until_spaces_are_assigned(db):
@@ -223,6 +252,7 @@ def test_expired_directory_error_does_not_reuse_admin_or_developer(directory):
 def test_unconfigured_environment_preserves_local_developers(db, monkeypatch):
     monkeypatch.setenv("USER_CENTER_PORTAL_DEVELOPER_ROLE_CODES", "")
     assert profile("dev").can_develop
+    assert not profile("plain").developer_business_binding_required
 
 
 def test_role_configuration_is_normalized_and_opt_in(monkeypatch):

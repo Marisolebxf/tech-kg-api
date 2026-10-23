@@ -1,8 +1,9 @@
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { getCurrentProfile, logoutCurrentSession, refreshCurrentSession, type AuthProfile } from '../api/auth'
 import { useAuthStore } from './auth'
+import { useToast } from '../composables/use-toast'
 
 vi.mock('../api/auth', () => ({
   getCurrentProfile: vi.fn(), getLoginUrl: vi.fn(),
@@ -22,6 +23,60 @@ function deferred<T>() {
 beforeEach(() => {
   setActivePinia(createPinia())
   vi.resetAllMocks()
+})
+
+afterEach(() => {
+  const { toasts, dismissToast } = useToast()
+  for (const toast of [...toasts.value]) dismissToast(toast.id)
+})
+
+describe('未绑定业务登录提示', () => {
+  const unbound = { ...profile, developerBusinessBindingRequired: true }
+
+  it('首次登录提示，路由重新校验和会话刷新不重复，仍保持普通权限', async () => {
+    const store = useAuthStore()
+    vi.mocked(getCurrentProfile).mockResolvedValue(unbound)
+    vi.mocked(refreshCurrentSession).mockResolvedValue(unbound)
+    await store.loadCurrentUser(true)
+    await store.loadCurrentUser(true)
+    await store.refresh()
+    expect(useToast().toasts.value.map(item => [item.message, item.tone])).toEqual([
+      ['您已获得门户开发人员身份，但尚未绑定可开发的业务，请联系管理员为您绑定业务。', 'warning'],
+    ])
+    expect(store.isAuthenticated).toBe(true)
+    expect(store.canDevelop).toBe(false)
+    expect(store.isAdmin).toBe(false)
+  })
+
+  it('重新登录会再次提示；完成绑定后停止提示', async () => {
+    const store = useAuthStore()
+    vi.mocked(getCurrentProfile).mockResolvedValue(unbound)
+    await store.loadCurrentUser(true)
+    store.invalidate()
+    await store.loadCurrentUser(true)
+    expect(useToast().toasts.value).toHaveLength(2)
+    vi.mocked(getCurrentProfile).mockResolvedValue({ ...profile, canDevelop: true, businessRbacEnabled: true })
+    await store.loadCurrentUser(true)
+    expect(useToast().toasts.value).toHaveLength(2)
+    expect(store.canDevelop).toBe(true)
+  })
+
+  it.each([profile, { ...unbound, isAdmin: true }, { ...unbound, businessOnly: true }])('普通用户、管理员和受限账号不提示', async (value) => {
+    vi.mocked(getCurrentProfile).mockResolvedValue(value)
+    await useAuthStore().loadCurrentUser(true)
+    expect(useToast().toasts.value).toEqual([])
+  })
+
+  it('不会用退出登录后才返回的旧身份弹出提示', async () => {
+    const store = useAuthStore()
+    const response = deferred<AuthProfile>()
+    vi.mocked(getCurrentProfile).mockReturnValue(response.promise)
+    const pending = store.loadCurrentUser(true)
+    store.invalidate()
+    response.resolve(unbound)
+    await pending
+    expect(useToast().toasts.value).toEqual([])
+  })
 })
 
 describe('session state recovery', () => {

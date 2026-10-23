@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
+
+from fastapi import HTTPException
 
 from biz.schemas.auth import AccountSecurityData, AuthProfile, OperationLogPage
 from config.auth import AuthSettings
@@ -10,6 +13,8 @@ from infra.redis import AsyncJsonStore, get_json_store
 from infra.user_center import UserCenterClient
 from service.auth import AuthContext, AuthService
 from service.platform_access import PlatformActor, actor_from_profile
+
+logger = logging.getLogger(__name__)
 
 
 class AuthApplication:
@@ -81,6 +86,25 @@ class AuthApplication:
         profile.business_only = str(profile.user.id) in self.settings.business_only_user_ids
         if profile.business_only:
             profile.platform_permissions = ["business:read"]
+        if (
+            self.settings.enabled
+            and self.settings.portal_developer_role_codes
+            and profile.business_rbac_enabled
+            and not actor.is_admin
+            and not actor.business_only
+            and not actor.developer_business_ids
+        ):
+            from service.portal_developer import portal_allows_development
+
+            try:
+                profile.developer_business_binding_required = portal_allows_development(
+                    actor.user_id
+                )
+            except HTTPException as exc:
+                if exc.status_code != 503:
+                    raise
+                # 此处仅补充登录提示；查询失败不误报缺少绑定，也不授予开发权限。
+                logger.warning("门户开发人员身份暂不可核验，略过未绑定业务提示")
         return profile
 
     def platform_actor(self, context: AuthContext) -> PlatformActor:

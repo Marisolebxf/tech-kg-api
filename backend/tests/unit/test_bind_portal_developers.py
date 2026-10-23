@@ -110,3 +110,42 @@ def test_existing_business_name_conflict_rejected(db):
     db.commit()
     with pytest.raises(ValueError, match="沿用现有编号"):
         bind(db, PLAN, settings(), apply=True)
+
+
+def test_username_only_plan_resolves_target_database_id_without_changing_input(db):
+    plan = deepcopy(PLAN)
+    del plan["members"][0]["userId"]
+    report = bind(db, plan, settings(), apply=True)
+    db.commit()
+    assert report["members"][0]["userId"] == "213"
+    assert "userId" not in plan["members"][0]
+    assert db.get(BusinessMembership, ("213", "team-a")).role == "developer"
+
+
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_username_only_plan_requires_unique_registered_account(db, duplicate):
+    plan = deepcopy(PLAN)
+    del plan["members"][0]["userId"]
+    if duplicate:
+        db.add(PlatformUser(user_id="other", username=plan["members"][0]["username"]))
+    else:
+        db.delete(db.get(PlatformUser, "213"))
+    db.commit()
+    with pytest.raises(ValueError, match="唯一"):
+        bind(db, plan, settings(), apply=True)
+    assert db.get(BusinessClient, "team-a") is None
+
+
+def test_plan_cannot_be_applied_to_another_user_center(db):
+    plan = {**PLAN, "userCenterOpenApiBaseUrl": "https://target.test/uc/open-api/system"}
+    with pytest.raises(ValueError, match="跨环境"):
+        bind(
+            db,
+            plan,
+            settings(user_center_open_api_base_url="https://other.test/uc/open-api/system"),
+            apply=True,
+        )
+    assert db.get(BusinessClient, "team-a") is None
+    assert not bind(
+        db, plan, settings(user_center_open_api_base_url=plan["userCenterOpenApiBaseUrl"] + "/")
+    )["applied"]

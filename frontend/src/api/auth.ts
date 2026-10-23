@@ -59,6 +59,7 @@ export interface AuthProfile {
   businesses?: Array<{ clientId: string; name: string; role: string }>
   platformRole?: 'user' | 'developer' | 'admin'
   canDevelop?: boolean
+  developerBusinessBindingRequired?: boolean
   businessOnly?: boolean
   user: UserProfile;
   roles: RoleSummary[];

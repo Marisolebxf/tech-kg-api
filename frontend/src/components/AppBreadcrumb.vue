@@ -34,14 +34,13 @@ function goBack() {
 <template>
   <nav class="app-breadcrumb" aria-label="当前位置">
     <!-- 行首「<」返回：应用内原路返回；深链直达时回最近一级上级 -->
-    <button
-      v-if="showBack"
-      class="app-breadcrumb__back"
-      type="button"
-      :title="backTitle"
-      :aria-label="backTitle"
-      @click="goBack"
-    >
+    <a-tooltip v-if="showBack" position="bottom" :content="backTitle">
+      <button
+        class="app-breadcrumb__back"
+        type="button"
+        :aria-label="backTitle"
+        @click="goBack"
+      >
       <svg
         viewBox="0 0 16 16"
         aria-hidden="true"
@@ -53,7 +52,8 @@ function goBack() {
       >
         <path d="M10 3.5 5.5 8l4.5 4.5" />
       </svg>
-    </button>
+      </button>
+    </a-tooltip>
     <span v-if="showBack" class="app-breadcrumb__divider" aria-hidden="true"></span>
     <template v-for="(item, index) in crumbs" :key="`${item.label}-${index}`">
       <span v-if="index > 0" class="app-breadcrumb__separator" aria-hidden="true">/</span>

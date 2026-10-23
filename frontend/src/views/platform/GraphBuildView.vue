@@ -488,10 +488,13 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
               </td>
               <td>{{ job.graphSpace || '归属待确认' }}</td>
               <td>
-                <span
+                <a-tooltip
                   v-if="job.schedule.kind === 'cron'"
-                  :title="`cron ${job.schedule.cron}`"
-                >{{ describeCron(job.schedule.cron ?? '') }}</span>
+                  position="top"
+                  :content="`cron ${job.schedule.cron}`"
+                >
+                  <span>{{ describeCron(job.schedule.cron ?? '') }}</span>
+                </a-tooltip>
                 <span v-else>单次</span>
               </td>
               <td>
@@ -522,7 +525,9 @@ const publicSpaceReadOnly = computed(() => Boolean(spaces.currentItem && (spaces
                     @click="action.run()"
                   >{{ action.label }}</button>
                   <a-dropdown v-if="overflowJobActions(job).length" trigger="click" position="bl">
-                    <button type="button" class="gb-action-link gb-action-more" :aria-label="`${job.name}更多操作`" title="更多操作">···</button>
+                    <a-tooltip position="top" content="更多操作">
+                      <button type="button" class="gb-action-link gb-action-more" :aria-label="`${job.name}更多操作`">···</button>
+                    </a-tooltip>
                     <template #content>
                       <a-doption
                         v-for="action in overflowJobActions(job)"

@@ -162,91 +162,96 @@ function applyColumnDefaults() {
 
 <template>
   <div class="source-binding-row">
-    <a-select allow-clear
-      :model-value="row.datasourceId"
-      class="source-binding-row__select source-binding-row__ds"
-      :title="dsLabel(row.datasourceId)"
-      placeholder="数据源"
-      allow-search
-      :loading="false"
-      :disabled="readonly"
-      popup-container=".schema-modal"
-      @change="onDatasourceChange"
-    >
-      <a-option v-for="ds in datasources" :key="ds.id" :value="ds.id" :label="`${ds.name}（${ds.host}）`" :disabled="ds.status === '停用'" :title="ds.status === '停用' ? `${ds.name}（${ds.host}）已停用，启用后才能选择` : `${ds.name}（${ds.host}）`">
-        {{ ds.name }}（{{ ds.host }}）
-      </a-option>
-    </a-select>
-    <a-select allow-clear
-      :model-value="row.databaseName"
-      class="source-binding-row__select source-binding-row__db"
-      :title="row.databaseName"
-      placeholder="库"
-      allow-search
-      :loading="loadingDatabases"
-      :disabled="readonly || !row.datasourceId"
-      popup-container=".schema-modal"
-      @change="onDatabaseChange"
-    >
-      <a-option v-for="db in databases" :key="db" :value="db" :title="db">{{ db }}</a-option>
-    </a-select>
-    <a-select allow-clear
-      :model-value="row.tableName"
-      class="source-binding-row__select source-binding-row__table"
-      :title="row.tableName"
-      placeholder="表"
-      allow-search
-      :loading="loadingTables"
-      :disabled="readonly || !row.databaseName"
-      popup-container=".schema-modal"
-      @change="onTableChange"
-    >
-      <a-option v-for="t in tables" :key="t.name" :value="t.name" :title="t.name">{{ t.name }}</a-option>
-    </a-select>
-    <a-select allow-clear
-      :model-value="row.pkColumn"
-      class="source-binding-row__select source-binding-row__col"
-      :title="row.pkColumn"
-      placeholder="主键列"
-      allow-search
-      :loading="loadingColumns"
-      :disabled="readonly || !row.tableName"
-      popup-container=".schema-modal"
-      @change="(value) => patch({ pkColumn: asString(value) })"
-    >
-      <a-option v-for="c in columns" :key="c.name" :value="c.name" :title="c.name">{{ c.name }}</a-option>
-    </a-select>
-    <a-select
-      :model-value="row.timeColumn"
-      class="source-binding-row__select source-binding-row__col"
-      :title="row.timeColumn"
-      placeholder="时间列（可空）"
-      allow-search
-      allow-clear
-      :loading="loadingColumns"
-      :disabled="readonly || !row.tableName"
-      popup-container=".schema-modal"
-      @change="(value) => patch({ timeColumn: asString(value) })"
-      @clear="() => patch({ timeColumn: '' })"
-    >
-      <a-option v-for="c in columns" :key="c.name" :value="c.name" :title="c.name">{{ c.name }}</a-option>
-    </a-select>
-    <button
-      v-if="removable"
-      type="button"
-      class="source-binding-row__remove"
-      title="移除该绑定"
-      :disabled="readonly"
-      @click="emit('remove')"
-    >
-      ×
-    </button>
+    <a-tooltip position="top" :content="dsLabel(row.datasourceId)" :disabled="!row.datasourceId" popup-container=".schema-modal">
+      <a-select allow-clear
+        :model-value="row.datasourceId"
+        class="source-binding-row__select source-binding-row__ds"
+        placeholder="数据源"
+        allow-search
+        :loading="false"
+        :disabled="readonly"
+        popup-container=".schema-modal"
+        @change="onDatasourceChange"
+      >
+        <a-option v-for="ds in datasources" :key="ds.id" :value="ds.id" :label="`${ds.name}（${ds.host}）`" :disabled="ds.status === '停用'" :title="ds.status === '停用' ? `${ds.name}（${ds.host}）已停用，启用后才能选择` : `${ds.name}（${ds.host}）`">
+          {{ ds.name }}（{{ ds.host }}）
+        </a-option>
+      </a-select>
+    </a-tooltip>
+    <a-tooltip position="top" :content="row.databaseName" :disabled="!row.databaseName" popup-container=".schema-modal">
+      <a-select allow-clear
+        :model-value="row.databaseName"
+        class="source-binding-row__select source-binding-row__db"
+        placeholder="库"
+        allow-search
+        :loading="loadingDatabases"
+        :disabled="readonly || !row.datasourceId"
+        popup-container=".schema-modal"
+        @change="onDatabaseChange"
+      >
+        <a-option v-for="db in databases" :key="db" :value="db" :title="db">{{ db }}</a-option>
+      </a-select>
+    </a-tooltip>
+    <a-tooltip position="top" :content="row.tableName" :disabled="!row.tableName" popup-container=".schema-modal">
+      <a-select allow-clear
+        :model-value="row.tableName"
+        class="source-binding-row__select source-binding-row__table"
+        placeholder="表"
+        allow-search
+        :loading="loadingTables"
+        :disabled="readonly || !row.databaseName"
+        popup-container=".schema-modal"
+        @change="onTableChange"
+      >
+        <a-option v-for="t in tables" :key="t.name" :value="t.name" :title="t.name">{{ t.name }}</a-option>
+      </a-select>
+    </a-tooltip>
+    <a-tooltip position="top" :content="row.pkColumn" :disabled="!row.pkColumn" popup-container=".schema-modal">
+      <a-select allow-clear
+        :model-value="row.pkColumn"
+        class="source-binding-row__select source-binding-row__col"
+        placeholder="主键列"
+        allow-search
+        :loading="loadingColumns"
+        :disabled="readonly || !row.tableName"
+        popup-container=".schema-modal"
+        @change="(value) => patch({ pkColumn: asString(value) })"
+      >
+        <a-option v-for="c in columns" :key="c.name" :value="c.name" :title="c.name">{{ c.name }}</a-option>
+      </a-select>
+    </a-tooltip>
+    <a-tooltip position="top" :content="row.timeColumn" :disabled="!row.timeColumn" popup-container=".schema-modal">
+      <a-select
+        :model-value="row.timeColumn"
+        class="source-binding-row__select source-binding-row__col"
+        placeholder="时间列（可空）"
+        allow-search
+        allow-clear
+        :loading="loadingColumns"
+        :disabled="readonly || !row.tableName"
+        popup-container=".schema-modal"
+        @change="(value) => patch({ timeColumn: asString(value) })"
+        @clear="() => patch({ timeColumn: '' })"
+      >
+        <a-option v-for="c in columns" :key="c.name" :value="c.name" :title="c.name">{{ c.name }}</a-option>
+      </a-select>
+    </a-tooltip>
+    <a-tooltip v-if="removable" position="top" content="移除该绑定" popup-container=".schema-modal">
+      <button
+        type="button"
+        class="source-binding-row__remove"
+        :disabled="readonly"
+        @click="emit('remove')"
+      >
+        ×
+      </button>
+    </a-tooltip>
   </div>
 </template>
 
 <style scoped>
 /* 列宽下限收窄（合计 546px ≤ 弹窗正文宽），行不再设 min-width——
-   窄屏不再整行横滚；超长名触发器内省略号，悬停 title 出全名（2026-10-10
+   窄屏不再整行横滚；超长名触发器内省略号，悬停 a-tooltip 气泡出全名（2026-10-10
    测试反馈「绑定来源表下面的左右滑块异常」，弃横向滚动改悬停看全） */
 .source-binding-row{display:grid;grid-template-columns:minmax(104px,1.1fr) minmax(88px,0.8fr) minmax(104px,1fr) minmax(78px,0.6fr) minmax(116px,0.8fr) 24px;gap:8px;align-items:center}
 .source-binding-row__select{min-width:0}

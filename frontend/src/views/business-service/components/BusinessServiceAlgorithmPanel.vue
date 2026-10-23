@@ -10,7 +10,7 @@ import { MonthPicker as AMonthPicker } from "@arco-design/web-vue";
 import { IconRefresh as AIconRefresh } from "@arco-design/web-vue/es/icon";
 import zhCN from "@arco-design/web-vue/es/locale/lang/zh-cn";
 import dayjs from "dayjs";
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 
 import {
   describeExpertAlumniRelation,
@@ -534,6 +534,28 @@ const achievementTypeSelection = computed<AchievementTypeOption[]>({
 });
 const liveResponse = ref<Record<string, any> | null>(null);
 const paramResetToken = ref(0);
+// 逐字段受控气泡显隐：悬停状态由各气泡自身事件回写（:popup-visible + @update:popupVisible）；
+// 该字段的下拉/日历面板展开期间强制隐藏，避免气泡压住选项/日期（原生 title 跟随光标不遮挡）。
+// 必须逐字段分账：共享一个状态会导致悬停 A 字段时其他字段的气泡同时弹出。
+// 也不用 a-tooltip 的 disabled：Arco Trigger 的 disabled 只拦「打开」，已展开的气泡不收起，
+// 连 mouseleave 都被短路，气泡会僵在原地（反而压住日期面板两侧）。
+const fieldTipHoverState: Record<string, boolean> = reactive({});
+const fieldPanelOpenNames = ref(new Set<string>());
+function fieldTipVisible(fieldName: string): boolean {
+  return Boolean(fieldTipHoverState[fieldName]) && !fieldPanelOpenNames.value.has(fieldName);
+}
+function setFieldTipVisible(fieldName: string, visible: boolean): void {
+  fieldTipHoverState[fieldName] = visible;
+}
+function setFieldPanelOpen(fieldName: string, open: boolean): void {
+  const next = new Set(fieldPanelOpenNames.value);
+  if (open) {
+    next.add(fieldName);
+  } else {
+    next.delete(fieldName);
+  }
+  fieldPanelOpenNames.value = next;
+}
 const selectedGraphNodeId = ref<string | null>(null);
 const selectedGraphEdgeId = ref<string | null>(null);
 const liveAlumniResult = ref<AlumniQueryResult | null>(null);
@@ -2567,6 +2589,12 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
         : summary.overlapDuration || "—";
     const relationConfidence =
       summary.relationConfidence ?? primary?.confidence;
+    // 实际发出的查询窗口：空结果时用户需要看到页面用了哪个时间段。
+    const colleagueReq = ((liveApiPayload.value as Record<string, any>)?.request ??
+      {}) as Record<string, string>;
+    const colleagueWindow = colleagueReq.start_time || colleagueReq.end_time
+      ? `${colleagueReq.start_time || "最早"} 至 ${colleagueReq.end_time || "最新"}`
+      : "未限定（全部时间段）";
     return [
       { label: "专家 A", value: summary.coreExpert || "—" },
       { label: "核心专家机构", value: summary.coreExpertOrganization || "—" },
@@ -2598,6 +2626,12 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
       {
         label: "关系判定",
         value: data.total ? "存在同事关系" : "不存在同事关系",
+      },
+      {
+        label: "查询时间窗口",
+        value: data.total
+          ? colleagueWindow
+          : `${colleagueWindow}（窗口内无共事记录，请核对起止月份）`,
       },
     ];
   }
@@ -4045,16 +4079,33 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         const error = identifierError(value);
         if (error) idErrors[field] = error;
       }
+      const startTime = optionalParam(parameterValues.value.start_time);
+      const endTime = optionalParam(parameterValues.value.end_time);
+      if (Boolean(startTime) !== Boolean(endTime)) {
+        if (!startTime) idErrors.start_time = "开始时间和结束时间必须同时填写";
+        if (!endTime) idErrors.end_time = "开始时间和结束时间必须同时填写";
+      }
+      if (startTime && endTime && startTime > endTime) {
+        idErrors.start_time = "开始时间不能晚于结束时间";
+        idErrors.end_time = "结束时间不能早于开始时间";
+      }
+      if (startTime && startTime > currentMonth) {
+        idErrors.start_time = "开始时间不能晚于当前月份";
+      }
+      if (endTime && endTime > currentMonth) {
+        idErrors.end_time = "结束时间不能晚于当前月份";
+      }
       if (Object.keys(idErrors).length) {
         parameterErrors.value = idErrors;
         showToast("请修正参数后再执行", "warning");
         return;
       }
       parameterErrors.value = {};
-      // 时间窗口参数已从页面移除；API 仍接受 start_time/end_time，此处不再传。
       const body = {
         expert_a_id: expertAId,
         expert_b_id: expertBId,
+        start_time: startTime,
+        end_time: endTime,
       };
       const res = await queryExpertColleagueRelation(body);
       if (
@@ -4089,10 +4140,15 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
         selectedGraphEdgeId.value = null;
         if (!total) {
           // 未命中同事关系也保留返回数据：摘要展示两位专家与"不存在同事关系"。
+          // toast 带上实际查询窗口：total=0 多数是月份选择落错年份导致窗口
+          // 没命中共事期，让用户第一时间看到页面到底用了哪个时间段。
           const now = new Date();
           lastTestTime.value = formatTimestamp(now);
           lastUpdateTime.value = now.getTime();
-          showToast("未查询到相关同事关系数据", "info");
+          const windowText = startTime || endTime
+            ? `（窗口 ${startTime || "最早"} 至 ${endTime || "最新"}）`
+            : "";
+          showToast(`未查询到相关同事关系数据${windowText}`, "info");
           resultMode.value = "summary";
           return;
         }
@@ -4719,72 +4775,96 @@ function clearGraphSelection() {
           ><i v-if="field.required === '是'">*</i
           >{{ field.label ?? field.name }}</span
         >
-        <ElSelect
-          :clear-icon="IconClose"
-          clearable
+        <a-tooltip
           v-if="field.type === 'select' || field.type === 'boolean'"
-          :key="`${field.name}-${paramResetToken}`"
-          class="service-console__select"
-          popper-class="business-parameter-options"
-          :fit-input-width="true"
-          :model-value="parameterValues[field.name] || undefined"
-          value-on-clear=""
-          :aria-label="field.label ?? field.name"
-          :aria-invalid="Boolean(parameterErrors[field.name])"
-          placeholder="请选择"
-          :title="field.description"
-          @update:model-value="handleParameterInput(field.name, $event)"
+          position="bottom"
+          :popup-visible="fieldTipVisible(field.name)"
+          @update:popupVisible="setFieldTipVisible(field.name, $event)"
+          :content="field.description"
+          :disabled="!field.description"
         >
-          <ElOption v-for="option in field.options" :key="option" :value="option" :label="option" />
-        </ElSelect>
-        <ElSelect
-          :clear-icon="IconClose"
+          <ElSelect
+            :clear-icon="IconClose"
+            clearable
+            :key="`${field.name}-${paramResetToken}`"
+            class="service-console__select"
+            popper-class="business-parameter-options"
+            :fit-input-width="true"
+            :model-value="parameterValues[field.name] || undefined"
+            value-on-clear=""
+            :aria-label="field.label ?? field.name"
+            :aria-invalid="Boolean(parameterErrors[field.name])"
+            placeholder="请选择"
+            @visible-change="setFieldPanelOpen(field.name, $event)"
+            @update:model-value="handleParameterInput(field.name, $event)"
+          >
+            <ElOption v-for="option in field.options" :key="option" :value="option" :label="option" />
+          </ElSelect>
+        </a-tooltip>
+        <a-tooltip
           v-else-if="field.name === 'achievementTypes'"
-          v-model="achievementTypeSelection"
-          class="cooperation-type-select"
-          popper-class="business-parameter-options"
-          :fit-input-width="true"
-          :data-empty="achievementTypeSelection.length === 0"
-          multiple
-          collapse-tags
-          :max-collapse-tags="1"
-          clearable
-          placeholder="留空为全部类型"
-          aria-label="成果类型"
-          :title="field.description"
-          @update:model-value="clearParameterError(field.name)"
+          position="bottom"
+          :popup-visible="fieldTipVisible(field.name)"
+          @update:popupVisible="setFieldTipVisible(field.name, $event)"
+          :content="field.description"
+          :disabled="!field.description"
         >
-          <ElOption
-            v-for="option in achievementTypeOptions"
-            :key="option.value"
-            :label="option.label"
-            :value="option.value"
-          />
-        </ElSelect>
-        <ElSelect
-          :clear-icon="IconClose"
+          <ElSelect
+            :clear-icon="IconClose"
+            v-model="achievementTypeSelection"
+            class="cooperation-type-select"
+            popper-class="business-parameter-options"
+            :fit-input-width="true"
+            :data-empty="achievementTypeSelection.length === 0"
+            multiple
+            collapse-tags
+            :max-collapse-tags="1"
+            clearable
+            placeholder="留空为全部类型"
+            aria-label="成果类型"
+            @visible-change="setFieldPanelOpen(field.name, $event)"
+            @update:model-value="clearParameterError(field.name)"
+          >
+            <ElOption
+              v-for="option in achievementTypeOptions"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
+          </ElSelect>
+        </a-tooltip>
+        <a-tooltip
           v-else-if="field.name === 'relationTypes'"
-          v-model="panoramaRelationSelection"
-          class="cooperation-type-select"
-          popper-class="business-parameter-options"
-          :fit-input-width="true"
-          :data-empty="panoramaRelationSelection.length === 0"
-          multiple
-          collapse-tags
-          :max-collapse-tags="1"
-          clearable
-          placeholder="留空为全部关系"
-          :aria-label="field.label ?? field.name"
-          :title="field.description"
-          @update:model-value="clearParameterError(field.name)"
+          position="bottom"
+          :popup-visible="fieldTipVisible(field.name)"
+          @update:popupVisible="setFieldTipVisible(field.name, $event)"
+          :content="field.description"
+          :disabled="!field.description"
         >
-          <ElOption
-            v-for="option in PANORAMA_RELATION_TYPES"
-            :key="option.value"
-            :label="option.label"
-            :value="option.value"
-          />
-        </ElSelect>
+          <ElSelect
+            :clear-icon="IconClose"
+            v-model="panoramaRelationSelection"
+            class="cooperation-type-select"
+            popper-class="business-parameter-options"
+            :fit-input-width="true"
+            :data-empty="panoramaRelationSelection.length === 0"
+            multiple
+            collapse-tags
+            :max-collapse-tags="1"
+            clearable
+            placeholder="留空为全部关系"
+            @visible-change="setFieldPanelOpen(field.name, $event)"
+            :aria-label="field.label ?? field.name"
+            @update:model-value="clearParameterError(field.name)"
+          >
+            <ElOption
+              v-for="option in PANORAMA_RELATION_TYPES"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
+          </ElSelect>
+        </a-tooltip>
         <ElSelect
           :clear-icon="IconClose"
           v-else-if="field.name === 'educationStage' && isLiveAlumni"
@@ -4808,47 +4888,60 @@ function clearGraphSelection() {
             :value="stage.value"
           />
         </ElSelect>
-        <AMonthPicker
+        <a-tooltip
           v-else-if="field.type === 'month'"
-          :key="`${field.name}-${paramResetToken}`"
-          :model-value="parameterValues[field.name] || ''"
-          class="service-console__month-picker"
-          :trigger-props="{ contentClass: 'business-month-options', autoFitPosition: true, autoFitPopupWidth: true }"
-          format="YYYY年MM月"
-          value-format="YYYY-MM"
-          :placeholder="field.placeholder ?? '请选择年月'"
-          allow-clear
-          disabled-input
-          :locale="zhCN"
-          :title="field.description"
-          :aria-label="field.name"
-          :disabled-date="
-            isLiveColleague ||
-            isExpertDirect ||
-            isLiveCoop ||
-            isPaperCooperation
-              ? disableFutureMonth
-              : undefined
-          "
-          :error="Boolean(parameterErrors[field.name])"
-          @update:model-value="handleMonthParameterInput(field.name, $event)"
-        />
-        <div v-else class="service-console__input-wrap">
-          <ClearableInput
-            :aria-label="field.label ?? field.name"
-            type="text"
+          position="bottom"
+          :popup-visible="fieldTipVisible(field.name)"
+          @update:popupVisible="setFieldTipVisible(field.name, $event)"
+          :content="field.description"
+          :disabled="!field.description"
+        >
+          <AMonthPicker
             :key="`${field.name}-${paramResetToken}`"
-            :value="parameterValues[field.name] ?? ''"
-            :placeholder="field.placeholder ?? field.description"
-            :title="field.description"
-            :aria-invalid="Boolean(parameterErrors[field.name])"
-            :maxlength="
-              liveValidationFieldNames.includes(field.name)
-                ? undefined
-                : field.maxLength
+            :model-value="parameterValues[field.name] || ''"
+            class="service-console__month-picker"
+            :trigger-props="{ contentClass: 'business-month-options', autoFitPosition: true, autoFitPopupMinWidth: true }"
+            format="YYYY年MM月"
+            value-format="YYYY-MM"
+            :placeholder="field.placeholder ?? '请选择年月'"
+            allow-clear
+            disabled-input
+            :locale="zhCN"
+            :aria-label="field.name"
+            :disabled-date="
+              isLiveColleague ||
+              isExpertDirect ||
+              isLiveCoop ||
+              isPaperCooperation
+                ? disableFutureMonth
+                : undefined
             "
-            @input="handleParameterInput(field.name, $event)"
+            :error="Boolean(parameterErrors[field.name])"
+            @update:model-value="handleMonthParameterInput(field.name, $event)"
+            @popup-visible-change="setFieldPanelOpen(field.name, $event)"
           />
+        </a-tooltip>
+        <div v-else class="service-console__input-wrap">
+          <a-tooltip
+            position="bottom"
+            :content="field.description"
+            :disabled="!field.description"
+          >
+            <ClearableInput
+              :aria-label="field.label ?? field.name"
+              type="text"
+              :key="`${field.name}-${paramResetToken}`"
+              :value="parameterValues[field.name] ?? ''"
+              :placeholder="field.placeholder ?? field.description"
+              :aria-invalid="Boolean(parameterErrors[field.name])"
+              :maxlength="
+                liveValidationFieldNames.includes(field.name)
+                  ? undefined
+                  : field.maxLength
+              "
+              @input="handleParameterInput(field.name, $event)"
+            />
+          </a-tooltip>
         </div>
         <small
           v-if="parameterErrors[field.name]"
@@ -4885,31 +4978,37 @@ function clearGraphSelection() {
       <div class="kg-panel__header">
         <h2 class="kg-panel__title">测试结果预览</h2>
         <div class="graph-panel__time">
-          <label
+          <a-tooltip
             v-if="isPanorama"
-            class="graph-panel__autorefresh"
-            title="勾选后每 60 秒自动忽略缓存刷新一次"
+            position="top"
+            content="勾选后每 60 秒自动忽略缓存刷新一次"
           >
-            <input
-              aria-label="选择此项"
-              v-model="panoramaAutoRefresh"
-              type="checkbox"
+            <label class="graph-panel__autorefresh">
+              <input
+                aria-label="选择此项"
+                v-model="panoramaAutoRefresh"
+                type="checkbox"
+                :disabled="running"
+              />
+              <span>自动更新</span>
+            </label>
+          </a-tooltip>
+          <a-tooltip
+            v-if="isPanorama"
+            position="top"
+            content="忽略服务端缓存，重新拉取分层与子图"
+          >
+            <button
+              class="kg-button kg-button--secondary graph-panel__refresh"
+              :class="{ 'graph-panel__refresh--loading': panoramaRefreshing }"
+              type="button"
               :disabled="running"
-            />
-            <span>自动更新</span>
-          </label>
-          <button
-            v-if="isPanorama"
-            class="kg-button kg-button--secondary graph-panel__refresh"
-            :class="{ 'graph-panel__refresh--loading': panoramaRefreshing }"
-            type="button"
-            :disabled="running"
-            title="忽略服务端缓存，重新拉取分层与子图"
-            @click="handleRefreshPanorama"
-          >
+              @click="handleRefreshPanorama"
+            >
             <AIconRefresh class="graph-panel__refresh-icon" />
             {{ panoramaRefreshing ? "刷新中…" : "刷新图谱" }}
-          </button>
+            </button>
+          </a-tooltip>
           <span>最近测试时间：</span>
           <strong>{{ lastTestTime }}</strong>
         </div>
@@ -5660,9 +5759,17 @@ function clearGraphSelection() {
   max-width: calc(100vw - 24px);
 }
 
-:global(.business-month-options :is(.arco-picker-container, .arco-panel-month, .arco-panel-year)) {
+/* 月份/年份面板宽度跟随输入框（「之前」的观感：弹层与框同宽），仅用 min-width: 190px 兜住
+   「十一月」一行：面板内左右 padding 32px、3 列平分，每格文字区 = (宽-32)/3-8，
+   「十一月」文字 42px → 182px 是不折行硬临界，190px 留少量余量。
+   输入框 ≥190px 的模块（桌面常见）日历与框完全同宽；个别月份列被栅格压到 ~150px 的模块
+   （产业链 TOP-N 事件 minmax(0,150px)）日历按 190 兜底、比框宽约 40px——再窄必折行，属物理边界。
+   Arco 原生固定 265px 比输入框宽一截（2026-10 反馈偏宽）；纯 width:100% 无下限
+   则退化到内容宽（2444066a 折行根因）。trigger-props 用 autoFitPopupMinWidth：
+   弹层宽度 = max(输入框宽, 190px)，能跟也能兜。 */
+:global(.business-month-options :is(.arco-panel-month, .arco-panel-year)) {
   width: 100%;
-  min-width: 0;
+  min-width: 190px;
 }
 
 .cooperation-type-select {

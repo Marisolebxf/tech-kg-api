@@ -21,15 +21,17 @@ const hiddenProperties = computed(() =>
 
 <template>
   <div class="schema-properties">
-    <span
+    <a-tooltip
       v-for="property in visibleProperties"
       :key="property.name"
-      class="schema-properties__chip"
-      :title="`${property.name}: ${property.dataType}`"
+      position="top"
+      :content="`${property.name}: ${property.dataType}`"
     >
-      <b>{{ property.name }}</b>
-      <em>{{ property.dataType }}</em>
-    </span>
+      <span class="schema-properties__chip">
+        <b>{{ property.name }}</b>
+        <em>{{ property.dataType }}</em>
+      </span>
+    </a-tooltip>
 
     <APopover
       v-if="hiddenProperties.length"
@@ -48,15 +50,17 @@ const hiddenProperties = computed(() =>
         <div class="schema-property-popover__content">
           <p class="schema-property-popover__title">其他属性（{{ hiddenProperties.length }}）</p>
           <div class="schema-property-popover__grid">
-            <span
+            <a-tooltip
               v-for="property in hiddenProperties"
               :key="property.name"
-              class="schema-property-popover__item"
-              :title="`${property.name}: ${property.dataType}`"
+              position="top"
+              :content="`${property.name}: ${property.dataType}`"
             >
-              <b>{{ property.name }}</b>
-              <em>{{ property.dataType }}</em>
-            </span>
+              <span class="schema-property-popover__item">
+                <b>{{ property.name }}</b>
+                <em>{{ property.dataType }}</em>
+              </span>
+            </a-tooltip>
           </div>
         </div>
       </template>

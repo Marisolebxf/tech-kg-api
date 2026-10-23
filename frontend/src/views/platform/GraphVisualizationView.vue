@@ -767,21 +767,25 @@ onUnmounted(() => {
         <div v-if="startListVisible && searchResults.length" class="graphviz-start" aria-label="起点检索结果">
           <div class="graphviz-start__bar">
             <span>起点检索结果（{{ searchResults.length }} 条，点击选择查询起点）</span>
-            <button type="button" class="graphviz-start__close" title="收起检索结果" @click="startListVisible = false">×</button>
+            <a-tooltip position="top" content="收起检索结果"><button type="button" class="graphviz-start__close" @click="startListVisible = false">×</button></a-tooltip>
           </div>
           <div class="graphviz-start__list">
-            <button
+            <a-tooltip
               v-for="item in searchResults"
               :key="item.vid"
-              type="button"
-              :class="['graphviz-start__item', { 'is-selected': startNode?.vid === item.vid }]"
-              :title="item.vid"
-              @click="pickStartNode(item)"
+              position="top"
+              :content="item.vid"
             >
+              <button
+                type="button"
+                :class="['graphviz-start__item', { 'is-selected': startNode?.vid === item.vid }]"
+                @click="pickStartNode(item)"
+              >
               <b>{{ item.name || '（未命名）' }}</b>
               <span>{{ item.entityType ? entityTypeLabel(item.entityType) : '未知类型' }}</span>
               <code>{{ item.vid }}</code>
-            </button>
+              </button>
+            </a-tooltip>
           </div>
         </div>
 
@@ -863,15 +867,16 @@ onUnmounted(() => {
           <div class="graphviz-field graphviz-field--actions">
             <label aria-hidden="true">查询</label>
             <div class="graphviz-actions">
-              <button
-                class="kg-button"
-                type="button"
-                :disabled="querying"
-                title="自动挑选有边的实体作为查询起点并出图"
-                @click="autoPreview"
-              >
-                自动预览
-              </button>
+              <a-tooltip position="top" content="自动挑选有边的实体作为查询起点并出图">
+                <button
+                  class="kg-button"
+                  type="button"
+                  :disabled="querying"
+                  @click="autoPreview"
+                >
+                  自动预览
+                </button>
+              </a-tooltip>
               <button class="kg-button" type="button" :disabled="querying || !startNode" @click="runQuery()">
                 {{ querying ? '查询中…' : '查询图谱' }}
               </button>
@@ -895,16 +900,20 @@ onUnmounted(() => {
           </span>
         </div>
         <div v-if="legendItems.length" class="graphviz-legend" aria-label="实体类型图例（点击显隐）">
-          <button
+          <a-tooltip
             v-for="item in legendItems"
             :key="item.label"
-            type="button"
-            :class="['graphviz-legend__item', `is-${item.tone}`, { 'is-hidden': item.hidden }]"
-            :title="item.hidden ? '点击显示该类型' : '点击隐藏该类型'"
-            @click="toggleLabel(item.label)"
+            position="top"
+            :content="item.hidden ? '点击显示该类型' : '点击隐藏该类型'"
           >
-            <i /><span>{{ entityTypeLabel(item.label) }}</span><em>{{ item.count }}</em>
-          </button>
+            <button
+              type="button"
+              :class="['graphviz-legend__item', `is-${item.tone}`, { 'is-hidden': item.hidden }]"
+              @click="toggleLabel(item.label)"
+            >
+              <i /><span>{{ entityTypeLabel(item.label) }}</span><em>{{ item.count }}</em>
+            </button>
+          </a-tooltip>
         </div>
         <!-- 结果截断说明：信息态提示条（AppAlert），右侧保留「显示全部」入口 -->
         <AppAlert v-if="capHiddenCount > 0" type="info" class="graphviz-cap-banner">

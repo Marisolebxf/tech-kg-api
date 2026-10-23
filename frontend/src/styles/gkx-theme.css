@@ -349,20 +349,9 @@ body {
   }
 }
 
-/* 截断悬停提示统一白底（arco 默认黑底白字，浅色主题下突兀）。
-   注意：--color-tooltip-bg 定义在 body 上，:root 级 token 覆盖不生效（此前黑底根因）；
-   气泡与箭头是 Teleport 到 body 的独立子树，这里直接按类名覆盖背景，
-   「body + 类名」提高一级优先级，不依赖本文件与 arco.css 的加载顺序。 */
-body .arco-tooltip-content {
-  color: rgb(var(--color-text-1));
-  background-color: #ffffff;
-  border: 1px solid rgb(var(--color-border-2));
-  box-shadow: 0 4px 12px rgba(31, 56, 88, 0.12);
-}
-
-body .arco-tooltip-popup-arrow {
-  background-color: #ffffff;
-}
+/* 悬停气泡走 Arco 原生样式：深底（--color-tooltip-bg=gray-10）+ 白字 + 14px + 350px 上限。
+   曾经的白底覆写已按 2026-10 统一口径移除；若再改色注意 token 定义在 body 上，
+   :root 级覆盖不生效，需按类名（body .arco-tooltip-content）覆盖。 */
 
 /* Footer spacing is owned by the shared shell, including destructive confirms. */
 .arco-modal-footer > .arco-btn + .arco-btn { margin-left: 0 !important; }

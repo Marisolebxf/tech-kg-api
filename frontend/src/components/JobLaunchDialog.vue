@@ -286,7 +286,7 @@ async function submit() {
     <aside v-if="open" v-dialog-focus="{ close: () => emit('close'), busy: submitting }" class="job-launch-dialog">
       <header>
         <h2>新建任务</h2>
-        <button type="button" aria-label="关闭弹窗" title="关闭" @click="emit('close')">×</button>
+        <a-tooltip position="top" content="关闭"><button type="button" aria-label="关闭弹窗" @click="emit('close')">×</button></a-tooltip>
       </header>
       <div class="job-launch-body">
         <div class="job-basics">
@@ -316,7 +316,7 @@ async function submit() {
           <div class="job-field">
             <div class="job-field__label-row">
               <span><i class="job-required" aria-hidden="true">*</i>目标 Schema（已传脚本并绑定来源表）</span>
-              <span class="space-scope-chip" :title="`下拉只列出「${graphSpace || '默认空间'}」图空间下的 Schema，跟随平台总览的图空间选择器切换`">图空间：{{ graphSpace || '默认空间' }}</span>
+              <a-tooltip position="top" :content="`下拉只列出「${graphSpace || '默认空间'}」图空间下的 Schema，跟随平台总览的图空间选择器切换`"><span class="space-scope-chip">图空间：{{ graphSpace || '默认空间' }}</span></a-tooltip>
             </div>
             <a-select v-model="extractSchemaId" class="job-select" aria-required="true" :loading="schemasLoading" placeholder="选择要抽取的实体/关系" allow-search allow-clear>
               <a-option v-for="s in extractSchemas" :key="s.id" :value="s.id">{{ schemaOptionLabel(s) }}</a-option>
@@ -333,7 +333,7 @@ async function submit() {
           <div class="job-field">
             <div class="job-field__label-row">
               <span><i class="job-required" aria-hidden="true">*</i>串联 Schema 队列（按顺序串行执行，任一失败即中止）</span>
-              <span class="space-scope-chip" :title="`下拉只列出「${graphSpace || '默认空间'}」图空间下的 Schema，跟随平台总览的图空间选择器切换`">图空间：{{ graphSpace || '默认空间' }}</span>
+              <a-tooltip position="top" :content="`下拉只列出「${graphSpace || '默认空间'}」图空间下的 Schema，跟随平台总览的图空间选择器切换`"><span class="space-scope-chip">图空间：{{ graphSpace || '默认空间' }}</span></a-tooltip>
             </div>
             <a-select :model-value="chainPick" class="job-select" :loading="schemasLoading" placeholder="搜索并添加 Schema" allow-search allow-clear @change="addChainStep">
               <a-option v-for="s in extractSchemas" :key="s.id" :value="s.id">{{ schemaOptionLabel(s) }}</a-option>
@@ -342,9 +342,9 @@ async function submit() {
               <li v-for="(step, i) in chainSteps" :key="step.id">
                 <em>{{ i + 1 }}</em>
                 <code>{{ step.name }}</code>
-                <button type="button" title="上移" aria-label="上移" :disabled="i === 0" @click="moveChainStep(i, -1)">↑</button>
-                <button type="button" title="下移" aria-label="下移" :disabled="i === chainSteps.length - 1" @click="moveChainStep(i, 1)">↓</button>
-                <button type="button" title="移除" aria-label="移除" class="danger" @click="removeChainStep(i)">×</button>
+                <a-tooltip position="top" content="上移"><button type="button" aria-label="上移" :disabled="i === 0" @click="moveChainStep(i, -1)">↑</button></a-tooltip>
+                <a-tooltip position="top" content="下移"><button type="button" aria-label="下移" :disabled="i === chainSteps.length - 1" @click="moveChainStep(i, 1)">↓</button></a-tooltip>
+                <a-tooltip position="top" content="移除"><button type="button" aria-label="移除" class="danger" @click="removeChainStep(i)">×</button></a-tooltip>
               </li>
             </ol>
             <small v-if="chainSteps.length === 1" class="muted-warn">多脚本串行任务至少选择 2 个 Schema</small>

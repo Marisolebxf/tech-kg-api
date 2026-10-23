@@ -66,14 +66,27 @@ async def require_business_data(request: Request, actor: CurrentActor):
 
     from biz.dependencies.selected_graph_space import read_request_graph_space
     from service.business_access_control import ensure_space_access, rbac_enabled
+    from service.graph_space import SPACE_NAME_PATTERN
     from service.graph_space_context import (
         business_data_plane,
+        business_space_override,
         get_current_space,
         request_can_write,
         selected_graph_space,
     )
 
     space = await read_request_graph_space(request) or get_current_space()
+    # X-Business-Graph-Space：按请求覆盖九大业务取数空间（测试旋钮，只改空间名，
+    # 连接参数仍取业务面/平台面 env）。与 X-Graph-Space 分开解析，避免下拉空间
+    # 一致性校验误伤；空间绑定校验仍走请求空间（与 env 钉死同信任级）。
+    override_values = request.headers.getlist("X-Business-Graph-Space")
+    if len(override_values) > 1:
+        raise HTTPException(400, "X-Business-Graph-Space 头只能出现一次")
+    override_value = override_values[0].strip() if override_values else ""
+    if override_value and not SPACE_NAME_PATTERN.fullmatch(override_value):
+        raise HTTPException(
+            400, "图空间名称格式不正确（字母/数字/下划线，字母或下划线开头，最长 64）"
+        )
     await asyncio.to_thread(ensure_space_access, actor, space, "read")
     can_write = actor.is_admin and not actor.business_only
     if rbac_enabled():
@@ -98,6 +111,7 @@ async def require_business_data(request: Request, actor: CurrentActor):
     token = selected_graph_space.set(space)
     # 本依赖即「九大业务」边界：置位后图连接走 TRS_GRAPH_BUSINESS_*（未配置则不变）。
     business_token = business_data_plane.set(True)
+    override_token = business_space_override.set(override_value or None)
     write_token = request_can_write.set(can_write)
     llm_token = selected_llm_business.set(business)
     settings_token = request_llm_settings.set({})
@@ -107,6 +121,7 @@ async def require_business_data(request: Request, actor: CurrentActor):
         request_llm_settings.reset(settings_token)
         selected_llm_business.reset(llm_token)
         request_can_write.reset(write_token)
+        business_space_override.reset(override_token)
         business_data_plane.reset(business_token)
         selected_graph_space.reset(token)
 

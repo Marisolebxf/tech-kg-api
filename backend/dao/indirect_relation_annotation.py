@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from db_model.indirect_relation_annotation import (
     SpaceIndirectRelationAnnotation as IndirectRelationAnnotation,
 )
-from service.graph_space_context import get_current_space
+from service.graph_space_context import effective_graph_space
 
 # 边主键：两端节点 VID（方向已归一）。
 EdgeKey = tuple[str, str]
@@ -21,7 +21,9 @@ class IndirectRelationAnnotationDAO:
 
     def __init__(self, session: Session) -> None:
         self._session = session
-        self._space = get_current_space()
+        # 标注随实际取数空间（含 X-Business-Graph-Space 覆盖）——标注挂在边
+        # (source_vid, target_vid) 上，边属于哪个空间标注就归属哪个空间。
+        self._space = effective_graph_space()
 
     def list_by_edges(self, keys: Sequence[EdgeKey]) -> list[IndirectRelationAnnotation]:
         if not keys:

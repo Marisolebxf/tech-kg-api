@@ -49,14 +49,17 @@ def _env_value(name: str) -> str | None:
     return value.strip() or None
 
 
-def business_plane_settings(request_space: str | None = None) -> TRSGraphSettings | None:
+def business_plane_settings(
+    request_space: str | None = None, override: str | None = None
+) -> TRSGraphSettings | None:
     """九大业务数据面的独立图连接（TRS_GRAPH_BUSINESS_*）。
 
     未设置 ``TRS_GRAPH_BUSINESS_BASE_URL`` 时返回 None —— 业务面与平台面共用
     ``TRS_GRAPH_*`` 同一连接（默认行为，改此模块前后的表现完全一致）。设置后
-    其余字段逐项回退 ``TRS_GRAPH_*``；``TRS_GRAPH_BUSINESS_SPACE`` 用于远端集群
-    空间名与本栈请求空间名不一致时的映射（如远端 dev ↔ 本栈请求 dev2），
-    未设置时沿用请求空间名，保证空间下拉切换语义不变。
+    其余字段逐项回退 ``TRS_GRAPH_*``；空间名优先级为 ``override``
+    （X-Business-Graph-Space 按请求覆盖，测试旋钮）> ``TRS_GRAPH_BUSINESS_SPACE``
+    （远端集群空间名与本栈请求空间名不一致时的映射，如远端 dev ↔ 本栈请求 dev2）
+    > ``request_space``（空间下拉语义）> ``TRS_GRAPH_SPACE``。
     """
     base_url = _env_value("TRS_GRAPH_BUSINESS_BASE_URL")
     if base_url is None:
@@ -65,7 +68,7 @@ def business_plane_settings(request_space: str | None = None) -> TRSGraphSetting
     timeout_raw = _env_value("TRS_GRAPH_BUSINESS_TIMEOUT")
     return TRSGraphSettings(
         base_url=base_url,
-        space=_env_value("TRS_GRAPH_BUSINESS_SPACE") or request_space or fallback.space,
+        space=override or _env_value("TRS_GRAPH_BUSINESS_SPACE") or request_space or fallback.space,
         api_key=_env_value("TRS_GRAPH_BUSINESS_API_KEY") or fallback.api_key,
         timeout=int(timeout_raw) if timeout_raw else fallback.timeout,
     )

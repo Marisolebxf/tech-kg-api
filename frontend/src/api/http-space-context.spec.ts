@@ -1,11 +1,12 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { AxiosError, AxiosHeaders, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios'
-import { http } from './http'
+import { businessSpaceOverride, http } from './http'
 import { useGraphSpaceStore } from '../stores/graphSpace'
 
 beforeEach(() => {
   setActivePinia(createPinia())
+  businessSpaceOverride.value = ''
   useGraphSpaceStore().$patch({ userId: 'u', current: 'a', spaces: ['a', 'b'], items: [
     {name: 'a', bound: true, mine: true, groupKind: 'business', clientId: 'business-a'},
     {name: 'b', bound: true, mine: true, groupKind: 'business', clientId: 'business-b'},
@@ -92,5 +93,31 @@ describe('请求空间隔离', () => {
     // 保存后重新确认相同空间并刷新列表，不构成上下文切换。
     useGraphSpaceStore().setCurrent('a')
     await expect(http.get('/v1/configurations/llms', { adapter })).resolves.toEqual({ ok: true })
+  })
+  it('九大请求带图空间覆盖头时仍携带当前空间头', async () => {
+    businessSpaceOverride.value = 'gkx_local_1'
+    let sent!: InternalAxiosRequestConfig
+    await http.post('/v1/kg-construction/expert-direct-relations/query', {}, { adapter: async config => {
+      sent = config
+      return { data: {}, status: 200, statusText: 'OK', headers: new AxiosHeaders(), config }
+    } })
+    expect(sent.headers.get('X-Business-Graph-Space')).toBe('gkx_local_1')
+    // 请求空间与所属业务照旧——覆盖头只改取数空间，权限锚点不动
+    expect(sent.headers.get('X-Graph-Space')).toBe('a')
+    expect(sent.headers.get('X-Business-Id')).toBe('business-a')
+  })
+  it('覆盖头只随九大业务请求发送', async () => {
+    businessSpaceOverride.value = 'gkx_local_1'
+    await http.get('/v1/graph-search/query', { adapter: async config => {
+      expect(config.headers.has('X-Business-Graph-Space')).toBe(false)
+      return { data: {}, status: 200, statusText: 'OK', headers: new AxiosHeaders(), config }
+    } })
+  })
+  it('覆盖为空白时不发送覆盖头', async () => {
+    businessSpaceOverride.value = '   '
+    await http.post('/v1/kg-service/key-enterprise-relation', {}, { adapter: async config => {
+      expect(config.headers.has('X-Business-Graph-Space')).toBe(false)
+      return { data: {}, status: 200, statusText: 'OK', headers: new AxiosHeaders(), config }
+    } })
   })
 })

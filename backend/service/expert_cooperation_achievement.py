@@ -19,7 +19,7 @@ from service.confidence_scoring import (
     edge_confidence,
     expert_entity_confidence,
 )
-from service.graph_space_context import get_current_space
+from service.graph_space_context import effective_graph_space, get_current_space
 from service.provenance_recorder import record_node_source
 
 PAPER_EDGE_TYPES = frozenset({"AUTHORED_BY"})
@@ -113,7 +113,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             raise ValueError("sourceExpertId 与 targetExpertId 不能相同")
 
         cache_key = (
-            f"{get_current_space()}|"
+            f"{effective_graph_space()}|"
             f"{source_expert_id}|{target_expert_id}|"
             f"{tuple(achievement_types or [])}|{time_range_start or ''}|"
             f"{time_range_end or ''}|{limit_per_type}"

@@ -18,7 +18,7 @@ from service.confidence_scoring import (
     confidence_result,
     edge_confidence,
 )
-from service.graph_space_context import get_current_space
+from service.graph_space_context import effective_graph_space, get_current_space
 from service.provenance_recorder import record_node_source
 
 STUDIED_AT_EDGE = "STUDIED_AT"
@@ -119,7 +119,7 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             raise ValueError("expertId 与 targetExpertId 不能相同")
 
         cache_key = (
-            f"{get_current_space()}|"
+            f"{effective_graph_space()}|"
             f"{expert_id}|{target_expert_id or ''}|{school or ''}|{education_stage or ''}|{limit}"
         )
         cached = _cache_get(_result_cache, cache_key)

@@ -127,6 +127,7 @@ class AuthProfile(CamelCaseModel):
     businesses: list[dict[str, str]] = Field(default_factory=list)
     platform_role: str = "user"
     can_develop: bool = False
+    developer_business_binding_required: bool = False
 
 
 class LogoutData(CamelCaseModel):

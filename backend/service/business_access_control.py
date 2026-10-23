@@ -65,6 +65,11 @@ def resolve_membership(user_id: str) -> tuple[str, str]:
 
 def with_memberships(actor):
     grants = resolve_memberships(actor.user_id)
+    if not actor.is_admin and any(grant.role == "developer" for grant in grants):
+        from service.portal_developer import portal_allows_development
+
+        if not portal_allows_development(actor.user_id):
+            grants = tuple(replace(grant, role="user") for grant in grants)
     single = grants[0] if len(grants) == 1 else None
     return replace(
         actor,

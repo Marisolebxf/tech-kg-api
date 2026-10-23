@@ -533,10 +533,16 @@ class AuthService:
             return
         user_id = str((context.permission_info.get("userInfo") or {}).get("id", ""))
         digest = hashlib.sha256(context.access_token.encode("utf-8")).hexdigest()
-        key = f"{self.PORTAL_ROLE_KEY_PREFIX}{self.settings.client_id}:{digest}"
+        # 映射配置改变时不沿用旧授权缓存；空配置保持原有门户身份判定。
+        policy = hashlib.sha256(
+            repr(self.settings.portal_admin_role_codes).encode("utf-8")
+        ).hexdigest()
+        key = f"{self.PORTAL_ROLE_KEY_PREFIX}v2:{self.settings.client_id}:{policy}:{digest}"
         cached = None if force else await self._store_get_json(key)
         if cached is not None and cached.get("user_id") == user_id:
             context.portal_is_admin = cached.get("is_admin") is True
+            if self.settings.portal_admin_role_codes:
+                context.permission_info = cached["permission_info"]
             return
         try:
             user = await self.user_center.get_user_by_token(context.access_token)
@@ -551,12 +557,37 @@ class AuthService:
         gkx_user = user.get("gkxUser")
         role = gkx_user.get("role") if isinstance(gkx_user, dict) else None
         context.portal_is_admin = type(role) is int and role == 1
+        if self.settings.portal_admin_role_codes:
+            # 不能拿登录时的权限快照反复续期，否则门户撤权后会永久保留管理员。
+            try:
+                permission_info = await self.user_center.get_permission_info(context.access_token)
+            except UserCenterError as exc:
+                raise AuthenticationError(str(exc), status_code=exc.status_code) from exc
+            permission_user = permission_info.get("userInfo") or {}
+            if str(permission_user.get("id", "")) != user_id:
+                raise AuthenticationError("统一用户中心返回的权限与登录用户不一致", status_code=502)
+            if permission_user.get("status") not in (0, None):
+                raise AuthenticationError("统一用户中心账号已停用")
+            app_roles = (permission_info.get("appPermissions") or {}).get("roles") or []
+            mapped_admin = any(
+                isinstance(item, dict)
+                and item.get("code") in self.settings.portal_admin_role_codes
+                and type(item.get("type")) is int
+                and item["type"] == 1
+                and type(item.get("status")) is int
+                and item["status"] == 0
+                and item.get("orgId") is None
+                for item in app_roles
+            )
+            context.permission_info = dict(permission_info)
+            context.portal_is_admin = context.portal_is_admin or mapped_admin
         ttl = self.settings.portal_role_cache_ttl_seconds
         if context.expires_at is not None:
             ttl = max(1, min(ttl, context.expires_at - int(time.time())))
-        await self._store_set_json(
-            key, {"user_id": user_id, "is_admin": context.portal_is_admin}, ttl
-        )
+        record: dict[str, Any] = {"user_id": user_id, "is_admin": context.portal_is_admin}
+        if self.settings.portal_admin_role_codes:
+            record["permission_info"] = context.permission_info
+        await self._store_set_json(key, record, ttl)
 
     async def _touch_session(self, session_id: str) -> None:
         try:

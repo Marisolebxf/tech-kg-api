@@ -108,6 +108,7 @@ class AuthSettings:
     dev_first_user_admin: bool
     user_center_open_api_base_url: str = ""
     portal_admin_enabled: bool = True
+    portal_admin_role_codes: tuple[str, ...] = ()
     portal_role_cache_ttl_seconds: int = 60
     business_only_user_ids: tuple[str, ...] = ()
     login_mode: str = "oauth"
@@ -163,6 +164,15 @@ class AuthSettings:
                 or f"{base_url.split('/admin-api/', 1)[0]}/open-api/system"
             ).rstrip("/"),
             portal_admin_enabled=_env_bool("USER_CENTER_PORTAL_ADMIN_ENABLED", True),
+            portal_admin_role_codes=tuple(
+                sorted(
+                    {
+                        value.strip()
+                        for value in os.getenv("USER_CENTER_PORTAL_ADMIN_ROLE_CODES", "").split(",")
+                        if value.strip()
+                    }
+                )
+            ),
             portal_role_cache_ttl_seconds=max(
                 1, _env_int("USER_CENTER_PORTAL_ROLE_CACHE_TTL_SECONDS", 60)
             ),

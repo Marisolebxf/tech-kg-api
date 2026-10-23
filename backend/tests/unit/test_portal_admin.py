@@ -1,6 +1,7 @@
 """门户身份验证、缓存撤权和本地授权叠加回归，不连接真实用户中心或业务库。"""
 
 from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -69,6 +70,7 @@ def service_for(role=1):
         enabled=True,
         client_id="test",
         portal_admin_enabled=True,
+        portal_admin_role_codes=(),
         portal_role_cache_ttl_seconds=60,
         bearer_cache_ttl_seconds=300,
     )
@@ -165,6 +167,147 @@ async def test_local_only_mode_does_not_call_portal_identity_service():
     service.settings = replace(service.settings, portal_admin_enabled=False)
     assert (await service.resolve_bearer("access")).portal_is_admin is False
     assert center.calls == 0
+
+
+class ApplicationRoleCenter(PortalCenter):
+    def __init__(self):
+        super().__init__(role=0)
+        self.permission_info = {
+            "userInfo": {"id": 139, "username": "member", "nickname": "member", "status": 0},
+            "appPermissions": {
+                "roles": [
+                    {
+                        "id": 78,
+                        "name": "平台管理员",
+                        "code": "system_admin",
+                        "type": 1,
+                        "status": 0,
+                        "orgId": None,
+                    }
+                ]
+            },
+        }
+        self.permission_failure = False
+
+    async def get_permission_info(self, token):
+        if self.permission_failure:
+            raise UserCenterError("权限服务不可用", status_code=503)
+        return deepcopy(self.permission_info)
+
+
+def application_role_service():
+    service, store, _ = service_for(role=0)
+    service.settings = replace(service.settings, portal_admin_role_codes=("system_admin",))
+    center = ApplicationRoleCenter()
+    service.user_center = center
+    return service, store, center
+
+
+async def test_configured_application_role_grants_admin_without_local_role(db):
+    service, _, _ = application_role_service()
+    context = await service.create_session_from_access_token("access")
+    actor = actor_from_profile(service.profile(context), initial_admin_ids=(), auth_enabled=True)
+    assert actor.is_admin is True
+    assert actor.can_develop is True
+    assert actor.role_code == "admin"
+    assert (
+        db.scalar(select(PlatformUserRole.id).where(PlatformUserRole.role_code == ADMIN_ROLE))
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"code": "common"},
+        {"code": "admin"},
+        {"code": "SYSTEM_ADMIN"},
+        {"status": 1},
+        {"status": None},
+        {"status": False},
+        {"status": "0"},
+        {"type": 2},
+        {"type": None},
+        {"type": True},
+        {"orgId": 42},
+    ],
+)
+async def test_application_mapping_rejects_nonmatching_disabled_or_org_role(change):
+    service, _, center = application_role_service()
+    center.permission_info["appPermissions"]["roles"][0].update(change)
+    assert (await service.resolve_bearer("access")).portal_is_admin is False
+
+
+async def test_aggregate_or_organization_roles_cannot_grant_application_admin():
+    service, _, center = application_role_service()
+    roles = center.permission_info.pop("appPermissions")
+    center.permission_info["allPermissions"] = roles
+    center.permission_info["orgPermissions"] = roles
+    assert (await service.resolve_bearer("access")).portal_is_admin is False
+
+
+@pytest.mark.parametrize("mode", ["session", "bearer"])
+async def test_application_role_revoked_after_ttl_even_with_old_login_snapshot(mode):
+    service, store, center = application_role_service()
+    if mode == "session":
+        context = await service.create_session_from_access_token("access")
+
+        async def load():
+            return await service.get_session(context.session_id)
+    else:
+
+        async def load():
+            return await service.resolve_bearer("access")
+
+    assert (await load()).portal_is_admin is True
+    center.permission_info["appPermissions"]["roles"] = []
+    store.now = 30
+    assert (await load()).portal_is_admin is True
+    store.now = 61
+    assert (await load()).portal_is_admin is False
+    store.now = 62
+    cached = await load()
+    assert cached.portal_is_admin is False
+    assert service.profile(cached).app_permissions.roles == []
+
+
+async def test_removing_mapping_does_not_reuse_cached_admin():
+    service, _, _ = application_role_service()
+    assert (await service.resolve_bearer("access")).portal_is_admin is True
+    service.settings = replace(service.settings, portal_admin_role_codes=())
+    assert (await service.resolve_bearer("access")).portal_is_admin is False
+
+
+async def test_application_mapping_respects_portal_admin_switch():
+    service, _, _ = application_role_service()
+    service.settings = replace(service.settings, portal_admin_enabled=False)
+    assert (await service.resolve_bearer("access")).portal_is_admin is False
+
+
+async def test_permission_failure_does_not_fall_back_to_stale_mapped_admin():
+    service, store, center = application_role_service()
+    context = await service.create_session_from_access_token("access")
+    center.permission_failure = True
+    store.now = 61
+    with pytest.raises(AuthenticationError, match="权限服务不可用"):
+        await service.get_session(context.session_id)
+
+
+@pytest.mark.parametrize("field,value", [("id", 999), ("status", 1)])
+async def test_fresh_permission_identity_must_match_active_login(field, value):
+    service, store, center = application_role_service()
+    context = await service.create_session_from_access_token("access")
+    center.permission_info["userInfo"][field] = value
+    store.now = 61
+    with pytest.raises(AuthenticationError):
+        await service.get_session(context.session_id)
+
+
+def test_application_admin_mapping_environment_is_opt_in(monkeypatch):
+    monkeypatch.delenv("USER_CENTER_PORTAL_ADMIN_ROLE_CODES", raising=False)
+    assert AuthSettings.from_env().portal_admin_role_codes == ()
+    monkeypatch.setenv("USER_CENTER_PORTAL_ADMIN_ROLE_CODES", " system_admin,system_admin, ")
+    assert AuthSettings.from_env().portal_admin_role_codes == ("system_admin",)
 
 
 @pytest.fixture

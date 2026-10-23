@@ -144,6 +144,29 @@ Client Secret 使用现有 Secret 管理方式注入后端。
 确认部署可用后，把该应用目录拖到右侧“国科信 → AI战略咨询”下，与“超大规模智算引擎”并列，再保存。
 已有 /bkg_dp 应用和其他菜单无需变更。
 
+## 后端管理员角色映射
+
+超算用户中心已实测返回应用角色 `平台管理员 / system_admin`，这与旧接口的
+`gkxUser.role=1` 是不同字段。超算 Compose 覆盖文件默认设置
+`USER_CENTER_PORTAL_ADMIN_ROLE_CODES=system_admin`；其他部署默认不启用新增映射。
+若同事不使用该 Compose 文件，需在后端容器环境中显式设置这个变量，再部署新版后端。
+`USER_CENTER_PORTAL_ADMIN_ENABLED` 需保持开启（默认 true）。本次无需重建前端或执行 SQL。
+
+后端只匹配用户中心实时返回的 `appPermissions.roles` 中启用的应用角色
+（`code=system_admin`、`type=1`、`status=0`、`orgId=null`）。不使用角色显示名称、
+组织角色或普通用户 `common` 提权，也不把继承的权限写成永久本地管理员。
+角色校验复用默认 60 秒、不随访问续期的缓存；到期重新获取权限，撤销角色后
+不再继承管理员权限，已有独立本地管理员授权仍然有效。
+
+部署后重新登录，检查 `/bkg_zp/api/v1/auth/me`：角色仍为 `system_admin` 的账号应返回
+`portalIsAdmin=true`、`isAdmin=true`、`platformRole=admin`、`canDevelop=true`。
+没有本地管理员授权的普通账号仍应是普通用户。
+`PLATFORM_BUSINESS_ONLY_USER_IDS` 中的账号仍受原有业务专用限制，不因映射而提权。
+可将 `USER_CENTER_PORTAL_ADMIN_ROLE_CODES` 显式设为空并重启后端，关闭新增映射。
+
+此映射不分配开发人员的业务归属，也不更改门户菜单授权；门户未返回图谱系统菜单时，
+仍需门户方为相应角色配置菜单。页面代码、业务成员记录和图空间绑定均未改动。
+
 ## 联调与验收
 
 1. 门户方确认 IP 入口自身的 SSO 登录及回跳地址已同步更新，不再把用户带回停用的 next 域名。

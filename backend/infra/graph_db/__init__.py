@@ -78,13 +78,17 @@ def get_trs_graph_client() -> TRSGraphClient:
     九大业务请求（require_business_data 置位 business_data_plane）优先返回
     TRS_GRAPH_BUSINESS_* 独立连接，未配置时回落到下面的常规路径。
     """
-    from service.graph_space_context import business_data_plane, selected_graph_space
+    from service.graph_space_context import (
+        business_data_plane,
+        business_space_override,
+        selected_graph_space,
+    )
 
     if business_data_plane.get():
         business = get_business_space_client(selected_graph_space.get())
         if business is not None:
             return business
-    space = selected_graph_space.get()
+    space = business_space_override.get() or selected_graph_space.get()
     if space:
         return get_space_client(space)
     global _client
@@ -161,13 +165,15 @@ def get_space_client(space: str) -> TRSGraphClient:
 def get_business_space_client(request_space: str | None) -> TRSGraphClient | None:
     """九大业务数据面客户端；TRS_GRAPH_BUSINESS_BASE_URL 未配置时返回 None（回落平台面）。
 
-    连接参数见 infra.graph_db.config.business_plane_settings。与 get_space_client
-    共用 _space_clients 缓存（key 带 business:: 前缀），因此 close_space_clients
-    的停机清理同样覆盖业务面连接，无需在 lifespan 里单独接线。
+    连接参数见 infra.graph_db.config.business_plane_settings；X-Business-Graph-Space
+    覆盖（business_space_override ContextVar）优先于 TRS_GRAPH_BUSINESS_SPACE 钉死。
+    与 get_space_client 共用 _space_clients 缓存（key 带 business:: 前缀），因此
+    close_space_clients 的停机清理同样覆盖业务面连接，无需在 lifespan 里单独接线。
     """
     from infra.graph_db.config import business_plane_settings
+    from service.graph_space_context import business_space_override
 
-    settings = business_plane_settings(request_space)
+    settings = business_plane_settings(request_space, business_space_override.get())
     if settings is None:
         return None
     key = f"business::{settings.base_url}::{settings.space}"

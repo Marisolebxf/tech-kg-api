@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from service.base_module import KGModuleScaffoldService
-from service.graph_space_context import get_current_space
+from service.graph_space_context import effective_graph_space
 from service.provenance_recorder import record_node_source
 
 logger = logging.getLogger(__name__)
@@ -85,7 +85,7 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
     ) -> dict[str, Any]:
         """结果缓存包装：固定入参命中缓存，避免压测稳态下重复查图。"""
         cache_key = (
-            f"{get_current_space()}|"
+            f"{effective_graph_space()}|"
             f"{expert_id}|{target_expert_id}|{organization}|{department}|"
             f"{overlap_period}|{team_or_project}|{tuple(achievement_types or [])}|"
             f"{min_confidence}|{limit}|{offset}|{space}"

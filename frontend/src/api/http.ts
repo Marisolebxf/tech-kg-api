@@ -1,5 +1,6 @@
 import axios, { CanceledError } from 'axios'
 import { getActivePinia } from 'pinia'
+import { ref } from 'vue'
 import { useGraphSpaceStore } from '../stores/graphSpace'
 
 import { apiBase } from '../config'
@@ -12,6 +13,13 @@ const requestVersions = new WeakMap<object, number>()
 const requestSpaces = new WeakMap<object, string>()
 const CONTEXT_FREE_REQUEST = /\/v1\/(?:auth(?:\/|$)|graph-spaces(?:\/|$)|graph-search\/spaces|business-access(?:\/|$))/
 const ALGORITHM_JOB_REQUEST = /\/v1\/graph-algorithms\/jobs(?:\/|$)/
+// 九大业务接口前缀：X-Business-Graph-Space 覆盖头只随这类请求发送
+const NINE_BUSINESS_REQUEST = /\/v1\/(?:kg-service|kg-construction)\/.+/
+
+// 九大业务「执行测试」图空间覆盖（控制台级测试旋钮）：非空时随九大业务请求
+// 发送 X-Business-Graph-Space，后端把取数空间切到该值（优先于部署钉死）。
+// 会话级状态、不持久化，避免忘记清除导致后续查询都打到别的空间。
+export const businessSpaceOverride = ref('')
 
 function activeContext() {
   return getActivePinia() ? useGraphSpaceStore() : undefined
@@ -81,6 +89,10 @@ http.interceptors.request.use((config) => {
     requestSpaces.set(config, spaces.contextKey)
     if (spaces.current) config.headers.set('X-Graph-Space', spaces.current)
     if (spaces.businessId) config.headers.set('X-Business-Id', spaces.businessId)
+    const override = businessSpaceOverride.value.trim()
+    if (override && NINE_BUSINESS_REQUEST.test(config.url || '')) {
+      config.headers.set('X-Business-Graph-Space', override)
+    }
   }
   return config
 })

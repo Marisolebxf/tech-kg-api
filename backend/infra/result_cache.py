@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import time
 
-from service.graph_space_context import get_current_space, request_can_write
+from service.graph_space_context import effective_graph_space, request_can_write
 
 _TTL = float(os.getenv("RESULT_CACHE_TTL", "60"))
 _store: dict[tuple[str, bool, str], tuple[float, str]] = {}
@@ -20,14 +20,14 @@ _store: dict[tuple[str, bool, str], tuple[float, str]] = {}
 
 def get_cached_json(key: str) -> str | None:
     """命中返回预序列化 JSON 串，未命中/过期返回 None。"""
-    entry = _store.get((get_current_space(), request_can_write.get(), key))
+    entry = _store.get((effective_graph_space(), request_can_write.get(), key))
     if entry and entry[0] > time.monotonic():
         return entry[1]
     return None
 
 
 def set_cached_json(key: str, json_str: str) -> None:
-    _store[(get_current_space(), request_can_write.get(), key)] = (
+    _store[(effective_graph_space(), request_can_write.get(), key)] = (
         time.monotonic() + _TTL,
         json_str,
     )
@@ -40,6 +40,6 @@ def clear() -> None:
 def discard_prefix(prefix: str) -> None:
     """按键前缀清除缓存（写接口修改数据后让对应 GET 列表立即失效）。"""
     for key in [
-        k for k in _store if k[0] == get_current_space() and k[2].split("?", 1)[0] == prefix
+        k for k in _store if k[0] == effective_graph_space() and k[2].split("?", 1)[0] == prefix
     ]:
         _store.pop(key, None)

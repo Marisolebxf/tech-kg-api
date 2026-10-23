@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import IconClose from "@arco-design/web-vue/es/icon/icon-close";
 import ClearableInput from '../../../components/ClearableInput.vue'
+import { businessSpaceOverride } from "../../../api/http";
 import { useSpacePermissions } from "../../../composables/use-space-permissions"
 const { canWrite, spaces } = useSpacePermissions()
 
@@ -4952,6 +4953,18 @@ function clearGraphSelection() {
       </label>
     </div>
     <div class="service-console__actions">
+      <label class="service-console__space-override" title="填写后本次测试改从该图空间取数（留空用部署默认空间）">
+        <span>图空间</span>
+        <ClearableInput
+          v-model.trim="businessSpaceOverride"
+          type="text"
+          maxlength="64"
+          spellcheck="false"
+          autocomplete="off"
+          aria-label="图空间覆盖"
+          placeholder="留空用默认空间"
+        />
+      </label>
       <button
         class="kg-button"
         type="button"
@@ -5868,6 +5881,26 @@ function clearGraphSelection() {
   justify-content: flex-end;
   gap: 16px;
   min-width: 236px;
+}
+
+/* 图空间覆盖输入：控制台级测试旋钮，与「执行测试」并排 */
+.service-console__space-override {
+  display: inline-flex;
+  flex: 0 1 208px;
+  min-width: 168px;
+  align-items: center;
+  gap: 8px;
+}
+.service-console__space-override > span {
+  flex: none;
+  font-size: 13px;
+  line-height: 20px;
+  color: #4e5969;
+  white-space: nowrap;
+}
+.service-console__space-override > :deep(.clearable-input) {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .service-console--cooperation {

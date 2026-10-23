@@ -194,11 +194,13 @@ class ExpertColleagueRelationApplication:
                     copy.deepcopy(data),
                 )
         # 只有请求对当前空间有写权限才持久化；公共只读查询仍返回推理结果。
+        # 展示空间用实际取数空间（含 X-Business-Graph-Space 覆盖）；kwargs["space"]
+        # 仍是请求空间——回环内层空间绑定校验的锚点。
         data["persistence"] = (
             await asyncio.to_thread(self._persist_relations, data)
             if request_can_write.get()
             else {
-                "space": space,
+                "space": effective_graph_space(),
                 "edgeType": "COLLEAGUE",
                 "created": 0,
                 "updated": 0,

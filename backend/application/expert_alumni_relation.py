@@ -49,7 +49,7 @@ class ExpertAlumniRelationApplication:
             self._persist_relations(data)
             if request_can_write.get()
             else {
-                "space": get_current_space(),
+                "space": effective_graph_space(),
                 "edgeType": "ALUMNI",
                 "created": 0,
                 "updated": 0,

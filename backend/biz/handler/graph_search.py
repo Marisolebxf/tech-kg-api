@@ -184,9 +184,15 @@ def _get_client(space: str | None = None) -> TRSGraphClient:
     九大业务进程内回环（business_data_plane 置位）优先返回业务面连接：回环
     请求虽携带 space 参数（须与请求头一致，否则一致性校验 400），实际取数
     空间由 TRS_GRAPH_BUSINESS_* 决定；未配置业务面变量时行为不变。
+    X-Business-Graph-Space 覆盖（business_space_override，经 require_business_data
+    置位、ASGI 回环同任务传播）在此重定向实际取数空间：space 参数仍是请求
+    空间（内层空间绑定校验锚点），仅连接指向覆盖空间。
     """
-    from service.graph_space_context import business_data_plane
+    from service.graph_space_context import business_data_plane, business_space_override
 
+    override = business_space_override.get()
+    if override:
+        space = override
     if business_data_plane.get():
         business = get_business_space_client(space)
         if business is not None:

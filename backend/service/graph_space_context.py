@@ -11,6 +11,13 @@ selected_graph_space: ContextVar[str | None] = ContextVar("selected_graph_space"
 # 时与平台面共用 TRS_GRAPH_*，行为不变）。平台管理路由与 worker 均不置位。
 business_data_plane: ContextVar[bool] = ContextVar("business_data_plane", default=False)
 
+# 九大业务图空间覆盖（X-Business-Graph-Space 请求头）：优先级高于
+# TRS_GRAPH_BUSINESS_SPACE 钉死与请求空间，仅改空间名不改连接参数（连接仍取
+# 业务面/平台面 env）。与 env 钉死同信任级的部署级测试旋钮，不参与空间绑定校验。
+business_space_override: ContextVar[str | None] = ContextVar(
+    "business_space_override", default=None
+)
+
 
 def get_current_space() -> str:
     from infra.graph_db.config import TRSGraphSettings
@@ -21,6 +28,7 @@ def get_current_space() -> str:
 def effective_graph_space() -> str:
     """本次请求实际取数的图空间。
 
+    优先返回 X-Business-Graph-Space 覆盖（business_space_override，测试旋钮）；
     九大业务（business_data_plane 置位）配置 TRS_GRAPH_BUSINESS_* 时返回业务面
     空间（TRS_GRAPH_BUSINESS_SPACE，未配置时按请求空间名映射），数据连接已被
     业务面接管；其余情况与 get_current_space() 一致。溯源标注（"trs-graph /
@@ -29,6 +37,9 @@ def effective_graph_space() -> str:
     """
     from infra.graph_db.config import business_plane_settings
 
+    override = business_space_override.get()
+    if override:
+        return override
     if business_data_plane.get():
         settings = business_plane_settings(selected_graph_space.get())
         if settings is not None:

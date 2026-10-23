@@ -6,6 +6,7 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?请填写平台公共入口}
       APP_BASE: ${APP_BASE:-/bkg_zp}
       AUTH_ENABLED: "true"
+      # 当前模板使用共享 Cookie 模式；首次登录链路需联调确认，不能从登记 callback 推断模式。
       AUTH_LOGIN_MODE: portal
       USER_CENTER_PORTAL_LOGIN_URL: ${USER_CENTER_PORTAL_LOGIN_URL:-/portal/}
       USER_CENTER_PORTAL_COOKIE_LOGIN_ENABLED: "true"
@@ -20,7 +21,7 @@ services:
       USER_CENTER_OPEN_API_BASE_URL: ${USER_CENTER_OPEN_API_BASE_URL:-}
       USER_CENTER_SSO_LOGIN_URL: ${PUBLIC_BASE_URL}/uc/sso/login
       USER_CENTER_ACCOUNT_URL: ${PUBLIC_BASE_URL}/uc/admin/login?redirect=/index
-      # 兼容原配置项；portal 模式不会调用本系统 OAuth callback，无需为它登记回调。
+      # 与门户要求登记的完整回调地址一致；portal 模式访问 callback 返回 404，实际回跳需先联调确认。
       USER_CENTER_REDIRECT_URI: ${PUBLIC_BASE_URL}${APP_BASE:-/bkg_zp}/api/v1/auth/callback
       # 角色沿用用户中心和本系统业务权限，不通过“首个访问者”自动授予管理员。
       PLATFORM_BOOTSTRAP_FIRST_ADMIN: "false"

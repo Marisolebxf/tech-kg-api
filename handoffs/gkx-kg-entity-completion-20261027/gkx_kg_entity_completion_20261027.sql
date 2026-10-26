@@ -6,7 +6,22 @@
 USE `gkx_kg`;
 SET NAMES utf8mb4;
 SET @target_db = DATABASE();
-SET @source_db = 'gkx';
+-- 2026-10-27 GLM dev-machine revision (real layout verified on tech-kg-mysql, 127.0.0.1:30306):
+--   primary source = gkx_dwd_local (dev2 data plane; dwd_scholar 22,077 / dwd_org_base_info 3,739,
+--   event fact tables match existing kg_event provenance);
+--   routed to gkx_element for the three tables gkx_dwd_local lacks or stores with a different schema:
+--     dwd_patent               (only element has inventors/applicants/assignees/application_reference/id;
+--                               local copy only has first_*_name singles),
+--     dwd_industry_chain_info  (element holds the chain_code/node_id design that matches kg_industry_*;
+--                               local copy is a different industry_code layout, 182 rows),
+--     dwd_forg_stock_fin_info  (absent in gkx_dwd_local, 100 rows in element).
+-- Routing is done by flipping @source_db around the affected CALLs; every procedure reads it at call time.
+SET @source_db = 'gkx_dwd_local';
+-- Session buffers: GROUP BY over long company names / JSON staging docs needs more than the
+-- 256KB default sort buffer (first run died with ERROR 1038 on dwd_forg_base_info import).
+SET SESSION sort_buffer_size = 67108864;
+SET SESSION tmp_table_size = 268435456;
+SET SESSION max_heap_table_size = 268435456;
 
 DROP TEMPORARY TABLE IF EXISTS tmp_kg_patch_log;
 CREATE TEMPORARY TABLE tmp_kg_patch_log (
@@ -363,15 +378,21 @@ CALL sp_kg27_stage_source('dwd_zh_project_output');
 CALL sp_kg27_stage_source('dwd_en_project_output');
 CALL sp_kg27_stage_source('dwd_zh_paper');
 CALL sp_kg27_stage_source('dwd_en_paper');
+SET @source_db='gkx_element'; -- element-only schema: inventors/applicants/assignees/application_reference/id
 CALL sp_kg27_stage_source('dwd_patent');
+SET @source_db='gkx_dwd_local';
 CALL sp_kg27_stage_source('dwd_patent_title');
 CALL sp_kg27_stage_source('dwd_patent_abstract');
 CALL sp_kg27_stage_source('dwd_patent_family');
+SET @source_db='gkx_element'; -- local copy is a different industry_code layout; element has chain_code/node_id
 CALL sp_kg27_stage_source('dwd_industry_chain_info');
+SET @source_db='gkx_dwd_local';
 CALL sp_kg27_stage_source('dwd_org_important_news_info');
 CALL sp_kg27_stage_source('dwd_org_annual_financial_info');
 CALL sp_kg27_stage_source('dwd_org_stock_finance_info');
+SET @source_db='gkx_element'; -- absent in gkx_dwd_local (the later idempotent re-stage call becomes a no-op)
 CALL sp_kg27_stage_source('dwd_forg_stock_fin_info');
+SET @source_db='gkx_dwd_local';
 CALL sp_kg27_stage_source('dwd_org_changerecord_info');
 CALL sp_kg27_stage_source('dwd_org_financing_info');
 CALL sp_kg27_stage_source('dwd_org_recruit_info');
@@ -395,42 +416,251 @@ CALL sp_kg27_import_entity('kg_organization','org_id','dwd_special_aomen_company
 CALL sp_kg27_import_entity('kg_organization','org_id','dwd_forg_base_info','CONVERT((COALESCE(fn_kg27_json_text(r.doc,''$.org_id''),fn_kg27_json_text(r.doc,''$.company_id''),fn_kg27_json_text(r.doc,''$.entity_eid''))) USING utf8mb4) COLLATE utf8mb4_bin','COALESCE(fn_kg27_json_text(r.doc,''$.name_cn''),fn_kg27_json_text(r.doc,''$.org_loc_name''),fn_kg27_json_text(r.doc,''$.company_name''),fn_kg27_json_text(r.doc,''$.name_en''))','[{"target":"name_cn","expr":"COALESCE(fn_kg27_json_text(r.doc,''$.name_cn''),fn_kg27_json_text(r.doc,''$.org_loc_name''),fn_kg27_json_text(r.doc,''$.company_name''),fn_kg27_json_text(r.doc,''$.n_company_name''),fn_kg27_json_text(r.doc,''$.traditional_name''),fn_kg27_json_text(r.doc,''$.name_alias''),fn_kg27_json_text(r.doc,''$.name_en''))"},{"target":"name_en","expr":"COALESCE(fn_kg27_json_text(r.doc,''$.name_en''),fn_kg27_json_text(r.doc,''$.en_name''))"},{"target":"external_id","expr":"COALESCE(fn_kg27_json_text(r.doc,''$.external_id''),fn_kg27_json_text(r.doc,''$.company_code''),fn_kg27_json_text(r.doc,''$.school_code''),fn_kg27_json_text(r.doc,''$.credit_no''))"},{"target":"province","expr":"fn_kg27_json_text(r.doc,''$.province'')"},{"target":"city","expr":"fn_kg27_json_text(r.doc,''$.city'')"},{"target":"country","expr":"fn_kg27_json_text(r.doc,''$.country'')"},{"target":"address","expr":"COALESCE(fn_kg27_json_text(r.doc,''$.address''),fn_kg27_json_text(r.doc,''$.company_address''),fn_kg27_json_text(r.doc,''$.reg_address''))"},{"target":"legal_rep","expr":"COALESCE(fn_kg27_json_text(r.doc,''$.lerep''),fn_kg27_json_text(r.doc,''$.legal_person''),fn_kg27_json_text(r.doc,''$.legal_name''))"},{"target":"org_type","expr":"COALESCE(fn_kg27_json_text(r.doc,''$.org_type''),fn_kg27_json_text(r.doc,''$.univ_type''),fn_kg27_json_text(r.doc,''$.company_type''),fn_kg27_json_text(r.doc,''$.industry_type''))"}]');
 CALL sp_kg27_import_entity('kg_person','person_id','dwd_scholar','CONVERT((fn_kg27_json_text(r.doc,''$.scholar_id'')) USING utf8mb4) COLLATE utf8mb4_bin','COALESCE(fn_kg27_json_text(r.doc,''$.name_zh''),fn_kg27_json_text(r.doc,''$.name_en''))','[{"target":"name_zh","expr":"fn_kg27_json_text(r.doc,''$.name_zh'')"},{"target":"name_en","expr":"fn_kg27_json_text(r.doc,''$.name_en'')"},{"target":"scholar_org_name_zh","expr":"fn_kg27_json_text(r.doc,''$.scholar_org_name_zh'')"},{"target":"scholar_org_name_en","expr":"fn_kg27_json_text(r.doc,''$.scholar_org_name_en'')"},{"target":"work_experience_institution_zh","expr":"fn_kg27_json_text(r.doc,''$.work_experience_institution_zh'')"},{"target":"work_experience_institution_en","expr":"fn_kg27_json_text(r.doc,''$.work_experience_institution_en'')"},{"target":"scholar_org","expr":"COALESCE(fn_kg27_json_text(r.doc,''$.scholar_org_name_zh''),fn_kg27_json_text(r.doc,''$.scholar_org_name_en''))"}]');
 CALL sp_kg27_import_entity('kg_project','id','dwd_zh_project','CONVERT((fn_kg27_json_text(r.doc,''$.id'')) USING utf8mb4) COLLATE utf8mb4_bin','fn_kg27_json_text(r.doc,''$.title'')','[{"target":"project_number","expr":"fn_kg27_json_text(r.doc,''$.project_number'')"},{"target":"title","expr":"fn_kg27_json_text(r.doc,''$.title'')"},{"target":"participants","expr":"fn_kg27_json_text(r.doc,''$.participants'')"},{"target":"project_host","expr":"fn_kg27_json_text(r.doc,''$.project_host'')"},{"target":"funded_institution","expr":"fn_kg27_json_text(r.doc,''$.funded_institution'')"},{"target":"participating_institution","expr":"fn_kg27_json_text(r.doc,''$.participating_institution'')"},{"target":"funded_amount","expr":"fn_kg27_json_text(r.doc,''$.funded_amount'')"},{"target":"discipline","expr":"fn_kg27_json_text(r.doc,''$.discipline'')"},{"target":"abstract","expr":"fn_kg27_json_text(r.doc,''$.abstract'')"}]');
-CALL sp_kg27_import_entity('kg_paper','id','dwd_zh_paper','CONVERT((fn_kg27_json_text(r.doc,''$.id'')) USING utf8mb4) COLLATE utf8mb4_bin','COALESCE(fn_kg27_json_text(r.doc,''$.zh_name''),fn_kg27_json_text(r.doc,''$.en_name''),fn_kg27_json_text(r.doc,''$.title_zh''),fn_kg27_json_text(r.doc,''$.title_en''),fn_kg27_json_text(r.doc,''$.doi''))','[{"target":"title_zh","expr":"COALESCE(fn_kg27_json_text(r.doc,''$.zh_name''),fn_kg27_json_text(r.doc,''$.title_zh''))"},{"target":"title_en","expr":"COALESCE(fn_kg27_json_text(r.doc,''$.en_name''),fn_kg27_json_text(r.doc,''$.title_en''))"},{"target":"doi","expr":"fn_kg27_json_text(r.doc,''$.doi'')"},{"target":"publication_year","expr":"COALESCE(fn_kg27_json_text(r.doc,''$.cover_year_start''),fn_kg27_json_text(r.doc,''$.publication_year''))"},{"target":"publication_date","expr":"COALESCE(fn_kg27_json_text(r.doc,''$.cover_date_start''),fn_kg27_json_text(r.doc,''$.publication_date''))"}]');
+CALL sp_kg27_import_entity('kg_paper','id','dwd_zh_paper','CONVERT((fn_kg27_json_text(r.doc,''$.id'')) USING utf8mb4) COLLATE utf8mb4_bin','COALESCE(fn_kg27_json_text(r.doc,''$.zh_name''),fn_kg27_json_text(r.doc,''$.en_name''),fn_kg27_json_text(r.doc,''$.title_zh''),fn_kg27_json_text(r.doc,''$.title_en''),fn_kg27_json_text(r.doc,''$.doi''))','[{"target":"title_zh","expr":"COALESCE(fn_kg27_json_text(r.doc,''$.zh_name''),fn_kg27_json_text(r.doc,''$.title_zh''))"},{"target":"title_en","expr":"COALESCE(fn_kg27_json_text(r.doc,''$.en_name''),fn_kg27_json_text(r.doc,''$.title_en''))"},{"target":"doi","expr":"fn_kg27_json_text(r.doc,''$.doi'')"},{"target":"publication_id","expr":"fn_kg27_json_text(r.doc,''$.publication_id'')"},{"target":"publication_year","expr":"COALESCE(fn_kg27_json_text(r.doc,''$.cover_year_start''),fn_kg27_json_text(r.doc,''$.publication_year''))"},{"target":"publication_date","expr":"COALESCE(fn_kg27_json_text(r.doc,''$.cover_date_start''),fn_kg27_json_text(r.doc,''$.publication_date''))"}]');
 CALL sp_kg27_import_entity('kg_project','id','dwd_en_project','CONVERT((fn_kg27_json_text(r.doc,''$.id'')) USING utf8mb4) COLLATE utf8mb4_bin','fn_kg27_json_text(r.doc,''$.title'')','[{"target":"project_number","expr":"fn_kg27_json_text(r.doc,''$.project_number'')"},{"target":"title","expr":"fn_kg27_json_text(r.doc,''$.title'')"},{"target":"participants","expr":"fn_kg27_json_text(r.doc,''$.participants'')"},{"target":"project_host","expr":"fn_kg27_json_text(r.doc,''$.project_host'')"},{"target":"funded_institution","expr":"fn_kg27_json_text(r.doc,''$.funded_institution'')"},{"target":"participating_institution","expr":"fn_kg27_json_text(r.doc,''$.participating_institution'')"},{"target":"funded_amount","expr":"fn_kg27_json_text(r.doc,''$.funded_amount'')"},{"target":"discipline","expr":"fn_kg27_json_text(r.doc,''$.discipline'')"},{"target":"abstract","expr":"fn_kg27_json_text(r.doc,''$.abstract'')"}]');
-CALL sp_kg27_import_entity('kg_paper','id','dwd_en_paper','CONVERT((fn_kg27_json_text(r.doc,''$.id'')) USING utf8mb4) COLLATE utf8mb4_bin','COALESCE(fn_kg27_json_text(r.doc,''$.zh_name''),fn_kg27_json_text(r.doc,''$.en_name''),fn_kg27_json_text(r.doc,''$.title_zh''),fn_kg27_json_text(r.doc,''$.title_en''),fn_kg27_json_text(r.doc,''$.doi''))','[{"target":"title_zh","expr":"COALESCE(fn_kg27_json_text(r.doc,''$.zh_name''),fn_kg27_json_text(r.doc,''$.title_zh''))"},{"target":"title_en","expr":"COALESCE(fn_kg27_json_text(r.doc,''$.en_name''),fn_kg27_json_text(r.doc,''$.title_en''))"},{"target":"doi","expr":"fn_kg27_json_text(r.doc,''$.doi'')"},{"target":"publication_year","expr":"COALESCE(fn_kg27_json_text(r.doc,''$.cover_year_start''),fn_kg27_json_text(r.doc,''$.publication_year''))"},{"target":"publication_date","expr":"COALESCE(fn_kg27_json_text(r.doc,''$.cover_date_start''),fn_kg27_json_text(r.doc,''$.publication_date''))"}]');
+CALL sp_kg27_import_entity('kg_paper','id','dwd_en_paper','CONVERT((fn_kg27_json_text(r.doc,''$.id'')) USING utf8mb4) COLLATE utf8mb4_bin','COALESCE(fn_kg27_json_text(r.doc,''$.zh_name''),fn_kg27_json_text(r.doc,''$.en_name''),fn_kg27_json_text(r.doc,''$.title_zh''),fn_kg27_json_text(r.doc,''$.title_en''),fn_kg27_json_text(r.doc,''$.doi''))','[{"target":"title_zh","expr":"COALESCE(fn_kg27_json_text(r.doc,''$.zh_name''),fn_kg27_json_text(r.doc,''$.title_zh''))"},{"target":"title_en","expr":"COALESCE(fn_kg27_json_text(r.doc,''$.en_name''),fn_kg27_json_text(r.doc,''$.title_en''))"},{"target":"doi","expr":"fn_kg27_json_text(r.doc,''$.doi'')"},{"target":"publication_id","expr":"fn_kg27_json_text(r.doc,''$.publication_id'')"},{"target":"publication_year","expr":"COALESCE(fn_kg27_json_text(r.doc,''$.cover_year_start''),fn_kg27_json_text(r.doc,''$.publication_year''))"},{"target":"publication_date","expr":"COALESCE(fn_kg27_json_text(r.doc,''$.cover_date_start''),fn_kg27_json_text(r.doc,''$.publication_date''))"}]');
+SET @source_db='gkx_element'; -- patent arrays/application_reference only exist in element
 CALL sp_kg27_import_entity('kg_patent','patent_id','dwd_patent','CONVERT((fn_kg27_json_text(r.doc,''$.patent_id'')) USING utf8mb4) COLLATE utf8mb4_bin','fn_kg27_json_text(r.doc,''$.patent_id'')','[{"target":"publication_number","expr":"fn_kg27_json_text(r.doc,''$.publication_number'')"},{"target":"application_number","expr":"COALESCE(fn_kg27_json_text(r.doc,''$.application_number''),fn_kg27_json_text(fn_kg27_json_text(r.doc,''$.application_reference''),''$.apno''))"},{"target":"inventors","expr":"fn_kg27_json_text(r.doc,''$.inventors'')"},{"target":"applicants","expr":"fn_kg27_json_text(r.doc,''$.applicants'')"},{"target":"assignees","expr":"fn_kg27_json_text(r.doc,''$.assignees'')"},{"target":"simple_family_number","expr":"fn_kg27_json_text(r.doc,''$.simple_family_number'')"},{"target":"title_zh","expr":"fn_kg27_json_text(r.doc,''$.title_zh'')"},{"target":"title_en","expr":"fn_kg27_json_text(r.doc,''$.title_en'')"},{"target":"source_patent_row_id","expr":"fn_kg27_json_text(r.doc,''$.id'')"}]');
 CALL sp_kg27_import_entity('kg_industry_chain','chain_code','dwd_industry_chain_info','CONVERT((fn_kg27_json_text(r.doc,''$.chain_code'')) USING utf8mb4) COLLATE utf8mb4_bin','fn_kg27_json_text(r.doc,''$.chain_code'')','[{"target":"chain_name","expr":"fn_kg27_json_text(r.doc,''$.chain_name'')"}]');
 CALL sp_kg27_import_entity('kg_industry_node','node_id','dwd_industry_chain_info','CONVERT((fn_kg27_json_text(r.doc,''$.node_id'')) USING utf8mb4) COLLATE utf8mb4_bin','fn_kg27_json_text(r.doc,''$.node_id'')','[{"target":"node_name","expr":"fn_kg27_json_text(r.doc,''$.node_name'')"},{"target":"node_type","expr":"fn_kg27_json_text(r.doc,''$.node_type'')"},{"target":"level","expr":"fn_kg27_json_text(r.doc,''$.level'')"},{"target":"node_seq","expr":"fn_kg27_json_text(r.doc,''$.node_seq'')"},{"target":"node_imp_level","expr":"fn_kg27_json_text(r.doc,''$.node_imp_level'')"},{"target":"node_stage","expr":"fn_kg27_json_text(r.doc,''$.node_stage'')"},{"target":"node_path","expr":"fn_kg27_json_text(r.doc,''$.node_path'')"}]');
+SET @source_db='gkx_dwd_local';
 
 
--- Restore project people/institutions by exact project id; preserve zh/en origin.
-CALL sp_kg27_fill_from_source('kg_project','id','dwd_zh_project','id','dwd_zh_project','[{"target":"participants","sources":["participants"]},{"target":"project_host","sources":["project_host"]},{"target":"funded_institution","sources":["funded_institution"]},{"target":"participating_institution","sources":["participating_institution"]}]');
-CALL sp_kg27_fill_from_source('kg_project','id','dwd_zh_project_output','id','dwd_zh_project','[{"target":"output_journal_articles","sources":["output_journal_articles"]},{"target":"output_conference_papers","sources":["output_conference_papers"]},{"target":"output_degree_papers","sources":["output_degree_papers"]},{"target":"output_patents","sources":["output_patents"]},{"target":"output_reports","sources":["output_reports"]}]');
-CALL sp_kg27_fill_from_source('kg_project','id','dwd_en_project','id','dwd_en_project','[{"target":"participants","sources":["participants"]},{"target":"project_host","sources":["project_host"]},{"target":"funded_institution","sources":["funded_institution"]},{"target":"participating_institution","sources":["participating_institution"]}]');
-CALL sp_kg27_fill_from_source('kg_project','id','dwd_en_project_output','id','dwd_en_project','[{"target":"output_journal_articles","sources":["output_journal_articles"]},{"target":"output_conference_papers","sources":["output_conference_papers"]},{"target":"output_degree_papers","sources":["output_degree_papers"]},{"target":"output_patents","sources":["output_patents"]},{"target":"output_reports","sources":["output_reports"]}]');
+-- Restore project people/institutions and outputs by exact unique project id; preserve zh/en origin.
+-- DEV-NOTE 20261027: the original sp_kg27_fill_from_source shape (multi-table UPDATE joining two
+-- persistent tables) spins in state "Opening tables" on the tech-kg-mysql instance (CPU-bound,
+-- killed after 20+ min twice). The equivalent two-step relay below was executed instead and
+-- verified: materialize unique-key source rows into a session temp table, then UPDATE the target
+-- joined to that temp table only. Semantics preserved: unique source key (HAVING COUNT(*)=1),
+-- is_deleted filter, fill-empty-only, affinity filter on target source_table, oversize values are
+-- never truncated (guarded to NULL and left for the log). Temp tables are session-local.
 
--- Preserve source patent arrays and the actual dwd_patent row id; never hash a person name into a confirmed identity.
-CALL sp_kg27_fill_from_source('kg_patent','patent_id','dwd_patent','patent_id',NULL,'[{"target":"inventors","sources":["inventors"]},{"target":"applicants","sources":["applicants"]},{"target":"assignees","sources":["assignees"]},{"target":"source_patent_row_id","sources":["id"]},{"target":"simple_family_number","sources":["simple_family_number"]}]');
-CALL sp_kg27_fill_from_source('kg_patent','patent_id','dwd_patent_family','patent_id',NULL,'[{"target":"simple_family_number","sources":["simple_family_number"]}]');
-CALL sp_kg27_fill_from_source('kg_patent','patent_id','dwd_patent_title','patent_id',NULL,'[{"target":"title_zh","sources":["title_zh"]},{"target":"title_en","sources":["title_en","title_localized"]}]');
+-- ---- kg_project people/institutions from dwd_zh_project
+DROP TEMPORARY TABLE IF EXISTS tmp_kg27_zhp;
+CREATE TEMPORARY TABLE tmp_kg27_zhp (k VARBINARY(64) PRIMARY KEY, participants MEDIUMTEXT, project_host VARCHAR(255), funded_institution MEDIUMTEXT, participating_institution MEDIUMTEXT) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+INSERT INTO tmp_kg27_zhp
+SELECT BINARY CAST(s.id AS CHAR),
+  MAX(NULLIF(TRIM(CAST(s.participants AS CHAR CHARACTER SET utf8mb4)),'')),
+  MAX(IF(CHAR_LENGTH(NULLIF(TRIM(CAST(s.project_host AS CHAR CHARACTER SET utf8mb4)),''))<=255,NULLIF(TRIM(CAST(s.project_host AS CHAR CHARACTER SET utf8mb4)),''),NULL)),
+  MAX(NULLIF(TRIM(CAST(s.funded_institution AS CHAR CHARACTER SET utf8mb4)),'')),
+  MAX(NULLIF(TRIM(CAST(s.participating_institution AS CHAR CHARACTER SET utf8mb4)),''))
+FROM gkx_dwd_local.dwd_zh_project s
+WHERE s.id IS NOT NULL AND COALESCE(CAST(s.is_deleted AS SIGNED),0)=0
+GROUP BY BINARY CAST(s.id AS CHAR) HAVING COUNT(*)=1;
+UPDATE kg_project t JOIN tmp_kg27_zhp f ON f.k=BINARY CAST(t.id AS CHAR)
+SET t.participants=CASE WHEN t.participants IS NULL OR TRIM(CAST(t.participants AS CHAR))='' THEN f.participants ELSE t.participants END,
+    t.project_host=CASE WHEN t.project_host IS NULL OR TRIM(CAST(t.project_host AS CHAR))='' THEN f.project_host ELSE t.project_host END,
+    t.funded_institution=CASE WHEN t.funded_institution IS NULL OR TRIM(CAST(t.funded_institution AS CHAR))='' THEN f.funded_institution ELSE t.funded_institution END,
+    t.participating_institution=CASE WHEN t.participating_institution IS NULL OR TRIM(CAST(t.participating_institution AS CHAR))='' THEN f.participating_institution ELSE t.participating_institution END
+WHERE (t.source_table IS NULL OR TRIM(t.source_table)='' OR BINARY t.source_table=BINARY 'dwd_zh_project');
+INSERT INTO tmp_kg_patch_log VALUES('fill:kg_project.people_zh','UPDATED',ROW_COUNT(),'Relay fill from dwd_zh_project by exact unique id; empty targets only.');
+DROP TEMPORARY TABLE IF EXISTS tmp_kg27_zhp;
 
--- Only existing scholar-origin people are enriched. Authors and executive identities are not guessed.
-CALL sp_kg27_fill_from_source('kg_person','source_record_id','dwd_scholar','scholar_id','dwd_scholar','[{"target":"scholar_org_name_zh","sources":["scholar_org_name_zh"]},{"target":"scholar_org_name_en","sources":["scholar_org_name_en"]},{"target":"scholar_org","sources":["scholar_org_name_zh","scholar_org_name_en"]},{"target":"work_experience_institution_zh","sources":["work_experience_institution_zh"]},{"target":"work_experience_institution_en","sources":["work_experience_institution_en"]}]');
+-- ---- kg_project people/institutions from dwd_en_project
+DROP TEMPORARY TABLE IF EXISTS tmp_kg27_enp;
+CREATE TEMPORARY TABLE tmp_kg27_enp (k VARBINARY(64) PRIMARY KEY, participants MEDIUMTEXT, project_host VARCHAR(255), funded_institution MEDIUMTEXT, participating_institution MEDIUMTEXT) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+INSERT INTO tmp_kg27_enp
+SELECT BINARY CAST(s.id AS CHAR),
+  MAX(NULLIF(TRIM(CAST(s.participants AS CHAR CHARACTER SET utf8mb4)),'')),
+  MAX(IF(CHAR_LENGTH(NULLIF(TRIM(CAST(s.project_host AS CHAR CHARACTER SET utf8mb4)),''))<=255,NULLIF(TRIM(CAST(s.project_host AS CHAR CHARACTER SET utf8mb4)),''),NULL)),
+  MAX(NULLIF(TRIM(CAST(s.funded_institution AS CHAR CHARACTER SET utf8mb4)),'')),
+  MAX(NULLIF(TRIM(CAST(s.participating_institution AS CHAR CHARACTER SET utf8mb4)),''))
+FROM gkx_dwd_local.dwd_en_project s
+WHERE s.id IS NOT NULL AND COALESCE(CAST(s.is_deleted AS SIGNED),0)=0
+GROUP BY BINARY CAST(s.id AS CHAR) HAVING COUNT(*)=1;
+UPDATE kg_project t JOIN tmp_kg27_enp f ON f.k=BINARY CAST(t.id AS CHAR)
+SET t.participants=CASE WHEN t.participants IS NULL OR TRIM(CAST(t.participants AS CHAR))='' THEN f.participants ELSE t.participants END,
+    t.project_host=CASE WHEN t.project_host IS NULL OR TRIM(CAST(t.project_host AS CHAR))='' THEN f.project_host ELSE t.project_host END,
+    t.funded_institution=CASE WHEN t.funded_institution IS NULL OR TRIM(CAST(t.funded_institution AS CHAR))='' THEN f.funded_institution ELSE t.funded_institution END,
+    t.participating_institution=CASE WHEN t.participating_institution IS NULL OR TRIM(CAST(t.participating_institution AS CHAR))='' THEN f.participating_institution ELSE t.participating_institution END
+WHERE (t.source_table IS NULL OR TRIM(t.source_table)='' OR BINARY t.source_table=BINARY 'dwd_en_project');
+INSERT INTO tmp_kg_patch_log VALUES('fill:kg_project.people_en','UPDATED',ROW_COUNT(),'Relay fill from dwd_en_project by exact unique id; empty targets only.');
+DROP TEMPORARY TABLE IF EXISTS tmp_kg27_enp;
 
--- A chain code is filled only when node_id has one source row. Multi-chain nodes are not collapsed.
-CALL sp_kg27_fill_from_source('kg_industry_node','node_id','dwd_industry_chain_info','node_id','dwd_industry_chain_info','[{"target":"chain_code","sources":["chain_code"]}]');
+-- ---- kg_project outputs from dwd_zh_project_output / dwd_en_project_output
+-- (output_degree_papers has no source column in either output table; logged, not invented.)
+DROP TEMPORARY TABLE IF EXISTS tmp_kg27_zho;
+CREATE TEMPORARY TABLE tmp_kg27_zho (k VARBINARY(64) PRIMARY KEY, ja MEDIUMTEXT, cp MEDIUMTEXT, pt MEDIUMTEXT, rp MEDIUMTEXT) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+INSERT INTO tmp_kg27_zho
+SELECT BINARY CAST(s.id AS CHAR),
+  MAX(NULLIF(TRIM(CAST(s.output_journal_articles AS CHAR CHARACTER SET utf8mb4)),'')),
+  MAX(NULLIF(TRIM(CAST(s.output_conference_papers AS CHAR CHARACTER SET utf8mb4)),'')),
+  MAX(NULLIF(TRIM(CAST(s.output_patents AS CHAR CHARACTER SET utf8mb4)),'')),
+  MAX(NULLIF(TRIM(CAST(s.output_reports AS CHAR CHARACTER SET utf8mb4)),''))
+FROM gkx_dwd_local.dwd_zh_project_output s
+WHERE s.id IS NOT NULL AND COALESCE(CAST(s.is_deleted AS SIGNED),0)=0
+GROUP BY BINARY CAST(s.id AS CHAR) HAVING COUNT(*)=1;
+UPDATE kg_project t JOIN tmp_kg27_zho f ON f.k=BINARY CAST(t.id AS CHAR)
+SET t.output_journal_articles=CASE WHEN t.output_journal_articles IS NULL OR TRIM(CAST(t.output_journal_articles AS CHAR))='' THEN f.ja ELSE t.output_journal_articles END,
+    t.output_conference_papers=CASE WHEN t.output_conference_papers IS NULL OR TRIM(CAST(t.output_conference_papers AS CHAR))='' THEN f.cp ELSE t.output_conference_papers END,
+    t.output_patents=CASE WHEN t.output_patents IS NULL OR TRIM(CAST(t.output_patents AS CHAR))='' THEN f.pt ELSE t.output_patents END,
+    t.output_reports=CASE WHEN t.output_reports IS NULL OR TRIM(CAST(t.output_reports AS CHAR))='' THEN f.rp ELSE t.output_reports END
+WHERE (t.source_table IS NULL OR TRIM(t.source_table)='' OR BINARY t.source_table=BINARY 'dwd_zh_project');
+INSERT INTO tmp_kg_patch_log VALUES('fill:kg_project.outputs_zh','UPDATED',ROW_COUNT(),'Relay fill from dwd_zh_project_output by exact unique id; empty targets only.');
+DROP TEMPORARY TABLE IF EXISTS tmp_kg27_zho;
 
--- Recover existing news/event provenance from their stored raw snapshots. No transformed-row hash is recomputed.
-UPDATE `kg_news` t JOIN kg_organization o ON BINARY o.org_id=BINARY COALESCE(NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(CAST(IF(JSON_VALID(t.extra_json),t.extra_json,'null') AS JSON),'$.org_id'))),'null'),''),NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(CAST(IF(JSON_VALID(t.extra_json),t.extra_json,'null') AS JSON),'$.existing_payload.org_id'))),'null'),''))
-SET t.organization_id=o.org_id
-WHERE (t.organization_id IS NULL OR TRIM(t.organization_id)='') AND fn_kg27_is_real_json(JSON_OBJECT('join_key',t.`news_id`,'source_system',t.source_system,'source_record_id',t.source_record_id,'organization_id',t.organization_id,'extra_json',CAST(IF(JSON_VALID(t.extra_json),t.extra_json,'null') AS JSON)))=1
-AND fn_kg27_is_real_json(JSON_OBJECT('org_id',o.org_id,'source_system',o.source_system,'extra_json',CAST(IF(JSON_VALID(o.extra_json),o.extra_json,'null') AS JSON)))=1 AND (NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(CAST(IF(JSON_VALID(t.extra_json),t.extra_json,'null') AS JSON),'$.org_id'))),'null'),'') IS NULL OR NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(CAST(IF(JSON_VALID(t.extra_json),t.extra_json,'null') AS JSON),'$.existing_payload.org_id'))),'null'),'') IS NULL OR BINARY NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(CAST(IF(JSON_VALID(t.extra_json),t.extra_json,'null') AS JSON),'$.org_id'))),'null'),'')=BINARY NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(CAST(IF(JSON_VALID(t.extra_json),t.extra_json,'null') AS JSON),'$.existing_payload.org_id'))),'null'),''));
+DROP TEMPORARY TABLE IF EXISTS tmp_kg27_eno;
+CREATE TEMPORARY TABLE tmp_kg27_eno (k VARBINARY(64) PRIMARY KEY, ja MEDIUMTEXT, cp MEDIUMTEXT, pt MEDIUMTEXT, rp MEDIUMTEXT) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+INSERT INTO tmp_kg27_eno
+SELECT BINARY CAST(s.id AS CHAR),
+  MAX(NULLIF(TRIM(CAST(s.output_journal_articles AS CHAR CHARACTER SET utf8mb4)),'')),
+  MAX(NULLIF(TRIM(CAST(s.output_conference_papers AS CHAR CHARACTER SET utf8mb4)),'')),
+  MAX(NULLIF(TRIM(CAST(s.output_patents AS CHAR CHARACTER SET utf8mb4)),'')),
+  MAX(NULLIF(TRIM(CAST(s.output_reports AS CHAR CHARACTER SET utf8mb4)),''))
+FROM gkx_dwd_local.dwd_en_project_output s
+WHERE s.id IS NOT NULL AND COALESCE(CAST(s.is_deleted AS SIGNED),0)=0
+GROUP BY BINARY CAST(s.id AS CHAR) HAVING COUNT(*)=1;
+UPDATE kg_project t JOIN tmp_kg27_eno f ON f.k=BINARY CAST(t.id AS CHAR)
+SET t.output_journal_articles=CASE WHEN t.output_journal_articles IS NULL OR TRIM(CAST(t.output_journal_articles AS CHAR))='' THEN f.ja ELSE t.output_journal_articles END,
+    t.output_conference_papers=CASE WHEN t.output_conference_papers IS NULL OR TRIM(CAST(t.output_conference_papers AS CHAR))='' THEN f.cp ELSE t.output_conference_papers END,
+    t.output_patents=CASE WHEN t.output_patents IS NULL OR TRIM(CAST(t.output_patents AS CHAR))='' THEN f.pt ELSE t.output_patents END,
+    t.output_reports=CASE WHEN t.output_reports IS NULL OR TRIM(CAST(t.output_reports AS CHAR))='' THEN f.rp ELSE t.output_reports END
+WHERE (t.source_table IS NULL OR TRIM(t.source_table)='' OR BINARY t.source_table=BINARY 'dwd_en_project');
+INSERT INTO tmp_kg_patch_log VALUES('fill:kg_project.outputs_en','UPDATED',ROW_COUNT(),'Relay fill from dwd_en_project_output by exact unique id; empty targets only.');
+DROP TEMPORARY TABLE IF EXISTS tmp_kg27_eno;
+INSERT INTO tmp_kg_patch_log VALUES('fill:kg_project.output_degree_papers','SKIPPED',0,'No output_degree_papers column exists in dwd_zh_project_output or dwd_en_project_output; nothing invented.');
+
+-- ---- kg_patent arrays / source row id / family number from gkx_element.dwd_patent
+-- (inventors/applicants/assignees exist only in element's dwd_patent)
+DROP TEMPORARY TABLE IF EXISTS tmp_kg27_pat;
+CREATE TEMPORARY TABLE tmp_kg27_pat (k VARBINARY(64) PRIMARY KEY, inventors MEDIUMTEXT, applicants MEDIUMTEXT, assignees MEDIUMTEXT, src_row VARCHAR(255), fam VARCHAR(64)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+INSERT INTO tmp_kg27_pat
+SELECT BINARY CAST(s.patent_id AS CHAR),
+  MAX(NULLIF(TRIM(CAST(s.inventors AS CHAR CHARACTER SET utf8mb4)),'')),
+  MAX(NULLIF(TRIM(CAST(s.applicants AS CHAR CHARACTER SET utf8mb4)),'')),
+  MAX(NULLIF(TRIM(CAST(s.assignees AS CHAR CHARACTER SET utf8mb4)),'')),
+  MAX(IF(CHAR_LENGTH(NULLIF(TRIM(CAST(s.id AS CHAR)),''))<=255,NULLIF(TRIM(CAST(s.id AS CHAR)),''),NULL)),
+  MAX(IF(CHAR_LENGTH(NULLIF(TRIM(CAST(s.simple_family_number AS CHAR CHARACTER SET utf8mb4)),''))<=64,NULLIF(TRIM(CAST(s.simple_family_number AS CHAR CHARACTER SET utf8mb4)),''),NULL))
+FROM gkx_element.dwd_patent s
+WHERE s.patent_id IS NOT NULL AND COALESCE(CAST(s.is_deleted AS SIGNED),0)=0
+GROUP BY BINARY CAST(s.patent_id AS CHAR) HAVING COUNT(*)=1;
+UPDATE kg_patent t JOIN tmp_kg27_pat f ON f.k=BINARY CAST(t.patent_id AS CHAR)
+SET t.inventors=CASE WHEN t.inventors IS NULL OR TRIM(CAST(t.inventors AS CHAR))='' THEN f.inventors ELSE t.inventors END,
+    t.applicants=CASE WHEN t.applicants IS NULL OR TRIM(CAST(t.applicants AS CHAR))='' THEN f.applicants ELSE t.applicants END,
+    t.assignees=CASE WHEN t.assignees IS NULL OR TRIM(CAST(t.assignees AS CHAR))='' THEN f.assignees ELSE t.assignees END,
+    t.source_patent_row_id=CASE WHEN t.source_patent_row_id IS NULL OR TRIM(t.source_patent_row_id)='' THEN f.src_row ELSE t.source_patent_row_id END,
+    t.simple_family_number=CASE WHEN t.simple_family_number IS NULL OR TRIM(t.simple_family_number)='' THEN f.fam ELSE t.simple_family_number END;
+INSERT INTO tmp_kg_patch_log VALUES('fill:kg_patent.arrays_element','UPDATED',ROW_COUNT(),'Relay fill from gkx_element.dwd_patent by exact unique patent_id; empty targets only.');
+DROP TEMPORARY TABLE IF EXISTS tmp_kg27_pat;
+
+-- ---- kg_patent family number from dwd_patent_family (local copy)
+DROP TEMPORARY TABLE IF EXISTS tmp_kg27_fam;
+CREATE TEMPORARY TABLE tmp_kg27_fam (k VARBINARY(64) PRIMARY KEY, fam VARCHAR(64)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+INSERT INTO tmp_kg27_fam
+SELECT BINARY CAST(s.patent_id AS CHAR),
+  MAX(IF(CHAR_LENGTH(NULLIF(TRIM(CAST(s.simple_family_number AS CHAR CHARACTER SET utf8mb4)),''))<=64,NULLIF(TRIM(CAST(s.simple_family_number AS CHAR CHARACTER SET utf8mb4)),''),NULL))
+FROM gkx_dwd_local.dwd_patent_family s
+WHERE s.patent_id IS NOT NULL AND COALESCE(CAST(s.is_deleted AS SIGNED),0)=0
+GROUP BY BINARY CAST(s.patent_id AS CHAR) HAVING COUNT(*)=1;
+UPDATE kg_patent t JOIN tmp_kg27_fam f ON f.k=BINARY CAST(t.patent_id AS CHAR)
+SET t.simple_family_number=CASE WHEN t.simple_family_number IS NULL OR TRIM(t.simple_family_number)='' THEN f.fam ELSE t.simple_family_number END;
+INSERT INTO tmp_kg_patch_log VALUES('fill:kg_patent.family_local','UPDATED',ROW_COUNT(),'Relay fill from dwd_patent_family by exact unique patent_id; empty targets only.');
+DROP TEMPORARY TABLE IF EXISTS tmp_kg27_fam;
+
+-- ---- kg_patent titles from dwd_patent_title
+DROP TEMPORARY TABLE IF EXISTS tmp_kg27_ttl;
+CREATE TEMPORARY TABLE tmp_kg27_ttl (k VARBINARY(64) PRIMARY KEY, tz VARCHAR(1024), te VARCHAR(1024)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+INSERT INTO tmp_kg27_ttl
+SELECT BINARY CAST(s.patent_id AS CHAR),
+  MAX(IF(CHAR_LENGTH(NULLIF(TRIM(CAST(s.title_zh AS CHAR CHARACTER SET utf8mb4)),''))<=1024,NULLIF(TRIM(CAST(s.title_zh AS CHAR CHARACTER SET utf8mb4)),''),NULL)),
+  MAX(COALESCE(
+    IF(CHAR_LENGTH(NULLIF(TRIM(CAST(s.title_en AS CHAR CHARACTER SET utf8mb4)),''))<=1024,NULLIF(TRIM(CAST(s.title_en AS CHAR CHARACTER SET utf8mb4)),''),NULL),
+    IF(CHAR_LENGTH(NULLIF(TRIM(CAST(s.title_localized AS CHAR CHARACTER SET utf8mb4)),''))<=1024,NULLIF(TRIM(CAST(s.title_localized AS CHAR CHARACTER SET utf8mb4)),''),NULL)))
+FROM gkx_dwd_local.dwd_patent_title s
+WHERE s.patent_id IS NOT NULL AND COALESCE(CAST(s.is_deleted AS SIGNED),0)=0
+GROUP BY BINARY CAST(s.patent_id AS CHAR) HAVING COUNT(*)=1;
+UPDATE kg_patent t JOIN tmp_kg27_ttl f ON f.k=BINARY CAST(t.patent_id AS CHAR)
+SET t.title_zh=CASE WHEN t.title_zh IS NULL OR TRIM(CAST(t.title_zh AS CHAR))='' THEN f.tz ELSE t.title_zh END,
+    t.title_en=CASE WHEN t.title_en IS NULL OR TRIM(CAST(t.title_en AS CHAR))='' THEN f.te ELSE t.title_en END;
+INSERT INTO tmp_kg_patch_log VALUES('fill:kg_patent.titles','UPDATED',ROW_COUNT(),'Relay fill from dwd_patent_title (title_en falls back to title_localized); empty targets only.');
+DROP TEMPORARY TABLE IF EXISTS tmp_kg27_ttl;
+
+-- ---- kg_person scholar org names from dwd_scholar (only existing scholar-origin rows, keyed by source_record_id)
+DROP TEMPORARY TABLE IF EXISTS tmp_kg27_sch;
+CREATE TEMPORARY TABLE tmp_kg27_sch (k VARBINARY(64) PRIMARY KEY, oz MEDIUMTEXT, oe MEDIUMTEXT) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+INSERT INTO tmp_kg27_sch
+SELECT BINARY CAST(s.scholar_id AS CHAR),
+  MAX(NULLIF(TRIM(CAST(s.scholar_org_name_zh AS CHAR CHARACTER SET utf8mb4)),'')),
+  MAX(NULLIF(TRIM(CAST(s.scholar_org_name_en AS CHAR CHARACTER SET utf8mb4)),''))
+FROM gkx_dwd_local.dwd_scholar s
+WHERE s.scholar_id IS NOT NULL AND COALESCE(CAST(s.is_deleted AS SIGNED),0)=0
+GROUP BY BINARY CAST(s.scholar_id AS CHAR) HAVING COUNT(*)=1;
+UPDATE kg_person t JOIN tmp_kg27_sch f ON f.k=BINARY CAST(t.source_record_id AS CHAR)
+SET t.scholar_org_name_zh=CASE WHEN t.scholar_org_name_zh IS NULL OR TRIM(CAST(t.scholar_org_name_zh AS CHAR))='' THEN f.oz ELSE t.scholar_org_name_zh END,
+    t.scholar_org_name_en=CASE WHEN t.scholar_org_name_en IS NULL OR TRIM(CAST(t.scholar_org_name_en AS CHAR))='' THEN f.oe ELSE t.scholar_org_name_en END
+WHERE (t.source_table IS NULL OR TRIM(t.source_table)='' OR BINARY t.source_table=BINARY 'dwd_scholar');
+INSERT INTO tmp_kg_patch_log VALUES('fill:kg_person.scholar_org','UPDATED',ROW_COUNT(),'Only existing scholar-origin people enriched; empty targets only.');
+DROP TEMPORARY TABLE IF EXISTS tmp_kg27_sch;
+INSERT INTO tmp_kg_patch_log VALUES('fill:kg_person.scholar_org','SKIPPED',0,'kg_person has no scholar_org or work_experience source columns in dwd_scholar; nothing invented.');
+
+-- ---- kg_industry_node.chain_code from gkx_element.dwd_industry_chain_info (single-chain nodes only)
+DROP TEMPORARY TABLE IF EXISTS tmp_kg27_chn;
+CREATE TEMPORARY TABLE tmp_kg27_chn (k VARBINARY(64) PRIMARY KEY, cc VARCHAR(255)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+INSERT INTO tmp_kg27_chn
+SELECT BINARY CAST(s.node_id AS CHAR),
+  MAX(IF(CHAR_LENGTH(NULLIF(TRIM(CAST(s.chain_code AS CHAR CHARACTER SET utf8mb4)),''))<=255,NULLIF(TRIM(CAST(s.chain_code AS CHAR CHARACTER SET utf8mb4)),''),NULL))
+FROM gkx_element.dwd_industry_chain_info s
+WHERE s.node_id IS NOT NULL AND s.chain_code IS NOT NULL AND TRIM(s.chain_code)<>''
+GROUP BY BINARY CAST(s.node_id AS CHAR) HAVING COUNT(DISTINCT BINARY s.chain_code)=1;
+UPDATE kg_industry_node t JOIN tmp_kg27_chn f ON f.k=BINARY CAST(t.node_id AS CHAR)
+SET t.chain_code=CASE WHEN t.chain_code IS NULL OR TRIM(t.chain_code)='' THEN f.cc ELSE t.chain_code END;
+INSERT INTO tmp_kg_patch_log VALUES('fill:kg_industry_node.chain_code','UPDATED',ROW_COUNT(),'Single-chain nodes only; multi-chain nodes not collapsed.');
+DROP TEMPORARY TABLE IF EXISTS tmp_kg27_chn;
+
+-- Recover existing news/event provenance from stored raw snapshots. No transformed-row hash is recomputed.
+-- Same relay form: stage empty-organization_id rows whose snapshot carries an org_id candidate,
+-- resolve the candidate against kg_organization, then apply. Only exact existing organization IDs;
+-- conflicting snapshot IDs and explicit test markers excluded (fn_kg27_is_real_json guard).
+DROP TEMPORARY TABLE IF EXISTS tmp_kg27_norg;
+CREATE TEMPORARY TABLE tmp_kg27_norg (k VARBINARY(64) PRIMARY KEY, oc VARBINARY(64), oke TINYINT NOT NULL DEFAULT 0, extra_json MEDIUMTEXT) ENGINE=InnoDB;
+INSERT INTO tmp_kg27_norg (k, oc, extra_json)
+SELECT BINARY CAST(t.news_id AS CHAR),
+       BINARY COALESCE(NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(CAST(IF(JSON_VALID(t.extra_json),t.extra_json,'null') AS JSON),'$.org_id'))),'null'),''),
+                       NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(CAST(IF(JSON_VALID(t.extra_json),t.extra_json,'null') AS JSON),'$.existing_payload.org_id'))),'null'),'')),
+       t.extra_json
+FROM kg_news t
+WHERE (t.organization_id IS NULL OR TRIM(t.organization_id)='')
+  AND fn_kg27_is_real_json(JSON_OBJECT('join_key',t.news_id,'source_system',t.source_system,'source_record_id',t.source_record_id,'organization_id',t.organization_id,'extra_json',CAST(IF(JSON_VALID(t.extra_json),t.extra_json,'null') AS JSON)))=1;
+UPDATE tmp_kg27_norg f JOIN kg_organization o ON BINARY o.org_id=BINARY f.oc
+SET f.oke=CASE WHEN fn_kg27_is_real_json(JSON_OBJECT('org_id',o.org_id,'source_system',o.source_system,'extra_json',CAST(IF(JSON_VALID(o.extra_json),o.extra_json,'null') AS JSON)))=1 THEN 1 ELSE 0 END
+WHERE f.oc IS NOT NULL;
+UPDATE tmp_kg27_norg f SET f.oke=0
+WHERE f.oke=1 AND JSON_VALID(f.extra_json)
+  AND BINARY NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(CAST(f.extra_json AS JSON),'$.org_id'))),'null'),'') IS NOT NULL
+  AND BINARY NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(CAST(f.extra_json AS JSON),'$.existing_payload.org_id'))),'null'),'') IS NOT NULL
+  AND BINARY NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(CAST(f.extra_json AS JSON),'$.org_id'))),'null'),'')
+   <> BINARY NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(CAST(f.extra_json AS JSON),'$.existing_payload.org_id'))),'null'),'');
+UPDATE kg_news t JOIN tmp_kg27_norg f ON BINARY f.k=BINARY CAST(t.news_id AS CHAR)
+SET t.organization_id=CONVERT(f.oc USING utf8mb4)
+WHERE f.oke=1 AND (t.organization_id IS NULL OR TRIM(t.organization_id)='');
 INSERT INTO tmp_kg_patch_log VALUES('snapshot:kg_news.organization_id','UPDATED',ROW_COUNT(),'Only exact existing organization IDs; conflicting snapshot IDs and explicit test markers excluded.');
-UPDATE `kg_event` t JOIN kg_organization o ON BINARY o.org_id=BINARY COALESCE(NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(CAST(IF(JSON_VALID(t.extra_json),t.extra_json,'null') AS JSON),'$.org_id'))),'null'),''),NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(CAST(IF(JSON_VALID(t.extra_json),t.extra_json,'null') AS JSON),'$.existing_payload.org_id'))),'null'),''))
-SET t.organization_id=o.org_id
-WHERE (t.organization_id IS NULL OR TRIM(t.organization_id)='') AND fn_kg27_is_real_json(JSON_OBJECT('join_key',t.`event_id`,'source_system',t.source_system,'source_record_id',t.source_record_id,'organization_id',t.organization_id,'extra_json',CAST(IF(JSON_VALID(t.extra_json),t.extra_json,'null') AS JSON)))=1
-AND fn_kg27_is_real_json(JSON_OBJECT('org_id',o.org_id,'source_system',o.source_system,'extra_json',CAST(IF(JSON_VALID(o.extra_json),o.extra_json,'null') AS JSON)))=1 AND (NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(CAST(IF(JSON_VALID(t.extra_json),t.extra_json,'null') AS JSON),'$.org_id'))),'null'),'') IS NULL OR NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(CAST(IF(JSON_VALID(t.extra_json),t.extra_json,'null') AS JSON),'$.existing_payload.org_id'))),'null'),'') IS NULL OR BINARY NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(CAST(IF(JSON_VALID(t.extra_json),t.extra_json,'null') AS JSON),'$.org_id'))),'null'),'')=BINARY NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(CAST(IF(JSON_VALID(t.extra_json),t.extra_json,'null') AS JSON),'$.existing_payload.org_id'))),'null'),''));
+DROP TEMPORARY TABLE IF EXISTS tmp_kg27_norg;
+
+DROP TEMPORARY TABLE IF EXISTS tmp_kg27_eorg;
+CREATE TEMPORARY TABLE tmp_kg27_eorg (k VARBINARY(64) PRIMARY KEY, oc VARBINARY(64), oke TINYINT NOT NULL DEFAULT 0, extra_json MEDIUMTEXT) ENGINE=InnoDB;
+INSERT INTO tmp_kg27_eorg (k, oc, extra_json)
+SELECT BINARY CAST(t.event_id AS CHAR),
+       BINARY COALESCE(NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(CAST(IF(JSON_VALID(t.extra_json),t.extra_json,'null') AS JSON),'$.org_id'))),'null'),''),
+                       NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(CAST(IF(JSON_VALID(t.extra_json),t.extra_json,'null') AS JSON),'$.existing_payload.org_id'))),'null'),'')),
+       t.extra_json
+FROM kg_event t
+WHERE (t.organization_id IS NULL OR TRIM(t.organization_id)='')
+  AND fn_kg27_is_real_json(JSON_OBJECT('join_key',t.event_id,'source_system',t.source_system,'source_record_id',t.source_record_id,'organization_id',t.organization_id,'extra_json',CAST(IF(JSON_VALID(t.extra_json),t.extra_json,'null') AS JSON)))=1;
+UPDATE tmp_kg27_eorg f JOIN kg_organization o ON BINARY o.org_id=BINARY f.oc
+SET f.oke=CASE WHEN fn_kg27_is_real_json(JSON_OBJECT('org_id',o.org_id,'source_system',o.source_system,'extra_json',CAST(IF(JSON_VALID(o.extra_json),o.extra_json,'null') AS JSON)))=1 THEN 1 ELSE 0 END
+WHERE f.oc IS NOT NULL;
+UPDATE tmp_kg27_eorg f SET f.oke=0
+WHERE f.oke=1 AND JSON_VALID(f.extra_json)
+  AND BINARY NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(CAST(f.extra_json AS JSON),'$.org_id'))),'null'),'') IS NOT NULL
+  AND BINARY NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(CAST(f.extra_json AS JSON),'$.existing_payload.org_id'))),'null'),'') IS NOT NULL
+  AND BINARY NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(CAST(f.extra_json AS JSON),'$.org_id'))),'null'),'')
+   <> BINARY NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(CAST(f.extra_json AS JSON),'$.existing_payload.org_id'))),'null'),'');
+UPDATE kg_event t JOIN tmp_kg27_eorg f ON BINARY f.k=BINARY CAST(t.event_id AS CHAR)
+SET t.organization_id=CONVERT(f.oc USING utf8mb4)
+WHERE f.oke=1 AND (t.organization_id IS NULL OR TRIM(t.organization_id)='');
 INSERT INTO tmp_kg_patch_log VALUES('snapshot:kg_event.organization_id','UPDATED',ROW_COUNT(),'Only exact existing organization IDs; conflicting snapshot IDs and explicit test markers excluded.');
+DROP TEMPORARY TABLE IF EXISTS tmp_kg27_eorg;
+
 UPDATE kg_event SET `case_role`=COALESCE(NULLIF(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(CAST(IF(JSON_VALID(extra_json),extra_json,'null') AS JSON),'$.case_role')),'null'),''),NULLIF(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(CAST(IF(JSON_VALID(extra_json),extra_json,'null') AS JSON),'$.existing_payload.case_role')),'null'),'')) WHERE (`case_role` IS NULL OR TRIM(`case_role`)='') AND fn_kg27_is_real_json(JSON_OBJECT('event_id',event_id,'organization_id',organization_id,'source_system',source_system,'extra_json',CAST(IF(JSON_VALID(extra_json),extra_json,'null') AS JSON)))=1;
 INSERT INTO tmp_kg_patch_log VALUES('snapshot:kg_event.case_role','UPDATED',ROW_COUNT(),'Copies an explicit role/key only; no participant role is invented.');
 UPDATE kg_event SET `exec_person_type`=COALESCE(NULLIF(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(CAST(IF(JSON_VALID(extra_json),extra_json,'null') AS JSON),'$.exec_person_type')),'null'),''),NULLIF(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(CAST(IF(JSON_VALID(extra_json),extra_json,'null') AS JSON),'$.existing_payload.exec_person_type')),'null'),'')) WHERE (`exec_person_type` IS NULL OR TRIM(`exec_person_type`)='') AND fn_kg27_is_real_json(JSON_OBJECT('event_id',event_id,'organization_id',organization_id,'source_system',source_system,'extra_json',CAST(IF(JSON_VALID(extra_json),extra_json,'null') AS JSON)))=1;
@@ -1302,6 +1532,13 @@ WHERE s.existing_event_id IS NULL AND fn_kg27_is_real_json(JSON_OBJECT(
 
 
 -- All changes above target kg_event or temporary audit/staging objects only.
+-- Provenance correction: dwd_forg_stock_fin_info was staged from gkx_element (absent in gkx_dwd_local),
+-- but the event INSERT stamps source_system=@source_db uniformly.
+UPDATE kg_event SET source_system='gkx_element'
+WHERE source_table='dwd_forg_stock_fin_info' AND BINARY source_system=BINARY 'gkx_dwd_local'
+  AND BINARY ingest_batch=BINARY @kg27_batch;
+INSERT INTO tmp_kg_patch_log VALUES('event:forg_stock_fin_provenance','UPDATED',ROW_COUNT(),'Rows staged from gkx_element; source_system corrected from the uniform @source_db stamp.');
+
 DROP PROCEDURE IF EXISTS sp_kg27_or_event_aliases;
 DROP FUNCTION IF EXISTS fn_kg27_or_legacy_key;
 DROP FUNCTION IF EXISTS fn_kg27_or_stable_values;

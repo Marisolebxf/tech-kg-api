@@ -1,0 +1,4 @@
+data/* -text
+checksums.sha256 -text
+.gitattributes text eol=lf
+*.md text eol=lf

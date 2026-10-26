@@ -1,0 +1,5888 @@
+{
+  "format_version": 1,
+  "database": "dev_graph_restore_20261026",
+  "source_archive": "dev-graph-export-20261026.tar.gz",
+  "source_archive_sha256": "21dd423b766e2efa0abd2edc81936fb8d61ca970da20375952302364cb3eeb4b",
+  "id_policy": "New numeric table primary keys; legacy VID/EID/rank are not output as structural keys. Legacy identities are used only in private staging. Business properties are preserved unchanged.",
+  "counts": {
+    "entity_schemas": 15,
+    "edge_schemas": 37,
+    "exported_nodes": 367011,
+    "total_nodes": 494408,
+    "missing_nodes": 127397,
+    "relations": 528537,
+    "shared_base_label_rows": 240763
+  },
+  "tables": [
+    {
+      "name": "kg_node_index",
+      "kind": "registry",
+      "schema": null,
+      "rows": 494408,
+      "columns": [],
+      "fingerprint_sha256": "c75b58978032afd91e7d9258cb958f50590e37bf17c888617991acfffe84fecb"
+    },
+    {
+      "name": "kg_missing_node",
+      "kind": "missing",
+      "schema": null,
+      "rows": 127397,
+      "columns": [],
+      "fingerprint_sha256": "d1e6553176f9492c37f614e7229c6043e0fa88605a7c841b6e41bab1a2691f2c"
+    },
+    {
+      "name": "kg_data_source",
+      "kind": "node",
+      "schema": "DataSource",
+      "rows": 39,
+      "columns": [
+        {
+          "name": "library",
+          "property": "library",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 7
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 36
+        },
+        {
+          "name": "table_cn_name",
+          "property": "table_cn_name",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 10
+        },
+        {
+          "name": "tier",
+          "property": "tier",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 3
+        }
+      ],
+      "fingerprint_sha256": "6cbbda2807518bf91db5adf7c3fa1eeff9b7f1a90acf794be9eca39cc28c747b"
+    },
+    {
+      "name": "kg_event",
+      "kind": "node",
+      "schema": "Event",
+      "rows": 24669,
+      "columns": [
+        {
+          "name": "amount",
+          "property": "amount",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "case_cause",
+          "property": "case_cause",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 66
+        },
+        {
+          "name": "case_no",
+          "property": "case_no",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 817
+        },
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "content",
+          "property": "content",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 7844
+        },
+        {
+          "name": "currency",
+          "property": "currency",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 34
+        },
+        {
+          "name": "event_type",
+          "property": "event_type",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 14
+        },
+        {
+          "name": "extra_json",
+          "property": "extra_json",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 17298
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 27
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 25
+        },
+        {
+          "name": "occur_date",
+          "property": "occur_date",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "organization_id",
+          "property": "organization_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 32
+        },
+        {
+          "name": "raw_id",
+          "property": "raw_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 117
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 117
+        },
+        {
+          "name": "source_system",
+          "property": "source_system",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 11
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 31
+        },
+        {
+          "name": "source_update_time",
+          "property": "source_update_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "source_url",
+          "property": "source_url",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 75
+        },
+        {
+          "name": "title",
+          "property": "title",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 158
+        }
+      ],
+      "fingerprint_sha256": "b4dad561420617da1fd2ea34aa84a43d74261956b87f52e456c47d771c28ec0a"
+    },
+    {
+      "name": "kg_industry_chain",
+      "kind": "node",
+      "schema": "IndustryChain",
+      "rows": 3,
+      "columns": [
+        {
+          "name": "chain_code",
+          "property": "chain_code",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 6
+        },
+        {
+          "name": "chain_name",
+          "property": "chain_name",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 4
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 27
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 20
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 23
+        }
+      ],
+      "fingerprint_sha256": "08239a0443721f995cf1c1d4f95a64b453e9085fd358a5483288bcec3929901e"
+    },
+    {
+      "name": "kg_industry_node",
+      "kind": "node",
+      "schema": "IndustryNode",
+      "rows": 180,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 27
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 10
+        },
+        {
+          "name": "level",
+          "property": "level",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 1
+        },
+        {
+          "name": "node_id",
+          "property": "node_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 10
+        },
+        {
+          "name": "node_imp_level",
+          "property": "node_imp_level",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 1
+        },
+        {
+          "name": "node_name",
+          "property": "node_name",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 15
+        },
+        {
+          "name": "node_path",
+          "property": "node_path",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 46
+        },
+        {
+          "name": "node_seq",
+          "property": "node_seq",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 2
+        },
+        {
+          "name": "node_stage",
+          "property": "node_stage",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 1
+        },
+        {
+          "name": "node_type",
+          "property": "node_type",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 1
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 23
+        }
+      ],
+      "fingerprint_sha256": "48314e065f70e0831c153d208c67995b50ffed270f9310f3a3a58922348c7c38"
+    },
+    {
+      "name": "kg_journal",
+      "kind": "node",
+      "schema": "Journal",
+      "rows": 2134,
+      "columns": [
+        {
+          "name": "annual_publication",
+          "property": "annual_publication",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 4
+        },
+        {
+          "name": "cite_nums",
+          "property": "cite_nums",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 4
+        },
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "country",
+          "property": "country",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 24
+        },
+        {
+          "name": "eissn",
+          "property": "eissn",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 9
+        },
+        {
+          "name": "founding_time",
+          "property": "founding_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 4
+        },
+        {
+          "name": "impact_factor",
+          "property": "impact_factor",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 4
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 21
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 20
+        },
+        {
+          "name": "is_sci",
+          "property": "is_sci",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 1
+        },
+        {
+          "name": "issn",
+          "property": "issn",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 9
+        },
+        {
+          "name": "jcr_zone",
+          "property": "jcr_zone",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 2
+        },
+        {
+          "name": "name_abbr",
+          "property": "name_abbr",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 123
+        },
+        {
+          "name": "name_en",
+          "property": "name_en",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 123
+        },
+        {
+          "name": "name_zh",
+          "property": "name_zh",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 9
+        },
+        {
+          "name": "organization_id",
+          "property": "organization_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 7
+        },
+        {
+          "name": "publication_cycle",
+          "property": "publication_cycle",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 22
+        },
+        {
+          "name": "scope_zone",
+          "property": "scope_zone",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 2
+        },
+        {
+          "name": "source",
+          "property": "source",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 10
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 7
+        },
+        {
+          "name": "source_system",
+          "property": "source_system",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 11
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 21
+        },
+        {
+          "name": "top",
+          "property": "top",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 1
+        },
+        {
+          "name": "zh_core",
+          "property": "zh_core",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 15
+        }
+      ],
+      "fingerprint_sha256": "5e6f2a942414129482ea6530174681f9d3814c045656146ebc66a963e772ef4f"
+    },
+    {
+      "name": "kg_keyword",
+      "kind": "node",
+      "schema": "Keyword",
+      "rows": 30042,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 21
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 20
+        },
+        {
+          "name": "keyword",
+          "property": "keyword",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 65251
+        },
+        {
+          "name": "organization_base",
+          "property": "organization_base",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 10
+        },
+        {
+          "name": "organization_id",
+          "property": "organization_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 40
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 40
+        },
+        {
+          "name": "source_system",
+          "property": "source_system",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 11
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 27
+        }
+      ],
+      "fingerprint_sha256": "0d775c51c3e86818893b9aa448752e5cdabdd1c679b2e750a22c5ec7decc1bb1"
+    },
+    {
+      "name": "kg_news",
+      "kind": "node",
+      "schema": "News",
+      "rows": 1492,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "content",
+          "property": "content",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 668
+        },
+        {
+          "name": "extra_json",
+          "property": "extra_json",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 3488
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 27
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 25
+        },
+        {
+          "name": "organization_id",
+          "property": "organization_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 32
+        },
+        {
+          "name": "original_url",
+          "property": "original_url",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 102
+        },
+        {
+          "name": "release_date",
+          "property": "release_date",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 32
+        },
+        {
+          "name": "source_system",
+          "property": "source_system",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 28
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 32
+        },
+        {
+          "name": "source_update_time",
+          "property": "source_update_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "source_url",
+          "property": "source_url",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 102
+        },
+        {
+          "name": "title",
+          "property": "title",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 668
+        }
+      ],
+      "fingerprint_sha256": "505d4368ed10ab19e3b706611d3047fadf51aaa3aad14e73d766315f7abb51b1"
+    },
+    {
+      "name": "kg_organization",
+      "kind": "node",
+      "schema": "Organization",
+      "rows": 10610,
+      "columns": [
+        {
+          "name": "address",
+          "property": "address",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 82
+        },
+        {
+          "name": "area",
+          "property": "area",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 4
+        },
+        {
+          "name": "capital_currency",
+          "property": "capital_currency",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 3
+        },
+        {
+          "name": "city",
+          "property": "city",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 27
+        },
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "country",
+          "property": "country",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 14
+        },
+        {
+          "name": "country_code",
+          "property": "country_code",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 2
+        },
+        {
+          "name": "description",
+          "property": "description",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 1653
+        },
+        {
+          "name": "email",
+          "property": "email",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 25
+        },
+        {
+          "name": "external_id",
+          "property": "external_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 21
+        },
+        {
+          "name": "extra_json",
+          "property": "extra_json",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 4173
+        },
+        {
+          "name": "founded_year",
+          "property": "founded_year",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "industry_class",
+          "property": "industry_class",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 35
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 28
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 25
+        },
+        {
+          "name": "legal_rep",
+          "property": "legal_rep",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 18
+        },
+        {
+          "name": "listed_date",
+          "property": "listed_date",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "listing_status",
+          "property": "listing_status",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 14
+        },
+        {
+          "name": "main_products",
+          "property": "main_products",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 1518
+        },
+        {
+          "name": "name_cn",
+          "property": "name_cn",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 92
+        },
+        {
+          "name": "name_en",
+          "property": "name_en",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 93
+        },
+        {
+          "name": "org_id",
+          "property": "org_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 93
+        },
+        {
+          "name": "org_kind",
+          "property": "org_kind",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 27
+        },
+        {
+          "name": "org_size",
+          "property": "org_size",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 2
+        },
+        {
+          "name": "org_type",
+          "property": "org_type",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 33
+        },
+        {
+          "name": "organization_id",
+          "property": "organization_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 93
+        },
+        {
+          "name": "phone",
+          "property": "phone",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 12
+        },
+        {
+          "name": "postal_code",
+          "property": "postal_code",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 6
+        },
+        {
+          "name": "province",
+          "property": "province",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 3
+        },
+        {
+          "name": "registered_capital",
+          "property": "registered_capital",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "source",
+          "property": "source",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 26
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 93
+        },
+        {
+          "name": "source_system",
+          "property": "source_system",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 13
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 32
+        },
+        {
+          "name": "source_update_time",
+          "property": "source_update_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "source_url",
+          "property": "source_url",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 34
+        },
+        {
+          "name": "stock_code",
+          "property": "stock_code",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 9
+        },
+        {
+          "name": "stock_noun",
+          "property": "stock_noun",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 7
+        },
+        {
+          "name": "stock_type",
+          "property": "stock_type",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 16
+        }
+      ],
+      "fingerprint_sha256": "9446f1f6135ad5b740ff758a77c47b03497ecc5a5e83dbbd85f1c641c2c6b664"
+    },
+    {
+      "name": "kg_paper",
+      "kind": "node",
+      "schema": "Paper",
+      "rows": 244646,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "created_time",
+          "property": "created_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "document_type",
+          "property": "document_type",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 38
+        },
+        {
+          "name": "doi",
+          "property": "doi",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 80
+        },
+        {
+          "name": "end_page",
+          "property": "end_page",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 11
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 20
+        },
+        {
+          "name": "issue",
+          "property": "issue",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 5
+        },
+        {
+          "name": "organization_id",
+          "property": "organization_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 41
+        },
+        {
+          "name": "output_awards",
+          "property": "output_awards",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 84
+        },
+        {
+          "name": "publication_date",
+          "property": "publication_date",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "publication_year",
+          "property": "publication_year",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 4
+        },
+        {
+          "name": "source",
+          "property": "source",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 21
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 41
+        },
+        {
+          "name": "source_system",
+          "property": "source_system",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 11
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 22
+        },
+        {
+          "name": "start_page",
+          "property": "start_page",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 6
+        },
+        {
+          "name": "title_en",
+          "property": "title_en",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 300
+        },
+        {
+          "name": "title_zh",
+          "property": "title_zh",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 298
+        },
+        {
+          "name": "updated_time",
+          "property": "updated_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "volume",
+          "property": "volume",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 40
+        }
+      ],
+      "fingerprint_sha256": "19e4d6ec9af0e60f1e31ff6a8342cb8bb840af3851dbde228768aea169ac032a"
+    },
+    {
+      "name": "kg_patent",
+      "kind": "node",
+      "schema": "Patent",
+      "rows": 2010,
+      "columns": [
+        {
+          "name": "abstract_zh",
+          "property": "abstract_zh",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 758
+        },
+        {
+          "name": "anticipated_expiration",
+          "property": "anticipated_expiration",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "application_date",
+          "property": "application_date",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "application_kind",
+          "property": "application_kind",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 1
+        },
+        {
+          "name": "application_number",
+          "property": "application_number",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 17
+        },
+        {
+          "name": "citation_nums",
+          "property": "citation_nums",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "cited_by_nums",
+          "property": "cited_by_nums",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "country",
+          "property": "country",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 5
+        },
+        {
+          "name": "country_code",
+          "property": "country_code",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 2
+        },
+        {
+          "name": "create_time",
+          "property": "create_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 59
+        },
+        {
+          "name": "db_source",
+          "property": "db_source",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 21
+        },
+        {
+          "name": "evaluation",
+          "property": "evaluation",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 23
+        },
+        {
+          "name": "further_cpc",
+          "property": "further_cpc",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 13
+        },
+        {
+          "name": "further_ipcr",
+          "property": "further_ipcr",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 16
+        },
+        {
+          "name": "grant_date",
+          "property": "grant_date",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 10
+        },
+        {
+          "name": "granted_number",
+          "property": "granted_number",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 13
+        },
+        {
+          "name": "keywords",
+          "property": "keywords",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 65437
+        },
+        {
+          "name": "language",
+          "property": "language",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 2
+        },
+        {
+          "name": "main_cpc",
+          "property": "main_cpc",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 14
+        },
+        {
+          "name": "main_ipcr",
+          "property": "main_ipcr",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 12
+        },
+        {
+          "name": "organization_base",
+          "property": "organization_base",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 10
+        },
+        {
+          "name": "organization_id",
+          "property": "organization_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 13
+        },
+        {
+          "name": "patent_id",
+          "property": "patent_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 13
+        },
+        {
+          "name": "patent_value",
+          "property": "patent_value",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "publication_date",
+          "property": "publication_date",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "publication_number",
+          "property": "publication_number",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 15
+        },
+        {
+          "name": "simple_family_number",
+          "property": "simple_family_number",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 8
+        },
+        {
+          "name": "status",
+          "property": "status",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 26
+        },
+        {
+          "name": "title_en",
+          "property": "title_en",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 232
+        },
+        {
+          "name": "title_original",
+          "property": "title_original",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 73
+        },
+        {
+          "name": "title_zh",
+          "property": "title_zh",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 73
+        },
+        {
+          "name": "update_time",
+          "property": "update_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 59
+        }
+      ],
+      "fingerprint_sha256": "fa97218ef520f6a42d7d21c9836d63e8c3f35bbba324f9bbd661e67216389c86"
+    },
+    {
+      "name": "kg_patent_family",
+      "kind": "node",
+      "schema": "PatentFamily",
+      "rows": 1999,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "family_number",
+          "property": "family_number",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 8
+        },
+        {
+          "name": "organization_base",
+          "property": "organization_base",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 17
+        },
+        {
+          "name": "organization_id",
+          "property": "organization_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 20
+        }
+      ],
+      "fingerprint_sha256": "0ce3e8dcc6875f0349dba717828002311df2d4932b33e75b9e5692cb853b8d44"
+    },
+    {
+      "name": "kg_person",
+      "kind": "node",
+      "schema": "Person",
+      "rows": 40139,
+      "columns": [
+        {
+          "name": "avatar",
+          "property": "avatar",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 92
+        },
+        {
+          "name": "bio_zh",
+          "property": "bio_zh",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 400
+        },
+        {
+          "name": "biography",
+          "property": "biography",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 20000
+        },
+        {
+          "name": "birth_date",
+          "property": "birth_date",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "citation_nums",
+          "property": "citation_nums",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "country",
+          "property": "country",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 55
+        },
+        {
+          "name": "country_code",
+          "property": "country_code",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 34
+        },
+        {
+          "name": "education_background_date",
+          "property": "education_background_date",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 15
+        },
+        {
+          "name": "education_background_degree_en",
+          "property": "education_background_degree_en",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 26
+        },
+        {
+          "name": "education_background_degree_zh",
+          "property": "education_background_degree_zh",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 21
+        },
+        {
+          "name": "education_background_institution_en",
+          "property": "education_background_institution_en",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 45
+        },
+        {
+          "name": "education_background_institution_zh",
+          "property": "education_background_institution_zh",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 24
+        },
+        {
+          "name": "email",
+          "property": "email",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 80
+        },
+        {
+          "name": "extra_json",
+          "property": "extra_json",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 20000
+        },
+        {
+          "name": "gender",
+          "property": "gender",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 34
+        },
+        {
+          "name": "h_index",
+          "property": "h_index",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 38
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 25
+        },
+        {
+          "name": "is_academician",
+          "property": "is_academician",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 3
+        },
+        {
+          "name": "match_evidence",
+          "property": "match_evidence",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 34
+        },
+        {
+          "name": "match_method",
+          "property": "match_method",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 18
+        },
+        {
+          "name": "name_cn",
+          "property": "name_cn",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 115
+        },
+        {
+          "name": "name_en",
+          "property": "name_en",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 115
+        },
+        {
+          "name": "name_zh",
+          "property": "name_zh",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 37
+        },
+        {
+          "name": "organization_base",
+          "property": "organization_base",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "organization_id",
+          "property": "organization_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 93
+        },
+        {
+          "name": "paper_nums",
+          "property": "paper_nums",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "person_kind",
+          "property": "person_kind",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 20
+        },
+        {
+          "name": "research_fields",
+          "property": "research_fields",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 550
+        },
+        {
+          "name": "scholar_org",
+          "property": "scholar_org",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 73
+        },
+        {
+          "name": "scholar_status",
+          "property": "scholar_status",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "source",
+          "property": "source",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 8
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 72
+        },
+        {
+          "name": "source_system",
+          "property": "source_system",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 13
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 32
+        },
+        {
+          "name": "source_update_time",
+          "property": "source_update_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "source_url",
+          "property": "source_url",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "work_experience_date",
+          "property": "work_experience_date",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 17
+        },
+        {
+          "name": "work_experience_department_en",
+          "property": "work_experience_department_en",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 45
+        },
+        {
+          "name": "work_experience_department_zh",
+          "property": "work_experience_department_zh",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 27
+        },
+        {
+          "name": "work_experience_institution_en",
+          "property": "work_experience_institution_en",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 77
+        },
+        {
+          "name": "work_experience_institution_zh",
+          "property": "work_experience_institution_zh",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 22
+        },
+        {
+          "name": "work_experience_position_en",
+          "property": "work_experience_position_en",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 20
+        },
+        {
+          "name": "work_experience_position_zh",
+          "property": "work_experience_position_zh",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 9
+        }
+      ],
+      "fingerprint_sha256": "5a042c28454c0550551635e7d349da656935361782c927330459339622efb9fa"
+    },
+    {
+      "name": "kg_product",
+      "kind": "node",
+      "schema": "Product",
+      "rows": 2040,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "description",
+          "property": "description",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 1653
+        },
+        {
+          "name": "extra_json",
+          "property": "extra_json",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 9206
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 27
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 25
+        },
+        {
+          "name": "name",
+          "property": "name",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 1518
+        },
+        {
+          "name": "organization_id",
+          "property": "organization_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 93
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 93
+        },
+        {
+          "name": "source_system",
+          "property": "source_system",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 11
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 24
+        },
+        {
+          "name": "source_update_time",
+          "property": "source_update_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        }
+      ],
+      "fingerprint_sha256": "698303b7baa2c98c29b14985464f733c51b7f376da0ab442967a939bac18e8ea"
+    },
+    {
+      "name": "kg_project",
+      "kind": "node",
+      "schema": "Project",
+      "rows": 4008,
+      "columns": [
+        {
+          "name": "abstract",
+          "property": "abstract",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 13229
+        },
+        {
+          "name": "approval_time",
+          "property": "approval_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "approval_year",
+          "property": "approval_year",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 4
+        },
+        {
+          "name": "awards_count",
+          "property": "awards_count",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "books_count",
+          "property": "books_count",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "clinical_trials_count",
+          "property": "clinical_trials_count",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "conference_papers_count",
+          "property": "conference_papers_count",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "degree_papers_count",
+          "property": "degree_papers_count",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "discipline",
+          "property": "discipline",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 39
+        },
+        {
+          "name": "discipline_code",
+          "property": "discipline_code",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 11
+        },
+        {
+          "name": "evaluation",
+          "property": "evaluation",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 45
+        },
+        {
+          "name": "extra_json",
+          "property": "extra_json",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 1747
+        },
+        {
+          "name": "final_report_abstract",
+          "property": "final_report_abstract",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 1000
+        },
+        {
+          "name": "fund_category",
+          "property": "fund_category",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 21
+        },
+        {
+          "name": "funded_amount",
+          "property": "funded_amount",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "funded_region",
+          "property": "funded_region",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 3
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 21
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 25
+        },
+        {
+          "name": "journal_articles_count",
+          "property": "journal_articles_count",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "keywords",
+          "property": "keywords",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 32
+        },
+        {
+          "name": "other_outputs_count",
+          "property": "other_outputs_count",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "output_awards",
+          "property": "output_awards",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 2377
+        },
+        {
+          "name": "patents_count",
+          "property": "patents_count",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "products_count",
+          "property": "products_count",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "project_level",
+          "property": "project_level",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 3
+        },
+        {
+          "name": "project_number",
+          "property": "project_number",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 10
+        },
+        {
+          "name": "project_page_url",
+          "property": "project_page_url",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 67
+        },
+        {
+          "name": "project_source",
+          "property": "project_source",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 14
+        },
+        {
+          "name": "reports_count",
+          "property": "reports_count",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "research_period",
+          "property": "research_period",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 23
+        },
+        {
+          "name": "source",
+          "property": "source",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 10
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 36
+        },
+        {
+          "name": "source_system",
+          "property": "source_system",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 11
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 14
+        },
+        {
+          "name": "source_update_time",
+          "property": "source_update_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "source_url",
+          "property": "source_url",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 67
+        },
+        {
+          "name": "title",
+          "property": "title",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 179
+        },
+        {
+          "name": "total_outputs",
+          "property": "total_outputs",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        }
+      ],
+      "fingerprint_sha256": "a4fa5cd50024b6935e38422fa8bbe7f8057478c574a7019f4f2b1a3ac7029b0e"
+    },
+    {
+      "name": "kg_report",
+      "kind": "node",
+      "schema": "Report",
+      "rows": 3000,
+      "columns": [
+        {
+          "name": "abstract",
+          "property": "abstract",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 7750
+        },
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 20
+        },
+        {
+          "name": "keywords",
+          "property": "keywords",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 430
+        },
+        {
+          "name": "organization_id",
+          "property": "organization_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 36
+        },
+        {
+          "name": "page_count",
+          "property": "page_count",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 4
+        },
+        {
+          "name": "publication_date",
+          "property": "publication_date",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 8
+        },
+        {
+          "name": "report_category",
+          "property": "report_category",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 5
+        },
+        {
+          "name": "report_type",
+          "property": "report_type",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 16
+        },
+        {
+          "name": "source",
+          "property": "source",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 9
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 36
+        },
+        {
+          "name": "source_system",
+          "property": "source_system",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 11
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 13
+        },
+        {
+          "name": "title_cn",
+          "property": "title_cn",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 64
+        },
+        {
+          "name": "title_en",
+          "property": "title_en",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 266
+        }
+      ],
+      "fingerprint_sha256": "5a8754debafc827ba0541b8cba0c0cfa45157545ad8af83b09ffcff3d63a4381"
+    },
+    {
+      "name": "kg_edge_acquires",
+      "kind": "edge",
+      "schema": "ACQUIRES",
+      "rows": 50,
+      "columns": [
+        {
+          "name": "currency_code",
+          "property": "currency_code",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 3
+        },
+        {
+          "name": "extra_json",
+          "property": "extra_json",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 429
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 24
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 25
+        },
+        {
+          "name": "ma_amount",
+          "property": "ma_amount",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 65
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 31
+        }
+      ],
+      "fingerprint_sha256": "48f124f254f40df89a7f5c093f202d355e369a9c6d0f4682c1ba22116f4bee90"
+    },
+    {
+      "name": "kg_edge_actual_controller_of",
+      "kind": "edge",
+      "schema": "ACTUAL_CONTROLLER_OF",
+      "rows": 50,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "direct_pct",
+          "property": "direct_pct",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "extra_json",
+          "property": "extra_json",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 325
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 24
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 25
+        },
+        {
+          "name": "organization_id",
+          "property": "organization_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 22
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 66
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 24
+        },
+        {
+          "name": "total_pct",
+          "property": "total_pct",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        }
+      ],
+      "fingerprint_sha256": "5103aa194f060bdc5935c0ef4f7ec5490e561b5853617aae0bdfae77da77459a"
+    },
+    {
+      "name": "kg_edge_affiliated_with",
+      "kind": "edge",
+      "schema": "AFFILIATED_WITH",
+      "rows": 1814,
+      "columns": [
+        {
+          "name": "affiliation_name",
+          "property": "affiliation_name",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 120
+        },
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 36
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "match_evidence",
+          "property": "match_evidence",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 62
+        },
+        {
+          "name": "match_method",
+          "property": "match_method",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 24
+        },
+        {
+          "name": "organization_base",
+          "property": "organization_base",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 11
+        },
+        {
+          "name": "organization_id",
+          "property": "organization_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 32
+        },
+        {
+          "name": "source",
+          "property": "source",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 7
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 9
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 11
+        },
+        {
+          "name": "work_experience_date",
+          "property": "work_experience_date",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 17
+        },
+        {
+          "name": "work_experience_department_zh",
+          "property": "work_experience_department_zh",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 8
+        },
+        {
+          "name": "work_experience_position_zh",
+          "property": "work_experience_position_zh",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 5
+        }
+      ],
+      "fingerprint_sha256": "1eb505b02d29197db7f66870da6bb9e2110436714068e0cf41f212e70ce5ab2e"
+    },
+    {
+      "name": "kg_edge_alumni",
+      "kind": "edge",
+      "schema": "ALUMNI",
+      "rows": 88,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "dimensions_json",
+          "property": "dimensions_json",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "educations_json",
+          "property": "educations_json",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 180
+        },
+        {
+          "name": "evidence_json",
+          "property": "evidence_json",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 63
+        },
+        {
+          "name": "interactions_summary",
+          "property": "interactions_summary",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 26
+        },
+        {
+          "name": "paper_count",
+          "property": "paper_count",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "patent_count",
+          "property": "patent_count",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "project_count",
+          "property": "project_count",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "shared_institutions",
+          "property": "shared_institutions",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 10
+        },
+        {
+          "name": "source",
+          "property": "source",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 30
+        },
+        {
+          "name": "updated_at",
+          "property": "updated_at",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 32
+        }
+      ],
+      "fingerprint_sha256": "2adbc958cca846d2560686194c21a899571b48c7d8c4ed5cef9be57de47ef4ac"
+    },
+    {
+      "name": "kg_edge_applied_by",
+      "kind": "edge",
+      "schema": "APPLIED_BY",
+      "rows": 80,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "match_evidence",
+          "property": "match_evidence",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 84
+        },
+        {
+          "name": "match_method",
+          "property": "match_method",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 30
+        },
+        {
+          "name": "resolution_status",
+          "property": "resolution_status",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 9
+        },
+        {
+          "name": "role",
+          "property": "role",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 9
+        },
+        {
+          "name": "sequence",
+          "property": "sequence",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "source_name",
+          "property": "source_name",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 15
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 17
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 10
+        },
+        {
+          "name": "subject_type",
+          "property": "subject_type",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 12
+        }
+      ],
+      "fingerprint_sha256": "84dd8957f73917cfdd6f287bbfbaf41d48c969dd6497b7010eb09274bc6518d3"
+    },
+    {
+      "name": "kg_edge_authored_by",
+      "kind": "edge",
+      "schema": "AUTHORED_BY",
+      "rows": 92644,
+      "columns": [
+        {
+          "name": "author_order",
+          "property": "author_order",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 2
+        },
+        {
+          "name": "citations",
+          "property": "citations",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 26
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "is_corresponding",
+          "property": "is_corresponding",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 1
+        },
+        {
+          "name": "match_evidence",
+          "property": "match_evidence",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 14
+        },
+        {
+          "name": "match_method",
+          "property": "match_method",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 18
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 20
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 48
+        }
+      ],
+      "fingerprint_sha256": "089edf738c23eefb27bbaf1fc827c2d1374ef4e7cc7e54da3f03f166d7cdaffd"
+    },
+    {
+      "name": "kg_edge_belongs_to_node",
+      "kind": "edge",
+      "schema": "BELONGS_TO_NODE",
+      "rows": 389,
+      "columns": [
+        {
+          "name": "chain_score",
+          "property": "chain_score",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 27
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 10
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 32
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 26
+        }
+      ],
+      "fingerprint_sha256": "c67a6ab9092eb68da7f8fa6ab8346d2bb35be35438aabdadcab78b69b00f6de0"
+    },
+    {
+      "name": "kg_edge_beneficial_owner_of",
+      "kind": "edge",
+      "schema": "BENEFICIAL_OWNER_OF",
+      "rows": 6350,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "direct_percent",
+          "property": "direct_percent",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "extra_json",
+          "property": "extra_json",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 4042
+        },
+        {
+          "name": "indirect_percent",
+          "property": "indirect_percent",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 24
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 25
+        },
+        {
+          "name": "organization_id",
+          "property": "organization_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 93
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 132
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 25
+        },
+        {
+          "name": "total_percent",
+          "property": "total_percent",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        }
+      ],
+      "fingerprint_sha256": "19c8c91bcaa57326e7fbd8b967654a62e6d8cd68c0444507db9bd139e2cc3cc2"
+    },
+    {
+      "name": "kg_edge_child_of",
+      "kind": "edge",
+      "schema": "CHILD_OF",
+      "rows": 174,
+      "columns": [],
+      "fingerprint_sha256": "cdc2e4065ff6383c4c387dbb24245b65cdd24f66fc26d814eb28f9a74ff39d5d"
+    },
+    {
+      "name": "kg_edge_cited_by",
+      "kind": "edge",
+      "schema": "CITED_BY",
+      "rows": 2558,
+      "columns": [
+        {
+          "name": "citation_identifier",
+          "property": "citation_identifier",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 39
+        },
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 21
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        }
+      ],
+      "fingerprint_sha256": "004a0e910b58144bac09a1a31c40f1d7bcd222a6d6b5194efa3c8b439f15ff3d"
+    },
+    {
+      "name": "kg_edge_cites",
+      "kind": "edge",
+      "schema": "CITES",
+      "rows": 89989,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 21
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "reference_identifier",
+          "property": "reference_identifier",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 68
+        }
+      ],
+      "fingerprint_sha256": "9db0f2af16f6a65acda8713ea8bca1e3babcf302284177bc3c5ecca52cd004dc"
+    },
+    {
+      "name": "kg_edge_coauthor_with",
+      "kind": "edge",
+      "schema": "COAUTHOR_WITH",
+      "rows": 156140,
+      "columns": [
+        {
+          "name": "co_paper_count",
+          "property": "co_paper_count",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 33
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "match_evidence",
+          "property": "match_evidence",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 46
+        },
+        {
+          "name": "match_method",
+          "property": "match_method",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 18
+        },
+        {
+          "name": "relation_time",
+          "property": "relation_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 39
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 20
+        }
+      ],
+      "fingerprint_sha256": "ba0f7f7466147a1b55c53a0466047f8b8b9b546c061f87c147964cefe8c2f35d"
+    },
+    {
+      "name": "kg_edge_colleague",
+      "kind": "edge",
+      "schema": "COLLEAGUE",
+      "rows": 41,
+      "columns": [
+        {
+          "name": "achievement_ids_json",
+          "property": "achievement_ids_json",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 180
+        },
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "department",
+          "property": "department",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 8
+        },
+        {
+          "name": "effective_period",
+          "property": "effective_period",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 17
+        },
+        {
+          "name": "evidence_json",
+          "property": "evidence_json",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 116
+        },
+        {
+          "name": "organization",
+          "property": "organization",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 16
+        },
+        {
+          "name": "overlap_months",
+          "property": "overlap_months",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "scenes_json",
+          "property": "scenes_json",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 29
+        },
+        {
+          "name": "source",
+          "property": "source",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 33
+        },
+        {
+          "name": "teams_json",
+          "property": "teams_json",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 2
+        },
+        {
+          "name": "updated_at",
+          "property": "updated_at",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 32
+        },
+        {
+          "name": "work_content_json",
+          "property": "work_content_json",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 306
+        }
+      ],
+      "fingerprint_sha256": "5d7cfe6243cc2c147f91e518acff9965183b22d8dd434b8bf73fb5bff2cedec9"
+    },
+    {
+      "name": "kg_edge_covers_chain",
+      "kind": "edge",
+      "schema": "COVERS_CHAIN",
+      "rows": 479,
+      "columns": [
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 27
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 20
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 28
+        }
+      ],
+      "fingerprint_sha256": "ce9549b97eaed8fa348205f08196ea64fd1fa2b5f8d766cde7fb94cb6390992b"
+    },
+    {
+      "name": "kg_edge_downstream_of",
+      "kind": "edge",
+      "schema": "DOWNSTREAM_OF",
+      "rows": 4,
+      "columns": [],
+      "fingerprint_sha256": "eef85c15e33dabbf5fc3004319d493a184e11f357bca65fc45f32da15fef8401"
+    },
+    {
+      "name": "kg_edge_executive_of",
+      "kind": "edge",
+      "schema": "EXECUTIVE_OF",
+      "rows": 10224,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "extra_json",
+          "property": "extra_json",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 20000
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 24
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 25
+        },
+        {
+          "name": "organization_id",
+          "property": "organization_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 93
+        },
+        {
+          "name": "position",
+          "property": "position",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 129
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 131
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 23
+        }
+      ],
+      "fingerprint_sha256": "aaf6f42aad52c4707664a5c52693944b0b2cd5dfcc3bd8a4c25a3ace3d6c6fa2"
+    },
+    {
+      "name": "kg_edge_funded_by",
+      "kind": "edge",
+      "schema": "FUNDED_BY",
+      "rows": 150,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "fund_category",
+          "property": "fund_category",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 12
+        },
+        {
+          "name": "funded_amount",
+          "property": "funded_amount",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 28
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "match_evidence",
+          "property": "match_evidence",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 11
+        },
+        {
+          "name": "match_method",
+          "property": "match_method",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 10
+        },
+        {
+          "name": "organization_id",
+          "property": "organization_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 32
+        },
+        {
+          "name": "organization_source_table",
+          "property": "organization_source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 17
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 36
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 14
+        }
+      ],
+      "fingerprint_sha256": "af5cf41f35c86aeaa90c3ae95513f313f76dd92a4c148303c79a7216c88e294e"
+    },
+    {
+      "name": "kg_edge_has_keyword",
+      "kind": "edge",
+      "schema": "HAS_KEYWORD",
+      "rows": 46928,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 23
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 36
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 27
+        }
+      ],
+      "fingerprint_sha256": "9ab43e006934a95709ceb99a96705ea4ef87254d6d7a65d9b6c8bb436dd971dd"
+    },
+    {
+      "name": "kg_edge_has_news",
+      "kind": "edge",
+      "schema": "HAS_NEWS",
+      "rows": 1013,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "extra_json",
+          "property": "extra_json",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 1692
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 24
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 25
+        },
+        {
+          "name": "organization_id",
+          "property": "organization_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 32
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 32
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 27
+        }
+      ],
+      "fingerprint_sha256": "eaee6de7e9c99d61fb3d9cdb75410ef1827f30e849b80d22013fbbd04d004b64"
+    },
+    {
+      "name": "kg_edge_has_node",
+      "kind": "edge",
+      "schema": "HAS_NODE",
+      "rows": 180,
+      "columns": [],
+      "fingerprint_sha256": "e2d076523467c43f46e57242c57c27fe2c2ecf1a344a8ae079b40a970cc3fff4"
+    },
+    {
+      "name": "kg_edge_has_output",
+      "kind": "edge",
+      "schema": "HAS_OUTPUT",
+      "rows": 38,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 23
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "match_evidence",
+          "property": "match_evidence",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 163
+        },
+        {
+          "name": "match_method",
+          "property": "match_method",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 16
+        },
+        {
+          "name": "output_identifier",
+          "property": "output_identifier",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 37
+        },
+        {
+          "name": "output_title",
+          "property": "output_title",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 158
+        },
+        {
+          "name": "output_type",
+          "property": "output_type",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 15
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 94
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 21
+        }
+      ],
+      "fingerprint_sha256": "e16b2a6b7adf0ac88249353abc227816d164300ad30a32fd9a1ec85d1562a0fa"
+    },
+    {
+      "name": "kg_edge_has_participant",
+      "kind": "edge",
+      "schema": "HAS_PARTICIPANT",
+      "rows": 947,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 23
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 25
+        },
+        {
+          "name": "match_evidence",
+          "property": "match_evidence",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 22
+        },
+        {
+          "name": "match_method",
+          "property": "match_method",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 10
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 36
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 14
+        }
+      ],
+      "fingerprint_sha256": "8804dfffd665209de2480ee541a63c3778770aca17a1321871c99d46a44e7139"
+    },
+    {
+      "name": "kg_edge_invented_by",
+      "kind": "edge",
+      "schema": "INVENTED_BY",
+      "rows": 20,
+      "columns": [
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 21
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        }
+      ],
+      "fingerprint_sha256": "f98fc3af3ee87593f1a3f229517218143c7eafd6829ea2d34234f313d43e76ec"
+    },
+    {
+      "name": "kg_edge_invests_in",
+      "kind": "edge",
+      "schema": "INVESTS_IN",
+      "rows": 153,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "extra_json",
+          "property": "extra_json",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 432
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 24
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 25
+        },
+        {
+          "name": "investment_amount",
+          "property": "investment_amount",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "investment_ratio",
+          "property": "investment_ratio",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "organization_id",
+          "property": "organization_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 32
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 65
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        }
+      ],
+      "fingerprint_sha256": "712f252819ba44cc285cd815314bbbfb5fd6c5994b00043f47c2af0d522b3f3e"
+    },
+    {
+      "name": "kg_edge_involved_in",
+      "kind": "edge",
+      "schema": "INVOLVED_IN",
+      "rows": 14921,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "extra_json",
+          "property": "extra_json",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 2475
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 24
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 25
+        },
+        {
+          "name": "organization_id",
+          "property": "organization_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 32
+        },
+        {
+          "name": "role",
+          "property": "role",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 34
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 117
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 36
+        }
+      ],
+      "fingerprint_sha256": "4e2141cde1c689f6c132c600374939e02b7f999c8850748360480715cb650b0b"
+    },
+    {
+      "name": "kg_edge_leads",
+      "kind": "edge",
+      "schema": "LEADS",
+      "rows": 207,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 25
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 25
+        },
+        {
+          "name": "match_evidence",
+          "property": "match_evidence",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "match_method",
+          "property": "match_method",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 10
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 36
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 14
+        }
+      ],
+      "fingerprint_sha256": "a1dc1a789fd833a0256bb06320fddee9409cfd08d4ed042be9032ba6fa17cd2c"
+    },
+    {
+      "name": "kg_edge_legal_rep_of",
+      "kind": "edge",
+      "schema": "LEGAL_REP_OF",
+      "rows": 1874,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "extra_json",
+          "property": "extra_json",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 1220
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 24
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 25
+        },
+        {
+          "name": "organization_id",
+          "property": "organization_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 32
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 51
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 32
+        }
+      ],
+      "fingerprint_sha256": "d669379d2a09fdc93cb5564d0b07b569615e004f9674c223c2a7d5e783968d82"
+    },
+    {
+      "name": "kg_edge_member_of_family",
+      "kind": "edge",
+      "schema": "MEMBER_OF_FAMILY",
+      "rows": 2000,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "match_evidence",
+          "property": "match_evidence",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 27
+        },
+        {
+          "name": "match_method",
+          "property": "match_method",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 20
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 13
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 17
+        }
+      ],
+      "fingerprint_sha256": "c6d4dbf8d927b2d66d950fa665c9f3e726ab2ab4c7c11a8fc3ce7afcc16c1727"
+    },
+    {
+      "name": "kg_edge_owned_by",
+      "kind": "edge",
+      "schema": "OWNED_BY",
+      "rows": 1,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "is_current",
+          "property": "is_current",
+          "sql_type": "TINYINT(1)",
+          "observed_types": [
+            "bool"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "match_evidence",
+          "property": "match_evidence",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 34
+        },
+        {
+          "name": "match_method",
+          "property": "match_method",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 30
+        },
+        {
+          "name": "resolution_status",
+          "property": "resolution_status",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 9
+        },
+        {
+          "name": "role",
+          "property": "role",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 8
+        },
+        {
+          "name": "sequence",
+          "property": "sequence",
+          "sql_type": "BIGINT",
+          "observed_types": [
+            "int"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "source_name",
+          "property": "source_name",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 20
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 15
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 10
+        },
+        {
+          "name": "subject_type",
+          "property": "subject_type",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 12
+        }
+      ],
+      "fingerprint_sha256": "6cdd40ab129b4ac148ca6f512e175dba65aae7a48f1255adaa4cf407e38bbe88"
+    },
+    {
+      "name": "kg_edge_produces",
+      "kind": "edge",
+      "schema": "PRODUCES",
+      "rows": 2246,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "extra_json",
+          "property": "extra_json",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 2272
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 24
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 25
+        },
+        {
+          "name": "organization_id",
+          "property": "organization_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 93
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 1550
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 24
+        }
+      ],
+      "fingerprint_sha256": "bbcd5e9262e0393bc075c0fd9c608918a2a7a30c2250e1598a36202daf5dc355"
+    },
+    {
+      "name": "kg_edge_published_in",
+      "kind": "edge",
+      "schema": "PUBLISHED_IN",
+      "rows": 4081,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "end_page",
+          "property": "end_page",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 7
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 21
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "issue",
+          "property": "issue",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 5
+        },
+        {
+          "name": "publication_year",
+          "property": "publication_year",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 4
+        },
+        {
+          "name": "start_page",
+          "property": "start_page",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 6
+        },
+        {
+          "name": "volume",
+          "property": "volume",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 3
+        }
+      ],
+      "fingerprint_sha256": "2f132c37e21df03e087fc2e1bf3019665f2617c5a1048072ddc8e6acbd15d173"
+    },
+    {
+      "name": "kg_edge_referenced_by",
+      "kind": "edge",
+      "schema": "REFERENCED_BY",
+      "rows": 12714,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        }
+      ],
+      "fingerprint_sha256": "09bcec2e8485f559f7e4998eeada817705504c0b3ca9c987f0d37d94f42f8950"
+    },
+    {
+      "name": "kg_edge_related_to",
+      "kind": "edge",
+      "schema": "RELATED_TO",
+      "rows": 79319,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        }
+      ],
+      "fingerprint_sha256": "461306cb360a45859923632fb361587b324960803891c2e1809e451f137e0b94"
+    },
+    {
+      "name": "kg_edge_same_as",
+      "kind": "edge",
+      "schema": "SAME_AS",
+      "rows": 259,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 6
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 23
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 10
+        },
+        {
+          "name": "match_method",
+          "property": "match_method",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 9
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 9
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 14
+        }
+      ],
+      "fingerprint_sha256": "f692b98021f9439d1a371a221fb423b5eb9e929a5e33106374fe189da8fe9bdd"
+    },
+    {
+      "name": "kg_edge_shareholder_of",
+      "kind": "edge",
+      "schema": "SHAREHOLDER_OF",
+      "rows": 198,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "extra_json",
+          "property": "extra_json",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 380
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 24
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 25
+        },
+        {
+          "name": "organization_id",
+          "property": "organization_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 33
+        },
+        {
+          "name": "ownership_percentage",
+          "property": "ownership_percentage",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 70
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 25
+        }
+      ],
+      "fingerprint_sha256": "69e085c2ada4f68b4f66ed220b02a55c544da46dd279884f1a27b88e65d5bcd5"
+    },
+    {
+      "name": "kg_edge_studied_at",
+      "kind": "edge",
+      "schema": "STUDIED_AT",
+      "rows": 96,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "degree_en",
+          "property": "degree_en",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 8
+        },
+        {
+          "name": "degree_zh",
+          "property": "degree_zh",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 2
+        },
+        {
+          "name": "education_date",
+          "property": "education_date",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 15
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 21
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 19
+        },
+        {
+          "name": "institution_en",
+          "property": "institution_en",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 45
+        },
+        {
+          "name": "institution_zh",
+          "property": "institution_zh",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 8
+        },
+        {
+          "name": "match_evidence",
+          "property": "match_evidence",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 22
+        },
+        {
+          "name": "match_method",
+          "property": "match_method",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 7
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 36
+        },
+        {
+          "name": "source_system",
+          "property": "source_system",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 11
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 11
+        }
+      ],
+      "fingerprint_sha256": "24ecd39a77c18a5db5c972f61065db1d9937550060787e4727db4393318c0f77"
+    },
+    {
+      "name": "kg_edge_subsidiary_of",
+      "kind": "edge",
+      "schema": "SUBSIDIARY_OF",
+      "rows": 118,
+      "columns": [
+        {
+          "name": "confidence",
+          "property": "confidence",
+          "sql_type": "DOUBLE",
+          "observed_types": [
+            "float"
+          ],
+          "max_chars": 0
+        },
+        {
+          "name": "extra_json",
+          "property": "extra_json",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 274
+        },
+        {
+          "name": "ingest_batch",
+          "property": "ingest_batch",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 24
+        },
+        {
+          "name": "ingest_time",
+          "property": "ingest_time",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 25
+        },
+        {
+          "name": "organization_id",
+          "property": "organization_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 34
+        },
+        {
+          "name": "source_record_id",
+          "property": "source_record_id",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 133
+        },
+        {
+          "name": "source_table",
+          "property": "source_table",
+          "sql_type": "LONGTEXT",
+          "observed_types": [
+            "str"
+          ],
+          "max_chars": 24
+        }
+      ],
+      "fingerprint_sha256": "e3af581e68a11d41471c097558a351aaf9133ff9fd8ca0c49431ec26a6e54451"
+    }
+  ],
+  "views": [
+    {
+      "name": "v_input_data_source",
+      "schema": "DataSource",
+      "exported_rows": 39,
+      "placeholder_rows": 0,
+      "rows": 39
+    },
+    {
+      "name": "v_input_event",
+      "schema": "Event",
+      "exported_rows": 24669,
+      "placeholder_rows": 0,
+      "rows": 24669
+    },
+    {
+      "name": "v_input_industry_chain",
+      "schema": "IndustryChain",
+      "exported_rows": 3,
+      "placeholder_rows": 0,
+      "rows": 3
+    },
+    {
+      "name": "v_input_industry_node",
+      "schema": "IndustryNode",
+      "exported_rows": 180,
+      "placeholder_rows": 0,
+      "rows": 180
+    },
+    {
+      "name": "v_input_journal",
+      "schema": "Journal",
+      "exported_rows": 2134,
+      "placeholder_rows": 0,
+      "rows": 2134
+    },
+    {
+      "name": "v_input_keyword",
+      "schema": "Keyword",
+      "exported_rows": 30042,
+      "placeholder_rows": 0,
+      "rows": 30042
+    },
+    {
+      "name": "v_input_news",
+      "schema": "News",
+      "exported_rows": 1492,
+      "placeholder_rows": 0,
+      "rows": 1492
+    },
+    {
+      "name": "v_input_organization",
+      "schema": "Organization",
+      "exported_rows": 10610,
+      "placeholder_rows": 596,
+      "rows": 11206
+    },
+    {
+      "name": "v_input_paper",
+      "schema": "Paper",
+      "exported_rows": 244646,
+      "placeholder_rows": 0,
+      "rows": 244646
+    },
+    {
+      "name": "v_input_patent",
+      "schema": "Patent",
+      "exported_rows": 2010,
+      "placeholder_rows": 0,
+      "rows": 2010
+    },
+    {
+      "name": "v_input_patent_family",
+      "schema": "PatentFamily",
+      "exported_rows": 1999,
+      "placeholder_rows": 0,
+      "rows": 1999
+    },
+    {
+      "name": "v_input_person",
+      "schema": "Person",
+      "exported_rows": 40139,
+      "placeholder_rows": 126801,
+      "rows": 166940
+    },
+    {
+      "name": "v_input_product",
+      "schema": "Product",
+      "exported_rows": 2040,
+      "placeholder_rows": 0,
+      "rows": 2040
+    },
+    {
+      "name": "v_input_project",
+      "schema": "Project",
+      "exported_rows": 4008,
+      "placeholder_rows": 0,
+      "rows": 4008
+    },
+    {
+      "name": "v_input_report",
+      "schema": "Report",
+      "exported_rows": 3000,
+      "placeholder_rows": 0,
+      "rows": 3000
+    }
+  ],
+  "edge_sources": {
+    "ACQUIRES": {
+      "file": "edge_ACQUIRES_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 50,
+      "distinct_ranks": 50,
+      "nonzero_rank_rows": 50
+    },
+    "ACTUAL_CONTROLLER_OF": {
+      "file": "edge_ACTUAL_CONTROLLER_OF_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 50,
+      "distinct_ranks": 50,
+      "nonzero_rank_rows": 50
+    },
+    "AFFILIATED_WITH": {
+      "file": "edge_AFFILIATED_WITH_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 1814,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 0
+    },
+    "ALUMNI": {
+      "file": "edge_ALUMNI_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 88,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 0
+    },
+    "APPLIED_BY": {
+      "file": "edge_APPLIED_BY_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 80,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 80
+    },
+    "AUTHORED_BY": {
+      "file": "edge_AUTHORED_BY.jsonl",
+      "mode": "endpoint_export",
+      "rows": 92644,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 0
+    },
+    "BELONGS_TO_NODE": {
+      "file": "edge_BELONGS_TO_NODE_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 389,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 0
+    },
+    "BENEFICIAL_OWNER_OF": {
+      "file": "edge_BENEFICIAL_OWNER_OF_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 6350,
+      "distinct_ranks": 6350,
+      "nonzero_rank_rows": 6350
+    },
+    "CHILD_OF": {
+      "file": "edge_CHILD_OF_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 174,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 0
+    },
+    "CITED_BY": {
+      "file": "edge_CITED_BY_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 2558,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 0
+    },
+    "CITES": {
+      "file": "edge_CITES.jsonl",
+      "mode": "endpoint_export",
+      "rows": 89989,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 0
+    },
+    "COAUTHOR_WITH": {
+      "file": "edge_COAUTHOR_WITH_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 156140,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 0
+    },
+    "COLLEAGUE": {
+      "file": "edge_COLLEAGUE_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 41,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 0
+    },
+    "COVERS_CHAIN": {
+      "file": "edge_COVERS_CHAIN_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 479,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 0
+    },
+    "DOWNSTREAM_OF": {
+      "file": "edge_DOWNSTREAM_OF_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 4,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 0
+    },
+    "EXECUTIVE_OF": {
+      "file": "edge_EXECUTIVE_OF_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 10224,
+      "distinct_ranks": 10224,
+      "nonzero_rank_rows": 10223
+    },
+    "FUNDED_BY": {
+      "file": "edge_FUNDED_BY_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 150,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 0
+    },
+    "HAS_KEYWORD": {
+      "file": "edge_HAS_KEYWORD.jsonl",
+      "mode": "endpoint_export",
+      "rows": 46928,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 0
+    },
+    "HAS_NEWS": {
+      "file": "edge_HAS_NEWS_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 1013,
+      "distinct_ranks": 1013,
+      "nonzero_rank_rows": 1013
+    },
+    "HAS_NODE": {
+      "file": "edge_HAS_NODE_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 180,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 0
+    },
+    "HAS_OUTPUT": {
+      "file": "edge_HAS_OUTPUT_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 38,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 0
+    },
+    "HAS_PARTICIPANT": {
+      "file": "edge_HAS_PARTICIPANT_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 947,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 0
+    },
+    "INVENTED_BY": {
+      "file": "edge_INVENTED_BY_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 20,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 0
+    },
+    "INVESTS_IN": {
+      "file": "edge_INVESTS_IN_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 153,
+      "distinct_ranks": 153,
+      "nonzero_rank_rows": 153
+    },
+    "INVOLVED_IN": {
+      "file": "edge_INVOLVED_IN.jsonl",
+      "mode": "endpoint_export",
+      "rows": 14921,
+      "distinct_ranks": 14914,
+      "nonzero_rank_rows": 14913
+    },
+    "LEADS": {
+      "file": "edge_LEADS_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 207,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 0
+    },
+    "LEGAL_REP_OF": {
+      "file": "edge_LEGAL_REP_OF_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 1874,
+      "distinct_ranks": 1874,
+      "nonzero_rank_rows": 1874
+    },
+    "MEMBER_OF_FAMILY": {
+      "file": "edge_MEMBER_OF_FAMILY_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 2000,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 0
+    },
+    "OWNED_BY": {
+      "file": "edge_OWNED_BY_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 1,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 1
+    },
+    "PRODUCES": {
+      "file": "edge_PRODUCES_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 2246,
+      "distinct_ranks": 2246,
+      "nonzero_rank_rows": 2246
+    },
+    "PUBLISHED_IN": {
+      "file": "edge_PUBLISHED_IN_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 4081,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 0
+    },
+    "REFERENCED_BY": {
+      "file": "edge_REFERENCED_BY.jsonl",
+      "mode": "endpoint_export",
+      "rows": 12714,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 0
+    },
+    "RELATED_TO": {
+      "file": "edge_RELATED_TO.jsonl",
+      "mode": "endpoint_export",
+      "rows": 79319,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 0
+    },
+    "SAME_AS": {
+      "file": "edge_SAME_AS_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 259,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 0
+    },
+    "SHAREHOLDER_OF": {
+      "file": "edge_SHAREHOLDER_OF_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 198,
+      "distinct_ranks": 198,
+      "nonzero_rank_rows": 198
+    },
+    "STUDIED_AT": {
+      "file": "edge_STUDIED_AT_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 96,
+      "distinct_ranks": 1,
+      "nonzero_rank_rows": 0
+    },
+    "SUBSIDIARY_OF": {
+      "file": "edge_SUBSIDIARY_OF_ranked.jsonl",
+      "mode": "ranked",
+      "rows": 118,
+      "distinct_ranks": 118,
+      "nonzero_rank_rows": 118
+    }
+  },
+  "missing_endpoints_by_edge": {
+    "ACQUIRES": {},
+    "ACTUAL_CONTROLLER_OF": {},
+    "AFFILIATED_WITH": {
+      "target_missing_rows": 1123
+    },
+    "ALUMNI": {},
+    "APPLIED_BY": {},
+    "AUTHORED_BY": {},
+    "BELONGS_TO_NODE": {},
+    "BENEFICIAL_OWNER_OF": {},
+    "CHILD_OF": {},
+    "CITED_BY": {},
+    "CITES": {},
+    "COAUTHOR_WITH": {
+      "target_missing_rows": 153755,
+      "source_missing_rows": 1
+    },
+    "COLLEAGUE": {},
+    "COVERS_CHAIN": {},
+    "DOWNSTREAM_OF": {},
+    "EXECUTIVE_OF": {},
+    "FUNDED_BY": {},
+    "HAS_KEYWORD": {},
+    "HAS_NEWS": {},
+    "HAS_NODE": {},
+    "HAS_OUTPUT": {},
+    "HAS_PARTICIPANT": {},
+    "INVENTED_BY": {},
+    "INVESTS_IN": {},
+    "INVOLVED_IN": {},
+    "LEADS": {},
+    "LEGAL_REP_OF": {},
+    "MEMBER_OF_FAMILY": {},
+    "OWNED_BY": {},
+    "PRODUCES": {},
+    "PUBLISHED_IN": {},
+    "REFERENCED_BY": {},
+    "RELATED_TO": {},
+    "SAME_AS": {},
+    "SHAREHOLDER_OF": {},
+    "STUDIED_AT": {},
+    "SUBSIDIARY_OF": {}
+  },
+  "duplicate_records_skipped": {},
+  "warnings": [
+    "This restores the records actually present in the archive; six endpoint-only large edge exports may omit parallel-rank edges from the original database.",
+    "Some edge endpoints have no exported node properties. Their new identifiers are preserved in kg_node_index and kg_missing_node; no names or business attributes are fabricated.",
+    "organization_base is a shared tag whose rows duplicate business nodes exactly; it is retained in kg_node_index.labels rather than imported as separate entities.",
+    "v_input_* views include explicitly flagged empty endpoint placeholders where a schema can be inferred from the legacy prefix. An inferred schema is not an exported tag.",
+    "Column types are inferred from observed graph values; this is a relational projection of the export, not a reconstruction of the original upstream MySQL DDL.",
+    "Empty node/edge schema types without JSONL files are not recreated because their property definitions are not present in this data archive."
+  ],
+  "missing_nodes_by_inferred_schema": {
+    "Organization": 596,
+    "Person": 126801
+  },
+  "artifacts": {
+    "sql_dump": "dev_graph_restore_20261026.sql.gz",
+    "schema": "schema.sql",
+    "mapping_manifest": "manifest.json"
+  }
+}

@@ -1,6 +1,6 @@
-# gkx_kg_v2：39 张表 SQL（两卷）+ 九大业务测试数据文档
+# gkx_kg_v2：39 张表 SQL（DDL + 全量数据压缩卷）+ 九大业务测试数据文档
 
-新库 `gkx_kg_v2`（宿主 tech-kg-mysql:30306）的 SQL 物料 + 测试数据文档。上游口径：只取 14 张实体表 + 25 张关系表，
+新库 `gkx_kg_v2`（宿主 tech-kg-mysql:30306）的完整 SQL 物料 + 测试数据文档。上游口径：只取 14 张实体表 + 25 张关系表，
 kg_scholar_organization 不作第 15 张实体表，按三档口径并入 Organization（props 逐字段展开、一列一属性、新列 `confidence double`）。
 配套图空间 `gkx_kg_v2`（14 TAG 1,025,180 点 / 25 EDGE 1,159,390 边，39 项对账一致）；46 组九大业务测试数据
 **42 组逐字命中 dp_gkx 基线 + 4 组差异全归因**（详见测试数据文档）。
@@ -9,15 +9,27 @@ kg_scholar_organization 不作第 15 张实体表，按三档口径并入 Organi
 
 | 文件 | 内容 | 大小 |
 |---|---|---:|
-| `01_gkx_kg_v2_part1_schema_entities.sql` | **全 39 张表 DDL** + 8 张实体表整表全量（含 v_organization 合并版 19,895 行 = 19,870 企业 + 25 学者） | 47MB |
-| `02_gkx_kg_v2_part2_edges.sql` | 22 张关系表整表全量（含 ev_affiliated_with 键对齐改写版 1,129 行） | 56MB |
+| `01_schema_39_tables.sql` | **全 39 张表 DDL**（明文可浏览；v_organization 含合并新列 `confidence double`） | 58KB |
+| `02_data_entities_11tables.sql.gz` | 实体数据卷①：v_person(190,021)/v_event/v_keyword/v_organization/v_news/v_journal/v_product/v_report/v_patent_family/v_industry_node/v_industry_chain | 54MiB |
+| `03_data_paper.sql.gz` | 实体数据卷②：v_paper(742,127) | 72MiB |
+| `04_data_patent_project.sql.gz` | 实体数据卷③：v_patent(2,010)/v_project(4,008) | 52MiB |
+| `05_data_edges_25tables.sql.gz` | 关系数据卷：25 张 ev_* 全量（含 ev_authored_by 779,256 / ev_coauthor_with 156,144 / ev_cites 147,720 / ev_affiliated_with 改写版 1,129） | 15MiB |
 | `nine-modules-testdata-gkx-kg-v2.md` | **九大业务测试数据文档**（46 组，2026-10-27 实跑验证；查询带 `X-Business-Graph-Space: gkx_kg_v2`） | 11KB |
 
-- **为什么分两卷**：39 张表完整数据单文件约 103MB，超 GitHub 单文件 100MB 硬限制，故按实体/关系分为两卷，导入顺序 01→02。
-- **9 张大表只有建表语句、无数据**：v_person(190,021)/v_paper(742,127)/v_event(24,669)/v_keyword(31,645)/v_patent(2,010)/v_project(4,008)/ev_authored_by(779,256)/ev_coauthor_with(156,144)/ev_cites(147,720)，合计约 208 万行、磁盘约 1.3GB——全量 SQL 超 GitHub 单文件 100MB 硬限一个数量级，无法入 Git 仓库；**其余 30 张表全量数据均已收录**。大表数据两条路：①本机/内网对源库 gkx_kg 一条命令灌全量（附录 A）；②测试数据子集版（44MB，让 39 张表都有数据）在历史提交 25932130 的 03_data_testdata_subset.sql。
-- 建库语句在 01 卷首注释：`CREATE DATABASE IF NOT EXISTS gkx_kg_v2 DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_general_ci;`
+- **39 张表数据全量齐**：未压缩共 **1.2GB**（1,214,763,249 字节），超 GitHub 单文件 100MB 硬限，故 gzip 压缩为 4 卷（共 193MiB，单卷最大 72MiB）。已回灌验证：4 卷 + DDL 导入 scratch 库，39 张表行数与原库逐一相等。
+- 行数交叉核对：14 张 v_ 合计 = 1,025,180（= 图空间点数），25 张 ev_ 合计 = 1,159,390（= 图空间边数）。
 
-总计 39 张表 = 14 实体（v_person/v_paper/v_patent/v_patent_family/v_project/v_organization/v_news/v_event/v_journal/v_keyword/v_report/v_product/v_industry_chain/v_industry_node）+ 25 关系（ev_acquires … ev_subsidiary_of）。
+## 导入（顺序：先 01 建表，02–05 任意顺序）
+
+```bash
+mysql -e 'CREATE DATABASE IF NOT EXISTS gkx_kg_v2 DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_general_ci'
+mysql gkx_kg_v2 < 01_schema_39_tables.sql
+for f in 02_data_entities_11tables 03_data_paper 04_data_patent_project 05_data_edges_25tables; do
+  zcat $f.sql.gz | mysql gkx_kg_v2
+done
+```
+
+总计 39 张表 = 14 实体（v_person/v_paper/v_patent/v_patent_family/v_project/v_organization/v_news/v_event/v_journal/v_keyword/v_report/v_product/v_industry_chain/v_industry_node）+ 25 关系（ev_acquires … ev_subsidiary_of）。**v_ = vertex（一行一个点），ev_ = edge（一行一条边：src_id/dst_id/edge_rank/props_json）**，与图空间 14 TAG / 25 EDGE 一一对应。
 
 ## 两键提醒
 
@@ -38,9 +50,9 @@ PYTHONPATH=/app python -m script.gkx_kg_v2_build.verify_space             # 39 �
 
 九大业务查询带请求头 `X-Business-Graph-Space: gkx_kg_v2` 即路由到新空间。
 
-## 附录 A：9 大表全量灌数 / 从源库全量重建 39 张表
+## 附录 A：从源库 gkx_kg 只读重建 39 张表（替代导入数据卷的另一种方式）
 
-对源库 `gkx_kg` 只读执行（源库零改动；可重复执行前先 DROP 库）。前 30 张小表如已按 01/02 卷导入可跳过对应语句。
+对源库 `gkx_kg` 只读执行（源库零改动；可重复执行前先 DROP 库）。
 
 ```sql
 CREATE DATABASE IF NOT EXISTS gkx_kg_v2 DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;

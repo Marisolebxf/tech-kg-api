@@ -6,7 +6,7 @@ const { canReview } = useSpacePermissions()
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppAlert from '../../components/AppAlert.vue'
-import { directDecideProductionReview, getProductionReview, heartbeatProductionReview, rerunExtractFailures, submitProductionReview, type ProductionReviewCase } from '../../api/workflowOperations'
+import { directDecideProductionReview, getProductionReview, heartbeatProductionReview, refreshProductionReviewCandidates, rerunExtractFailures, submitProductionReview, type ProductionReviewCase } from '../../api/workflowOperations'
 
 import {
   getHandleCategory,
@@ -326,6 +326,35 @@ const incomingSourceLink = computed(() => {
 })
 /** merge 裁决的并入目标（targetEntityId）——服务端校验必须属于候选集。 */
 const selectedTarget = ref('')
+/** MR-CAND B：T_LINK 受控刷新未决候选（零写图；失效剔除也算变更，版本+1+审计）。 */
+const candidatesRefreshing = ref(false)
+async function refreshCandidates() {
+  if (!productionCase.value || !isEditable.value || submitting.value || candidatesRefreshing.value) return
+  candidatesRefreshing.value = true
+  try {
+    productionCase.value = await refreshProductionReviewCandidates(
+      productionCase.value.id,
+      productionCase.value.version,
+    )
+    record.value = mapProductionRecord(productionCase.value)
+    const snapshot = (productionCase.value.candidate || {}) as Record<string, unknown>
+    const refresh = snapshot._candidateRefresh as { addedVids?: string[]; removedVids?: string[] } | undefined
+    if (!refresh) {
+      notify('info', '图库暂无变化：候选集与当前一致，未更新版本。')
+      return
+    }
+    const added = refresh.addedVids || []
+    const removed = refresh.removedVids || []
+    // 已选目标被剔除时清空选择（merge 白名单只认刷新后候选集，旧目标会被 400 拒）
+    const cleared = selectedTarget.value && removed.includes(selectedTarget.value)
+    if (cleared) selectedTarget.value = ''
+    notify('success', `候选已刷新：新增 ${added.length} 个、剔除 ${removed.length} 个（版本已更新）${cleared ? '；原选中目标已被剔除，请重选' : ''}。`)
+  } catch (error) {
+    notify('error', error instanceof Error ? error.message : '候选刷新失败')
+  } finally {
+    candidatesRefreshing.value = false
+  }
+}
 watch(
   linkCandidates,
   (list) => {
@@ -676,6 +705,14 @@ const runPrimary = () => {
         </div>
         <!-- 终态判定结果（MR-TEXT）：与裁决前快照并列，先说结论再看快照 -->
         <AppAlert v-if="terminalOutcome" :type="terminalOutcome.tone" class="link-outcome">{{ terminalOutcome.text }}</AppAlert>
+
+        <!-- MR-CAND B：T_LINK 受控刷新未决候选（零写图；判活=图存在性，仅剔除图中已确认不存在的候选） -->
+        <div v-if="templateId === 'T_LINK' && !terminalOutcome && linkSnapshot" class="link-refresh">
+          <button type="button" class="direct-edit-toggle" :disabled="!isEditable || submitting || candidatesRefreshing" @click="refreshCandidates">
+            {{ candidatesRefreshing ? '刷新中…' : '刷新候选' }}
+          </button>
+          <span class="link-refresh-hint">按案件图空间重跑同名+近邻召回；仅剔除图中已确认不存在的候选（版本+1，记审计），召回不可见但图内存活的候选保留，merge 白名单以刷新后候选集为准。</span>
+        </div>
 
         <!-- T_LINK 挂起边可见：驳回会把这些边一并丢弃，评审员需看见代价（终态为裁决前快照） -->
         <div v-if="templateId === 'T_LINK' && linkPendingRelations.length" class="link-pending">
@@ -1395,6 +1432,19 @@ const runPrimary = () => {
 /* 终态判定结果条（MR-TEXT）：紧跟待入库记录卡，先结论后快照 */
 .link-outcome {
   margin-bottom: 12px;
+}
+
+/* 受控刷新候选行（MR-CAND B） */
+.link-refresh {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.link-refresh-hint {
+  color: #667085;
+  font-size: 12px;
 }
 
 .link-incoming-props {

@@ -14,7 +14,7 @@ kg_scholar_organization 不作第 15 张实体表，按三档口径并入 Organi
 | `nine-modules-testdata-gkx-kg-v2.md` | **九大业务测试数据文档**（46 组，2026-10-27 实跑验证；查询带 `X-Business-Graph-Space: gkx_kg_v2`） | 11KB |
 
 - **为什么分两卷**：39 张表完整数据单文件约 103MB，超 GitHub 单文件 100MB 硬限制，故按实体/关系分为两卷，导入顺序 01→02。
-- **9 张大表（v_person/v_paper/v_patent/v_event/v_keyword/v_project/ev_authored_by/ev_coauthor_with/ev_has_keyword）全量数据数 GB 不在本包内**（同样超限），30 张小表已全量收录；大表全量灌数见附录 A（对源库 gkx_kg 只读执行）。
+- **9 张大表只有建表语句、无数据**：v_person(190,021)/v_paper(742,127)/v_event(24,669)/v_keyword(31,645)/v_patent(2,010)/v_project(4,008)/ev_authored_by(779,256)/ev_coauthor_with(156,144)/ev_cites(147,720)，合计约 208 万行、磁盘约 1.3GB——全量 SQL 超 GitHub 单文件 100MB 硬限一个数量级，无法入 Git 仓库；**其余 30 张表全量数据均已收录**。大表数据两条路：①本机/内网对源库 gkx_kg 一条命令灌全量（附录 A）；②测试数据子集版（44MB，让 39 张表都有数据）在历史提交 25932130 的 03_data_testdata_subset.sql。
 - 建库语句在 01 卷首注释：`CREATE DATABASE IF NOT EXISTS gkx_kg_v2 DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_general_ci;`
 
 总计 39 张表 = 14 实体（v_person/v_paper/v_patent/v_patent_family/v_project/v_organization/v_news/v_event/v_journal/v_keyword/v_report/v_product/v_industry_chain/v_industry_node）+ 25 关系（ev_acquires … ev_subsidiary_of）。

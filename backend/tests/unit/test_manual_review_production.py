@@ -1184,6 +1184,44 @@ def test_refresh_picks_up_cross_column_candidate(service, monkeypatch):
     assert refresh["removedVids"] == []
 
 
+def test_refresh_response_carries_enriched_props(service, monkeypatch):
+    """刷新响应与详情读同口径富化（回归锁）：候选属性随响应带回。
+
+    修复前 refresh 返回裸 detail（快照只存 vid/name/score），前端一点刷新
+    属性对照就空、F5 走详情读才回来（2026-10-27 8097 实测）。富化通道按
+    ES 同名路最小桩（不触图），断言响应候选带图内属性。
+    """
+    import service.entity_disambiguation as ed
+
+    detail = _refreshable_link_case(service)
+    monkeypatch.setattr(
+        ed,
+        "recall_candidates",
+        lambda client, tag, names, space=None: {
+            names[0]: [{"vid": "old-1", "name": "张三", "props": {}}]
+        },
+    )
+    monkeypatch.setattr(
+        ed,
+        "score_candidate",
+        lambda display, iprops, cname, cprops: (0.9, {"nameSim": 0.9}),
+    )
+    monkeypatch.setattr(
+        ManualReviewService,
+        "_es_same_name_by_vid",
+        lambda self, space, label, name: {
+            "old-1": {"vid": "old-1", "name": "张三", "props": {"org": "中国科学院"}}
+        },
+    )
+    # 图客户端桩：共享客户端构造即探 /health（client.py:227），单测不给真连
+    # 接（召回假桩忽略 client、判活不被触发、富化走 ES 桩——全程零触达）
+    monkeypatch.setattr(ManualReviewService, "_graph_client_for", lambda self, snap: object())
+    out = service.refresh_candidates(detail["id"], detail["version"], actor())
+    cands = out["candidate"]["existingCandidates"]
+    assert [c["vid"] for c in cands] == ["old-1"]
+    assert cands[0]["props"]["org"] == "中国科学院"
+
+
 def test_refresh_true_noop_keeps_version(service, monkeypatch):
     """召回结果与现快照完全一致（零新增零剔除零变化）→ 不动版本不落审计。"""
     detail = _refreshable_link_case(service)

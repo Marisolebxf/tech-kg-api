@@ -84,5 +84,6 @@ docker exec tech-kg-mysql mysql -uroot -pgkx_element -e "DROP DATABASE gkx_kg_sm
 - 重传脚本后 `copy_defs_to_control` 只敢插入：须先删控制库本空间目录行
   （`kg_schema_script/source/property` → 按 `kind='relation'` 先删 `kg_schema_definition`）再重拷，
   否则 launch_jobs 预检报"脚本本体不存在"（控制库还指着被替换的旧 S3 key）。
-- `workflow_executions.status` 回写滞后十余分钟属常态（Temporal 已 Completed、图已落盘），
-  终态以 Temporal describe / 图计数为准。
+- `workflow_executions.status` 回写滞后属常态：execution_reconciler 只对
+  **RUNNING 超 30 分钟**的行回写真值（5 分钟一轮），Temporal 已 Completed、图已落盘时
+  任务中心可能仍显示"运行中"，终态以 Temporal describe / 图计数为准。

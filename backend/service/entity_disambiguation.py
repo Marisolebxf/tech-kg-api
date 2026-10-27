@@ -473,6 +473,11 @@ def recall_candidates_envelope(
     ``routes`` 两路各自的 RouteStatus（ok/true_zero/no_name_column/
     degraded/service_error）——写入案件快照的召回观测（进 input_snapshot，
     不进 dedupe 哈希）。近邻路 fail-open 语义不变。
+
+    分组键是**候选自身的显示名**（``recall_same_name`` 的口径），查询名之外
+    的跨键桶（案件口径名与候选显示名不同列时活候选的唯一承载）原样保留，
+    按查询名取桶的调用方不受影响——需要全量候选的调用方（refresh 候选）
+    展平所有桶取用。
     """
     exact, exact_status = recall_same_name(client, tag, names)
     fuzzy, near_status = _milvus_fuzzy_recall(tag, names, space)
@@ -488,6 +493,11 @@ def recall_candidates_envelope(
                     cands.append(cand)
             if cands:
                 merged[name] = cands
+        # 查询名之外的 exact 桶不能丢：近邻路一空这些桶就是活候选的唯一
+        # 承载（10-21 刷新候选误杀根因之一——按名取桶取空被当「图中无此候选」）
+        for key, cands in exact.items():
+            if key not in merged and cands:
+                merged[key] = cands
     return {
         "space": space,
         "tag": tag,

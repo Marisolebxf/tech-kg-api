@@ -1023,23 +1023,52 @@ def _refreshable_link_case(service):
     return service.get_case(created["reviewId"], actor())
 
 
-def _patch_recall(monkeypatch, recalled, calls=None, score=0.9):
-    """假召回+打分（零图写：recall/score 均为纯函数，客户端不被触写）。"""
+class _AliveGraphClient:
+    """判活探查桩：所有 vid 图内存活（get_node 非 None）。"""
+
+    def get_node(self, vid):
+        return object()
+
+
+class _DeadGraphClient:
+    """判活探查桩：所有 vid 图内已不存在（get_node None）。"""
+
+    def get_node(self, vid):
+        return None
+
+
+class _BrokenProbeClient:
+    """判活探查桩：get_node 全部抛错（探查失败≠失效，保守按存活保留）。"""
+
+    def get_node(self, vid):
+        raise RuntimeError("判活探查通道不可用")
+
+
+def _patch_recall(monkeypatch, recalled, calls=None, score=0.9, client=None, grouped=None):
+    """假召回+打分（零图写：recall/score 均为纯函数；图客户端只被读探查）。
+
+    ``grouped`` 直接给定召回分组 dict（跨键桶场景）；``client`` 是判活探查
+    （旧候选召回不可见时的 get_node）用的图客户端桩。
+    """
     import service.entity_disambiguation as ed
 
     def fake_recall(client, tag, names, space=None):
         if calls is not None:
             calls.append({"tag": tag, "names": list(names), "space": space})
+        if grouped is not None:
+            return grouped
         return {names[0]: list(recalled)} if recalled else {}
 
     monkeypatch.setattr(ed, "recall_candidates", fake_recall)
     monkeypatch.setattr(
         ed, "score_candidate", lambda display, iprops, cname, cprops: (score, {"nameSim": score})
     )
-    # 详情富化与图客户端按最小桩处理（富化只读有独立覆盖；refresh 召回已假化，
-    # 客户端本体不再被触达——由此也约束了刷新路径零图写）
+    # 详情富化按最小桩处理（富化只读有独立覆盖）；图客户端只在判活探查
+    # （旧候选召回不可见时的 get_node）被触达——refresh 路径零图写不变
     monkeypatch.setattr(ManualReviewService, "_enrich_link_snapshot", lambda self, c, snap: snap)
-    monkeypatch.setattr(ManualReviewService, "_graph_client_for", lambda self, snap: object())
+    monkeypatch.setattr(
+        ManualReviewService, "_graph_client_for", lambda self, snap: client if client else object()
+    )
 
 
 def _audit_events(service, case_id):
@@ -1071,15 +1100,88 @@ def test_refresh_appends_new_candidate_and_bumps_version(service, monkeypatch):
 
 
 def test_refresh_dropping_stale_candidate_is_a_change(service, monkeypatch):
-    """失效候选被剔除也算变更：version+1+审计，不能因「没有新增」当 no-op。"""
+    """真失效剔除也算变更：version+1+审计，不能因「没有新增」当 no-op。
+
+    判活口径（graph-existence-v1）：剔除的前提是召回看不见**且** get_node
+    返回 None（图中确认不存在）——召回看不见单独不构成失效依据。
+    """
     detail = _refreshable_link_case(service)
-    _patch_recall(monkeypatch, [])  # 图中 old-1 已不存在（同名+近邻均召回不到）
+    # old-1 召回不可见且图内已删除（判活探查确认不存在）
+    _patch_recall(monkeypatch, [], client=_DeadGraphClient())
     out = service.refresh_candidates(detail["id"], detail["version"], actor())
     assert out["candidate"]["existingCandidates"] == []
     assert out["version"] == detail["version"] + 1
-    assert out["candidate"]["_candidateRefresh"]["removedVids"] == ["old-1"]
+    refresh = out["candidate"]["_candidateRefresh"]
+    assert refresh["removedVids"] == ["old-1"]
+    assert refresh["livenessPolicy"] == "graph-existence-v1"
     events = _audit_events(service, detail["id"])
     assert events.count("CANDIDATES_REFRESHED") == 1
+
+
+def test_refresh_keeps_live_candidate_when_recall_invisible(service, monkeypatch):
+    """误杀防护（10-21 事故形态）：召回看不见≠图中没有。
+
+    跨列同名候选（Jian Huang 案候选分组在「黄健」）召回按名取空、Milvus
+    true_zero 时，判活走 get_node——图内存活则原样保留，真 no-op：不动版本、
+    不落审计、不写 _candidateRefresh（候选/属性对照/merge 目标不消失）。
+    """
+    detail = _refreshable_link_case(service)
+    _patch_recall(monkeypatch, [], client=_AliveGraphClient())
+    out = service.refresh_candidates(detail["id"], detail["version"], actor())
+    assert out["candidate"]["existingCandidates"] == detail["candidate"]["existingCandidates"]
+    assert out["version"] == detail["version"]
+    assert "_candidateRefresh" not in out["candidate"]
+    assert "CANDIDATES_REFRESHED" not in _audit_events(service, detail["id"])
+
+
+def test_refresh_probe_failure_keeps_candidate_conservative(service, monkeypatch):
+    """探查失败≠失效：get_node 抛错时保守按存活保留（宁可不剔除，不误杀）。
+
+    保守保留的候选不做名称/得分刷新（未被重评分），新召回候选照常追加；
+    失败计数进 _candidateRefresh.livenessProbeFailed 供观测。
+    """
+    detail = _refreshable_link_case(service)
+    _patch_recall(
+        monkeypatch,
+        [{"vid": "fresh-2", "name": "张三丰", "props": {}}],
+        client=_BrokenProbeClient(),
+    )
+    out = service.refresh_candidates(detail["id"], detail["version"], actor())
+    vids = [c["vid"] for c in out["candidate"]["existingCandidates"]]
+    assert vids == ["old-1", "fresh-2"]
+    # old-1 条目逐字段未动（探查失败的原样保留路径，不重评分）
+    assert out["candidate"]["existingCandidates"][0] == {
+        "vid": "old-1",
+        "name": "张三",
+        "score": 0.7,
+    }
+    refresh = out["candidate"]["_candidateRefresh"]
+    assert refresh["removedVids"] == []
+    assert refresh["addedVids"] == ["fresh-2"]
+    assert refresh["livenessProbeFailed"] == 1
+    assert refresh["livenessPolicy"] == "graph-existence-v1"
+
+
+def test_refresh_picks_up_cross_column_candidate(service, monkeypatch):
+    """跨列同名候选可新增：召回按候选自身显示名分组，展平全部桶后跨键候选可见。
+
+    修复前 refresh 只取 .get(案件显示名) 单桶——分组键与案件名不同列的
+    候选（机构双语名最典型）永远进不了新增集。
+    """
+    detail = _refreshable_link_case(service)
+    # 案件显示名=张三；召回分组只有跨键桶「黄健」（无查询名桶）
+    _patch_recall(
+        monkeypatch,
+        [],
+        grouped={"黄健": [{"vid": "cross-1", "name": "黄健", "props": {}}]},
+        client=_AliveGraphClient(),
+    )
+    out = service.refresh_candidates(detail["id"], detail["version"], actor())
+    vids = [c["vid"] for c in out["candidate"]["existingCandidates"]]
+    assert vids == ["old-1", "cross-1"]
+    refresh = out["candidate"]["_candidateRefresh"]
+    assert refresh["addedVids"] == ["cross-1"]
+    assert refresh["removedVids"] == []
 
 
 def test_refresh_true_noop_keeps_version(service, monkeypatch):
@@ -1123,8 +1225,8 @@ def test_refresh_conflict_on_stale_version(service, monkeypatch):
     )
     with pytest.raises(ReviewConflictError):
         service.refresh_candidates(detail["id"], detail["version"], actor())
-    # 持新版本再刷即可（拿最新 version 重试）
-    _patch_recall(monkeypatch, [])
+    # 持新版本再刷即可（拿最新 version 重试；判活探查确认候选确已不在图内）
+    _patch_recall(monkeypatch, [], client=_DeadGraphClient())
     second = service.refresh_candidates(first["id"], first["version"], actor())
     assert second["candidate"]["existingCandidates"] == []
 

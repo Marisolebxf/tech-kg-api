@@ -38,3 +38,4 @@ kg_person	190021
 kg_product	2072
 kg_project	4008
 kg_report	3000
+kg_scholar_organization	45

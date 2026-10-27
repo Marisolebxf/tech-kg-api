@@ -486,3 +486,11 @@ CREATE TABLE `kg_report` (
   KEY `idx_pub_year` (`pub_year`),
   KEY `idx_approval_year` (`approval_year`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='研究报告（dwd_zh_report+dwd_en_report 合一，一实体一表）';
+DROP TABLE IF EXISTS `kg_scholar_organization`;
+CREATE TABLE `kg_scholar_organization` (
+  `org_id` varchar(64) COLLATE utf8mb4_general_ci NOT NULL COMMENT '主键=MD5(单位名)前16位，与 kg_edge_affiliated_with.dst_id 同键',
+  `name_zh` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '机构中文名（来源单位字符串原样）',
+  `name_en` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT '机构英文名',
+  `props` json DEFAULT NULL COMMENT '属性 JSON（id/name/org_kind=scholar_affiliation/confidence/source_table=dwd_scholar_work_experience/ingest_batch 等审计列）',
+  PRIMARY KEY (`org_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='学者机构（dwd_scholar_work_experience 单位名 DISTINCT 物化；affiliated_with 边 dst 落点，第 15 张实体表）';

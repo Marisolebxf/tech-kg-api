@@ -1,6 +1,18 @@
 -- gkx_kg_v2 全 39 张表 DDL（14 实体 + 25 关系）
 -- v_organization 含合并新列 confidence double（学者行=0.6，企业行=NULL）
 -- 建库：CREATE DATABASE IF NOT EXISTS gkx_kg_v2 DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_general_ci;
+--
+-- 数据分卷（本目录 gzip 卷，未压缩合计 1.2GB，单卷 <100MB）：
+--   02_data_entities_11tables.sql.gz  11 张实体表全量(v_person 190,021 等) 54MiB
+--   03_data_paper.sql.gz              v_paper 742,127 行 72MiB
+--   04_data_patent_project.sql.gz     v_patent(2,010)/v_project(4,008) 52MiB
+--   05_data_edges_25tables.sql.gz     25 张 ev_* 全量(ev_authored_by 779,256 等) 15MiB
+-- 导入：先本文件建表，再逐卷（02~05 顺序任意）：
+--   mysql gkx_kg_v2 < 01_schema_39_tables.sql
+--   zcat 02_data_entities_11tables.sql.gz | mysql gkx_kg_v2   （03/04/05 同法）
+-- 已回灌验证：DDL+4 卷导入 scratch 库，39 张表 COUNT(*) 与原库逐一相等
+-- 提醒：ev_* 边表存带前缀 vid(person_xxx/paper_xxx/org_xxx)，v_* 实体表存裸主键；
+--   建图排除口径：Paper id NOT LIKE '889900%'(17 篇演示)、Organization 排 org_id MOCK% 与引号开头(52 行)
 -- MySQL dump 10.13  Distrib 8.0.46, for Linux (x86_64)
 --
 -- Host: localhost    Database: gkx_kg_v2

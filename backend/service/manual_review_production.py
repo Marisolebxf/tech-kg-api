@@ -617,19 +617,27 @@ class ManualReviewService:
                 "pageSize": size,
             }
 
+    def _link_case_view(self, s, c, a) -> dict[str, Any]:
+        """T_LINK 详情读口径：detail + 判定证据实时富化 + 操作档位。
+
+        建案快照只存 ``{vid,name,score}``；候选属性/评分明细/同名总数/挂起边
+        端点名都靠读时现查补齐（fail-open，不回写快照）。详情读与刷新响应
+        必须同一口径——refresh 只回 detail 不富化的话，前端一点刷新属性对照
+        就空，F5 走详情读才回来（2026-10-27 8097 实测）。
+        """
+        d = self.detail(s, c)
+        d["candidate"] = self._enrich_link_snapshot(c, d.get("candidate") or {})
+        if isinstance(d.get("data"), dict):
+            d["data"]["candidate"] = d["candidate"]
+        # 只读查看档（如开发维护看共享空间）：detail 默认可操作，按操作档覆写
+        d["canOperate"] = self._can_operate(a, c)
+        return d
+
     def get_case(self, i, a):
         with self.sf() as s:
             c = self.need(s, i)
             self.require_case_view(a, c)
-            d = self.detail(s, c)
-            # T_LINK 判定证据实时富化（fail-open，不回写快照）：候选属性/评分明细/
-            # 同名总数/挂起边端点名——建案快照只存 vid/name/score，打开详情时现查补齐
-            d["candidate"] = self._enrich_link_snapshot(c, d.get("candidate") or {})
-            if isinstance(d.get("data"), dict):
-                d["data"]["candidate"] = d["candidate"]
-            # 只读查看档（如开发维护看共享空间）：detail 默认可操作，按操作档覆写
-            d["canOperate"] = self._can_operate(a, c)
-            return d
+            return self._link_case_view(s, c, a)
 
     def claim(self, i, v, a):
         t = now()
@@ -2601,8 +2609,15 @@ class ManualReviewService:
 
         只重读图、零写图。合并策略：旧候选保留（评审员可能已开始对照）、图中
         已失效的剔除、新召回的按得分追加；快照候选形维持 ``{vid,name,score}``
-        （props/nameSim 等证据字段由详情富化现查现补，不入快照）。
+        （props/nameSim 等证据字段由详情富化现查现补，不入快照；响应与详情读
+        同口径走 ``_link_case_view`` 富化，前端刷新后属性对照不闪空）。
 
+        - **判活=图存在性，不是召回可见性**（10-21 误杀教训：案件口径名与候选
+          显示名不同列时同名召回分组取空、Milvus true_zero，活候选被当失效剔除
+          → 空候选案，属性对照随候选块整体消失）。旧候选没被本次召回再看见时
+          逐个 ``get_node`` 复核——真不存在（None）才剔除；探查异常保守按存活
+          保留（宁可不剔除，merge 侧另有存在性终判兜底）。召回侧同步展平全部分
+          组桶（跨列同名候选不再因分组键不同而丢失）。
         - 判定「变更」含失效剔除与名称/得分刷新（不能因「没有新增候选」当
           no-op）；真 no-op（合并结果逐字段等于旧集）不动版本、不落审计。
         - 读-改-写全程在同一事务：召回期间不预读版本，最终以 version CAS 落位
@@ -2633,9 +2648,18 @@ class ManualReviewService:
             from service.entity_disambiguation import TOP_K, recall_candidates, score_candidate
 
             client = self._graph_client_for(snapshot)
-            recalled = (recall_candidates(client, node_label, [display], space=space) or {}).get(
-                display, []
-            )
+            grouped = recall_candidates(client, node_label, [display], space=space) or {}
+            # 召回按候选自身 display_name 分组；跨列同名（案件名在 name_en、候选
+            # 主名列是 name_cn 等）时活候选落在查询名之外的桶——展平全部桶按
+            # vid 去重，不能只取 .get(案件显示名)（10-21 误杀根因之一）
+            recalled: list[dict[str, Any]] = []
+            seen_vids: set[str] = set()
+            for cands in grouped.values():
+                for cand in cands or []:
+                    vid = str(cand.get("vid") or "")
+                    if vid and vid not in seen_vids:
+                        seen_vids.add(vid)
+                        recalled.append(cand)
             scored: list[dict[str, Any]] = []
             for cand in recalled:
                 vid = str(cand.get("vid") or "")
@@ -2662,14 +2686,31 @@ class ManualReviewService:
                 if isinstance(x, dict) and x.get("vid")
             ]
             old_vids = {str(x["vid"]) for x in old}
-            kept = [
-                {**x, **fresh_by_vid[str(x["vid"])]} for x in old if str(x["vid"]) in fresh_by_vid
-            ]
+            # 判活=图存在性（10-21 误杀根因之二）：旧候选没被召回再看见≠失效，
+            # 逐个 get_node 复核——None 才剔除；探查异常保守按存活保留。
+            dead_vids: set[str] = set()
+            probe_failed = 0
+            for x in old:
+                vid = str(x["vid"])
+                if vid in fresh_by_vid:
+                    continue
+                try:
+                    if client.get_node(vid) is None:
+                        dead_vids.add(vid)
+                except Exception:  # noqa: BLE001 - 探查失败≠失效，宁可不剔除
+                    probe_failed += 1
+            kept: list[dict[str, Any]] = []
+            for x in old:
+                vid = str(x["vid"])
+                if vid in fresh_by_vid:
+                    kept.append({**x, **fresh_by_vid[vid]})
+                elif vid not in dead_vids:
+                    kept.append(x)
             added_vids = [vid for vid in fresh_by_vid if vid not in old_vids]
             merged = kept + [fresh_by_vid[vid] for vid in added_vids]
             if merged == old:
                 # 真 no-op：零新增、零剔除、名称/得分无变化 → 不动版本不落审计
-                return self.detail(s, c)
+                return self._link_case_view(s, c, a)
             t = now()
             reserved = s.execute(
                 update(ReviewCase)
@@ -2683,11 +2724,13 @@ class ManualReviewService:
             if reserved.rowcount != 1:
                 raise ReviewConflictError(STATE_OR_VERSION_CONFLICT)
             s.expire(c, ["version", "updated_at"])
-            removed_vids = sorted(old_vids - set(fresh_by_vid))
+            removed_vids = sorted(dead_vids)
             snapshot["existingCandidates"] = merged
             snapshot["_candidateRefresh"] = {
                 "policyVersion": "refresh-candidates-v1",
                 "recallPolicy": "exact+milvus-dense-v1",
+                "livenessPolicy": "graph-existence-v1",
+                "livenessProbeFailed": probe_failed,
                 "refreshedAt": t.strftime("%Y-%m-%d %H:%M:%S"),
                 "addedVids": added_vids,
                 "removedVids": removed_vids,
@@ -2715,7 +2758,8 @@ class ManualReviewService:
                 },
             )
             s.commit()
-            return self.detail(s, c)
+            # 响应与详情读同口径（含候选属性富化）：前端刷新后属性对照不闪空
+            return self._link_case_view(s, c, a)
 
     def _write_candidate_to_graph(self, c: ReviewCase) -> None:
         """accept 时把 candidate_snapshot 灌图。entity→merge_node，relation→create_edge。

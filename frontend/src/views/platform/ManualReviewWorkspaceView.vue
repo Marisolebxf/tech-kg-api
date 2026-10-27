@@ -706,12 +706,11 @@ const runPrimary = () => {
         <!-- 终态判定结果（MR-TEXT）：与裁决前快照并列，先说结论再看快照 -->
         <AppAlert v-if="terminalOutcome" :type="terminalOutcome.tone" class="link-outcome">{{ terminalOutcome.text }}</AppAlert>
 
-        <!-- MR-CAND B：T_LINK 受控刷新未决候选（零写图；失效剔除也算变更） -->
+        <!-- MR-CAND B：T_LINK 受控刷新未决候选（零写图；判活=图存在性，仅剔除图中已确认不存在的候选） -->
         <div v-if="templateId === 'T_LINK' && !terminalOutcome && linkSnapshot" class="link-refresh">
           <button type="button" class="direct-edit-toggle" :disabled="!isEditable || submitting || candidatesRefreshing" @click="refreshCandidates">
             {{ candidatesRefreshing ? '刷新中…' : '刷新候选' }}
           </button>
-          <span class="link-refresh-hint">按案件图空间重跑同名+近邻召回；图中已失效候选会被剔除（版本+1，记审计），merge 白名单以刷新后候选集为准。</span>
         </div>
 
         <!-- T_LINK 挂起边可见：驳回会把这些边一并丢弃，评审员需看见代价（终态为裁决前快照） -->
@@ -1440,11 +1439,6 @@ const runPrimary = () => {
   align-items: center;
   gap: 8px;
   margin-bottom: 12px;
-}
-
-.link-refresh-hint {
-  color: #667085;
-  font-size: 12px;
 }
 
 .link-incoming-props {

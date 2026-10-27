@@ -277,6 +277,37 @@ def test_recall_candidates_unions_two_roads_dedup_by_vid(monkeypatch: pytest.Mon
     assert vids == ["e1", "e2", "e3"]  # 同名路在前，近邻路去重后补位
 
 
+def test_envelope_keeps_cross_column_buckets_when_fuzzy_present(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """近邻路非空时查询名之外的 exact 桶必须保留（10-21 刷新候选误杀根因）。
+
+    案件口径名与候选显示名不同列（name_en=Jian Huang / name_zh=黄健）时，
+    同名精确路把活候选分组在「黄健」——重建 merged 若只留查询名桶，按名取桶
+    的调用方（refresh 候选）就看不见它，被误判「图中已失效」剔除。
+    """
+    monkeypatch.delenv("ENTITY_DISAMBIGUATION_MILVUS_RECALL", raising=False)
+    monkeypatch.setattr(
+        ed,
+        "recall_same_name",
+        lambda client, tag, names: ({"黄健": [{"vid": "v-zh", "name": "黄健", "props": {}}]}, "ok"),
+    )
+    monkeypatch.setattr(
+        ed,
+        "_milvus_fuzzy_recall",
+        lambda tag, names, space, **kw: (
+            {"Jian Huang": [{"vid": "v-en", "name": "Jian Huang", "props": {}, "similarity": 0.9}]},
+            "ok",
+        ),
+    )
+    env = ed.recall_candidates_envelope(object(), "Scholar", ["Jian Huang"], space="dev2")
+    cands = env["candidates"]
+    # 查询名桶=近邻并集照旧
+    assert [c["vid"] for c in cands["Jian Huang"]] == ["v-en"]
+    # 跨键桶不再被丢弃：展平全量桶的调用方（refresh 候选）能看见活候选
+    assert [c["vid"] for c in cands["黄健"]] == ["v-zh"]
+
+
 def test_recall_candidates_fuzzy_failure_falls_back_to_exact(monkeypatch: pytest.MonkeyPatch):
     # 近邻路异常（service_error）fail-open：载荷空，仅同名路候选
     monkeypatch.setattr(ed, "_milvus_fuzzy_recall", lambda *a, **kw: ({}, "service_error"))

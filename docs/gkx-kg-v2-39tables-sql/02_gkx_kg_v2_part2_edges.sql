@@ -1,3 +1,6 @@
+-- gkx_kg_v2 39张表SQL · 第2卷(共2卷)：22张关系表整表全量(含ev_affiliated_with键对齐改写版1,129行)
+-- 须先导入第1卷(01_gkx_kg_v2_part1_schema_entities.sql,含全部39张表DDL)
+
 -- gkx_kg_v2 整表全量·关系 22 张（含 ev_affiliated_with 键对齐改写版 1,129 行：81 同键 + 252 改写 + 796 新学者键）
 -- MySQL dump 10.13  Distrib 8.0.46, for Linux (x86_64)
 --

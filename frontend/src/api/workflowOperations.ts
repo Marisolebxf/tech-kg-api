@@ -193,11 +193,6 @@ export const releaseProductionReview = (id: string, version: number) => unwrap(h
 export const saveProductionReviewDraft = (id: string, version: number, payload: Record<string, unknown>) => unwrap(http.put(`/v1/manual-reviews/production/${id}/draft`, { version, payload })) as Promise<ProductionReviewCase>
 export const submitProductionReview = (id: string, data: { version:number; actionId:string; result:Record<string,unknown>; note?:string }) => unwrap(http.post(`/v1/manual-reviews/production/${id}/submit`, data)) as Promise<ProductionReviewCase>
 
-/** T_LINK 受控刷新未决候选：按案件图空间重跑召回+打分，零写图（MR-CAND B）。
- *  失效候选剔除也算变更（version+1+审计）；刷新/提交并发由后端 version CAS 拦截（409）。 */
-export const refreshProductionReviewCandidates = (id: string, version: number) =>
-  unwrap(http.post(`/v1/manual-reviews/production/${id}/refresh-candidates`, { version })) as Promise<ProductionReviewCase>
-
 /** case 审计日志（建案/领取/提交/重跑等事件时间线）。 */
 export interface ProductionReviewAuditEntry {
   eventType: string; actorId?: string; actorName?: string; requestId?: string

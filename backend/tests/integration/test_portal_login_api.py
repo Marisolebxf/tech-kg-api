@@ -223,3 +223,32 @@ async def test_portal_mode_revalidates_non_portal_sessions(
         assert client.cookies.get(COOKIE) != context.session_id
     assert user_center.checked == ["portal-before"]
     assert user_center.refresh_count == 0
+
+
+async def test_portal_exchange_sets_session_cookie_on_error_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """门户兑换出的新会话在非 2xx 响应上也必须下发 Cookie。
+
+    回归：中间件原先仅在 status<400 时写回会话 Cookie——静默重建发生在
+    409/5xx 业务响应上时 Set-Cookie 被吞，浏览器持续丢会话、反复静默重建
+    （2026-10-27 人工审核跳登录排查）。
+    """
+    from fastapi import HTTPException
+
+    from biz.dependencies.auth import CurrentUser
+
+    app, _, _, _ = make_portal_app(monkeypatch)
+
+    @app.get("/api/v1/_test/conflict")
+    async def _conflict(user: CurrentUser) -> None:
+        raise HTTPException(status_code=409, detail="业务冲突")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test.local"
+    ) as client:
+        client.cookies.set(PORTAL_COOKIE, "portal-before", domain="test.local")
+        response = await client.get("/api/v1/_test/conflict")
+    assert response.status_code == 409
+    cookies = response_cookies(response)
+    assert COOKIE in cookies, "非 2xx 响应也必须下发门户兑换出的新会话 Cookie"

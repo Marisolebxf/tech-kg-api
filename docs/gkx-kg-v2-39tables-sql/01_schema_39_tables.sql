@@ -1,12 +1,16 @@
 -- gkx_kg_v2 全 39 张表 DDL（14 实体 + 25 关系）
+-- 10-28 晚更新（相对上一版 82bf7353）：v_paper 新增 citation_count bigint——742,127 行全量随机演示值
+--   （指数分布均值≈20、种子 20261028 可复现；⚠️非真实被引数，仅用于演示 M6 被引链路；回滚口径 UPDATE 置 NULL，勿 DROP 列）
+-- 本版数据增量（相对 82bf7353）：ev_published_in 4,000→76,264(P1 65,210+P2b 2,923+P2c 4,131)、v_journal 2,134→2,164、
+--   v_event 24,669→24,671(2 条真实公告风险事件)、ev_has_keyword 20,259→20,303；其余 34 表行数不变
 -- v_organization 含合并新列 confidence double（学者行=0.6，企业行=NULL）
 -- 建库：CREATE DATABASE IF NOT EXISTS gkx_kg_v2 DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_general_ci;
 --
--- 数据分卷（本目录 gzip 卷，未压缩合计 1.2GB，单卷 <100MB）：
+-- 数据分卷（本目录 gzip 卷，未压缩合计约 1.2GB，单卷 <100MB）：
 --   02_data_entities_11tables.sql.gz  11 张实体表全量(v_person 190,021 等) 54MiB
---   03_data_paper.sql.gz              v_paper 742,127 行 72MiB
+--   03_data_paper.sql.gz              v_paper 742,127 行(含 citation_count) 75MiB
 --   04_data_patent_project.sql.gz     v_patent(2,010)/v_project(4,008) 52MiB
---   05_data_edges_25tables.sql.gz     25 张 ev_* 全量(ev_authored_by 779,256 等) 15MiB
+--   05_data_edges_25tables.sql.gz     25 张 ev_* 全量(ev_authored_by 779,256 等) 17MiB
 -- 导入：先本文件建表，再逐卷（02~05 顺序任意）：
 --   mysql gkx_kg_v2 < 01_schema_39_tables.sql
 --   zcat 02_data_entities_11tables.sql.gz | mysql gkx_kg_v2   （03/04/05 同法）
@@ -136,6 +140,7 @@ CREATE TABLE `v_paper` (
   `related_dois` json DEFAULT NULL COMMENT '相关论文DOI清单←dwd_zh_paper_related.relevant(JSON内doi)+dwd_en_paper_related.doi 按论文聚合(10-26补,RELATED_TO连接键)',
   `author_ids` json DEFAULT NULL,
   `keyword_ids` json DEFAULT NULL,
+  `citation_count` bigint DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `idx_doi` (`doi`(191)),
   KEY `idx_pub_year` (`publication_year`),
@@ -555,9 +560,17 @@ CREATE TABLE `v_report` (
   KEY `idx_approval_year` (`approval_year`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='研究报告（dwd_zh_report+dwd_en_report 合一，一实体一表）';
 /*!40101 SET character_set_client = @saved_cs_client */;
+/*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 
---
--- Table structure for table `v_product`
+/*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
+/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;
+/*!40014 SET UNIQUE_CHECKS=@OLD_UNIQUE_CHECKS */;
+/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
+/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
+/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
+/*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
+
+-- Dump completed-- Table structure for table `v_product`
 --
 
 DROP TABLE IF EXISTS `v_product`;
@@ -1005,14 +1018,5 @@ CREATE TABLE `ev_subsidiary_of` (
   `props_json` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-/*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 
-/*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
-/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;
-/*!40014 SET UNIQUE_CHECKS=@OLD_UNIQUE_CHECKS */;
-/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
-/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
-/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
-/*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
-
--- Dump completed on 2026-10-27 18:36:48
+--

@@ -2590,12 +2590,6 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
         : summary.overlapDuration || "—";
     const relationConfidence =
       summary.relationConfidence ?? primary?.confidence;
-    // 实际发出的查询窗口：空结果时用户需要看到页面用了哪个时间段。
-    const colleagueReq = ((liveApiPayload.value as Record<string, any>)?.request ??
-      {}) as Record<string, string>;
-    const colleagueWindow = colleagueReq.start_time || colleagueReq.end_time
-      ? `${colleagueReq.start_time || "最早"} 至 ${colleagueReq.end_time || "最新"}`
-      : "未限定（全部时间段）";
     return [
       { label: "专家 A", value: summary.coreExpert || "—" },
       { label: "核心专家机构", value: summary.coreExpertOrganization || "—" },
@@ -2627,12 +2621,6 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
       {
         label: "关系判定",
         value: data.total ? "存在同事关系" : "不存在同事关系",
-      },
-      {
-        label: "查询时间窗口",
-        value: data.total
-          ? colleagueWindow
-          : `${colleagueWindow}（窗口内无共事记录，请核对起止月份）`,
       },
     ];
   }

@@ -4,7 +4,9 @@ for (const [width, height] of [[320, 568], [375, 667], [390, 400], [768, 1024], 
   test(`${width}x${height}: login scrolls and the entry remains reachable`, async ({ page, browserName }) => {
     await page.setViewportSize({ width, height })
     await page.route(url => url.pathname.startsWith('/api/'), async route => {
-      if (new URL(route.request().url()).pathname.endsWith('/auth/login-url')) {
+      if (new URL(route.request().url()).pathname.endsWith('/auth/login-config')) {
+        await route.fulfill({ json: { success: true, code: 200, data: { mode: 'oauth' } } })
+      } else if (new URL(route.request().url()).pathname.endsWith('/auth/login-url')) {
         await route.fulfill({ json: { success: true, code: 200, data: { url: '/?oauth-test=1', expiresIn: 60 } } })
       } else {
         await route.fulfill({ status: 401, json: { detail: 'Not authenticated' } })

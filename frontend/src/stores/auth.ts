@@ -117,6 +117,17 @@ export const useAuthStore = defineStore("auth", {
       if (version !== currentSessionVersion()) return;
       window.location.assign(result.url);
     },
+    async preparePortalLogin(next = "/overview"): Promise<string | null> {
+      const version = currentSessionVersion();
+      const result = await getLoginUrl(next);
+      if (version !== currentSessionVersion()) return null;
+      if (result.mode !== "portal") {
+        throw new Error("登录方式已更新，请刷新页面后重试");
+      }
+      // 仅用户主动开始登录后恢复共享 Cookie 检查，预加载不能撤销退出状态。
+      this.skipSilentLogin = false;
+      return result.url;
+    },
     async refresh(): Promise<AuthProfile | null> {
       const version = currentSessionVersion();
       const profile = await refreshCurrentSession();

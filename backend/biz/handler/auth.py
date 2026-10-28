@@ -14,6 +14,8 @@ from biz.dependencies.auth import AuthApplicationDependency, BearerDependency, C
 from biz.schemas.auth import (
     AccountSecurityResponse,
     AuthProfileResponse,
+    LoginConfigData,
+    LoginConfigResponse,
     LoginUrlData,
     LoginUrlResponse,
     LogoutData,
@@ -56,6 +58,22 @@ def _clear_state_cookie(response: Response, application: AuthApplication) -> Non
     )
 
 
+@router.get("/login-config")
+async def get_login_config(
+    response: Response,
+    application: AuthApplicationDependency,
+) -> LoginConfigResponse:
+    # 预加载只读取方式，不生成 OAuth state，也不清除主动退出标记。
+    # 前端据此在点击事件内同步打开弹窗，避免异步请求消耗用户激活状态。
+    response.headers["Cache-Control"] = "no-store"
+    mode = (
+        "portal"
+        if application.settings.enabled and application.settings.login_mode == "portal"
+        else "oauth"
+    )
+    return LoginConfigResponse(data=LoginConfigData(mode=mode))
+
+
 @router.get("/login-url")
 async def get_login_url(
     response: Response,
@@ -84,7 +102,7 @@ async def get_login_url(
         # 此接口仅在用户主动点击登录时调用。允许退出后使用同一门户登录态重新进入；
         # 不生成子系统 OAuth state，也不猜测门户的回跳参数。
         clear_portal_logout_cookie(response, application.settings)
-        return LoginUrlResponse(data=LoginUrlData(url=url, expires_in=0))
+        return LoginUrlResponse(data=LoginUrlData(url=url, expires_in=0, mode="portal"))
     try:
         url, expires_in, state = await application.create_login_url(next_path)
     except AuthenticationError as exc:

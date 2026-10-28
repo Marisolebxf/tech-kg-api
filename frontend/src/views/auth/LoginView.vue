@@ -5,11 +5,21 @@ import { useRoute, useRouter } from "vue-router";
 import logoKg from "../../assets/images/logo-kg.png";
 import { useAuthStore } from "../../stores/auth";
 import { safeLoginTarget } from "../../router/loginTarget";
+import { getLoginConfig } from "../../api/auth";
+import { usePortalLogin } from "../../composables/usePortalLogin";
+import { portalBridge } from "../../portal/iframeBridge";
 
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
 const submitting = ref(false);
+const loginMode = ref<"oauth" | "portal" | null>(null);
+const configLoading = ref(true);
+const portalLogin = usePortalLogin(async (target) => {
+  await router.replace(target);
+  return route.name !== "login";
+});
+const { waiting, status: portalStatus, error: portalError } = portalLogin;
 function normalizeLoginFeedback(value: unknown): string {
   if (typeof value !== "string") return "";
   // 未建立本系统会话也是正常登录入口；兼容旧书签中的过期提示，避免误报。
@@ -39,11 +49,21 @@ function errorMessage(error: unknown): string {
 }
 
 async function login() {
-  if (submitting.value || authStore.loading) return;
+  if (submitting.value || authStore.loading || waiting.value || configLoading.value) return;
+  if (!loginMode.value) {
+    feedback.value = "";
+    await loadLoginConfig();
+    return;
+  }
   submitting.value = true;
   feedback.value = "";
   // 旧书签可能指向已下线的 /admin 管理端路径，此时回退到平台总览
   const target = redirectPath.value && !redirectPath.value.startsWith("/admin") ? redirectPath.value : "/overview";
+  if (loginMode.value === "portal" && !portalBridge.isInIframe) {
+    portalLogin.start(target);
+    submitting.value = false;
+    return;
+  }
   try {
     if (await authStore.loadCurrentUser(true)) {
       await router.replace(target);
@@ -61,6 +81,17 @@ function resetSubmitting() {
   submitting.value = false;
 }
 
+async function loadLoginConfig() {
+  configLoading.value = true;
+  try {
+    loginMode.value = (await getLoginConfig()).mode;
+  } catch (error) {
+    feedback.value = errorMessage(error);
+  } finally {
+    configLoading.value = false;
+  }
+}
+
 watch(() => route.query.error, (error) => {
   feedback.value = normalizeLoginFeedback(error);
   resetSubmitting();
@@ -68,6 +99,7 @@ watch(() => route.query.error, (error) => {
 
 onMounted(async () => {
   window.addEventListener("pageshow", resetSubmitting);
+  void loadLoginConfig();
   try {
     await authStore.loadCurrentUser(true);
   } catch (error) {
@@ -111,13 +143,15 @@ onBeforeUnmount(() => window.removeEventListener("pageshow", resetSubmitting));
             ><strong>统一身份</strong>登录后使用当前账号已获授权的功能和数据。</span
           >
         </div>
-        <p v-if="feedback" class="login-card__error" role="alert">
-          {{ feedback }}
+        <p v-if="feedback || portalError" class="login-card__error" role="alert">
+          {{ feedback || portalError }}
         </p>
+        <p v-if="waiting" class="login-card__status" role="status">{{ portalStatus }}</p>
         <div class="login-portals">
-          <button type="button" :disabled="submitting || authStore.loading" @click="login">
-            <strong>进入平台</strong><b>{{ submitting ? '跳转中…' : '进入 →' }}</b>
+          <button type="button" :disabled="submitting || authStore.loading || configLoading || waiting" @click="login">
+            <strong>{{ loginMode === null && !configLoading ? '重试登录入口' : '进入平台' }}</strong><b>{{ waiting ? '等待登录…' : submitting ? '跳转中…' : configLoading ? '准备中…' : '进入 →' }}</b>
           </button>
+          <button v-if="waiting" type="button" @click="portalLogin.cancel">取消等待</button>
         </div>
         <small>登录即表示你已获得访问本系统的组织授权。</small>
       </div>
@@ -302,6 +336,11 @@ onBeforeUnmount(() => window.removeEventListener("pageshow", resetSubmitting));
   color: #b42318;
 }
 .login-portals{display:grid;gap:10px}.login-portals button{display:flex;align-items:center;justify-content:space-between;width:100%;height:58px;padding:0 18px;border:1px solid #dce8f8;border-radius:6px;background:#fff;color:var(--gkx-text-primary);text-align:left;cursor:pointer}.login-portals button:hover{border-color:var(--gkx-primary);background:#f7faff}.login-portals button:disabled{opacity:.6;cursor:not-allowed}.login-portals strong{font-size:14px}.login-portals b{color:var(--gkx-primary);font-size:12px;white-space:nowrap}
+.login-card .login-card__status {
+  margin: 0 0 16px;
+  color: var(--gkx-text-secondary);
+  line-height: 1.7;
+}
 .login-card small {
   display: block;
   margin-top: 17px;

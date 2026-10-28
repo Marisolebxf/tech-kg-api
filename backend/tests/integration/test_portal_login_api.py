@@ -101,10 +101,32 @@ async def test_portal_login_url_does_not_start_oauth_or_access_session_store(
         )
         assert response.status_code == 200
         assert response.json()["data"]["url"] == entry
+        assert response.json()["data"]["mode"] == "portal"
         assert response.headers["cache-control"] == "no-store"
         assert response_cookies(response)[MARKER]["max-age"] == "0"
         assert f"{COOKIE}_oauth_state" not in response_cookies(response)
         assert client.cookies.get(MARKER) is None
+
+
+@pytest.mark.parametrize("mode", ["portal", "oauth"])
+async def test_login_config_is_read_only(monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+    app, _, store, _ = make_portal_app(monkeypatch, login_mode=mode)
+
+    async def unexpected_store_access(*args, **kwargs):
+        raise AssertionError("预加载登录方式不能访问会话或 OAuth state")
+
+    for method in ("get_json", "set_json", "pop_json"):
+        monkeypatch.setattr(store, method, unexpected_store_access)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test.local"
+    ) as client:
+        client.cookies.set(MARKER, "previous-logout", domain="test.local")
+        response = await client.get("/api/v1/auth/login-config")
+        assert response.status_code == 200
+        assert response.json()["data"] == {"mode": mode}
+        assert response.headers["cache-control"] == "no-store"
+        assert "set-cookie" not in response.headers
+        assert client.cookies.get(MARKER) == "previous-logout"
 
 
 @pytest.mark.parametrize(

@@ -15,6 +15,7 @@ import ArcoVue from '@arco-design/web-vue'
 
 import App from './App.vue'
 import { router } from './router'
+import { failPageLoading } from './portal/pageLoading'
 
 const scrollingTimers = new WeakMap<Element, number>()
 
@@ -41,29 +42,33 @@ window.addEventListener('scroll', (event) => revealScrollbar(event.target), true
 window.addEventListener('wheel', (event) => revealScrollbar(event.target), { passive: true, capture: true })
 window.addEventListener('touchmove', (event) => revealScrollbar(event.target), { passive: true, capture: true })
 
-function renderFatalError(error: unknown) {
+function renderFatalError() {
   const target = document.querySelector('#app')
   if (!target) return
-  const message = error instanceof Error ? error.message : String(error)
-  target.innerHTML = `
-    <div style="min-height:100vh;display:grid;place-items:center;background:#f5f7fb;color:#1d2129;font-family:Arial,'Microsoft YaHei',sans-serif;">
-      <section style="width:min(720px,calc(100vw - 48px));padding:24px;border:1px solid #fecdca;border-radius:8px;background:#fff7f6;">
-        <h1 style="margin:0 0 12px;font-size:20px;color:#b42318;">页面启动异常</h1>
-        <p style="margin:0;line-height:1.6;color:#912018;word-break:break-word;">${message}</p>
-      </section>
-    </div>
-  `
+  if (failPageLoading()) return
+  // Fallback for an older cached HTML document without the independent startup shell.
+  const section = document.createElement('section')
+  const title = document.createElement('h1')
+  title.textContent = '页面暂时无法加载'
+  const message = document.createElement('p')
+  message.textContent = '请重新加载页面，或通过左侧菜单切换其他业务。'
+  const retry = document.createElement('button')
+  retry.type = 'button'
+  retry.textContent = '重新加载'
+  retry.addEventListener('click', () => window.location.reload())
+  section.append(title, message, retry)
+  target.replaceChildren(section)
 }
 
 try {
   const app = createApp(App)
   app.config.errorHandler = (error) => {
     console.error(error)
-    renderFatalError(error)
+    renderFatalError()
   }
   app.use(createPinia()).use(router).use(ArcoVue).mount('#app')
   // 初始身份和空间由路由守卫统一准备；登录页独立检查已有会话。
 } catch (error) {
   console.error(error)
-  renderFatalError(error)
+  renderFatalError()
 }

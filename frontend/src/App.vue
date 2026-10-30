@@ -2,7 +2,7 @@
 import { useGraphSpaceStore } from "./stores/graphSpace"
 const spaceContext = useGraphSpaceStore()
 
-import { computed, onErrorCaptured, ref } from 'vue'
+import { computed, onErrorCaptured, ref, watch } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
 
 import KgToast from './components/kg-toast.vue'
@@ -10,6 +10,7 @@ import GraphSpaceSelector from './components/GraphSpaceSelector.vue'
 import AppBreadcrumb from './components/AppBreadcrumb.vue'
 import AppLayout from './layouts/AppLayout.vue'
 import { usePortalIntegration } from './portal/usePortalIntegration'
+import { PortalAction, portalBridge } from './portal/iframeBridge'
 
 const route = useRoute()
 const useBlankLayout = computed(() => route.meta.layout === 'blank')
@@ -19,9 +20,18 @@ const isOverviewPage = computed(() => route.path === '/overview')
 // 嵌入态没有 AppLayout 的 onErrorCaptured 兜底：视图渲染错误会直通全局 errorHandler
 // 把门户里的整页炸成「页面启动异常」。这里补同款路由级错误边界。
 const routeError = ref('')
+const retryVersion = ref(0)
+watch(() => route.fullPath, () => { routeError.value = '' })
+function retryView() {
+  routeError.value = ''
+  retryVersion.value += 1
+}
 
 onErrorCaptured((error) => {
-  routeError.value = error instanceof Error ? error.message : String(error)
+  console.error(error)
+  routeError.value = '请重试，或通过左侧菜单切换其他业务。'
+  window.__KG_PAGE_LOADING__?.finish()
+  portalBridge.send(PortalAction.LOADING_HIDE)
   return false
 })
 const embeddedPageTitle = computed(() => String(route.meta.title ?? '亿级科技知识图谱引擎'))
@@ -61,8 +71,9 @@ const showEmbeddedAuthState = computed(
           <div v-if="routeError" class="route-error">
             <strong>页面渲染异常</strong>
             <span>{{ routeError }}</span>
+            <button type="button" @click="retryView">重试</button>
           </div>
-          <RouterView v-else :key="spaceContext.contextKey" />
+          <RouterView v-else :key="spaceContext.contextKey + '|' + retryVersion" />
         </section>
       </section>
     </main>
@@ -179,6 +190,16 @@ const showEmbeddedAuthState = computed(
 
 .route-error strong {
   font-size: 18px;
+}
+
+.route-error button {
+  justify-self: start;
+  padding: 8px 18px;
+  border: 0;
+  border-radius: 4px;
+  background: #165dff;
+  color: #fff;
+  cursor: pointer;
 }
 
 .route-error span {

@@ -19,7 +19,7 @@ vi.mock('../config', () => ({
 vi.mock('../stores/auth', () => ({ useAuthStore: () => ({ loadCurrentUser: mocks.loadCurrentUser, get sessionExpired() { return mocks.sessionExpired }, get skipSilentLogin() { return mocks.skipSilentLogin } }) }))
 vi.mock('../portal/iframeBridge', () => ({
   isPortalEmbeddedMode: () => mocks.embedded,
-  PortalAction: { SESSION_EXPIRED: 'session-expired' },
+  PortalAction: { SESSION_EXPIRED: 'session-expired', LOADING_HIDE: 'loading.hide' },
   portalBridge: { get isInIframe() { return mocks.embedded }, send: mocks.send },
 }))
 vi.mock('../views/business-service/BusinessServiceView.vue', () => ({ default: {} }))
@@ -152,7 +152,7 @@ describe('角色控制与默认入口', () => {
     await router.push('/expert-direct')
     expect(router.currentRoute.value.path).toBe('/login')
     expect(router.currentRoute.value.query).toEqual({ embedded: '1', portalState: 'session-expired' })
-    expect(mocks.send).toHaveBeenCalledTimes(1)
+    expect(mocks.send.mock.calls.filter(([action]) => action === 'session-expired')).toHaveLength(1)
   })
 
   it('iframe 首次未登录不发送会话失效事件', async () => {
@@ -160,7 +160,7 @@ describe('角色控制与默认入口', () => {
     mocks.loadCurrentUser.mockResolvedValue(null)
     await router.push('/expert-direct')
     expect(router.currentRoute.value.query).toEqual({ embedded: '1', portalState: 'login-required' })
-    expect(mocks.send).not.toHaveBeenCalled()
+    expect(mocks.send).not.toHaveBeenCalledWith('session-expired', expect.anything())
   })
 
   it('主动退出后的导航不被归为过期', async () => {
@@ -170,7 +170,7 @@ describe('角色控制与默认入口', () => {
     mocks.loadCurrentUser.mockResolvedValue(null)
     await router.push('/expert-direct')
     expect(router.currentRoute.value.query.portalState).toBe('login-required')
-    expect(mocks.send).not.toHaveBeenCalled()
+    expect(mocks.send).not.toHaveBeenCalledWith('session-expired', expect.anything())
   })
 
   it('后端明确允许的免登录开发身份保留管理页访问', async () => {

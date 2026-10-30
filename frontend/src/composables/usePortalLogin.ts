@@ -63,7 +63,7 @@ export function usePortalLogin(onAuthenticated: (target: string) => Promise<bool
       // COOP 也会让 closed=true，不能据此判定取消，更不能判定登录成功。
       status.value = popup?.closed
         ? '登录窗口已关闭或已切换。完成门户登录后，此页会自动继续；也可以取消后重试。'
-        : '请在新窗口完成门户登录，此页会自动进入系统。'
+        : '请在新窗口点击门户右上角“登录”并完成登录，此页会自动进入系统。'
     } catch {
       if (current === attempt) {
         status.value = '暂时无法确认登录状态，正在重试。请保持此页打开。'
@@ -110,7 +110,7 @@ export function usePortalLogin(onAuthenticated: (target: string) => Promise<bool
         if (!['http:', 'https:'].includes(destination.protocol)) throw new Error('invalid login URL')
         popup!.location.replace(destination.href)
         ready = true
-        status.value = '请在新窗口完成门户登录，此页会自动进入系统。'
+        status.value = '请在新窗口点击门户右上角“登录”并完成登录，此页会自动进入系统。'
         void check()
       } catch {
         if (current !== attempt) return

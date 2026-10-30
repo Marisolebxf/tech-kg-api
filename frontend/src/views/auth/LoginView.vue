@@ -60,8 +60,30 @@ async function login() {
   // 旧书签可能指向已下线的 /admin 管理端路径，此时回退到平台总览
   const target = redirectPath.value && !redirectPath.value.startsWith("/admin") ? redirectPath.value : "/overview";
   if (loginMode.value === "portal" && !portalBridge.isInIframe) {
-    portalLogin.start(target);
-    submitting.value = false;
+    if (!authStore.isAuthenticated) {
+      // 未登录时仍须在用户点击内同步开窗。
+      portalLogin.start(target);
+      submitting.value = false;
+      return;
+    }
+    // 已有身份不依赖弹窗，但进入前仍向后端确认，不能信任挂载时的旧状态。
+    portalLogin.cancel();
+    try {
+      if (await authStore.loadCurrentUser(true)) {
+        await router.replace(target);
+        if (route.name !== "login") return;
+        feedback.value = authStore.isAuthenticated
+          ? "暂时无法进入系统，请再次点击“进入平台”重试。"
+          : "登录状态已失效，请再次点击“进入平台”打开登录窗口。";
+      } else {
+        // await 后已失去可靠的用户激活；留待下一次点击同步开窗。
+        feedback.value = "登录状态已失效，请再次点击“进入平台”打开登录窗口。";
+      }
+    } catch (error) {
+      feedback.value = errorMessage(error);
+    } finally {
+      submitting.value = false;
+    }
     return;
   }
   try {

@@ -137,23 +137,40 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
         }
 
         items: list[dict[str, Any]] = []
+        keyword_cache: dict[str, Any] = {}
         for ach_type in ("paper", "patent", "project"):
             if ach_type not in type_filter:
                 continue
-            ordered = sorted(shared[ach_type], key=str)[:limit_per_type]
-            for vid in ordered:
-                item = self._build_item(
-                    graph,
-                    ach_type,
-                    vid,
-                    source_expert_id=source_expert_id,
-                    target_expert_id=target_expert_id,
-                    source_edge=src_edges[ach_type][vid],
-                    target_edge=tgt_edges[ach_type][vid],
-                )
-                if not self._in_time_range(item.get("time"), time_range_start, time_range_end):
-                    continue
-                items.append(item)
+            ordered = sorted(shared[ach_type], key=str)
+            # Fetch in bounded blocks, filtering before applying the output limit.
+            selected = 0
+            for block_start in range(0, len(ordered), 128):
+                candidate_ids = ordered[block_start : block_start + 128]
+                node_cache = graph.get_nodes_bulk(candidate_ids)
+                for vid in candidate_ids:
+                    node = node_cache.get(vid)
+                    props = getattr(node, "properties", None) or {}
+                    if not self._in_time_range(
+                        self._pick_time(props), time_range_start, time_range_end
+                    ):
+                        continue
+                    item = self._build_item(
+                        graph,
+                        ach_type,
+                        vid,
+                        source_expert_id=source_expert_id,
+                        target_expert_id=target_expert_id,
+                        source_edge=src_edges[ach_type][vid],
+                        target_edge=tgt_edges[ach_type][vid],
+                        node_cache=node_cache,
+                        keyword_cache=keyword_cache,
+                    )
+                    items.append(item)
+                    selected += 1
+                    if selected >= limit_per_type:
+                        break
+                if selected >= limit_per_type:
+                    break
 
         award_count = sum(len(i.get("awards") or []) for i in items)
         papers = sum(1 for i in items if i["type"] == "paper")
@@ -234,12 +251,24 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
         self, graph: TRSGraphClient, person_id: str
     ) -> dict[str, dict[str, Any]]:
         result: dict[str, dict[str, Any]] = {"paper": {}, "patent": {}, "project": {}}
-        try:
-            edges = graph.get_node_edges(person_id, direction="both", limit=EDGE_LIMIT)
-        except GraphNotFoundError:
-            return result
+        edges = []
+        seen = set()
+        offset = 0
+        while True:
+            try:
+                page = graph.get_node_edges(
+                    person_id, direction="both", limit=EDGE_LIMIT, offset=offset
+                )
+            except GraphNotFoundError:
+                break
+            fresh = [e for e in page if (str(e.type), str(e.id)) not in seen]
+            edges.extend(fresh)
+            seen.update((str(e.type), str(e.id)) for e in fresh)
+            if len(page) < EDGE_LIMIT or not fresh:
+                break
+            offset += len(page)
 
-        for edge in edges or []:
+        for edge in edges:
             edge_type = str(getattr(edge, "type", "") or "")
             neighbor = self._neighbor_id(edge, person_id)
             if not neighbor:
@@ -275,16 +304,21 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
         target_expert_id: str,
         source_edge: Any,
         target_edge: Any,
+        node_cache: dict[str, Any] | None = None,
+        keyword_cache: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        try:
-            node = graph.get_node(vid)
-        except GraphNotFoundError:
-            node = None
+        if node_cache is not None:
+            node = node_cache.get(vid)
+        else:
+            try:
+                node = graph.get_node(vid)
+            except GraphNotFoundError:
+                node = None
         props = (getattr(node, "properties", None) or {}) if node else {}
         awards = self._extract_awards(props)
         title = self._pick_title(props, vid)
         time_value = self._pick_time(props)
-        fields = self._resolve_keyword_fields(graph, vid, props)
+        fields = self._resolve_keyword_fields(graph, vid, props, keyword_cache)
         entity_score = achievement_entity_confidence(
             ach_type,
             props,
@@ -334,15 +368,21 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
         }
 
     def _resolve_keyword_fields(
-        self, graph: TRSGraphClient, vid: str, props: dict[str, Any]
+        self,
+        graph: TRSGraphClient,
+        vid: str,
+        props: dict[str, Any],
+        keyword_cache: dict[str, Any] | None = None,
     ) -> list[str]:
         """所属领域：优先 HAS_KEYWORD→Keyword；否则回退成果节点 keywords 等属性（专利双写）。"""
-        from_edges = self._fields_from_has_keyword(graph, vid)
+        from_edges = self._fields_from_has_keyword(graph, vid, keyword_cache)
         if from_edges:
             return from_edges
         return self._pick_fields(props)
 
-    def _fields_from_has_keyword(self, graph: TRSGraphClient, vid: str) -> list[str]:
+    def _fields_from_has_keyword(
+        self, graph: TRSGraphClient, vid: str, keyword_cache: dict[str, Any] | None = None
+    ) -> list[str]:
         try:
             edges = graph.get_node_edges(
                 vid,
@@ -353,6 +393,19 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
         except GraphNotFoundError:
             return []
 
+        cache = keyword_cache if keyword_cache is not None else {}
+        kids = list(
+            dict.fromkeys(
+                str(self._neighbor_id(e, vid))
+                for e in edges or []
+                if str(getattr(e, "type", "") or "") == KEYWORD_EDGE_TYPE
+                and self._neighbor_id(e, vid)
+            )
+        )
+        missing = [kid for kid in kids if kid not in cache]
+        if missing:
+            loaded = graph.get_nodes_bulk(missing)
+            cache.update({kid: loaded.get(kid) for kid in missing})
         seen: set[str] = set()
         out: list[str] = []
         for edge in edges or []:
@@ -361,10 +414,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
             kid = self._neighbor_id(edge, vid)
             if not kid:
                 continue
-            try:
-                knode = graph.get_node(kid)
-            except GraphNotFoundError:
-                knode = None
+            knode = cache.get(str(kid))
             kprops = (getattr(knode, "properties", None) or {}) if knode else {}
             label = (
                 self._as_keyword_label(kprops.get("keyword"))

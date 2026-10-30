@@ -774,24 +774,35 @@ class TestTraversal:
     def test_get_node_edges(self):
         def handler(request):
             if request.url.path == "/health":
-                return httpx.Response(200, json={"status": "UP"})
-            assert request.url.path == "/api/v1/traversal/1/edges"
-            return httpx.Response(
-                200,
-                json=[
-                    {
-                        "id": "1->2@0",
-                        "type": "KNOWS",
-                        "sourceId": "1",
-                        "targetId": "2",
-                        "properties": {},
-                    }
-                ],
-            )
+                return _health_ok(request)
+            if request.url.path == "/api/v1/query/read":
+                query = json.loads(request.content)["query"]
+                assert "ORDER BY edge_src, edge_dst, edge_type, edge_rank" in query
+                return httpx.Response(
+                    200,
+                    json={
+                        "records": [
+                            {
+                                "e": {
+                                    "id": "1->2@0",
+                                    "type": "KNOWS",
+                                    "sourceId": "1",
+                                    "targetId": "2",
+                                    "properties": {"weight": 2},
+                                }
+                            }
+                        ],
+                        "summary": {},
+                    },
+                )
+            assert request.method == "DELETE"
+            assert request.url.params["type"] == "KNOWS"
+            return httpx.Response(204)
 
         repo = _make_repo(handler)
         edges = repo.get_node_edges("1", direction="both")
         assert len(edges) == 1
+        assert edges[0].properties["weight"] == 2
         repo.close()
 
     def test_get_neighbours(self):
@@ -967,25 +978,34 @@ class TestEdgeCrud:
     def test_delete_edge(self):
         def handler(request):
             if request.url.path == "/health":
-                return httpx.Response(200, json={"status": "UP"})
-            if request.method == "GET":
+                return _health_ok(request)
+            if request.url.path == "/api/v1/query/read":
+                query = json.loads(request.content)["query"]
+                assert "ORDER BY edge_src, edge_dst, edge_type, edge_rank" in query
                 return httpx.Response(
                     200,
-                    json=[
-                        {
-                            "id": "1->2@0",
-                            "type": "KNOWS",
-                            "sourceId": "1",
-                            "targetId": "2",
-                            "properties": {},
-                        }
-                    ],
+                    json={
+                        "records": [
+                            {
+                                "e": {
+                                    "id": "1->2@0",
+                                    "type": "KNOWS",
+                                    "sourceId": "1",
+                                    "targetId": "2",
+                                    "properties": {"weight": 2},
+                                }
+                            }
+                        ],
+                        "summary": {},
+                    },
                 )
+            assert request.method == "DELETE"
             assert request.url.params["type"] == "KNOWS"
             return httpx.Response(204)
 
         repo = _make_repo(handler)
-        assert repo.delete_edge("1->2@0") is True
+        result = repo.delete_edge("1->2@0")
+        assert result is True
         repo.close()
 
     def test_delete_edge_missing_returns_false(self):
@@ -1003,30 +1023,33 @@ class TestEdgeCrud:
     def test_get_edge_without_type_scans_node_edges(self):
         def handler(request):
             if request.url.path == "/health":
-                return httpx.Response(200, json={"status": "UP"})
-            assert request.url.path == "/api/v1/traversal/1/edges"
-            return httpx.Response(
-                200,
-                json=[
-                    {
-                        "id": "1->3@0",
-                        "type": "KNOWS",
-                        "sourceId": "1",
-                        "targetId": "3",
-                        "properties": {},
+                return _health_ok(request)
+            if request.url.path == "/api/v1/query/read":
+                query = json.loads(request.content)["query"]
+                assert "ORDER BY edge_src, edge_dst, edge_type, edge_rank" in query
+                return httpx.Response(
+                    200,
+                    json={
+                        "records": [
+                            {
+                                "e": {
+                                    "id": "1->2@0",
+                                    "type": "KNOWS",
+                                    "sourceId": "1",
+                                    "targetId": "2",
+                                    "properties": {"weight": 2},
+                                }
+                            }
+                        ],
+                        "summary": {},
                     },
-                    {
-                        "id": "1->2@0",
-                        "type": "KNOWS",
-                        "sourceId": "1",
-                        "targetId": "2",
-                        "properties": {},
-                    },
-                ],
-            )
+                )
+            assert request.method == "DELETE"
+            assert request.url.params["type"] == "KNOWS"
+            return httpx.Response(204)
 
         repo = _make_repo(handler)
-        e = repo.get_edge("1->2@0")  # no edge_type -> scan branch
+        e = repo.get_edge("1->2@0")
         assert e is not None
         assert e.target_id == "2"
         repo.close()
@@ -1383,7 +1406,7 @@ class TestSlashVidNgqlFallback:
         def handler(request):
             if request.url.path == "/health":
                 return _health_ok(request)
-            if request.url.path == "/api/v1/query":
+            if request.url.path in {"/api/v1/query", "/api/v1/query/read"}:
                 captured.append(json.loads(request.content)["query"])
                 return httpx.Response(200, json={"records": records, "summary": {}})
             return httpx.Response(404, json={"error": "NotFound"})
@@ -1418,41 +1441,34 @@ class TestSlashVidNgqlFallback:
         assert repo.get_node("paper_ref_10.1111/jth.14768") is None
 
     def test_get_node_edges_slash_vid_uses_go(self):
-        captured: list[str] = []
+        captured = []
         records = [
             {
-                "src": "paper_ref_10.1111/jth.14768",
-                "dst": "paper_812578243168174080",
-                "etype": "CITES",
-            },
-            {
-                "src": "paper_864145551824782225",
-                "dst": "paper_ref_10.1111/jth.14768",
-                "etype": "CITES",
-            },
+                "e": {
+                    "id": "a/b->c@2",
+                    "sourceId": "a/b",
+                    "targetId": "c",
+                    "type": "CITES",
+                    "properties": {"weight": 3},
+                }
+            }
         ]
         repo = _make_repo(self._query_handler(captured, records))
-
-        edges = repo.get_node_edges(
-            "paper_ref_10.1111/jth.14768", direction="both", edge_type="CITES", limit=1, offset=0
-        )
-
-        # GO 一跳边 + Python 侧分页切片
-        assert len(edges) == 1
-        assert edges[0].type == "CITES"
-        assert str(edges[0].source_id) == "paper_ref_10.1111/jth.14768"
+        edges = repo.get_node_edges("a/b", direction="both", edge_type="CITES", limit=1, offset=5)
+        assert edges[0].properties == {"weight": 3}
+        assert edges[0].source_id == "a/b"
         assert "BIDIRECT" in captured[0]
-        assert "OVER CITES" in captured[0]
+        assert "ORDER BY" in captured[0]
+        assert "LIMIT 5, 1" in captured[0]
+        repo.close()
 
     def test_get_node_edges_slash_vid_rejects_injected_edge_type(self):
-        captured: list[str] = []
+        captured = []
         repo = _make_repo(self._query_handler(captured, []))
-
-        repo.get_node_edges("a/b", edge_type="CITES; DROP SPACE dev2", limit=10)
-
-        # 非法边类型不下入 nGQL，回退 OVER *
-        assert "OVER *" in captured[0]
-        assert "DROP SPACE" not in captured[0]
+        with pytest.raises(GraphRequestError):
+            repo.get_node_edges("a/b", edge_type="CITES; DROP SPACE dev2", limit=10)
+        assert not captured
+        repo.close()
 
     def test_normal_vid_still_uses_rest(self):
         def handler(request):

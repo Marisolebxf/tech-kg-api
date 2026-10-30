@@ -213,6 +213,14 @@ pnpm dev                    # /api 代理到 VITE_API_TARGET（默认 http://loc
 
 开启业务权限控制时，当前图库中真实存在、但在平台 MySQL 的新旧归属表中都没有记录的空间，默认按公共图空间展示和授权。此默认规则不向 MySQL 写入登记；管理员之后可显式设置业务归属。已有公共、业务或未归属策略优先，连接切换后的同名空间仍沿用 SQL 中的归属。公共空间沿用现有权限：普通用户和开发人员可读，写入和审核操作由管理员执行。
 
+## 查询驱动的索引维护
+
+默认开启 `TRS_GRAPH_AUTO_INDEX_ENABLED=true`。结构化属性查找、标签分页及校友院校查找会依据当前连接、图空间和真实字段生成索引需求，无需预设空间名/字段清单。已存在的同定义索引会被复用；缺失索引由后台创建、重建并轮询到 FINISHED，再用 EXPLAIN 编译对应 LOOKUP。当前图服务不返回详细 planDesc，维护状态的 explainAccepted 仅表示编译通过。
+
+索引任务使用 Redis 去重、按图服务地址串行执行并续租，进程中断后租约过期可重试。准备期间查询返回明确的 503/准备中，不查询未完成索引；Redis 不可用时不自动执行 DDL，依赖索引就绪检查的查询返回明确的暂不可用状态，避免读取重建中的不完整索引。失败原因与进度可通过 `GET /api/v1/graph-search/index-maintenance?space=...` 查看，沿用空间读取权限。默认重建等待上限 900 秒，可通过 `TRS_GRAPH_AUTO_INDEX_BUILD_TIMEOUT` 配置。公共空间的数据写入权限不因后台索引维护而变化。普通等值字段适用原生索引；全文/包含匹配仍需独立检索方案。
+
+取边统一使用稳定排序与服务端分页，保留 rank 和属性；产业链事件邻居节点批量读取；两点合作成果按时间过滤后才应用 limit，并批量补全详情与关键词。
+
 ## TRS 图库客户端（`infra/graph_db`）
 
 图库是 NebulaGraph，经 trs-graph-service 的 REST API 访问。认证用 `X-API-Key` 头，图空间用 `X-Graph-Space` 头。`infra/graph_db/client.TRSGraphClient` 是 ORM 风格客户端。

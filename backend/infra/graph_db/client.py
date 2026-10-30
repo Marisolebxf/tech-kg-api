@@ -465,6 +465,7 @@ class TRSGraphClient:
         """
         if not _TAG_IDENTIFIER.fullmatch(label or ""):
             raise GraphRequestError(f"非法节点标签: {label!r}", status_code=400)
+        self.ensure_tag_indexes(label)
         try:
             result = self.execute_read(
                 f"LOOKUP ON `{label}` YIELD vertex AS v | LIMIT {int(limit)} OFFSET {int(offset)}"
@@ -664,6 +665,13 @@ class TRSGraphClient:
         """SHOW STATS 的全标签计数（stats_snapshot 的 tags 部分，副本）。"""
         return dict(self.stats_snapshot()["tags"])
 
+    def ensure_tag_indexes(self, label: str, fields: Sequence[str] = ()) -> None:
+        from infra.graph_db.exceptions import GraphIndexPreparing
+        from infra.graph_db.index_maintenance import request_indexes
+
+        if not request_indexes(self._settings, label, list(fields)):
+            raise GraphIndexPreparing(label)
+
     def find_nodes(
         self,
         labels: list[str],
@@ -672,13 +680,22 @@ class TRSGraphClient:
         limit: int = 100,
         offset: int = 0,
     ) -> GraphPagedResult:
+        if labels:
+            self.ensure_tag_indexes(labels[0], list(properties))
         body = {
             "labels": labels if labels else ["Vertex"],
             "properties": properties,
             "limit": limit,
             "offset": offset,
         }
-        resp = self._request("POST", "/api/v1/nodes/find", json=body)
+        try:
+            resp = self._request("POST", "/api/v1/nodes/find", json=body)
+        except GraphRequestError as exc:
+            if labels and is_no_index_error(exc):
+                from infra.graph_db.index_maintenance import invalidate
+
+                invalidate(self._settings, labels[0], list(properties))
+            raise
         data = resp.json()
         items = [_trs_node_to_model(n) for n in data.get("items", [])]
         return GraphPagedResult(
@@ -887,19 +904,9 @@ class TRSGraphClient:
         limit: int = 100,
         offset: int = 0,
     ) -> list[GraphEdge]:
-        if _vid_has_slash(node_id):
-            return self._get_node_edges_via_ngql(
-                node_id, direction=direction, edge_type=edge_type, limit=limit, offset=offset
-            )
-        params: dict[str, Any] = {"direction": direction, "limit": limit}
-        if offset:
-            params["offset"] = offset
-        if edge_type:
-            params["edgeType"] = edge_type
-        resp = self._request("GET", f"/api/v1/traversal/{node_id}/edges", params=params)
-        data = resp.json()
-        items = data if isinstance(data, list) else data.get("items", [])
-        return [_trs_edge_to_model(e) for e in items]
+        return self._get_node_edges_via_ngql(
+            node_id, direction=direction, edge_type=edge_type, limit=limit, offset=offset
+        )
 
     def _get_node_via_ngql(self, node_id: Any) -> GraphNode | None:
         """含 ``/`` 的 VID（DOI 类）经 nGQL FETCH 取节点。
@@ -923,31 +930,49 @@ class TRSGraphClient:
         limit: int,
         offset: int,
     ) -> list[GraphEdge]:
-        """含 ``/`` 的 VID（DOI 类）经 nGQL GO 取一跳边（REST 路径参数无法承载）。
+        """Stable server-side edge pages, including slash VIDs and full properties.
 
-        边不带属性（子图渲染只用类型与端点）；GO 不做服务端分页，Python 侧切片。
-        edge_type 只放行字母数字下划线，防 nGQL 注入。
+        The deployed traversal REST endpoint ignores offset. Use the query endpoint
+        for every page so page zero and later pages have exactly the same ordering.
+        MATCH keeps the REST contract that both endpoints must exist.
         """
-        over = "*"
-        if edge_type and edge_type.replace("_", "a").isalnum():
-            over = edge_type
-        direction_clause = {"in": "REVERSELY", "both": "BIDIRECT"}.get(direction, "")
-        statement = (
-            f"GO 1 STEP FROM {_ngql_quote(node_id)} OVER {over}"
-            + (f" {direction_clause}" if direction_clause else "")
-            + " YIELD id($^) AS src, id($$) AS dst, type(edge) AS etype"
-        )
-        result = self.execute_query(statement)
-        edges = [
-            GraphEdge(
-                id=f"{record.get('src')}|{record.get('etype')}|{record.get('dst')}",
-                type=str(record.get("etype")),
-                source_id=record.get("src"),
-                target_id=record.get("dst"),
+        if direction not in {"in", "out", "both"} or limit < 1 or offset < 0:
+            raise GraphRequestError("Invalid edge pagination", status_code=400)
+        if edge_type and not _TAG_IDENTIFIER.fullmatch(edge_type):
+            raise GraphRequestError("Invalid edge type", status_code=400)
+        typed = f":`{edge_type}`" if edge_type else ""
+        pattern = {
+            "out": f"(n)-[e{typed}]->(m)",
+            "in": f"(n)<-[e{typed}]-(m)",
+            "both": f"(n)-[e{typed}]-(m)",
+        }[direction]
+        if _vid_has_slash(node_id):
+            clause = {"in": " REVERSELY", "both": " BIDIRECT", "out": ""}[direction]
+            over = f"`{edge_type}`" if edge_type else "*"
+            result = self.execute_read(
+                f"GO 1 STEP FROM {_ngql_quote(node_id)} OVER {over}{clause} "
+                "YIELD edge AS e, src(edge) AS edge_src, dst(edge) AS edge_dst, "
+                "type(edge) AS edge_type, rank(edge) AS edge_rank "
+                "| ORDER BY $-.edge_src, $-.edge_dst, $-.edge_type, $-.edge_rank "
+                f"| LIMIT {int(offset)}, {int(limit)}"
             )
+            return [
+                _trs_edge_to_model(record["e"])
+                for record in result.records
+                if isinstance(record.get("e"), dict)
+            ]
+        result = self.execute_read(
+            f"MATCH {pattern} WHERE id(n) == {_ngql_quote(node_id)} "
+            "RETURN e, src(e) AS edge_src, dst(e) AS edge_dst, "
+            "type(e) AS edge_type, rank(e) AS edge_rank "
+            "ORDER BY edge_src, edge_dst, edge_type, edge_rank "
+            f"SKIP {int(offset)} LIMIT {int(limit)}"
+        )
+        return [
+            _trs_edge_to_model(record["e"])
             for record in result.records
+            if isinstance(record.get("e"), dict)
         ]
-        return edges[offset : offset + limit]
 
     def get_neighbours(
         self,
@@ -1031,6 +1056,15 @@ class TRSGraphClient:
                 body=json.dumps(data, ensure_ascii=False),
             )
         return GraphQueryResult(records=data.get("records", []), summary=summary)
+
+    def execute_explain(self, query: str) -> GraphQueryResult:
+        """EXPLAIN must wrap USE in braces; USE ...; EXPLAIN ... is invalid nGQL."""
+        space = self._settings.space
+        if not re.fullmatch(r"[A-Za-z_]\w*", space, flags=re.ASCII):
+            raise GraphRequestError("Invalid graph space name", status_code=400)
+        statement = f"EXPLAIN {{ USE {space}; {query.rstrip().rstrip(';')}; }}"
+        response = self._request("POST", "/api/v1/query/read", json={"query": statement})
+        return self._query_result(response.json(), "/api/v1/query/read", expected_space=space)
 
     def execute_query(
         self,

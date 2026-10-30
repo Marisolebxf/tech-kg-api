@@ -19,7 +19,7 @@ from infra.graph_db import (
     close_space_clients,
     close_trs_graph_client,
 )
-from infra.graph_db.exceptions import GraphRepoError
+from infra.graph_db.exceptions import GraphIndexPreparing, GraphRepoError
 from infra.mysql import session_scope
 from infra.redis import close_redis_client
 from infra.workflow_mysql import close_workflow_engine
@@ -180,6 +180,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             stats_snapshot_collector.cancel()
             with suppress(asyncio.CancelledError):
                 await stats_snapshot_collector
+        from infra.graph_db.index_maintenance import stop as stop_index_maintenance
+
+        stop_index_maintenance()
         await close_redis_client()
         close_trs_graph_client()
         close_algorithm_client()
@@ -231,6 +234,15 @@ async def graph_error_handler(request, exc: GraphRepoError) -> JSONResponse:
     return JSONResponse(
         status_code=502,
         content={"status": "error", "message": "图数据服务暂时不可用"},
+    )
+
+
+@app.exception_handler(GraphIndexPreparing)
+async def index_preparing_handler(request, exc: GraphIndexPreparing) -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        headers={"Retry-After": "5"},
+        content={"code": 503, "success": False, "data": None, "msg": str(exc)},
     )
 
 

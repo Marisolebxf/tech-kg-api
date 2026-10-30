@@ -2,7 +2,6 @@ import { createRouter, createWebHistory, START_LOCATION } from 'vue-router'
 
 import { appBase, graphVisualizationEnabled } from '../config'
 
-import { installPageLoading } from '../portal/pageLoading'
 import { useAuthStore } from '../stores/auth'
 import { useGraphSpaceStore } from '../stores/graphSpace'
 import { installSessionRecovery, loginRedirect, notifySessionExpired } from './sessionRecovery'
@@ -112,8 +111,6 @@ export const router = createRouter({
     })),
   ],
 })
-
-installPageLoading(router)
 
 router.beforeEach(async (to, from) => {
   // 仅处理整页刷新后的首次导航；后续从平台页进入或组件重新挂载不应重置业务。

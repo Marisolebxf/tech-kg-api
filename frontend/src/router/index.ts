@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHistory, START_LOCATION } from 'vue-router'
 
 import { appBase, graphVisualizationEnabled } from '../config'
 
@@ -109,7 +109,17 @@ export const router = createRouter({
   ],
 })
 
-router.beforeEach(async (to) => {
+router.beforeEach(async (to, from) => {
+  // 仅处理整页刷新后的首次导航；后续从平台页进入或组件重新挂载不应重置业务。
+  if (
+    from === START_LOCATION
+    && (performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined)?.type === 'reload'
+    && serviceRoutes.some((route) => route.name === to.name)
+    && to.name !== 'expert-direct'
+  ) {
+    return { name: 'expert-direct', query: to.query, hash: to.hash, replace: true }
+  }
+
   // 图谱可视化未开启时整功能隐藏：导航入口不渲染，直达 URL 也归拢到综合查询
   if (to.name === 'graph-query-visualization' && !graphVisualizationEnabled) {
     return { path: '/graph-query' }

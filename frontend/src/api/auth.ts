@@ -120,6 +120,18 @@ export interface OperationLogQuery {
 interface LoginUrlData {
   url: string;
   expiresIn: number;
+  mode?: "oauth" | "portal";
+}
+
+export async function getLoginConfig(): Promise<{ mode: "oauth" | "portal" }> {
+  try {
+    const response = await http.get<ApiResponse<{ mode: "oauth" | "portal" }>, ApiResponse<{ mode: "oauth" | "portal" }>>("/v1/auth/login-config");
+    return unwrapApiResponse(response);
+  } catch (error) {
+    // 兼容旧后端，缺少新接口时保持原有整页登录行为。
+    if ((error as { response?: { status?: number } })?.response?.status === 404) return { mode: "oauth" };
+    throw error;
+  }
 }
 
 export async function getLoginUrl(next = "/overview"): Promise<LoginUrlData> {

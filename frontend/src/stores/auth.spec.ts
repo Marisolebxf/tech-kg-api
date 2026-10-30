@@ -1,7 +1,7 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { getCurrentProfile, logoutCurrentSession, refreshCurrentSession, type AuthProfile } from '../api/auth'
+import { getCurrentProfile, getLoginUrl, logoutCurrentSession, refreshCurrentSession, type AuthProfile } from '../api/auth'
 import { useAuthStore } from './auth'
 import { useToast } from '../composables/use-toast'
 
@@ -192,5 +192,40 @@ describe('业务角色菜单权限', () => {
     const store = useAuthStore()
     store.profile = { ...profile, businessRbacEnabled: false, canDevelop: true }
     expect(store.canDevelop).toBe(false)
+  })
+})
+
+describe('explicit portal login', () => {
+  it('resumes shared-cookie checks only after an explicit successful portal login request', async () => {
+    const store = useAuthStore()
+    await store.logout()
+    vi.mocked(getCurrentProfile).mockResolvedValue(profile)
+    expect(await store.loadCurrentUser(true)).toBeNull()
+    vi.mocked(getLoginUrl).mockResolvedValue({ url: '/portal/', expiresIn: 0, mode: 'portal' })
+    expect(await store.preparePortalLogin('/schema?view=all')).toBe('/portal/')
+    expect(getLoginUrl).toHaveBeenCalledWith('/schema?view=all')
+    expect(await store.loadCurrentUser(true)).toEqual(profile)
+  })
+
+  it('does not resume silent login when the entry request fails or changes mode', async () => {
+    const store = useAuthStore()
+    await store.logout()
+    vi.mocked(getLoginUrl).mockRejectedValueOnce(new Error('offline'))
+    await expect(store.preparePortalLogin()).rejects.toThrow('offline')
+    expect(store.skipSilentLogin).toBe(true)
+    vi.mocked(getLoginUrl).mockResolvedValue({ url: '/sso/login', expiresIn: 300, mode: 'oauth' })
+    await expect(store.preparePortalLogin()).rejects.toThrow('登录方式已更新')
+    expect(store.skipSilentLogin).toBe(true)
+  })
+
+  it('ignores a prepared entry that arrives after logout', async () => {
+    const store = useAuthStore()
+    const response = deferred<{ url: string; expiresIn: number; mode: 'portal' }>()
+    vi.mocked(getLoginUrl).mockReturnValue(response.promise)
+    const pending = store.preparePortalLogin()
+    await store.logout()
+    response.resolve({ url: '/portal/', expiresIn: 0, mode: 'portal' })
+    expect(await pending).toBeNull()
+    expect(store.skipSilentLogin).toBe(true)
   })
 })

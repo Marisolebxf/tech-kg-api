@@ -1,7 +1,7 @@
 import { useAuthStore } from './auth'
 import type { AuthProfile } from '../api/auth'
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { listGraphSpaces } from '../api/graphSearch'
 import { GRAPH_SPACE_STORAGE_KEY, useGraphSpaceStore } from './graphSpace'
@@ -246,4 +246,59 @@ it('下拉目录不展示缺失归属的空间，也不将其自动公开', () =
   ]
   expect(store.groups.map(group => group.label)).toEqual(['公共图空间'])
   expect(store.groups[0]!.children.map(item => item.value)).toEqual(['public'])
+})
+
+
+describe('space initialization freshness and authorization scope', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('shares concurrent initialization and refreshes after the navigation window expires', async () => {
+    let now = 100_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    let finish!: (value: never) => void
+    vi.mocked(listGraphSpaces).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+      .mockResolvedValue({ data: { spaces: ['dev'] } } as never)
+    const store = useGraphSpaceStore()
+    store.bindUser('101')
+    const first = store.ensureLoaded(false, 15_000)
+    const second = store.ensureLoaded(false, 15_000)
+    expect(listGraphSpaces).toHaveBeenCalledTimes(1)
+    finish({ data: { spaces: ['dev'] } } as never)
+    await Promise.all([first, second])
+    now += 14_999
+    await store.ensureLoaded(false, 15_000)
+    expect(listGraphSpaces).toHaveBeenCalledTimes(1)
+    now += 1
+    await store.ensureLoaded(false, 15_000)
+    expect(listGraphSpaces).toHaveBeenCalledTimes(2)
+  })
+
+  it('reloads changed developer scope without sharing a pending old authorization response', async () => {
+    useAuthStore().profile = { ...({ user: { id: '101' } } as AuthProfile), developerBusinessIds: ['a'] }
+    let finish!: (value: never) => void
+    vi.mocked(listGraphSpaces).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+      .mockResolvedValueOnce({ data: { spaces: [] } } as never)
+    const store = useGraphSpaceStore()
+    store.bindUser('101')
+    const old = store.ensureLoaded()
+    useAuthStore().profile!.developerBusinessIds = []
+    await store.ensureLoaded()
+    finish({ data: { spaces: ['revoked'] } } as never)
+    await old
+    expect(store.spaces).toEqual([])
+    expect(store.current).toBe('')
+    expect(listGraphSpaces).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not reload when a refreshed profile has equivalent authorization fields', async () => {
+    const auth = useAuthStore()
+    auth.profile = { user: { id: '101' }, businessIds: ['a', 'b'] } as AuthProfile
+    vi.mocked(listGraphSpaces).mockResolvedValue({ data: { spaces: ['dev'] } } as never)
+    const store = useGraphSpaceStore()
+    store.bindUser('101')
+    await store.ensureLoaded()
+    auth.profile = { user: { id: '101' }, businessIds: ['b', 'a'] } as AuthProfile
+    await store.ensureLoaded()
+    expect(listGraphSpaces).toHaveBeenCalledTimes(1)
+  })
 })

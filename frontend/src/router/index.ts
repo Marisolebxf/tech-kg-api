@@ -5,22 +5,25 @@ import { appBase, graphVisualizationEnabled } from '../config'
 import { useAuthStore } from '../stores/auth'
 import { useGraphSpaceStore } from '../stores/graphSpace'
 import { installSessionRecovery, loginRedirect, notifySessionExpired } from './sessionRecovery'
-import BusinessServiceView from '../views/business-service/BusinessServiceView.vue'
-import LoginView from '../views/auth/LoginView.vue'
-import UserCenterView from '../views/auth/UserCenterView.vue'
-import AccountSecurityView from '../views/auth/AccountSecurityView.vue'
-import OperationLogsView from '../views/auth/OperationLogsView.vue'
-import PlatformWorkbenchView from '../views/platform/PlatformWorkbenchView.vue'
-import OperationsCenterView from '../views/platform/OperationsCenterView.vue'
-import ManualReviewWorkspaceView from '../views/platform/ManualReviewWorkspaceView.vue'
-import TDirectDemoView from '../views/platform/TDirectDemoView.vue'
-import ProcessInstanceDetailView from '../views/platform/ProcessInstanceDetailView.vue'
-import SchemaBrowserView from '../views/platform/SchemaBrowserView.vue'
-import GraphBuildView from '../views/platform/GraphBuildView.vue'
-import EntityListView from '../views/platform/EntityListView.vue'
-import GraphVisualizationView from '../views/platform/GraphVisualizationView.vue'
-import ConfigurationManagementView from '../views/platform/ConfigurationManagementView.vue'
-import AccessDeniedView from '../views/auth/AccessDeniedView.vue'
+const BusinessServiceView = () => import('../views/business-service/BusinessServiceView.vue')
+const LoginView = () => import('../views/auth/LoginView.vue')
+const UserCenterView = () => import('../views/auth/UserCenterView.vue')
+const AccountSecurityView = () => import('../views/auth/AccountSecurityView.vue')
+const OperationLogsView = () => import('../views/auth/OperationLogsView.vue')
+const PlatformWorkbenchView = () => import('../views/platform/PlatformWorkbenchView.vue')
+const OperationsCenterView = () => import('../views/platform/OperationsCenterView.vue')
+const ManualReviewWorkspaceView = () => import('../views/platform/ManualReviewWorkspaceView.vue')
+const TDirectDemoView = () => import('../views/platform/TDirectDemoView.vue')
+const ProcessInstanceDetailView = () => import('../views/platform/ProcessInstanceDetailView.vue')
+const SchemaBrowserView = () => import('../views/platform/SchemaBrowserView.vue')
+const GraphBuildView = () => import('../views/platform/GraphBuildView.vue')
+const EntityListView = () => import('../views/platform/EntityListView.vue')
+const GraphVisualizationView = () => import('../views/platform/GraphVisualizationView.vue')
+const ConfigurationManagementView = () => import('../views/platform/ConfigurationManagementView.vue')
+const AccessDeniedView = () => import('../views/auth/AccessDeniedView.vue')
+
+// 仅缓存当前 JS 会话内的初始化结果；刷新文档、退出和 401 均会重新初始化。
+const NAVIGATION_CACHE_MS = 15_000
 
 const serviceRoutes = [
   { path: '/expert-direct', name: 'expert-direct', title: '科技专家/人才直接关系', serviceKey: 'expert-direct' },
@@ -129,9 +132,13 @@ router.beforeEach(async (to, from) => {
 
   const authStore = useAuthStore()
   try {
-    // 每次导航由后端确认身份；前端部署开关不能跳过鉴权或自行赋予管理员。
-    // 免登录开发环境同样使用后端明确允许的开发身份。
-    const profile = await authStore.loadCurrentUser(true)
+    // 首次/过期导航向后端确认，普通切页短时复用；管理页和个人信息页始终重新核验。
+    // 数据请求仍逐次执行后端鉴权，前端部署开关不能赋予任何权限。
+    const freshIdentity = to.meta.admin === true || Boolean(to.meta.permission)
+      || ['user-center', 'account-security', 'operation-logs'].includes(String(to.name))
+    const profile = await (freshIdentity
+      ? authStore.loadCurrentUser(true)
+      : authStore.loadCurrentUser(false, NAVIGATION_CACHE_MS))
     if (profile) {
       // 身份就绪后先绑定图空间上下文并拉取本人空间列表（换账号时丢弃上一用户
       // 的选中空间），页面挂载后拿到的 current 必在本人列表内——否则总览等
@@ -140,7 +147,8 @@ router.beforeEach(async (to, from) => {
       try {
         const spaceStore = useGraphSpaceStore()
         spaceStore.bindUser(String(profile.user?.id ?? ''))
-        await spaceStore.ensureLoaded(true)
+        // 使用同一授权范围内的在途请求，避免与空间选择器的权限监听重复加载。
+        await spaceStore.ensureLoaded(false, NAVIGATION_CACHE_MS)
       } catch {
         // 不以构建默认值代替服务端授权空间；加载失败保持空列表
       }

@@ -104,7 +104,7 @@ describe('角色控制与默认入口', () => {
   it.each(sharedPaths)('普通用户可访问 %s', async (path) => {
     await router.push(path)
     expect(router.currentRoute.value.path).toBe(path)
-    expect(mocks.loadCurrentUser).toHaveBeenCalledWith(true)
+    expect(mocks.loadCurrentUser).toHaveBeenCalledWith(false, 15_000)
   })
 
   it.each(['/overview', '/'])('普通用户可进入平台总览并保留门户参数', async (path) => {
@@ -134,7 +134,7 @@ describe('角色控制与默认入口', () => {
     mocks.loadCurrentUser.mockResolvedValue({ isAdmin: false, permissions: [] })
     await router.push('/configurations')
     expect(router.currentRoute.value.path).toBe('/forbidden')
-    expect(mocks.loadCurrentUser).toHaveBeenLastCalledWith(true)
+    expect(mocks.loadCurrentUser).toHaveBeenNthCalledWith(2, true)
   })
 
   it('未登录用户不能进入共享业务页', async () => {

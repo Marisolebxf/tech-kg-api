@@ -77,11 +77,55 @@ describe('portal route integration', () => {
     }), { global: { plugins: [router] } })
     await flushPromises()
     expect(portalBridge.ready).not.toHaveBeenCalled()
+    expect(portalBridge.send).toHaveBeenCalledWith(PortalAction.LOADING_HIDE)
     allowNavigation()
     await navigation
     await flushPromises()
     expect(portalBridge.ready).toHaveBeenCalledTimes(1)
     expect(portalBridge.send).not.toHaveBeenCalledWith(PortalAction.ROUTE_CHANGE, expect.anything())
+  })
+
+  it('releases loading without announcing readiness if the initial route fails', async () => {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/graph-build', component: {} }],
+    })
+    vi.spyOn(router, 'isReady').mockRejectedValue(new Error('route chunk unavailable'))
+    const fail = vi.fn()
+    window.__KG_PAGE_LOADING__ = { start: vi.fn(), finish: vi.fn(), fail }
+    wrapper = mount(defineComponent({
+      setup() { usePortalIntegration(); return () => null },
+    }), { global: { plugins: [router] } })
+    await flushPromises()
+    expect(fail).not.toHaveBeenCalled()
+    expect(portalBridge.send).toHaveBeenCalledWith(PortalAction.LOADING_HIDE)
+    expect(portalBridge.ready).not.toHaveBeenCalled()
+    delete window.__KG_PAGE_LOADING__
+  })
+
+  it('does not show an old route failure over a newer successfully selected business', async () => {
+    const router = await setup()
+    let reject!: (error: Error) => void
+    router.addRoute({
+      path: '/graph-build/jobs/failed',
+      component: () => new Promise((_resolve, fail) => { reject = fail }),
+    })
+    const fail = vi.fn()
+    window.__KG_PAGE_LOADING__ = { start: vi.fn(), finish: vi.fn(), fail }
+    state.handlers.get(PortalAction.ROUTE_CHANGE)?.({
+      code: 'graph_build', subPath: '/graph-build/jobs/failed',
+    })
+    await flushPromises()
+    state.handlers.get(PortalAction.ROUTE_CHANGE)?.({
+      code: 'manual_review', subPath: '/manual-review',
+    })
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/manual-review')
+    reject(new Error('old route chunk failed'))
+    await flushPromises()
+    expect(fail).not.toHaveBeenCalled()
+    expect(router.currentRoute.value.path).toBe('/manual-review')
+    delete window.__KG_PAGE_LOADING__
   })
 
   it('announces readiness after registering the downlink listener without overwriting the initial deep link', async () => {

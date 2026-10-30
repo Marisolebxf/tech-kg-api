@@ -77,7 +77,7 @@ def _stub_rbac_lists(monkeypatch, session, names: list[str]) -> None:
     monkeypatch.setattr(
         bac,
         "space_registrations",
-        lambda session: {name: bac.SpaceRegistration(name, None, True) for name in names},
+        lambda session, **kwargs: {name: bac.SpaceRegistration(name, None, True) for name in names},
     )
     monkeypatch.setattr(GraphSpaceService, "_all_spaces", lambda self: list(names))
     monkeypatch.setattr(bac, "session_scope", lambda: _sqlite_scope(session))

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
@@ -108,7 +109,10 @@ class SpaceRegistration:
     business_enabled: bool = True
 
 
-def space_registrations(session) -> dict[str, SpaceRegistration]:
+def space_registrations(
+    session, *, existing_spaces: Iterable[str] = ()
+) -> dict[str, SpaceRegistration]:
+    """SQL 归属优先；当前图库中未登记的真实空间默认公共，不写入 SQL。"""
     businesses = {r.client_id: r for r in session.scalars(select(BusinessClient))}
     rows = {r.space_name: r for r in session.scalars(select(BusinessGraphSpace))}
     policies = {r.space_name: r for r in session.scalars(select(BusinessSpacePolicy))}
@@ -129,11 +133,20 @@ def space_registrations(session) -> dict[str, SpaceRegistration]:
             business.name if business else "",
             bool(business and business.enabled) if client_id else True,
         )
+    for name in existing_spaces:
+        result.setdefault(name, SpaceRegistration(name, None, True))
     return result
 
 
 def space_registration(session, space: str):
-    return space_registrations(session).get(space)
+    rows = space_registrations(session)
+    if space in rows:
+        return rows[space]
+    from service.graph_space import GraphSpaceService
+
+    if space in GraphSpaceService(session)._all_spaces():
+        return SpaceRegistration(space, None, True)
+    return None
 
 
 def _space_allowed(actor: PlatformActor, row: BusinessGraphSpace, action: str) -> bool:
@@ -187,7 +200,11 @@ def allowed_space_names(actor: PlatformActor, action: str = "read") -> list[str]
             return list(GraphSpaceService(session)._all_spaces())
     try:
         with session_scope() as session:
-            rows = space_registrations(session).values()
+            from service.graph_space import GraphSpaceService
+
+            rows = space_registrations(
+                session, existing_spaces=GraphSpaceService(session)._all_spaces()
+            ).values()
             return sorted(row.space_name for row in rows if _space_allowed(actor, row, action))
     except SQLAlchemyError as exc:
         raise HTTPException(503, "无法读取图空间权限") from exc
@@ -199,7 +216,7 @@ def space_items(actor: PlatformActor) -> list[dict]:
     names = allowed_space_names(actor)
     with session_scope() as session:
         existing = set(GraphSpaceService(session)._all_spaces())
-        rows = space_registrations(session)
+        rows = space_registrations(session, existing_spaces=existing)
         # 用户主动解绑（隐藏）的空间：mine/bound 为 False，工作空间下拉过滤掉
         hidden = (
             set(

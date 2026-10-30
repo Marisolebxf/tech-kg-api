@@ -163,8 +163,13 @@ def test_local_user_binding_is_not_upgraded_by_portal_role(db, directory):
     assert profile("dev").developer_business_binding_required is True
 
 
-def test_new_team_has_public_read_only_until_spaces_are_assigned(db):
+def test_new_team_has_public_read_only_until_spaces_are_assigned(db, monkeypatch):
     from service.platform_access import PlatformActor
+
+    monkeypatch.setattr(
+        "service.graph_space.GraphSpaceService._all_spaces",
+        lambda self: ["public", "other", "new_public"],
+    )
 
     db.add_all(
         [
@@ -175,9 +180,10 @@ def test_new_team_has_public_read_only_until_spaces_are_assigned(db):
     db.commit()
     actor = acl.with_memberships(PlatformActor("dev", "dev", "dev", "", False))
     assert actor.is_developer
-    assert acl.allowed_space_names(actor) == ["public"]
+    assert acl.allowed_space_names(actor) == ["new_public", "public"]
     assert acl.allowed_space_names(actor, "write") == []
     acl.ensure_space_access(actor, "public", "read")
+    acl.ensure_space_access(actor, "new_public", "read")
     for space, action in [("public", "write"), ("public", "review"), ("other", "read")]:
         with pytest.raises(HTTPException) as exc:
             acl.ensure_space_access(actor, space, action)

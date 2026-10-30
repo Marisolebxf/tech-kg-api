@@ -209,6 +209,10 @@ pnpm dev                    # /api 代理到 VITE_API_TARGET（默认 http://loc
 - **企业背景关联分析** `POST /api/v1/kg-construction/enterprise-background-analyses/analyze` —— 聚合 MySQL（行业地位/核心技术/经营财务）+ LLM 合成结论（失败降级）。
 - **下拉选项聚合** `GET /api/v1/kg-construction/options` —— 供前端参数弹窗动态拉取学者/企业/关系/角色/维度/CPC 选项。
 
+## 图空间默认归属
+
+开启业务权限控制时，当前图库中真实存在、但在平台 MySQL 的新旧归属表中都没有记录的空间，默认按公共图空间展示和授权。此默认规则不向 MySQL 写入登记；管理员之后可显式设置业务归属。已有公共、业务或未归属策略优先，连接切换后的同名空间仍沿用 SQL 中的归属。公共空间沿用现有权限：普通用户和开发人员可读，写入和审核操作由管理员执行。
+
 ## TRS 图库客户端（`infra/graph_db`）
 
 图库是 NebulaGraph，经 trs-graph-service 的 REST API 访问。认证用 `X-API-Key` 头，图空间用 `X-Graph-Space` 头。`infra/graph_db/client.TRSGraphClient` 是 ORM 风格客户端。

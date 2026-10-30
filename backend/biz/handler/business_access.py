@@ -141,9 +141,10 @@ def state(actor: CurrentMaintainer, session: Db, application: AuthApplicationDep
                     else "user",
                 }
             )
-    rows = space_registrations(session)
+    existing = set(GraphSpaceService(session)._all_spaces())
+    rows = space_registrations(session, existing_spaces=existing)
     if actor.is_admin:
-        names = sorted(set(GraphSpaceService(session)._all_spaces()) | set(rows))
+        names = sorted(existing | set(rows))
     else:
         names = sorted(
             r.space_name

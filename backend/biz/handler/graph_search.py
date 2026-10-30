@@ -29,7 +29,7 @@ from infra.graph_db import (
     get_space_client,
     get_trs_graph_client,
 )
-from infra.graph_db.exceptions import GraphRequestError
+from infra.graph_db.exceptions import GraphIndexPreparing, GraphRequestError
 from infra.graph_db.models import GraphEdge, GraphNode
 from infra.graph_exec_budget import GraphExecOverloaded, graph_exec_slot
 from infra.mysql import create_session
@@ -406,6 +406,8 @@ async def get_node(
         if node is None:
             return ApiResponse(code=404, success=False, msg=f"节点不存在: {node_id}")
         return ApiResponse(data=_node_to_data(node).model_dump())
+    except GraphIndexPreparing as exc:
+        return ApiResponse(code=503, success=False, msg=str(exc))
     except GraphExecOverloaded as exc:
         return _graph_overloaded(exc)
     except Exception:
@@ -437,6 +439,8 @@ async def list_nodes(
             items = [_node_to_data(n).model_dump() for n in nodes]
             total = await _node_count_cached(client, space, label)
         return ApiResponse(data=NodeListData(items=items, total=total).model_dump())
+    except GraphIndexPreparing as exc:
+        return ApiResponse(code=503, success=False, msg=str(exc))
     except GraphExecOverloaded as exc:
         return _graph_overloaded(exc)
     except Exception:
@@ -461,6 +465,8 @@ async def search_nodes(
             )
         items = [_node_to_data(n).model_dump() for n in result.items]
         return ApiResponse(data=NodeListData(items=items, total=len(items)).model_dump())
+    except GraphIndexPreparing as exc:
+        return ApiResponse(code=503, success=False, msg=str(exc))
     except GraphExecOverloaded as exc:
         return _graph_overloaded(exc)
     except Exception:
@@ -506,6 +512,8 @@ async def search_typed_paths(body: TypedPathSearchRequest, actor: CurrentActor) 
             offset=body.offset,
         )
         return ApiResponse(data=data.model_dump())
+    except GraphIndexPreparing as exc:
+        return ApiResponse(code=503, success=False, msg=str(exc))
     except GraphExecOverloaded as exc:
         return _graph_overloaded(exc)
     except Exception:
@@ -545,6 +553,8 @@ async def get_subgraph(
         if subgraph is None:
             return ApiResponse(code=404, success=False, msg=f"节点不存在: {node_id}")
         return ApiResponse(data=SubgraphData(**subgraph).model_dump())
+    except GraphIndexPreparing as exc:
+        return ApiResponse(code=503, success=False, msg=str(exc))
     except GraphExecOverloaded as exc:
         return _graph_overloaded(exc)
     except Exception:
@@ -667,6 +677,8 @@ async def get_filtered_subgraph(
         if subgraph is None:
             return ApiResponse(code=404, success=False, msg=f"节点不存在: {node_id}")
         return ApiResponse(data=SubgraphData(**subgraph).model_dump())
+    except GraphIndexPreparing as exc:
+        return ApiResponse(code=503, success=False, msg=str(exc))
     except GraphExecOverloaded as exc:
         return _graph_overloaded(exc)
     except Exception:
@@ -855,6 +867,8 @@ async def get_node_edges(
             )
         edges = [_edge_to_data(e).model_dump() for e in edge_list]
         return ApiResponse(data={"edges": edges, "total": len(edges)})
+    except GraphIndexPreparing as exc:
+        return ApiResponse(code=503, success=False, msg=str(exc))
     except GraphExecOverloaded as exc:
         return _graph_overloaded(exc)
     except Exception:
@@ -886,6 +900,8 @@ async def get_neighbours(
             )
         nodes = [_node_to_data(n).model_dump() for n in neighbours]
         return ApiResponse(data={"nodes": nodes, "total": len(nodes)})
+    except GraphIndexPreparing as exc:
+        return ApiResponse(code=503, success=False, msg=str(exc))
     except GraphExecOverloaded as exc:
         return _graph_overloaded(exc)
     except Exception:
@@ -914,6 +930,8 @@ async def shortest_path(
         nodes = [_node_to_data(n).model_dump() for n in path.nodes]
         edges = [_edge_to_data(e).model_dump() for e in path.edges]
         return ApiResponse(data=PathData(nodes=nodes, edges=edges, found=True).model_dump())
+    except GraphIndexPreparing as exc:
+        return ApiResponse(code=503, success=False, msg=str(exc))
     except GraphExecOverloaded as exc:
         return _graph_overloaded(exc)
     except Exception:
@@ -965,6 +983,8 @@ async def get_stats(
     try:
         data = await _load_stats(space, refresh=refresh)
         payload = ApiResponse(data=data)
+    except GraphIndexPreparing as exc:
+        return ApiResponse(code=503, success=False, msg=str(exc))
     except GraphExecOverloaded as exc:
         payload = _graph_overloaded(exc)
     except Exception:
@@ -1063,3 +1083,15 @@ async def prewarm_stats() -> None:
         await _load_stats(None, refresh=False)
     except Exception:  # noqa: BLE001
         pass
+
+
+@router.get("/index-maintenance")
+async def index_maintenance_status(
+    actor: CurrentActor, space: str | None = Query(None)
+) -> ApiResponse:
+    from infra.graph_db.index_maintenance import list_status
+
+    space = resolve_selected_space(space)
+    _ensure_space_access(actor, space)
+    jobs = await asyncio.to_thread(list_status, _get_client(space)._settings)
+    return ApiResponse(data={"items": jobs})

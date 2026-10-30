@@ -12,6 +12,7 @@ import unicodedata
 from typing import Any
 
 from infra.graph_db import GraphNotFoundError, TRSGraphClient, get_trs_graph_client
+from infra.graph_db.exceptions import GraphIndexPreparing
 from service.base_module import KGModuleScaffoldService
 from service.confidence_scoring import (
     achievement_entity_confidence,
@@ -366,12 +367,22 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
             return org_vids
 
         # 无 STUDIED_AT：教育属性 → Organization 名索引
-        index = self._org_name_index(graph)
         for name in self._source_institution_names(source_node, school):
-            vid = index.get(name) or index.get(name.lower())
-            if vid and vid not in seen:
-                seen.add(vid)
-                org_vids.append(vid)
+            for field in ("name_cn", "name_en"):
+                for node in graph.find_nodes(["Organization"], {field: name}, limit=20).items:
+                    vid = str(node.id)
+                    if vid not in seen:
+                        seen.add(vid)
+                        org_vids.append(vid)
+        if not org_vids:
+            # Preserve the original case-insensitive fallback for names that do not
+            # exactly equal either indexed field. Exact matches avoid this scan.
+            index = self._org_name_index(graph)
+            for name in self._source_institution_names(source_node, school):
+                vid = index.get(name) or index.get(name.lower())
+                if vid and vid not in seen:
+                    seen.add(vid)
+                    org_vids.append(vid)
         return org_vids
 
     def _source_institution_names(self, source_node: Any, school: str | None) -> list[str]:
@@ -423,6 +434,9 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         self, graph: TRSGraphClient, institution: str
     ) -> tuple[list[tuple[str, Any]], bool]:
         """院校 tag index LOOKUP；返回 (candidates, hit_limit)。"""
+        graph.ensure_tag_indexes(
+            "Person", ["education_background_institution_zh", "education_background_institution_en"]
+        )
         lit = self._ngql_string(institution)
         queries = [
             (
@@ -440,19 +454,20 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
         for query in queries:
             try:
                 result = graph.execute_read(query)
+            except GraphIndexPreparing:
+                raise
             except Exception:  # noqa: BLE001 — 索引未建或 LOOKUP 不可用
                 continue
             rows = getattr(result, "records", None) or []
             if len(rows) >= LOOKUP_CANDIDATE_LIMIT:
                 hit_cap = True
+            vids = list(dict.fromkeys(str(rec.get("vid") or "") for rec in rows))
+            node_cache = graph.get_nodes_bulk([vid for vid in vids if vid and vid not in seen])
             for rec in rows:
                 vid = str(rec.get("vid") or "")
                 if not vid or vid in seen:
                     continue
-                try:
-                    node = graph.get_node(vid)
-                except GraphNotFoundError:
-                    node = None
+                node = node_cache.get(vid)
                 if node is None:
                     continue
                 seen.add(vid)
@@ -909,11 +924,15 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 for edge in page or []:
                     if str(getattr(edge, "type", "") or "") != edge_type:
                         continue
-                    identity = str(
-                        getattr(edge, "id", "")
-                        or (
-                            f"{edge_type}:{getattr(edge, 'source_id', '')}:"
-                            f"{getattr(edge, 'target_id', '')}"
+                    identity = (
+                        edge_type
+                        + ":"
+                        + str(
+                            getattr(edge, "id", "")
+                            or (
+                                f"{edge_type}:{getattr(edge, 'source_id', '')}:"
+                                f"{getattr(edge, 'target_id', '')}"
+                            )
                         )
                     )
                     if identity in seen:

@@ -35,6 +35,11 @@ def _edge(etype: str, source: str, target: str, props: dict | None = None):
 
 
 def _svc(graph) -> ExpertAlumniRelationService:
+    graph.get_nodes_bulk = MagicMock(
+        side_effect=lambda ids: {
+            str(nid): node for nid in ids if (node := graph.get_node(nid)) is not None
+        }
+    )
     svc = ExpertAlumniRelationService()
     svc._client = MagicMock(return_value=graph)  # type: ignore[method-assign]
     return svc

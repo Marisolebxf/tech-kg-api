@@ -5,6 +5,7 @@ from httpx import ASGITransport, AsyncClient
 
 os.environ["AUTH_ENABLED"] = "false"
 os.environ["APP_ENV"] = "test"
+os.environ["TRS_GRAPH_AUTO_INDEX_ENABLED"] = "false"
 os.environ["AUTH_ALLOW_INSECURE_DEV_CONTEXT"] = "true"
 os.environ["API_DOCS_ENABLED"] = "true"
 os.environ["AUTH_SESSION_BACKEND"] = "memory"

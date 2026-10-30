@@ -22,3 +22,10 @@ class GraphRequestError(GraphRepoError):
         super().__init__(message)
         self.status_code = status_code
         self.body = body
+
+
+class GraphIndexPreparing(GraphRequestError):
+    """Required indexes are being prepared; callers must not treat this as no matches."""
+
+    def __init__(self, label: str) -> None:
+        super().__init__(f"图索引准备中（{label}），请稍后重试", status_code=503)

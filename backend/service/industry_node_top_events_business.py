@@ -30,6 +30,7 @@ from biz.schemas.industry_node_top_events_business import (
 )
 from biz.schemas.tech_enterprise_relation_business import EntityProvenance
 from infra.graph_db import TRSGraphClient
+from infra.graph_db.exceptions import GraphRequestError
 from service.entity_confidence import fill_entity_confidence
 from service.graph_space_context import effective_graph_space, request_can_write
 from service.provenance_recorder import record_node_source
@@ -92,38 +93,40 @@ def _subgraph_sync(
     center = client.get_node(vid)
     if center is None:
         return {"nodes": [], "edges": []}
-    nodes: list[dict[str, Any]] = [{"id": str(center.id), "properties": center.properties or {}}]
-    edges: list[dict[str, Any]] = []
-    seen_vids = {str(center.id)}
+    raw_edges = []
     for et in edge_types:
         try:
-            edge_list = client.get_node_edges(vid, direction="both", edge_type=et, limit=limit)
-        except Exception:
-            continue
-        for e in edge_list:
-            edges.append(
-                {
-                    "source": str(e.source_id),
-                    "target": str(e.target_id),
-                    "type": str(e.type),
-                    "properties": e.properties or {},
-                }
+            raw_edges.extend(
+                client.get_node_edges(vid, direction="both", edge_type=et, limit=limit)
             )
-            neighbor = str(e.target_id if str(e.source_id) == vid else e.source_id)
-            if neighbor and neighbor not in seen_vids:
-                try:
-                    n = client.get_node(neighbor)
-                except Exception:
-                    n = None
-                if n is not None:
-                    nodes.append({"id": str(n.id), "properties": n.properties or {}})
-                    seen_vids.add(str(n.id))
-    # 对齐 graph-search /filtered-subgraph 的截断（limit × 边类型数），避免事件密集企业取过多邻居。
-    cap = limit * len(edge_types)
-    if len(nodes) > cap:
-        nodes = nodes[:cap]
-    if len(edges) > cap:
-        edges = edges[:cap]
+        except GraphRequestError as exc:
+            # Some connected spaces omit an optional edge type; keep other types.
+            if exc.status_code == 400 and any(
+                text in str(exc).lower() for text in ("not exist", "not found", "unknown edge")
+            ):
+                continue
+            raise
+    neighbors = list(
+        dict.fromkeys(
+            str(e.target_id if str(e.source_id) == str(vid) else e.source_id)
+            for e in raw_edges
+            if str(e.target_id if str(e.source_id) == str(vid) else e.source_id) != str(center.id)
+        )
+    )
+    found = client.get_nodes_bulk(neighbors) if neighbors else {}
+    nodes = [{"id": str(center.id), "properties": center.properties or {}}]
+    nodes.extend({"id": str(n.id), "properties": n.properties or {}} for n in found.values())
+    real = {str(center.id), *found}
+    edges = [
+        {
+            "source": str(e.source_id),
+            "target": str(e.target_id),
+            "type": str(e.type),
+            "properties": e.properties or {},
+        }
+        for e in raw_edges
+        if str(e.source_id) in real and str(e.target_id) in real
+    ]
     return {"nodes": nodes, "edges": edges}
 
 

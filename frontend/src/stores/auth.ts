@@ -31,6 +31,7 @@ export const useAuthStore = defineStore("auth", {
   state: () => ({
     profile: null as AuthProfile | null,
     initialized: false,
+    profileLoadedAt: null as number | null,
     loading: false,
     loggingOut: false,
     skipSilentLogin: false,
@@ -72,24 +73,31 @@ export const useAuthStore = defineStore("auth", {
       invalidateSessionVersion();
       profileLoads.delete(this);
       this.profile = null;
+      this.profileLoadedAt = null;
       this.initialized = true;
       this.loading = false;
       this.sessionExpired = expired;
       this.bindingNoticeUserId = "";
       useGraphSpaceStore().reset();
     },
-    async loadCurrentUser(force = false): Promise<AuthProfile | null> {
+    /** 普通导航可短时复用已确认的身份；主动登录/管理页仍可强制向后端核验。 */
+    async loadCurrentUser(force = false, maxAgeMs = Infinity): Promise<AuthProfile | null> {
       if (this.loggingOut || this.skipSilentLogin) return null;
-      if (this.initialized && !force) return this.profile;
       const version = currentSessionVersion();
       const pending = profileLoads.get(this);
       if (pending?.version === version) return pending.promise;
+      if (this.initialized && !force && (
+        maxAgeMs === Infinity ||
+        (this.profile !== null && this.profileLoadedAt !== null &&
+          Date.now() - this.profileLoadedAt < maxAgeMs)
+      )) return this.profile;
       this.loading = true;
       const promise = (async () => {
         try {
           const profile = await getCurrentProfile();
           if (version !== currentSessionVersion()) return null;
           this.profile = profile;
+          this.profileLoadedAt = Date.now();
           this.sessionExpired = false;
           useGraphSpaceStore().bindUser(String(profile.user?.id ?? ""));
           this.notifyBusinessBinding(profile);
@@ -133,6 +141,7 @@ export const useAuthStore = defineStore("auth", {
       const profile = await refreshCurrentSession();
       if (version !== currentSessionVersion()) return null;
       this.profile = profile;
+      this.profileLoadedAt = Date.now();
       this.sessionExpired = false;
       useGraphSpaceStore().bindUser(String(profile.user?.id ?? ""));
       this.notifyBusinessBinding(profile);

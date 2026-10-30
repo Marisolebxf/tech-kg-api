@@ -229,3 +229,47 @@ describe('explicit portal login', () => {
     expect(store.skipSilentLogin).toBe(true)
   })
 })
+
+describe('bounded navigation profile cache', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('reuses a fresh profile and rechecks after the navigation window expires', async () => {
+    let now = 100_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    vi.mocked(getCurrentProfile).mockResolvedValue(profile)
+    const store = useAuthStore()
+    await store.loadCurrentUser(false, 15_000)
+    now += 14_999
+    await store.loadCurrentUser(false, 15_000)
+    expect(getCurrentProfile).toHaveBeenCalledTimes(1)
+    now += 1
+    await store.loadCurrentUser(false, 15_000)
+    expect(getCurrentProfile).toHaveBeenCalledTimes(2)
+    await store.loadCurrentUser(true)
+    expect(getCurrentProfile).toHaveBeenCalledTimes(3)
+  })
+
+  it('waits for an ongoing forced check instead of using the old cached role', async () => {
+    vi.mocked(getCurrentProfile).mockResolvedValueOnce({ ...profile, isAdmin: true })
+    const store = useAuthStore()
+    await store.loadCurrentUser()
+    const response = deferred<AuthProfile>()
+    vi.mocked(getCurrentProfile).mockReturnValueOnce(response.promise)
+    const forced = store.loadCurrentUser(true)
+    const navigation = store.loadCurrentUser(false, 15_000)
+    response.resolve(profile)
+    expect(await forced).toEqual(profile)
+    expect(await navigation).toEqual(profile)
+    expect(getCurrentProfile).toHaveBeenCalledTimes(2)
+  })
+
+  it('invalidates freshness when a business request expires the session', async () => {
+    vi.mocked(getCurrentProfile).mockResolvedValueOnce(profile).mockRejectedValueOnce(unauthorized)
+    const store = useAuthStore()
+    await store.loadCurrentUser(false, 15_000)
+    store.invalidate(true)
+    expect(store.profileLoadedAt).toBeNull()
+    expect(await store.loadCurrentUser(false, 15_000)).toBeNull()
+    expect(getCurrentProfile).toHaveBeenCalledTimes(2)
+  })
+})

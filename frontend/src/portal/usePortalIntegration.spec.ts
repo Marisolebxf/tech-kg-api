@@ -115,7 +115,7 @@ describe('portal route integration', () => {
       code: 'graph_build', subPath: '/graph-build/jobs/job-123?tab=logs',
     })
     await flushPromises()
-    expect(router.currentRoute.value.fullPath).toBe('/graph-build/jobs/job-123?tab=logs')
+    expect(router.currentRoute.value.fullPath).toBe('/graph-build/jobs/job-123?tab=logs&embedded=1')
     expect(portalBridge.send).not.toHaveBeenCalledWith(PortalAction.ROUTE_CHANGE, expect.anything())
     expect(portalBridge.ready).toHaveBeenCalledTimes(1)
     // 后续本地导航仍正常回报，不会被下行导航抑制永久锁住。
@@ -124,6 +124,33 @@ describe('portal route integration', () => {
     expect(portalBridge.send).toHaveBeenCalledWith(PortalAction.ROUTE_CHANGE, {
       code: 'manual_review', subPath: '/manual-review',
     })
+  })
+
+  it.each([
+    ['/graph-build?embedded=1', { code: 'graph_build', subPath: '/graph-build' }],
+    ['/graph-build?embedded=1', { code: 'graph_build' }],
+    ['/graph-build?embedded=1&tab=logs#detail', { code: 'graph_build', subPath: '/graph-build?tab=logs#detail' }],
+    ['/graph-build?embedded=1&tag=a&tag=b', { code: 'graph_build', subPath: '/graph-build?tag=a&tag=b&embedded=1' }],
+  ])('does not navigate again for the same portal route %s', async (path, data) => {
+    const router = await setup(path)
+    const guard = vi.fn()
+    router.beforeEach(guard)
+    state.handlers.get(PortalAction.ROUTE_CHANGE)?.(data)
+    await flushPromises()
+    expect(router.currentRoute.value.fullPath).toBe(path)
+    expect(guard).not.toHaveBeenCalled()
+    expect(portalBridge.send).toHaveBeenCalledWith(PortalAction.LOADING_HIDE)
+  })
+
+  it('preserves requested filters and hash when changing embedded pages', async () => {
+    const router = await setup('/overview?embedded=1&old=filter')
+    state.handlers.get(PortalAction.ROUTE_CHANGE)?.({
+      code: 'graph_build', subPath: '/graph-build?tag=a&tag=b#detail',
+    })
+    await flushPromises()
+    expect(router.currentRoute.value.query).toEqual({ tag: ['a', 'b'], embedded: '1' })
+    expect(router.currentRoute.value.hash).toBe('#detail')
+    expect(portalBridge.send).not.toHaveBeenCalledWith(PortalAction.ROUTE_CHANGE, expect.anything())
   })
 
   it.each([

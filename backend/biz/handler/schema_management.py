@@ -342,7 +342,11 @@ def replace_schema_sources(
         scoped_actor = replace(actor, context_graph_space=schema.graph_space)
         for source in payload.sources:
             _validate_resource_selectors(
-                scoped_actor, {"mysql_datasource_id": source.datasource_id}
+                scoped_actor,
+                {
+                    "mysql_datasource_id": source.datasource_id,
+                    "mysql_database": source.database_name,
+                },
             )
     try:
         data = _application(session).replace_sources(

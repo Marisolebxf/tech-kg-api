@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import socket
 from datetime import datetime
 
 import pytest
@@ -63,7 +64,14 @@ class FakeMySQLClient:
 
 
 @pytest.fixture
-def datasource_session():
+def datasource_session(monkeypatch):
+    monkeypatch.setenv("MYSQL_DATASOURCE_ALLOWED_ENDPOINTS", '["10.20.30.40:3306"]')
+    monkeypatch.setattr(
+        "service.mysql_datasource_target.socket.getaddrinfo",
+        lambda host, port, **kw: [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("10.20.30.40", port))
+        ],
+    )
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )

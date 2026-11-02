@@ -147,28 +147,37 @@ def _validate_resource_selectors(actor: PlatformActor, selectors: dict) -> None:
     from dao.embedding_config import EmbeddingConfigDAO
     from dao.llm_config import LlmConfigDAO
     from dao.milvus_config import MilvusConfigDAO
-    from dao.mysql_datasource import MysqlDatasourceDAO
     from infra.mysql import create_session
     from service.graph_space import GraphSpaceService
+    from service.mysql_datasource_access import ensure_mysql_database_access
 
     session = create_session()
     try:
+        mysql_ids = {selectors.get("mysql_datasource_id"), selectors.get("mysqlDatasourceId")} - {
+            None,
+            "",
+        }
+        databases = [
+            selectors[key]
+            for key in ("mysql_database", "mysqlDatabase")
+            if selectors.get(key) not in (None, "")
+        ] or [None]
+        for datasource_id in mysql_ids:
+            for database in databases:
+                ensure_mysql_database_access(session, actor, datasource_id, database)
         checks = (
             (LlmConfigDAO(session), selectors.get("llm_config_id")),
             (EmbeddingConfigDAO(session), selectors.get("embedding_config_id")),
-            (MysqlDatasourceDAO(session), selectors.get("mysql_datasource_id")),
             (MilvusConfigDAO(session), selectors.get("milvus_config_id")),
         )
         for dao, config_id in checks:
             if not config_id:
                 continue
             row = dao.get(config_id)
-            if isinstance(dao, (LlmConfigDAO, MysqlDatasourceDAO)):
+            if isinstance(dao, LlmConfigDAO):
                 from service.config_ownership import ensure_config_access
 
-                ensure_config_access(
-                    session, actor, "llm" if isinstance(dao, LlmConfigDAO) else "mysql", config_id
-                )
+                ensure_config_access(session, actor, "llm", config_id)
                 if row is None:
                     raise HTTPException(404, "共享配置不存在")
                 continue

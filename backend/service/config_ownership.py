@@ -53,6 +53,10 @@ def ensure_config_access(
 ) -> None:
     ensure_shared_config_read(actor)
     policy = session.get(ConfigOwnership, (kind, config_id))
+    # A legacy datasource is not evidence of a deliberate sharing decision.
+    # Require reviewed ownership before developers can use stored credentials.
+    if kind == "mysql" and policy is None and not actor.is_admin:
+        raise HTTPException(403, "数据源尚未完成归属授权")
     business_id = policy.business_id if policy else None
     businesses = _businesses(session, {business_id} if business_id else set())
     if not _allowed(actor, business_id, businesses):
@@ -86,8 +90,18 @@ def visible_configurations(
     businesses = _businesses(session, {value for value in policies.values() if value})
     result = []
     for item in configs:
+        if kind == "mysql" and item["id"] not in policies and not actor.is_admin:
+            continue
         business_id = policies.get(item["id"])
         if not _allowed(actor, business_id, businesses):
+            continue
+        if (
+            kind == "mysql"
+            and not actor.is_admin
+            and business_id is not None
+            and actor.context_business_id
+            and actor.context_business_id != business_id
+        ):
             continue
         business = businesses.get(business_id)
         result.append(

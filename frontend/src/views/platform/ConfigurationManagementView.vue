@@ -344,7 +344,7 @@ function toConfigItem(kind: ConfigKind, cfg: LlmConfig | MysqlDatasource | Embed
     id: cfg.id,
     kind,
     name: cfg.name,
-    description: cfg.description,
+    description: cfg.description || '',
     owner: cfg.owner || '',
     updatedAt: cfg.updatedAt,
     status: configStatus(cfg.status),
@@ -361,7 +361,7 @@ function toConfigItem(kind: ConfigKind, cfg: LlmConfig | MysqlDatasource | Embed
   }
   if (kind === 'mysql') {
     const c = cfg as MysqlDatasource
-    return { ...common, visibility: c.visibility, businessName: c.businessName, canManage: c.canManage, category: 'MySQL 数据源', type: 'MySQL 数据源', endpoint: `${c.host}:${c.port}`, host: c.host, port: c.port, defaultDatabase: c.defaultDatabase, username: c.username, hasPassword: c.hasPassword, passwordMasked: c.passwordMasked }
+    return { ...common, visibility: c.visibility, businessName: c.businessName, canManage: c.canManage, category: 'MySQL 数据源', type: 'MySQL 数据源', endpoint: c.host ? `${c.host}:${c.port}` : '仅授权使用', host: c.host, port: c.port, defaultDatabase: c.defaultDatabase, username: c.username, hasPassword: c.hasPassword, passwordMasked: c.passwordMasked }
   }
   throw new Error(`未知配置类型：${kind}`)
 }
@@ -965,6 +965,9 @@ onUnmounted(() => {
             <a-form-item v-if="selected.kind === 'embedding'" label="维度"><ClearableInput :disabled="!canManageConfig(selected)" aria-label="number-input" :value="selected.dimensions ?? ''" type="number" :aria-invalid="Boolean(detailFieldErrors.dimensions)" @input="selected.dimensions = ($event.target as HTMLInputElement).value" /><small v-if="detailFieldErrors.dimensions" class="field-error">{{ detailFieldErrors.dimensions }}</small></a-form-item>
             <a-form-item label="访问凭据"><input :disabled="!canManageConfig(selected)" aria-label="input-field" :value="selected.apiKeyMasked || (selected.hasApiKey ? '••••••••' : '未设置')" readonly /></a-form-item>
             <a-form-item class="wide" label="更新 API Key（留空保留原值）"><ClearableInput :disabled="!canManageConfig(selected)" aria-label="输入新 Key 覆盖原值" v-model="selected.apiKey" type="password" placeholder="输入新 Key 覆盖原值" :aria-invalid="Boolean(detailFieldErrors.apiKey)" /><small v-if="detailFieldErrors.apiKey" class="field-error">{{ detailFieldErrors.apiKey }}</small></a-form-item>
+          </template>
+          <template v-else-if="selected.kind === 'mysql' && !canManageConfig(selected)">
+            <p>此数据源已授权选用，连接信息仅对配置管理者开放。</p>
           </template>
           <template v-else>
             <a-form-item field="host" label="主机" required><ClearableInput :disabled="!canManageConfig(selected)" aria-label="host" v-model="selected.host" :aria-invalid="Boolean(detailFieldErrors.host)" /><small v-if="detailFieldErrors.host" class="field-error">{{ detailFieldErrors.host }}</small></a-form-item>

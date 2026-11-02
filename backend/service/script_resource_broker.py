@@ -81,8 +81,22 @@ def validate_script_resources(request: dict):
         ):
             raise ScriptAccessDenied("来源绑定已变更，请重新创建抽取任务")
     authorize_workflow_resource(
-        actor, {**request, **selectors, "mysqlDatasourceId": source["datasourceId"]}, "write"
+        actor,
+        {
+            **request,
+            **selectors,
+            "mysqlDatasourceId": source["datasourceId"],
+            "mysqlDatabase": source.get("databaseName"),
+        },
+        "write",
     )
+    from infra.mysql import session_scope
+    from service.mysql_datasource_access import ensure_mysql_database_access
+
+    with session_scope() as session:
+        ensure_mysql_database_access(
+            session, actor, source["datasourceId"], source.get("databaseName")
+        )
     sql = (
         source.get("querySql")
         or f"SELECT * FROM `{source.get('databaseName', '')}`.`{source.get('tableName', '')}`"
@@ -135,7 +149,7 @@ def validate_source_sql(sql: str, database: str) -> str:
         if isinstance(node, exp.Table):
             if not isinstance(node.this, exp.Identifier) or node.catalog:
                 raise ScriptAccessDenied("不允许表函数或跨目录访问")
-            if node.db and node.db.lower() != database.lower():
+            if node.db and node.db != database:
                 raise ScriptAccessDenied("不允许访问所选数据源库以外的数据库")
             if node.name.lower().startswith(PROTECTED_TABLE_PREFIXES) or node.name.lower() in {
                 "batches",
@@ -341,7 +355,7 @@ class ScriptResourceBroker:
             raise ScriptAccessDenied("资源请求参数无效或超限")
         actor = self._authorize()  # Includes every cache hit and every call after revocation.
         if resource == "mysql" and method == "query":
-            result = self._mysql(args, kwargs)
+            result = self._mysql(actor, args, kwargs)
         elif resource == "graph" and method in GRAPH_READ | GRAPH_WRITE:
             result = self._graph(actor, method, args, kwargs)
         elif resource == "milvus" and method in MILVUS_READ | MILVUS_WRITE:
@@ -542,10 +556,27 @@ class ScriptResourceBroker:
                 raise ScriptAccessDenied("图类型标识不合法")
         return getattr(client, method)(*args, **kwargs)
 
-    def _mysql(self, args, kwargs):
+    def _mysql(self, actor, args, kwargs):
         if kwargs or not 1 <= len(args) <= 2 or not self.resolved.get("mysql"):
             raise ScriptAccessDenied("查询需要已授权的数据源及SQL参数")
         settings = self.resolved["mysql"]
+        datasource_ids = {
+            (self.request.get("source") or {}).get("datasourceId"),
+            self.request.get("mysql_datasource_id"),
+            self.request.get("mysqlDatasourceId"),
+            self.selectors.get("mysql_datasource_id"),
+            self.selectors.get("mysqlDatasourceId"),
+        } - {None, ""}
+        if not datasource_ids:
+            raise ScriptAccessDenied("查询缺少已授权的数据源绑定")
+        from infra.mysql import session_scope
+        from service.mysql_datasource_access import ensure_mysql_database_access
+
+        with session_scope() as session:
+            for datasource_id in datasource_ids:
+                ensure_mysql_database_access(
+                    session, actor, datasource_id, settings.get("database")
+                )
         sql = validate_source_sql(args[0], str(settings.get("database") or ""))
         parameters = args[1] if len(args) == 2 else {}
         if parameters is None:

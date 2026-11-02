@@ -42,7 +42,7 @@ function asString(value: ArcoSelectValue | undefined): string {
 /** 数据源触发器悬停提示：显示「名称（host）」而非 id */
 function dsLabel(id: string): string {
   const ds = props.datasources.find((item) => item.id === id)
-  return ds ? `${ds.name}（${ds.host}）` : ''
+  return ds?.name || ''
 }
 
 const databases = ref<string[]>([])
@@ -173,8 +173,8 @@ function applyColumnDefaults() {
         popup-container=".schema-modal"
         @change="onDatasourceChange"
       >
-        <a-option v-for="ds in datasources" :key="ds.id" :value="ds.id" :label="`${ds.name}（${ds.host}）`" :disabled="ds.status === '停用'" :title="ds.status === '停用' ? `${ds.name}（${ds.host}）已停用，启用后才能选择` : `${ds.name}（${ds.host}）`">
-          {{ ds.name }}（{{ ds.host }}）
+        <a-option v-for="ds in datasources" :key="ds.id" :value="ds.id" :label="ds.name" :disabled="ds.status === '停用'" :title="ds.status === '停用' ? `${ds.name} 已停用，启用后才能选择` : ds.name">
+          {{ ds.name }}
         </a-option>
       </a-select>
     </a-tooltip>

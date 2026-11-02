@@ -4,10 +4,10 @@ import os
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from typing import Any
-from urllib.parse import quote_plus
+from urllib.parse import quote, quote_plus
 
 from dotenv import load_dotenv
-from sqlalchemy import Engine, create_engine, text
+from sqlalchemy import URL, Engine, create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 load_dotenv()
@@ -93,10 +93,29 @@ class MySQLClient:
             return self._explicit_url
         username = quote_plus(self.username)
         password = quote_plus(self.password)
-        db_part = f"{self.database}" if self.database else ""
-        return (
-            f"mysql+pymysql://{username}:{password}@{self.host}:{self.port}/"
-            f"{db_part}?charset=utf8mb4"
+        db_part = quote(self.database, safe="") if self.database else ""
+        host = self.host
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        return f"mysql+pymysql://{username}:{password}@{host}:{self.port}/{db_part}?charset=utf8mb4"
+
+    def _connection_url(self) -> str | URL:
+        if self._explicit_url:
+            return self._explicit_url
+        # Never parse user-configured database names as URL query parameters.
+        # Keep the structured URL through create_engine so Unicode/reserved
+        # database characters remain literal, while .url retains its string API.
+        host = self.host
+        if host.startswith("[") and host.endswith("]"):
+            host = host[1:-1]
+        return URL.create(
+            "mysql+pymysql",
+            username=self.username,
+            password=self.password,
+            host=host,
+            port=self.port,
+            database=self.database or None,
+            query={"charset": "utf8mb4"},
         )
 
     def _ensure_database(self) -> None:
@@ -147,7 +166,7 @@ class MySQLClient:
                     "read_timeout": 600,
                     "write_timeout": 600,
                 }
-            self._engine = create_engine(self.url, **kwargs)
+            self._engine = create_engine(self._connection_url(), **kwargs)
         return self._engine
 
     @property

@@ -138,6 +138,7 @@ def authorize_workflow_resource(actor, resource, action="read"):
         from dao.milvus_config import MilvusConfigDAO
         from dao.mysql_datasource import MysqlDatasourceDAO
         from infra.mysql import session_scope
+        from service.mysql_datasource_access import ensure_mysql_database_access
 
         config_types = (
             ("llmConfigId", "llm_config_id", LlmConfigDAO),
@@ -145,6 +146,12 @@ def authorize_workflow_resource(actor, resource, action="read"):
             ("mysqlDatasourceId", "mysql_datasource_id", MysqlDatasourceDAO),
             ("milvusConfigId", "milvus_config_id", MilvusConfigDAO),
         )
+        requested_databases = [
+            value[key]
+            for value in values
+            for key in ("mysqlDatabase", "mysql_database")
+            if value.get(key) not in (None, "")
+        ] or [None]
         with session_scope() as session:
             for value in values:
                 for camel, snake, dao_type in config_types:
@@ -152,13 +159,16 @@ def authorize_workflow_resource(actor, resource, action="read"):
                         row = dao_type(session).get(config_id)
                         if row is None:
                             raise HTTPException(status_code=403, detail="任务配置不存在或不可访问")
-                        if dao_type in (LlmConfigDAO, MysqlDatasourceDAO):
+                        if dao_type is MysqlDatasourceDAO:
+                            for database in requested_databases:
+                                ensure_mysql_database_access(session, actor, row.id, database)
+                        elif dao_type is LlmConfigDAO:
                             from service.config_ownership import ensure_config_access
 
                             ensure_config_access(
                                 session,
                                 actor,
-                                "llm" if dao_type is LlmConfigDAO else "mysql",
+                                "llm",
                                 row.id,
                             )
                         else:

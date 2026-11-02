@@ -344,6 +344,7 @@ def test_gateway_uses_current_membership_and_persisted_source(monkeypatch):
                     created_at=datetime.now(),
                     updated_at=datetime.now(),
                 ),
+                ConfigOwnership(config_kind="mysql", config_id="mysql-a", business_id=None),
             ]
         )
     request = {

@@ -239,8 +239,10 @@ async def test_developer_reads_all_shared_configs_and_cannot_mutate(session_fact
                 username="u",
                 password="secret",
                 owner="business:other",
+                default_database="source_db",
             )
         )
+        session.add(ConfigOwnership(config_kind="mysql", config_id="MYSQL-OTHER", business_id=None))
         session.commit()
     developer = replace(
         _actor(USER_A),
@@ -309,8 +311,10 @@ def test_workflow_selectors_allow_shared_configs_but_keep_graph_guard(session_fa
                 username="u",
                 password="secret",
                 owner="legacy-admin",
+                default_database="source_db",
             )
         )
+        session.add(ConfigOwnership(config_kind="mysql", config_id="MYSQL-OTHER", business_id=None))
         session.commit()
     monkeypatch.setattr("infra.mysql.create_session", session_factory)
     developer = replace(_actor(USER_A), business_id="mine", business_role="developer")
@@ -370,6 +374,12 @@ async def test_business_creation_shared_management_and_cross_business_denial(
     session_factory, monkeypatch, kind, path, payload
 ):
     monkeypatch.setenv("BUSINESS_RBAC_ENABLED", "true")
+    if kind == "mysql":
+        # This is an authorization test, not a real DNS or database probe.
+        monkeypatch.setattr(
+            "service.mysql_datasource.resolve_mysql_datasource_target",
+            lambda host, port: "10.25.0.12",
+        )
     with session_factory.begin() as session:
         session.add_all(
             [

@@ -519,6 +519,33 @@ describe('开发人员共享配置只读', () => {
 })
 
 describe('业务配置权限与归属', () => {
+  it('公共MySQL摘要可选用，查看时不显示未授权的连接字段', async () => {
+    setActivePinia(createPinia())
+    vi.mocked(currentUserIsAdmin).mockReturnValue(false)
+    const auth = useAuthStore()
+    auth.profile = { isAdmin: false, businessRbacEnabled: true, canDevelop: true } as typeof auth.profile
+    const { listMysqlDatasources } = await import('../../api/mysqlDatasource')
+    vi.mocked(listMysqlDatasources).mockResolvedValueOnce([{
+      id: 'MYSQL-PUBLIC', name: '公共业务数据', status: '正常', isDefault: false,
+      createdAt: '', updatedAt: '', visibility: 'public', businessId: null, canManage: false,
+    }])
+    const wrapper = mountView()
+    try {
+      await flushPromises()
+      await wrapper.findAll('.category-nav button')[1]!.trigger('click')
+      await flushPromises()
+      expect(wrapper.text()).toContain('仅授权使用')
+      expect(wrapper.text()).not.toContain('undefined')
+      await wrapper.findAll('.row-actions button')[0]!.trigger('click')
+      expect(wrapper.text()).toContain('连接信息仅对配置管理者开放')
+      expect(wrapper.find('input[aria-label="host"]').exists()).toBe(false)
+      expect(wrapper.get('.detail-drawer footer button').attributes('disabled')).toBeDefined()
+    } finally {
+      wrapper.unmount()
+      vi.mocked(currentUserIsAdmin).mockReturnValue(true)
+    }
+  })
+
   it.each(['llm', 'mysql'] as const)('%s：开发人员复用新建表单并管理本业务配置，模型可设置本业务默认', async (kind) => {
     setActivePinia(createPinia())
     vi.mocked(currentUserIsAdmin).mockReturnValue(false)

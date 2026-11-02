@@ -14,6 +14,10 @@ from sqlalchemy.orm import Session
 from dao.mysql_datasource import MysqlDatasourceDAO
 from db_model.mysql_datasource import MysqlDatasource
 from infra.mysql import MySQLClient
+from service.mysql_datasource_target import (
+    MysqlDatasourceTargetError,
+    resolve_mysql_datasource_target,
+)
 from utils.time_display import utc_to_cst_str
 
 logger = logging.getLogger(__name__)
@@ -22,9 +26,21 @@ logger = logging.getLogger(__name__)
 def _mask_password(password: str) -> str:
     if not password:
         return ""
-    if len(password) <= 8:
-        return "•" * len(password)
-    return f"••••••••{password[-4:]}"
+    return "••••••••"
+
+
+def _connection_host(host: str, port: int) -> str:
+    # Internal settings are also consumed by URL.create in the script broker,
+    # which expects a bare numeric IPv6 address rather than URL authority syntax.
+    return resolve_mysql_datasource_target(host, port)
+
+
+def _dispose_client(client: MySQLClient | None) -> None:
+    if client is not None:
+        try:
+            client.dispose()
+        except Exception:  # noqa: BLE001
+            logger.warning("MySQL 数据源连接清理失败")
 
 
 def _to_out(cfg: MysqlDatasource) -> dict[str, Any]:
@@ -64,6 +80,7 @@ class MysqlDatasourceService:
     def create_config(
         self, payload: dict[str, Any], *, scope_owner: str | None = None
     ) -> dict[str, Any]:
+        resolve_mysql_datasource_target(payload["host"], int(payload.get("port", 3306)))
         now = datetime.now(UTC)
         config_id = f"MYSQL-{uuid.uuid4().hex[:8].upper()}"
         # Register visibility in the same commit as the configuration itself.
@@ -119,6 +136,10 @@ class MysqlDatasourceService:
                 updates[field] = payload[camel]
         if "port" in updates:
             updates["port"] = int(updates["port"])
+        target_host = updates.get("host", row.host)
+        target_port = updates.get("port", row.port)
+        if target_host != row.host or target_port != row.port:
+            resolve_mysql_datasource_target(target_host, target_port)
         new_pwd = payload.get("password")
         if new_pwd:
             updates["password"] = new_pwd
@@ -149,26 +170,31 @@ class MysqlDatasourceService:
     def test_connection(self, config_id: str) -> dict[str, Any]:
         row = self._dao.get(config_id)
         if row is None:
-            return {"ok": False, "latencyMs": None, "error": "数据源不存在"}
+            return {"ok": False, "latencyMs": None, "error": "连接失败"}
+        try:
+            host = _connection_host(row.host, row.port)
+        except MysqlDatasourceTargetError:
+            # A policy denial is not a network probe and must not change status.
+            return {"ok": False, "latencyMs": None, "error": "连接失败"}
         start = time.perf_counter()
+        client = None
         try:
             client = MySQLClient(
-                host=row.host,
+                host=host,
                 port=row.port,
                 database=row.default_database or None,
                 username=row.username,
                 password=row.password,
             )
             ok = client.health_check()
-            client.dispose()
-            latency_ms = int((time.perf_counter() - start) * 1000)
-            self._record_probe_status(config_id, row.status, ok)
-            return {"ok": ok, "latencyMs": latency_ms, "error": None}
-        except Exception as exc:  # noqa: BLE001
-            latency_ms = int((time.perf_counter() - start) * 1000)
-            logger.warning("MySQL 测试连接失败 id=%s: %s", config_id, exc)
-            self._record_probe_status(config_id, row.status, False)
-            return {"ok": False, "latencyMs": latency_ms, "error": str(exc)}
+        except Exception:  # noqa: BLE001
+            logger.warning("MySQL 测试连接失败 id=%s", config_id)
+            ok = False
+        finally:
+            _dispose_client(client)
+        latency_ms = int((time.perf_counter() - start) * 1000)
+        self._record_probe_status(config_id, row.status, ok)
+        return {"ok": ok, "latencyMs": latency_ms, "error": None if ok else "连接失败"}
 
     def _record_probe_status(self, config_id: str, current_status: str, ok: bool) -> None:
         """探活结果落库（失败→异常 / 成功→正常）：徽标与探活结果一致，刷新不回跳；停用态不覆盖（启停只由人工切换）。"""
@@ -181,22 +207,24 @@ class MysqlDatasourceService:
         row = self._dao.get(config_id)
         if row is None:
             return []
-        client = MySQLClient(
-            host=row.host,
-            port=row.port,
-            database="",
-            username=row.username,
-            password=row.password,
-        )
+        host = _connection_host(row.host, row.port)
+        client = None
         try:
+            client = MySQLClient(
+                host=host,
+                port=row.port,
+                database="",
+                username=row.username,
+                password=row.password,
+            )
             with client.engine.connect() as conn:
                 rows = conn.execute(text("SHOW DATABASES")).fetchall()
             return [r[0] for r in rows if r[0] not in ("information_schema",)]
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("列库失败 id=%s: %s", config_id, exc)
+        except Exception:  # noqa: BLE001
+            logger.warning("MySQL 列库失败 id=%s", config_id)
             return []
         finally:
-            client.dispose()
+            _dispose_client(client)
 
     def list_tables(self, config_id: str, database: str | None = None) -> list[dict[str, Any]]:
         """列出指定库（缺省为数据源默认库）的表。连接失败返回 []。"""
@@ -206,14 +234,16 @@ class MysqlDatasourceService:
         db = database or row.default_database
         if not db:
             return []
-        client = MySQLClient(
-            host=row.host,
-            port=row.port,
-            database="",
-            username=row.username,
-            password=row.password,
-        )
+        host = _connection_host(row.host, row.port)
+        client = None
         try:
+            client = MySQLClient(
+                host=host,
+                port=row.port,
+                database="",
+                username=row.username,
+                password=row.password,
+            )
             with client.engine.connect() as conn:
                 rows = conn.execute(
                     text(
@@ -223,11 +253,11 @@ class MysqlDatasourceService:
                     {"db": db},
                 ).fetchall()
             return [{"name": r[0], "type": r[1]} for r in rows]
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("列表失败 id=%s db=%s: %s", config_id, db, exc)
+        except Exception:  # noqa: BLE001
+            logger.warning("MySQL 列表失败 id=%s", config_id)
             return []
         finally:
-            client.dispose()
+            _dispose_client(client)
 
     def list_columns(
         self, config_id: str, table: str, database: str | None = None
@@ -239,14 +269,16 @@ class MysqlDatasourceService:
         db = database or row.default_database
         if not db:
             return []
-        client = MySQLClient(
-            host=row.host,
-            port=row.port,
-            database="",
-            username=row.username,
-            password=row.password,
-        )
+        host = _connection_host(row.host, row.port)
+        client = None
         try:
+            client = MySQLClient(
+                host=host,
+                port=row.port,
+                database="",
+                username=row.username,
+                password=row.password,
+            )
             with client.engine.connect() as conn:
                 rows = conn.execute(
                     text(
@@ -256,11 +288,11 @@ class MysqlDatasourceService:
                     {"db": db, "t": table},
                 ).fetchall()
             return [{"name": r[0], "dataType": r[1], "nullable": r[2] == "YES"} for r in rows]
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("列列失败 id=%s db=%s table=%s: %s", config_id, db, table, exc)
+        except Exception:  # noqa: BLE001
+            logger.warning("MySQL 列字段失败 id=%s", config_id)
             return []
         finally:
-            client.dispose()
+            _dispose_client(client)
 
 
 def get_mysql_settings_by_id(config_id: str | None) -> dict[str, Any] | None:
@@ -278,7 +310,7 @@ def get_mysql_settings_by_id(config_id: str | None) -> dict[str, Any] | None:
         if row is None:
             return None
         return {
-            "host": row.host,
+            "host": _connection_host(row.host, row.port),
             "port": row.port,
             "database": row.default_database,
             "username": row.username,

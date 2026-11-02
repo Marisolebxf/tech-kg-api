@@ -1001,7 +1001,7 @@ async def load_schema_extract_plan(schema_id: str | dict[str, Any]) -> dict[str,
     from infra.s3 import get_schema_s3_storage
     from infra.workflow_mysql import get_workflow_engine
     from service.business_access_control import rbac_enabled
-    from service.config_ownership import ensure_config_access
+    from service.mysql_datasource_access import ensure_mysql_database_access
     from service.workflow_jobs import authorize_background_execution
 
     actor = None
@@ -1038,7 +1038,9 @@ async def load_schema_extract_plan(schema_id: str | dict[str, Any]) -> dict[str,
                     source_row = MysqlDatasourceDAO(source_session).get(source.datasource_id)
                     if source_row is None:
                         raise ApplicationError("来源配置不存在", non_retryable=True)
-                    ensure_config_access(source_session, actor, "mysql", source_row.id)
+                    ensure_mysql_database_access(
+                        source_session, actor, source_row.id, source.database_name
+                    )
         kind = definition.kind
         name = definition.name
         label = definition.label
@@ -1260,6 +1262,7 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
         time_column = _require_identifier(time_column)
     pk_column = _require_identifier(request["pkColumn"])
     query_sql = request.get("querySql") or None
+    actor = None
     from service.business_access_control import rbac_enabled
 
     if rbac_enabled():
@@ -1269,7 +1272,7 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
             validate_source_sql,
         )
 
-        validate_script_resources(request)
+        actor = validate_script_resources(request)
         source = request.get("source") or {}
         for read_key, source_key in (
             ("datasourceId", "datasourceId"),
@@ -1379,6 +1382,12 @@ async def read_source_batch(request: dict[str, Any]) -> dict[str, Any]:
         sqls.append((sql, binds))
 
     # 源库连接统一走 MySQLClient（URL 拼装与引擎参数只此一份）
+    if actor is not None:
+        from infra.mysql import session_scope
+        from service.mysql_datasource_access import ensure_mysql_database_access
+
+        with session_scope() as session:
+            ensure_mysql_database_access(session, actor, datasource_id, database)
     source_client = MySQLClient(
         host=params["host"],
         port=int(params["port"]),

@@ -6,6 +6,7 @@ standalone get_*_settings_by_id / read/write_watermark 走 infra.mysql.create_se
 
 from __future__ import annotations
 
+import socket
 from datetime import datetime
 
 import pytest
@@ -99,12 +100,25 @@ def _seed(session_factory) -> None:
     s.close()
 
 
-def test_get_mysql_settings_by_id(sqlite_session_factory) -> None:
+def test_get_mysql_settings_by_id(sqlite_session_factory, monkeypatch) -> None:
+    monkeypatch.setenv("MYSQL_DATASOURCE_ALLOWED_ENDPOINTS", '["10.20.30.40:3307"]')
+    monkeypatch.setattr(
+        "service.mysql_datasource_target.socket.getaddrinfo",
+        lambda host, port, **kw: [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("10.20.30.40", port))
+        ],
+    )
     _seed(sqlite_session_factory)
     from service.mysql_datasource import get_mysql_settings_by_id
 
     params = get_mysql_settings_by_id("MYSQL-1")
-    assert params == {"host": "h", "port": 3307, "database": "db", "username": "u", "password": "p"}
+    assert params == {
+        "host": "10.20.30.40",
+        "port": 3307,
+        "database": "db",
+        "username": "u",
+        "password": "p",
+    }
     assert get_mysql_settings_by_id("MISSING") is None
     assert get_mysql_settings_by_id(None) is None
 

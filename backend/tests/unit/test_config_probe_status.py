@@ -4,6 +4,7 @@
 刷新后回跳库里旧值——表现为「连接测试失败但状态仍是正常」。
 """
 
+import socket
 from types import SimpleNamespace
 
 from openai import APITimeoutError
@@ -66,6 +67,14 @@ class _FakeMySQLClient:
 
 
 def _mysql_service(monkeypatch, row) -> tuple[MysqlDatasourceService, StubDAO]:
+    row.host = "mysql.internal"
+    monkeypatch.setenv("MYSQL_DATASOURCE_ALLOWED_ENDPOINTS", '["10.20.30.40:3306"]')
+    monkeypatch.setattr(
+        "service.mysql_datasource_target.socket.getaddrinfo",
+        lambda host, port, **kw: [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("10.20.30.40", port))
+        ],
+    )
     monkeypatch.setattr(mysql_module, "MySQLClient", _FakeMySQLClient)
     service = MysqlDatasourceService(session=None)
     stub = StubDAO(row)

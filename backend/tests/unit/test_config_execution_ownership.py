@@ -78,12 +78,13 @@ def ownership_db(monkeypatch):
                     host="example.invalid",
                     username="test",
                     password="test",
+                    default_database="example",
                     owner="legacy-owner",
                     created_at=now,
                     updated_at=now,
                 )
             )
-            if business:
+            if business is not None:
                 for kind in ("mysql", "llm"):
                     session.add(
                         ConfigOwnership(
@@ -92,6 +93,11 @@ def ownership_db(monkeypatch):
                             business_id=business,
                         )
                     )
+            else:
+                # Public MySQL use is an explicit reviewed grant, not an absent row.
+                session.add(
+                    ConfigOwnership(config_kind="mysql", config_id="mysql-public", business_id=None)
+                )
     yield engine, factory
     engine.dispose()
 

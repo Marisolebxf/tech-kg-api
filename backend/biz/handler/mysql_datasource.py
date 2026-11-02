@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
+from contextlib import contextmanager
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -24,6 +26,50 @@ from service.config_ownership import (
     guard_default_change,
     visible_configurations,
 )
+from service.mysql_datasource_probe_limit import consume_mysql_datasource_probe
+from service.mysql_datasource_target import MysqlDatasourceTargetError
+
+logger = logging.getLogger(__name__)
+
+# Shared datasource consumers need a selector, not the connection topology.
+_CATALOG_FIELDS = frozenset(
+    {
+        "id",
+        "name",
+        "status",
+        "isDefault",
+        "visibility",
+        "businessId",
+        "businessName",
+        "canManage",
+        "createdAt",
+        "updatedAt",
+    }
+)
+
+
+def _response_config(data: dict) -> dict:
+    if data.get("canManage") is True:
+        return data
+    return {key: value for key, value in data.items() if key in _CATALOG_FIELDS}
+
+
+def _database_scope(actor: CurrentActor, data: dict, requested: str | None = None) -> str:
+    if actor.is_admin:
+        return requested or str(data.get("defaultDatabase") or "")
+    database = str(data.get("defaultDatabase") or "")
+    if not database or (requested is not None and requested != database):
+        raise HTTPException(403, "无权访问该数据库")
+    return database
+
+
+@contextmanager
+def _target_policy_errors():
+    try:
+        yield
+    except MysqlDatasourceTargetError:
+        raise HTTPException(403, "数据源连接目标未获准") from None
+
 
 # 数据源列表为读多写少的轻查询，加短 TTL 响应缓存扛读并发；键含用户身份
 # 缓存仅保存脱敏配置原始数据；每次返回前重新校验业务归属，不缓存授权结果。
@@ -96,7 +142,10 @@ def list_mysql_datasources(
         {
             "code": 200,
             "success": True,
-            "data": visible_configurations(session, actor, "mysql", configs),
+            "data": [
+                _response_config(item)
+                for item in visible_configurations(session, actor, "mysql", configs)
+            ],
             "msg": "success",
         },
         ensure_ascii=False,
@@ -111,7 +160,8 @@ def get_mysql_datasource(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
-    return ApiResponse(data=_readable_config(_application(session), actor, datasource_id, session))
+    data = _readable_config(_application(session), actor, datasource_id, session)
+    return ApiResponse(data=_response_config(data))
 
 
 @router.post("", response_model=ApiResponse)
@@ -126,7 +176,8 @@ def create_mysql_datasource(
     guard_default_change(actor, data)
     data["owner"] = actor.user_id
     data["_business_id"] = business_id
-    result = _application(session).create_config(data, scope_owner=None)
+    with _target_policy_errors():
+        result = _application(session).create_config(data, scope_owner=None)
     return ApiResponse(
         data=config_output(session, actor, "mysql", result), msg="MySQL 数据源已创建"
     )
@@ -145,7 +196,8 @@ def update_mysql_datasource(
     guard_default_change(actor, data, current)
     # Keep historical ownership metadata; it no longer grants configuration access.
     data.pop("owner", None)
-    updated = _application(session).update_config(datasource_id, data, scope_owner=None)
+    with _target_policy_errors():
+        updated = _application(session).update_config(datasource_id, data, scope_owner=None)
     if updated is None:
         raise HTTPException(status_code=404, detail="数据源不存在")
     return ApiResponse(
@@ -192,7 +244,15 @@ def test_mysql_datasource(
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
     _readable_config(_application(session), actor, datasource_id, session, manage=True)
-    return ApiResponse(data=_application(session).test_connection(datasource_id))
+    consume_mysql_datasource_probe(actor.user_id)
+    result = _application(session).test_connection(datasource_id)
+    logger.info(
+        "mysql_datasource_probe actor=%s datasource=%s ok=%s",
+        actor.user_id,
+        datasource_id,
+        result.get("ok") is True,
+    )
+    return ApiResponse(data=result)
 
 
 @router.get("/{datasource_id}/databases", response_model=ApiResponse)
@@ -201,8 +261,13 @@ def list_mysql_databases(
     actor: CurrentActor,
     session: Annotated[Session, Depends(get_session)],
 ) -> ApiResponse:
-    _readable_config(_application(session), actor, datasource_id, session)
-    return ApiResponse(data={"items": _application(session).list_databases(datasource_id)})
+    data = _readable_config(_application(session), actor, datasource_id, session)
+    if not actor.is_admin:
+        # Do not run SHOW DATABASES with a shared (possibly overprivileged) account.
+        return ApiResponse(data={"items": [_database_scope(actor, data)]})
+    with _target_policy_errors():
+        items = _application(session).list_databases(datasource_id)
+    return ApiResponse(data={"items": items})
 
 
 @router.get("/{datasource_id}/tables", response_model=ApiResponse)
@@ -213,8 +278,11 @@ def list_mysql_tables(
     database: Annotated[str | None, Query(max_length=128)] = None,
 ) -> ApiResponse:
     """列出指定库（缺省为数据源默认库）的表，供 Schema 来源表绑定选择。"""
-    _readable_config(_application(session), actor, datasource_id, session)
-    return ApiResponse(data={"items": _application(session).list_tables(datasource_id, database)})
+    data = _readable_config(_application(session), actor, datasource_id, session)
+    scoped_database = _database_scope(actor, data, database)
+    with _target_policy_errors():
+        items = _application(session).list_tables(datasource_id, scoped_database)
+    return ApiResponse(data={"items": items})
 
 
 @router.get("/{datasource_id}/tables/{table_name}/columns", response_model=ApiResponse)
@@ -226,7 +294,8 @@ def list_mysql_table_columns(
     database: Annotated[str | None, Query(max_length=128)] = None,
 ) -> ApiResponse:
     """列出指定表的列，供选主键列/时间列。"""
-    _readable_config(_application(session), actor, datasource_id, session)
-    return ApiResponse(
-        data={"items": _application(session).list_columns(datasource_id, table_name, database)}
-    )
+    data = _readable_config(_application(session), actor, datasource_id, session)
+    scoped_database = _database_scope(actor, data, database)
+    with _target_policy_errors():
+        items = _application(session).list_columns(datasource_id, table_name, scoped_database)
+    return ApiResponse(data={"items": items})

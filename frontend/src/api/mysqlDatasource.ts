@@ -10,16 +10,16 @@ export interface MysqlDatasource {
   businessName?: string
   canManage?: boolean
   name: string
-  description: string
-  host: string
-  port: number
-  defaultDatabase: string
-  username: string
-  owner: string
+  description?: string
+  host?: string
+  port?: number
+  defaultDatabase?: string
+  username?: string
+  owner?: string
   isDefault: boolean
   status: string
-  hasPassword: boolean
-  passwordMasked: string
+  hasPassword?: boolean
+  passwordMasked?: string
   createdAt: string
   updatedAt: string
 }

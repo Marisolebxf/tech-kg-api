@@ -284,7 +284,7 @@ describe('Schema 管理输入框达上限提示', () => {
     expect(view.find('.create-field--limit-note .limit-field-note').exists()).toBe(false)
 
     // 实体页维持 128
-    const entityTab = view.findAll('.schema-tabs__items button').find((button) => button.text() === '标准实体')
+    const entityTab = view.findAll('.schema-tabs__items button').find((button) => button.text() === '实体')
     await entityTab!.trigger('click')
     await view.get('.schema-tabs__create').trigger('click')
     const entityNameInput = view.findAll('input.create-text-input')[0]
@@ -533,12 +533,12 @@ describe('Schema 新增弹窗必填提示文案', () => {
 
 
 describe('Create Schema incremental rows', () => {
-  it.each(['标准实体', '关系'])('requires existing property fields before adding another row in %s', async (tab) => {
+  it.each(['实体', '关系'])('requires existing property fields before adding another row in %s', async (tab) => {
     const view = mountView()
     await flushPromises()
     if (tab === '关系') await view.findAll('.schema-tabs__items button').find((button) => button.text() === tab)!.trigger('click')
     await view.get('.schema-tabs__create').trigger('click')
-    const lockedCount = tab === '标准实体' ? 5 : 3
+    const lockedCount = tab === '实体' ? 5 : 3
     expect(view.find('.create-props__head .create-props__add').exists()).toBe(false)
     const add = view.get('.create-props__add')
     await add.trigger('click')

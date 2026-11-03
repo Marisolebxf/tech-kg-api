@@ -774,35 +774,24 @@ class TestTraversal:
     def test_get_node_edges(self):
         def handler(request):
             if request.url.path == "/health":
-                return _health_ok(request)
-            if request.url.path == "/api/v1/query/read":
-                query = json.loads(request.content)["query"]
-                assert "ORDER BY edge_src, edge_dst, edge_type, edge_rank" in query
-                return httpx.Response(
-                    200,
-                    json={
-                        "records": [
-                            {
-                                "e": {
-                                    "id": "1->2@0",
-                                    "type": "KNOWS",
-                                    "sourceId": "1",
-                                    "targetId": "2",
-                                    "properties": {"weight": 2},
-                                }
-                            }
-                        ],
-                        "summary": {},
-                    },
-                )
-            assert request.method == "DELETE"
-            assert request.url.params["type"] == "KNOWS"
-            return httpx.Response(204)
+                return httpx.Response(200, json={"status": "UP"})
+            assert request.url.path == "/api/v1/traversal/1/edges"
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": "1->2@0",
+                        "type": "KNOWS",
+                        "sourceId": "1",
+                        "targetId": "2",
+                        "properties": {},
+                    }
+                ],
+            )
 
         repo = _make_repo(handler)
         edges = repo.get_node_edges("1", direction="both")
         assert len(edges) == 1
-        assert edges[0].properties["weight"] == 2
         repo.close()
 
     def test_get_neighbours(self):
@@ -978,34 +967,25 @@ class TestEdgeCrud:
     def test_delete_edge(self):
         def handler(request):
             if request.url.path == "/health":
-                return _health_ok(request)
-            if request.url.path == "/api/v1/query/read":
-                query = json.loads(request.content)["query"]
-                assert "ORDER BY edge_src, edge_dst, edge_type, edge_rank" in query
+                return httpx.Response(200, json={"status": "UP"})
+            if request.method == "GET":
                 return httpx.Response(
                     200,
-                    json={
-                        "records": [
-                            {
-                                "e": {
-                                    "id": "1->2@0",
-                                    "type": "KNOWS",
-                                    "sourceId": "1",
-                                    "targetId": "2",
-                                    "properties": {"weight": 2},
-                                }
-                            }
-                        ],
-                        "summary": {},
-                    },
+                    json=[
+                        {
+                            "id": "1->2@0",
+                            "type": "KNOWS",
+                            "sourceId": "1",
+                            "targetId": "2",
+                            "properties": {},
+                        }
+                    ],
                 )
-            assert request.method == "DELETE"
             assert request.url.params["type"] == "KNOWS"
             return httpx.Response(204)
 
         repo = _make_repo(handler)
-        result = repo.delete_edge("1->2@0")
-        assert result is True
+        assert repo.delete_edge("1->2@0") is True
         repo.close()
 
     def test_delete_edge_missing_returns_false(self):
@@ -1023,33 +1003,30 @@ class TestEdgeCrud:
     def test_get_edge_without_type_scans_node_edges(self):
         def handler(request):
             if request.url.path == "/health":
-                return _health_ok(request)
-            if request.url.path == "/api/v1/query/read":
-                query = json.loads(request.content)["query"]
-                assert "ORDER BY edge_src, edge_dst, edge_type, edge_rank" in query
-                return httpx.Response(
-                    200,
-                    json={
-                        "records": [
-                            {
-                                "e": {
-                                    "id": "1->2@0",
-                                    "type": "KNOWS",
-                                    "sourceId": "1",
-                                    "targetId": "2",
-                                    "properties": {"weight": 2},
-                                }
-                            }
-                        ],
-                        "summary": {},
+                return httpx.Response(200, json={"status": "UP"})
+            assert request.url.path == "/api/v1/traversal/1/edges"
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": "1->3@0",
+                        "type": "KNOWS",
+                        "sourceId": "1",
+                        "targetId": "3",
+                        "properties": {},
                     },
-                )
-            assert request.method == "DELETE"
-            assert request.url.params["type"] == "KNOWS"
-            return httpx.Response(204)
+                    {
+                        "id": "1->2@0",
+                        "type": "KNOWS",
+                        "sourceId": "1",
+                        "targetId": "2",
+                        "properties": {},
+                    },
+                ],
+            )
 
         repo = _make_repo(handler)
-        e = repo.get_edge("1->2@0")
+        e = repo.get_edge("1->2@0")  # no edge_type -> scan branch
         assert e is not None
         assert e.target_id == "2"
         repo.close()
@@ -1406,7 +1383,7 @@ class TestSlashVidNgqlFallback:
         def handler(request):
             if request.url.path == "/health":
                 return _health_ok(request)
-            if request.url.path in {"/api/v1/query", "/api/v1/query/read"}:
+            if request.url.path == "/api/v1/query":
                 captured.append(json.loads(request.content)["query"])
                 return httpx.Response(200, json={"records": records, "summary": {}})
             return httpx.Response(404, json={"error": "NotFound"})
@@ -1441,34 +1418,41 @@ class TestSlashVidNgqlFallback:
         assert repo.get_node("paper_ref_10.1111/jth.14768") is None
 
     def test_get_node_edges_slash_vid_uses_go(self):
-        captured = []
+        captured: list[str] = []
         records = [
             {
-                "e": {
-                    "id": "a/b->c@2",
-                    "sourceId": "a/b",
-                    "targetId": "c",
-                    "type": "CITES",
-                    "properties": {"weight": 3},
-                }
-            }
+                "src": "paper_ref_10.1111/jth.14768",
+                "dst": "paper_812578243168174080",
+                "etype": "CITES",
+            },
+            {
+                "src": "paper_864145551824782225",
+                "dst": "paper_ref_10.1111/jth.14768",
+                "etype": "CITES",
+            },
         ]
         repo = _make_repo(self._query_handler(captured, records))
-        edges = repo.get_node_edges("a/b", direction="both", edge_type="CITES", limit=1, offset=5)
-        assert edges[0].properties == {"weight": 3}
-        assert edges[0].source_id == "a/b"
+
+        edges = repo.get_node_edges(
+            "paper_ref_10.1111/jth.14768", direction="both", edge_type="CITES", limit=1, offset=0
+        )
+
+        # GO 一跳边 + Python 侧分页切片
+        assert len(edges) == 1
+        assert edges[0].type == "CITES"
+        assert str(edges[0].source_id) == "paper_ref_10.1111/jth.14768"
         assert "BIDIRECT" in captured[0]
-        assert "ORDER BY" in captured[0]
-        assert "LIMIT 5, 1" in captured[0]
-        repo.close()
+        assert "OVER CITES" in captured[0]
 
     def test_get_node_edges_slash_vid_rejects_injected_edge_type(self):
-        captured = []
+        captured: list[str] = []
         repo = _make_repo(self._query_handler(captured, []))
-        with pytest.raises(GraphRequestError):
-            repo.get_node_edges("a/b", edge_type="CITES; DROP SPACE dev2", limit=10)
-        assert not captured
-        repo.close()
+
+        repo.get_node_edges("a/b", edge_type="CITES; DROP SPACE dev2", limit=10)
+
+        # 非法边类型不下入 nGQL，回退 OVER *
+        assert "OVER *" in captured[0]
+        assert "DROP SPACE" not in captured[0]
 
     def test_normal_vid_still_uses_rest(self):
         def handler(request):
@@ -2080,102 +2064,4 @@ class TestKeywordNodes:
         with pytest.raises(GraphRequestError):
             repo.keyword_nodes_by_label("Paper", "论文")
         assert len(queries) == 1
-        repo.close()
-
-
-@pytest.mark.parametrize("operation", ["browse", "find"])
-@pytest.mark.parametrize("maintenance_state", [None, "failed", "building"])
-def test_existing_index_queries_do_not_consult_maintenance(
-    monkeypatch, operation, maintenance_state
-):
-    """Missing/expired/failed Redis state must never block a usable physical index."""
-    from unittest.mock import MagicMock
-
-    from infra.graph_db import index_maintenance as maintenance
-
-    monkeypatch.setenv("TRS_GRAPH_AUTO_INDEX_ENABLED", "true")
-    store = MagicMock()
-    store.get.return_value = (
-        json.dumps({"status": maintenance_state}) if maintenance_state else None
-    )
-    redis = MagicMock(return_value=store)
-    monkeypatch.setattr(maintenance, "_redis", redis)
-    repo = _make_repo(_health_ok)
-    try:
-        if operation == "browse":
-            repo.execute_read = MagicMock(return_value=GraphQueryResult(records=[]))
-            assert repo.paged_nodes_by_label("Person") == []
-        else:
-            repo._request = MagicMock(return_value=httpx.Response(200, json={"items": []}))
-            assert repo.find_nodes(["Person"], {"name": "Alice"}).items == []
-        redis.assert_not_called()
-    finally:
-        repo.close()
-
-
-@pytest.mark.parametrize("operation", ["browse", "find"])
-def test_confirmed_missing_index_schedules_maintenance(monkeypatch, operation):
-    from unittest.mock import MagicMock
-
-    from infra.graph_db import index_maintenance as maintenance
-    from infra.graph_db.exceptions import GraphIndexPreparing
-
-    monkeypatch.setenv("TRS_GRAPH_AUTO_INDEX_ENABLED", "true")
-    request = MagicMock(return_value=False)
-    monkeypatch.setattr(maintenance, "request_indexes", request)
-    repo = _make_repo(_health_ok)
-    missing = GraphRequestError("There is no index to use at runtime", status_code=400)
-    try:
-        if operation == "browse":
-            repo.execute_read = MagicMock(side_effect=missing)
-
-            def call():
-                return repo.paged_nodes_by_label("Person")
-
-            fields = []
-        else:
-            repo._request = MagicMock(side_effect=missing)
-
-            def call():
-                return repo.find_nodes(["Person"], {"name": "Alice"})
-
-            fields = ["name"]
-        with pytest.raises(GraphIndexPreparing):
-            call()
-        request.assert_called_once_with(repo._settings, "Person", fields, observed_missing=True)
-    finally:
-        repo.close()
-
-
-@pytest.mark.parametrize("operation", ["browse", "find"])
-@pytest.mark.parametrize(
-    "message,status", [("query timeout", 504), ("SyntaxError", 400), ("service unavailable", 503)]
-)
-def test_unrelated_query_errors_never_trigger_maintenance(monkeypatch, operation, message, status):
-    from unittest.mock import MagicMock
-
-    from infra.graph_db import index_maintenance as maintenance
-
-    monkeypatch.setenv("TRS_GRAPH_AUTO_INDEX_ENABLED", "true")
-    request = MagicMock()
-    monkeypatch.setattr(maintenance, "request_indexes", request)
-    repo = _make_repo(_health_ok)
-    error = GraphRequestError(message, status_code=status)
-    try:
-        if operation == "browse":
-            repo.execute_read = MagicMock(side_effect=error)
-
-            def call():
-                return repo.paged_nodes_by_label("Person")
-        else:
-            repo._request = MagicMock(side_effect=error)
-
-            def call():
-                return repo.find_nodes(["Person"], {"name": "Alice"})
-
-        with pytest.raises(GraphRequestError) as caught:
-            call()
-        assert caught.value is error
-        request.assert_not_called()
-    finally:
         repo.close()

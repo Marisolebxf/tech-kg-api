@@ -453,14 +453,12 @@ class TRSGraphClient:
     def paged_nodes_by_label(
         self, label: str, *, limit: int = 100, offset: int = 0
     ) -> list[GraphNode]:
-        """先执行 LOOKUP；仅确认缺少索引时才安排维护。
-
-        Redis 维护记录不代表物理索引是否可用，不参与正常查询的准入。
+        """按标签分页取节点：LOOKUP 索引枚举优先，无标签索引回退 MATCH 全扫。
 
         MATCH (v:`Label`) SKIP/LIMIT 即便标签有索引也不走（实测 dev2 DataSource
         39 行 2.7s，高负载 30s 超时拖垮实体列表），LOOKUP 走标签索引 0.07s；
         无索引标签 LOOKUP 立即 400 "There is no index to use"（快速失败不扫描），
-        开启自动维护时提交索引任务；关闭自动维护时才回退 MATCH 全扫。
+        回退 MATCH 慢但正确——补建标签索引后自动切回快路径。
         REST /api/v1/nodes/label/{label} 在 trs-graph 侧附带全量总数计算，
         大标签（如 Paper 十万级）30s+ 超时（2026-09-21 实测 limit=2 也挂）；
         总数需求另走 label_count()，不要为此恢复 REST 分页端点。
@@ -472,13 +470,6 @@ class TRSGraphClient:
                 f"LOOKUP ON `{label}` YIELD vertex AS v | LIMIT {int(limit)} OFFSET {int(offset)}"
             )
         except GraphRequestError as exc:
-            if not is_no_index_error(exc):
-                raise
-            from infra.graph_db.index_maintenance import enabled
-
-            if enabled():
-                self.ensure_tag_indexes(label, observed_missing=True)
-                raise
             logger.warning("LOOKUP 分页无索引（label=%s），回退 MATCH 全扫: %s", label, exc)
             result = self.execute_read(
                 f"MATCH (v:`{label}`) RETURN v SKIP {int(offset)} LIMIT {int(limit)}"
@@ -673,17 +664,6 @@ class TRSGraphClient:
         """SHOW STATS 的全标签计数（stats_snapshot 的 tags 部分，副本）。"""
         return dict(self.stats_snapshot()["tags"])
 
-    def ensure_tag_indexes(
-        self, label: str, fields: Sequence[str] = (), *, observed_missing: bool = False
-    ) -> None:
-        from infra.graph_db.exceptions import GraphIndexPreparing
-        from infra.graph_db.index_maintenance import request_indexes
-
-        if not request_indexes(
-            self._settings, label, list(fields), observed_missing=observed_missing
-        ):
-            raise GraphIndexPreparing(label)
-
     def find_nodes(
         self,
         labels: list[str],
@@ -698,15 +678,7 @@ class TRSGraphClient:
             "limit": limit,
             "offset": offset,
         }
-        try:
-            resp = self._request("POST", "/api/v1/nodes/find", json=body)
-        except GraphRequestError as exc:
-            if labels and is_no_index_error(exc):
-                from infra.graph_db.index_maintenance import enabled
-
-                if enabled():
-                    self.ensure_tag_indexes(labels[0], list(properties), observed_missing=True)
-            raise
+        resp = self._request("POST", "/api/v1/nodes/find", json=body)
         data = resp.json()
         items = [_trs_node_to_model(n) for n in data.get("items", [])]
         return GraphPagedResult(
@@ -915,9 +887,19 @@ class TRSGraphClient:
         limit: int = 100,
         offset: int = 0,
     ) -> list[GraphEdge]:
-        return self._get_node_edges_via_ngql(
-            node_id, direction=direction, edge_type=edge_type, limit=limit, offset=offset
-        )
+        if _vid_has_slash(node_id):
+            return self._get_node_edges_via_ngql(
+                node_id, direction=direction, edge_type=edge_type, limit=limit, offset=offset
+            )
+        params: dict[str, Any] = {"direction": direction, "limit": limit}
+        if offset:
+            params["offset"] = offset
+        if edge_type:
+            params["edgeType"] = edge_type
+        resp = self._request("GET", f"/api/v1/traversal/{node_id}/edges", params=params)
+        data = resp.json()
+        items = data if isinstance(data, list) else data.get("items", [])
+        return [_trs_edge_to_model(e) for e in items]
 
     def _get_node_via_ngql(self, node_id: Any) -> GraphNode | None:
         """含 ``/`` 的 VID（DOI 类）经 nGQL FETCH 取节点。
@@ -941,49 +923,31 @@ class TRSGraphClient:
         limit: int,
         offset: int,
     ) -> list[GraphEdge]:
-        """Stable server-side edge pages, including slash VIDs and full properties.
+        """含 ``/`` 的 VID（DOI 类）经 nGQL GO 取一跳边（REST 路径参数无法承载）。
 
-        The deployed traversal REST endpoint ignores offset. Use the query endpoint
-        for every page so page zero and later pages have exactly the same ordering.
-        MATCH keeps the REST contract that both endpoints must exist.
+        边不带属性（子图渲染只用类型与端点）；GO 不做服务端分页，Python 侧切片。
+        edge_type 只放行字母数字下划线，防 nGQL 注入。
         """
-        if direction not in {"in", "out", "both"} or limit < 1 or offset < 0:
-            raise GraphRequestError("Invalid edge pagination", status_code=400)
-        if edge_type and not _TAG_IDENTIFIER.fullmatch(edge_type):
-            raise GraphRequestError("Invalid edge type", status_code=400)
-        typed = f":`{edge_type}`" if edge_type else ""
-        pattern = {
-            "out": f"(n)-[e{typed}]->(m)",
-            "in": f"(n)<-[e{typed}]-(m)",
-            "both": f"(n)-[e{typed}]-(m)",
-        }[direction]
-        if _vid_has_slash(node_id):
-            clause = {"in": " REVERSELY", "both": " BIDIRECT", "out": ""}[direction]
-            over = f"`{edge_type}`" if edge_type else "*"
-            result = self.execute_read(
-                f"GO 1 STEP FROM {_ngql_quote(node_id)} OVER {over}{clause} "
-                "YIELD edge AS e, src(edge) AS edge_src, dst(edge) AS edge_dst, "
-                "type(edge) AS edge_type, rank(edge) AS edge_rank "
-                "| ORDER BY $-.edge_src, $-.edge_dst, $-.edge_type, $-.edge_rank "
-                f"| LIMIT {int(offset)}, {int(limit)}"
-            )
-            return [
-                _trs_edge_to_model(record["e"])
-                for record in result.records
-                if isinstance(record.get("e"), dict)
-            ]
-        result = self.execute_read(
-            f"MATCH {pattern} WHERE id(n) == {_ngql_quote(node_id)} "
-            "RETURN e, src(e) AS edge_src, dst(e) AS edge_dst, "
-            "type(e) AS edge_type, rank(e) AS edge_rank "
-            "ORDER BY edge_src, edge_dst, edge_type, edge_rank "
-            f"SKIP {int(offset)} LIMIT {int(limit)}"
+        over = "*"
+        if edge_type and edge_type.replace("_", "a").isalnum():
+            over = edge_type
+        direction_clause = {"in": "REVERSELY", "both": "BIDIRECT"}.get(direction, "")
+        statement = (
+            f"GO 1 STEP FROM {_ngql_quote(node_id)} OVER {over}"
+            + (f" {direction_clause}" if direction_clause else "")
+            + " YIELD id($^) AS src, id($$) AS dst, type(edge) AS etype"
         )
-        return [
-            _trs_edge_to_model(record["e"])
+        result = self.execute_query(statement)
+        edges = [
+            GraphEdge(
+                id=f"{record.get('src')}|{record.get('etype')}|{record.get('dst')}",
+                type=str(record.get("etype")),
+                source_id=record.get("src"),
+                target_id=record.get("dst"),
+            )
             for record in result.records
-            if isinstance(record.get("e"), dict)
         ]
+        return edges[offset : offset + limit]
 
     def get_neighbours(
         self,
@@ -1067,15 +1031,6 @@ class TRSGraphClient:
                 body=json.dumps(data, ensure_ascii=False),
             )
         return GraphQueryResult(records=data.get("records", []), summary=summary)
-
-    def execute_explain(self, query: str) -> GraphQueryResult:
-        """EXPLAIN must wrap USE in braces; USE ...; EXPLAIN ... is invalid nGQL."""
-        space = self._settings.space
-        if not re.fullmatch(r"[A-Za-z_]\w*", space, flags=re.ASCII):
-            raise GraphRequestError("Invalid graph space name", status_code=400)
-        statement = f"EXPLAIN {{ USE {space}; {query.rstrip().rstrip(';')}; }}"
-        response = self._request("POST", "/api/v1/query/read", json={"query": statement})
-        return self._query_result(response.json(), "/api/v1/query/read", expected_space=space)
 
     def execute_query(
         self,

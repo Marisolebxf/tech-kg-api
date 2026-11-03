@@ -49,19 +49,24 @@ def test_stable_edge_pages_preserve_rank_properties_and_do_not_repeat():
     client.close()
 
 
-def test_preparing_index_never_issues_partial_lookup(monkeypatch):
-    monkeypatch.setattr("infra.graph_db.index_maintenance.request_indexes", lambda *a: False)
+def test_missing_index_is_confirmed_before_preparing(monkeypatch):
+    monkeypatch.setenv("TRS_GRAPH_AUTO_INDEX_ENABLED", "true")
+    schedule = MagicMock(return_value=False)
+    monkeypatch.setattr("infra.graph_db.index_maintenance.request_indexes", schedule)
     calls = []
 
     def handler(request):
         calls.append(request.url.path)
-        return httpx.Response(200, json={"status": "UP"})
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "UP"})
+        return httpx.Response(400, json={"error": "There is no index to use at runtime"})
 
     client = TRSGraphClient(TRSGraphSettings(), transport=httpx.MockTransport(handler))
     client.connect()
     with pytest.raises(GraphIndexPreparing):
         client.find_nodes(["Person"], {"school": "A"})
-    assert calls == ["/health"]
+    assert calls == ["/health", "/api/v1/nodes/find"]
+    schedule.assert_called_once_with(client._settings, "Person", ["school"], observed_missing=True)
     client.close()
 
 

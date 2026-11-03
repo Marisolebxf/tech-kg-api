@@ -2081,3 +2081,101 @@ class TestKeywordNodes:
             repo.keyword_nodes_by_label("Paper", "论文")
         assert len(queries) == 1
         repo.close()
+
+
+@pytest.mark.parametrize("operation", ["browse", "find"])
+@pytest.mark.parametrize("maintenance_state", [None, "failed", "building"])
+def test_existing_index_queries_do_not_consult_maintenance(
+    monkeypatch, operation, maintenance_state
+):
+    """Missing/expired/failed Redis state must never block a usable physical index."""
+    from unittest.mock import MagicMock
+
+    from infra.graph_db import index_maintenance as maintenance
+
+    monkeypatch.setenv("TRS_GRAPH_AUTO_INDEX_ENABLED", "true")
+    store = MagicMock()
+    store.get.return_value = (
+        json.dumps({"status": maintenance_state}) if maintenance_state else None
+    )
+    redis = MagicMock(return_value=store)
+    monkeypatch.setattr(maintenance, "_redis", redis)
+    repo = _make_repo(_health_ok)
+    try:
+        if operation == "browse":
+            repo.execute_read = MagicMock(return_value=GraphQueryResult(records=[]))
+            assert repo.paged_nodes_by_label("Person") == []
+        else:
+            repo._request = MagicMock(return_value=httpx.Response(200, json={"items": []}))
+            assert repo.find_nodes(["Person"], {"name": "Alice"}).items == []
+        redis.assert_not_called()
+    finally:
+        repo.close()
+
+
+@pytest.mark.parametrize("operation", ["browse", "find"])
+def test_confirmed_missing_index_schedules_maintenance(monkeypatch, operation):
+    from unittest.mock import MagicMock
+
+    from infra.graph_db import index_maintenance as maintenance
+    from infra.graph_db.exceptions import GraphIndexPreparing
+
+    monkeypatch.setenv("TRS_GRAPH_AUTO_INDEX_ENABLED", "true")
+    request = MagicMock(return_value=False)
+    monkeypatch.setattr(maintenance, "request_indexes", request)
+    repo = _make_repo(_health_ok)
+    missing = GraphRequestError("There is no index to use at runtime", status_code=400)
+    try:
+        if operation == "browse":
+            repo.execute_read = MagicMock(side_effect=missing)
+
+            def call():
+                return repo.paged_nodes_by_label("Person")
+
+            fields = []
+        else:
+            repo._request = MagicMock(side_effect=missing)
+
+            def call():
+                return repo.find_nodes(["Person"], {"name": "Alice"})
+
+            fields = ["name"]
+        with pytest.raises(GraphIndexPreparing):
+            call()
+        request.assert_called_once_with(repo._settings, "Person", fields, observed_missing=True)
+    finally:
+        repo.close()
+
+
+@pytest.mark.parametrize("operation", ["browse", "find"])
+@pytest.mark.parametrize(
+    "message,status", [("query timeout", 504), ("SyntaxError", 400), ("service unavailable", 503)]
+)
+def test_unrelated_query_errors_never_trigger_maintenance(monkeypatch, operation, message, status):
+    from unittest.mock import MagicMock
+
+    from infra.graph_db import index_maintenance as maintenance
+
+    monkeypatch.setenv("TRS_GRAPH_AUTO_INDEX_ENABLED", "true")
+    request = MagicMock()
+    monkeypatch.setattr(maintenance, "request_indexes", request)
+    repo = _make_repo(_health_ok)
+    error = GraphRequestError(message, status_code=status)
+    try:
+        if operation == "browse":
+            repo.execute_read = MagicMock(side_effect=error)
+
+            def call():
+                return repo.paged_nodes_by_label("Person")
+        else:
+            repo._request = MagicMock(side_effect=error)
+
+            def call():
+                return repo.find_nodes(["Person"], {"name": "Alice"})
+
+        with pytest.raises(GraphRequestError) as caught:
+            call()
+        assert caught.value is error
+        request.assert_not_called()
+    finally:
+        repo.close()

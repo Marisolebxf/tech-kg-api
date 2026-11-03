@@ -6312,7 +6312,10 @@ function clearGraphSelection() {
   overflow: auto;
 }
 
-.result-panel__table div {
+/* 行容器只匹配 dl 的直接子 div：后代选择器会命中 dd 内嵌套的
+   ClearableInput wrapper（如关系标注输入框），把 display:grid /
+   flex:0 0 auto 强写到输入框上，导致确认按钮被顶出面板右缘。 */
+.result-panel__table > div {
   position: relative;
   flex: 0 0 auto;
   display: grid;
@@ -6830,7 +6833,7 @@ function clearGraphSelection() {
   background: #fff;
 }
 
-.result-panel__table div {
+.result-panel__table > div {
   position: relative;
   display: grid;
   grid-template-columns: var(--result-label-column-width) minmax(0, 1fr);
@@ -6840,7 +6843,7 @@ function clearGraphSelection() {
   border-bottom: 1px solid #e5e6eb;
 }
 
-.result-panel__table div:last-child {
+.result-panel__table > div:last-child {
   border-bottom: 0;
 }
 

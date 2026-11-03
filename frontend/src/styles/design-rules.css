@@ -710,7 +710,9 @@ body {
   background: #f7f8fa;
 }
 
-.app-workspace .result-panel__table div {
+/* 行容器只匹配直接子 div（dl 的行）；后代 div（如 dd 内的关系标注输入框）
+   不得被强写 grid/flex/min-height，否则控件被顶出面板。 */
+.app-workspace .result-panel__table > div {
   grid-template-columns: 96px minmax(0, 1fr);
   min-height: 40px;
 }
@@ -1083,7 +1085,7 @@ body {
     margin-top: 12px !important;
   }
 
-  .app-workspace .business-service .result-panel__table div {
+  .app-workspace .business-service .result-panel__table > div {
     grid-template-columns: 104px minmax(0, 1fr);
     min-height: 44px;
   }
@@ -1263,7 +1265,7 @@ body {
   line-height: 22px;
 }
 
-.app-workspace .business-service .result-panel__table div {
+.app-workspace .business-service .result-panel__table > div {
   min-height: 40px;
 }
 
@@ -1538,13 +1540,13 @@ body {
   background: transparent;
 }
 
-.app-workspace .business-service .result-panel__table div {
+.app-workspace .business-service .result-panel__table > div {
   grid-template-columns: 136px minmax(0, 1fr);
   flex: 0 0 auto;
   min-height: 40px;
 }
 
-.app-workspace .business-service .result-panel__table div:last-child {
+.app-workspace .business-service .result-panel__table > div:last-child {
   border-bottom: 0;
 }
 

@@ -57,7 +57,9 @@ def _save(store: Any, key: str, data: dict, ttl: int) -> None:
     store.set(PREFIX + "job:" + key, json.dumps(data, ensure_ascii=False), ex=ttl)
 
 
-def request_indexes(settings: Any, label: str, fields: list[str]) -> bool:
+def request_indexes(
+    settings: Any, label: str, fields: list[str], *, observed_missing: bool = False
+) -> bool:
     """True: ready/disabled; False: queued/building. Existing SQL permissions are unchanged."""
     if not enabled():
         return True
@@ -73,12 +75,17 @@ def request_indexes(settings: Any, label: str, fields: list[str]) -> bool:
         data = json.loads(raw) if raw else None
         if data:
             if data["status"] == "ready":
-                return True
-            if data["status"] == "failed":
+                if not observed_missing:
+                    return True
+                # A real query proved the cached readiness stale. Preserve queued /
+                # building reservations so concurrent missing-index reads coalesce.
+                store.delete(PREFIX + "job:" + key)
+            elif data["status"] == "failed":
                 raise GraphRequestError(
                     "图索引维护失败，请稍后重试：" + data.get("error", ""), status_code=503
                 )
-            return False
+            else:
+                return False
         with _pending_lock:
             if key in _pending:
                 return False

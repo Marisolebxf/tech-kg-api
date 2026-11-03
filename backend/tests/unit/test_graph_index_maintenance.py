@@ -200,3 +200,23 @@ def test_redis_outage_does_not_allow_reading_an_unverified_index(monkeypatch):
     with pytest.raises(GraphRequestError) as error:
         maintenance.request_indexes(TRSGraphSettings(), "Person", ["school"])
     assert error.value.status_code == 503
+
+
+def test_confirmed_missing_index_replaces_stale_ready_but_coalesces_building(monkeypatch):
+    monkeypatch.setenv("TRS_GRAPH_AUTO_INDEX_ENABLED", "true")
+    store, executor = Store(), SimpleNamespace(submit=MagicMock())
+    monkeypatch.setattr(maintenance, "_redis", lambda: store)
+    monkeypatch.setattr(maintenance, "_executor", executor)
+    monkeypatch.setattr(maintenance, "_pending", set())
+    settings = TRSGraphSettings(base_url="http://graph", space="test")
+    key = maintenance.PREFIX + "job:" + maintenance._identity(settings, "Person", ())
+    store.set(key, json.dumps({"status": "ready"}))
+    assert not maintenance.request_indexes(settings, "Person", [], observed_missing=True)
+    assert json.loads(store.get(key))["status"] == "queued"
+    assert executor.submit.call_count == 1
+    # A second worker observing the same error must reuse the reservation.
+    monkeypatch.setattr(maintenance, "_pending", set())
+    assert not maintenance.request_indexes(settings, "Person", [], observed_missing=True)
+    store.set(key, json.dumps({"status": "building"}))
+    assert not maintenance.request_indexes(settings, "Person", [], observed_missing=True)
+    assert executor.submit.call_count == 1

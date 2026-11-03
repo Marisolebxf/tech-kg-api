@@ -453,24 +453,32 @@ class TRSGraphClient:
     def paged_nodes_by_label(
         self, label: str, *, limit: int = 100, offset: int = 0
     ) -> list[GraphNode]:
-        """按标签分页取节点：LOOKUP 索引枚举优先，无标签索引回退 MATCH 全扫。
+        """先执行 LOOKUP；仅确认缺少索引时才安排维护。
+
+        Redis 维护记录不代表物理索引是否可用，不参与正常查询的准入。
 
         MATCH (v:`Label`) SKIP/LIMIT 即便标签有索引也不走（实测 dev2 DataSource
         39 行 2.7s，高负载 30s 超时拖垮实体列表），LOOKUP 走标签索引 0.07s；
         无索引标签 LOOKUP 立即 400 "There is no index to use"（快速失败不扫描），
-        回退 MATCH 慢但正确——补建标签索引后自动切回快路径。
+        开启自动维护时提交索引任务；关闭自动维护时才回退 MATCH 全扫。
         REST /api/v1/nodes/label/{label} 在 trs-graph 侧附带全量总数计算，
         大标签（如 Paper 十万级）30s+ 超时（2026-09-21 实测 limit=2 也挂）；
         总数需求另走 label_count()，不要为此恢复 REST 分页端点。
         """
         if not _TAG_IDENTIFIER.fullmatch(label or ""):
             raise GraphRequestError(f"非法节点标签: {label!r}", status_code=400)
-        self.ensure_tag_indexes(label)
         try:
             result = self.execute_read(
                 f"LOOKUP ON `{label}` YIELD vertex AS v | LIMIT {int(limit)} OFFSET {int(offset)}"
             )
         except GraphRequestError as exc:
+            if not is_no_index_error(exc):
+                raise
+            from infra.graph_db.index_maintenance import enabled
+
+            if enabled():
+                self.ensure_tag_indexes(label, observed_missing=True)
+                raise
             logger.warning("LOOKUP 分页无索引（label=%s），回退 MATCH 全扫: %s", label, exc)
             result = self.execute_read(
                 f"MATCH (v:`{label}`) RETURN v SKIP {int(offset)} LIMIT {int(limit)}"
@@ -665,11 +673,15 @@ class TRSGraphClient:
         """SHOW STATS 的全标签计数（stats_snapshot 的 tags 部分，副本）。"""
         return dict(self.stats_snapshot()["tags"])
 
-    def ensure_tag_indexes(self, label: str, fields: Sequence[str] = ()) -> None:
+    def ensure_tag_indexes(
+        self, label: str, fields: Sequence[str] = (), *, observed_missing: bool = False
+    ) -> None:
         from infra.graph_db.exceptions import GraphIndexPreparing
         from infra.graph_db.index_maintenance import request_indexes
 
-        if not request_indexes(self._settings, label, list(fields)):
+        if not request_indexes(
+            self._settings, label, list(fields), observed_missing=observed_missing
+        ):
             raise GraphIndexPreparing(label)
 
     def find_nodes(
@@ -680,8 +692,6 @@ class TRSGraphClient:
         limit: int = 100,
         offset: int = 0,
     ) -> GraphPagedResult:
-        if labels:
-            self.ensure_tag_indexes(labels[0], list(properties))
         body = {
             "labels": labels if labels else ["Vertex"],
             "properties": properties,
@@ -692,9 +702,10 @@ class TRSGraphClient:
             resp = self._request("POST", "/api/v1/nodes/find", json=body)
         except GraphRequestError as exc:
             if labels and is_no_index_error(exc):
-                from infra.graph_db.index_maintenance import invalidate
+                from infra.graph_db.index_maintenance import enabled
 
-                invalidate(self._settings, labels[0], list(properties))
+                if enabled():
+                    self.ensure_tag_indexes(labels[0], list(properties), observed_missing=True)
             raise
         data = resp.json()
         items = [_trs_node_to_model(n) for n in data.get("items", [])]

@@ -5,34 +5,12 @@
     <link rel="icon" type="image/png" href="%BASE_URL%logo-kg.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>亿级科技知识图谱引擎</title>
-    <style>
-      .kg-page-loading{position:fixed;inset:0;z-index:1000;box-sizing:border-box;padding:24px;background:#f5f7fb;color:#1d2129;font:14px/1.6 Arial,"Microsoft YaHei",sans-serif;overflow:auto}
-      .kg-page-loading[hidden],.kg-page-loading [hidden]{display:none!important}
-      .kg-loading-card{box-sizing:border-box;max-width:1200px;min-height:300px;margin:0 auto;padding:28px;background:#fff;border:1px solid #e5e8ef;border-radius:8px}
-      .kg-loading-card h1{margin:0 0 8px;font-size:20px}.kg-loading-card p{margin:0 0 24px;color:#65758e}
-      .kg-loading-skeleton{display:grid;gap:18px}.kg-loading-line{height:16px;width:70%;border-radius:4px;background:#edf1f7}.kg-loading-line:first-child{width:35%;height:24px}.kg-loading-line:last-child{width:90%;height:120px}
-      .kg-page-loading[data-state=error] .kg-loading-skeleton{display:none}
-      .kg-loading-card button{padding:9px 18px;border:0;border-radius:4px;background:#165dff;color:#fff;font:inherit;cursor:pointer}.kg-loading-card button:focus-visible{outline:3px solid #94baff;outline-offset:3px}
-      @media(max-width:767px){.kg-page-loading{padding:12px}.kg-loading-card{padding:20px}}
-    </style>
-    <!-- 在应用 CSS/模块之前安装观察器；骨架 DOM 就位即释放门户遮罩。 -->
-    <script src="%BASE_URL%startup-shell.v1.js"></script>
+    <!-- 运行时配置：由容器启动脚本生成（构建一次、部署期注入）；
+         非容器环境无此文件（404），前端回落 import.meta.env 构建期值 -->
+    <script src="%BASE_URL%runtime-config.js"></script>
   </head>
   <body>
     <div id="app"></div>
-    <section id="kg-page-loading" class="kg-page-loading" role="status" aria-live="polite" aria-busy="true" data-state="loading">
-      <div class="kg-loading-card">
-        <h1 id="kg-loading-title">正在加载页面</h1>
-        <p id="kg-loading-message">正在准备业务页面，请稍候。</p>
-        <div class="kg-loading-skeleton" aria-hidden="true">
-          <div class="kg-loading-line"></div><div class="kg-loading-line"></div><div class="kg-loading-line"></div>
-        </div>
-        <button id="kg-loading-retry" type="button" hidden>重新加载</button>
-        <noscript>请启用 JavaScript 后重新加载页面。</noscript>
-      </div>
-    </section>
-    <!-- 非容器环境允许 runtime-config.js 缺失，前端会回落构建期配置。 -->
-    <script id="kg-runtime-config" src="%BASE_URL%runtime-config.js"></script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -126,20 +126,11 @@ export function usePortalIntegration() {
       void handlePortalLogout()
     })
     removeRouteHandler = portalBridge.on(PortalAction.ROUTE_CHANGE, (data) => {
-      void handlePortalRoute(data).catch(() => {
-        // The router's loading controller owns errors and ignores failures from superseded routes.
-        portalBridge.send(PortalAction.LOADING_HIDE)
-      })
+      void handlePortalRoute(data)
     })
     // main.ts 在初始路由完成前挂载应用；不能把首次路由解析当成本地导航覆盖门户深链。
-    portalBridge.send(PortalAction.LOADING_HIDE)
-    try {
-      await router.isReady()
-      await nextTick()
-    } catch {
-      if (!disposed) portalBridge.send(PortalAction.LOADING_HIDE)
-      return
-    }
+    await router.isReady()
+    await nextTick()
     if (disposed) return
     ready = true
     // ready 会触发门户下发深链，只在监听器就绪后发送一次，避免每次跳转都被旧深链拉回。

@@ -1,5 +1,5 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter, type LocationQuery } from 'vue-router'
 
 import { portalSource } from '../config'
 import { useAuthStore } from '../stores/auth'
@@ -17,6 +17,11 @@ function routeTitle(title: unknown): string {
   return typeof title === 'string' && title.trim()
     ? title.trim()
     : '亿级科技知识图谱引擎'
+}
+
+function sameQuery(left: LocationQuery, right: LocationQuery): boolean {
+  const entries = (query: LocationQuery) => Object.keys(query).sort().map((key) => [key, query[key]])
+  return JSON.stringify(entries(left)) === JSON.stringify(entries(right))
 }
 
 export function usePortalIntegration() {
@@ -72,11 +77,23 @@ export function usePortalIntegration() {
       ? data.subPath.trim()
       : portalMenuPath(code)
     if (!target || !target.startsWith('/') || target.startsWith('//') || target.includes('\\')) return
-    const resolved = router.resolve(target)
+    let resolved = router.resolve(target)
+    // 门户常只回传菜单路径。保留当前 iframe 嵌入上下文，避免同页回显再次执行守卫。
+    if (isEmbedded.value && !('embedded' in resolved.query)) {
+      resolved = router.resolve({
+        path: resolved.path,
+        query: { ...resolved.query, embedded: '1' },
+        hash: resolved.hash,
+      })
+    }
     // 仅接受本应用已注册且属于指定菜单的路由，身份限制仍由 router guard 执行。
     const targetCode = portalMenuCode(resolved.path)
     if (!resolved.matched.length || !targetCode || (code && targetCode !== code)) return
-    if (resolved.fullPath === route.fullPath) return
+    if (resolved.path === route.path && resolved.hash === route.hash
+      && sameQuery(resolved.query, route.query)) {
+      portalBridge.send(PortalAction.LOADING_HIDE)
+      return
+    }
     restoringPortalRoute += 1
     try {
       await router.replace(resolved.fullPath)

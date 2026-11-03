@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -21,6 +21,11 @@ class CamelCaseModel(BaseModel):
 class LoginUrlData(CamelCaseModel):
     url: str
     expires_in: int
+    mode: Literal["oauth", "portal"] = "oauth"
+
+
+class LoginConfigData(CamelCaseModel):
+    mode: Literal["oauth", "portal"]
 
 
 class UserProfile(CamelCaseModel):
@@ -127,6 +132,7 @@ class AuthProfile(CamelCaseModel):
     businesses: list[dict[str, str]] = Field(default_factory=list)
     platform_role: str = "user"
     can_develop: bool = False
+    developer_business_binding_required: bool = False
 
 
 class LogoutData(CamelCaseModel):
@@ -170,6 +176,10 @@ class OperationLogPage(CamelCaseModel):
 
 class LoginUrlResponse(ApiResponse):
     data: LoginUrlData
+
+
+class LoginConfigResponse(ApiResponse):
+    data: LoginConfigData
 
 
 class AuthProfileResponse(ApiResponse):

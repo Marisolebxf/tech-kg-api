@@ -3,12 +3,12 @@ import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { getCurrentProfile, type AuthProfile } from '../../api/auth'
+import { getCurrentProfile, getLoginConfig, getLoginUrl, type AuthProfile } from '../../api/auth'
 import { useAuthStore } from '../../stores/auth'
 import LoginView from './LoginView.vue'
 
 vi.mock('../../api/auth', () => ({
-  getCurrentProfile: vi.fn(), getLoginUrl: vi.fn(),
+  getCurrentProfile: vi.fn(), getLoginUrl: vi.fn(), getLoginConfig: vi.fn(),
   logoutCurrentSession: vi.fn(), refreshCurrentSession: vi.fn(),
 }))
 
@@ -16,7 +16,7 @@ const profile = { user: { id: 1 }, isAdmin: false, permissions: [] } as AuthProf
 const unauthorized = { response: { status: 401 } }
 let wrapper: VueWrapper | undefined
 
-async function setup(initialProfile: AuthProfile | null = null, error?: string) {
+async function setup(initialProfile: AuthProfile | null = null, error?: string, redirect?: string) {
   const pinia = createPinia()
   setActivePinia(pinia)
   if (initialProfile) vi.mocked(getCurrentProfile).mockResolvedValue(initialProfile)
@@ -26,9 +26,10 @@ async function setup(initialProfile: AuthProfile | null = null, error?: string) 
     routes: [
       { path: '/login', name: 'login', component: LoginView },
       { path: '/overview', name: 'overview', component: {} },
+      { path: '/schema', name: 'schema', component: {} },
     ],
   })
-  await router.push({ path: '/login', query: error ? { error } : {} })
+  await router.push({ path: '/login', query: { ...(error ? { error } : {}), ...(redirect ? { redirect } : {}) } })
   wrapper = mount(LoginView, { global: { plugins: [pinia, router] } })
   await flushPromises()
   const store = useAuthStore()
@@ -36,8 +37,11 @@ async function setup(initialProfile: AuthProfile | null = null, error?: string) 
   return { router, store, startLogin, button: wrapper.find('button') }
 }
 
-beforeEach(() => vi.resetAllMocks())
-afterEach(() => { wrapper?.unmount(); wrapper = undefined })
+beforeEach(() => {
+  vi.resetAllMocks()
+  vi.mocked(getLoginConfig).mockResolvedValue({ mode: 'oauth' })
+})
+afterEach(() => { wrapper?.unmount(); wrapper = undefined; vi.restoreAllMocks() })
 
 describe('login navigation recovery', () => {
   it('hides the legacy session-expired query feedback while explicit login still works', async () => {
@@ -117,5 +121,104 @@ describe('login navigation recovery', () => {
     await flushPromises()
     expect(getCurrentProfile).toHaveBeenCalledTimes(1)
     expect(startLogin).toHaveBeenCalledExactlyOnceWith('/overview')
+  })
+})
+
+describe('portal login page', () => {
+  it('enters with a server-confirmed identity without requiring popup permission', async () => {
+    vi.mocked(getLoginConfig).mockResolvedValue({ mode: 'portal' })
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    const { router, button, startLogin } = await setup(profile, undefined, '/schema?tab=entities#details')
+    await button.trigger('click')
+    await flushPromises()
+    expect(getCurrentProfile).toHaveBeenCalledTimes(2)
+    expect(router.currentRoute.value.fullPath).toBe('/schema?tab=entities#details')
+    expect(open).not.toHaveBeenCalled()
+    expect(getLoginUrl).not.toHaveBeenCalled()
+    expect(startLogin).not.toHaveBeenCalled()
+  })
+
+  it('requires a fresh click to open the popup when the mounted identity has expired', async () => {
+    vi.mocked(getLoginConfig).mockResolvedValue({ mode: 'portal' })
+    vi.mocked(getLoginUrl).mockResolvedValue({ mode: 'portal', url: '/portal/', expiresIn: 0 })
+    const popup = { close: vi.fn(), location: { replace: vi.fn() }, closed: false }
+    const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
+    const { router, button } = await setup(profile)
+    vi.mocked(getCurrentProfile).mockRejectedValue(unauthorized)
+    await button.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.name).toBe('login')
+    expect(open).not.toHaveBeenCalled()
+    expect(wrapper!.get('[role="alert"]').text()).toContain('再次点击')
+    expect(button.attributes('disabled')).toBeUndefined()
+    const click = button.trigger('click')
+    expect(open).toHaveBeenCalledOnce()
+    await click
+    await flushPromises()
+    expect(popup.location.replace).toHaveBeenCalled()
+    expect(wrapper!.find('[role="alert"]').exists()).toBe(false)
+  })
+
+  it('keeps the login action usable if authenticated portal navigation is cancelled', async () => {
+    vi.mocked(getLoginConfig).mockResolvedValue({ mode: 'portal' })
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    const { router, button } = await setup(profile)
+    router.beforeEach(to => to.name === 'overview' ? false : true)
+    await button.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.name).toBe('login')
+    expect(button.attributes('disabled')).toBeUndefined()
+    expect(wrapper!.get('[role="alert"]').text()).toContain('重试')
+    expect(open).not.toHaveBeenCalled()
+  })
+
+  it('reports server failure instead of navigating with a stale portal identity', async () => {
+    vi.mocked(getLoginConfig).mockResolvedValue({ mode: 'portal' })
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    const { router, button } = await setup(profile)
+    vi.mocked(getCurrentProfile).mockRejectedValueOnce(new Error('offline'))
+    await button.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.name).toBe('login')
+    expect(button.attributes('disabled')).toBeUndefined()
+    expect(wrapper!.get('[role="alert"]').text()).toContain('登录服务暂时不可用')
+    expect(open).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['/schema?tab=entities#details', '/schema?tab=entities#details'],
+    ['//untrusted.example/path', '/overview'],
+  ])('keeps the parent and returns to the safe original route: %s', async (redirect, expected) => {
+    vi.mocked(getLoginConfig).mockResolvedValue({ mode: 'portal' })
+    vi.mocked(getLoginUrl).mockResolvedValue({ mode: 'portal', url: '/portal/', expiresIn: 0 })
+    const popup = { close: vi.fn(), location: { replace: vi.fn() }, closed: false }
+    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
+    const { router, button, startLogin } = await setup(null, undefined, redirect)
+    await button.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.name).toBe('login')
+    expect(wrapper!.get('[role="status"]').text()).toContain('新窗口')
+    expect(startLogin).not.toHaveBeenCalled()
+    vi.mocked(getCurrentProfile).mockResolvedValue(profile)
+    window.dispatchEvent(new Event('focus'))
+    await flushPromises()
+    expect(router.currentRoute.value.fullPath).toBe(expected)
+    expect(popup.close).toHaveBeenCalled()
+  })
+
+  it('allows cancellation without disabling the cancel action during a profile check', async () => {
+    vi.mocked(getLoginConfig).mockResolvedValue({ mode: 'portal' })
+    vi.mocked(getLoginUrl).mockResolvedValue({ mode: 'portal', url: '/portal/', expiresIn: 0 })
+    const popup = { close: vi.fn(), location: { replace: vi.fn() }, closed: false }
+    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
+    const { button, router } = await setup()
+    await button.trigger('click')
+    await flushPromises()
+    const cancel = wrapper!.findAll('button').find(item => item.text() === '取消等待')!
+    expect(cancel.attributes('disabled')).toBeUndefined()
+    await cancel.trigger('click')
+    expect(wrapper!.find('[role="status"]').exists()).toBe(false)
+    expect(router.currentRoute.value.name).toBe('login')
+    expect(popup.close).toHaveBeenCalled()
   })
 })

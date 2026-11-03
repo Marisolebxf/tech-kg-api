@@ -28,9 +28,11 @@ class UserCenterClient:
         settings: AuthSettings,
         *,
         transport: httpx.AsyncBaseTransport | None = None,
+        sync_transport: httpx.BaseTransport | None = None,
     ) -> None:
         self.settings = settings
         self._transport = transport
+        self._sync_transport = sync_transport
 
     def build_login_url(self, state: str) -> str:
         self.settings.require_oauth_credentials()
@@ -91,6 +93,18 @@ class UserCenterClient:
 
     async def get_user_by_token(self, access_token: str) -> dict[str, Any]:
         """v2.4 2.5：服务端获取原官网角色，业务参数不参与签名。"""
+        result = await self._request(
+            "POST",
+            "/user/get-by-token",
+            base_url=self.settings.user_center_open_api_base_url
+            or f"{self.settings.user_center_base_url.split('/admin-api/', 1)[0]}/open-api/system",
+            json_body=self._signed_body(token=access_token),
+        )
+        if not isinstance(result, dict):
+            raise UserCenterError("统一用户中心未返回有效的门户用户信息")
+        return result
+
+    def _signed_body(self, **business_params: Any) -> dict[str, Any]:
         public_params = {
             "clientId": self.settings.client_id,
             "timestamp": int(time.time() * 1000),
@@ -102,16 +116,45 @@ class UserCenterClient:
             payload.encode("utf-8"),
             hashlib.sha256,
         ).hexdigest()
-        result = await self._request(
-            "POST",
-            "/user/get-by-token",
-            base_url=self.settings.user_center_open_api_base_url
-            or f"{self.settings.user_center_base_url.split('/admin-api/', 1)[0]}/open-api/system",
-            json_body={**public_params, "signature": signature, "token": access_token},
-        )
-        if not isinstance(result, dict):
-            raise UserCenterError("统一用户中心未返回有效的门户用户信息")
-        return result
+        return {**public_params, "signature": signature, **business_params}
+
+    def role_user_ids(self, role_code: str) -> frozenset[str]:
+        """v2.5.1 §2.7：后端签名查询授权成员，供无浏览器令牌的 worker 同步校验。"""
+        try:
+            self.settings.require_oauth_credentials()
+        except ValueError as exc:
+            raise UserCenterError(str(exc), status_code=503) from exc
+        try:
+            with httpx.Client(
+                base_url=self.settings.user_center_open_api_base_url
+                or f"{self.settings.user_center_base_url.split('/admin-api/', 1)[0]}/open-api/system",
+                auth=httpx.BasicAuth(self.settings.client_id, self.settings.client_secret),
+                timeout=15,
+                transport=self._sync_transport,
+            ) as client:
+                response = client.post(
+                    "/permission/role-user", json=self._signed_body(roleCode=role_code)
+                )
+        except httpx.HTTPError as exc:
+            raise UserCenterError("统一用户中心暂时不可用") from exc
+        result = self._response_data(response)
+        if (
+            not isinstance(result, dict)
+            or result.get("roleCode") != role_code
+            or not isinstance(result.get("users"), list)
+        ):
+            raise UserCenterError("统一用户中心未返回匹配角色的授权用户集合")
+        users = set()
+        for user in result["users"]:
+            if not isinstance(user, dict) or type(user.get("userId")) not in (int, str):
+                raise UserCenterError("统一用户中心返回的授权用户编号无效")
+            if (
+                type(user.get("status")) is int
+                and user["status"] == 0
+                and str(user["userId"]).strip()
+            ):
+                users.add(str(user["userId"]))
+        return frozenset(users)
 
     async def _request(
         self,
@@ -144,6 +187,10 @@ class UserCenterClient:
         except httpx.HTTPError as exc:
             raise UserCenterError("统一用户中心暂时不可用") from exc
 
+        return self._response_data(response)
+
+    @staticmethod
+    def _response_data(response: httpx.Response) -> Any:
         try:
             payload = response.json()
         except ValueError as exc:

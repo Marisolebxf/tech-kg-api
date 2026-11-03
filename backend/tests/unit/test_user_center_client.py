@@ -5,9 +5,63 @@ from dataclasses import replace
 from urllib.parse import parse_qs, urlparse
 
 import httpx
+import pytest
 
 from config.auth import AuthSettings
 from infra.user_center import UserCenterClient, UserCenterError
+
+
+def test_role_user_directory_is_signed_and_accepts_active_members_across_orgs():
+    def handle(request):
+        assert request.url.path == "/uc/open-api/system/permission/role-user"
+        assert request.headers["authorization"].startswith("Basic ")
+        body = json.loads(request.content)
+        assert body["roleCode"] == "bkg_developer"
+        assert "token" not in body
+        public = {key: body[key] for key in ("clientId", "nonce", "timestamp")}
+        signed = "&".join(f"{key}={public[key]}" for key in sorted(public))
+        assert (
+            body["signature"]
+            == hmac.new(b"top-secret", signed.encode(), hashlib.sha256).hexdigest()
+        )
+        return httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "data": {
+                    "roleCode": "bkg_developer",
+                    "users": [
+                        {"userId": 213, "status": 0, "orgId": None},
+                        {"userId": 232, "status": 1, "orgId": None},
+                        {"userId": 184, "status": 0, "orgId": 3},
+                        {"userId": 999, "status": False, "orgId": None},
+                    ],
+                },
+            },
+        )
+
+    client = UserCenterClient(_settings(), sync_transport=httpx.MockTransport(handle))
+    assert client.role_user_ids("bkg_developer") == frozenset({"213", "184"})
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        None,
+        {"roleCode": "other", "users": []},
+        {"roleCode": "bkg_developer", "users": None},
+        {"roleCode": "bkg_developer", "users": [{"userId": True, "status": 0}]},
+    ],
+)
+def test_invalid_role_directory_fails_closed(data):
+    client = UserCenterClient(
+        _settings(),
+        sync_transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"code": 0, "data": data})
+        ),
+    )
+    with pytest.raises(UserCenterError):
+        client.role_user_ids("bkg_developer")
 
 
 def _settings() -> AuthSettings:

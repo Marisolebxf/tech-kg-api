@@ -25,6 +25,7 @@ from service.platform_access import PlatformActor
 
 @pytest.fixture
 def database(monkeypatch):
+    monkeypatch.setattr("service.graph_space.GraphSpaceService._all_spaces", lambda self: [])
     monkeypatch.setenv("BUSINESS_RBAC_ENABLED", "true")
     engine = create_engine(
         "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
@@ -44,6 +45,12 @@ def database(monkeypatch):
         ],
     )
     migration.migrate(engine, apply=True)
+    from sqlalchemy.orm import sessionmaker
+
+    from infra.workflow_mysql import workflow_mysql_client
+
+    monkeypatch.setattr(workflow_mysql_client, "_engine", engine)
+    monkeypatch.setattr(workflow_mysql_client, "_session_factory", sessionmaker(engine))
 
     @contextmanager
     def scope():
@@ -219,7 +226,7 @@ def test_public_task_read_does_not_require_creator_business_but_write_is_denied(
         )
 
 
-def test_admin_business_directory_and_unassigned_space_are_explicit(database, monkeypatch):
+def test_discovered_space_defaults_public_for_admin_and_developer(database, monkeypatch):
     from service.graph_space import GraphSpaceService
 
     admin = PlatformActor("admin", "admin", "Admin", "", True)
@@ -228,8 +235,17 @@ def test_admin_business_directory_and_unassigned_space_are_explicit(database, mo
     )
     assert [item["clientId"] for item in acl.business_summaries(admin)] == ["a", "b"]
     assert all(item["groupKind"] in {"public", "business"} for item in acl.space_items(admin))
-    assert "unknown" not in {item["name"] for item in acl.space_items(admin)}
-    assert "unknown" not in acl.allowed_space_names(developer())
+    for current_actor in (
+        admin,
+        developer(),
+        PlatformActor("reader", "reader", "Reader", "", False),
+    ):
+        item = next(item for item in acl.space_items(current_actor) if item["name"] == "unknown")
+        assert item["groupKind"] == "public"
+        assert item["isSharedProduction"] is True
+        assert item["clientId"] is None
+        assert item["writeAllowed"] is current_actor.is_admin
+        assert "unknown" in acl.allowed_space_names(current_actor)
 
 
 def test_configuration_reassignment_requires_valid_business_but_preserves_unchanged_legacy_owner(
@@ -311,3 +327,89 @@ def test_source_binding_without_request_header_still_uses_schema_business(databa
     with pytest.raises(HTTPException) as error:
         schema_management.replace_schema_sources("schema-a", developer(), None, payload)
     assert error.value.status_code == 403
+
+
+@pytest.mark.parametrize("kind", ["legacy", "business", "unassigned"])
+def test_discovery_never_overrides_sql_ownership(database, monkeypatch, kind):
+    from service.graph_space import GraphSpaceService
+
+    _, scope = database
+    monkeypatch.setattr(GraphSpaceService, "_all_spaces", lambda self: ["b_space"])
+    with scope() as session:
+        if kind != "legacy":
+            session.add(
+                BusinessSpacePolicy(
+                    space_name="b_space",
+                    visibility=kind,
+                    client_id="b" if kind == "business" else None,
+                )
+            )
+        session.flush()
+        row = acl.space_registration(session, "b_space")
+        assert not row.is_shared_production
+        assert row.client_id == (None if kind == "unassigned" else "b")
+    assert "b_space" not in acl.allowed_space_names(developer())
+    with pytest.raises(HTTPException):
+        acl.ensure_space_access(developer(), "b_space", "read")
+
+
+def test_discovered_public_uses_public_permissions_and_leaves_sql_unchanged(database, monkeypatch):
+    from service.graph_space import GraphSpaceService
+
+    _, scope = database
+    existing = ["imported"]
+    monkeypatch.setattr(GraphSpaceService, "_all_spaces", lambda self: existing)
+    reader = PlatformActor("reader", "reader", "Reader", "", False)
+    limited = replace(reader, business_only=True)
+    for current_actor in (reader, limited, developer()):
+        acl.ensure_space_access(current_actor, "imported", "read")
+        for action in ("write", "review"):
+            with pytest.raises(HTTPException):
+                acl.ensure_space_access(current_actor, "imported", action)
+    acl.ensure_space_access(developer(), "imported", "review_view")
+    for name in ("missing", "invalid;space"):
+        with pytest.raises(HTTPException):
+            acl.ensure_space_access(reader, name, "read")
+    with scope() as session:
+        assert session.get(BusinessGraphSpace, "imported") is None
+        assert session.get(BusinessSpacePolicy, "imported") is None
+    # Discovery is tied to the current graph's real spaces, not a permanent SQL grant.
+    existing.clear()
+    assert "imported" not in acl.allowed_space_names(reader)
+    with pytest.raises(HTTPException):
+        acl.ensure_space_access(reader, "imported", "read")
+
+
+def test_discovered_public_respects_personal_hiding(database, monkeypatch):
+    from service.graph_space import GraphSpaceService
+
+    _, scope = database
+    monkeypatch.setattr(GraphSpaceService, "_all_spaces", lambda self: ["imported"])
+    with scope() as session:
+        session.add(UserGraphSpaceHidden(user_id="dev", space_name="imported"))
+    item = acl.space_items(developer())[0]
+    assert item["name"] == "imported"
+    assert item["groupKind"] == "public"
+    assert not item["mine"]
+    with scope() as session:
+        assert GraphSpaceService(session).list_work_spaces_for_actor(developer()) == []
+
+
+def test_management_state_reports_discovered_space_as_public(database, monkeypatch):
+    from types import SimpleNamespace
+
+    from biz.handler import business_access as api
+    from db_model.business_access import BusinessSpaceRequest
+    from service.graph_space import GraphSpaceService
+
+    engine, scope = database
+    BusinessSpaceRequest.__table__.create(engine)
+    monkeypatch.setattr(GraphSpaceService, "_all_spaces", lambda self: ["imported", "b_space"])
+    monkeypatch.setattr(api, "list_members", lambda *args, **kwargs: [])
+    application = SimpleNamespace(settings=SimpleNamespace(initial_admin_user_ids=()))
+    admin = PlatformActor("admin", "admin", "Admin", "", True)
+    with scope() as session:
+        payload = api.state(admin, session, application).data
+    item = next(item for item in payload["spaces"] if item["name"] == "imported")
+    assert item["isSharedProduction"] is True
+    assert item["clientId"] is None

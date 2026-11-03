@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { currentSessionVersion, invalidateSessionVersion } from "../auth/sessionVersion";
 import { useGraphSpaceStore } from "./graphSpace";
+import { useToast } from "../composables/use-toast";
 
 import {
   getCurrentProfile,
@@ -30,10 +31,12 @@ export const useAuthStore = defineStore("auth", {
   state: () => ({
     profile: null as AuthProfile | null,
     initialized: false,
+    profileLoadedAt: null as number | null,
     loading: false,
     loggingOut: false,
     skipSilentLogin: false,
     sessionExpired: false,
+    bindingNoticeUserId: "",
   }),
   getters: {
     isAuthenticated: (state) => state.profile !== null,
@@ -50,29 +53,54 @@ export const useAuthStore = defineStore("auth", {
     isAdmin: (state) => Boolean(state.profile?.isAdmin) && !state.profile?.businessOnly,
   },
   actions: {
+    notifyBusinessBinding(profile: AuthProfile): void {
+      if (
+        !profile.developerBusinessBindingRequired ||
+        profile.isAdmin || profile.businessOnly || profile.canDevelop
+      ) {
+        this.bindingNoticeUserId = "";
+        return;
+      }
+      const userId = String(profile.user.id);
+      if (this.bindingNoticeUserId === userId) return;
+      this.bindingNoticeUserId = userId;
+      useToast().showToast(
+        "您已获得门户开发人员身份，但尚未绑定可开发的业务，请联系管理员为您绑定业务。",
+        "warning",
+      );
+    },
     invalidate(expired = false): void {
       invalidateSessionVersion();
       profileLoads.delete(this);
       this.profile = null;
+      this.profileLoadedAt = null;
       this.initialized = true;
       this.loading = false;
       this.sessionExpired = expired;
+      this.bindingNoticeUserId = "";
       useGraphSpaceStore().reset();
     },
-    async loadCurrentUser(force = false): Promise<AuthProfile | null> {
+    /** 普通导航可短时复用已确认的身份；主动登录/管理页仍可强制向后端核验。 */
+    async loadCurrentUser(force = false, maxAgeMs = Infinity): Promise<AuthProfile | null> {
       if (this.loggingOut || this.skipSilentLogin) return null;
-      if (this.initialized && !force) return this.profile;
       const version = currentSessionVersion();
       const pending = profileLoads.get(this);
       if (pending?.version === version) return pending.promise;
+      if (this.initialized && !force && (
+        maxAgeMs === Infinity ||
+        (this.profile !== null && this.profileLoadedAt !== null &&
+          Date.now() - this.profileLoadedAt < maxAgeMs)
+      )) return this.profile;
       this.loading = true;
       const promise = (async () => {
         try {
           const profile = await getCurrentProfile();
           if (version !== currentSessionVersion()) return null;
           this.profile = profile;
+          this.profileLoadedAt = Date.now();
           this.sessionExpired = false;
           useGraphSpaceStore().bindUser(String(profile.user?.id ?? ""));
+          this.notifyBusinessBinding(profile);
           return profile;
         } catch (error) {
           if (version !== currentSessionVersion()) return null;
@@ -97,13 +125,26 @@ export const useAuthStore = defineStore("auth", {
       if (version !== currentSessionVersion()) return;
       window.location.assign(result.url);
     },
+    async preparePortalLogin(next = "/overview"): Promise<string | null> {
+      const version = currentSessionVersion();
+      const result = await getLoginUrl(next);
+      if (version !== currentSessionVersion()) return null;
+      if (result.mode !== "portal") {
+        throw new Error("登录方式已更新，请刷新页面后重试");
+      }
+      // 仅用户主动开始登录后恢复共享 Cookie 检查，预加载不能撤销退出状态。
+      this.skipSilentLogin = false;
+      return result.url;
+    },
     async refresh(): Promise<AuthProfile | null> {
       const version = currentSessionVersion();
       const profile = await refreshCurrentSession();
       if (version !== currentSessionVersion()) return null;
       this.profile = profile;
+      this.profileLoadedAt = Date.now();
       this.sessionExpired = false;
       useGraphSpaceStore().bindUser(String(profile.user?.id ?? ""));
+      this.notifyBusinessBinding(profile);
       this.initialized = true;
       return profile;
     },

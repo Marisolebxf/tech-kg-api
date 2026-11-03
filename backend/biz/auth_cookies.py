@@ -31,7 +31,10 @@ class AuthSessionMiddleware:
                 if path.startswith("/api/v1/auth/"):
                     headers["Cache-Control"] = "no-store"
                 pending = scope.get("state", {}).get("auth_session_cookie")
-                if pending is not None and message["status"] < 400:
+                # 只要本请求认证成功就续发会话 Cookie，不看响应状态码：
+                # 门户兑换出的新会话若只在 2xx 下发，业务接口一旦 409/5xx 就吞掉
+                # Set-Cookie，浏览器丢失会话后反复静默重建（2026-10-27 排查）。
+                if pending is not None:
                     settings, session_id = pending
                     cookie_response = Response()
                     set_session_cookie(cookie_response, settings, session_id)

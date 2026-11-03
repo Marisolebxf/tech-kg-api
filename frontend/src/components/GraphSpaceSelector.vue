@@ -32,11 +32,11 @@ onMounted(() => {
 
 // 换号后空间可见集变化：重拉列表并归一当前值（越权访问另有后端 403 防线）
 watch(
-  () => [authStore.profile?.user?.id, authStore.profile?.businessIds?.join(','), authStore.profile?.platformRole, authStore.profile?.businessRbacEnabled].join('|'),
+  () => graphSpaceStore.authorizationKey,
   () => {
     if (!authStore.profile) return
     graphSpaceStore.bindUser(String(authStore.profile.user?.id ?? ''))
-    void graphSpaceStore.ensureLoaded(true)
+    void graphSpaceStore.ensureLoaded()
   },
 )
 </script>

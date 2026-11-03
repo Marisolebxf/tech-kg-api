@@ -2590,12 +2590,6 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
         : summary.overlapDuration || "—";
     const relationConfidence =
       summary.relationConfidence ?? primary?.confidence;
-    // 实际发出的查询窗口：空结果时用户需要看到页面用了哪个时间段。
-    const colleagueReq = ((liveApiPayload.value as Record<string, any>)?.request ??
-      {}) as Record<string, string>;
-    const colleagueWindow = colleagueReq.start_time || colleagueReq.end_time
-      ? `${colleagueReq.start_time || "最早"} 至 ${colleagueReq.end_time || "最新"}`
-      : "未限定（全部时间段）";
     return [
       { label: "专家 A", value: summary.coreExpert || "—" },
       { label: "核心专家机构", value: summary.coreExpertOrganization || "—" },
@@ -2627,12 +2621,6 @@ const liveSummaryRows = computed((): ServiceSummaryRow[] | null => {
       {
         label: "关系判定",
         value: data.total ? "存在同事关系" : "不存在同事关系",
-      },
-      {
-        label: "查询时间窗口",
-        value: data.total
-          ? colleagueWindow
-          : `${colleagueWindow}（窗口内无共事记录，请核对起止月份）`,
       },
     ];
   }
@@ -3296,7 +3284,8 @@ function computePanoramaSummaryRows(
   // 实际渲染的节点（与画布同一个 derivedGraphFromResponse）按 entityType
   // 分组统计，首项取该分类在画布上的第一个节点；后端 layer.total 是命中
   // 总数（受 topK 限制画布未必全部渲染），不作为页面展示口径。
-  const canvasNodes = derivedGraphFromResponse(resp).nodes;
+  const canvasGraph = derivedGraphFromResponse(resp);
+  const canvasNodes = canvasGraph.nodes;
   const canvasLabel = (entityType: string) => {
     const nodes = canvasNodes.filter((node) => node.entityType === entityType);
     if (!nodes.length) return "0项";
@@ -3336,10 +3325,12 @@ function computePanoramaSummaryRows(
         ? compactSummaryText(coreSegment.items[0].label)
         : "—",
     ],
-    // 核心节点/关联关系/数据流向此前无覆盖、恒显示静态演示文案——改用
-    // 后端真实汇总值（节点/边总数、命中产业链串联），未命中时占位。
+    // 核心节点/数据流向此前无覆盖、恒显示静态演示文案——改用后端真实汇总值
+    // （节点总数、命中产业链串联），未命中时占位。关联关系改用画布口径：画布
+    // 实际渲染的连线数（真实图库边 + 分层展示连线）；后端 totalEdges 是子图
+    // 全量边数，含两端节点都未上画布的边，画布上根本看不到，不再作为展示口径。
     ["核心节点", `${resp.summary.totalNodes} 个`],
-    ["关联关系", `${resp.summary.totalEdges} 条`],
+    ["关联关系", `${canvasGraph.edges.length} 条`],
     ["数据流向", chainLabels.length ? chainLabels.join(" → ") : "—"],
     ["关键技术", canvasLabel("技术主题")],
     ["重点企业", canvasLabel("企业")],

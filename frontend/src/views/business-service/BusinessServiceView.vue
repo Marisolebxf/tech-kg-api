@@ -1,13 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { computed, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 
 import BusinessServiceAlgorithmPanel from "./components/BusinessServiceAlgorithmPanel.vue";
 import BusinessServiceContractPanel from "./components/BusinessServiceContractPanel.vue";
 import { getServiceModule, serviceModules } from "./service-modules";
 
 const route = useRoute();
-const router = useRouter();
 const activeView = ref<"test" | "developer">("test");
 const selectedModuleKey = ref(String(route.name ?? "expert-direct"));
 const viewOrder = ["test", "developer"] as const;
@@ -30,15 +29,6 @@ function handleViewTabKeydown(event: KeyboardEvent) {
     document.getElementById(`business-view-tab-`)?.focus();
   });
 }
-
-onMounted(() => {
-  const navigation = performance.getEntriesByType("navigation")[0] as
-    | PerformanceNavigationTiming
-    | undefined;
-  if (navigation?.type === "reload" && route.name !== "expert-direct") {
-    void router.replace({ name: "expert-direct" });
-  }
-});
 
 const moduleInfo = computed(() =>
   getServiceModule(

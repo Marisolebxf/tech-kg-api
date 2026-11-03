@@ -36,7 +36,24 @@ function persistSpace(userId: string, space: string): void {
   }
 }
 
-const pendingLoads = new WeakMap<object, { generation: number; promise: Promise<void> }>()
+// 只比较影响空间授权的字段，避免每次 /me 返回新对象都误判为权限变更。
+function authorizationKey(): string {
+  const profile = useAuthStore().profile
+  return JSON.stringify([
+    profile?.user?.id, profile?.isAdmin, profile?.canDevelop, profile?.businessOnly,
+    profile?.businessRbacEnabled, profile?.platformRole, profile?.businessId,
+    [...(profile?.businessIds ?? [])].sort(),
+    [...(profile?.developerBusinessIds ?? [])].sort(),
+    [...(profile?.permissions ?? [])].sort(),
+    [...(profile?.platformRoles ?? [])].sort(),
+    [...(profile?.platformPermissions ?? [])].sort(),
+    (profile?.businesses ?? []).map(({ clientId, role }) => [clientId, role]).sort(),
+  ])
+}
+
+const pendingLoads = new WeakMap<object, {
+  generation: number; scope: string; promise: Promise<void>
+}>()
 
 /** 当前空间只能从服务端授权列表选择，持久化记录仅作为列表加载后的候选。 */
 export const useGraphSpaceStore = defineStore('graphSpace', {
@@ -50,9 +67,12 @@ export const useGraphSpaceStore = defineStore('graphSpace', {
     loading: false,
     loadError: false,
     initialized: false,
+    loadedAt: null as number | null,
+    loadedScope: '',
     generation: 0,
   }),
   getters: {
+    authorizationKey: (): string => authorizationKey(),
     currentItem: (state) => state.items.find((item) => item.name === state.current),
     businesses() { return useAuthStore().profile?.businesses ?? [] },
     businessId(): string {
@@ -103,13 +123,17 @@ export const useGraphSpaceStore = defineStore('graphSpace', {
       this.selectedBusinessId = ''
       this.current = ''
       this.initialized = false
+      this.loadedAt = null
+      this.loadedScope = ''
       this.loading = false
       this.loadError = false
     },
-    async ensureLoaded(force = false): Promise<void> {
+    async ensureLoaded(force = false, maxAgeMs = Infinity): Promise<void> {
+      const scope = this.authorizationKey
       const pending = pendingLoads.get(this)
-      if (pending && !force) return pending.promise
-      if (this.initialized && !force) return
+      if (pending?.scope === scope && !force) return pending.promise
+      if (this.initialized && this.loadedScope === scope && !force &&
+        (maxAgeMs === Infinity || (this.loadedAt !== null && Date.now() - this.loadedAt < maxAgeMs))) return
       const generation = ++this.generation
       const userId = this.userId
       this.loading = true
@@ -118,13 +142,15 @@ export const useGraphSpaceStore = defineStore('graphSpace', {
         try {
           // http 拦截器已解包为 ApiResponse（运行时），axios 泛型声明与运行时不同，故做一次窄化断言
           const payload = (await listGraphSpaces()) as unknown as { data?: { spaces?: string[]; items?: GraphSpaceItem[] } }
-          if (this.generation !== generation || this.userId !== userId) return
+          if (this.generation !== generation || this.userId !== userId || this.authorizationKey !== scope) return
           this.spaces = payload.data?.spaces ?? []
           this.items = payload.data?.items ?? this.spaces.map((name) => ({ name, bound: false, mine: false }))
           this._normalizeCurrent()
           this.initialized = true
+          this.loadedAt = Date.now()
+          this.loadedScope = scope
         } catch {
-          if (this.generation !== generation || this.userId !== userId) return
+          if (this.generation !== generation || this.userId !== userId || this.authorizationKey !== scope) return
           this.loadError = true
           this.initialized = false
           this.spaces = []
@@ -135,7 +161,7 @@ export const useGraphSpaceStore = defineStore('graphSpace', {
           if (pendingLoads.get(this)?.generation === generation) pendingLoads.delete(this)
         }
       })()
-      pendingLoads.set(this, { generation, promise })
+      pendingLoads.set(this, { generation, scope, promise })
       return promise
     },
     setCurrent(space: string): void {

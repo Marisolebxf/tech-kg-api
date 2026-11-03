@@ -37,6 +37,7 @@ def actor(role="user", business="a", business_only=False):
 
 @pytest.fixture
 def business_db(monkeypatch):
+    monkeypatch.setattr("service.graph_space.GraphSpaceService._all_spaces", lambda self: [])
     monkeypatch.setenv("BUSINESS_RBAC_ENABLED", "true")
     engine = create_engine(
         "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}

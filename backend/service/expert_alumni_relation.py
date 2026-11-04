@@ -128,6 +128,11 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
 
         graph = self._client()
         source = self._require_node(graph, expert_id, "专家")
+        if getattr(graph, "vid_alias_enabled", False) is True:
+            expert_id = str(source.id)
+            if target_expert_id:
+                target_node = self._require_node(graph, target_expert_id, "专家")
+                target_expert_id = str(target_node.id)
         source_edus = self._parse_educations(getattr(source, "properties", None) or {})
         target_profile: dict[str, Any] | None = None
         truncated = False
@@ -454,6 +459,10 @@ class ExpertAlumniRelationService(KGModuleScaffoldService):
                 except GraphNotFoundError:
                     node = None
                 if node is None:
+                    continue
+                if getattr(graph, "vid_alias_enabled", False) is True:
+                    vid = str(node.id)
+                if vid in seen:
                     continue
                 seen.add(vid)
                 out.append((vid, node))

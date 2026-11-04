@@ -112,7 +112,7 @@ def test_get_business_space_client_reads_override_context(monkeypatch):
     monkeypatch.setattr(graph_db, "_space_clients", {})
     monkeypatch.setattr(
         graph_db,
-        "TRSGraphClient",
+        "_new_client",
         lambda settings: SimpleNamespace(_settings=settings, connect=lambda: None),
     )
     space_token = selected_graph_space.set("test1012")

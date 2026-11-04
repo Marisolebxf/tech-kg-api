@@ -172,6 +172,8 @@ def persist_entity_confidence(client: Any, vid: str, tag: str, value: float) -> 
 
     # memo 按实际取数空间记（含 X-Business-Graph-Space 覆盖）：client 连接指向哪
     # 个空间，ALTER 就落在哪个空间，跨空间复用 memo 会漏 ALTER 反复失败。
+    if getattr(client, "vid_alias_enabled", False) is True:
+        vid = client.attribute_vid(vid, tag)
     alter_key = (effective_graph_space(), tag)
     query = f"UPDATE VERTEX ON `{tag}` {_ngql_vid(vid)} SET `{tag}`.`confidence` = {value:.4f};"
     try:

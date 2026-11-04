@@ -475,6 +475,13 @@ async def search_typed_paths(body: TypedPathSearchRequest, actor: CurrentActor) 
     try:
         client = _get_client(body.space)
 
+        if getattr(client, "vid_alias_enabled", False) is True:
+            async with graph_exec_slot():
+                data = await asyncio.to_thread(client.typed_paths, body)
+            if data is None:
+                return ApiResponse(code=404, success=False, msg=f"节点不存在: {body.sourceId}")
+            return ApiResponse(data=data)
+
         # TRSGraphClient 底层是同步 httpx.Client，直接在 async handler 里调用会
         # 冻结整个事件循环（论文合作经进程内 ASGI 回环翻页调用本端点，冻结期间
         # 该 worker 上所有请求与并发任务全部退化为串行）。三步打包进一次
@@ -508,6 +515,8 @@ async def search_typed_paths(body: TypedPathSearchRequest, actor: CurrentActor) 
         return ApiResponse(data=data.model_dump())
     except GraphExecOverloaded as exc:
         return _graph_overloaded(exc)
+    except GraphRequestError as exc:
+        return ApiResponse(code=exc.status_code, success=False, msg=str(exc))
     except Exception:
         return _graph_query_error("search_typed_paths")
 
@@ -569,6 +578,7 @@ def _collect_subgraph(
             return None
         center = GraphNode(id=node_id, labels=[], properties={})
 
+    node_id = str(center.id)
     nodes: list[GraphNodeData] = [_node_to_data(center)]
     edges: list[GraphEdgeData] = []
     seen_edge_ids: set[str] = set()
@@ -717,6 +727,7 @@ def _collect_filtered_subgraph(
     if center is None:
         return None
 
+    node_id = str(center.id)
     nodes: list[GraphNodeData] = [_node_to_data(center)]
     edges: list[GraphEdgeData] = []
     seen_edge_ids: set[str] = set()

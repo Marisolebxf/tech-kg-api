@@ -127,6 +127,11 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
         source = self._require_node(graph, source_expert_id, "专家")
         target = self._require_node(graph, target_expert_id, "专家")
 
+        if getattr(graph, "vid_alias_enabled", False) is True:
+            source_expert_id = str(source.id)
+            target_expert_id = str(target.id)
+            if source_expert_id == target_expert_id:
+                raise ValueError("两个 ID 对应同一专家")
         type_filter = set(achievement_types or ["paper", "patent", "project"])
         src_edges = self._collect_achievement_edges(graph, source_expert_id)
         tgt_edges = self._collect_achievement_edges(graph, target_expert_id)

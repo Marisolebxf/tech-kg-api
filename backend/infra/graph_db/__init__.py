@@ -67,6 +67,12 @@ __all__ = [
     "GraphRequestError",
 ]
 
+def _new_client(settings: TRSGraphSettings) -> TRSGraphClient:
+    from infra.graph_db.vid_alias import make_graph_client
+
+    return make_graph_client(settings)
+
+
 _client: TRSGraphClient | None = None
 _client_lock = threading.Lock()
 
@@ -97,7 +103,7 @@ def get_trs_graph_client() -> TRSGraphClient:
     with _client_lock:
         if _client is not None:
             return _client
-        repo = TRSGraphClient(TRSGraphSettings.from_env())
+        repo = _new_client(TRSGraphSettings.from_env())
         repo.connect()  # may raise; only cache on success
         _client = repo
     return _client
@@ -156,7 +162,7 @@ def get_space_client(space: str) -> TRSGraphClient:
             return _space_clients[space]
         settings = TRSGraphSettings.from_env()
         settings.space = space
-        client = TRSGraphClient(settings)
+        client = _new_client(settings)
         client.connect()
         _space_clients[space] = client
         return client
@@ -181,7 +187,7 @@ def get_business_space_client(request_space: str | None) -> TRSGraphClient | Non
         cached = _space_clients.get(key)
         if cached is not None:
             return cached
-        client = TRSGraphClient(settings)
+        client = _new_client(settings)
         client.connect()  # may raise; only cache on success
         _space_clients[key] = client
         return client

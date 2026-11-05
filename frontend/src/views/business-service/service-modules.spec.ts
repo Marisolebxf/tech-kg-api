@@ -3,6 +3,13 @@ import { describe, expect, it } from 'vitest'
 import { serviceModules } from './service-modules'
 
 describe('serviceModules', () => {
+  it('requires both experts for alumni queries', () => {
+    const module = serviceModules.find((item) => item.key === 'expert-alumni')
+    for (const name of ['expertId', 'targetExpertId']) {
+      expect(module?.requestFields.find((field) => field.name === name)?.required).toBe('是')
+    }
+  })
+
   it.each([
     ['expert-direct', ['taskName', 'input', 'total', 'items', 'graph', 'source', 'provenance', 'apiResultExample']],
     ['node-indirect', ['structuredResult', 'provenance', 'rules']],

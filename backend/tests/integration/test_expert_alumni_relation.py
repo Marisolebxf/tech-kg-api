@@ -65,7 +65,7 @@ async def test_query_alumni_relation_accepts_limit_boundaries(async_client, monk
     monkeypatch.setattr(handler.application, "query", _query)
     resp = await async_client.post(
         "/api/v1/kg-construction/expert-alumni-relations/query",
-        json={"expertId": "S1", "limit": limit},
+        json={"expertId": "S1", "targetExpertId": "S2", "limit": limit},
     )
 
     assert resp.status_code == 200
@@ -77,7 +77,7 @@ async def test_query_alumni_relation_accepts_limit_boundaries(async_client, monk
 async def test_query_alumni_relation_rejects_invalid_limit(async_client, limit):
     resp = await async_client.post(
         "/api/v1/kg-construction/expert-alumni-relations/query",
-        json={"expertId": "S1", "limit": limit},
+        json={"expertId": "S1", "targetExpertId": "S2", "limit": limit},
     )
 
     assert resp.status_code == 200
@@ -92,7 +92,7 @@ async def test_query_alumni_relation_not_found(async_client, monkeypatch):
     monkeypatch.setattr(handler.application, "query", _raise)
     resp = await async_client.post(
         "/api/v1/kg-construction/expert-alumni-relations/query",
-        json={"expertId": "S404"},
+        json={"expertId": "S404", "targetExpertId": "S2"},
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -133,7 +133,7 @@ async def test_query_alumni_relation_rejects_invalid_expert_ids(
 async def test_query_alumni_relation_rejects_invalid_school(async_client, value, message):
     resp = await async_client.post(
         "/api/v1/kg-construction/expert-alumni-relations/query",
-        json={"expertId": "S1", "school": value},
+        json={"expertId": "S1", "targetExpertId": "S2", "school": value},
     )
     assert resp.status_code == 200
     body = resp.json()

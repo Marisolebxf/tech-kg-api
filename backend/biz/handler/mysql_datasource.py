@@ -132,7 +132,10 @@ def create_mysql_datasource(
     )
 
 
-@router.put("/{datasource_id}", response_model=ApiResponse)
+@router.post("/{datasource_id}/update", response_model=ApiResponse)
+@router.put(
+    "/{datasource_id}", response_model=ApiResponse, deprecated=True, include_in_schema=False
+)
 def update_mysql_datasource(
     datasource_id: str,
     payload: MysqlDatasourceUpdate,
@@ -153,7 +156,10 @@ def update_mysql_datasource(
     )
 
 
-@router.delete("/{datasource_id}", response_model=ApiResponse)
+@router.post("/{datasource_id}/delete", response_model=ApiResponse)
+@router.delete(
+    "/{datasource_id}", response_model=ApiResponse, deprecated=True, include_in_schema=False
+)
 def delete_mysql_datasource(
     datasource_id: str,
     actor: CurrentActor,

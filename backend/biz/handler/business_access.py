@@ -171,7 +171,8 @@ def state(actor: CurrentMaintainer, session: Db, application: AuthApplicationDep
     )
 
 
-@router.put("/businesses/{client_id}")
+@router.post("/businesses/{client_id}/update")
+@router.put("/businesses/{client_id}", deprecated=True, include_in_schema=False)
 def save_business(client_id: str, payload: BusinessPayload, actor: CurrentAdmin, session: Db):
     import re
 
@@ -187,7 +188,8 @@ def save_business(client_id: str, payload: BusinessPayload, actor: CurrentAdmin,
     return ApiResponse(data={"clientId": client_id})
 
 
-@router.put("/members/{user_id}")
+@router.post("/members/{user_id}/update")
+@router.put("/members/{user_id}", deprecated=True, include_in_schema=False)
 def save_member(
     user_id: str,
     payload: MemberPayload,
@@ -237,7 +239,8 @@ def save_member(
     return ApiResponse(data={"userId": user_id})
 
 
-@router.put("/spaces/{space_name}")
+@router.post("/spaces/{space_name}/update")
+@router.put("/spaces/{space_name}", deprecated=True, include_in_schema=False)
 def save_space(space_name: str, payload: SpacePayload, actor: CurrentAdmin, session: Db):
     import re
 
@@ -408,6 +411,19 @@ def retry_request(request_id: str, actor: CurrentAdmin, session: Db):
 
 # 仅挂载配置管理需要的归属接口；旧空间申请审批接口仍需单独显式挂载。
 management_router.add_api_route("/state", state, methods=["GET"])
-management_router.add_api_route("/businesses/{client_id}", save_business, methods=["PUT"])
-management_router.add_api_route("/members/{user_id}", save_member, methods=["PUT"])
-management_router.add_api_route("/spaces/{space_name}", save_space, methods=["PUT"])
+management_router.add_api_route("/businesses/{client_id}/update", save_business, methods=["POST"])
+management_router.add_api_route(
+    "/businesses/{client_id}",
+    save_business,
+    methods=["PUT"],
+    deprecated=True,
+    include_in_schema=False,
+)
+management_router.add_api_route("/members/{user_id}/update", save_member, methods=["POST"])
+management_router.add_api_route(
+    "/members/{user_id}", save_member, methods=["PUT"], deprecated=True, include_in_schema=False
+)
+management_router.add_api_route("/spaces/{space_name}/update", save_space, methods=["POST"])
+management_router.add_api_route(
+    "/spaces/{space_name}", save_space, methods=["PUT"], deprecated=True, include_in_schema=False
+)

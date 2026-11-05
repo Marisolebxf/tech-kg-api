@@ -67,7 +67,8 @@ def create_milvus_config(
     return ApiResponse(data=result, msg="Milvus 配置已创建")
 
 
-@router.put("/{config_id}", response_model=ApiResponse)
+@router.post("/{config_id}/update", response_model=ApiResponse)
+@router.put("/{config_id}", response_model=ApiResponse, deprecated=True, include_in_schema=False)
 def update_milvus_config(
     config_id: str,
     payload: MilvusConfigUpdate,
@@ -87,7 +88,8 @@ def update_milvus_config(
     return ApiResponse(data=updated, msg="Milvus 配置已更新")
 
 
-@router.delete("/{config_id}", response_model=ApiResponse)
+@router.post("/{config_id}/delete", response_model=ApiResponse)
+@router.delete("/{config_id}", response_model=ApiResponse, deprecated=True, include_in_schema=False)
 def delete_milvus_config(
     config_id: str,
     actor: CurrentActor,

@@ -80,13 +80,13 @@ export async function updateMilvusConfig(
   userId = currentUserId(),
 ): Promise<MilvusConfig> {
   return unwrap(
-    await asApiPromise<MilvusConfig>(http.put(`${PREFIX}/${id}`, payload, { headers: headers(userId) })),
+    await asApiPromise<MilvusConfig>(http.post(`${PREFIX}/${id}/update`, payload, { headers: headers(userId) })),
   )
 }
 
 export async function deleteMilvusConfig(id: string, userId = currentUserId()): Promise<void> {
   await unwrap(
-    await asApiPromise<{ deleted: boolean }>(http.delete(`${PREFIX}/${id}`, { headers: headers(userId) })),
+    await asApiPromise<{ deleted: boolean }>(http.post(`${PREFIX}/${id}/delete`, {}, { headers: headers(userId) })),
   )
 }
 

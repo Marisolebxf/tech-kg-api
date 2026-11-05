@@ -158,7 +158,8 @@ async def get_update_policy(actor: CurrentActor) -> ApiResponse:
     return ApiResponse(data=service.repo.get_setting(key))
 
 
-@router.put("/update-policy")
+@router.post("/update-policy")
+@router.put("/update-policy", deprecated=True, include_in_schema=False)
 async def save_update_policy(request: UpdatePolicyRequest, actor: CurrentActor) -> ApiResponse:
     _require_global_admin(actor)
     payload = request.model_dump()

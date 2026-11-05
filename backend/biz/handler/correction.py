@@ -103,7 +103,8 @@ def get_correction(
         _raise_error(exc)
 
 
-@router.patch("/{correction_id}")
+@router.post("/{correction_id}/update")
+@router.patch("/{correction_id}", deprecated=True, include_in_schema=False)
 def update_correction(
     correction_id: str,
     request: CorrectionUpdateRequest,
@@ -125,7 +126,8 @@ def update_correction(
         _raise_error(exc)
 
 
-@router.delete("/{correction_id}")
+@router.post("/{correction_id}/delete")
+@router.delete("/{correction_id}", deprecated=True, include_in_schema=False)
 def cancel_correction(
     correction_id: str,
     actor: CurrentActor,

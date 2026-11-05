@@ -89,7 +89,7 @@ describe('请求空间隔离', () => {
   })
   it('同空间保存后刷新不丢弃响应', async () => {
     const adapter = async (config: InternalAxiosRequestConfig) => ({ data: { ok: true }, status: 200, statusText: 'OK', headers: new AxiosHeaders(), config })
-    await expect(http.put('/v1/configurations/llms/one', {}, { adapter })).resolves.toEqual({ ok: true })
+    await expect(http.post('/v1/llm-config/llm-configs/one/update', {}, { adapter })).resolves.toEqual({ ok: true })
     // 保存后重新确认相同空间并刷新列表，不构成上下文切换。
     useGraphSpaceStore().setCurrent('a')
     await expect(http.get('/v1/configurations/llms', { adapter })).resolves.toEqual({ ok: true })

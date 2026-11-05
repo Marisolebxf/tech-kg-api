@@ -37,9 +37,15 @@ def get_members(
     )
 
 
+@router.post(
+    "/{user_id}/admin/update",
+    responses={404: {"description": "请求的资源不存在"}, 409: {"description": "资源状态冲突"}},
+)
 @router.put(
     "/{user_id}/admin",
     responses={404: {"description": "请求的资源不存在"}, 409: {"description": "资源状态冲突"}},
+    deprecated=True,
+    include_in_schema=False,
 )
 def update_admin_role(
     user_id: str,

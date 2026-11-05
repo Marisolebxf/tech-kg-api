@@ -83,13 +83,13 @@ export async function updateEmbeddingConfig(
   userId = currentUserId(),
 ): Promise<EmbeddingConfig> {
   return unwrap(
-    await asApiPromise<EmbeddingConfig>(http.put(`${PREFIX}/${id}`, payload, { headers: headers(userId) })),
+    await asApiPromise<EmbeddingConfig>(http.post(`${PREFIX}/${id}/update`, payload, { headers: headers(userId) })),
   )
 }
 
 export async function deleteEmbeddingConfig(id: string, userId = currentUserId()): Promise<void> {
   await unwrap(
-    await asApiPromise<{ deleted: boolean }>(http.delete(`${PREFIX}/${id}`, { headers: headers(userId) })),
+    await asApiPromise<{ deleted: boolean }>(http.post(`${PREFIX}/${id}/delete`, {}, { headers: headers(userId) })),
   )
 }
 

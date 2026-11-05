@@ -243,7 +243,7 @@ export const serviceModules: ServiceModule[] = [
     moduleRequirement: '科技专家校友关系服务基于科技专家的教育背景数据，结合知识图谱中的院校信息与校友网络数据，运用教育经历匹配算法，识别并构建专家之间的校友关系。服务会对校友关系进行细分，记录校友关系的关联维度，同时关联校友之间的后续学术交流、合作互动等信息，为挖掘科技专家的教育背景关联与校友资源网络提供支持。',
     requestFields: [
       { name: 'expertId', type: 'string', required: '是', description: '请输入专家，如 person_9F9A0001' },
-      { name: 'targetExpertId', type: 'string', required: '否', description: '请输入目标专家，如 person_9F9A0004' },
+      { name: 'targetExpertId', type: 'string', required: '是', description: '请输入目标专家，如 person_9F9A0004' },
       { name: 'school', type: 'string', required: '否', description: '请输入院校，如清华大学' },
       { name: 'educationStage', type: 'string', required: '否', description: '教育阶段，可多选（如 博士、硕士），多选时以逗号拼接提交' },
       { name: 'limit', type: 'number', defaultValue: '20', required: '否', maxLength: 64, placeholder: '选填，1-50，默认 20', description: '返回校友关系数上限，1-50，默认 20，最多输入 64 个字符' },

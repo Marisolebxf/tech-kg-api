@@ -183,7 +183,7 @@ const modules: ServiceModule[] = [
     method: 'POST',
     requestFields: [
       { name: 'expertId', type: 'string', required: true, description: '源专家图节点 ID' },
-      { name: 'targetExpertId', type: 'string', required: false, description: '目标专家 ID；有则 pair，空则 list' },
+      { name: 'targetExpertId', type: 'string', required: true, description: '目标专家图节点 ID，必填' },
       { name: 'school', type: 'string', required: false, description: '院校关键词过滤' },
       { name: 'educationStage', type: 'string', required: false, description: '学历/教育阶段过滤' },
     ],

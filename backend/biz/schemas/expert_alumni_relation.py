@@ -19,8 +19,8 @@ class AlumniRelationQueryRequest(BaseModel):
     expertId: str = Field(
         ..., min_length=1, max_length=MAX_EXPERT_ID_LENGTH, description="源专家图节点 ID"
     )
-    targetExpertId: str | None = Field(
-        default=None, max_length=MAX_EXPERT_ID_LENGTH, description="目标专家 ID，有则双点判定"
+    targetExpertId: str = Field(
+        ..., min_length=1, max_length=MAX_EXPERT_ID_LENGTH, description="目标专家图节点 ID，必填"
     )
     school: str | None = Field(
         default=None, max_length=MAX_SCHOOL_LENGTH, description="院校关键词过滤"

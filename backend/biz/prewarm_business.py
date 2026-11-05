@@ -56,7 +56,7 @@ _PREWARM_CASES: list[tuple[str, dict]] = [
     ),
     (
         "/api/v1/kg-construction/expert-alumni-relations/query",
-        {"expertId": "4P566No1", "limit": 20},
+        {"expertId": "4P566No1", "targetExpertId": "d492835p", "limit": 20},
     ),
     (
         "/api/v1/kg-construction/expert-paper-cooperation-relations/structured-result",

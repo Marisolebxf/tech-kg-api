@@ -144,7 +144,7 @@ export interface AlumniQueryResult {
 
 export type AlumniQueryRequest = {
   expertId: string
-  targetExpertId?: string
+  targetExpertId: string
   school?: string
   educationStage?: string
   limit?: number

@@ -4152,16 +4152,18 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       const targetExpertIdRaw = parameterValues.value.targetExpertId ?? "";
       const schoolRaw = parameterValues.value.school ?? "";
       const expertId = expertIdRaw.trim();
-      if (!expertId) {
-        parameterErrors.value = { expertId: "请输入专家唯一标识" };
+      const targetExpertId = targetExpertIdRaw.trim();
+      if (!expertId || !targetExpertId) {
+        parameterErrors.value = {
+          ...(!expertId ? { expertId: "请输入专家唯一标识" } : {}),
+          ...(!targetExpertId ? { targetExpertId: "请输入目标专家唯一标识" } : {}),
+        };
         showToast("请完善必填项后再执行", "warning");
         return;
       }
       const alumniErrors: Record<string, string> = {};
       const sourceError = identifierError(expertIdRaw);
-      const targetError = targetExpertIdRaw
-        ? identifierError(targetExpertIdRaw)
-        : null;
+      const targetError = identifierError(targetExpertIdRaw);
       const institutionError = schoolError(schoolRaw);
       const limitError = numericInputRangeError(
         parameterValues.value.limit ?? "",
@@ -4182,7 +4184,7 @@ async function handleRun(runOptions: { refresh?: boolean } = {}) {
       const limit = limitValue ? Number(limitValue) : 20;
       const body = {
         expertId,
-        targetExpertId: optionalParam(targetExpertIdRaw),
+        targetExpertId,
         school: optionalParam(schoolRaw),
         educationStage: optionalParam(parameterValues.value.educationStage),
         limit,

@@ -26,6 +26,11 @@ PAPER_EDGE_TYPES = frozenset({"AUTHORED_BY"})
 PATENT_EDGE_TYPES = frozenset({"INVENTED_BY"})
 PROJECT_EDGE_TYPES = frozenset({"LEADS", "HAS_PARTICIPANT"})
 KEYWORD_EDGE_TYPE = "HAS_KEYWORD"
+KEYWORD_EDGE_TYPES = {
+    "paper": "HAS_KEYWORD_PAPER",
+    "patent": "HAS_KEYWORD_PATENT",
+    "project": "HAS_KEYWORD_PROJECT",
+}
 EDGE_LIMIT = 500
 KEYWORD_EDGE_LIMIT = 50
 
@@ -289,7 +294,7 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
         awards = self._extract_awards(props)
         title = self._pick_title(props, vid)
         time_value = self._pick_time(props)
-        fields = self._resolve_keyword_fields(graph, vid, props)
+        fields = self._resolve_keyword_fields(graph, vid, props, ach_type)
         entity_score = achievement_entity_confidence(
             ach_type,
             props,
@@ -339,47 +344,56 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
         }
 
     def _resolve_keyword_fields(
-        self, graph: TRSGraphClient, vid: str, props: dict[str, Any]
+        self, graph: TRSGraphClient, vid: str, props: dict[str, Any], ach_type: str
     ) -> list[str]:
-        """所属领域：优先 HAS_KEYWORD→Keyword；否则回退成果节点 keywords 等属性（专利双写）。"""
-        from_edges = self._fields_from_has_keyword(graph, vid)
+        """兼容按成果拆分及旧统一关键词边；无有效文字时回退成果节点属性。"""
+        from_edges = self._fields_from_keyword_edges(graph, vid, ach_type)
         if from_edges:
             return from_edges
         return self._pick_fields(props)
 
-    def _fields_from_has_keyword(self, graph: TRSGraphClient, vid: str) -> list[str]:
-        try:
-            edges = graph.get_node_edges(
-                vid,
-                direction="out",
-                edge_type=KEYWORD_EDGE_TYPE,
-                limit=KEYWORD_EDGE_LIMIT,
-            )
-        except GraphNotFoundError:
-            return []
-
+    def _fields_from_keyword_edges(
+        self, graph: TRSGraphClient, vid: str, ach_type: str
+    ) -> list[str]:
+        # edge_types() 在 infra 层按空间缓存。不存在的关系类型不能直接查询，
+        # 否则图服务返回 SemanticError，而不是可按空结果处理的 404。
+        available = set(graph.edge_types())
         seen: set[str] = set()
         out: list[str] = []
-        for edge in edges or []:
-            if str(getattr(edge, "type", "") or "") != KEYWORD_EDGE_TYPE:
-                continue
-            kid = self._neighbor_id(edge, vid)
-            if not kid:
+        for edge_type in (KEYWORD_EDGE_TYPES[ach_type], KEYWORD_EDGE_TYPE):
+            if edge_type not in available:
                 continue
             try:
-                knode = graph.get_node(kid)
+                edges = graph.get_node_edges(
+                    vid,
+                    direction="out",
+                    edge_type=edge_type,
+                    limit=KEYWORD_EDGE_LIMIT,
+                )
             except GraphNotFoundError:
-                knode = None
-            kprops = (getattr(knode, "properties", None) or {}) if knode else {}
-            label = (
-                self._as_keyword_label(kprops.get("keyword"))
-                or self._as_keyword_label(kprops.get("name_zh"))
-                or self._as_keyword_label(kprops.get("name"))
-            )
-            if not label or label in seen:
                 continue
-            seen.add(label)
-            out.append(label)
+            for edge in edges or []:
+                if str(getattr(edge, "type", "") or "") != edge_type:
+                    continue
+                kid = self._neighbor_id(edge, vid)
+                if not kid:
+                    continue
+                try:
+                    knode = graph.get_node(kid)
+                except GraphNotFoundError:
+                    knode = None
+                kprops = (getattr(knode, "properties", None) or {}) if knode else {}
+                label = (
+                    self._as_keyword_label(kprops.get("keyword"))
+                    or self._as_keyword_label(kprops.get("name_zh"))
+                    or self._as_keyword_label(kprops.get("name"))
+                )
+                if not label or label in seen:
+                    continue
+                seen.add(label)
+                out.append(label)
+                if len(out) >= KEYWORD_EDGE_LIMIT:
+                    return out
         return out
 
     @staticmethod
@@ -890,7 +904,8 @@ class ExpertCooperationAchievementService(KGModuleScaffoldService):
 
         evidence = [
             "按论文、专利、项目邻居求交汇总共同成果。",
-            "所属领域取自成果 HAS_KEYWORD→Keyword（专利无边时回退节点 keywords 属性）。",
+            "所属领域取自成果对应的 HAS_KEYWORD_PAPER/PATENT/PROJECT→Keyword，"
+            "兼容 HAS_KEYWORD；无有效关键词文字时回退成果节点属性。",
             f"规则归因：核心贡献={core}；合作模式={mode}。",
         ]
 

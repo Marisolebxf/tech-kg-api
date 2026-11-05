@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from infra.graph_db import GraphConnectionError
+from infra.graph_db import GraphConnectionError, GraphRequestError
 from service.expert_cooperation_achievement import ExpertCooperationAchievementService, clear_caches
 
 
@@ -34,6 +34,8 @@ def _edge(etype: str, source: str, target: str, props: dict | None = None):
 
 
 def _svc(graph) -> ExpertCooperationAchievementService:
+    if isinstance(graph, MagicMock):
+        graph.edge_types.return_value = ["HAS_KEYWORD"]
     svc = ExpertCooperationAchievementService()
     svc._client = MagicMock(return_value=graph)  # type: ignore[method-assign]
     return svc
@@ -543,3 +545,147 @@ def test_fields_fallback_to_node_keywords_when_no_has_keyword():
     assert resp["items"][0]["type"] == "patent"
     assert "知识图谱" in resp["items"][0]["fields"]
     assert "推理" in resp["items"][0]["fields"]
+
+
+class _SchemaGraph:
+    """Read-only graph fixture that rejects absent edge types like the real service."""
+
+    vid_alias_enabled = False
+
+    def __init__(self, nodes, edges, edge_types):
+        self.nodes = nodes
+        self.edges = edges
+        self.schema = edge_types
+        self._settings = SimpleNamespace(space="kgcfg_8ab8b6d00")
+
+    def get_node(self, node_id):
+        return self.nodes.get(node_id)
+
+    def edge_types(self):
+        return list(self.schema)
+
+    def get_node_edges(self, node_id, *, direction="both", edge_type=None, limit=100):
+        if edge_type and edge_type not in self.schema:
+            raise GraphRequestError(
+                f"SemanticError: {edge_type} not found in space [kgcfg_8ab8b6d00].",
+                status_code=400,
+            )
+        return [
+            edge
+            for edge in self.edges
+            if (not edge_type or edge.type == edge_type)
+            and (edge.source_id == node_id or (direction == "both" and edge.target_id == node_id))
+        ][:limit]
+
+
+@pytest.mark.parametrize(
+    ("kind", "label", "achievement_edge", "keyword_edge", "count_key"),
+    [
+        ("paper", "Paper", "AUTHORED_BY", "HAS_KEYWORD_PAPER", "papers"),
+        ("patent", "Patent", "INVENTED_BY", "HAS_KEYWORD_PATENT", "patents"),
+        ("project", "Project", "HAS_PARTICIPANT", "HAS_KEYWORD_PROJECT", "projects"),
+    ],
+)
+def test_query_reads_split_keyword_relations(
+    kind, label, achievement_edge, keyword_edge, count_key
+):
+    nodes = {
+        "S1": _node("S1"),
+        "S2": _node("S2"),
+        "A1": _node("A1", {"title": "共同成果"}, labels=[label]),
+        "K1": _node("K1", {"keyword": "知识图谱"}, labels=["Keyword"]),
+    }
+    graph = _SchemaGraph(
+        nodes,
+        [
+            _edge(achievement_edge, "A1", "S1"),
+            _edge(achievement_edge, "A1", "S2"),
+            _edge(keyword_edge, "A1", "K1"),
+        ],
+        {achievement_edge, keyword_edge},
+    )
+
+    result = _svc(graph).query(source_expert_id="S1", target_expert_id="S2")
+
+    assert result["summary"][count_key] == 1
+    assert result["items"][0]["type"] == kind
+    assert result["items"][0]["fields"] == ["知识图谱"]
+
+
+def test_query_keeps_achievements_when_keyword_schema_is_absent():
+    nodes = {
+        "S1": _node("S1"),
+        "S2": _node("S2"),
+        "A1": _node("A1", {"keywords": "节点领域"}, labels=["Paper"]),
+    }
+    graph = _SchemaGraph(
+        nodes,
+        [_edge("AUTHORED_BY", "A1", "S1"), _edge("AUTHORED_BY", "A1", "S2")],
+        {"AUTHORED_BY"},
+    )
+
+    result = _svc(graph).query(source_expert_id="S1", target_expert_id="S2")
+
+    assert result["summary"]["papers"] == 1
+    assert result["items"][0]["fields"] == ["节点领域"]
+
+
+def test_query_combines_legacy_and_split_keyword_labels_without_duplicates():
+    nodes = {
+        "S1": _node("S1"),
+        "S2": _node("S2"),
+        "A1": _node("A1", labels=["Paper"]),
+        "K1": _node("K1", {"keyword": "共享领域"}, labels=["Keyword"]),
+        "K2": _node("K2", {"keyword": "旧领域"}, labels=["Keyword"]),
+        "K3": _node("K3", {"keyword": "新领域"}, labels=["Keyword"]),
+    }
+    graph = _SchemaGraph(
+        nodes,
+        [
+            _edge("AUTHORED_BY", "A1", "S1"),
+            _edge("AUTHORED_BY", "A1", "S2"),
+            _edge("HAS_KEYWORD_PAPER", "A1", "K1"),
+            _edge("HAS_KEYWORD_PAPER", "A1", "K3"),
+            _edge("HAS_KEYWORD", "A1", "K1"),
+            _edge("HAS_KEYWORD", "A1", "K2"),
+        ],
+        {"AUTHORED_BY", "HAS_KEYWORD", "HAS_KEYWORD_PAPER"},
+    )
+
+    result = _svc(graph).query(source_expert_id="S1", target_expert_id="S2")
+
+    assert result["items"][0]["fields"] == ["共享领域", "新领域", "旧领域"]
+
+
+def test_query_keeps_empty_property_nodes_and_edges_in_split_schema():
+    """Match the reported graph: shared paper/project and empty keyword properties."""
+    nodes = {nid: _node(nid) for nid in ("S1", "S2", "P1", "PJ1", "K1")}
+    graph = _SchemaGraph(
+        nodes,
+        [
+            _edge("AUTHORED_BY", "P1", "S1"),
+            _edge("AUTHORED_BY", "P1", "S2"),
+            _edge("HAS_PARTICIPANT", "PJ1", "S1"),
+            _edge("LEADS", "PJ1", "S2"),
+            _edge("HAS_KEYWORD_PAPER", "P1", "K1"),
+        ],
+        {"AUTHORED_BY", "HAS_PARTICIPANT", "LEADS", "HAS_KEYWORD_PAPER", "HAS_KEYWORD_PROJECT"},
+    )
+
+    result = _svc(graph).query(source_expert_id="S1", target_expert_id="S2")
+
+    assert result["summary"] == {"papers": 1, "patents": 0, "projects": 1, "awards": 0}
+    assert {item["id"] for item in result["items"]} == {"P1", "PJ1"}
+    assert all(item["fields"] == [] and item["time"] is None for item in result["items"])
+
+
+def test_query_does_not_hide_keyword_schema_connection_failure():
+    graph = _SchemaGraph(
+        {nid: _node(nid) for nid in ("S1", "S2", "P1")},
+        [_edge("AUTHORED_BY", "P1", "S1"), _edge("AUTHORED_BY", "P1", "S2")],
+        {"AUTHORED_BY", "HAS_KEYWORD_PAPER"},
+    )
+    graph.edge_types = MagicMock(side_effect=GraphConnectionError("graph unavailable"))
+
+    with pytest.raises(GraphConnectionError, match="graph unavailable"):
+        _svc(graph).query(source_expert_id="S1", target_expert_id="S2")

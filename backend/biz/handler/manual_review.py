@@ -334,7 +334,13 @@ async def transfer_case(case_id: str, body: TransferRequest, identity: ReviewIde
         _raise_production_error(exc)
 
 
-@router.put("/production/{case_id}/draft", response_model=ApiResponse)
+@router.post("/production/{case_id}/draft/update", response_model=ApiResponse)
+@router.put(
+    "/production/{case_id}/draft",
+    response_model=ApiResponse,
+    deprecated=True,
+    include_in_schema=False,
+)
 async def save_case_draft(case_id: str, body: DraftRequest, identity: ReviewIdentityDep):
     try:
         return ApiResponse(
@@ -456,7 +462,10 @@ async def cancel_case(case_id: str, body: CancelRequest, identity: ReviewIdentit
         _raise_production_error(exc)
 
 
-@router.delete("/production/{case_id}", response_model=ApiResponse)
+@router.post("/production/{case_id}/delete", response_model=ApiResponse)
+@router.delete(
+    "/production/{case_id}", response_model=ApiResponse, deprecated=True, include_in_schema=False
+)
 async def delete_case(case_id: str, identity: ReviewIdentityDep):
     """物理删除未处理 case（review_admin；已终态的记录保留作历史不可删）。"""
     _queue_cache_clear()

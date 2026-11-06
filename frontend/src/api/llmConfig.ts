@@ -97,7 +97,7 @@ export async function updateLlmConfig(
 ): Promise<LlmConfig> {
   return unwrap(
     await asApiPromise<LlmConfig>(
-      http.put(`${PREFIX}/llm-configs/${id}`, payload, {
+      http.post(`${PREFIX}/llm-configs/${id}/update`, payload, {
         headers: headers(userId),
         params: force ? { force: true } : undefined,
       }),
@@ -108,7 +108,7 @@ export async function updateLlmConfig(
 export async function deleteLlmConfig(id: string, userId: string, /** true=管理员已确认解绑业务默认 */ force = false): Promise<void> {
   unwrap(
     await asApiPromise<{ deleted: boolean }>(
-      http.delete(`${PREFIX}/llm-configs/${id}`, {
+      http.post(`${PREFIX}/llm-configs/${id}/delete`, {}, {
         headers: headers(userId),
         params: force ? { force: true } : undefined,
       }),

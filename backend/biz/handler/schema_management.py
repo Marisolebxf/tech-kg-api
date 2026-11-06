@@ -260,7 +260,8 @@ def get_schema_delete_impact(
         _raise_domain_error(exc)
 
 
-@router.delete("/schemas/{schema_id}")
+@router.post("/schemas/{schema_id}/delete")
+@router.delete("/schemas/{schema_id}", deprecated=True, include_in_schema=False)
 def delete_schema(
     schema_id: str,
     actor: CurrentActor,
@@ -299,7 +300,13 @@ def add_schema_property(
         _raise_domain_error(exc)
 
 
-@router.delete("/schemas/{schema_id}/properties/{property_name}", response_model=ApiResponse)
+@router.post("/schemas/{schema_id}/properties/{property_name}/delete", response_model=ApiResponse)
+@router.delete(
+    "/schemas/{schema_id}/properties/{property_name}",
+    response_model=ApiResponse,
+    deprecated=True,
+    include_in_schema=False,
+)
 def delete_schema_property(
     schema_id: str,
     property_name: str,
@@ -324,7 +331,13 @@ def delete_schema_property(
         _raise_domain_error(exc)
 
 
-@router.put("/schemas/{schema_id}/sources", response_model=ApiResponse)
+@router.post("/schemas/{schema_id}/sources/update", response_model=ApiResponse)
+@router.put(
+    "/schemas/{schema_id}/sources",
+    response_model=ApiResponse,
+    deprecated=True,
+    include_in_schema=False,
+)
 def replace_schema_sources(
     schema_id: str,
     actor: CurrentActor,
@@ -362,7 +375,13 @@ def replace_schema_sources(
 # 口径不对齐（清全部水位全量重跑会绕过增量水位、覆盖人工修订），不再提供。
 
 
-@router.put("/schemas/{schema_id}/script", response_model=ApiResponse)
+@router.post("/schemas/{schema_id}/script/update", response_model=ApiResponse)
+@router.put(
+    "/schemas/{schema_id}/script",
+    response_model=ApiResponse,
+    deprecated=True,
+    include_in_schema=False,
+)
 def replace_schema_script(
     schema_id: str,
     actor: CurrentActor,

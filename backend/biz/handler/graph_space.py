@@ -72,7 +72,10 @@ def bind_graph_space(
     return ApiResponse(data=data, msg="图空间已绑定")
 
 
-@router.delete("/{space_name}", response_model=ApiResponse)
+@router.post("/{space_name}/unbind", response_model=ApiResponse)
+@router.delete(
+    "/{space_name}", response_model=ApiResponse, deprecated=True, include_in_schema=False
+)
 def unbind_graph_space(
     space_name: str,
     actor: CurrentMaintainer,

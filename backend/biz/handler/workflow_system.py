@@ -348,7 +348,13 @@ async def create_schedule(
     return ApiResponse(data=schedule, msg="Schedule 已保存")
 
 
-@router.put("/schedules/{schedule_id}/state", responses={404: {"description": "请求的资源不存在"}})
+@router.post("/schedules/{schedule_id}/state", responses={404: {"description": "请求的资源不存在"}})
+@router.put(
+    "/schedules/{schedule_id}/state",
+    responses={404: {"description": "请求的资源不存在"}},
+    deprecated=True,
+    include_in_schema=False,
+)
 async def update_schedule_state(
     schedule_id: str, request: ScheduleStateRequest, actor: CurrentActor
 ) -> ApiResponse:
@@ -392,7 +398,15 @@ async def trigger_schedule(schedule_id: str, actor: CurrentActor) -> ApiResponse
         )
 
 
-@router.delete("/schedules/{schedule_id}", responses={404: {"description": "请求的资源不存在"}})
+@router.post(
+    "/schedules/{schedule_id}/delete", responses={404: {"description": "请求的资源不存在"}}
+)
+@router.delete(
+    "/schedules/{schedule_id}",
+    responses={404: {"description": "请求的资源不存在"}},
+    deprecated=True,
+    include_in_schema=False,
+)
 async def delete_schedule(schedule_id: str, actor: CurrentActor) -> ApiResponse:
     if service.repo.get_schedule(schedule_id) is None:
         raise HTTPException(status_code=404, detail=SCHEDULE_NOT_FOUND)
@@ -536,7 +550,10 @@ async def trigger_job(job_id: str, actor: CurrentActor) -> ApiResponse:
     return ApiResponse(data=execution, msg="任务已触发")
 
 
-@router.put("/jobs/{job_id}/state", response_model=ApiResponse)
+@router.post("/jobs/{job_id}/state", response_model=ApiResponse)
+@router.put(
+    "/jobs/{job_id}/state", response_model=ApiResponse, deprecated=True, include_in_schema=False
+)
 async def update_job_state(
     job_id: str, request: ScheduleStateRequest, actor: CurrentActor
 ) -> ApiResponse:
@@ -548,7 +565,8 @@ async def update_job_state(
     return ApiResponse(data=job)
 
 
-@router.put("/jobs/{job_id}", response_model=ApiResponse)
+@router.post("/jobs/{job_id}/update", response_model=ApiResponse)
+@router.put("/jobs/{job_id}", response_model=ApiResponse, deprecated=True, include_in_schema=False)
 async def update_job(job_id: str, request: JobUpdateRequest, actor: CurrentActor) -> ApiResponse:
     _validate_resource_selectors(actor, request.model_dump())
     try:
@@ -559,7 +577,10 @@ async def update_job(job_id: str, request: JobUpdateRequest, actor: CurrentActor
     return ApiResponse(data=job, msg="任务已更新")
 
 
-@router.delete("/jobs/{job_id}", response_model=ApiResponse)
+@router.post("/jobs/{job_id}/delete", response_model=ApiResponse)
+@router.delete(
+    "/jobs/{job_id}", response_model=ApiResponse, deprecated=True, include_in_schema=False
+)
 async def delete_job(job_id: str, actor: CurrentActor) -> ApiResponse:
     _jobs_cache_clear()
     try:

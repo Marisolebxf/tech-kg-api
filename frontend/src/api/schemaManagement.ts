@@ -406,7 +406,7 @@ export async function deleteSchemaProperty(
 ): Promise<SchemaPropertyDeleteResult> {
   return unwrap(
     await asApiPromise<SchemaPropertyDeleteResult>(
-      http.delete(`${PREFIX}/schemas/${schemaId}/properties/${encodeURIComponent(propertyName)}`, {
+      http.post(`${PREFIX}/schemas/${schemaId}/properties/${encodeURIComponent(propertyName)}/delete`, {}, {
         headers: headers(userId),
       }),
     ),
@@ -420,7 +420,7 @@ export async function replaceSchemaSources(
 ): Promise<SchemaSourcesReplaceResult> {
   return unwrap(
     await asApiPromise<SchemaSourcesReplaceResult>(
-      http.put(`${PREFIX}/schemas/${schemaId}/sources`, { sources }, { headers: headers(userId) }),
+      http.post(`${PREFIX}/schemas/${schemaId}/sources/update`, { sources }, { headers: headers(userId) }),
     ),
   )
 }
@@ -434,7 +434,7 @@ export async function deleteSchema(
 ): Promise<SchemaDeleteResult> {
   return unwrap(
     await asApiPromise<SchemaDeleteResult>(
-      http.delete(`${PREFIX}/schemas/${schemaId}`, { headers: headers(userId) }),
+      http.post(`${PREFIX}/schemas/${schemaId}/delete`, {}, { headers: headers(userId) }),
     ),
   )
 }

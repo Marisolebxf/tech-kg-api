@@ -49,7 +49,7 @@ print(f'当前目录 {len(current)} 个 schema（期望 {len(dump_entries)}）')
 if set(current) != set(dump_entries):
     raise SystemExit(f'目录名不一致: 仅当前有 {set(current) - set(dump_entries)} / 仅 dump 有 {set(dump_entries) - set(current)}')
 
-# ---- ① PUT 恢复 querySql / placeholder ----
+# ---- ① POST 恢复 querySql / placeholder ----
 restored = 0
 for name, x in dump_entries.items():
     has_qs = any(s.get('querySql') for s in (x.get('sources') or []))
@@ -69,11 +69,11 @@ for name, x in dump_entries.items():
             for s in x['sources']
         ]
     }
-    r = cli.put(f"{API}/schema-management/schemas/{current[name]['id']}/sources", json=payload)
+    r = cli.post(f"{API}/schema-management/schemas/{current[name]['id']}/sources/update", json=payload)
     if r.status_code >= 400:
-        raise SystemExit(f'PUT sources 失败 {name}: HTTP {r.status_code} {r.text[:300]}')
+        raise SystemExit(f'POST sources 失败 {name}: HTTP {r.status_code} {r.text[:300]}')
     restored += 1
-print(f'① PUT 恢复 {restored} 个 schema 的来源（含 querySql 47 条 / placeholder 1 条）')
+print(f'① POST 恢复 {restored} 个 schema 的来源（含 querySql 47 条 / placeholder 1 条）')
 
 # ---- ② 还原度对账 ----
 current = fetch_current()

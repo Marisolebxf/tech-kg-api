@@ -143,7 +143,15 @@ def create_llm_config(
     )
 
 
-@router.put("/llm-configs/{config_id}", responses={404: {"description": "请求的资源不存在"}})
+@router.post(
+    "/llm-configs/{config_id}/update", responses={404: {"description": "请求的资源不存在"}}
+)
+@router.put(
+    "/llm-configs/{config_id}",
+    responses={404: {"description": "请求的资源不存在"}},
+    deprecated=True,
+    include_in_schema=False,
+)
 def update_llm_config(
     config_id: str,
     payload: LlmConfigUpdate,
@@ -171,9 +179,15 @@ def update_llm_config(
     )
 
 
+@router.post(
+    "/llm-configs/{config_id}/delete",
+    responses={404: {"description": "请求的资源不存在"}, 409: {"description": "默认配置不可删除"}},
+)
 @router.delete(
     "/llm-configs/{config_id}",
     responses={404: {"description": "请求的资源不存在"}, 409: {"description": "默认配置不可删除"}},
+    deprecated=True,
+    include_in_schema=False,
 )
 def delete_llm_config(
     config_id: str,

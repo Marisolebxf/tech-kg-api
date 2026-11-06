@@ -190,7 +190,7 @@ export const getProductionReviews = (params: Record<string, unknown> = {}) => un
 export const getProductionReview = (id: string) => unwrap(http.get(`/v1/manual-reviews/production/${id}`)) as Promise<ProductionReviewCase>
 export const heartbeatProductionReview = (id: string, version: number) => unwrap(http.post(`/v1/manual-reviews/production/${id}/heartbeat`, { version })) as Promise<ProductionReviewCase>
 export const releaseProductionReview = (id: string, version: number) => unwrap(http.post(`/v1/manual-reviews/production/${id}/release`, { version })) as Promise<ProductionReviewCase>
-export const saveProductionReviewDraft = (id: string, version: number, payload: Record<string, unknown>) => unwrap(http.put(`/v1/manual-reviews/production/${id}/draft`, { version, payload })) as Promise<ProductionReviewCase>
+export const saveProductionReviewDraft = (id: string, version: number, payload: Record<string, unknown>) => unwrap(http.post(`/v1/manual-reviews/production/${id}/draft/update`, { version, payload })) as Promise<ProductionReviewCase>
 export const submitProductionReview = (id: string, data: { version:number; actionId:string; result:Record<string,unknown>; note?:string }) => unwrap(http.post(`/v1/manual-reviews/production/${id}/submit`, data)) as Promise<ProductionReviewCase>
 
 /** T_LINK 受控刷新未决候选：按案件图空间重跑召回+打分，零写图（MR-CAND B）。
@@ -208,7 +208,7 @@ export const getProductionReviewAuditLogs = (id: string) =>
 
 /** 物理删除未处理 case（review_admin；已终态的后端 409）。 */
 export const deleteProductionReview = (id: string) =>
-  unwrap(http.delete(`/v1/manual-reviews/production/${id}`)) as Promise<{ id: string; deleted: boolean }>
+  unwrap(http.post(`/v1/manual-reviews/production/${id}/delete`, {})) as Promise<{ id: string; deleted: boolean }>
 
 /** 批量物理删除未处理 case：逐条复用单删门控，已处理/不存在/无权限的按条跳过不阻断整批。 */
 export const batchDeleteProductionReviews = (data: { caseIds: string[] }) =>
@@ -454,7 +454,7 @@ export const triggerJob = (jobId: string) =>
   unwrap(http.post(`/v1/workflow-system/jobs/${jobId}/trigger`)) as Promise<WorkflowExecution>
 
 export const updateJobState = (jobId: string, active: boolean) =>
-  unwrap(http.put(`/v1/workflow-system/jobs/${jobId}/state`, { active })) as Promise<WorkflowJob>
+  unwrap(http.post(`/v1/workflow-system/jobs/${jobId}/state`, { active })) as Promise<WorkflowJob>
 
 export const deleteJob = (jobId: string) =>
-  unwrap(http.delete(`/v1/workflow-system/jobs/${jobId}`)) as Promise<{ id: string }>
+  unwrap(http.post(`/v1/workflow-system/jobs/${jobId}/delete`, {})) as Promise<{ id: string }>

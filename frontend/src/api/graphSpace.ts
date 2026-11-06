@@ -76,7 +76,7 @@ export async function bindGraphSpace(name: string, userId = currentUserId()): Pr
 export async function unbindGraphSpace(name: string, userId = currentUserId()): Promise<void> {
   await unwrap(
     await asApiPromise<{ unbound: boolean }>(
-      http.delete(`${PREFIX}/${encodeURIComponent(name)}`, { headers: headers(userId) }),
+      http.post(`${PREFIX}/${encodeURIComponent(name)}/unbind`, {}, { headers: headers(userId) }),
     ),
   )
 }

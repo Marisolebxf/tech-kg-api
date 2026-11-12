@@ -15,7 +15,9 @@ EXPERT_ID_PATTERN = re.compile(r"[\w\u4e00-\u9fff·.\-]+")
 # 机构关键词：在专家标识基础上额外允许空格、括号、顿号和斜杠
 INSTITUTION_PATTERN = re.compile(r"[\w\u4e00-\u9fff·.\-()（）、，,/\s]+")
 # 时间：YYYY-MM 或 YYYY-MM-DD
-TIME_PATTERN = re.compile(r"(?:19|20)\d{2}-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\d|3[01]))?")
+TIME_PATTERN = re.compile(
+    r"(?:19|20)\d{2}-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\d|3[01]))?"
+)
 
 
 class ExpertDirectRelationQueryRequest(BaseModel):
@@ -48,8 +50,12 @@ class ExpertDirectRelationQueryRequest(BaseModel):
     institution: str | None = Field(
         default=None, description=f"机构关键词，最多 {MAX_TEXT_LENGTH} 个字符。"
     )
-    startTime: str | None = Field(default=None, description="开始日期 YYYY-MM 或 YYYY-MM-DD。")
-    endTime: str | None = Field(default=None, description="结束日期 YYYY-MM 或 YYYY-MM-DD。")
+    startTime: str | None = Field(
+        default=None, description="开始日期 YYYY-MM 或 YYYY-MM-DD。"
+    )
+    endTime: str | None = Field(
+        default=None, description="结束日期 YYYY-MM 或 YYYY-MM-DD。"
+    )
     limit: int = Field(
         default=10,
         strict=True,
@@ -155,6 +161,10 @@ class DirectRelationItem(BaseModel):
     representativeAchievements: list[dict[str, str]] = Field(default_factory=list)
     relationSummary: str = ""
     lastUpdatedAt: str | None = None
+    relationTimeSource: str | None = None
+    relationTimePrecision: Literal["year", "month", "day"] | None = None
+    relationTimePaperIds: list[str] = Field(default_factory=list)
+    relationTimeStatus: Literal["verified", "missing", "unavailable"] = "missing"
     detailRows: list[list[Any]] = Field(default_factory=list)
 
 

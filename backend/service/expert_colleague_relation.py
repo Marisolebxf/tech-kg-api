@@ -227,8 +227,10 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
                     candidate_department = self._property(
                         {"properties": edge_props}, DEPARTMENT_KEYS
                     )
-                    candidate_period = self._parse_period(
-                        self._property({"properties": edge_props}, DATE_KEYS)
+                    candidate_period = self._employment_period(
+                        node,
+                        edge_props,
+                        organization_name=affiliation["name"],
                     )
                     overlap = self._overlap(affiliation.get("period"), candidate_period, None)
                     if overlap is None:
@@ -356,8 +358,37 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
             "apiCalls": list(gateway.api_calls),
         }
 
+    def _employment_period(
+        self,
+        person_node: dict[str, Any],
+        edge_props: dict[str, Any],
+        *,
+        organization_name: str,
+    ) -> tuple[int, int] | None:
+        """优先读任职边时间；缺失时仅补读当前机构对应的人员工作经历。"""
+        period = self._parse_period(
+            self._property({"properties": edge_props}, DATE_KEYS)
+        )
+        if period is not None:
+            return period
+        if not organization_name:
+            return None
+        institutions = [
+            self._property(person_node, ("work_experience_institution_zh",)),
+            self._property(person_node, ("work_experience_institution_en",)),
+        ]
+        if not any(
+            institution and self._same_text(institution, organization_name)
+            for institution in institutions
+        ):
+            return None
+        return self._parse_period(
+            self._property(person_node, ("work_experience_date",))
+        )
+
     def _affiliations(self, person_id: str, graph: dict[str, Any]) -> list[dict[str, Any]]:
         nodes = {str(node.get("id")): node for node in graph.get("nodes", [])}
+        person_node = nodes.get(person_id, {})
         result: list[dict[str, Any]] = []
         for edge in graph.get("edges", []):
             if edge.get("type") != "AFFILIATED_WITH" or str(edge.get("source")) != person_id:
@@ -371,7 +402,11 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
                     {
                         "id": str(edge.get("target")),
                         "name": name,
-                        "period": self._parse_period(self._property(edge_node, DATE_KEYS)),
+                        "period": self._employment_period(
+                            person_node,
+                            edge_props,
+                            organization_name=name,
+                        ),
                         "department": self._property(edge_node, DEPARTMENT_KEYS),
                         "edgeProperties": edge_props,
                         "entity": self._entity_data(target, {"name": name}),

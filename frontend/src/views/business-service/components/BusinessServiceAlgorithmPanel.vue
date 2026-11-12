@@ -3454,7 +3454,10 @@ function derivedGraphFromExpertResponse(
     const bId = item.expertB?.expertId;
     const strength = item.relationStrength ?? 0;
     const summary =
-      item.relationSummary || `共同论文${item.coPaperCount ?? 0}篇`;
+      item.relationSummary ||
+      (item.coPaperCount == null
+        ? "共同论文计数暂不可用"
+        : `共同论文${item.coPaperCount}篇`);
     if (aId) {
       const entry = expertRelations.get(aId) ?? {
         peerNames: [],
@@ -3662,7 +3665,11 @@ function computeExpertDirectSummaryRows(
     );
     overrides.set(
       "相关成果",
-      compactSummaryText(`共同论文${item.coPaperCount}篇`),
+      compactSummaryText(
+        item.coPaperCount == null
+          ? "共同论文计数暂不可用"
+          : `共同论文${item.coPaperCount}篇`,
+      ),
     );
     overrides.set(
       "代表成果",
@@ -7044,3 +7051,4 @@ function clearGraphSelection() {
   outline-offset: 1px;
 }
 </style>
+

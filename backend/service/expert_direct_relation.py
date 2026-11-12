@@ -6,7 +6,7 @@
    一条关系都没有时退回仅返回 A 节点（``source.reason="no_relation_for_a"``）。
 3. 若 ``expertBId`` 非空：定位专家B；查不到 → 空结果。在 A、B 之间找一条
    ``COAUTHOR_WITH`` 边；找不到 → 空结果。找到则据此组装唯一一条关系。
-4. 机构过滤 & 时间过滤：在服务层按 ``institution`` 关键字、``relation_time`` 过滤该条关系。
+4. 机构过滤 & 时间过滤：在服务层按机构与时间过滤；边时间缺失时回退真实共同论文发表时间。
 5. 图数据/详情：按业务格式组装 items + graph + provenance。
 6. 代表成果：/paths/search 服务端搜 A→Paper→B 共同论文路径（最多 3 条标题）；
    图上无共同论文边时为空列表，不再回退 MySQL。
@@ -31,6 +31,7 @@ from infra.graph_api_client import GraphAPIError, graph_api
 from infra.graph_exec_budget import loop_scoped_semaphore
 from service.base_module import KGModuleScaffoldService
 from service.confidence_scoring import edge_confidence
+from service.direct_relation_time import apply_time, paper_time, parse_time, select_time
 from service.graph_space_context import effective_graph_space, get_current_space
 from service.provenance_recorder import record_node_source
 
@@ -53,6 +54,8 @@ _MAX_EDGES_PER_EXPERT = 100
 # 代表成果：出参最多 3 条标题；路径多取几条给空标题留余量。
 _MAX_ACHIEVEMENT_TITLES = 3
 _ACHIEVEMENT_PATH_LIMIT = 5
+_TIME_PATH_PAGE_SIZE = 100
+_MAX_TIME_PATHS = 1000
 
 # 溯源展示的 MySQL 源表名与英文字段名（图空间 VID 逐条取自节点/边）
 _SCHOLAR_SOURCE_TABLE = "dwd_scholar"
@@ -121,7 +124,11 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             "limit": normalized_limit,
         }
 
-        source: dict[str, Any] = {"requested": "all", "actual": "graph-api", "fallback": False}
+        source: dict[str, Any] = {
+            "requested": "all",
+            "actual": "graph-api",
+            "fallback": False,
+        }
         rows: list[dict[str, Any]] = []
         anchor_only_node: dict[str, Any] | None = None
         fallback_reason: str | None = None
@@ -138,7 +145,9 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                     )
                     if institution:
                         collected = [
-                            row for row in collected if self._matches_institution(row, institution)
+                            row
+                            for row in collected
+                            if self._matches_institution(row, institution)
                         ]
                         if not collected:
                             fallback_reason = "institution_filtered"
@@ -163,11 +172,14 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                             fallback_reason = "no_relation_between_a_b"
                         else:
                             row = self._build_row(node_a, node_b, edge)
-                            if institution and not self._matches_institution(row, institution):
+                            if institution and not self._matches_institution(
+                                row, institution
+                            ):
                                 fallback_reason = "institution_filtered"
                             else:
                                 rows = [row]
                 if rows:
+                    await self._resolve_relation_times(client, rows)
                     await self._attach_representative_achievements(client, rows)
         except GraphAPIError as exc:
             logger.warning("graph API unavailable: %s", exc)
@@ -206,9 +218,15 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                 },
             }
             with _result_cache_lock:
-                _result_cache[cache_key] = (time.monotonic() + _RESULT_CACHE_TTL, payload)
+                _result_cache[cache_key] = (
+                    time.monotonic() + _RESULT_CACHE_TTL,
+                    payload,
+                )
             return payload
 
+        time_query_failed = any(
+            row.get("relation_time_status") == "unavailable" for row in rows
+        )
         rows = self._orient_rows(
             rows=self._filter_rows_by_time(rows, start_time, end_time),
             expert_a_id=a_keyword,
@@ -226,6 +244,11 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                 "fallback": False,
                 "reason": fallback_reason,
             }
+
+        if time_query_failed:
+            source["relationTimeStatus"] = "unavailable"
+            if not items:
+                source["reason"] = "graph_api_error"
 
         logger.info(
             "expert direct relation result: reason=%s, a=%s, b=%s, items=%d",
@@ -250,9 +273,12 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             },
         }
         # 仅缓存图服务正常（无 fallback_reason）的结果，避免把瞬时故障缓存住。
-        if fallback_reason is None:
+        if fallback_reason is None and not time_query_failed:
             with _result_cache_lock:
-                _result_cache[cache_key] = (time.monotonic() + _RESULT_CACHE_TTL, payload)
+                _result_cache[cache_key] = (
+                    time.monotonic() + _RESULT_CACHE_TTL,
+                    payload,
+                )
         return payload
 
     # ---------------- Graph API 调用 ----------------
@@ -269,7 +295,9 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             a_id, edge_type="COAUTHOR_WITH", limit=_MAX_EDGES_PER_EXPERT
         )
         for edge in edges:
-            peer_id = str(edge.get("target") if edge.get("source") == a_id else edge.get("source"))
+            peer_id = str(
+                edge.get("target") if edge.get("source") == a_id else edge.get("source")
+            )
             if peer_id == b_id:
                 return edge
         return None
@@ -310,7 +338,9 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         seen: set[str] = set()
         for edge in sorted(edges, key=_co_paper_count, reverse=True):
             peer_id = str(
-                edge.get("target") if str(edge.get("source")) == a_id else edge.get("source")
+                edge.get("target")
+                if str(edge.get("source")) == a_id
+                else edge.get("source")
             )
             if not peer_id or peer_id == a_id or peer_id in seen:
                 continue
@@ -354,13 +384,16 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         """
         space = get_current_space()
         for row in rows:
+            if "representative_achievements" in row:
+                continue
             try:
                 row["representative_achievements"] = await self._shared_paper_titles(
                     client, row["expert_a_id"], row["expert_b_id"], space=space
                 )
             except GraphAPIError:
                 logger.warning(
-                    "Could not retrieve representative papers for %s", row["relation_key"]
+                    "Could not retrieve representative papers for %s",
+                    row["relation_key"],
                 )
 
     async def _shared_paper_titles(
@@ -372,39 +405,14 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         space: str,
     ) -> list[dict[str, str]]:
         """经 /paths/search 搜两位专家的共同论文，返回 ≤3 条 {id, title}。"""
-        # techkg: Scholar -[AUTHORED]-> Paper（out）；dev: Paper -[AUTHORED_BY]-> Person，
-        # 从人找论文要走 in，第二跳反方向。
-        # 边型/方向按实际取数空间选择（九大业务数据面可能固定为
-        # TRS_GRAPH_BUSINESS_SPACE）；space 参数仅作回环请求的传输空间，
-        # 须与请求头一致，否则 graph-search 一致性校验 400。
-        space_is_techkg = effective_graph_space() == "techkg"
-        person_to_paper = "out" if space_is_techkg else "in"
-        paper_to_person = "in" if space_is_techkg else "out"
-        request = {
-            "sourceId": person_a,
-            "targetId": person_b,
-            "steps": [
-                {
-                    "edgeType": "AUTHORED" if space_is_techkg else "AUTHORED_BY",
-                    "direction": person_to_paper,
-                    "targetLabel": "Paper",
-                    "targetFilters": [],
-                },
-                {
-                    "edgeType": "AUTHORED" if space_is_techkg else "AUTHORED_BY",
-                    "direction": paper_to_person,
-                    "targetLabel": "Scholar" if space_is_techkg else "Person",
-                    "targetFilters": [],
-                },
-            ],
-            # 多取几条给空标题留余量，出参仍截 3 条；countTotal=False 省掉
-            # 服务端全量 count 聚合。
-            "limit": _ACHIEVEMENT_PATH_LIMIT,
-            "offset": 0,
-            "countTotal": False,
-            "space": space,
-        }
-        result = await client.search_paths(request)
+        result = await self._shared_paper_page(
+            client,
+            person_a,
+            person_b,
+            space=space,
+            limit=_ACHIEVEMENT_PATH_LIMIT,
+            offset=0,
+        )
         achievements: list[dict[str, str]] = []
         for path in result.get("items") or []:
             nodes = path.get("nodes") or []
@@ -435,6 +443,148 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                 break
         return achievements
 
+    async def _shared_paper_page(
+        self,
+        client: Any,
+        person_a: str,
+        person_b: str,
+        *,
+        space: str,
+        limit: int,
+        offset: int,
+    ) -> dict[str, Any]:
+        """Use the existing typed path API, including its VID alias hydration."""
+        # techkg: Scholar -[AUTHORED]-> Paper（out）；dev: Paper -[AUTHORED_BY]-> Person，
+        # 从人找论文要走 in，第二跳反方向。
+        # 边型/方向按实际取数空间选择（九大业务数据面可能固定为
+        # TRS_GRAPH_BUSINESS_SPACE）；space 参数仅作回环请求的传输空间，
+        # 须与请求头一致，否则 graph-search 一致性校验 400。
+        space_is_techkg = effective_graph_space() == "techkg"
+        person_to_paper = "out" if space_is_techkg else "in"
+        paper_to_person = "in" if space_is_techkg else "out"
+        request = {
+            "sourceId": person_a,
+            "targetId": person_b,
+            "steps": [
+                {
+                    "edgeType": "AUTHORED" if space_is_techkg else "AUTHORED_BY",
+                    "direction": person_to_paper,
+                    "targetLabel": "Paper",
+                    "targetFilters": [],
+                },
+                {
+                    "edgeType": "AUTHORED" if space_is_techkg else "AUTHORED_BY",
+                    "direction": paper_to_person,
+                    "targetLabel": "Scholar" if space_is_techkg else "Person",
+                    "targetFilters": [],
+                },
+            ],
+            # 多取几条给空标题留余量，出参仍截 3 条；countTotal=False 省掉
+            # 服务端全量 count 聚合。
+            "limit": limit,
+            "offset": offset,
+            "countTotal": False,
+            "space": space,
+        }
+        return await client.search_paths(request)
+
+    async def _resolve_relation_times(
+        self, client: Any, rows: list[dict[str, Any]]
+    ) -> None:
+        for row in rows:
+            edge_time = parse_time(
+                row.get("relation_time"), source="COAUTHOR_WITH.relation_time"
+            )
+            if edge_time is not None:
+                row["relation_time_evidence"] = [edge_time]
+                row["relation_time_status"] = "verified"
+                apply_time(row, edge_time)
+                continue
+            try:
+                papers: dict[str, dict[str, Any]] = {}
+                offset = 0
+                while True:
+                    # One lookahead path detects overflow, including exactly full pages.
+                    limit = min(_TIME_PATH_PAGE_SIZE, _MAX_TIME_PATHS - offset + 1)
+                    page = await self._shared_paper_page(
+                        client,
+                        row["expert_a_id"],
+                        row["expert_b_id"],
+                        space=get_current_space(),
+                        limit=limit,
+                        offset=offset,
+                    )
+                    paths = page.get("items") or []
+                    if offset + len(paths) > _MAX_TIME_PATHS:
+                        raise GraphAPIError(
+                            "共同论文时间查询超过 1000 条路径，无法验证完整时间"
+                        )
+                    for path in paths:
+                        nodes = path.get("nodes") or []
+                        if len(nodes) != 3:
+                            raise GraphAPIError("共同论文路径结构不完整")
+                        paper = nodes[1]
+                        paper_id = str(paper.get("id") or "")
+                        if not paper_id:
+                            raise GraphAPIError("共同论文缺少 VID")
+                        key = paper_id.removeprefix("paper_")
+                        # Path API hydrates typed raw/prefixed aliases before returning.
+                        # Prefer a dated occurrence if a duplicate path lacks properties.
+                        if key not in papers or (
+                            paper_time(papers[key]) is None and paper_time(paper)
+                        ):
+                            papers[key] = paper
+                    if len(paths) < limit:
+                        break
+                    offset += len(paths)
+                evidence = [
+                    item
+                    for paper in papers.values()
+                    if (item := paper_time(paper)) is not None
+                ]
+                row["relation_time_evidence"] = evidence
+                row["relation_time_status"] = "verified" if evidence else "missing"
+                apply_time(row, select_time(evidence))
+                row["representative_achievements"] = []
+                for paper in papers.values():
+                    props = paper.get("properties") or {}
+                    title = next(
+                        (
+                            str(props[k]).strip()
+                            for k in (
+                                "title_zh",
+                                "title_cn",
+                                "title",
+                                "title_en",
+                                "zh_name",
+                                "en_name",
+                                "name",
+                            )
+                            if props.get(k)
+                        ),
+                        "",
+                    )
+                    if title:
+                        row["representative_achievements"].append(
+                            {"id": str(paper["id"]), "title": title}
+                        )
+                    if (
+                        len(row["representative_achievements"])
+                        == _MAX_ACHIEVEMENT_TITLES
+                    ):
+                        break
+            except (GraphAPIError, TimeoutError):
+                logger.warning(
+                    "Could not verify shared-paper times for %s",
+                    row["relation_key"],
+                    exc_info=True,
+                )
+                row["relation_time_evidence"] = []
+                row["relation_time_status"] = "unavailable"
+                apply_time(row, None)
+                # Do not repeat an already failed path query for representative titles.
+                row["representative_achievements"] = []
+
     async def _find_person(self, client: Any, keyword: str) -> dict[str, Any] | None:
         """按 VID / scholar_id / 姓名定位一个 Person 节点。
 
@@ -454,7 +604,9 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         # 必须先换成可寻址节点，否则后续查边一定为空。
         for name_field in ("name_zh", "name_en"):
             result = await client.search_nodes(
-                label="Person", properties={name_field: keyword}, limit=_MAX_ANCHOR_CANDIDATES
+                label="Person",
+                properties={name_field: keyword},
+                limit=_MAX_ANCHOR_CANDIDATES,
             )
             items = result.get("items") if isinstance(result, dict) else []
             for item in items or []:
@@ -572,39 +724,19 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         start_time: str | None,
         end_time: str | None,
     ) -> list[dict[str, Any]]:
-        """按关系边真实 relation_time 过滤；无法验证时间的边不进入限时结果。"""
-        start = (start_time or "").strip()
-        end = (end_time or "").strip()
-        if not start and not end:
-            return rows
-
-        def normalized_relation_date(row: dict[str, Any]) -> str | None:
-            value = row.get("relation_time")
-            if hasattr(value, "strftime"):
-                return value.strftime("%Y-%m-%d")
-            match = re.search(
-                r"((?:19|20)\d{2})[-/.年](0?[1-9]|1[0-2])(?:[-/.月](0?[1-9]|[12]\d|3[01]))?",
-                str(value or ""),
-            )
-            if not match:
-                return None
-            year, month, day = match.groups()
-            return f"{year}-{int(month):02d}-{int(day or 1):02d}"
-
-        lower = f"{start[:7]}-01" if start else ""
-        if end and len(end) == 7:
-            upper = f"{end[:7]}-31"
-        else:
-            upper = end[:10] if end else ""
-        filtered: list[dict[str, Any]] = []
+        """Edge time first; otherwise use dated shared papers, at stored precision."""
+        filtered = []
         for row in rows:
-            relation_date = normalized_relation_date(row)
-            if relation_date is None:
+            evidence = row.get("relation_time_evidence")
+            if evidence is None:
+                edge_time = parse_time(
+                    row.get("relation_time"), source="COAUTHOR_WITH.relation_time"
+                )
+                evidence = [edge_time] if edge_time else []
+            selected = select_time(evidence, start_time, end_time)
+            if (start_time or end_time) and selected is None:
                 continue
-            if lower and relation_date < lower:
-                continue
-            if upper and relation_date > upper:
-                continue
+            apply_time(row, selected)
             filtered.append(row)
         return filtered
 
@@ -613,10 +745,14 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         expert_a_org = str(row.get("expert_a_org") or "")
         expert_b_org = str(row.get("expert_b_org") or "")
         # 只有 A、B 机构真实相同时才算"共同机构"；否则不能把单侧机构包装成双方共有属性。
-        shared_institution = expert_a_org if expert_a_org and expert_a_org == expert_b_org else ""
+        shared_institution = (
+            expert_a_org if expert_a_org and expert_a_org == expert_b_org else ""
+        )
         institution = shared_institution or "合作关系"
         evidence_kind = str(row.get("evidence_kind") or "paper")
-        evidence_count = int(row.get("evidence_count") or row.get("co_paper_count") or 0)
+        evidence_count = int(
+            row.get("evidence_count") or row.get("co_paper_count") or 0
+        )
 
         if evidence_kind == "patent":
             reason_tags = ["共专利"] if evidence_count else ["专利关联"]
@@ -635,7 +771,9 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             last_updated_at = relation_time.strftime("%Y-%m-%d")
         else:
             last_updated_at = (
-                re.split(r"[T ]", str(relation_time), maxsplit=1)[0] if relation_time else None
+                re.split(r"[T ]", str(relation_time), maxsplit=1)[0]
+                if relation_time
+                else None
             )
 
         expert_a = {
@@ -669,6 +807,10 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             "representativeAchievements": row.get("representative_achievements", []),
             "relationSummary": " + ".join(reason_tags),
             "lastUpdatedAt": last_updated_at,
+            "relationTimeSource": row.get("relation_time_source"),
+            "relationTimePrecision": row.get("relation_time_precision"),
+            "relationTimePaperIds": row.get("relation_time_paper_ids", []),
+            "relationTimeStatus": row.get("relation_time_status", "missing"),
             "detailRows": [
                 ["专家 A", expert_a["name"]],
                 ["专家 A 机构", expert_a["organization"] or ""],
@@ -677,6 +819,19 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                 ["专家 B 机构", expert_b["organization"] or ""],
                 ["专家 B H指数", expert_b["hIndex"]],
                 ["关系类型", "直接关系"],
+                ["关系发生时间", last_updated_at or "—"],
+                [
+                    "时间依据",
+                    (
+                        "共同论文发表时间"
+                        if str(row.get("relation_time_source") or "").startswith(
+                            "shared_paper."
+                        )
+                        else "合著边 relation_time"
+                        if row.get("relation_time_source")
+                        else "无可核验时间"
+                    ),
+                ],
                 ["共同机构", shared_institution or "无"],
                 ["证据类型", self._evidence_label(evidence_kind)],
                 ["证据数量", evidence_count],
@@ -728,7 +883,11 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                 _src: dict[str, str] | None = None,
             ) -> dict[str, Any]:
                 src = _src if _src is not None else {}
-                name = str(_row.get(f"expert_{side}_name") or _row.get(f"expert_{side}_id") or "—")
+                name = str(
+                    _row.get(f"expert_{side}_name")
+                    or _row.get(f"expert_{side}_id")
+                    or "—"
+                )
                 system = str(src.get("source_system") or "")
                 record_id = str(
                     src.get("source_record_id")
@@ -771,7 +930,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                         "businessTable": "专家合作关系",
                         "technicalTable": "Person -[COAUTHOR_WITH]- Person",
                         "recordId": f"{row.get('expert_a_id') or '—'} / {row.get('expert_b_id') or '—'}",
-                        "fieldIdentifier": "co_paper_count / relation_time",
+                        "fieldIdentifier": "co_paper_count / relation_time / shared_paper.publication_time",
                         "sourceTable": _COAUTHOR_SOURCE_TABLE,
                         "sourceField": _COAUTHOR_SOURCE_FIELD,
                         "graphVid": (
@@ -779,7 +938,9 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                         ),
                         "summary": (
                             f"共同论文 {row.get('co_paper_count') or 0} 篇；"
-                            f"最近合作时间：{row.get('relation_time') or '—'}"
+                            f"可核验合作时间：{row.get('relation_time') or '—'}；"
+                            f"时间来源：{row.get('relation_time_source') or '无'}；"
+                            f"论文 VID：{', '.join(row.get('relation_time_paper_ids') or []) or '—'}"
                         ),
                     }
                 )
@@ -793,7 +954,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                         "businessTable": "专家合作关系",
                         "technicalTable": "Person -[COAUTHOR_WITH]- Person",
                         "recordId": f"{row.get('expert_a_id') or '—'} / {row.get('expert_b_id') or '—'}",
-                        "fieldIdentifier": "co_paper_count / relation_time",
+                        "fieldIdentifier": "co_paper_count / relation_time / shared_paper.publication_time",
                         "sourceTable": _COAUTHOR_SOURCE_TABLE,
                         "sourceField": _COAUTHOR_SOURCE_FIELD,
                         "graphVid": (
@@ -801,6 +962,9 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                         ),
                         "summary": (
                             f"共同论文 {row.get('co_paper_count') or 0} 篇；"
+                            f"可核验合作时间：{row.get('relation_time') or '—'}；"
+                            f"时间来源：{row.get('relation_time_source') or '无'}；"
+                            f"论文 VID：{', '.join(row.get('relation_time_paper_ids') or []) or '—'}；"
                             "图库中无该关系的入库元数据"
                         ),
                     }
@@ -883,7 +1047,9 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             "evidences": evidences,
         }
 
-    def _build_anchor_only_graph(self, anchor: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    def _build_anchor_only_graph(
+        self, anchor: dict[str, Any]
+    ) -> dict[str, list[dict[str, Any]]]:
         """仅专家A分支的图：只有一个 expert 节点，无边。"""
         node = {
             "id": str(anchor.get("id") or ""),
@@ -901,7 +1067,10 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         name = self._person_name(anchor) or str(anchor.get("id") or "—")
         system = str(src.get("source_system") or "")
         record_id = str(
-            src.get("source_record_id") or src.get("scholar_id") or anchor.get("id") or ""
+            src.get("source_record_id")
+            or src.get("scholar_id")
+            or anchor.get("id")
+            or ""
         )
         evidence = {
             "title": f"专家实体 · {name}",
@@ -924,7 +1093,9 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             "evidences": [evidence],
         }
 
-    def _build_graph(self, items: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    def _build_graph(
+        self, items: list[dict[str, Any]]
+    ) -> dict[str, list[dict[str, Any]]]:
         """组装展示用子图。
 
         机构边只按各专家自己的 ``organization`` 连线：同机构时两人自然汇聚到同一个
@@ -942,12 +1113,16 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             seen_nodes.add(node["id"])
             nodes.append(node)
 
-        def add_edge(source: str, target: str, label: str, data: dict[str, Any]) -> None:
+        def add_edge(
+            source: str, target: str, label: str, data: dict[str, Any]
+        ) -> None:
             key = (source, target, label)
             if key in seen_edges:
                 return
             seen_edges.add(key)
-            edges.append({"source": source, "target": target, "label": label, "data": data})
+            edges.append(
+                {"source": source, "target": target, "label": label, "data": data}
+            )
 
         for item in items:
             expert_a = item["expertA"]
@@ -1007,7 +1182,8 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         expert_b_id: str | None,
     ) -> list[dict[str, Any]]:
         return [
-            self._orient_row(row, expert_a_id=expert_a_id, expert_b_id=expert_b_id) for row in rows
+            self._orient_row(row, expert_a_id=expert_a_id, expert_b_id=expert_b_id)
+            for row in rows
         ]
 
     def _orient_row(
@@ -1036,7 +1212,15 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             return row
 
         swapped = dict(row)
-        for field in ("id", "name", "org", "h_index", "paper_nums", "citation_nums", "source"):
+        for field in (
+            "id",
+            "name",
+            "org",
+            "h_index",
+            "paper_nums",
+            "citation_nums",
+            "source",
+        ):
             swapped[f"expert_a_{field}"] = row.get(f"expert_b_{field}")
             swapped[f"expert_b_{field}"] = row.get(f"expert_a_{field}")
         return swapped

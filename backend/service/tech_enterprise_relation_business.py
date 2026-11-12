@@ -290,6 +290,40 @@ def _pick_tech_field(bg: dict, op: dict) -> str | None:
     return None
 
 
+
+def executive_position_from_source(expert_props: dict, *, org_id: str) -> str:
+    """从人员来源记录补读当前企业的高管职位，不跨企业借用职位。"""
+    target = str(org_id or "").strip()
+    if target.startswith("org_"):
+        target = target[len("org_"):]
+    if not target:
+        return ""
+
+    raw = expert_props.get("extra_json")
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        return ""
+    if not isinstance(payload, Mapping):
+        return ""
+
+    records = payload.get("source_records")
+    candidates = list(records.values()) if isinstance(records, Mapping) else []
+    candidates.append(payload.get("existing_payload"))
+    for record in candidates:
+        if not isinstance(record, Mapping):
+            continue
+        source_org = str(record.get("org_id") or "").strip()
+        if source_org.startswith("org_"):
+            source_org = source_org[len("org_"):]
+        if source_org != target:
+            continue
+        position = record.get("executives_position")
+        if isinstance(position, str) and position.strip():
+            return position.strip()
+    return ""
+
+
 class KeyEnterpriseRelationService:
     def __init__(self, base_url: str | None = None, timeout: float = 60.0) -> None:
         self.base = (base_url or DEFAULT_BASE).rstrip("/") + "/api/v1"
@@ -434,6 +468,8 @@ class KeyEnterpriseRelationService:
                 # work_experience_position_zh（无 position 字段），两者都兜底，避免
                 # role 退化成通用 '任职'（反馈：角色关系任职不属实角色）。
                 role = props.get("position") or props.get("work_experience_position_zh") or ""
+                if not role and et == "EXECUTIVE_OF":
+                    role = executive_position_from_source(expert_props, org_id=other)
                 # 治理边优先用边上任期；缺失时回退专家工作经历日期，避免摘要合作时间为空
                 period = _period_from_mapping(props, expert_props)
                 _add(other, "governance", GOVERNANCE_MODE[et], role, period, et)

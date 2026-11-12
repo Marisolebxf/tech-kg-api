@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 from collections.abc import Mapping
@@ -291,6 +292,18 @@ def _pick_tech_field(bg: dict, op: dict) -> str | None:
 
 
 
+def _matching_role_label(role_label: str, role_filter: str | None) -> str:
+    """筛选并返回真实职位；未筛选时保留全部职位。"""
+    roles = list(dict.fromkeys(
+        role.strip()
+        for role in re.split(r"[、,，;；\r\n]+", role_label)
+        if role.strip()
+    ))
+    if role_filter:
+        roles = [role for role in roles if role_filter in role]
+    return "、".join(roles)
+
+
 def executive_position_from_source(expert_props: dict, *, org_id: str) -> str:
     """从人员来源记录补读当前企业的高管职位，不跨企业借用职位。"""
     target = str(org_id or "").strip()
@@ -308,8 +321,14 @@ def executive_position_from_source(expert_props: dict, *, org_id: str) -> str:
         return ""
 
     records = payload.get("source_records")
-    candidates = list(records.values()) if isinstance(records, Mapping) else []
+    if isinstance(records, Mapping):
+        candidates = list(records.values())
+    elif isinstance(records, list):
+        candidates = list(records)
+    else:
+        candidates = []
     candidates.append(payload.get("existing_payload"))
+    positions: list[str] = []
     for record in candidates:
         if not isinstance(record, Mapping):
             continue
@@ -320,8 +339,10 @@ def executive_position_from_source(expert_props: dict, *, org_id: str) -> str:
             continue
         position = record.get("executives_position")
         if isinstance(position, str) and position.strip():
-            return position.strip()
-    return ""
+            position = position.strip()
+            if position not in positions:
+                positions.append(position)
+    return "、".join(positions)
 
 
 class KeyEnterpriseRelationService:
@@ -436,6 +457,9 @@ class KeyEnterpriseRelationService:
                 return
             if "Organization" not in node_labels.get(org_id, set()):
                 return
+            role_label = _matching_role_label(role or mode, req.role_type)
+            if not role_label:
+                return
             op = node_props.get(org_id, {})
             bg = _enterprise_background(op)
             filled_period = period if period.start else _period_from_mapping(op, expert_props)
@@ -445,8 +469,8 @@ class KeyEnterpriseRelationService:
                     enterprise_name=op.get("name_cn") or op.get("name_en"),
                     cooperation_type=ctype,
                     cooperation_mode=mode,
-                    role_label=role or mode,
-                    role_level=_role_level(role)
+                    role_label=role_label,
+                    role_level=_role_level(role_label)
                     or (
                         "L1"
                         if ctype == "governance"
@@ -646,3 +670,4 @@ class KeyEnterpriseRelationService:
                 risk_types.add(et)
                 risk_count += 1
         return risk_types, risk_count
+

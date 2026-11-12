@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -224,8 +225,10 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
                     continue
                 matching_periods: list[tuple[str, tuple[int, int], dict[str, Any]]] = []
                 for edge_props in edge_by_person.get(candidate_id, []):
-                    candidate_department = self._property(
-                        {"properties": edge_props}, DEPARTMENT_KEYS
+                    candidate_departments = self._employment_departments(
+                        node,
+                        edge_props,
+                        organization_name=affiliation["name"],
                     )
                     candidate_period = self._employment_period(
                         node,
@@ -240,16 +243,21 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
                         continue
                     if requested_period and self._overlap(overlap, requested_period, None) is False:
                         continue
-                    expert_department = affiliation.get("department") or ""
-                    common_department = (
-                        candidate_department
-                        if candidate_department
-                        and expert_department
-                        and self._same_text(candidate_department, expert_department)
-                        else ""
-                    )
-                    if department and not self._contains(common_department, department):
-                        continue
+                    common_departments = [
+                        value for value in candidate_departments
+                        if any(
+                            self._same_text(value, expert_department)
+                            for expert_department in affiliation.get("departments", [])
+                        )
+                    ]
+                    if department:
+                        common_departments = [
+                            value for value in common_departments
+                            if self._contains(value, department)
+                        ]
+                        if not common_departments:
+                            continue
+                    common_department = "、".join(common_departments)
                     matching_periods.append((common_department, overlap, edge_props))
                 if not matching_periods:
                     continue
@@ -358,6 +366,59 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
             "apiCalls": list(gateway.api_calls),
         }
 
+    def _matches_employment_organization(
+        self, person_node: dict[str, Any], organization_name: str
+    ) -> bool:
+        if not organization_name:
+            return False
+        institutions = [
+            self._property(person_node, ("work_experience_institution_zh",)),
+            self._property(person_node, ("work_experience_institution_en",)),
+        ]
+        return any(
+            institution and self._same_text(institution, organization_name)
+            for institution in institutions
+        )
+
+    def _department_values(self, value: Any) -> list[str]:
+        """支持列表、JSON 列表和常用分隔符，不拆分部门名称中的斜杠层级。"""
+        if isinstance(value, str) and value.strip().startswith("["):
+            try:
+                decoded = json.loads(value)
+            except (ValueError, TypeError):
+                return []
+            if not isinstance(decoded, list):
+                return []
+            value = decoded
+        values = value if isinstance(value, (list, tuple)) else [value]
+        result: list[str] = []
+        for item in values:
+            if not isinstance(item, str):
+                continue
+            for department in re.split(r"[、,，;；\r\n]+", item):
+                department = department.strip()
+                if department and not any(self._same_text(department, old) for old in result):
+                    result.append(department)
+        return result
+
+    def _employment_departments(
+        self,
+        person_node: dict[str, Any],
+        edge_props: dict[str, Any],
+        *,
+        organization_name: str,
+    ) -> list[str]:
+        """保留边上的部门；缺失时补读当前机构对应的人员工作经历部门。"""
+        for key in DEPARTMENT_KEYS:
+            departments = self._department_values(edge_props.get(key))
+            if departments:
+                return departments
+        if not self._matches_employment_organization(person_node, organization_name):
+            return []
+        return self._department_values(
+            (person_node.get("properties") or {}).get("work_experience_department_zh")
+        )
+
     def _employment_period(
         self,
         person_node: dict[str, Any],
@@ -371,16 +432,7 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
         )
         if period is not None:
             return period
-        if not organization_name:
-            return None
-        institutions = [
-            self._property(person_node, ("work_experience_institution_zh",)),
-            self._property(person_node, ("work_experience_institution_en",)),
-        ]
-        if not any(
-            institution and self._same_text(institution, organization_name)
-            for institution in institutions
-        ):
+        if not self._matches_employment_organization(person_node, organization_name):
             return None
         return self._parse_period(
             self._property(person_node, ("work_experience_date",))
@@ -407,7 +459,11 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
                             edge_props,
                             organization_name=name,
                         ),
-                        "department": self._property(edge_node, DEPARTMENT_KEYS),
+                        "departments": self._employment_departments(
+                            person_node,
+                            edge_props,
+                            organization_name=name,
+                        ),
                         "edgeProperties": edge_props,
                         "entity": self._entity_data(target, {"name": name}),
                     }
@@ -513,6 +569,9 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
         }
         best = incoming if incoming["confidence"] > current["confidence"] else current
         merged = {**best}
+        merged["commonDepartment"] = "、".join(self._department_values([
+            current.get("commonDepartment"), incoming.get("commonDepartment")
+        ])) or None
         merged["employmentHistory"] = list(history_keys.values())
         merged["achievements"] = list(achievements.values())[:10]
         merged["employmentEdges"] = {
@@ -959,3 +1018,4 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
     def _year(self, value: str) -> int | None:
         match = re.search(r"(?:19|20)\d{2}", value)
         return int(match.group()) if match else None
+

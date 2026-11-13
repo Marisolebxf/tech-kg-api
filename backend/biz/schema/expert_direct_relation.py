@@ -155,7 +155,9 @@ class DirectRelationItem(BaseModel):
     expertA: DirectRelationExpert
     expertB: DirectRelationExpert
     institution: str | None = None
-    coPaperCount: int = 0
+    coPaperCount: int | None = None
+    coPaperCountSource: str | None = None
+    coPaperCountStatus: Literal["verified", "missing", "unavailable"] = "missing"
     relationStrength: int = 0
     reasonTags: list[str] = Field(default_factory=list)
     representativeAchievements: list[dict[str, str]] = Field(default_factory=list)

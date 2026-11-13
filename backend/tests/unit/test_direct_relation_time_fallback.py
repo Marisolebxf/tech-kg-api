@@ -77,7 +77,7 @@ def test_month_boundaries_do_not_invent_dates():
 @pytest.mark.asyncio
 async def test_edge_time_precedes_paper_fallback():
     client = AsyncMock()
-    rows = [row("2020-05-06")]
+    rows = [{**row("2020-05-06"), "co_paper_count": 7}]
     await ExpertDirectRelationService()._resolve_relation_times(client, rows)
     client.search_paths.assert_not_awaited()
     assert rows[0]["relation_time_source"] == "COAUTHOR_WITH.relation_time"
@@ -276,6 +276,7 @@ async def test_three_verified_space_snapshots(years, expected):
     rows = [row()]
     service = ExpertDirectRelationService()
     await service._resolve_relation_times(client, rows)
+    assert rows[0]["co_paper_count"] == len(years)
     result = service._filter_rows_by_time(rows, "2015-01", "2026-08")
     assert bool(result) == bool(expected)
     if result:

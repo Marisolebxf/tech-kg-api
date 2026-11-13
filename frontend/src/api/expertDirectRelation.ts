@@ -47,7 +47,10 @@ export interface DirectRelationItem {
   expertA: DirectRelationExpert;
   expertB: DirectRelationExpert;
   institution: string | null;
-  coPaperCount: number;
+  /** null means the complete shared-paper count could not be verified. */
+  coPaperCount: number | null;
+  coPaperCountSource?: string | null;
+  coPaperCountStatus?: "verified" | "missing" | "unavailable";
   relationStrength: number;
   reasonTags: string[];
   /** 成果类型码（paper/patent/project）；后端暂只回论文、无该字段。 */
@@ -124,3 +127,4 @@ export function queryExpertDirectRelation(
     ExpertDirectRelationQueryResponse
   >(EXPERT_DIRECT_RELATION_ENDPOINT, request, { signal });
 }
+

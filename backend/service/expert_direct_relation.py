@@ -224,6 +224,9 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                 )
             return payload
 
+        count_query_failed = any(
+            row.get("co_paper_count_status") == "unavailable" for row in rows
+        )
         time_query_failed = any(
             row.get("relation_time_status") == "unavailable" for row in rows
         )
@@ -244,6 +247,9 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                 "fallback": False,
                 "reason": fallback_reason,
             }
+
+        if count_query_failed:
+            source["coPaperCountStatus"] = "unavailable"
 
         if time_query_failed:
             source["relationTimeStatus"] = "unavailable"
@@ -273,7 +279,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             },
         }
         # 仅缓存图服务正常（无 fallback_reason）的结果，避免把瞬时故障缓存住。
-        if fallback_reason is None and not time_query_failed:
+        if fallback_reason is None and not (time_query_failed or count_query_failed):
             with _result_cache_lock:
                 _result_cache[cache_key] = (
                     time.monotonic() + _RESULT_CACHE_TTL,
@@ -491,7 +497,9 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
     async def _resolve_relation_times(
         self, client: Any, rows: list[dict[str, Any]]
     ) -> None:
+        """Resolve missing time/count from one complete, VID-deduplicated paper scan."""
         for row in rows:
+            count_missing = self._valid_paper_count(row.get("co_paper_count")) is None
             edge_time = parse_time(
                 row.get("relation_time"), source="COAUTHOR_WITH.relation_time"
             )
@@ -499,7 +507,8 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                 row["relation_time_evidence"] = [edge_time]
                 row["relation_time_status"] = "verified"
                 apply_time(row, edge_time)
-                continue
+                if not count_missing:
+                    continue
             try:
                 papers: dict[str, dict[str, Any]] = {}
                 offset = 0
@@ -514,14 +523,16 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                         limit=limit,
                         offset=offset,
                     )
-                    paths = page.get("items") or []
+                    if not isinstance(page, dict) or not isinstance(page.get("items"), list):
+                        raise GraphAPIError("共同论文分页响应不完整")
+                    paths = page["items"]
                     if offset + len(paths) > _MAX_TIME_PATHS:
                         raise GraphAPIError(
-                            "共同论文时间查询超过 1000 条路径，无法验证完整时间"
+                            "共同论文查询超过 1000 条路径，无法验证完整计数或时间"
                         )
                     for path in paths:
-                        nodes = path.get("nodes") or []
-                        if len(nodes) != 3:
+                        nodes = path.get("nodes") if isinstance(path, dict) else None
+                        if not isinstance(nodes, list) or len(nodes) != 3 or not isinstance(nodes[1], dict):
                             raise GraphAPIError("共同论文路径结构不完整")
                         paper = nodes[1]
                         paper_id = str(paper.get("id") or "")
@@ -537,14 +548,20 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                     if len(paths) < limit:
                         break
                     offset += len(paths)
+                if count_missing:
+                    row["co_paper_count"] = len(papers)
+                    row["evidence_count"] = len(papers)
+                    row["co_paper_count_source"] = "shared_paper.vid"
+                    row["co_paper_count_status"] = "verified"
                 evidence = [
                     item
                     for paper in papers.values()
                     if (item := paper_time(paper)) is not None
                 ]
-                row["relation_time_evidence"] = evidence
-                row["relation_time_status"] = "verified" if evidence else "missing"
-                apply_time(row, select_time(evidence))
+                if edge_time is None:
+                    row["relation_time_evidence"] = evidence
+                    row["relation_time_status"] = "verified" if evidence else "missing"
+                    apply_time(row, select_time(evidence))
                 row["representative_achievements"] = []
                 for paper in papers.values():
                     props = paper.get("properties") or {}
@@ -575,13 +592,19 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                         break
             except (GraphAPIError, TimeoutError):
                 logger.warning(
-                    "Could not verify shared-paper times for %s",
+                    "Could not verify shared-paper evidence for %s",
                     row["relation_key"],
                     exc_info=True,
                 )
-                row["relation_time_evidence"] = []
-                row["relation_time_status"] = "unavailable"
-                apply_time(row, None)
+                if count_missing:
+                    row["co_paper_count"] = None
+                    row["evidence_count"] = None
+                    row["co_paper_count_source"] = None
+                    row["co_paper_count_status"] = "unavailable"
+                if edge_time is None:
+                    row["relation_time_evidence"] = []
+                    row["relation_time_status"] = "unavailable"
+                    apply_time(row, None)
                 # Do not repeat an already failed path query for representative titles.
                 row["representative_achievements"] = []
 
@@ -628,6 +651,18 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                 candidates.append(f"person_{value}")
         return candidates
 
+    @staticmethod
+    def _valid_paper_count(value: Any) -> int | None:
+        # Explicit zero is valid; never truncate fractions or accept boolean counts.
+        if type(value) is int:
+            return value if value >= 0 else None
+        if isinstance(value, str) and re.fullmatch(r"[0-9]+", value.strip()):
+            try:
+                return int(value.strip())
+            except ValueError:
+                pass
+        return None
+
     def _build_row(
         self,
         anchor: dict[str, Any],
@@ -641,7 +676,13 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         left_id = str(left.get("id") or "")
         right_id = str(right.get("id") or "")
         edge_props = edge.get("properties") or {}
-        co_count = int(edge_props.get("co_paper_count") or edge_props.get("count") or 0)
+        co_count = None
+        count_source = None
+        for key in ("co_paper_count", "count"):
+            if (value := self._valid_paper_count(edge_props.get(key))) is not None:
+                co_count = value
+                count_source = f"COAUTHOR_WITH.{key}"
+                break
         return {
             "relation_key": f"direct:{left_id}:{right_id}",
             "expert_a_id": left_id,
@@ -659,6 +700,8 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             "expert_b_citation_nums": self._person_int(right, "citation_nums"),
             "expert_b_source": self._person_source(right),
             "co_paper_count": co_count,
+            "co_paper_count_source": count_source,
+            "co_paper_count_status": "verified" if co_count is not None else "missing",
             "evidence_kind": "paper",
             "evidence_count": co_count,
             "relation_time": edge_props.get("relation_time"),
@@ -750,9 +793,9 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
         )
         institution = shared_institution or "合作关系"
         evidence_kind = str(row.get("evidence_kind") or "paper")
-        evidence_count = int(
-            row.get("evidence_count") or row.get("co_paper_count") or 0
-        )
+        evidence_count = self._valid_paper_count(row.get("evidence_count"))
+        if evidence_count is None:
+            evidence_count = self._valid_paper_count(row.get("co_paper_count"))
 
         if evidence_kind == "patent":
             reason_tags = ["共专利"] if evidence_count else ["专利关联"]
@@ -765,7 +808,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
 
         # 对数缩放：证据数量差距很大时（如 11 篇 vs 139 篇）仍能拉开置信度档位，
         # 不再是线性公式一撞到 99 上限就全部趴平。
-        relation_strength = min(99, round(60 + math.log1p(evidence_count) * 10))
+        relation_strength = min(99, round(60 + math.log1p(evidence_count or 0) * 10))
         relation_time = row.get("relation_time")
         if hasattr(relation_time, "strftime"):
             last_updated_at = relation_time.strftime("%Y-%m-%d")
@@ -802,6 +845,8 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             "expertB": expert_b,
             "institution": institution,
             "coPaperCount": evidence_count if evidence_kind == "paper" else 0,
+            "coPaperCountSource": row.get("co_paper_count_source"),
+            "coPaperCountStatus": row.get("co_paper_count_status", "missing"),
             "relationStrength": relation_strength,
             "reasonTags": reason_tags,
             "representativeAchievements": row.get("representative_achievements", []),
@@ -834,7 +879,7 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                 ],
                 ["共同机构", shared_institution or "无"],
                 ["证据类型", self._evidence_label(evidence_kind)],
-                ["证据数量", evidence_count],
+                ["证据数量", evidence_count if evidence_count is not None else "暂不可用"],
                 ["判定依据", reason_tags],
                 ["关系摘要", " + ".join(reason_tags)],
             ],
@@ -876,6 +921,10 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
             src_a = row.get("expert_a_source") or {}
             src_b = row.get("expert_b_source") or {}
             has_meta = bool(src_a or src_b)
+            count = row.get("co_paper_count")
+            count_summary = f"共同论文 {count} 篇" if count is not None else "共同论文计数暂不可用"
+            count_source = row.get("co_paper_count_source")
+            count_from_papers = count_source == "shared_paper.vid"
 
             def _side_evidence(
                 side: str,
@@ -931,13 +980,13 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                         "technicalTable": "Person -[COAUTHOR_WITH]- Person",
                         "recordId": f"{row.get('expert_a_id') or '—'} / {row.get('expert_b_id') or '—'}",
                         "fieldIdentifier": "co_paper_count / relation_time / shared_paper.publication_time",
-                        "sourceTable": _COAUTHOR_SOURCE_TABLE,
-                        "sourceField": _COAUTHOR_SOURCE_FIELD,
+                        "sourceTable": "Paper / AUTHORED_BY (techkg: AUTHORED)" if count_from_papers else _COAUTHOR_SOURCE_TABLE,
+                        "sourceField": "VID (distinct)" if count_from_papers else _COAUTHOR_SOURCE_FIELD,
                         "graphVid": (
                             f"{row.get('expert_a_id') or '—'} -> {row.get('expert_b_id') or '—'}"
                         ),
                         "summary": (
-                            f"共同论文 {row.get('co_paper_count') or 0} 篇；"
+                            f"{count_summary}；计数来源：{count_source or '无'}；"
                             f"可核验合作时间：{row.get('relation_time') or '—'}；"
                             f"时间来源：{row.get('relation_time_source') or '无'}；"
                             f"论文 VID：{', '.join(row.get('relation_time_paper_ids') or []) or '—'}"
@@ -955,13 +1004,13 @@ class ExpertDirectRelationService(KGModuleScaffoldService):
                         "technicalTable": "Person -[COAUTHOR_WITH]- Person",
                         "recordId": f"{row.get('expert_a_id') or '—'} / {row.get('expert_b_id') or '—'}",
                         "fieldIdentifier": "co_paper_count / relation_time / shared_paper.publication_time",
-                        "sourceTable": _COAUTHOR_SOURCE_TABLE,
-                        "sourceField": _COAUTHOR_SOURCE_FIELD,
+                        "sourceTable": "Paper / AUTHORED_BY (techkg: AUTHORED)" if count_from_papers else _COAUTHOR_SOURCE_TABLE,
+                        "sourceField": "VID (distinct)" if count_from_papers else _COAUTHOR_SOURCE_FIELD,
                         "graphVid": (
                             f"{row.get('expert_a_id') or '—'} -> {row.get('expert_b_id') or '—'}"
                         ),
                         "summary": (
-                            f"共同论文 {row.get('co_paper_count') or 0} 篇；"
+                            f"{count_summary}；计数来源：{count_source or '无'}；"
                             f"可核验合作时间：{row.get('relation_time') or '—'}；"
                             f"时间来源：{row.get('relation_time_source') or '无'}；"
                             f"论文 VID：{', '.join(row.get('relation_time_paper_ids') or []) or '—'}；"

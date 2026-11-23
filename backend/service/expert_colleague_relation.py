@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -380,6 +381,47 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
             for institution in institutions
         )
 
+    def _affiliation_confidence(
+        self, person: dict[str, Any], organization: dict[str, Any], organization_id: str
+    ) -> float | None:
+        """按任职机构的源 ID 或名称匹配为已存在的任职边计分。"""
+        person_props = person.get("details") or {}
+        org_props = organization.get("details") or {}
+        org_names = [
+            name.strip()
+            for key in ("name_zh", "name_cn", "name_en", "name")
+            if isinstance(name := org_props.get(key), str) and name.strip()
+        ]
+
+        def normalize_id(raw: object) -> str:
+            value = str(raw).strip().removeprefix("org_")
+            return "" if value.casefold().strip("_") in {"none", "null", "empty"} else value
+
+        source_id = normalize_id(person_props.get("scholar_org_id")) or normalize_id(
+            person_props.get("organization_id")
+        )
+        if source_id:
+            org_ids = {
+                normalize_id(organization_id),
+                normalize_id(org_props.get("org_id")),
+                normalize_id(org_props.get("organization_id")),
+            }
+            if source_id not in org_ids:
+                return None
+            name_ids = {
+                hashlib.md5(name.lower().encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+                for name in org_names
+            }
+            if source_id not in name_ids:
+                return 1.0
+
+        if any(
+            self._matches_employment_organization({"properties": person_props}, org_name)
+            for org_name in org_names
+        ):
+            return 0.6
+        return None
+
     def _department_values(self, value: Any) -> list[str]:
         """支持列表、JSON 列表和常用分隔符，不拆分部门名称中的斜杠层级。"""
         if isinstance(value, str) and value.strip().startswith("["):
@@ -731,32 +773,24 @@ class ExpertColleagueRelationService(KGModuleScaffoldService):
             org_id = item.get("organizationId")
             if not org_id:
                 continue
+            organization = item["organizationEntity"]
             node_map[org_id] = {
                 "id": org_id,
                 "type": "organization",
                 "label": item["commonOrganization"],
-                "data": {**item["organizationEntity"], "confidence": item["confidence"]},
+                "data": {**organization, "confidence": item["confidence"]},
             }
-            add_edge(
-                expert["id"],
-                org_id,
-                "AFFILIATED_WITH",
-                {
-                    **item.get("employmentEdges", {}).get("expert", {}),
+            for role, person in (("expert", expert), ("colleague", colleague)):
+                data = {
+                    **item.get("employmentEdges", {}).get(role, {}),
                     "period": item["effectivePeriod"],
                     "existingGraphEdge": True,
-                },
-            )
-            add_edge(
-                colleague["id"],
-                org_id,
-                "AFFILIATED_WITH",
-                {
-                    **item.get("employmentEdges", {}).get("colleague", {}),
-                    "period": item["effectivePeriod"],
-                    "existingGraphEdge": True,
-                },
-            )
+                }
+                data.pop("confidence", None)
+                confidence = self._affiliation_confidence(person, organization, org_id)
+                if confidence is not None:
+                    data["confidence"] = confidence
+                add_edge(person["id"], org_id, "AFFILIATED_WITH", data)
             for achievement in item["achievements"]:
                 achievement_id = achievement["id"]
                 node_type = achievement["type"].casefold()

@@ -11,18 +11,33 @@ from fastapi.testclient import TestClient
 
 from biz.dependencies.kg_open_auth import KgOpenContext, require_kg_open_identity
 from biz.handler import kg_open
+from infra import rate_limit
 from infra.graph_db.exceptions import GraphRequestError
 from infra.workflow_mysql import get_workflow_session
-from service.external_api_client import ExternalClientIdentity
+from service.external_api_client import KG_OPEN_PII, KG_OPEN_READ, ExternalClientIdentity
 
 BASE_URL = "/api/v1/kg-open"
 CATALOG = {
-    "entityTypes": [{"name": "Paper", "properties": [{"name": "title", "type": "string"}]}],
+    "entityTypes": [
+        {"name": "Paper", "properties": [{"name": "title", "type": "string"}]},
+        {"name": "Person", "properties": [{"name": "email", "type": "string"}]},
+    ],
     "relationTypes": [
         {"name": "AUTHORED_BY", "sourceType": "Paper", "targetType": "Person", "properties": []}
     ],
 }
 VERTEX = {"id": "paper/1", "labels": ["Paper"], "properties": {"title": "量子综述"}}
+PERSON = {
+    "id": "person/1",
+    "labels": ["Person"],
+    "properties": {
+        "name_zh": "张三",
+        "email": "zhangsan@pku.edu.cn",
+        "birth_date": "1975-03-02",
+        "extra_json": '{"phone": "13800000000"}',
+        "h_index": 30,
+    },
+}
 EDGE = {
     "e": {"type": "AUTHORED_BY", "properties": {"confidence": 0.9}},
     "src": "paper/1",
@@ -33,6 +48,7 @@ EDGE = {
 
 @pytest.fixture
 def client(monkeypatch):
+    rate_limit.reset_memory_counters()
     app = FastAPI()
     app.include_router(kg_open.router, prefix="/api/v1")
     app.dependency_overrides[require_kg_open_identity] = lambda: KgOpenContext(
@@ -52,6 +68,8 @@ def client(monkeypatch):
             return SimpleNamespace(
                 records=[EDGE]
                 if "LOOKUP ON `AUTHORED_BY`" in query or query.startswith("GO ")
+                else [{"v": PERSON}]
+                if "LOOKUP ON `Person`" in query
                 else [{"v": VERTEX}]
             )
 
@@ -75,7 +93,7 @@ def test_rejects_non_identifier_type_name(client, path):
     assert client.get(BASE_URL + path).status_code == 400
 
 
-@pytest.mark.parametrize("query", ["limit=501", "offset=10000001", "limit=0"])
+@pytest.mark.parametrize("query", ["limit=501", "offset=10001", "offset=10000001", "limit=0"])
 def test_rejects_bad_pagination(client, query):
     response = client.get(BASE_URL + "/entity-types/Paper/entities?" + query)
     assert response.status_code == 200
@@ -121,3 +139,36 @@ def test_schema_without_stats_and_index_failure(client, monkeypatch):
     data = client.get(BASE_URL + "/schema").json()["data"]
     assert data["statsAvailable"] is False and data["entityTypes"][0]["count"] == -1
     assert client.get(BASE_URL + "/entity-types/Paper/entities").status_code == 503
+
+
+def _identity(app_client, identity):
+    app_client.app.dependency_overrides[require_kg_open_identity] = lambda: KgOpenContext(
+        identity, "shared", True
+    )
+
+
+def test_person_pii_masked_by_default(client):
+    """渗透 B1：kg-open 不得默认下发自然人邮箱/出生日期/extra_json 明文。"""
+    entity = client.get(BASE_URL + "/entity-types/Person/entities").json()["data"]["entities"][0]
+    props = entity["properties"]
+    assert props["email"] == "z***@pku.edu.cn"
+    assert props["birth_date"] == "1975-**-**"
+    assert props["extra_json"] == "***"
+    assert props["name_zh"] == "张三" and props["h_index"] == 30
+
+
+def test_pii_scope_receives_plaintext(client):
+    _identity(client, ExternalClientIdentity("partner", (KG_OPEN_READ, KG_OPEN_PII)))
+    entity = client.get(BASE_URL + "/entity-types/Person/entities").json()["data"]["entities"][0]
+    assert entity["properties"]["email"] == "zhangsan@pku.edu.cn"
+    assert entity["properties"]["birth_date"] == "1975-03-02"
+
+
+def test_rate_limited_per_caller(client, monkeypatch):
+    monkeypatch.setenv("RATE_LIMIT_KG_OPEN", "2/60")
+    for _ in range(2):
+        assert client.get(BASE_URL + "/entity-types/Paper/entities").status_code == 200
+    blocked = client.get(BASE_URL + "/entity-types/Paper/entities")
+    assert blocked.status_code == 429 and blocked.headers["Retry-After"]
+    _identity(client, ExternalClientIdentity("another"))
+    assert client.get(BASE_URL + "/entity-types/Paper/entities").status_code == 200

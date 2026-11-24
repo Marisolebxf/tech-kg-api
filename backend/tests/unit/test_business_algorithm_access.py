@@ -16,14 +16,15 @@ from service import graph_algorithm as service
 from service.platform_access import PlatformActor
 
 
-def actor(business="a", admin=False):
+def actor(business="a", admin=False, role="developer", user_id=None):
     return PlatformActor(
-        user_id=business,
+        user_id=user_id or business,
         username=business,
         display_name=business,
         email="",
         is_admin=admin,
         business_id=business,
+        business_role=role,
     )
 
 
@@ -44,6 +45,8 @@ def registry(monkeypatch):
     def allow(principal, space, action="read"):
         if not principal.is_admin and space != principal.business_id:
             raise HTTPException(403, "其他业务空间")
+        if action == "write" and not principal.is_admin and space == "shared":
+            raise HTTPException(403, "共享生产空间只读")
 
     monkeypatch.setattr("service.business_access_control.ensure_space_access", allow)
     monkeypatch.setattr(service, "_ensure_space_access", allow)
@@ -129,3 +132,63 @@ def test_registry_unavailable_fails_closed(registry, monkeypatch):
         service.get_result(actor(), "a", "remote-job")
     assert exc.value.status_code == 503
     remote.get_result.assert_not_called()
+
+
+def test_plain_member_cannot_submit_jobs(registry):
+    """渗透 B3：只读成员（writeAllowed=false）提交作业须 403，且不触达 Spark。"""
+    _, remote = registry
+    with pytest.raises(service.GraphAlgorithmError) as exc:
+        service.submit_job(actor(role="user"), "a", "pagerank", ["CITES"], {})
+    assert exc.value.status_code == 403
+    remote.submit.assert_not_called()
+
+
+def test_submit_requires_space_write_permission(registry):
+    _, remote = registry
+    with pytest.raises(HTTPException) as exc:
+        service.submit_job(actor("shared"), "shared", "pagerank", ["CITES"], {})
+    assert exc.value.status_code == 403
+    remote.submit.assert_not_called()
+    assert service.submit_job(actor(admin=True), "shared", "pagerank", ["CITES"], {})
+
+
+@pytest.mark.parametrize("operation", [service.get_job, service.get_result, service.cancel_job])
+def test_same_space_reader_cannot_touch_someone_elses_job(registry, operation):
+    _, remote = registry
+    service._register_remote_job(actor(), "a", "remote-job")
+    with pytest.raises(service.GraphAlgorithmError) as exc:
+        operation(actor(user_id="teammate"), "a", "remote-job")
+    assert exc.value.status_code == 403
+    remote.get_job.assert_not_called()
+    remote.get_result.assert_not_called()
+
+
+def test_executor_log_tail_only_visible_to_admin(registry):
+    _, remote = registry
+    remote.get_job.return_value = AlgorithmJob(
+        job_id="remote-job", status="running", log_tail="spark executor 10.0.0.1"
+    )
+    service._register_remote_job(actor(), "a", "remote-job")
+    assert service.get_job(actor(), "a", "remote-job")["logTail"] is None
+    admin_view = service.get_job(actor(admin=True), "a", "remote-job")
+    assert admin_view["logTail"] == "spark executor 10.0.0.1"
+
+
+def test_degree_job_is_bound_to_submitter(registry, monkeypatch):
+    job = {
+        "job_id": "degree-1",
+        "space": "a",
+        "status": "succeeded",
+        "created_by": "a",
+        "created_at": "2026-11-24T00:00:00+00:00",
+        "finished_at": "2026-11-24T00:00:01+00:00",
+        "error": None,
+        "rows": [],
+        "truncated": False,
+    }
+    monkeypatch.setattr(service, "_local_degree_job", lambda space, job_id: job)
+    assert service.get_job(actor(), "a", "degree-1")["status"] == "succeeded"
+    for operation in (service.get_job, service.get_result, service.cancel_job):
+        with pytest.raises(service.GraphAlgorithmError) as exc:
+            operation(actor(user_id="teammate"), "a", "degree-1")
+        assert exc.value.status_code == 403

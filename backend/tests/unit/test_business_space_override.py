@@ -264,3 +264,36 @@ async def test_business_dependency_rejects_invalid_override_header(monkeypatch, 
         await anext(dep)
     assert error.value.status_code == 400
     assert business_space_override.get() is None
+
+
+async def test_business_override_requires_read_access_to_override_space(monkeypatch):
+    """覆盖空间就是实际取数空间：无权空间不得借 X-Business-Graph-Space 读取。"""
+    from biz.router.register import require_business_data
+    from service import business_access_control
+
+    checked = []
+
+    def ensure(actor, space, action="read"):
+        checked.append((space, action))
+        if space == "gaoxing_test":
+            raise HTTPException(403, "无权对该图空间执行此操作")
+
+    monkeypatch.setattr(business_access_control, "ensure_space_access", ensure)
+    monkeypatch.setattr(business_access_control, "rbac_enabled", lambda: False)
+    monkeypatch.setattr("service.llm_context.request_llm_business", lambda actor, space: "b")
+    request = Request(
+        {
+            "type": "http",
+            "query_string": b"",
+            "headers": [
+                (b"x-graph-space", b"dev2"),
+                (b"x-business-graph-space", b"gaoxing_test"),
+            ],
+        }
+    )
+    dep = require_business_data(request, SimpleNamespace(is_admin=False, business_only=False))
+    with pytest.raises(HTTPException) as error:
+        await anext(dep)
+    assert error.value.status_code == 403
+    assert ("gaoxing_test", "read") in checked
+    assert business_space_override.get() is None

@@ -25,7 +25,11 @@ from service.platform_access import PlatformActor
 
 @pytest.fixture
 def database(monkeypatch):
-    monkeypatch.setattr("service.graph_space.GraphSpaceService._all_spaces", lambda self: [])
+    # 授权要求空间真实存在于图库（与空间列表同口径），这里列出已登记的空间
+    monkeypatch.setattr(
+        "service.graph_space.GraphSpaceService._all_spaces",
+        lambda self: ["dev", "dev2", "a_space", "b_space"],
+    )
     monkeypatch.setenv("BUSINESS_RBAC_ENABLED", "true")
     engine = create_engine(
         "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}

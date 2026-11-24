@@ -13,7 +13,7 @@ business_data_plane: ContextVar[bool] = ContextVar("business_data_plane", defaul
 
 # 九大业务图空间覆盖（X-Business-Graph-Space 请求头）：优先级高于
 # TRS_GRAPH_BUSINESS_SPACE 钉死与请求空间，仅改空间名不改连接参数（连接仍取
-# 业务面/平台面 env）。与 env 钉死同信任级的部署级测试旋钮，不参与空间绑定校验。
+# 业务面/平台面 env）。require_business_data 置位前已对覆盖空间做读权限校验。
 business_space_override: ContextVar[str | None] = ContextVar(
     "business_space_override", default=None
 )

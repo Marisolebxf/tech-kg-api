@@ -1,13 +1,15 @@
-"""图算法作业 API：所有登录用户可在有权空间提交/轮询算法作业，结果仅 csv 展示。"""
+"""图算法作业 API：有写权限的用户提交作业，提交人/管理员轮询与终止，结果仅 csv 展示。"""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi.concurrency import run_in_threadpool
 
 from biz.dependencies.auth import CurrentActor
 from biz.dependencies.selected_graph_space import bind_selected_graph_space
 from biz.schemas.common import ApiResponse
 from biz.schemas.graph_algorithm import AlgorithmSubmitRequest
+from infra.rate_limit import RateLimit, enforce_rate_limit
 from service.graph_algorithm import (
     GraphAlgorithmError,
     cancel_job,
@@ -50,12 +52,15 @@ def read_engine(
 
 
 @router.post("/jobs", response_model=ApiResponse)
-def create_job(
+async def create_job(
     payload: AlgorithmSubmitRequest, actor: CurrentActor, background_tasks: BackgroundTasks
 ) -> ApiResponse:
     """提交算法作业，返回 running 快照；前端轮询 GET /jobs/{jobId}。"""
+    # 每用户提交配额：Spark/图库算力为全平台共享（渗透 B3）
+    await enforce_rate_limit("graph-algorithm-submit", actor.user_id, RateLimit(30, 3600))
     try:
-        data = submit_job(
+        data = await run_in_threadpool(
+            submit_job,
             actor,
             payload.space,
             payload.algorithm,

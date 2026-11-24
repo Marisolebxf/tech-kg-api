@@ -6,7 +6,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from service.graph_console import GraphConsoleError, classify_statement, run_statement
+from service import graph_console
+from service.graph_console import (
+    GraphConsoleError,
+    bound_read_statement,
+    classify_statement,
+    run_statement,
+)
 from service.platform_access import PlatformActor
 
 
@@ -84,10 +90,15 @@ def test_trailing_semicolon_ok() -> None:
     assert classify_statement("SHOW TAGS;") == "read"
 
 
+class _Calls(list):
+    rows: list
+
+
 @pytest.fixture
 def console_backend(monkeypatch):
     monkeypatch.setenv("TRS_GRAPH_SPACE", "shared_business")
-    calls = []
+    calls = _Calls()
+    rows = [{"result": 1}]
     bindings = {("101", "bound_private")}
 
     class Session:
@@ -100,9 +111,9 @@ def console_backend(monkeypatch):
         def list_spaces(self):
             return ["shared_business", "bound_private", "other_private"]
 
-        def execute_read(self, statement):
+        def execute_read(self, statement, **kwargs):
             calls.append(("read", statement))
-            return SimpleNamespace(records=[{"result": 1}], summary={})
+            return SimpleNamespace(records=rows[:], summary={})
 
         def execute_write(self, statement):
             calls.append(("write", statement))
@@ -126,6 +137,7 @@ def console_backend(monkeypatch):
     monkeypatch.setattr("infra.mysql.create_session", Session)
     monkeypatch.setattr("service.graph_space.GraphSpaceService", SpaceService)
     monkeypatch.setattr("infra.graph_db.get_space_client", lambda space: client)
+    calls.rows = rows
     return calls
 
 
@@ -154,3 +166,82 @@ def test_shared_or_bound_read_access_never_grants_write(console_backend, space) 
 def test_administrator_keeps_existing_write_permission(console_backend) -> None:
     run_statement(_actor(is_admin=True), "other_private", 'DELETE VERTEX "p1"')
     assert console_backend == [("write", 'DELETE VERTEX "p1"')]
+
+
+# ---------- 渗透 B1：普通用户只读语句的服务端行数上限 ----------
+
+
+@pytest.mark.parametrize(
+    "statement,expected",
+    [
+        (
+            "LOOKUP ON Paper YIELD properties(vertex)",
+            "LOOKUP ON Paper YIELD properties(vertex) | LIMIT 1000",
+        ),
+        (
+            'GO FROM "p1" OVER CITES YIELD dst(edge);',
+            'GO FROM "p1" OVER CITES YIELD dst(edge) | LIMIT 1000',
+        ),
+        (
+            'FETCH PROP ON Paper "p1" YIELD vertex AS v',
+            'FETCH PROP ON Paper "p1" YIELD vertex AS v | LIMIT 1000',
+        ),
+        ("MATCH (v:Paper) RETURN v", "MATCH (v:Paper) RETURN v LIMIT 1000"),
+        ("MATCH (v:Paper)--(p) RETURN p LIMIT 20", "MATCH (v:Paper)--(p) RETURN p LIMIT 20"),
+        (
+            "MATCH (a)-->(b)<--(c) RETURN a SKIP 5 LIMIT 1000;",
+            "MATCH (a)-->(b)<--(c) RETURN a SKIP 5 LIMIT 1000",
+        ),
+        (
+            'MATCH (v) WHERE v.Paper.url == "http://x -- LIMIT 5" RETURN v',
+            'MATCH (v) WHERE v.Paper.url == "http://x -- LIMIT 5" RETURN v LIMIT 1000',
+        ),
+        (
+            "UNWIND range(1, 100000000) AS x RETURN x",
+            "UNWIND range(1, 100000000) AS x RETURN x LIMIT 1000",
+        ),
+        ("SHOW TAGS", "SHOW TAGS"),
+        ("RETURN 1 AS result", "RETURN 1 AS result"),
+    ],
+)
+def test_user_read_statements_get_row_bound(statement, expected) -> None:
+    assert bound_read_statement(statement) == expected
+
+
+@pytest.mark.parametrize(
+    "statement,reason",
+    [
+        ("MATCH (v) RETURN v LIMIT 469009", "LIMIT"),
+        ("MATCH (v) RETURN v -- LIMIT 5", "注释"),
+        ("MATCH (v) RETURN v # LIMIT 5", "注释"),
+        ("MATCH (v) RETURN v // LIMIT 5", "注释"),
+        ("MATCH (v) RETURN v /* LIMIT 5 */", "注释"),
+        ("MATCH (v) RETURN v UNION MATCH (u) RETURN u LIMIT 1", "集合运算"),
+        ('GO FROM "a" OVER e YIELD dst(edge) UNION GO FROM "b" OVER e YIELD dst(edge)', "集合运算"),
+        ('MATCH (v) WHERE v.P.name == "x RETURN v', "引号"),
+    ],
+)
+def test_unboundable_user_statements_rejected(statement, reason) -> None:
+    with pytest.raises(GraphConsoleError, match=reason):
+        bound_read_statement(statement)
+
+
+def test_ordinary_user_query_is_executed_bounded_and_truncated(console_backend) -> None:
+    console_backend.rows[:] = [{"v": i} for i in range(1500)]
+    result = run_statement(_actor(), "shared_business", "LOOKUP ON Paper YIELD properties(vertex)")
+    assert console_backend == [("read", "LOOKUP ON Paper YIELD properties(vertex) | LIMIT 1000")]
+    assert len(result["records"]) == 1000
+    assert result["summary"]["truncated"] is True
+
+
+def test_administrator_reads_are_not_rewritten(console_backend) -> None:
+    run_statement(_actor(is_admin=True), "shared_business", "LOOKUP ON Paper YIELD id(vertex)")
+    assert console_backend == [("read", "LOOKUP ON Paper YIELD id(vertex)")]
+
+
+def test_bounded_and_unbounded_results_never_share_cache(console_backend, monkeypatch) -> None:
+    monkeypatch.setattr(graph_console, "_ngql_payload_cache", {})
+    statement = "LOOKUP ON Paper YIELD id(vertex)"
+    graph_console.run_statement_cached_payload(_actor(is_admin=True), "shared_business", statement)
+    graph_console.run_statement_cached_payload(_actor(), "shared_business", statement)
+    assert [call[1] for call in console_backend] == [statement, statement + " | LIMIT 1000"]

@@ -38,9 +38,11 @@ X-API-Key: <管理员签发的密钥>
 - API Key 为 32 字节安全随机数，数据库只存 SHA-256 摘要。明文仅创建或轮换时显示一次。
 - 默认有效期 **365 天**；签发/轮换可指定 `--expires-days 1～3650`。精确过期时刻为签发 UTC 时刻加指定天数；请求不会续期。
 - 带任一 API Key Header 就选择机器认证，缺项、重复、错误、过期或停用均拒绝，不回退到 Bearer/Cookie。
-- 不带两个 API Key Header 时，兼容平台用户的 Bearer/Cookie 认证和空间读权限检查。
+- 不带两个 API Key Header 时，兼容平台用户的 Bearer/Cookie 认证，仅限开发维护与管理员联调，普通注册用户返回 403；仍做空间读权限检查。
 - 固定查询后端 `TRS_GRAPH_SPACE` 配置的默认空间，未配置时为 `dev`。请求中的 `space`、`graphSpace` 和 `X-Graph-Space` 不用于切换空间。
-- `BUSINESS_RBAC_ENABLED=true` 时，机器调用还要求默认空间登记为共享生产空间。单个 `kg-open:read` 凭证可读取这个空间的所有对外目录实体类型、关系类型及完整属性；目前没有细分到字段或业务行的授权。
+- `BUSINESS_RBAC_ENABLED=true` 时，机器调用还要求默认空间登记为共享生产空间。单个 `kg-open:read` 凭证可读取这个空间的所有对外目录实体类型、关系类型及属性；自然人敏感字段默认脱敏，见下条。
+- 自然人（`Person`）的 `email`、`birth_date`、`extra_json` 默认脱敏：邮箱保留首字符与域名（`z***@pku.edu.cn`），出生日期只保留年份（`1975-**-**`），`extra_json` 返回 `***`。需要明文的调用方经审批另行授予 `kg-open:pii`，其余凭证与浏览器会话一律脱敏。脱敏同样作用于关系接口附带的端点实体。
+- 每个调用方（机器 client 或用户）默认每 60 秒最多 120 次请求，超出返回 429 与 `Retry-After`；运维可用 `RATE_LIMIT_KG_OPEN=<次数>/<秒>` 调整。
 - 正式环境启用 `AUTH_ENABLED=true`，不要启用模拟开发身份；调用方在后端保存凭证，通过 HTTPS 调用。
 
 ## 3. 公共响应与分页
@@ -60,7 +62,7 @@ X-API-Key: <管理员签发的密钥>
 - 服务端多取一条记录判断 `hasMore`，不依赖统计总数。
 - 游标绑定空间和类型筛选条件；更换类型时必须重新开始。`limit` 可改变，`includeEntities` 可改变。
 - 实体按 VID 排序，边按 `(source, target, rank)` 排序。新游标使用上述最后一个键继续，不存在一千万 offset 上限；这不保证查询耗时与总量无关。
-- 旧 GET 类型列表仍接受 `offset=0～10000000`，默认 0；与非空 cursor 同时使用时 offset 必须为 0。新调用方使用 cursor。
+- 旧 GET 类型列表仍接受 `offset=0～10000`，默认 0；超出范围按参数校验失败处理。offset 分页每页都要扫描排序前面的全部记录，更深的数据只能用 cursor。与非空 cursor 同时使用时 offset 必须为 0。新调用方使用 cursor。
 - 游标是分页位置，不是认证凭证、加密数据或数据库快照。遍历时新增的较小键可能不被读到，删除的记录可能消失；严格一致的全量导出需独立快照机制。
 - `total`、`count` 是 SHOW STATS 的参考快照，`totalIsEstimate` / `countIsEstimate` 恒为 true；未知时为 **-1**。统计缓存约 300 秒，实际新鲜度还取决于最近一次统计任务，不是每 300 秒自动重算。
 
@@ -169,7 +171,7 @@ Query 参数：
 |---|---|---|---|---|
 | `limit` | int | 否 | 20 | 页大小，范围 1～500 |
 | `cursor` | string | 否 | 空串 | 翻页游标。首页不传或传空串；之后原样回传上一页 `nextCursor`。最长 4096 字符；与服务端记录的空间/接口/类型绑定，换类型必须从头开始；与 `offset` 非零值同传返回 400 |
-| `offset` | int | 否 | 0 | 旧 offset 分页兼容参数，范围 0～10000000。新调用方一律使用 `cursor` |
+| `offset` | int | 否 | 0 | 旧 offset 分页兼容参数，范围 0～10000。新调用方一律使用 `cursor` |
 
 **输出参数**（`data`）：
 
@@ -326,9 +328,10 @@ curl 的 --fail-with-body 不能识别 HTTP 200 包装的业务错误；调用�
 | 参数校验失败、分页越界等 | 200 | 平台统一 `code=422, success=false` 响应壳 |
 | 非法类型名、无效/不匹配游标 | 400 | `{"detail":"..."}` |
 | 缺少身份、密钥错误/缺项/重复/过期/停用 | 401 | `{"detail":"..."}` |
-| 有效凭证但缺少 kg-open:read 或空间门禁不通过 | 403 | `{"detail":"..."}` |
+| 有效凭证但缺少 kg-open:read 或空间门禁不通过；普通用户浏览器会话 | 403 | `{"detail":"..."}` |
 | 类型不存在 | 404 | `{"detail":"..."}` |
 | 图执行队列满或等待超时 | 429 | `{"detail":"..."}`，`Retry-After: 1` |
+| 调用方超出频控额度 | 429 | `{"detail":"请求过于频繁…"}`，`Retry-After` 为窗口剩余秒数 |
 | 图服务调用失败或超时 | 502 | `{"detail":"图数据服务暂时不可用，请稍后重试"}` |
 | 认证数据库不可用、目录数据库查询失败、所需索引未就绪 | 503 | `{"detail":"..."}` |
 
@@ -359,6 +362,12 @@ docker exec -w /app <后端容器名> .venv/bin/python -m script.manage_external
 ```
 
 轮换不会启用已停用调用方。`disable --client-id ...` 立即阻止后续调用。
+
+自然人敏感字段明文需审批后单独授予 `kg-open:pii`（与 `kg-open:read` 同时授予；轮换时同样要显式列出）：
+
+```bash
+docker exec -w /app <后端容器名> .venv/bin/python -m script.manage_external_api_clients rotate \n  --client-id partner_graph_a --expires-days 365 \n  --scopes kg-open:read,kg-open:pii
+```
 
 上线检查：
 

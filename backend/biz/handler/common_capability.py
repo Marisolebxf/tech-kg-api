@@ -1,12 +1,31 @@
-from typing import Any, Literal
+import asyncio
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from application.common_capability import CommonCapabilityApplication
+from biz.dependencies.auth import CurrentActor
+from infra.rate_limit import RateLimit, enforce_rate_limit
 
 router = APIRouter(prefix="/common-capabilities", tags=["common-capabilities"])
 application = CommonCapabilityApplication()
+
+# 单请求上限 + 按用户的文本额度（批量按条数计费）：渗透 B5 实测单请求 1000 条即时执行，
+# 底层逐条消耗 NLP/LLM 算力。额度可用 RATE_LIMIT_COMMON_CAPABILITIES 覆盖。
+MAX_TEXT_CHARS = 5000
+MAX_BATCH_TEXTS = 50
+MAX_KB_ENTITIES = 200
+_RATE_BUCKET = "common-capabilities"
+_DEFAULT_RATE = RateLimit(limit=200, window_seconds=60)
+
+BoundedText = Annotated[str, Field(max_length=MAX_TEXT_CHARS)]
+
+
+async def _run_charged(actor, cost: int, func, *args, **kwargs):
+    """先扣额度再在线程池执行：抽取/对齐为同步重计算，直接在协程里跑会卡住事件循环。"""
+    await enforce_rate_limit(_RATE_BUCKET, actor.user_id, _DEFAULT_RATE, cost=cost)
+    return await asyncio.to_thread(func, *args, **kwargs)
 
 
 class EntityExtractionRequest(BaseModel):
@@ -21,7 +40,9 @@ class EntityExtractionRequest(BaseModel):
         }
     )
 
-    text: str = Field(..., min_length=1, description="Text to extract entities from.")
+    text: str = Field(
+        ..., min_length=1, max_length=MAX_TEXT_CHARS, description="Text to extract entities from."
+    )
     source_type: Literal["work", "education", "abstract", "general"] = Field(
         default="general",
         description="Text scenario used to focus entity types.",
@@ -35,10 +56,12 @@ class EntityAlignmentRequest(BaseModel):
 
     kg_a: list[dict[str, Any]] | None = Field(
         default=None,
+        max_length=MAX_KB_ENTITIES,
         description="Left-side entity list. Empty or null uses built-in demo data.",
     )
     kg_b: list[dict[str, Any]] | None = Field(
         default=None,
+        max_length=MAX_KB_ENTITIES,
         description="Right-side entity list. Empty or null uses built-in demo data.",
     )
     top_k: int = Field(default=3, ge=1, le=50, description="Number of candidates to recall.")
@@ -57,10 +80,15 @@ class EntityDisambiguationRequest(BaseModel):
         }
     )
 
-    text: str = Field(..., min_length=1, description="Full context text.")
-    mention: str = Field(..., min_length=1, description="Entity mention to disambiguate.")
+    text: str = Field(
+        ..., min_length=1, max_length=MAX_TEXT_CHARS, description="Full context text."
+    )
+    mention: str = Field(
+        ..., min_length=1, max_length=256, description="Entity mention to disambiguate."
+    )
     kb: list[dict[str, Any]] | None = Field(
         default=None,
+        max_length=MAX_KB_ENTITIES,
         description="Candidate KB entities. Empty or null uses built-in demo data.",
     )
     top_k: int = Field(default=5, ge=1, le=50, description="Number of candidates to recall.")
@@ -78,7 +106,9 @@ class RelationExtractionRequest(BaseModel):
         }
     )
 
-    text: str = Field(..., min_length=1, description="Text to extract relations from.")
+    text: str = Field(
+        ..., min_length=1, max_length=MAX_TEXT_CHARS, description="Text to extract relations from."
+    )
     method: Literal["rule", "llm", "hybrid"] = Field(
         default="rule",
         description="Extraction method. llm/hybrid require LLM_API_KEY.",
@@ -97,7 +127,9 @@ class BatchRelationExtractionRequest(BaseModel):
         }
     )
 
-    texts: list[str] = Field(..., min_length=1, description="Texts to process.")
+    texts: list[BoundedText] = Field(
+        ..., min_length=1, max_length=MAX_BATCH_TEXTS, description="Texts to process."
+    )
     method: Literal["rule", "llm", "hybrid"] = Field(default="rule")
 
 
@@ -116,35 +148,56 @@ async def metadata() -> dict[str, Any]:
 
 
 @router.post("/entity-extraction", responses={400: {"description": "请求参数无效"}})
-async def extract_entities(body: EntityExtractionRequest) -> dict[str, Any]:
+async def extract_entities(body: EntityExtractionRequest, actor: CurrentActor) -> dict[str, Any]:
     if not body.text.strip():
         raise HTTPException(status_code=400, detail="text cannot be empty")
-    return application.extract_entities(body.text, body.source_type)
+    return await _run_charged(actor, 1, application.extract_entities, body.text, body.source_type)
 
 
 @router.post("/entity-alignment")
-async def align_entities(body: EntityAlignmentRequest) -> dict[str, Any]:
-    return application.align_entities(body.kg_a, body.kg_b, top_k=body.top_k)
+async def align_entities(body: EntityAlignmentRequest, actor: CurrentActor) -> dict[str, Any]:
+    return await _run_charged(
+        actor, 1, application.align_entities, body.kg_a, body.kg_b, top_k=body.top_k
+    )
 
 
 @router.post("/entity-disambiguation")
-async def disambiguate_entity(body: EntityDisambiguationRequest) -> dict[str, Any]:
-    return application.disambiguate_entity(body.text, body.mention, body.kb, top_k=body.top_k)
+async def disambiguate_entity(
+    body: EntityDisambiguationRequest, actor: CurrentActor
+) -> dict[str, Any]:
+    return await _run_charged(
+        actor,
+        1,
+        application.disambiguate_entity,
+        body.text,
+        body.mention,
+        body.kb,
+        top_k=body.top_k,
+    )
 
 
 @router.post("/relation-extraction", responses={400: {"description": "请求参数无效"}})
-async def extract_relation(body: RelationExtractionRequest) -> dict[str, Any]:
+async def extract_relation(body: RelationExtractionRequest, actor: CurrentActor) -> dict[str, Any]:
     if not body.text.strip():
         raise HTTPException(status_code=400, detail="text cannot be empty")
-    return application.extract_relations(body.text, method=body.method)
+    return await _run_charged(
+        actor, 1, application.extract_relations, body.text, method=body.method
+    )
 
 
-@router.post("/relation-extraction/batch", responses={400: {"description": "请求参数无效"}})
-async def batch_extract_relation(body: BatchRelationExtractionRequest) -> dict[str, Any]:
+@router.post(
+    "/relation-extraction/batch",
+    responses={400: {"description": "请求参数无效"}, 429: {"description": "超出调用额度"}},
+)
+async def batch_extract_relation(
+    body: BatchRelationExtractionRequest, actor: CurrentActor
+) -> dict[str, Any]:
     texts = [text for text in body.texts if text.strip()]
     if not texts:
         raise HTTPException(status_code=400, detail="texts cannot be empty")
-    return application.batch_extract_relations(texts, method=body.method)
+    return await _run_charged(
+        actor, len(texts), application.batch_extract_relations, texts, method=body.method
+    )
 
 
 @router.get("/relation-extraction/examples")

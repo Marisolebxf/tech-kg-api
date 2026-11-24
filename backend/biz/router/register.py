@@ -53,7 +53,6 @@ from biz.handler.task_center import router as task_center_router
 from biz.handler.tech_enterprise_relation_business import (
     router as tech_enterprise_relation_business_router,
 )
-from biz.handler.workflow_system import readonly_router as workflow_system_readonly_router
 from biz.handler.workflow_system import router as workflow_system_router
 
 API_V1_PREFIX = "/api/v1"
@@ -78,7 +77,8 @@ async def require_business_data(request: Request, actor: CurrentActor):
     space = await read_request_graph_space(request) or get_current_space()
     # X-Business-Graph-Space：按请求覆盖九大业务取数空间（测试旋钮，只改空间名，
     # 连接参数仍取业务面/平台面 env）。与 X-Graph-Space 分开解析，避免下拉空间
-    # 一致性校验误伤；空间绑定校验仍走请求空间（与 env 钉死同信任级）。
+    # 一致性校验误伤；但覆盖空间就是实际取数空间，必须同样过读权限校验——
+    # 否则任何登录用户都能借业务接口读任意空间（与渗透 B2 同类）。
     override_values = request.headers.getlist("X-Business-Graph-Space")
     if len(override_values) > 1:
         raise HTTPException(400, "X-Business-Graph-Space 头只能出现一次")
@@ -88,6 +88,8 @@ async def require_business_data(request: Request, actor: CurrentActor):
             400, "图空间名称格式不正确（字母/数字/下划线，字母或下划线开头，最长 64）"
         )
     await asyncio.to_thread(ensure_space_access, actor, space, "read")
+    if override_value and override_value != space:
+        await asyncio.to_thread(ensure_space_access, actor, override_value, "read")
     can_write = actor.is_admin and not actor.business_only
     if rbac_enabled():
         try:
@@ -187,9 +189,10 @@ def register_routers(app: FastAPI) -> None:
         expert_colleague_service_router,
         tech_enterprise_relation_business_router,
         industry_node_top_events_business_router,
-        # 平台总览页数据对所有登录用户只读开放（页面卡片对普通用户不可点击）：
+        # 平台总览页数据对所有登录用户只读开放（页面卡片对普通用户不可点击）。
+        # 构建任务列表不在此列：前端仅对开发维护拉取，普通用户经此入口可读全平台
+        # 他人任务（渗透 B6），统一走下方 maintainer 路由组。
         platform_overview_router,
-        workflow_system_readonly_router,
         manual_review_readonly_router,
         graph_space_readonly_router,
     )

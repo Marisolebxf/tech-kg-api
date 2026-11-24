@@ -4,7 +4,8 @@
 - 拒绝多语句（分号分隔的多条）、管道、USE（图空间由 scoped client 强制）；
 - 首 token 白名单分类为 读 / 写；
 - DDL 与管理类语句对所有人（含管理员）一律拒绝；
-- 写语句仅平台管理员可执行。
+- 写语句仅平台管理员可执行；
+- 普通用户的只读语句由服务端限定返回行数（见 bound_read_statement）。
 """
 
 from __future__ import annotations
@@ -65,6 +66,16 @@ DDL_TOKENS = frozenset(
 
 _MAX_STATEMENT_CHARS = 4000
 
+# 普通用户（非开发维护/管理员）的只读语句服务端加行数上限：单条 LOOKUP 曾一次拖走
+# 46.9 万条论文全属性（92MB/15s，渗透 B1）。Cypher 族语句须自带不超过上限的 LIMIT
+# （缺省由服务端补上），nGQL 族语句由服务端追加管道 LIMIT。
+USER_MAX_ROWS = int(os.getenv("GRAPH_CONSOLE_USER_MAX_ROWS", "1000"))
+USER_READ_TIMEOUT_SECONDS = float(os.getenv("GRAPH_CONSOLE_USER_TIMEOUT_SECONDS", "20"))
+_CYPHER_BOUND_TOKENS = frozenset({"MATCH", "WITH", "UNWIND"})
+_PIPE_BOUND_TOKENS = frozenset({"LOOKUP", "GO", "FETCH", "FIND", "GET"})
+# Cypher 模式里的无向/有向边写法 (a)--(b)、(a)-->(b)、(a)<--(b) 不是注释
+_EDGE_DASHES = re.compile(r"(?<=[)<])--(?=[(>])")
+
 # 只读查询结果缓存：同 space+statement 在 TTL 内直接复用上次结果。
 # 背景：Nebula 会话池容量小，500 并发重复执行同一语句会耗尽会话
 # （no extra session available）。TTL 环境变量
@@ -115,7 +126,13 @@ def run_statement_cached_payload(actor: PlatformActor, space: str, statement: st
         kind = classify_statement(statement)
     except GraphConsoleError:
         kind = None
-    key = ngql_cache_key(space, statement) if kind == "read" else None
+    # 缓存键取实际执行的语句：普通用户被补上 LIMIT 后与开发维护的原语句不同键，
+    # 不会命中对方未限行的结果
+    key = (
+        ngql_cache_key(space, _effective_statement(actor, statement, kind))
+        if kind == "read"
+        else None
+    )
     if key is not None:
         # single-flight：持锁重算，同 key 的并发请求只放一个真实执行，
         # 其余等锁后直接命中缓存（500 并发惊群下 Nebula 会话会耗尽）
@@ -212,6 +229,69 @@ def classify_statement(statement: str) -> str:
     )
 
 
+def _requires_row_bound(actor: PlatformActor) -> bool:
+    from service.business_access_control import rbac_enabled
+
+    return not (actor.can_develop if rbac_enabled() else actor.is_admin)
+
+
+def _effective_statement(actor: PlatformActor, statement: str, kind: str | None) -> str:
+    if kind == "read" and _requires_row_bound(actor):
+        return bound_read_statement(statement)
+    return statement
+
+
+def _mask_literals(statement: str) -> str:
+    """引号内容换成空格（长度不变），结构检查只看语句骨架，不被字符串里的 -- // LIMIT 干扰。"""
+    chars: list[str] = []
+    quote: str | None = None
+    escaped = False
+    for ch in statement:
+        if quote is None:
+            quote = ch if ch in "\"'`" else None
+            chars.append(ch)
+        elif escaped:
+            escaped = False
+            chars.append(" ")
+        elif ch == "\\":
+            escaped = True
+            chars.append(" ")
+        elif ch == quote:
+            quote = None
+            chars.append(ch)
+        else:
+            chars.append(" ")
+    if quote is not None:
+        raise GraphConsoleError("语句中的引号未闭合")
+    return "".join(chars)
+
+
+def bound_read_statement(statement: str) -> str:
+    """普通用户只读语句的行数上限改写；超限或无法确定上限的写法直接拒绝。
+
+    注释会让追加的 LIMIT 失效（被注释掉），集合运算的 LIMIT 只约束最后一段，
+    这两类对普通用户一律拒绝，保证服务端能确定执行语句的返回上限。
+    """
+    body = statement.strip().rstrip(";").rstrip()
+    skeleton = _mask_literals(body)
+    if re.search(r"#|//|/\*", skeleton) or "--" in _EDGE_DASHES.sub("", skeleton):
+        raise GraphConsoleError("控制台语句不支持注释，请删除注释后重试")
+    if re.search(r"\b(UNION|INTERSECT|MINUS)\b", skeleton, re.IGNORECASE):
+        raise GraphConsoleError("控制台语句不支持集合运算，请拆成多条查询")
+    token_match = re.match(r"[A-Za-z_]+", skeleton)
+    first_token = (token_match.group(0) if token_match else "").upper()
+    if first_token in _CYPHER_BOUND_TOKENS:
+        limit = re.search(r"\bLIMIT\s+(\d+)$", skeleton, re.IGNORECASE)
+        if limit is None:
+            return f"{body} LIMIT {USER_MAX_ROWS}"
+        if int(limit.group(1)) > USER_MAX_ROWS:
+            raise GraphConsoleError(f"单次最多返回 {USER_MAX_ROWS} 条，请把 LIMIT 调到该值以内")
+        return body
+    if first_token in _PIPE_BOUND_TOKENS:
+        return f"{body} | LIMIT {USER_MAX_ROWS}"
+    return statement
+
+
 def run_statement(actor: PlatformActor, space: str, statement: str) -> dict:
     """按分类执行语句并返回 {records, columns, summary}。
 
@@ -239,7 +319,7 @@ def run_statement(actor: PlatformActor, space: str, statement: str) -> dict:
     import logging
 
     from infra.graph_db import get_space_client
-    from infra.graph_db.exceptions import GraphRepoError
+    from infra.graph_db.exceptions import GraphRepoError, public_graph_error
 
     logger = logging.getLogger(__name__)
 
@@ -265,12 +345,15 @@ def run_statement(actor: PlatformActor, space: str, statement: str) -> dict:
         raise GraphConsoleError(str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         logger.warning("nGQL 控制台列空间失败: %s", exc)
-        raise GraphConsoleError(f"图服务不可用: {exc}") from exc
+        raise GraphConsoleError("图服务不可用，请稍后重试", status_code=503) from exc
     if space not in spaces:
         raise GraphConsoleError(f"图空间 {space} 不存在")
     if not space_allowed:
         raise GraphConsoleError("无权访问未绑定的图空间", status_code=403)
 
+    bounded = kind == "read" and _requires_row_bound(actor)
+    executed = bound_read_statement(statement) if bounded else statement
+    read_options = {"timeout": USER_READ_TIMEOUT_SECONDS} if bounded else {}
     try:
         client = get_space_client(space)
         if kind == "write":
@@ -284,13 +367,16 @@ def run_statement(actor: PlatformActor, space: str, statement: str) -> dict:
                     try:
                         if attempt > 1:
                             time.sleep(delay)
-                        result = client.execute_read(statement)
+                        result = client.execute_read(executed, **read_options)
                         break
                     except GraphRepoError as exc:
                         if "no extra session" not in str(exc) or attempt == 3:
                             raise
     except GraphRepoError as exc:
-        raise GraphConsoleError(f"语句执行失败: {exc}") from exc
+        # 原始错误含内部路由与内存水位等运维信息，只进日志（渗透 B4）
+        logger.warning("nGQL 控制台执行失败 space=%s: %s", space, exc)
+        message, status_code = public_graph_error(exc)
+        raise GraphConsoleError(f"语句执行失败: {message}", status_code=status_code) from exc
 
     records = [dict(record) for record in (result.records or [])]
     columns: list[str] = []
@@ -299,4 +385,7 @@ def run_statement(actor: PlatformActor, space: str, statement: str) -> dict:
     summary = getattr(result, "summary", None) or {}
     if not isinstance(summary, dict):
         summary = {"summary": str(summary)}
+    if bounded and len(records) > USER_MAX_ROWS:
+        records = records[:USER_MAX_ROWS]
+        summary = {**summary, "truncated": True}
     return {"records": records, "columns": columns, "summary": summary}

@@ -37,7 +37,12 @@ def actor(role="user", business="a", business_only=False):
 
 @pytest.fixture
 def business_db(monkeypatch):
-    monkeypatch.setattr("service.graph_space.GraphSpaceService._all_spaces", lambda self: [])
+    # 图库实际空间：已登记三个；yunfei_test 仅留有公共策略（图库里已删除），
+    # 用于覆盖渗透 B2 的残留策略口径。
+    monkeypatch.setattr(
+        "service.graph_space.GraphSpaceService._all_spaces",
+        lambda self: ["private_a", "private_b", "production"],
+    )
     monkeypatch.setenv("BUSINESS_RBAC_ENABLED", "true")
     engine = create_engine(
         "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
@@ -77,6 +82,7 @@ def business_db(monkeypatch):
                 BusinessGraphSpace(
                     space_name="production", is_shared_production=True, shared_key="production"
                 ),
+                BusinessSpacePolicy(space_name="yunfei_test", visibility="public"),
             ]
         )
     yield scope
@@ -136,6 +142,61 @@ def test_unbound_only_explicit_shared_space(business_db):
     assert acl.allowed_space_names(unbound) == ["production"]
     with pytest.raises(HTTPException):
         acl.ensure_space_access(unbound, "private_a")
+
+
+@pytest.mark.parametrize("role", ["user", "developer"])
+def test_stale_public_policy_without_graph_space_is_denied(business_db, role):
+    """渗透 B2：图库已删的空间残留公共策略（Milvus 索引仍在），清单外必须 403。"""
+    with pytest.raises(HTTPException) as caught:
+        acl.ensure_space_access(actor(role), "yunfei_test", "read")
+    assert caught.value.status_code == 403
+    assert "yunfei_test" not in acl.allowed_space_names(actor(role))
+
+
+def test_authorization_matches_listed_spaces(business_db):
+    """任一通道（请求头/参数/请求体）选到的空间都经 ensure_space_access：清单外即 403。"""
+    for role in ("user", "developer"):
+        listed = set(acl.allowed_space_names(actor(role)))
+        for space in ("private_a", "private_b", "production", "yunfei_test"):
+            try:
+                acl.ensure_space_access(actor(role), space, "read")
+                granted = True
+            except HTTPException:
+                granted = False
+            assert granted == (space in listed), (role, space)
+
+
+def test_admin_can_still_reach_space_missing_from_listing(business_db):
+    acl.ensure_space_access(actor("admin"), "yunfei_test", "write")
+
+
+def test_graph_listing_outage_falls_back_to_registrations(business_db, monkeypatch):
+    """冷启动且 SHOW SPACES 不可用时不连带拒绝已登记空间，但未登记名称仍拒绝。"""
+    monkeypatch.setattr("service.graph_space.GraphSpaceService._all_spaces", lambda self: [])
+    acl.ensure_space_access(actor("developer"), "private_a", "write")
+    acl.ensure_space_access(actor(), "production", "read")
+    with pytest.raises(HTTPException):
+        acl.ensure_space_access(actor("developer"), "never_registered", "read")
+    with pytest.raises(HTTPException):
+        acl.ensure_space_access(actor("developer"), "private_b", "read")
+
+
+def test_space_listing_failure_is_not_retried_on_every_request(monkeypatch):
+    from service.graph_space import GraphSpaceService
+
+    attempts = []
+
+    class Failing:
+        def list_spaces(self):
+            attempts.append(1)
+            raise RuntimeError("graph down")
+
+    monkeypatch.setattr(GraphSpaceService, "_all_spaces_cache", ["dev"])
+    monkeypatch.setattr(GraphSpaceService, "_all_spaces_cached_at", 0.0)
+    service = GraphSpaceService(session=None, client=Failing())
+    assert service._all_spaces() == ["dev"]
+    assert service._all_spaces() == ["dev"]
+    assert len(attempts) == 1
 
 
 def test_direct_database_changes_apply_without_session_refresh(business_db):

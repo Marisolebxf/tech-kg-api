@@ -309,6 +309,10 @@ def test_gateway_uses_current_membership_and_persisted_source(monkeypatch):
 
     monkeypatch.setattr(mysql, "session_scope", scope)
     monkeypatch.setattr(business_access_control, "session_scope", scope)
+    # 空间授权要求空间真实存在于图库（与空间列表同口径）
+    monkeypatch.setattr(
+        "service.graph_space.GraphSpaceService._all_spaces", lambda self: ["space-a", "space-b"]
+    )
     monkeypatch.setattr(workflow_mysql, "workflow_session_scope", lambda: nullcontext(None))
     source = SimpleNamespace(
         id="src", datasource_id="mysql-a", database_name="app", table_name="items", query_sql=None

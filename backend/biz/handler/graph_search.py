@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -33,6 +34,7 @@ from infra.graph_db.exceptions import GraphRequestError
 from infra.graph_db.models import GraphEdge, GraphNode
 from infra.graph_exec_budget import GraphExecOverloaded, graph_exec_slot
 from infra.mysql import create_session
+from infra.rate_limit import RateLimit, enforce_rate_limit
 
 router = APIRouter(
     prefix="/graph-search", tags=["graph-search"], dependencies=[Depends(bind_selected_graph_space)]
@@ -226,6 +228,55 @@ def _ensure_space_access(actor: Any, space: str | None) -> None:
         session.close()
     if not bound:
         raise HTTPException(status_code=403, detail=f"无权访问图空间 {space}，请先在配置页绑定")
+
+
+# 属性过滤白名单：只认 SHOW TAG INDEXES 里各索引的首列（等值过滤可走该索引）。
+# 索引低频变化，按空间缓存；建索引后最多 5 分钟生效。
+_INDEXED_PROPS_TTL_SECONDS = 300.0
+_indexed_props_cache: dict[str, tuple[float, dict[str, frozenset[str]]]] = {}
+_NODE_SEARCH_RATE_BUCKET = "graph-node-search"
+_NODE_SEARCH_RATE = RateLimit(limit=60, window_seconds=60)
+
+
+def _validate_filter_values(properties: dict[str, Any]) -> None:
+    for name, value in properties.items():
+        if not re.fullmatch(GRAPH_IDENTIFIER_PATTERN, name):
+            raise HTTPException(status_code=400, detail=f"属性名不合法: {name}")
+        if not isinstance(value, (str, int, float, bool)):
+            raise HTTPException(status_code=400, detail=f"属性 {name} 只支持标量等值过滤")
+
+
+def _leading_index_columns(client: TRSGraphClient, space: str | None) -> dict[str, frozenset[str]]:
+    key = space or ""
+    cached = _indexed_props_cache.get(key)
+    if cached and time.monotonic() - cached[0] < _INDEXED_PROPS_TTL_SECONDS:
+        return cached[1]
+    by_tag: dict[str, set[str]] = {}
+    for row in client.execute_read("SHOW TAG INDEXES").records or []:
+        tag = row.get("By Tag")
+        columns = row.get("Columns") or []
+        if isinstance(columns, str):
+            columns = [columns]
+        if tag and columns:
+            by_tag.setdefault(str(tag), set()).add(str(columns[0]))
+    indexed = {tag: frozenset(names) for tag, names in by_tag.items()}
+    _indexed_props_cache[key] = (time.monotonic(), indexed)
+    return indexed
+
+
+def _ensure_indexed_filters(
+    client: TRSGraphClient, space: str | None, label: str, properties: dict[str, Any] | None
+) -> None:
+    if not properties:
+        return
+    indexed = _leading_index_columns(client, space).get(label, frozenset())
+    unindexed = sorted(set(properties) - indexed)
+    if unindexed:
+        available = "、".join(sorted(indexed)) or "无"
+        raise HTTPException(
+            status_code=400,
+            detail=f"属性 {'、'.join(unindexed)} 未建立索引，不支持过滤；{label} 可用属性：{available}",
+        )
 
 
 def _node_to_data(n: Any) -> GraphNodeData:
@@ -445,22 +496,38 @@ async def list_nodes(
 
 @router.post("/nodes/search")
 async def search_nodes(
+    request: Request,
     actor: CurrentActor,
     label: str = Query(..., description="节点标签"),
     properties: dict[str, Any] | None = None,
     limit: int = Query(20, ge=1, le=500),
     space: str | None = Query(None, description="图空间"),
 ) -> ApiResponse:
-    """按属性搜索节点（如 {"doi": "10.xxx"} 查论文）。"""
+    """按属性搜索节点（如 {"doi": "10.xxx"} 查论文）。
+
+    外部调用只允许按已建索引的属性过滤：未建索引的属性会让图库全表扫描，
+    并发几次即可把共享实例打到内存高水位、拖垮所有空间（渗透 B4）。
+    九大业务的进程内回环由服务端拼装条件，不受此限。
+    """
+    from service.business_access import is_internal_business_call
+
     space = resolve_selected_space(space)
     _ensure_space_access(actor, space)
+    if not is_internal_business_call(request):
+        await enforce_rate_limit(_NODE_SEARCH_RATE_BUCKET, actor.user_id, _NODE_SEARCH_RATE)
+        _validate_filter_values(properties or {})
     try:
         async with graph_exec_slot():
+            client = _get_client(space)
+            if not is_internal_business_call(request):
+                await asyncio.to_thread(_ensure_indexed_filters, client, space, label, properties)
             result = await asyncio.to_thread(
-                _get_client(space).find_nodes, [label], properties or {}, limit=limit
+                client.find_nodes, [label], properties or {}, limit=limit
             )
         items = [_node_to_data(n).model_dump() for n in result.items]
         return ApiResponse(data=NodeListData(items=items, total=len(items)).model_dump())
+    except HTTPException:
+        raise
     except GraphExecOverloaded as exc:
         return _graph_overloaded(exc)
     except Exception:

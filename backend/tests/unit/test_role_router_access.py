@@ -41,9 +41,9 @@ USER_ROUTERS = [
     "industry_chain_panorama_router",
     "options_router",
     "correction_router",
-    # 平台总览页数据 + 图空间列表/任务列表/审核队列的只读入口对所有登录用户开放。
+    # 平台总览页数据 + 图空间列表/审核队列的只读入口对所有登录用户开放；
+    # 构建任务列表不再对普通用户开放（渗透 B6：可读全平台他人任务）。
     "platform_overview_router",
-    "workflow_system_readonly_router",
     "manual_review_readonly_router",
     "graph_space_readonly_router",
 ]

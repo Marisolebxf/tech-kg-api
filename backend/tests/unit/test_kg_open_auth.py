@@ -97,3 +97,33 @@ async def test_every_endpoint_has_auth_guard(auth_client, path):
     response = await client.get("/api/v1/kg-open" + path)
     assert response.status_code == 401
     authenticate.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "role,expected",
+    [("user", 403), ("developer", 200), ("admin", 200)],
+)
+async def test_browser_channel_limited_to_developers(auth_client, monkeypatch, role, expected):
+    """渗透 B1：普通注册用户不得经浏览器会话枚举 kg-open 明细。"""
+    from service import business_access_control
+    from service.auth import AuthContext
+    from service.platform_access import PlatformActor
+
+    client, authenticate, application = auth_client
+    monkeypatch.setenv("BUSINESS_RBAC_ENABLED", "true")
+    monkeypatch.setattr(business_access_control, "ensure_space_access", lambda *a: None)
+    application.resolve_bearer.return_value = AuthContext("token", {}, None)
+    application.platform_actor.return_value = PlatformActor(
+        "u",
+        "u",
+        "u",
+        "",
+        role == "admin",
+        business_id="a",
+        business_role="developer" if role == "developer" else "user",
+    )
+    response = await client.get(
+        "/api/v1/kg-open/schema", headers={"Authorization": "Bearer user-token"}
+    )
+    assert response.status_code == expected
+    authenticate.assert_not_called()

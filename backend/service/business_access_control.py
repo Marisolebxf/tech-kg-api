@@ -149,6 +149,18 @@ def space_registration(session, space: str):
     return None
 
 
+def _space_exists(session, space: str) -> bool:
+    """与空间列表同一来源（SHOW SPACES，进程内 30s 缓存）。
+
+    冷启动且图服务不可用时列表为空，此时不以存在性拒绝、只按登记策略判断：
+    否则图库故障会连带拒绝所有只读 MySQL 的业务接口。
+    """
+    from service.graph_space import GraphSpaceService
+
+    existing = GraphSpaceService(session)._all_spaces()
+    return not existing or space in existing
+
+
 def _space_allowed(actor: PlatformActor, row: BusinessGraphSpace, action: str) -> bool:
     if action not in {"read", "write", "review", "review_view"}:
         return False
@@ -185,7 +197,13 @@ def ensure_space_access(actor: PlatformActor, space: str | None, action: str = "
     try:
         with session_scope() as session:
             row = space_registration(session, space)
-            if row is not None and _space_allowed(actor, row, action):
+            # 授权口径与空间列表一致：策略允许且空间真实存在。图库里已删除的空间可能
+            # 仍留有公共策略与 Milvus 索引等衍生数据，不能凭残留策略读取（渗透 B2）。
+            if (
+                row is not None
+                and _space_allowed(actor, row, action)
+                and _space_exists(session, space)
+            ):
                 return
     except SQLAlchemyError as exc:
         raise HTTPException(503, "无法校验图空间权限") from exc
@@ -202,10 +220,16 @@ def allowed_space_names(actor: PlatformActor, action: str = "read") -> list[str]
         with session_scope() as session:
             from service.graph_space import GraphSpaceService
 
-            rows = space_registrations(
-                session, existing_spaces=GraphSpaceService(session)._all_spaces()
-            ).values()
-            return sorted(row.space_name for row in rows if _space_allowed(actor, row, action))
+            existing = set(GraphSpaceService(session)._all_spaces())
+            rows = space_registrations(session, existing_spaces=existing).values()
+            # 只返回真实存在的空间，与 ensure_space_access / 空间列表同一口径
+            # （列表不可用时同 _space_exists 退回仅按登记策略）
+            return sorted(
+                row.space_name
+                for row in rows
+                if (not existing or row.space_name in existing)
+                and _space_allowed(actor, row, action)
+            )
     except SQLAlchemyError as exc:
         raise HTTPException(503, "无法读取图空间权限") from exc
 

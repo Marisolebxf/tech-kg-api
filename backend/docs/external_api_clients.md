@@ -7,7 +7,7 @@
 ## 凭证与权限
 
 - `external_api_client` 表保存在应用业务 MySQL 中，连接沿用 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_DATABASE`、`MYSQL_USERNAME`、`MYSQL_PASSWORD` 配置。
-- 管理员按业务方分配唯一 `client_id`，不由调用方随意填写。创建时登记业务方名称。`project-relations:read` 允许项目关系查询，`kg-open:read` 允许 3 个对外图查询接口；用 `--scopes` 指定，可同时授予。新建未指定时仍默认为 `project-relations:read`。
+- 管理员按业务方分配唯一 `client_id`，不由调用方随意填写。创建时登记业务方名称。`project-relations:read` 允许项目关系查询，`kg-open:read` 允许 3 个对外图查询接口，`kg-open:pii` 允许其中自然人敏感字段（邮箱、出生日期、extra_json）返回明文（须审批，未授予时脱敏）；用 `--scopes` 指定，可同时授予。新建未指定时仍默认为 `project-relations:read`。
 - API Key 使用 32 字节安全随机数生成，数据库仅保存 SHA-256 哈希值，不保存可恢复的明文。原始 Key 只在创建或轮换时输出一次，遗失后需轮换。
 - 默认有效期为 365 天，可在签发或轮换时通过 `--expires-days` 指定。不要把生产 Key 放入源码、工单正文或请求日志。
 - 携带任意一个 API Key Header 就进入 API Key 校验；缺失配对 Header 或认证失败不会尝试 Bearer/Cookie。未携带这两个 Header 时沿用原认证流程。

@@ -1,6 +1,7 @@
 """图算法作业 service：提交 / 轮询 / 结果获取 + 元数据（边类型、引擎状态）。
 
-所有登录用户可在有权访问的图空间（默认空间、已绑定空间或管理员）提交算法作业；
+业务权限模式下，提交作业须对目标空间有写权限（共享生产空间仅管理员），作业仅提交人
+与管理员可查看/终止；未启用业务权限时沿用默认空间、已绑定空间或管理员规则。
 结果去向 v1 固定 csv（前端表格展示），不暴露 Nebula 回写。
 labels 传 EDGE（边类型）名——Spark 侧按边类型构建计算图。
 """
@@ -82,11 +83,42 @@ def _ensure_space_access(actor: PlatformActor, space: str) -> None:
         raise GraphAlgorithmError(str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         logger.warning("图算法列空间失败: %s", exc)
-        raise GraphAlgorithmError(f"图服务不可用: {exc}") from exc
+        raise GraphAlgorithmError("图服务不可用，请稍后重试", status_code=503) from exc
     if space not in spaces:
         raise GraphAlgorithmError(f"图空间 {space} 不存在")
     if not space_allowed:
         raise GraphAlgorithmError("无权访问未绑定的图空间", status_code=403)
+
+
+def _ensure_submit_access(actor: PlatformActor, space: str) -> None:
+    """提交作业消耗共享 Spark/图库算力：业务权限模式下须对该空间有写权限。
+
+    读权限只够查看；共享生产空间对开发维护也不可写，即仅管理员可在其上提交。
+    """
+    from service.business_access_control import ensure_space_access, rbac_enabled
+
+    if rbac_enabled():
+        if not actor.can_develop:
+            raise GraphAlgorithmError("仅开发维护或管理员可以提交图算法作业", status_code=403)
+        ensure_space_access(actor, space, "write")
+
+
+def _visible_job_data(actor: PlatformActor, data: dict) -> dict:
+    """执行器日志含 Spark executor/网络等内部信息，业务权限模式下仅管理员可见。"""
+    from service.business_access_control import rbac_enabled
+
+    if rbac_enabled() and not (actor.is_admin and not actor.business_only):
+        return {**data, "logTail": None}
+    return data
+
+
+def _ensure_job_owner(actor: PlatformActor, owner: str | None) -> None:
+    from service.business_access_control import rbac_enabled
+
+    if not rbac_enabled() or (actor.is_admin and not actor.business_only):
+        return
+    if not owner or owner != actor.user_id:
+        raise GraphAlgorithmError("只能查看或终止自己提交的算法作业", status_code=403)
 
 
 def _map_error(exc: Exception) -> GraphAlgorithmError:
@@ -96,6 +128,7 @@ def _map_error(exc: Exception) -> GraphAlgorithmError:
         GraphConnectionError,
         GraphNotFoundError,
         GraphRequestError,
+        public_graph_error,
     )
 
     if isinstance(exc, GraphAlgorithmError):
@@ -111,10 +144,12 @@ def _map_error(exc: Exception) -> GraphAlgorithmError:
     if isinstance(exc, GraphRequestError):
         if exc.status_code == 502:
             return GraphAlgorithmError("算法引擎暂时不可用（Spark 运行器未就绪），请稍后重试", 502)
-        return GraphAlgorithmError(f"算法引擎请求失败: {exc}", status_code=502)
+        logger.warning("算法引擎请求失败: %s", exc)
+        return GraphAlgorithmError(f"算法引擎请求失败: {public_graph_error(exc)[0]}", 502)
     if isinstance(exc, ValueError):
         return GraphAlgorithmError(f"算法参数不合法: {exc}")
-    return GraphAlgorithmError(f"算法作业执行失败: {exc}", status_code=502)
+    logger.warning("算法作业执行失败: %s", exc)
+    return GraphAlgorithmError(f"算法作业执行失败: {public_graph_error(exc)[0]}", 502)
 
 
 def _job_to_data(job: Any) -> dict:
@@ -290,6 +325,7 @@ def _save_degree_job(
     truncated: bool,
     *,
     running: bool = False,
+    owner: str = "",
 ) -> dict[str, Any]:
     """登记 Degree 作业并清理过期结果；后台计算最多同时运行两个。"""
 
@@ -303,6 +339,7 @@ def _save_degree_job(
         "truncated": truncated,
         "saved_at": time.time(),
         "created_at": now,
+        "created_by": owner,
         "status": "running" if running else "succeeded",
         "finished_at": None if running else now,
         "error": None,
@@ -1004,7 +1041,7 @@ def _degree_rows_via_ngql(
 
 
 def _submit_degree_via_ngql(
-    space: str, labels: list[str], *, allow_index_writes: bool = True
+    space: str, labels: list[str], *, allow_index_writes: bool = True, owner: str = ""
 ) -> dict:
     """同步计算 Degree 并登记本地作业，返回 succeeded 快照（失败直接抛业务错误）。"""
     try:
@@ -1016,7 +1053,7 @@ def _submit_degree_via_ngql(
     except Exception as exc:  # noqa: BLE001
         logger.warning("Degree nGQL 计算失败: %s", exc)
         raise GraphAlgorithmError(f"度数计算失败: {exc}", status_code=502) from exc
-    return _local_job_to_data(_save_degree_job(space, labels, rows, truncated))
+    return _local_job_to_data(_save_degree_job(space, labels, rows, truncated, owner=owner))
 
 
 def _run_degree_job(job: dict[str, Any]) -> None:
@@ -1068,14 +1105,17 @@ def submit_job(
     后台计算后通过相同轮询接口获取终态。直接 service 调用保留同步兼容。
     """
     _ensure_space_access(actor, space)
+    _ensure_submit_access(actor, space)
     if algorithm == "degreestatic":
         from service.business_access_control import rbac_enabled
 
         allow_index_writes = not rbac_enabled() or actor.can_develop
         if background_tasks is None:
-            return _submit_degree_via_ngql(space, labels, allow_index_writes=allow_index_writes)
+            return _submit_degree_via_ngql(
+                space, labels, allow_index_writes=allow_index_writes, owner=actor.user_id
+            )
         # HTTP 请求先返回 running，避免原生聚合阻塞提交及触发前端超时。
-        job = _save_degree_job(space, labels, [], False, running=True)
+        job = _save_degree_job(space, labels, [], False, running=True, owner=actor.user_id)
         job["allow_index_writes"] = allow_index_writes
         background_tasks.add_task(_run_degree_job, job)
         return _local_job_to_data(job)
@@ -1099,7 +1139,7 @@ def submit_job(
     except Exception as exc:  # noqa: BLE001
         raise _map_error(exc) from exc
     _register_remote_job(actor, space, job.job_id)
-    return _job_to_data(job)
+    return _visible_job_data(actor, _job_to_data(job))
 
 
 def _register_remote_job(actor: PlatformActor, space: str, job_id: str) -> None:
@@ -1142,11 +1182,13 @@ def _ensure_remote_job_access(actor: PlatformActor, space: str, job_id: str) -> 
                     return
                 raise HTTPException(403, "算法任务尚未登记空间归属")
             actual_space = row.graph_space
+            owner = row.created_by
     except SQLAlchemyError as exc:
         raise HTTPException(503, "无法校验算法任务空间归属") from exc
     if actual_space != space:
         raise HTTPException(403, "算法任务不属于请求的图空间")
     ensure_space_access(actor, actual_space, "read")
+    _ensure_job_owner(actor, owner)
 
 
 def get_job(actor: PlatformActor, space: str, job_id: str) -> dict:
@@ -1156,13 +1198,14 @@ def get_job(actor: PlatformActor, space: str, job_id: str) -> dict:
     _ensure_space_access(actor, space)
     local = _local_degree_job(space, job_id)
     if local is not None:
+        _ensure_job_owner(actor, local.get("created_by"))
         return _local_job_to_data(local)
     _ensure_remote_job_access(actor, space, job_id)
     try:
         job = get_space_algorithm_client(space).get_job(job_id)
     except Exception as exc:  # noqa: BLE001
         raise _map_error(exc) from exc
-    return _job_to_data(job)
+    return _visible_job_data(actor, _job_to_data(job))
 
 
 def cancel_job(actor: PlatformActor, space: str, job_id: str) -> dict:
@@ -1172,6 +1215,7 @@ def cancel_job(actor: PlatformActor, space: str, job_id: str) -> dict:
     _ensure_space_access(actor, space)
     local = _local_degree_job(space, job_id)
     if local is not None:
+        _ensure_job_owner(actor, local.get("created_by"))
         if local["status"] != "running":
             return _local_job_to_data(local)
         # Separate durable marker cannot be overwritten by a computation snapshot.
@@ -1193,7 +1237,7 @@ def cancel_job(actor: PlatformActor, space: str, job_id: str) -> dict:
         client = get_space_algorithm_client(space)
         job = client.get_job(job_id)
         if job.status != "running":
-            return _job_to_data(job)
+            return _visible_job_data(actor, _job_to_data(job))
         runner_url = os.getenv("TRSGRAPH_ALGORITHM_RUNNER_URL", "").strip()
         if runner_url:
             # 单机 all-in-one 部署：算法经 trsgraph-algorithm-runner 以 Spark
@@ -1203,7 +1247,7 @@ def cancel_job(actor: PlatformActor, space: str, job_id: str) -> dict:
 
             kill_runner_job(job_id, runner_url)
             # Runner acceptance is not completion: polling confirms "cancelled".
-            return _job_to_data(client.get_job(job_id))
+            return _visible_job_data(actor, _job_to_data(client.get_job(job_id)))
         rest_url = os.getenv("GRAPH_ALGO_SPARK_REST_URL", "").strip()
         if not rest_url:
             raise GraphAlgorithmError(
@@ -1216,7 +1260,7 @@ def cancel_job(actor: PlatformActor, space: str, job_id: str) -> dict:
             raise GraphAlgorithmError("算法引擎尚未返回 Spark 作业标识，请刷新状态后重试", 409)
         client.kill_submission(job.submission_id, rest_url)
         # Spark acceptance is not completion. Existing polling confirms KILLED.
-        return _job_to_data(client.get_job(job_id))
+        return _visible_job_data(actor, _job_to_data(client.get_job(job_id)))
     except Exception as exc:
         raise _map_error(exc) from exc
 
@@ -1228,6 +1272,7 @@ def get_result(actor: PlatformActor, space: str, job_id: str) -> dict:
     _ensure_space_access(actor, space)
     local = _local_degree_job(space, job_id)
     if local is not None:
+        _ensure_job_owner(actor, local.get("created_by"))
         if local["status"] != "succeeded":
             raise GraphAlgorithmError("作业尚未成功完成，暂不可获取结果", status_code=409)
         return {

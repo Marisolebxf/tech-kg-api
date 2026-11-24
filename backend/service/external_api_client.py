@@ -14,7 +14,9 @@ from infra.mysql import session_scope
 
 PROJECT_RELATIONS_READ = "project-relations:read"
 KG_OPEN_READ = "kg-open:read"
-KNOWN_SCOPES = (PROJECT_RELATIONS_READ, KG_OPEN_READ)
+# 自然人敏感字段明文：默认脱敏，经审批单独授予（不随 kg-open:read 下发）。
+KG_OPEN_PII = "kg-open:pii"
+KNOWN_SCOPES = (PROJECT_RELATIONS_READ, KG_OPEN_READ, KG_OPEN_PII)
 CLIENT_ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
 
 
@@ -27,6 +29,7 @@ class ExternalClientError(Exception):
 @dataclass(frozen=True)
 class ExternalClientIdentity:
     client_id: str
+    scopes: tuple[str, ...] = ()
 
 
 def utc_now() -> datetime:
@@ -56,7 +59,9 @@ def authenticate_client(
                 raise ExternalClientError("调用凭证无效或已失效")
             if required_scope not in (client.scopes or []):
                 raise ExternalClientError("调用方无该接口的查询权限", 403)
-            return ExternalClientIdentity(client_id=client.client_id)
+            return ExternalClientIdentity(
+                client_id=client.client_id, scopes=tuple(client.scopes or ())
+            )
     except SQLAlchemyError as exc:
         # 不将连接信息、SQL 参数或数据库异常回传调用方。
         raise ExternalClientError("调用方认证服务暂时不可用", 503) from exc

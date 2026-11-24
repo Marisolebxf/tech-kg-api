@@ -78,6 +78,11 @@ def enforce_business_access(request: Request) -> None:
         raise HTTPException(403, "当前账号仅可使用九大业务模块")
 
 
+def is_internal_business_call(request: Request) -> bool:
+    """九大业务进程内回环（business_graph_app 包装）才为真；外部请求无法伪造该标记。"""
+    return request.scope.get(_INTERNAL_SCOPE_KEY) is _INTERNAL_MARKER
+
+
 def business_graph_app(app):
     """Wrap only in-process business graph calls; credentials are still authenticated."""
 

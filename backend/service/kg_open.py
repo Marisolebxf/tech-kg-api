@@ -16,6 +16,45 @@ from infra.graph_db.exceptions import GraphRequestError
 
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}\Z")
 QUERY_TIMEOUT_SECONDS = 20
+# 旧 offset 分页每页都要 LOOKUP 全量再排序跳过，深翻页即全表扫描；更深的数据走 cursor。
+MAX_OFFSET = 10_000
+
+# 自然人类型的敏感字段默认脱敏（渗透 B1：Person 返回真实邮箱/出生日期/extra_json）。
+# 明文仅对持 kg-open:pii 的机器调用方下发，见 biz.dependencies.kg_open_auth。
+PERSON_TYPES = frozenset({"Person"})
+MASKED = "***"
+
+
+def _mask_email(value: Any) -> str:
+    local, sep, domain = str(value).partition("@")
+    return f"{local[:1]}***@{domain}" if sep and local and domain else MASKED
+
+
+def _mask_birth_date(value: Any) -> str:
+    year = re.match(r"\d{4}", str(value))
+    return f"{year.group(0)}-**-**" if year else MASKED
+
+
+_PERSON_PII_MASKERS = {
+    "email": _mask_email,
+    "birth_date": _mask_birth_date,
+    "extra_json": lambda value: MASKED,
+}
+
+
+def mask_person_pii(entity: dict[str, Any]) -> dict[str, Any]:
+    """返回脱敏后的新实体；非自然人类型原样返回。"""
+    if not PERSON_TYPES.intersection(entity.get("types") or ()):
+        return entity
+    properties = {
+        name: (
+            _PERSON_PII_MASKERS[name](value)
+            if name in _PERSON_PII_MASKERS and value not in (None, "")
+            else value
+        )
+        for name, value in (entity.get("properties") or {}).items()
+    }
+    return {**entity, "properties": properties}
 
 
 class OpenQueryError(ValueError):
@@ -118,8 +157,13 @@ def _after_predicate(columns: list[str], after: list[Any] | None) -> str:
 
 
 class OpenGraphQueries:
-    def __init__(self, client: Any, catalog: dict[str, Any], space: str):
+    def __init__(self, client: Any, catalog: dict[str, Any], space: str, *, mask_pii: bool = True):
         self.client, self.catalog, self.space = client, catalog, space
+        self.mask_pii = mask_pii
+
+    def _entity(self, vertex: dict[str, Any]) -> dict[str, Any]:
+        payload = entity_payload(vertex)
+        return mask_person_pii(payload) if self.mask_pii else payload
 
     def entity_type(self, name: str) -> dict[str, Any]:
         identifier(name)
@@ -163,7 +207,7 @@ class OpenGraphQueries:
             for row in rows:
                 vertex = row.get("v")
                 if isinstance(vertex, dict) and vertex.get("id") is not None:
-                    payload = entity_payload(vertex)
+                    payload = self._entity(vertex)
                     found[payload["id"]] = payload
         return found
 
@@ -199,7 +243,7 @@ class OpenGraphQueries:
             query += f" WHERE id($-.v) > {literal(after[0])}"
         query += f" | ORDER BY $-.vid | LIMIT {limit + 1} OFFSET {offset}"
         rows = self.execute(query)
-        entities = [entity_payload(row["v"]) for row in rows]
+        entities = [self._entity(row["v"]) for row in rows]
         data = self.page(entities, limit, scope, lambda item: [item["id"]], "entities")
         data.update(entityType=name, offset=offset)
         return data

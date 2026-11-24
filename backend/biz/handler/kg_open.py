@@ -14,12 +14,16 @@ from biz.dependencies.kg_open_auth import KgOpenAuth
 from biz.schemas.common import ApiResponse
 from infra.graph_db import get_space_client
 from infra.graph_exec_budget import GraphExecOverloaded, graph_exec_slot
+from infra.rate_limit import RateLimit, enforce_rate_limit
 from infra.workflow_mysql import get_workflow_session
-from service.kg_open import OpenGraphQueries, OpenQueryError
+from service.kg_open import MAX_OFFSET, OpenGraphQueries, OpenQueryError
 
 router = APIRouter(prefix="/kg-open", tags=["kg-open"])
 logger = logging.getLogger(__name__)
 SessionDependency = Annotated[Session, Depends(get_workflow_session)]
+# 按调用方（机器 client / 用户）计数；可用 RATE_LIMIT_KG_OPEN 覆盖。
+_RATE_BUCKET = "kg-open"
+_DEFAULT_RATE = RateLimit(limit=120, window_seconds=60)
 
 
 def _get_client(space):
@@ -39,9 +43,12 @@ async def _run(ctx, session, operation):
     # 目录与图 I/O 顺序在 worker 中执行，不阻塞事件循环。
     def work():
         catalog = _catalog(session, ctx.space)
-        queries = OpenGraphQueries(_get_client(ctx.space), catalog, ctx.space)
+        queries = OpenGraphQueries(
+            _get_client(ctx.space), catalog, ctx.space, mask_pii=not ctx.can_read_pii
+        )
         return operation(queries)
 
+    await enforce_rate_limit(_RATE_BUCKET, ctx.caller_id, _DEFAULT_RATE)
     try:
         async with graph_exec_slot():
             data = await asyncio.to_thread(work)
@@ -85,7 +92,7 @@ async def list_entities_by_type(
     name: str,
     session: SessionDependency,
     limit: int = Query(20, ge=1, le=500),
-    offset: int = Query(0, ge=0, le=10_000_000),
+    offset: int = Query(0, ge=0, le=MAX_OFFSET),
     cursor: str = Query("", max_length=4096),
 ) -> ApiResponse:
     def query(queries):
@@ -106,7 +113,7 @@ async def list_edges_by_type(
     name: str,
     session: SessionDependency,
     limit: int = Query(20, ge=1, le=500),
-    offset: int = Query(0, ge=0, le=10_000_000),
+    offset: int = Query(0, ge=0, le=MAX_OFFSET),
     cursor: str = Query("", max_length=4096),
     include_entities: bool = Query(True, alias="includeEntities"),
 ) -> ApiResponse:

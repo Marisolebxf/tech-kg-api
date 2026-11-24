@@ -75,6 +75,103 @@ class EmploymentPeriodFallbackTests(unittest.TestCase):
         self.assertEqual(item["employmentEdges"], {"expert": {}, "colleague": {}})
         self.assertEqual(self.gateway.edges[0]["properties"], {})
 
+    def test_graph_scores_use_endpoints_for_the_two_employment_edges(self):
+        self.gateway.edges[0]["properties"]["confidence"] = 0.25
+        self.gateway.b["properties"]["organization_id"] = ORG_ID
+        self.gateway.org["properties"]["organization_id"] = ORG_ID
+        self.gateway.a["properties"]["work_experience_department_zh"] = "智能计算研究室"
+        self.gateway.b["properties"]["work_experience_department_zh"] = "智能计算研究室"
+        paper_ids = [
+            "paper_20129466",
+            "paper_19585803",
+            "paper_20511496",
+            "paper_22810886",
+            "paper_28790652",
+            "paper_29847493",
+            "paper_37148955",
+        ]
+
+        async def search_paths(body, *, space):
+            return {
+                "items": [
+                    {
+                        "nodes": [
+                            {
+                                "id": pid,
+                                "labels": ["Paper"],
+                                "properties": {"title": pid, "year": "2019"},
+                            },
+                            self.gateway.b,
+                        ],
+                        "edges": [
+                            {
+                                "source": pid,
+                                "target": vid,
+                                "type": "AUTHORED_BY",
+                                "properties": {"confidence": 1.0},
+                            }
+                            for vid in (A_ID, B_ID)
+                        ],
+                    }
+                    for pid in paper_ids
+                ]
+            }
+
+        subgraph = self.gateway.subgraph
+
+        async def subgraph_with_coauthor(node_id, *, edge_type=None, **kwargs):
+            if edge_type == "COAUTHOR_WITH":
+                return {
+                    "nodes": [self.gateway.a, self.gateway.b],
+                    "edges": [{"source": A_ID, "target": B_ID, "type": "COAUTHOR_WITH"}],
+                }
+            return await subgraph(node_id, edge_type=edge_type, **kwargs)
+
+        self.gateway.search_paths = search_paths
+        self.gateway.subgraph = subgraph_with_coauthor
+        result = self.query()
+        scores = {
+            (edge["source"], edge["target"], edge["label"]): edge["data"].get("confidence")
+            for edge in result["graph"]["edges"]
+        }
+        self.assertEqual(
+            scores,
+            {
+                (A_ID, B_ID, "同事关系"): 0.76,
+                (A_ID, ORG_ID, "AFFILIATED_WITH"): 0.60,
+                (B_ID, ORG_ID, "AFFILIATED_WITH"): 0.60,
+                **{(pid, vid, "AUTHORED_BY"): 1.0 for pid in paper_ids for vid in (A_ID, B_ID)},
+            },
+        )
+        self.assertEqual(self.gateway.edges[0]["properties"]["confidence"], 0.25)
+
+    def test_source_organization_id_outranks_name_and_edge_confidence(self):
+        self.gateway.org["properties"]["org_id"] = "verified_org_id"
+        self.gateway.a["properties"]["organization_id"] = "verified_org_id"
+        self.gateway.b["properties"]["scholar_org_id"] = "another_org_id"
+        for edge in self.gateway.edges:
+            edge["properties"]["confidence"] = 0.9
+
+        affiliation_data = {
+            edge["source"]: edge["data"]
+            for edge in self.query()["graph"]["edges"]
+            if edge["label"] == "AFFILIATED_WITH"
+        }
+        self.assertEqual(affiliation_data[A_ID]["confidence"], 1.0)
+        self.assertNotIn("confidence", affiliation_data[B_ID])
+
+    def test_missing_endpoint_evidence_ignores_stored_edge_confidence(self):
+        self.gateway.a["properties"].pop("work_experience_institution_zh")
+        self.gateway.edges[0]["properties"].update(
+            work_experience_date="2017-01 至 2024-12", confidence=0.9
+        )
+        affiliation = next(
+            edge
+            for edge in self.query()["graph"]["edges"]
+            if edge["label"] == "AFFILIATED_WITH" and edge["source"] == A_ID
+        )
+        self.assertNotIn("confidence", affiliation["data"])
+
     def test_reverse_pair_also_uses_both_person_periods(self):
         result = asyncio.run(self.service._query_impl(
             self.gateway, expert_id=B_ID, target_expert_id=A_ID,
